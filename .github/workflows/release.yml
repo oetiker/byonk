@@ -123,7 +123,7 @@ jobs:
           ref: ${{ needs.version.outputs.tag }}
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 

@@ -12,15 +12,6 @@ use crate::error::ApiError;
 use crate::models::{ApiKey, Device, DeviceId, DeviceModel, DisplaySpec};
 use crate::services::{ContentPipeline, DeviceRegistry, RenderService, UrlSigner};
 
-/// Error response for display endpoints
-#[derive(Debug, Serialize, ToSchema)]
-pub struct DisplayErrorResponse {
-    /// Status code
-    pub status: u16,
-    /// Error message
-    pub error: String,
-}
-
 // Maximum allowed display dimensions to prevent DoS
 const MAX_DISPLAY_WIDTH: u32 = 2000;
 const MAX_DISPLAY_HEIGHT: u32 = 2000;

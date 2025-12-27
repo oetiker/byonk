@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
+  <rect width="800" height="480" fill="white"/>
+  
+  <!-- Gradient bars to test all 4 levels -->
+  <rect x="50" y="50" width="700" height="80" fill="rgb(0,0,0)"/>
+  <text x="400" y="100" text-anchor="middle" fill="white" font-family="Outfit" font-size="24">Level 0: Black (0)</text>
+  
+  <rect x="50" y="150" width="700" height="80" fill="rgb(85,85,85)"/>
+  <text x="400" y="200" text-anchor="middle" fill="white" font-family="Outfit" font-size="24">Level 1: Dark Gray (85)</text>
+  
+  <rect x="50" y="250" width="700" height="80" fill="rgb(170,170,170)"/>
+  <text x="400" y="300" text-anchor="middle" fill="black" font-family="Outfit" font-size="24">Level 2: Light Gray (170)</text>
+  
+  <rect x="50" y="350" width="700" height="80" fill="rgb(255,255,255)" stroke="black"/>
+  <text x="400" y="400" text-anchor="middle" fill="black" font-family="Outfit" font-size="24">Level 3: White (255)</text>
+</svg>

@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
+  <style>
+    /* Using font-variation-settings for variable font support */
+    .header { font-family: Outfit; font-size: 36px; font-variation-settings: "wght" 700; fill: white; }
+    .time { font-family: Outfit; font-size: 72px; font-variation-settings: "wght" 700; fill: black; }
+    .date { font-family: Outfit; font-size: 24px; font-variation-settings: "wght" 400; fill: rgb(100,100,100); }
+    .subtitle { font-family: Outfit; font-size: 24px; font-variation-settings: "wght" 400; fill: rgb(85,85,85); }
+    .message { font-family: Outfit; font-size: 18px; font-variation-settings: "wght" 400; fill: black; }
+    .footer { font-family: Outfit; font-size: 12px; font-variation-settings: "wght" 400; fill: rgb(150,150,150); }
+  </style>
+
+  <rect width="800" height="480" fill="white"/>
+
+  <!-- Header -->
+  <rect x="0" y="0" width="800" height="80" fill="black"/>
+  <text class="header" x="400" y="55" text-anchor="middle">
+    {{ title }}
+  </text>
+
+  <!-- Time display -->
+  <text class="time" x="400" y="180" text-anchor="middle">
+    {{ time }}
+  </text>
+  <text class="date" x="400" y="220" text-anchor="middle">
+    {{ date }}
+  </text>
+
+  <!-- Subtitle -->
+  <text class="subtitle" x="400" y="300" text-anchor="middle">
+    {{ subtitle }}
+  </text>
+
+  <!-- Message box -->
+  <rect x="50" y="340" width="700" height="80" fill="rgb(240,240,240)" stroke="rgb(200,200,200)" stroke-width="1" rx="10"/>
+  <text class="message" x="400" y="390" text-anchor="middle">
+    {{ message }}
+  </text>
+
+  <!-- Footer -->
+  <text class="footer" x="400" y="460" text-anchor="middle">
+    Scripted content powered by Lua + Tera
+  </text>
+</svg>

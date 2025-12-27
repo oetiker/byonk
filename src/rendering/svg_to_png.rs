@@ -1,0 +1,206 @@
+use crate::error::RenderError;
+use crate::models::DisplaySpec;
+use crate::rendering::dither::floyd_steinberg;
+use resvg::usvg::{self, Transform};
+use std::io::Cursor;
+use std::sync::Arc;
+use tiny_skia::Pixmap;
+
+/// Renders SVG to grayscale PNG with dithering for e-ink displays
+pub struct SvgRenderer {
+    /// Number of grayscale levels (4 for 2-bit)
+    pub levels: u8,
+    /// Font database for text rendering
+    fontdb: Arc<fontdb::Database>,
+}
+
+impl SvgRenderer {
+    pub fn new() -> Self {
+        let mut fontdb = fontdb::Database::new();
+
+        // Load custom fonts from fonts/ directory first
+        let fonts_dir = std::path::Path::new("fonts");
+        if fonts_dir.exists() {
+            fontdb.load_fonts_dir(fonts_dir);
+            tracing::info!(
+                path = ?fonts_dir,
+                "Loaded custom fonts from fonts/ directory"
+            );
+        }
+
+        // Load system fonts as fallback
+        fontdb.load_system_fonts();
+
+        tracing::info!(
+            font_count = fontdb.len(),
+            "Loaded fonts for SVG text rendering"
+        );
+
+        // Log available font families for debugging
+        let families: std::collections::HashSet<_> = fontdb
+            .faces()
+            .filter_map(|f| f.families.first().map(|(name, _)| name.clone()))
+            .collect();
+        tracing::debug!(families = ?families, "Available font families");
+
+        Self {
+            levels: 4, // 2-bit = 4 levels
+            fontdb: Arc::new(fontdb),
+        }
+    }
+
+    /// Render SVG to grayscale PNG with dithering
+    pub fn render_to_png(
+        &self,
+        svg_data: &[u8],
+        spec: DisplaySpec,
+    ) -> Result<Vec<u8>, RenderError> {
+        // Parse SVG with font database for text support
+        let options = usvg::Options {
+            fontdb: self.fontdb.clone(),
+            ..Default::default()
+        };
+        let tree = usvg::Tree::from_data(svg_data, &options)
+            .map_err(|e| RenderError::SvgParse(e.to_string()))?;
+
+        // Calculate scale to fit display while maintaining aspect ratio
+        let svg_size = tree.size();
+        let scale_x = spec.width as f32 / svg_size.width();
+        let scale_y = spec.height as f32 / svg_size.height();
+        let scale = scale_x.min(scale_y);
+
+        // Calculate offset to center the image
+        let scaled_width = svg_size.width() * scale;
+        let scaled_height = svg_size.height() * scale;
+        let offset_x = (spec.width as f32 - scaled_width) / 2.0;
+        let offset_y = (spec.height as f32 - scaled_height) / 2.0;
+
+        // Create pixmap with white background
+        let mut pixmap =
+            Pixmap::new(spec.width, spec.height).ok_or(RenderError::PixmapAllocation)?;
+        pixmap.fill(tiny_skia::Color::WHITE);
+
+        // Render with transform (scale and center)
+        let transform = Transform::from_scale(scale, scale).post_translate(offset_x, offset_y);
+        resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+        // Convert RGBA to grayscale
+        let gray_data = self.to_grayscale(pixmap.data());
+
+        // Apply Floyd-Steinberg dithering for 2-bit output
+        let dithered = floyd_steinberg(&gray_data, spec.width, spec.height, self.levels);
+
+        // Encode to PNG
+        self.encode_png(&dithered, spec)
+    }
+
+    /// Convert RGBA to grayscale using ITU-R BT.709 luma coefficients
+    fn to_grayscale(&self, rgba: &[u8]) -> Vec<u8> {
+        rgba.chunks(4)
+            .map(|pixel| {
+                let r = pixel[0] as u32;
+                let g = pixel[1] as u32;
+                let b = pixel[2] as u32;
+                let a = pixel[3] as u32;
+
+                // If fully transparent, treat as white (e-ink background)
+                if a == 0 {
+                    return 255;
+                }
+
+                // ITU-R BT.709 luma: Y = 0.2126*R + 0.7152*G + 0.0722*B
+                // Using integer math: Y = (2126*R + 7152*G + 722*B) / 10000
+                let luma = (2126 * r + 7152 * g + 722 * b) / 10000;
+
+                // Alpha compositing against white background
+                let white = 255u32;
+                let composited = (luma * a + white * (255 - a)) / 255;
+
+                composited as u8
+            })
+            .collect()
+    }
+
+    /// Encode grayscale data to 2-bit indexed PNG for e-ink displays
+    fn encode_png(&self, gray_data: &[u8], spec: DisplaySpec) -> Result<Vec<u8>, RenderError> {
+        let mut buf = Cursor::new(Vec::new());
+
+        {
+            // Create PNG encoder with 2-bit indexed color
+            let mut encoder = png::Encoder::new(&mut buf, spec.width, spec.height);
+            encoder.set_color(png::ColorType::Indexed);
+            encoder.set_depth(png::BitDepth::Two);
+
+            // 4-level grayscale palette (2-bit = 4 colors)
+            // Index 0 = black, 1 = dark gray, 2 = light gray, 3 = white
+            let palette: Vec<u8> = vec![
+                0, 0, 0, // 0: black
+                85, 85, 85, // 1: dark gray (~33%)
+                170, 170, 170, // 2: light gray (~67%)
+                255, 255, 255, // 3: white
+            ];
+            encoder.set_palette(palette);
+
+            let mut writer = encoder
+                .write_header()
+                .map_err(|e| RenderError::PngEncode(e.to_string()))?;
+
+            // Convert 8-bit grayscale to 2-bit indexed, packing 4 pixels per byte
+            let packed_data = self.pack_2bit(gray_data, spec.width);
+
+            writer
+                .write_image_data(&packed_data)
+                .map_err(|e| RenderError::PngEncode(e.to_string()))?;
+        }
+
+        let png_bytes = buf.into_inner();
+
+        // Validate size
+        spec.validate_size(png_bytes.len())?;
+
+        Ok(png_bytes)
+    }
+
+    /// Pack 8-bit grayscale pixels into 2-bit indexed format (4 pixels per byte)
+    fn pack_2bit(&self, gray_data: &[u8], width: u32) -> Vec<u8> {
+        // Each row needs to be byte-aligned
+        let bytes_per_row = (width as usize).div_ceil(4);
+        let height = gray_data.len() / width as usize;
+
+        let mut packed = Vec::with_capacity(bytes_per_row * height);
+
+        for row in gray_data.chunks(width as usize) {
+            let mut byte = 0u8;
+            let mut bit_pos = 6; // Start from high bits (2 bits per pixel)
+
+            for (i, &pixel) in row.iter().enumerate() {
+                // Map 8-bit grayscale to 2-bit index (0-3)
+                // After dithering, pixels should already be quantized to 4 levels
+                let index = match pixel {
+                    0..=63 => 0,    // black
+                    64..=127 => 1,  // dark gray
+                    128..=191 => 2, // light gray
+                    192..=255 => 3, // white
+                };
+
+                byte |= index << bit_pos;
+
+                if bit_pos == 0 || i == row.len() - 1 {
+                    packed.push(byte);
+                    byte = 0;
+                    bit_pos = 6;
+                } else {
+                    bit_pos -= 2;
+                }
+            }
+        }
+
+        packed
+    }
+}
+
+impl Default for SvgRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
+}

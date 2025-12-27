@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
+  <!-- Background -->
+  <rect width="800" height="480" fill="white"/>
+
+  <!-- Border -->
+  <rect x="10" y="10" width="780" height="460" fill="none" stroke="black" stroke-width="2"/>
+
+  <!-- Header -->
+  <rect x="10" y="10" width="780" height="60" fill="black"/>
+  <text x="400" y="50" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="28" font-weight="bold">
+    Device Registered!
+  </text>
+
+  <!-- Checkmark icon (simple) -->
+  <circle cx="400" cy="180" r="50" fill="none" stroke="black" stroke-width="4"/>
+  <polyline points="370,180 390,200 430,155" fill="none" stroke="black" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Message -->
+  <text x="400" y="280" text-anchor="middle" fill="black" font-family="Arial, sans-serif" font-size="22">
+    Your device has been registered successfully!
+  </text>
+
+  <text x="400" y="320" text-anchor="middle" fill="gray" font-family="Arial, sans-serif" font-size="18">
+    The display will update automatically
+  </text>
+  <text x="400" y="350" text-anchor="middle" fill="gray" font-family="Arial, sans-serif" font-size="18">
+    with content from your BOYS server.
+  </text>
+
+  <!-- Footer -->
+  <line x1="50" y1="420" x2="750" y2="420" stroke="gray" stroke-width="1"/>
+  <text x="400" y="450" text-anchor="middle" fill="gray" font-family="Arial, sans-serif" font-size="14">
+    Next refresh in 15 minutes
+  </text>
+</svg>

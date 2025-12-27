@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
+  <style>
+    /* Using font-variation-settings for variable font support */
+    .title { font-family: Outfit; font-size: 28px; font-variation-settings: "wght" 700; fill: white; }
+    .time { font-family: Outfit; font-size: 14px; font-variation-settings: "wght" 400; fill: white; }
+    .col-header { font-family: Outfit; font-size: 14px; font-variation-settings: "wght" 600; fill: rgb(100,100,100); }
+    .line-badge { font-family: Outfit; font-size: 16px; font-variation-settings: "wght" 700; fill: white; }
+    .destination { font-family: Outfit; font-size: 18px; font-variation-settings: "wght" 400; fill: black; }
+    .dep-time { font-family: Outfit; font-size: 22px; font-variation-settings: "wght" 700; fill: black; }
+    .delay { font-family: Outfit; font-size: 14px; font-variation-settings: "wght" 500; fill: rgb(200,50,50); }
+    .muted { font-family: Outfit; font-size: 24px; font-variation-settings: "wght" 400; fill: rgb(150,150,150); }
+    .footer { font-family: Outfit; font-size: 11px; font-variation-settings: "wght" 400; fill: rgb(150,150,150); }
+  </style>
+
+  <rect width="800" height="480" fill="white"/>
+
+  <!-- Header -->
+  <rect x="0" y="0" width="800" height="70" fill="black"/>
+  <text class="title" x="30" y="48">{{ station }}</text>
+  <text class="time" x="780" y="48" text-anchor="end">{{ updated_at }}</text>
+
+  <!-- Column Headers -->
+  <rect x="0" y="70" width="800" height="35" fill="rgb(240,240,240)"/>
+  <text class="col-header" x="30" y="95">LINIE</text>
+  <text class="col-header" x="120" y="95">RICHTUNG</text>
+  <text class="col-header" x="700" y="95" text-anchor="end">ABFAHRT</text>
+
+  <!-- Departures -->
+  {% if departures | length > 0 %}
+  {% for dep in departures %}
+  <!-- Row {{ loop.index }} -->
+  {% if loop.index0 is odd %}
+  <rect x="0" y="{{ 105 + loop.index0 * 45 }}" width="800" height="45" fill="rgb(250,250,250)"/>
+  {% endif %}
+
+  <!-- Line badge -->
+  <rect x="20" y="{{ 112 + loop.index0 * 45 }}" width="70" height="30" rx="5"
+        fill="{% if dep.category == 'S' %}rgb(0,100,180){% elif dep.category == 'B' or dep.category == 'BN' %}rgb(180,50,50){% elif dep.category == 'T' %}rgb(50,150,50){% else %}rgb(100,100,100){% endif %}"/>
+  <text class="line-badge" x="55" y="{{ 134 + loop.index0 * 45 }}" text-anchor="middle">{{ dep.line }}</text>
+
+  <!-- Destination -->
+  <text class="destination" x="120" y="{{ 134 + loop.index0 * 45 }}">
+    {% if dep.destination | length > 35 %}{{ dep.destination | truncate(length=35) }}{% else %}{{ dep.destination }}{% endif %}
+  </text>
+
+  <!-- Time -->
+  <text class="dep-time" x="700" y="{{ 134 + loop.index0 * 45 }}" text-anchor="end">{{ dep.time }}</text>
+  {% if dep.delay %}
+  <text class="delay" x="720" y="{{ 134 + loop.index0 * 45 }}">{{ dep.delay }}</text>
+  {% endif %}
+  {% endfor %}
+  {% else %}
+  <text class="muted" x="400" y="280" text-anchor="middle">Keine Abfahrten gefunden</text>
+  {% endif %}
+
+  <!-- Footer -->
+  <text class="footer" x="400" y="473" text-anchor="middle">Daten: transport.opendata.ch</text>
+</svg>

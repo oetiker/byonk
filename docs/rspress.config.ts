@@ -2,6 +2,7 @@ import { defineConfig } from 'rspress/config';
 
 export default defineConfig({
   root: 'content',
+  base: '/byonk/',
   title: 'Byonk',
   description: 'Bring Your Own Ink - Self-hosted content server for TRMNL e-ink devices',
   icon: '/icon.svg',

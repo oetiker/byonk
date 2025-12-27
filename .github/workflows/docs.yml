@@ -6,6 +6,7 @@ on:
     paths:
       - 'docs/**'
       - 'src/**'
+      - 'screens/**'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -24,6 +25,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-docs-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-docs-
+
+      - name: Build Byonk
+        run: cargo build --release
+
+      - name: Generate sample screenshots
+        run: |
+          # Start Byonk in background
+          ./target/release/byonk &
+          BYONK_PID=$!
+
+          # Wait for server to be ready
+          for i in {1..30}; do
+            if curl -s http://localhost:3000/health > /dev/null; then
+              echo "Byonk is ready"
+              break
+            fi
+            echo "Waiting for Byonk... ($i/30)"
+            sleep 1
+          done
+
+          # Generate samples
+          bash docs/scripts/generate-samples.sh
+
+          # Stop Byonk
+          kill $BYONK_PID || true
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

@@ -11,7 +11,7 @@
 set -e
 
 BYONK_URL="${BYONK_URL:-http://localhost:3000}"
-OUTPUT_DIR="$(dirname "$0")/../content/en/public/samples"
+OUTPUT_DIR="$(dirname "$0")/../content/public/samples"
 
 mkdir -p "$OUTPUT_DIR"
 

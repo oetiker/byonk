@@ -1,0 +1,22 @@
+[
+  {
+    "text": "Guide",
+    "link": "/guide/",
+    "activeMatch": "^/guide/"
+  },
+  {
+    "text": "Concepts",
+    "link": "/concepts/architecture",
+    "activeMatch": "^/concepts/"
+  },
+  {
+    "text": "Tutorial",
+    "link": "/tutorial/",
+    "activeMatch": "^/tutorial/"
+  },
+  {
+    "text": "API",
+    "link": "/api/http-api",
+    "activeMatch": "^/api/"
+  }
+]

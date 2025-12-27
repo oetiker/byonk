@@ -94,7 +94,7 @@ After=network.target
 Type=simple
 User=byonk
 WorkingDirectory=/opt/byonk
-ExecStart=/opt/byonk/target/release/byonk
+ExecStart=/opt/target/release/byonk
 Environment="BIND_ADDR=0.0.0.0:3000"
 Environment="URL_SECRET=your-secret-here"
 Restart=always
@@ -131,5 +131,5 @@ Refer to TRMNL documentation for instructions on configuring a custom server URL
 
 ## Next Steps
 
-- [Configure](/en/guide/configuration) your screens and devices
-- [Create your first screen](/en/tutorial/first-screen)
+- [Configure](/guide/configuration) your screens and devices
+- [Create your first screen](/tutorial/first-screen)

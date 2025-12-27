@@ -9,6 +9,15 @@ export default defineConfig({
   logo: '/logo.svg',
   logoText: 'Byonk',
 
+  // Default language - removes /en/ from URLs
+  lang: 'en',
+  locales: [
+    {
+      lang: 'en',
+      label: 'English',
+    },
+  ],
+
   themeConfig: {
     socialLinks: [
       {
@@ -21,7 +30,7 @@ export default defineConfig({
       message: 'MIT License | Byonk - Bring Your Own Ink',
     },
     editLink: {
-      docRepoBaseUrl: 'https://github.com/oetiker/byonk/tree/main/docs/content',
+      docRepoBaseUrl: 'https://github.com/oetiker/byonk/tree/main/docs/content/en',
       text: 'Edit this page on GitHub',
     },
   },

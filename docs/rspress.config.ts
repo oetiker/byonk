@@ -1,7 +1,7 @@
 import { defineConfig } from 'rspress/config';
 
 export default defineConfig({
-  root: 'docs',
+  root: 'content',
   title: 'Byonk',
   description: 'Bring Your Own Ink - Self-hosted content server for TRMNL e-ink devices',
   icon: '/icon.svg',
@@ -20,7 +20,7 @@ export default defineConfig({
       message: 'MIT License | Byonk - Bring Your Own Ink',
     },
     editLink: {
-      docRepoBaseUrl: 'https://github.com/oetiker/byonk/tree/main/docs/docs',
+      docRepoBaseUrl: 'https://github.com/oetiker/byonk/tree/main/docs/content',
       text: 'Edit this page on GitHub',
     },
   },

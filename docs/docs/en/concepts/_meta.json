@@ -1,0 +1,17 @@
+[
+  {
+    "type": "file",
+    "name": "architecture",
+    "label": "Architecture"
+  },
+  {
+    "type": "file",
+    "name": "content-pipeline",
+    "label": "Content Pipeline"
+  },
+  {
+    "type": "file",
+    "name": "device-mapping",
+    "label": "Device Mapping"
+  }
+]

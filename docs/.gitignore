@@ -1,0 +1,5 @@
+node_modules/
+doc_build/
+.rspress/
+*.log
+.DS_Store

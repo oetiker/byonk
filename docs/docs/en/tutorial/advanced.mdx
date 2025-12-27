@@ -1,0 +1,489 @@
+---
+title: Advanced Topics
+---
+
+# Advanced Topics
+
+This guide covers advanced techniques for building robust Byonk screens.
+
+## Error Handling
+
+### Graceful HTTP Failures
+
+Always wrap HTTP requests in `pcall`:
+
+```lua
+local function fetch_data(url)
+  local ok, response = pcall(function()
+    return http_get(url)
+  end)
+
+  if not ok then
+    log_error("HTTP request failed: " .. tostring(response))
+    return nil, response
+  end
+
+  return response, nil
+end
+
+-- Usage
+local data, err = fetch_data("https://api.example.com/data")
+if err then
+  return {
+    data = { error = "Could not fetch data" },
+    refresh_rate = 60  -- Retry in 1 minute
+  }
+end
+```
+
+### JSON Parsing Errors
+
+```lua
+local function safe_json_decode(str)
+  local ok, result = pcall(function()
+    return json_decode(str)
+  end)
+
+  if not ok then
+    log_error("JSON parse error: " .. tostring(result))
+    return nil
+  end
+
+  return result
+end
+```
+
+### Template Error Display
+
+When errors occur, display them helpfully:
+
+```lua
+return {
+  data = {
+    has_error = true,
+    error_message = "API returned invalid response",
+    error_details = "Expected JSON, got HTML",
+    retry_in = 60
+  },
+  refresh_rate = 60
+}
+```
+
+```svg
+{% if has_error %}
+  <rect x="20" y="20" width="760" height="440" fill="white" stroke="red" stroke-width="4" rx="10"/>
+  <text x="400" y="200" text-anchor="middle" font-size="24" fill="red">{{ error_message }}</text>
+  <text x="400" y="240" text-anchor="middle" font-size="16" fill="#666">{{ error_details }}</text>
+  <text x="400" y="300" text-anchor="middle" font-size="14" fill="#999">Retrying in {{ retry_in }} seconds...</text>
+{% else %}
+  <!-- Normal content -->
+{% endif %}
+```
+
+## HTML Scraping Techniques
+
+### Handling Missing Elements
+
+```lua
+local function safe_text(element)
+  if element then
+    return element:text()
+  end
+  return ""
+end
+
+local title = safe_text(doc:select_one("h1"))
+```
+
+### Complex Table Parsing
+
+```lua
+local function parse_table(doc, selector)
+  local rows = {}
+
+  doc:select(selector .. " tr"):each(function(row)
+    local cells = {}
+    row:select("td, th"):each(function(cell)
+      table.insert(cells, cell:text():match("^%s*(.-)%s*$"))  -- Trim whitespace
+    end)
+
+    if #cells > 0 then
+      table.insert(rows, cells)
+    end
+  end)
+
+  return rows
+end
+
+local data = parse_table(doc, "table.schedule")
+-- Returns: { {"9:00", "Meeting"}, {"10:00", "Call"}, ... }
+```
+
+### Following Links
+
+```lua
+local function get_detail_page(doc, selector)
+  local link = doc:select_one(selector)
+  if not link then return nil end
+
+  local href = link:attr("href")
+  if not href then return nil end
+
+  -- Handle relative URLs
+  if href:sub(1, 1) == "/" then
+    href = "https://example.com" .. href
+  end
+
+  return http_get(href)
+end
+```
+
+### Handling Pagination
+
+```lua
+local all_items = {}
+local page = 1
+
+while true do
+  local url = "https://example.com/list?page=" .. page
+  local html = http_get(url)
+  local doc = html_parse(html)
+
+  local items_found = 0
+  doc:select(".item"):each(function(el)
+    table.insert(all_items, el:text())
+    items_found = items_found + 1
+  end)
+
+  -- Stop if no items or we have enough
+  if items_found == 0 or #all_items >= 50 then
+    break
+  end
+
+  page = page + 1
+
+  -- Safety limit
+  if page > 10 then break end
+end
+```
+
+## Dynamic Refresh Rates
+
+### Time-Based Refresh
+
+```lua
+local now = time_now()
+local hour = tonumber(time_format(now, "%H"))
+
+local refresh_rate
+if hour >= 6 and hour < 22 then
+  -- Daytime: refresh frequently
+  refresh_rate = 300
+else
+  -- Night: refresh less often
+  refresh_rate = 3600
+end
+```
+
+### Event-Based Refresh
+
+```lua
+-- Refresh when the next event starts
+local next_event_time = events[1].timestamp
+local seconds_until = next_event_time - time_now()
+
+-- Refresh 30 seconds after event starts (to show updated state)
+local refresh_rate = math.max(30, seconds_until + 30)
+
+-- Cap at reasonable maximum
+refresh_rate = math.min(refresh_rate, 3600)
+```
+
+### Adaptive Refresh
+
+```lua
+-- Refresh more often if data is stale
+local last_update = data.updated_timestamp
+local age = time_now() - last_update
+
+if age > 600 then
+  -- Data is stale, refresh soon
+  refresh_rate = 60
+else
+  -- Data is fresh, normal refresh
+  refresh_rate = 300
+end
+```
+
+## Data Transformation
+
+### Sorting
+
+```lua
+-- Sort by time
+table.sort(items, function(a, b)
+  return a.timestamp < b.timestamp
+end)
+
+-- Sort alphabetically
+table.sort(items, function(a, b)
+  return a.name < b.name
+end)
+```
+
+### Filtering
+
+```lua
+local active = {}
+for _, item in ipairs(items) do
+  if item.status == "active" then
+    table.insert(active, item)
+  end
+end
+```
+
+### Limiting
+
+```lua
+local limit = params.limit or 10
+local limited = {}
+for i = 1, math.min(#items, limit) do
+  table.insert(limited, items[i])
+end
+```
+
+### Grouping
+
+```lua
+local by_category = {}
+for _, item in ipairs(items) do
+  local cat = item.category or "Other"
+  if not by_category[cat] then
+    by_category[cat] = {}
+  end
+  table.insert(by_category[cat], item)
+end
+```
+
+## Working with Dates
+
+### Relative Time
+
+```lua
+local function relative_time(timestamp)
+  local diff = timestamp - time_now()
+
+  if diff < 0 then
+    return "past"
+  elseif diff < 60 then
+    return "now"
+  elseif diff < 3600 then
+    return math.floor(diff / 60) .. " min"
+  elseif diff < 86400 then
+    return math.floor(diff / 3600) .. " hr"
+  else
+    return math.floor(diff / 86400) .. " days"
+  end
+end
+```
+
+### Date Comparison
+
+```lua
+local today_start = time_parse(time_format(time_now(), "%Y-%m-%d"), "%Y-%m-%d")
+local today_end = today_start + 86400
+
+local todays_events = {}
+for _, event in ipairs(events) do
+  if event.timestamp >= today_start and event.timestamp < today_end then
+    table.insert(todays_events, event)
+  end
+end
+```
+
+### Timezone Handling
+
+```lua
+-- time_format uses local timezone
+-- For UTC, parse the offset from API responses
+
+local function parse_iso_date(str)
+  -- "2024-12-27T14:30:00+01:00"
+  local y, m, d, h, min, s = str:match("(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+)")
+  if y then
+    return time_parse(
+      string.format("%s-%s-%s %s:%s:%s", y, m, d, h, min, s),
+      "%Y-%m-%d %H:%M:%S"
+    )
+  end
+  return nil
+end
+```
+
+## Performance Optimization
+
+### Minimize HTTP Requests
+
+```lua
+-- Bad: Multiple requests
+local weather = json_decode(http_get("https://api.example.com/weather"))
+local news = json_decode(http_get("https://api.example.com/news"))
+local stocks = json_decode(http_get("https://api.example.com/stocks"))
+
+-- Better: Combined endpoint if available
+local dashboard = json_decode(http_get("https://api.example.com/dashboard"))
+```
+
+### Early Exit
+
+```lua
+-- Check for errors early
+if not params.api_key then
+  return {
+    data = { error = "Missing API key" },
+    refresh_rate = 3600
+  }
+end
+```
+
+### Limit Data Processing
+
+```lua
+-- Only process what you need
+local limit = params.limit or 10
+for i, item in ipairs(json.items) do
+  if i > limit then break end
+  -- Process item
+end
+```
+
+## Testing Strategies
+
+### Test with Swagger UI
+
+1. Open `http://localhost:3000/swagger-ui`
+2. Use `/api/display` with a test MAC address
+3. Copy the image URL and open in browser
+4. Iterate on your script and template
+
+### Log Intermediate Values
+
+```lua
+log_info("Params: " .. json_encode(params))
+log_info("Fetched " .. #items .. " items")
+log_info("First item: " .. json_encode(items[1]))
+```
+
+### Create Test Screens
+
+```yaml
+# config.yaml
+devices:
+  "TE:ST:00:00:00:01":
+    screen: myscreen
+    params:
+      test_mode: true
+      mock_data: true
+```
+
+```lua
+if params.test_mode then
+  -- Use mock data for testing
+  return {
+    data = {
+      items = {
+        { name = "Test Item 1" },
+        { name = "Test Item 2" }
+      }
+    },
+    refresh_rate = 30
+  }
+end
+
+-- Normal data fetching
+```
+
+## Real-World Example: Room Booking
+
+This example combines many advanced techniques:
+
+```lua
+-- floerli.lua - Room booking display
+
+local room_name = params.room or "Rosa"
+local base_url = params.url or "https://floerli-olten.ch"
+
+log_info("Fetching bookings for room: " .. room_name)
+
+-- Fetch and parse
+local ok, html = pcall(function()
+  return http_get(base_url .. "/index.cgi?rm=calendar")
+end)
+
+if not ok then
+  log_error("Failed to fetch calendar: " .. tostring(html))
+  return {
+    data = {
+      room = room_name,
+      error = "Could not load calendar",
+      bookings = {}
+    },
+    refresh_rate = 60
+  }
+end
+
+local doc = html_parse(html)
+
+-- Find room column index
+local room_columns = {
+  Flora = 1, Salon = 2, ["Küche"] = 3, Bernsteinzimmer = 4,
+  Rosa = 5, Clara = 6, Cosy = 7, Sofia = 8
+}
+local col = room_columns[room_name] or 5
+
+-- Parse table
+local bookings = {}
+local now = time_now()
+local current_hour = tonumber(time_format(now, "%H"))
+
+doc:select("table.calendar tr"):each(function(row)
+  local time_cell = row:select_one("td:first-child")
+  local room_cell = row:select_one("td:nth-child(" .. (col + 1) .. ")")
+
+  if time_cell and room_cell then
+    local time_str = time_cell:text()
+    local hour = tonumber(time_str:match("^(%d+)"))
+
+    if hour and hour >= current_hour then
+      local booking_text = room_cell:text():match("^%s*(.-)%s*$")
+      local is_free = (booking_text == "" or booking_text == "frei")
+
+      table.insert(bookings, {
+        time = time_str,
+        title = is_free and nil or booking_text,
+        is_free = is_free
+      })
+    end
+  end
+end)
+
+-- Calculate refresh: at top of next hour
+local minutes_until_next_hour = 60 - tonumber(time_format(now, "%M"))
+local refresh_rate = math.max(60, minutes_until_next_hour * 60)
+
+return {
+  data = {
+    room = room_name,
+    bookings = bookings,
+    current_booking = bookings[1],
+    upcoming = { table.unpack(bookings, 2, 6) },
+    updated_at = time_format(now, "%H:%M")
+  },
+  refresh_rate = refresh_rate
+}
+```
+
+## Next Steps
+
+- [HTTP API Reference](/en/api/http-api) - Full endpoint documentation
+- [Lua API Reference](/en/api/lua-api) - Complete function reference

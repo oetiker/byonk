@@ -1,0 +1,226 @@
+---
+title: HTTP API Reference
+---
+
+# HTTP API Reference
+
+> Bring Your Own Ink - content server for TRMNL e-ink devices
+
+**Version:** 0.1.0
+
+## Overview
+
+Byonk provides a REST API for TRMNL device communication. The API handles device registration, content delivery, and logging.
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/setup` | Device registration |
+| `GET /api/display` | Get display content URL |
+| `GET /api/image/:id` | Get rendered PNG |
+| `POST /api/log` | Submit device logs |
+| `GET /health` | Health check |
+
+:::tip
+For interactive API documentation, visit `/swagger-ui` on your running Byonk server.
+:::
+
+## Device
+
+### GET /api/setup
+
+**Register or retrieve device credentials**
+
+Registers a new TRMNL device or returns existing credentials for a previously registered device.
+
+#### Parameters
+
+| Name | In | Required | Description |
+|------|-----|----------|-------------|
+| `ID` | header | Yes | Device MAC address (e.g., "94:A9:90:8C:6D:18") |
+| `FW-Version` | header | No | Firmware version |
+| `Model` | header | No | Device model ("og" or "x") |
+
+#### Responses
+
+**200**: Success
+
+```json
+{
+  "status": 200,
+  "api_key": "a1b2c3d4e5f6g7h8i9j0...",
+  "friendly_id": "abc123def456",
+  "image_url": null,
+  "message": null
+}
+```
+
+## Display
+
+### GET /api/display
+
+**Get display content information**
+
+Returns JSON with a signed URL to fetch the actual image. The device should then request the image separately.
+
+#### Parameters
+
+| Name | In | Required | Description |
+|------|-----|----------|-------------|
+| `Access-Token` | header | Yes | API key from /api/setup |
+| `ID` | header | Yes | Device MAC address |
+| `Width` | header | No | Display width in pixels (default: 800) |
+| `Height` | header | No | Display height in pixels (default: 480) |
+| `Battery-Voltage` | header | No | Current battery voltage |
+| `RSSI` | header | No | WiFi signal strength |
+
+#### Responses
+
+**200**: Success
+
+```json
+{
+  "status": 0,
+  "image_url": "/api/image/94-A9-90-8C-6D-18?w=800&h=480&exp=1703676000&sig=abc123...",
+  "filename": "default",
+  "update_firmware": false,
+  "firmware_url": null,
+  "refresh_rate": 300,
+  "reset_firmware": false,
+  "special_function": null
+}
+```
+
+:::note
+The `status` field is `0` for success (not `200`). This matches TRMNL firmware expectations.
+:::
+
+### GET /api/image/:device_id
+
+**Get rendered PNG image**
+
+Returns the actual rendered PNG image for the device. The URL must include valid signature and expiration parameters.
+
+#### Parameters
+
+| Name | In | Required | Description |
+|------|-----|----------|-------------|
+| `device_id` | path | Yes | Device MAC with dashes (e.g., "94-A9-90-8C-6D-18") |
+| `w` | query | No | Width in pixels (default: 800) |
+| `h` | query | No | Height in pixels (default: 480) |
+| `exp` | query | Yes | Expiration timestamp (Unix seconds) |
+| `sig` | query | Yes | HMAC-SHA256 signature |
+
+#### Responses
+
+**200**: PNG image
+
+Content-Type: `image/png`
+
+The image is:
+- Scaled to fit the requested dimensions
+- Converted to grayscale
+- Dithered to 4 levels using Floyd-Steinberg
+- Encoded as 2-bit indexed PNG
+
+**403**: Invalid or expired signature
+
+```json
+{
+  "error": "Invalid signature or expired URL"
+}
+```
+
+## Logging
+
+### POST /api/log
+
+**Submit device logs**
+
+Devices can submit diagnostic logs for debugging.
+
+#### Parameters
+
+| Name | In | Required | Description |
+|------|-----|----------|-------------|
+| `ID` | header | Yes | Device MAC address |
+| `Access-Token` | header | Yes | API key |
+
+#### Request Body
+
+```json
+{
+  "logs": [
+    { "timestamp": 1703672400, "level": "info", "message": "Boot complete" },
+    { "timestamp": 1703672410, "level": "error", "message": "WiFi timeout" }
+  ]
+}
+```
+
+#### Responses
+
+**200**: Logs received
+
+```json
+{
+  "status": 200,
+  "message": "Logs received"
+}
+```
+
+## Health
+
+### GET /health
+
+**Health check endpoint**
+
+Returns "OK" if the server is running.
+
+#### Responses
+
+**200**: OK
+
+```
+OK
+```
+
+## URL Signing
+
+Image URLs are signed with HMAC-SHA256 to prevent unauthorized access:
+
+- **Expiration**: URLs are valid for 1 hour
+- **Signature**: `sig` parameter contains the HMAC of `{path}:{exp}`
+- **Secret**: Configured via `URL_SECRET` environment variable
+
+If `URL_SECRET` is not set, a random secret is generated on startup (URLs won't survive restarts).
+
+## Error Responses
+
+All error responses follow this format:
+
+```json
+{
+  "error": "Description of the error"
+}
+```
+
+Common status codes:
+
+| Code | Description |
+|------|-------------|
+| 400 | Bad Request - Invalid parameters |
+| 403 | Forbidden - Invalid signature or API key |
+| 404 | Not Found - Unknown endpoint or device |
+| 500 | Internal Server Error - Script or render failure |
+
+## Rate Limits
+
+There are currently no rate limits. Each request triggers fresh content generation.
+
+## Size Limits
+
+| Device | Max Image Size |
+|--------|----------------|
+| TRMNL OG (800×480) | 90 KB |
+| TRMNL X (1872×1404) | 750 KB |
+
+Images exceeding these limits will return a 500 error.

@@ -1,0 +1,28 @@
+# Build artifacts
+target/
+*.swp
+
+# Documentation
+docs/node_modules/
+docs/doc_build/
+docs/.rspress/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# GitHub
+.github/
+
+# Development files
+*.md
+!README.md

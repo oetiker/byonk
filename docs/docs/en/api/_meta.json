@@ -1,0 +1,12 @@
+[
+  {
+    "type": "file",
+    "name": "http-api",
+    "label": "HTTP API"
+  },
+  {
+    "type": "file",
+    "name": "lua-api",
+    "label": "Lua API"
+  }
+]

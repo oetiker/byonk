@@ -1,0 +1,27 @@
+[
+  {
+    "type": "file",
+    "name": "index",
+    "label": "Home"
+  },
+  {
+    "type": "dir",
+    "name": "guide",
+    "label": "Guide"
+  },
+  {
+    "type": "dir",
+    "name": "concepts",
+    "label": "Concepts"
+  },
+  {
+    "type": "dir",
+    "name": "tutorial",
+    "label": "Tutorial"
+  },
+  {
+    "type": "dir",
+    "name": "api",
+    "label": "API Reference"
+  }
+]

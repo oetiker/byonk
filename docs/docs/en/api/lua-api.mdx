@@ -1,0 +1,421 @@
+---
+title: Lua API Reference
+---
+
+# Lua API Reference
+
+This page documents all functions available to Lua scripts in Byonk.
+
+## Global Variables
+
+### params
+
+A table containing device-specific parameters from `config.yaml`.
+
+```lua
+local station = params.station  -- From config.yaml
+local limit = params.limit or 10  -- With default
+```
+
+**Type:** `table`
+
+## HTTP Functions
+
+### http_get(url)
+
+Performs an HTTP GET request and returns the response body.
+
+```lua
+local response = http_get("https://api.example.com/data")
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `url` | string | The URL to fetch |
+
+**Returns:** `string` - The response body
+
+**Throws:** Error if the request fails
+
+**Example with error handling:**
+```lua
+local ok, response = pcall(function()
+  return http_get("https://api.example.com/data")
+end)
+
+if not ok then
+  log_error("Request failed: " .. tostring(response))
+end
+```
+
+## JSON Functions
+
+### json_decode(str)
+
+Parses a JSON string into a Lua table.
+
+```lua
+local data = json_decode('{"name": "Alice", "age": 30}')
+print(data.name)  -- "Alice"
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `str` | string | JSON string to parse |
+
+**Returns:** `table` - The parsed JSON as a Lua table
+
+**Notes:**
+- JSON arrays become 1-indexed Lua tables
+- JSON `null` becomes Lua `nil`
+
+### json_encode(table)
+
+Converts a Lua table to a JSON string.
+
+```lua
+local json = json_encode({name = "Bob", items = {1, 2, 3}})
+-- '{"name":"Bob","items":[1,2,3]}'
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `table` | table | Lua table to encode |
+
+**Returns:** `string` - JSON representation
+
+**Notes:**
+- Tables with sequential integer keys become arrays
+- Tables with string keys become objects
+
+## HTML Parsing Functions
+
+### html_parse(html)
+
+Parses an HTML string and returns a document object.
+
+```lua
+local doc = html_parse("<html><body><h1>Hello</h1></body></html>")
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `html` | string | HTML string to parse |
+
+**Returns:** `Document` - Parsed document object
+
+## Document Methods
+
+### doc:select(selector)
+
+Queries elements using a CSS selector.
+
+```lua
+local links = doc:select("a.nav-link")
+local items = doc:select("ul > li")
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `selector` | string | CSS selector |
+
+**Returns:** `Elements` - Collection of matching elements
+
+**Supported selectors:**
+- Tag: `div`, `a`, `span`
+- Class: `.classname`
+- ID: `#idname`
+- Attribute: `[href]`, `[data-id="123"]`
+- Combinators: `div > p`, `ul li`, `h1 + p`
+- Pseudo-classes: `:first-child`, `:nth-child(2)`
+
+### doc:select_one(selector)
+
+Returns only the first matching element.
+
+```lua
+local title = doc:select_one("h1")
+if title then
+  print(title:text())
+end
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `selector` | string | CSS selector |
+
+**Returns:** `Element` or `nil` - First matching element
+
+## Elements Methods
+
+### elements:each(fn)
+
+Iterates over all elements in the collection.
+
+```lua
+doc:select("li"):each(function(el)
+  print(el:text())
+end)
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `fn` | function | Callback receiving each element |
+
+## Element Methods
+
+### element:text()
+
+Gets the inner text content.
+
+```lua
+local heading = doc:select_one("h1")
+local text = heading:text()  -- "Welcome"
+```
+
+**Returns:** `string` - Text content
+
+### element:attr(name)
+
+Gets an attribute value.
+
+```lua
+local link = doc:select_one("a")
+local href = link:attr("href")  -- "https://..."
+local class = link:attr("class")  -- "nav-link" or nil
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `name` | string | Attribute name |
+
+**Returns:** `string` or `nil` - Attribute value
+
+### element:html()
+
+Gets the inner HTML.
+
+```lua
+local div = doc:select_one("div.content")
+local inner = div:html()  -- "<p>Paragraph</p><p>Another</p>"
+```
+
+**Returns:** `string` - Inner HTML
+
+### element:select(selector)
+
+Queries descendants of this element.
+
+```lua
+local table = doc:select_one("table.data")
+local rows = table:select("tr")
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `selector` | string | CSS selector |
+
+**Returns:** `Elements` - Matching descendants
+
+### element:select_one(selector)
+
+Returns first matching descendant.
+
+```lua
+local row = doc:select_one("tr")
+local first_cell = row:select_one("td")
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `selector` | string | CSS selector |
+
+**Returns:** `Element` or `nil`
+
+## Time Functions
+
+### time_now()
+
+Returns the current Unix timestamp.
+
+```lua
+local now = time_now()  -- e.g., 1703672400
+```
+
+**Returns:** `number` - Unix timestamp (seconds since 1970)
+
+### time_format(timestamp, format)
+
+Formats a timestamp into a string using the server's local timezone.
+
+```lua
+local now = time_now()
+time_format(now, "%H:%M")      -- "14:32"
+time_format(now, "%Y-%m-%d")   -- "2024-12-27"
+time_format(now, "%A, %B %d")  -- "Friday, December 27"
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `timestamp` | number | Unix timestamp |
+| `format` | string | strftime format string |
+
+**Returns:** `string` - Formatted date/time
+
+**Format codes:**
+
+| Code | Description | Example |
+|------|-------------|---------|
+| `%Y` | Year (4 digit) | 2024 |
+| `%y` | Year (2 digit) | 24 |
+| `%m` | Month (01-12) | 12 |
+| `%d` | Day (01-31) | 27 |
+| `%H` | Hour 24h (00-23) | 14 |
+| `%I` | Hour 12h (01-12) | 02 |
+| `%M` | Minute (00-59) | 32 |
+| `%S` | Second (00-59) | 05 |
+| `%A` | Weekday name | Friday |
+| `%a` | Weekday short | Fri |
+| `%B` | Month name | December |
+| `%b` | Month short | Dec |
+| `%p` | AM/PM | PM |
+| `%Z` | Timezone | CET |
+| `%%` | Literal % | % |
+
+### time_parse(str, format)
+
+Parses a date string into a Unix timestamp.
+
+```lua
+local ts = time_parse("2024-12-27 14:30", "%Y-%m-%d %H:%M")
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `str` | string | Date string to parse |
+| `format` | string | strftime format string |
+
+**Returns:** `number` - Unix timestamp
+
+**Note:** Uses local timezone for interpretation.
+
+## Logging Functions
+
+### log_info(message)
+
+Logs an informational message.
+
+```lua
+log_info("Processing request for: " .. station)
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `message` | string | Message to log |
+
+**Server output:**
+```
+INFO script=true: Processing request for: Olten
+```
+
+### log_warn(message)
+
+Logs a warning message.
+
+```lua
+log_warn("API response was empty")
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `message` | string | Message to log |
+
+### log_error(message)
+
+Logs an error message.
+
+```lua
+log_error("Failed to parse response: " .. err)
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `message` | string | Message to log |
+
+## Script Return Value
+
+Every script must return a table with this structure:
+
+```lua
+return {
+  data = {
+    -- Any data structure
+    -- Passed to SVG template as context
+  },
+  refresh_rate = 300  -- Seconds until next refresh
+}
+```
+
+### data
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `data` | table | Data passed to the Tera template |
+
+The `data` table can contain any Lua values:
+- Strings, numbers, booleans
+- Nested tables (become objects)
+- Arrays (1-indexed tables with sequential keys)
+
+### refresh_rate
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `refresh_rate` | number | Seconds until device should refresh |
+
+**Guidelines:**
+- **30-60**: Real-time data (transit, stocks)
+- **300-900**: Regular updates (weather, calendar)
+- **3600+**: Static or slow-changing content
+
+If `refresh_rate` is 0 or omitted, the screen's `default_refresh` from config is used.
+
+## Standard Lua Functions
+
+Byonk uses Lua 5.4. Standard library functions available include:
+
+### String
+- `string.format`, `string.sub`, `string.find`
+- `string.match`, `string.gmatch`, `string.gsub`
+- `string.upper`, `string.lower`, `string.len`
+
+### Table
+- `table.insert`, `table.remove`
+- `table.sort`, `table.concat`
+- `ipairs`, `pairs`
+
+### Math
+- `math.floor`, `math.ceil`, `math.abs`
+- `math.min`, `math.max`
+- `math.random`
+
+### Other
+- `tonumber`, `tostring`, `type`
+- `pcall` (for error handling)
+
+**Not available:** File I/O, OS functions, network (except `http_get`)

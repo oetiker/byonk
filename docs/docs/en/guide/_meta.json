@@ -1,0 +1,17 @@
+[
+  {
+    "type": "file",
+    "name": "index",
+    "label": "Introduction"
+  },
+  {
+    "type": "file",
+    "name": "installation",
+    "label": "Installation"
+  },
+  {
+    "type": "file",
+    "name": "configuration",
+    "label": "Configuration"
+  }
+]

@@ -1,0 +1,214 @@
+---
+title: Your First Screen
+---
+
+# Your First Screen
+
+Let's create a simple screen that displays a greeting and the current time. This will introduce you to the basic workflow of creating Byonk screens.
+
+## Step 1: Create the Lua Script
+
+Create a new file `screens/hello.lua`:
+
+```lua
+-- Hello World screen
+-- Displays a greeting with the current time
+
+local now = time_now()
+
+return {
+  data = {
+    greeting = "Hello, World!",
+    time = time_format(now, "%H:%M:%S"),
+    date = time_format(now, "%A, %B %d, %Y")
+  },
+  refresh_rate = 60  -- Refresh every minute
+}
+```
+
+**What this does:**
+- `time_now()` gets the current Unix timestamp
+- `time_format()` formats it into readable strings
+- The returned `data` table is passed to the template
+- `refresh_rate` tells the device to check back in 60 seconds
+
+## Step 2: Create the SVG Template
+
+Create a new file `screens/hello.svg`:
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
+  <style>
+    .greeting {
+      font-family: sans-serif;
+      font-size: 48px;
+      font-weight: bold;
+      fill: black;
+    }
+    .time {
+      font-family: sans-serif;
+      font-size: 72px;
+      font-weight: bold;
+      fill: black;
+    }
+    .date {
+      font-family: sans-serif;
+      font-size: 24px;
+      fill: #555;
+    }
+  </style>
+
+  <!-- White background -->
+  <rect width="800" height="480" fill="white"/>
+
+  <!-- Greeting -->
+  <text class="greeting" x="400" y="120" text-anchor="middle">
+    {{ greeting }}
+  </text>
+
+  <!-- Large time display -->
+  <text class="time" x="400" y="260" text-anchor="middle">
+    {{ time }}
+  </text>
+
+  <!-- Date below -->
+  <text class="date" x="400" y="320" text-anchor="middle">
+    {{ date }}
+  </text>
+
+  <!-- Footer -->
+  <text x="400" y="450" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#999">
+    My first Byonk screen!
+  </text>
+</svg>
+```
+
+**Template features used:**
+- `{{ variable }}` - Inserts values from the Lua script's `data` table
+- CSS styling for fonts and colors
+- `text-anchor="middle"` for centered text
+
+## Step 3: Add the Screen to Configuration
+
+Edit `config.yaml` to add your new screen:
+
+```yaml
+screens:
+  # ... existing screens ...
+
+  hello:
+    script: hello.lua
+    template: hello.svg
+    default_refresh: 60
+```
+
+## Step 4: Assign to a Device
+
+Still in `config.yaml`, assign the screen to your device:
+
+```yaml
+devices:
+  "YOUR:MAC:AD:DR:ES:S0":
+    screen: hello
+    params: {}
+```
+
+Replace `YOUR:MAC:AD:DR:ES:S0` with your device's actual MAC address.
+
+:::tip Finding Your MAC Address
+Check the Byonk server logs when your device connects - the MAC address is printed there.
+:::
+
+## Step 5: Test It
+
+1. **Restart Byonk** (config.yaml changes require restart)
+
+2. **Check the API** at `http://localhost:3000/swagger-ui`:
+   - Use the `/api/display` endpoint with your device's MAC
+   - You'll get a signed image URL
+   - Open that URL to see your screen!
+
+3. **Or wait for your device** to refresh automatically
+
+## Understanding the Result
+
+Your screen should show:
+
+```
+        Hello, World!
+
+          14:32:05
+
+    Friday, December 27, 2024
+
+      My first Byonk screen!
+```
+
+## Adding Parameters
+
+Let's make the greeting customizable. Update your files:
+
+**screens/hello.lua:**
+```lua
+local now = time_now()
+
+-- Get name from params, default to "World"
+local name = params.name or "World"
+
+return {
+  data = {
+    greeting = "Hello, " .. name .. "!",
+    time = time_format(now, "%H:%M:%S"),
+    date = time_format(now, "%A, %B %d, %Y")
+  },
+  refresh_rate = 60
+}
+```
+
+**config.yaml:**
+```yaml
+devices:
+  "YOUR:MAC:AD:DR:ES:S0":
+    screen: hello
+    params:
+      name: "Alice"
+```
+
+Now your screen will say "Hello, Alice!" instead of "Hello, World!".
+
+## Troubleshooting
+
+### Screen shows error
+
+Check the Byonk logs for script errors:
+
+```bash
+./target/release/byonk
+# Look for ERROR or WARN lines
+```
+
+### Template variables not replaced
+
+Make sure your Lua script returns a `data` table with the expected keys:
+
+```lua
+return {
+  data = {
+    greeting = "Hello"  -- Must match {{ greeting }} in template
+  },
+  refresh_rate = 60
+}
+```
+
+### Device not updating
+
+- Check that the device MAC in config matches exactly (uppercase, with colons)
+- Verify the device is pointing to your Byonk server
+- Check device WiFi connectivity
+
+## What's Next?
+
+Now that you have a basic screen working, learn more about:
+
+- [Lua Scripting](/en/tutorial/lua-scripting) - Fetch data from APIs
+- [SVG Templates](/en/tutorial/svg-templates) - Create complex layouts

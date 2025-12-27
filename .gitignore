@@ -1,3 +1,8 @@
 target/
 *.swp
 .DS_Store
+
+# Documentation build output
+docs/node_modules/
+docs/doc_build/
+docs/.rspress/

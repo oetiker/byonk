@@ -1,0 +1,389 @@
+---
+title: SVG Templates
+---
+
+# SVG Templates
+
+SVG templates define the visual layout of your screens. They use [Tera](https://tera.netlify.app/) templating syntax to insert data from your Lua scripts.
+
+## Template Basics
+
+A Byonk SVG template is a standard SVG file with Tera expressions:
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
+  <rect width="800" height="480" fill="white"/>
+
+  <text x="400" y="240" text-anchor="middle" font-size="24">
+    {{ message }}
+  </text>
+</svg>
+```
+
+**Key points:**
+- Set `viewBox` to `0 0 800 480` for TRMNL OG (or `0 0 1872 1404` for TRMNL X)
+- Always include `width` and `height` attributes
+- Use `{{ variable }}` to insert values from Lua
+
+## Display Dimensions
+
+| Device | Width | Height | Aspect Ratio |
+|--------|-------|--------|--------------|
+| TRMNL OG | 800 | 480 | 5:3 |
+| TRMNL X | 1872 | 1404 | 4:3 |
+
+Byonk automatically scales your SVG to fit the display, but matching the aspect ratio gives the best results.
+
+## Variables
+
+### Basic Interpolation
+
+```svg
+<text>{{ title }}</text>
+<text>{{ user.name }}</text>
+<text>{{ items[0].label }}</text>
+```
+
+### Filters
+
+Apply filters to modify values:
+
+```svg
+<!-- Truncate long text -->
+<text>{{ description | truncate(length=50) }}</text>
+
+<!-- Format timestamp (uses UTC) -->
+<text>{{ updated_at | format_time(format="%H:%M") }}</text>
+
+<!-- Get length -->
+<text>{{ items | length }} items</text>
+```
+
+:::tip Timezone Note
+The `format_time` template filter uses UTC timezone. For local time formatting, use `time_format()` in your Lua script and pass the pre-formatted string to the template.
+:::
+
+### Default Values
+
+```svg
+<text>{{ title | default(value="Untitled") }}</text>
+```
+
+## Control Flow
+
+### Conditionals
+
+```svg
+{% if error %}
+  <text fill="red">Error: {{ error }}</text>
+{% else %}
+  <text>All systems operational</text>
+{% endif %}
+```
+
+### Comparisons
+
+```svg
+{% if count > 0 %}
+  <text>{{ count }} items</text>
+{% elif count == 0 %}
+  <text>No items</text>
+{% endif %}
+
+{% if status == "active" %}
+  <circle fill="green" r="10"/>
+{% endif %}
+```
+
+### Boolean Checks
+
+```svg
+{% if is_online %}
+  <text fill="green">Online</text>
+{% endif %}
+
+{% if not items %}
+  <text>No data available</text>
+{% endif %}
+```
+
+## Loops
+
+### Basic Loop
+
+```svg
+{% for item in items %}
+  <text y="{{ 100 + loop.index0 * 30 }}">{{ item.name }}</text>
+{% endfor %}
+```
+
+### Loop Variables
+
+| Variable | Description |
+|----------|-------------|
+| `loop.index` | Current iteration (1-indexed) |
+| `loop.index0` | Current iteration (0-indexed) |
+| `loop.first` | True on first iteration |
+| `loop.last` | True on last iteration |
+
+### Positioning with Loops
+
+```svg
+{% for dep in departures %}
+  <!-- Calculate Y position based on index -->
+  <text y="{{ 80 + loop.index0 * 40 }}">
+    {{ dep.time }} - {{ dep.destination }}
+  </text>
+{% endfor %}
+```
+
+### Conditional Styling in Loops
+
+```svg
+{% for item in items %}
+  <!-- Alternating row backgrounds -->
+  {% if loop.index0 is odd %}
+    <rect y="{{ 100 + loop.index0 * 40 }}" width="800" height="40" fill="#f5f5f5"/>
+  {% endif %}
+
+  <text y="{{ 125 + loop.index0 * 40 }}">{{ item.name }}</text>
+{% endfor %}
+```
+
+### Empty State
+
+```svg
+{% if items | length > 0 %}
+  {% for item in items %}
+    <text>{{ item.name }}</text>
+  {% endfor %}
+{% else %}
+  <text fill="#999">No items found</text>
+{% endif %}
+```
+
+## Styling
+
+### Inline Styles
+
+```svg
+<text x="20" y="40"
+      font-family="sans-serif"
+      font-size="24"
+      font-weight="bold"
+      fill="black">
+  {{ title }}
+</text>
+```
+
+### CSS in Style Block
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480">
+  <style>
+    .title { font-family: sans-serif; font-size: 32px; font-weight: bold; }
+    .subtitle { font-family: sans-serif; font-size: 18px; fill: #666; }
+    .highlight { fill: #333; font-weight: bold; }
+  </style>
+
+  <text class="title" x="20" y="40">{{ title }}</text>
+  <text class="subtitle" x="20" y="70">{{ subtitle }}</text>
+</svg>
+```
+
+### Variable Fonts
+
+Byonk supports variable fonts via CSS `font-variation-settings`:
+
+```svg
+<style>
+  .light { font-family: Outfit; font-variation-settings: "wght" 300; }
+  .regular { font-family: Outfit; font-variation-settings: "wght" 400; }
+  .bold { font-family: Outfit; font-variation-settings: "wght" 700; }
+</style>
+```
+
+:::note
+Place custom font files (e.g., `Outfit-Variable.ttf`) in the `fonts/` directory.
+:::
+
+## Colors and Grayscale
+
+E-ink displays only show 4 gray levels. Design with this in mind:
+
+### Recommended Colors
+
+```svg
+<style>
+  .black { fill: rgb(0, 0, 0); }       /* Level 0 - Black */
+  .dark { fill: rgb(85, 85, 85); }     /* Level 1 - Dark gray */
+  .light { fill: rgb(170, 170, 170); } /* Level 2 - Light gray */
+  .white { fill: rgb(255, 255, 255); } /* Level 3 - White */
+</style>
+```
+
+### Testing Grayscale
+
+The included `graytest.svg` demonstrates all 4 levels:
+
+```svg
+<rect x="0" y="0" width="200" height="480" fill="rgb(0,0,0)"/>
+<rect x="200" y="0" width="200" height="480" fill="rgb(85,85,85)"/>
+<rect x="400" y="0" width="200" height="480" fill="rgb(170,170,170)"/>
+<rect x="600" y="0" width="200" height="480" fill="rgb(255,255,255)"/>
+```
+
+### Avoid
+
+- **Gradients** - Convert to dithered patterns (may look noisy)
+- **Subtle color differences** - May become indistinguishable
+- **Many gray levels** - Only 4 will render
+
+## Layout Patterns
+
+### Header + Content
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480">
+  <!-- Header bar -->
+  <rect width="800" height="70" fill="black"/>
+  <text x="30" y="48" fill="white" font-size="28">{{ title }}</text>
+  <text x="770" y="48" fill="#aaa" font-size="14" text-anchor="end">{{ time }}</text>
+
+  <!-- Content area -->
+  <g transform="translate(0, 70)">
+    <!-- Your content here, Y coordinates start at 0 -->
+  </g>
+</svg>
+```
+
+### Grid Layout
+
+```svg
+{% for item in items %}
+  {% set col = loop.index0 % 3 %}
+  {% set row = loop.index0 // 3 %}
+
+  <rect x="{{ col * 266 }}" y="{{ 80 + row * 100 }}"
+        width="260" height="90" fill="#f0f0f0" rx="5"/>
+  <text x="{{ col * 266 + 130 }}" y="{{ 130 + row * 100 }}"
+        text-anchor="middle">{{ item.name }}</text>
+{% endfor %}
+```
+
+### Two Columns
+
+```svg
+<!-- Left column -->
+<text x="30" y="100">Left content</text>
+
+<!-- Divider -->
+<line x1="400" y1="80" x2="400" y2="450" stroke="#ccc"/>
+
+<!-- Right column -->
+<text x="430" y="100">Right content</text>
+```
+
+## Dynamic Styling
+
+### Conditional Colors
+
+```svg
+{% for item in items %}
+  <text fill="{% if item.is_urgent %}red{% else %}black{% endif %}">
+    {{ item.name }}
+  </text>
+{% endfor %}
+```
+
+### Dynamic Classes
+
+```svg
+<text class="{% if count > 100 %}highlight{% else %}normal{% endif %}">
+  {{ count }}
+</text>
+```
+
+### Status Indicators
+
+```svg
+{% if status == "online" %}
+  <circle cx="20" cy="20" r="8" fill="green"/>
+{% elif status == "warning" %}
+  <circle cx="20" cy="20" r="8" fill="orange"/>
+{% else %}
+  <circle cx="20" cy="20" r="8" fill="red"/>
+{% endif %}
+```
+
+## Common Patterns
+
+### Truncating Long Text
+
+```svg
+<text>
+  {% if title | length > 30 %}
+    {{ title | truncate(length=30) }}
+  {% else %}
+    {{ title }}
+  {% endif %}
+</text>
+```
+
+### Formatted Numbers
+
+Use Lua to format numbers before passing to template:
+
+```lua
+-- In Lua script
+return {
+  data = {
+    temperature = string.format("%.1f°C", temp),
+    price = string.format("$%.2f", amount)
+  }
+}
+```
+
+### Time-Based Styling
+
+```lua
+-- In Lua script
+local hour = tonumber(time_format(time_now(), "%H"))
+return {
+  data = {
+    is_night = hour < 6 or hour > 20
+  }
+}
+```
+
+```svg
+<rect width="800" height="480" fill="{% if is_night %}#333{% else %}white{% endif %}"/>
+```
+
+## Debugging Templates
+
+### Show Raw Data
+
+```svg
+<!-- Temporarily add this to see all data -->
+<text x="10" y="460" font-size="10" fill="#999">
+  Debug: {{ items | length }} items
+</text>
+```
+
+### Check for Missing Data
+
+```svg
+{% if not title %}
+  <text fill="red">ERROR: title is missing!</text>
+{% endif %}
+```
+
+### Template Errors
+
+If your template has a syntax error, Byonk will display an error screen with the message. Check the server logs for details.
+
+## Next Steps
+
+- [Advanced Topics](/en/tutorial/advanced) - HTML scraping, error handling
+- [API Reference](/en/api/lua-api) - Complete Lua function reference

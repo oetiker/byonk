@@ -1,0 +1,27 @@
+[
+  {
+    "type": "file",
+    "name": "index",
+    "label": "Overview"
+  },
+  {
+    "type": "file",
+    "name": "first-screen",
+    "label": "Your First Screen"
+  },
+  {
+    "type": "file",
+    "name": "lua-scripting",
+    "label": "Lua Scripting"
+  },
+  {
+    "type": "file",
+    "name": "svg-templates",
+    "label": "SVG Templates"
+  },
+  {
+    "type": "file",
+    "name": "advanced",
+    "label": "Advanced Topics"
+  }
+]

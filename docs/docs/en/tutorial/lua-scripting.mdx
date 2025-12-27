@@ -1,0 +1,405 @@
+---
+title: Lua Scripting
+---
+
+# Lua Scripting
+
+Lua scripts are the data engine of Byonk screens. They fetch, process, and transform data before it's rendered by the template. This guide covers all the APIs available to your scripts.
+
+## Script Structure
+
+Every Lua script must return a table with `data` and `refresh_rate`:
+
+```lua
+-- Optional: Use params from config.yaml
+local my_param = params.some_key or "default"
+
+-- Your logic here
+local result = do_something()
+
+-- Required: Return data for template
+return {
+  data = {
+    -- Passed to SVG template
+  },
+  refresh_rate = 300  -- Seconds until next refresh
+}
+```
+
+## Parameters
+
+Device-specific parameters are available via the global `params` table:
+
+```yaml
+# config.yaml
+devices:
+  "94:A9:90:8C:6D:18":
+    screen: weather
+    params:
+      city: "Zurich"
+      units: "metric"
+```
+
+```lua
+-- In your script
+local city = params.city        -- "Zurich"
+local units = params.units      -- "metric"
+local missing = params.other    -- nil (not defined)
+
+-- Always provide defaults
+local limit = params.limit or 10
+```
+
+## HTTP Requests
+
+### http_get(url)
+
+Fetches a URL and returns the response body as a string.
+
+```lua
+local response = http_get("https://api.example.com/data")
+```
+
+**Error handling:**
+
+```lua
+local ok, response = pcall(function()
+  return http_get("https://api.example.com/data")
+end)
+
+if not ok then
+  log_error("Request failed: " .. tostring(response))
+  return {
+    data = { error = "Failed to fetch data" },
+    refresh_rate = 60
+  }
+end
+```
+
+**URL encoding:**
+
+```lua
+local city = "Zürich, Schweiz"
+local encoded = city:gsub(" ", "%%20"):gsub(",", "%%2C")
+local url = "https://api.example.com/city?name=" .. encoded
+```
+
+## JSON
+
+### json_decode(string)
+
+Parses a JSON string into a Lua table.
+
+```lua
+local response = http_get("https://api.example.com/data")
+local data = json_decode(response)
+
+-- Access fields
+local name = data.name
+local items = data.items
+local first = data.items[1]  -- Lua arrays are 1-indexed!
+```
+
+### json_encode(table)
+
+Converts a Lua table to a JSON string.
+
+```lua
+local data = { name = "test", values = {1, 2, 3} }
+local json_str = json_encode(data)
+-- '{"name":"test","values":[1,2,3]}'
+```
+
+## HTML Parsing
+
+For scraping web pages, Byonk provides CSS selector-based HTML parsing.
+
+### html_parse(html)
+
+Parses an HTML string and returns a document object.
+
+```lua
+local html = http_get("https://example.com")
+local doc = html_parse(html)
+```
+
+### doc:select(selector)
+
+Queries elements using CSS selectors. Returns an elements collection.
+
+```lua
+local links = doc:select("a.nav-link")
+local rows = doc:select("table.data tr")
+local header = doc:select("h1")
+```
+
+### doc:select_one(selector)
+
+Returns only the first matching element (or nil).
+
+```lua
+local title = doc:select_one("title")
+if title then
+  log_info("Page title: " .. title:text())
+end
+```
+
+### elements:each(fn)
+
+Iterates over matched elements.
+
+```lua
+local items = {}
+doc:select("ul.list li"):each(function(el)
+  table.insert(items, {
+    text = el:text(),
+    link = el:attr("href")
+  })
+end)
+```
+
+### element:text()
+
+Gets the inner text content.
+
+```lua
+local heading = doc:select_one("h1")
+local text = heading:text()  -- "Welcome to Example"
+```
+
+### element:attr(name)
+
+Gets an attribute value.
+
+```lua
+local link = doc:select_one("a")
+local href = link:attr("href")   -- "https://..."
+local class = link:attr("class") -- "nav-link"
+```
+
+### element:html()
+
+Gets the inner HTML.
+
+```lua
+local div = doc:select_one("div.content")
+local inner_html = div:html()
+```
+
+### Example: Scraping a Table
+
+```lua
+local html = http_get("https://example.com/data")
+local doc = html_parse(html)
+
+local rows = {}
+doc:select("table tbody tr"):each(function(row)
+  local cells = {}
+  row:select("td"):each(function(cell)
+    table.insert(cells, cell:text())
+  end)
+
+  if #cells >= 2 then
+    table.insert(rows, {
+      name = cells[1],
+      value = cells[2]
+    })
+  end
+end)
+
+return {
+  data = { rows = rows },
+  refresh_rate = 900
+}
+```
+
+## Time Functions
+
+### time_now()
+
+Returns the current Unix timestamp (seconds since 1970).
+
+```lua
+local now = time_now()  -- e.g., 1703672400
+```
+
+### time_format(timestamp, format)
+
+Formats a timestamp into a string using strftime patterns.
+
+```lua
+local now = time_now()
+
+time_format(now, "%H:%M")        -- "14:32"
+time_format(now, "%H:%M:%S")     -- "14:32:05"
+time_format(now, "%Y-%m-%d")     -- "2024-12-27"
+time_format(now, "%A")           -- "Friday"
+time_format(now, "%B %d, %Y")    -- "December 27, 2024"
+```
+
+**Common format codes:**
+
+| Code | Description | Example |
+|------|-------------|---------|
+| `%H` | Hour (24h) | 14 |
+| `%M` | Minute | 32 |
+| `%S` | Second | 05 |
+| `%Y` | Year | 2024 |
+| `%m` | Month | 12 |
+| `%d` | Day | 27 |
+| `%A` | Weekday name | Friday |
+| `%B` | Month name | December |
+| `%a` | Short weekday | Fri |
+| `%b` | Short month | Dec |
+
+### time_parse(string, format)
+
+Parses a date string into a Unix timestamp.
+
+```lua
+local ts = time_parse("2024-12-27 14:30", "%Y-%m-%d %H:%M")
+```
+
+## Logging
+
+Write messages to the Byonk server logs.
+
+```lua
+log_info("Processing request for station: " .. station)
+log_warn("API returned empty response")
+log_error("Failed to parse JSON: " .. err)
+```
+
+Logs appear in the server output:
+
+```
+INFO script=true: Processing request for station: Olten
+WARN script=true: API returned empty response
+ERROR script=true: Failed to parse JSON: unexpected token
+```
+
+## Complete Example: Transit API
+
+Here's a real-world example fetching transit data:
+
+```lua
+-- transit.lua - Fetch public transport departures
+
+local station = params.station or "Olten"
+local limit = params.limit or 8
+
+log_info("Fetching departures for: " .. station)
+
+-- URL encode the station name
+local encoded = station:gsub(" ", "%%20"):gsub(",", "%%2C")
+local url = "https://transport.opendata.ch/v1/stationboard"
+      .. "?station=" .. encoded
+      .. "&limit=" .. limit
+
+-- Fetch with error handling
+local ok, response = pcall(function()
+  return http_get(url)
+end)
+
+if not ok then
+  log_error("API request failed: " .. tostring(response))
+  return {
+    data = {
+      station = station,
+      error = "Failed to fetch departures",
+      departures = {}
+    },
+    refresh_rate = 60
+  }
+end
+
+-- Parse JSON
+local json = json_decode(response)
+
+-- Transform data for template
+local departures = {}
+local now = time_now()
+
+for i, dep in ipairs(json.stationboard or {}) do
+  local departure_time = dep.stop and dep.stop.departure or ""
+  local hour, min = departure_time:match("T(%d+):(%d+)")
+
+  table.insert(departures, {
+    time = hour and (hour .. ":" .. min) or "??:??",
+    line = (dep.category or "") .. (dep.number or ""),
+    destination = dep.to or "Unknown",
+    delay = dep.stop and dep.stop.delay or 0
+  })
+end
+
+-- Calculate smart refresh rate
+local refresh_rate = 300
+if #departures > 0 and json.stationboard[1].stop then
+  local first_dep = json.stationboard[1].stop.departureTimestamp
+  if first_dep then
+    local seconds_until = first_dep - now
+    refresh_rate = math.max(30, math.min(seconds_until + 30, 900))
+  end
+end
+
+log_info("Found " .. #departures .. " departures, refresh in " .. refresh_rate .. "s")
+
+return {
+  data = {
+    station = json.station and json.station.name or station,
+    departures = departures,
+    updated_at = time_format(now, "%H:%M")
+  },
+  refresh_rate = refresh_rate
+}
+```
+
+## Tips & Best Practices
+
+### Always Handle Errors
+
+```lua
+local ok, result = pcall(function()
+  return http_get(url)
+end)
+
+if not ok then
+  return { data = { error = "..." }, refresh_rate = 60 }
+end
+```
+
+### Provide Default Values
+
+```lua
+local limit = params.limit or 10
+local show_delays = params.show_delays or true
+```
+
+### Log for Debugging
+
+```lua
+log_info("Params: " .. json_encode(params))
+log_info("Fetched " .. #items .. " items")
+```
+
+### Keep It Simple
+
+Scripts run on every request. Avoid:
+- Complex computations
+- Multiple HTTP requests when one will do
+- Parsing more data than needed
+
+### Use Smart Refresh Rates
+
+Don't refresh more often than necessary:
+
+```lua
+-- Real-time data: 30-60 seconds
+-- Regular updates: 300-900 seconds
+-- Static content: 3600+ seconds
+```
+
+## Next Steps
+
+- [SVG Templates](/en/tutorial/svg-templates) - Design the visual layout
+- [Advanced Topics](/en/tutorial/advanced) - Error handling, caching strategies

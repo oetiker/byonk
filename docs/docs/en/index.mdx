@@ -1,0 +1,92 @@
+---
+pageType: home
+hero:
+  name: Byonk
+  text: Bring Your Own Ink
+  tagline: Self-hosted content server for TRMNL e-ink devices
+  actions:
+    - theme: brand
+      text: Get Started
+      link: /en/guide/
+    - theme: alt
+      text: View on GitHub
+      link: https://github.com/oetiker/byonk
+features:
+  - title: Lua Scripting
+    details: Fetch data from any API, scrape websites, process JSON - all with simple Lua scripts.
+    icon: 📜
+  - title: SVG Templates
+    details: Design pixel-perfect screens using SVG with Tera templating (Jinja2-style syntax).
+    icon: 🎨
+  - title: Variable Fonts
+    details: Full support for variable font weights via CSS font-variation-settings.
+    icon: ✨
+  - title: Smart Refresh
+    details: Scripts control when devices refresh - optimize for fresh data and battery life.
+    icon: 🔄
+  - title: 4-Level Grayscale
+    details: Floyd-Steinberg dithering optimized for e-paper's 4 gray levels.
+    icon: 🖼️
+  - title: Device Mapping
+    details: Assign different screens to different devices via simple YAML configuration.
+    icon: 📱
+---
+
+## Quick Start
+
+```bash
+# Clone and build
+git clone https://github.com/oetiker/byonk.git
+cd byonk
+cargo build --release
+
+# Run the server
+./target/release/byonk
+```
+
+Point your TRMNL device to `http://your-server:3000` and it will start displaying content.
+
+## How It Works
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  Lua Script │ ──▶ │ SVG Template│ ──▶ │  Renderer   │ ──▶ │  E-ink PNG  │
+│  (fetch data)     │  (layout)   │     │  (dither)   │     │  (display)  │
+└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
+```
+
+1. **Lua scripts** fetch data from APIs or scrape websites
+2. **SVG templates** render the data into beautiful layouts
+3. **Renderer** converts SVG to dithered PNG optimized for e-ink
+4. **Device** displays the content and sleeps until next refresh
+
+## Example: Transit Departures
+
+**Lua Script** fetches real-time data:
+```lua
+local response = http_get("https://transport.opendata.ch/v1/stationboard?station=Olten")
+local data = json_decode(response)
+
+return {
+  data = { departures = data.stationboard },
+  refresh_rate = 60
+}
+```
+
+**SVG Template** renders the display:
+```svg
+<svg viewBox="0 0 800 480">
+  {% for dep in departures %}
+  <text y="{{ 100 + loop.index0 * 40 }}">
+    {{ dep.category }}{{ dep.number }} → {{ dep.to }}
+  </text>
+  {% endfor %}
+</svg>
+```
+
+## Next Steps
+
+- [Installation Guide](/en/guide/) - Set up Byonk on your server
+- [Architecture](/en/concepts/architecture) - Understand how Byonk works
+- [Create Your First Screen](/en/tutorial/first-screen) - Build a custom display
+- [API Reference](/en/api/http-api) - HTTP and Lua API documentation

@@ -1,0 +1,172 @@
+---
+title: Configuration
+---
+
+# Configuration
+
+Byonk uses a YAML configuration file to define screens and map devices to them. By default, this file is `config.yaml` in the working directory.
+
+## Configuration Structure
+
+```yaml
+# Screen definitions
+screens:
+  transit:
+    script: transit.lua        # Lua script in screens/
+    template: transit.svg      # SVG template in screens/
+    default_refresh: 60        # Fallback refresh rate (seconds)
+
+  weather:
+    script: weather.lua
+    template: weather.svg
+    default_refresh: 900
+
+# Device-to-screen mapping
+devices:
+  "94:A9:90:8C:6D:18":         # Device MAC address
+    screen: transit             # Which screen to display
+    params:                     # Parameters passed to Lua script
+      station: "Olten, Bahnhof"
+      limit: 8
+
+  "AA:BB:CC:DD:EE:FF":
+    screen: weather
+    params:
+      city: "Zurich"
+
+# Default screen for unmapped devices
+default_screen: default
+```
+
+## Screens Section
+
+Each screen definition has three properties:
+
+| Property | Required | Description |
+|----------|----------|-------------|
+| `script` | Yes | Lua script filename (relative to `screens/`) |
+| `template` | Yes | SVG template filename (relative to `screens/`) |
+| `default_refresh` | No | Fallback refresh rate in seconds (default: 900) |
+
+The `default_refresh` is used when the Lua script returns `refresh_rate = 0` or omits it entirely.
+
+## Devices Section
+
+Each device entry maps a MAC address to a screen:
+
+| Property | Required | Description |
+|----------|----------|-------------|
+| `screen` | Yes | Name of the screen definition to use |
+| `params` | No | Key-value pairs passed to the Lua script |
+
+### MAC Address Format
+
+- Use uppercase letters with colons: `"94:A9:90:8C:6D:18"`
+- The MAC address must be quoted (it's a YAML string)
+
+### Parameters
+
+The `params` section can contain any YAML values:
+
+```yaml
+params:
+  # Strings
+  station: "Olten, Bahnhof"
+
+  # Numbers
+  limit: 8
+  temperature_offset: -2.5
+
+  # Booleans
+  show_delays: true
+
+  # Lists
+  rooms:
+    - "Rosa"
+    - "Flora"
+```
+
+These are available in Lua as the global `params` table:
+
+```lua
+local station = params.station or "Default Station"
+local limit = params.limit or 10
+```
+
+## Default Screen
+
+The `default_screen` specifies which screen to show for devices not listed in the `devices` section:
+
+```yaml
+default_screen: default
+```
+
+If omitted, unknown devices receive an error response.
+
+## Hot Reloading
+
+Byonk loads Lua scripts and SVG templates fresh on every request. You can edit these files without restarting the server.
+
+However, `config.yaml` is only loaded at startup. Changes to device mappings or screen definitions require a server restart.
+
+## Example: Complete Configuration
+
+```yaml
+# Byonk Configuration
+
+screens:
+  # Default screen - shows time and a message
+  default:
+    script: default.lua
+    template: default.svg
+    default_refresh: 300
+
+  # Public transport departures
+  transit:
+    script: transit.lua
+    template: transit.svg
+    default_refresh: 60
+
+  # Room booking display
+  floerli:
+    script: floerli.lua
+    template: floerli.svg
+    default_refresh: 900
+
+devices:
+  # Kitchen display - bus departures
+  "94:A9:90:8C:6D:18":
+    screen: transit
+    params:
+      station: "Olten, Südwest"
+      limit: 8
+
+  # Office display - room booking
+  "AA:BB:CC:DD:EE:FF":
+    screen: floerli
+    params:
+      room: "Rosa"
+
+  # Lobby display - different bus stop
+  "BB:CC:DD:EE:FF:00":
+    screen: transit
+    params:
+      station: "Olten, Bahnhof"
+      limit: 6
+
+default_screen: default
+```
+
+## File Locations
+
+| File | Location | Hot Reload |
+|------|----------|------------|
+| Configuration | `$CONFIG_FILE` or `./config.yaml` | No (restart required) |
+| Lua scripts | `$SCREENS_DIR/*.lua` or `./screens/*.lua` | Yes |
+| SVG templates | `$SCREENS_DIR/*.svg` or `./screens/*.svg` | Yes |
+| Fonts | `./fonts/` | No (restart required) |
+
+## Next Steps
+
+- [Understand the architecture](/en/concepts/architecture)
+- [Create your first screen](/en/tutorial/first-screen)

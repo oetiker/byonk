@@ -26,15 +26,6 @@ export default defineConfig({
     },
   },
 
-  locales: [
-    {
-      lang: 'en',
-      label: 'English',
-      title: 'Byonk',
-      description: 'Self-hosted content server for TRMNL e-ink devices',
-    },
-  ],
-
   markdown: {
     showLineNumbers: true,
   },

@@ -12,7 +12,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 const BYONK_URL = process.env.BYONK_URL || 'http://localhost:3000';
-const OUTPUT_FILE = path.join(__dirname, '../content/en/api/http-api.mdx');
+const OUTPUT_FILE = path.join(__dirname, '../content/api/http-api.mdx');
 
 interface OpenAPISpec {
   info: {

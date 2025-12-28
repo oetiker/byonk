@@ -1,5 +1,5 @@
 # Build stage - using musl for static linking
-FROM rust:1.83-alpine AS builder
+FROM rust:1.85-alpine AS builder
 
 RUN apk add --no-cache musl-dev
 

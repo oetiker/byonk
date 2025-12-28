@@ -8,9 +8,18 @@ src = "src"
 [build]
 build-dir = "book"
 
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
 [output.html]
 default-theme = "light"
 preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/oetiker/byonk"
 edit-url-template = "https://github.com/oetiker/byonk/edit/main/docs/{path}"
 site-url = "/byonk/"
+
+[output.html.playground]
+editable = false
+
+[output.html.fold]
+enable = true

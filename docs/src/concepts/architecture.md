@@ -4,38 +4,27 @@ Byonk is designed as a content server that bridges dynamic data sources with e-i
 
 ## System Overview
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        TRMNL Device                              │
-│                     (e-ink display)                              │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-         ┌────────────────────┼────────────────────┐
-         │                    │                    │
-    [1] Setup            [2] Display          [3] Image
-    GET /api/setup       GET /api/display     GET /api/image/:id
-         │                    │                    │
-         ▼                    ▼                    ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        Byonk Server                              │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │                      HTTP Router                             ││
-│  └─────────────────────────────────────────────────────────────┘│
-│         │                    │                    │              │
-│         ▼                    ▼                    ▼              │
-│  ┌───────────┐      ┌─────────────┐      ┌───────────────┐      │
-│  │  Device   │      │     URL     │      │    Content    │      │
-│  │ Registry  │      │   Signer    │      │   Pipeline    │      │
-│  └───────────┘      └─────────────┘      └───────────────┘      │
-│                                                  │               │
-│                           ┌──────────────────────┼──────────┐   │
-│                           │                      │          │   │
-│                           ▼                      ▼          ▼   │
-│                    ┌───────────┐          ┌──────────┐ ┌──────┐ │
-│                    │    Lua    │          │ Template │ │Render│ │
-│                    │  Runtime  │          │ Service  │ │ SVG  │ │
-│                    └───────────┘          └──────────┘ └──────┘ │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Device["TRMNL Device (e-ink display)"]
+        D[Device]
+    end
+
+    D -->|"[1] GET /api/setup"| Router
+    D -->|"[2] GET /api/display"| Router
+    D -->|"[3] GET /api/image/:id"| Router
+
+    subgraph Server["Byonk Server"]
+        Router[HTTP Router]
+
+        Router --> Registry[Device Registry]
+        Router --> Signer[URL Signer]
+        Router --> Pipeline[Content Pipeline]
+
+        Pipeline --> Lua[Lua Runtime]
+        Pipeline --> Template[Template Service]
+        Pipeline --> Render[SVG Renderer]
+    end
 ```
 
 ## Core Components

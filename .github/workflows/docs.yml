@@ -65,15 +65,18 @@ jobs:
           # Stop Byonk
           kill $BYONK_PID || true
 
-      - name: Install mdBook
+      - name: Install mdBook and plugins
         run: |
           mkdir -p ~/bin
           curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.4.40/mdbook-v0.4.40-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C ~/bin
+          curl -sSL https://github.com/badboy/mdbook-mermaid/releases/download/v0.14.0/mdbook-mermaid-v0.14.0-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C ~/bin
           echo "$HOME/bin" >> $GITHUB_PATH
 
       - name: Build documentation
         working-directory: docs
-        run: mdbook build
+        run: |
+          mdbook-mermaid install .
+          mdbook build
 
       - name: Setup Pages
         uses: actions/configure-pages@v4

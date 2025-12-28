@@ -14,26 +14,26 @@
   <!-- Header -->
   <rect x="0" y="0" width="800" height="80" fill="black"/>
   <text class="header" x="400" y="55" text-anchor="middle">
-    {{ title }}
+    {{ data.title }}
   </text>
 
   <!-- Time display -->
   <text class="time" x="400" y="180" text-anchor="middle">
-    {{ time }}
+    {{ data.time }}
   </text>
   <text class="date" x="400" y="220" text-anchor="middle">
-    {{ date }}
+    {{ data.date }}
   </text>
 
   <!-- Subtitle -->
   <text class="subtitle" x="400" y="300" text-anchor="middle">
-    {{ subtitle }}
+    {{ data.subtitle }}
   </text>
 
   <!-- Message box -->
   <rect x="50" y="340" width="700" height="80" fill="rgb(240,240,240)" stroke="rgb(200,200,200)" stroke-width="1" rx="10"/>
   <text class="message" x="400" y="390" text-anchor="middle">
-    {{ message }}
+    {{ data.message }}
   </text>
 
   <!-- Footer -->

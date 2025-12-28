@@ -10,7 +10,10 @@ use utoipa::ToSchema;
 
 use crate::error::ApiError;
 use crate::models::{ApiKey, Device, DeviceId, DeviceModel, DisplaySpec};
-use crate::services::{ContentPipeline, DeviceRegistry, RenderService, UrlSigner};
+use crate::services::{
+    CachedContent, ContentCache, ContentPipeline, DeviceContext, DeviceRegistry, RenderService,
+    UrlSigner,
+};
 
 // Maximum allowed display dimensions to prevent DoS
 const MAX_DISPLAY_WIDTH: u32 = 2000;
@@ -58,8 +61,10 @@ pub struct ImageQuery {
 )]
 pub async fn handle_display<R: DeviceRegistry>(
     State(registry): State<Arc<R>>,
-    State(_renderer): State<Arc<RenderService>>,
+    State(renderer): State<Arc<RenderService>>,
     State(url_signer): State<Arc<UrlSigner>>,
+    State(content_pipeline): State<Arc<ContentPipeline>>,
+    State(content_cache): State<Arc<ContentCache>>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     // Extract required headers
@@ -148,37 +153,135 @@ pub async fn handle_display<R: DeviceRegistry>(
     device.last_seen = chrono::Utc::now();
     registry.update(device.clone()).await?;
 
-    // Build full image URL - device needs absolute URL for separate HTTP request
-    // Get the Host header to construct the base URL
-    let host = headers
-        .get("Host")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost:3000");
+    // Build device context for script
+    let device_ctx = DeviceContext {
+        battery_voltage: device.battery_voltage,
+        rssi: device.rssi,
+    };
 
-    // URL-encode the device ID (MAC address contains colons)
-    let encoded_device_id = device.device_id.to_string().replace(':', "-");
-    let path = format!("/api/image/{encoded_device_id}");
+    // Determine display spec from dimensions
+    let spec = DisplaySpec::from_dimensions(width, height)?;
 
-    // Sign the URL to prevent unauthorized access
-    let (signature, expires) = url_signer.sign(&path);
-    let image_url = format!(
-        "http://{host}/api/image/{encoded_device_id}?w={width}&h={height}&exp={expires}&sig={signature}"
-    );
+    // Run content pipeline and cache results
+    let device_mac = device.device_id.to_string();
+    let (refresh_rate, skip_update) = if content_pipeline
+        .config()
+        .get_screen_for_device(&device_mac)
+        .is_some()
+    {
+        // Device has a configured screen - run the content pipeline
+        let pipeline = content_pipeline.clone();
+        let mac = device_mac.clone();
+        let cache = content_cache.clone();
 
-    tracing::info!(
-        image_url = %image_url,
-        "Returning display response with image URL"
-    );
+        // Run in spawn_blocking because Lua scripts use blocking HTTP requests
+        let (refresh_rate, skip_update, error_opt) = tokio::task::spawn_blocking(move || {
+            match pipeline.generate_for_device(&mac, spec, Some(device_ctx)) {
+                Ok(result) => {
+                    if result.skip_update {
+                        // Script says no update needed - don't cache new content
+                        (result.refresh_rate, true, None)
+                    } else if let Some(png_bytes) = result.png_bytes {
+                        // Cache the rendered content
+                        let cached = CachedContent {
+                            png_bytes,
+                            refresh_rate: result.refresh_rate,
+                            generated_at: chrono::Utc::now(),
+                        };
+                        // We need to store synchronously - use a runtime handle
+                        let rt = tokio::runtime::Handle::current();
+                        rt.block_on(cache.store(&mac, cached));
+                        (result.refresh_rate, false, None)
+                    } else {
+                        // No bytes but not skip_update - shouldn't happen, treat as skip
+                        (result.refresh_rate, true, None)
+                    }
+                }
+                Err(e) => {
+                    // Generate error screen
+                    let error_msg = e.to_string();
+                    match pipeline.generate_error(&error_msg, spec) {
+                        Ok(bytes) => {
+                            let cached = CachedContent {
+                                png_bytes: bytes,
+                                refresh_rate: 60, // Retry in 1 minute on error
+                                generated_at: chrono::Utc::now(),
+                            };
+                            let rt = tokio::runtime::Handle::current();
+                            rt.block_on(cache.store(&mac, cached));
+                            (60, false, Some(error_msg))
+                        }
+                        Err(render_err) => (60, true, Some(format!("Render error: {render_err}"))),
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|e| ApiError::Internal(format!("Task error: {e}")))?;
 
-    // Return JSON response with image_url
+        if let Some(ref error_msg) = error_opt {
+            tracing::error!(error = %error_msg, "Content pipeline error, cached error screen");
+        } else if skip_update {
+            tracing::info!(refresh_rate = refresh_rate, "Script returned skip_update");
+        } else {
+            tracing::info!(refresh_rate = refresh_rate, "Content generated and cached");
+        }
+
+        (refresh_rate, skip_update)
+    } else {
+        // No configured screen - render default and cache it
+        let png_bytes = renderer.render_default(spec).await?;
+        let cached = CachedContent {
+            png_bytes,
+            refresh_rate: 900, // 15 minutes for static content
+            generated_at: chrono::Utc::now(),
+        };
+        content_cache.store(&device_mac, cached).await;
+        (900, false)
+    };
+
+    // Build image URL only if we have new content
+    let image_url = if skip_update {
+        tracing::info!(
+            refresh_rate = refresh_rate,
+            "Returning display response without image (skip_update)"
+        );
+        None
+    } else {
+        // Build full image URL - device needs absolute URL for separate HTTP request
+        // Get the Host header to construct the base URL
+        let host = headers
+            .get("Host")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("localhost:3000");
+
+        // URL-encode the device ID (MAC address contains colons)
+        let encoded_device_id = device.device_id.to_string().replace(':', "-");
+        let path = format!("/api/image/{encoded_device_id}");
+
+        // Sign the URL to prevent unauthorized access
+        let (signature, expires) = url_signer.sign(&path);
+        let url = format!(
+            "http://{host}/api/image/{encoded_device_id}?w={width}&h={height}&exp={expires}&sig={signature}"
+        );
+
+        tracing::info!(
+            image_url = %url,
+            refresh_rate = refresh_rate,
+            "Returning display response with image URL"
+        );
+        Some(url)
+    };
+
+    // Return JSON response
     // Note: firmware expects status=0 for success (not 200!)
     Ok(Json(DisplayJsonResponse {
         status: 0,
-        image_url: Some(image_url),
+        image_url,
         filename: "default".to_string(),
         update_firmware: false,
         firmware_url: None,
-        refresh_rate: 900, // 15 minutes
+        refresh_rate,
         reset_firmware: false,
         temperature_profile: Some("default".to_string()),
         special_function: None,
@@ -203,10 +306,11 @@ pub async fn handle_display<R: DeviceRegistry>(
     ),
     tag = "Display"
 )]
-pub async fn handle_image(
+pub async fn handle_image<R: DeviceRegistry>(
+    State(_registry): State<Arc<R>>,
     State(renderer): State<Arc<RenderService>>,
     State(url_signer): State<Arc<UrlSigner>>,
-    State(content_pipeline): State<Arc<ContentPipeline>>,
+    State(content_cache): State<Arc<ContentCache>>,
     Path(device_id): Path<String>,
     Query(query): Query<ImageQuery>,
 ) -> Result<Response, ApiError> {
@@ -220,7 +324,7 @@ pub async fn handle_image(
         return Err(ApiError::InvalidSignature);
     }
 
-    // Parse dimensions from query parameters (w, h)
+    // Parse dimensions from query parameters (w, h) for fallback rendering
     let width: u32 = query
         .w
         .filter(|&w| w > 0 && w <= MAX_DISPLAY_WIDTH)
@@ -236,65 +340,29 @@ pub async fn handle_image(
     tracing::info!(
         device_id = %device_id,
         device_mac = %device_mac,
-        width = width,
-        height = height,
         "Image request received"
     );
 
-    // Determine display spec from dimensions
-    let spec = DisplaySpec::from_dimensions(width, height)?;
-
-    // Try content pipeline first (for scripted content)
-    let png_bytes = if content_pipeline
-        .config()
-        .get_screen_for_device(&device_mac)
-        .is_some()
-    {
-        // Device has a configured screen - use the content pipeline
-        // Run in spawn_blocking because Lua scripts use blocking HTTP requests
-        // Convert Result to (Option<bytes>, Option<error_string>) to avoid Send issues
-        let pipeline = content_pipeline.clone();
-        let mac = device_mac.clone();
-        let (bytes_opt, refresh_opt, error_opt) = tokio::task::spawn_blocking(move || {
-            match pipeline.generate_for_device(&mac, spec) {
-                Ok(result) => (Some(result.png_bytes), Some(result.refresh_rate), None),
-                Err(e) => {
-                    // Try to generate error screen
-                    let error_msg = e.to_string();
-                    match pipeline.generate_error(&error_msg, spec) {
-                        Ok(bytes) => (Some(bytes), None, Some(error_msg)),
-                        Err(render_err) => {
-                            (None, None, Some(format!("Render error: {render_err}")))
-                        }
-                    }
-                }
-            }
-        })
-        .await
-        .map_err(|e| ApiError::Internal(format!("Task error: {e}")))?;
-
-        if let Some(bytes) = bytes_opt {
-            if let Some(refresh_rate) = refresh_opt {
-                tracing::info!(
-                    refresh_rate = refresh_rate,
-                    size_bytes = bytes.len(),
-                    "Scripted content generated successfully"
-                );
-            } else if let Some(ref error_msg) = error_opt {
-                tracing::error!(error = %error_msg, "Content pipeline error, showing error screen");
-            }
-            bytes
-        } else {
-            let error_msg = error_opt.unwrap_or_else(|| "Unknown error".to_string());
-            tracing::error!(error = %error_msg, "Failed to render content");
-            return Err(ApiError::Internal(error_msg));
-        }
+    // Try to get cached content (generated during /api/display)
+    let png_bytes = if let Some(cached) = content_cache.get(&device_mac).await {
+        tracing::info!(
+            size_bytes = cached.png_bytes.len(),
+            age_secs = (chrono::Utc::now() - cached.generated_at).num_seconds(),
+            "Serving cached content"
+        );
+        cached.png_bytes
     } else {
-        // No configured screen - use default static SVG
+        // No cached content - render default as fallback
+        // This can happen if /api/image is called before /api/display
+        tracing::warn!(
+            device_mac = %device_mac,
+            "No cached content found, rendering default"
+        );
+        let spec = DisplaySpec::from_dimensions(width, height)?;
         renderer.render_default(spec).await?
     };
 
-    tracing::info!(size_bytes = png_bytes.len(), "Image rendered successfully");
+    tracing::info!(size_bytes = png_bytes.len(), "Image served successfully");
 
     // Return PNG as binary response
     Ok((

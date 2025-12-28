@@ -16,8 +16,8 @@
 
   <!-- Header -->
   <rect x="0" y="0" width="800" height="70" fill="black"/>
-  <text class="title" x="30" y="48">{{ station }}</text>
-  <text class="time" x="780" y="48" text-anchor="end">{{ updated_at }}</text>
+  <text class="title" x="30" y="48">{{ data.station }}</text>
+  <text class="time" x="780" y="48" text-anchor="end">{% if device.battery_voltage %}{{ device.battery_voltage | round(method="ceil", precision=2) }}V  {% endif %}{{ data.updated_at }}</text>
 
   <!-- Column Headers -->
   <rect x="0" y="70" width="800" height="35" fill="rgb(240,240,240)"/>
@@ -26,8 +26,8 @@
   <text class="col-header" x="700" y="95" text-anchor="end">ABFAHRT</text>
 
   <!-- Departures -->
-  {% if departures | length > 0 %}
-  {% for dep in departures %}
+  {% if data.departures | length > 0 %}
+  {% for dep in data.departures %}
   <!-- Row {{ loop.index }} -->
   {% if loop.index0 is odd %}
   <rect x="0" y="{{ 105 + loop.index0 * 45 }}" width="800" height="45" fill="rgb(250,250,250)"/>

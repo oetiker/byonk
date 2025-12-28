@@ -6,6 +6,8 @@ use scraper::{Html, Selector};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::DeviceContext;
+
 /// Result from running a Lua script
 #[derive(Debug)]
 pub struct ScriptResult {
@@ -13,6 +15,8 @@ pub struct ScriptResult {
     pub data: serde_json::Value,
     /// Refresh rate in seconds
     pub refresh_rate: u32,
+    /// If true, skip rendering and just tell device to check back later
+    pub skip_update: bool,
 }
 
 /// Error type for Lua script execution
@@ -42,6 +46,7 @@ impl LuaRuntime {
         &self,
         script_path: &std::path::Path,
         params: &HashMap<String, serde_yaml::Value>,
+        device_ctx: Option<&DeviceContext>,
     ) -> Result<ScriptResult, ScriptError> {
         let full_path = self.screens_dir.join(script_path);
 
@@ -51,16 +56,21 @@ impl LuaRuntime {
         let lua = Lua::new();
 
         // Set up the Lua environment
-        self.setup_globals(&lua, params)?;
+        self.setup_globals(&lua, params, device_ctx)?;
 
         // Execute the script
         let result: Table = lua.load(&script_content).eval()?;
 
-        // Extract data and refresh_rate
+        // Extract data, refresh_rate, and skip_update
         let data = self.table_to_json(&lua, result.get::<Table>("data")?)?;
         let refresh_rate: u32 = result.get("refresh_rate").unwrap_or(900);
+        let skip_update: bool = result.get("skip_update").unwrap_or(false);
 
-        Ok(ScriptResult { data, refresh_rate })
+        Ok(ScriptResult {
+            data,
+            refresh_rate,
+            skip_update,
+        })
     }
 
     /// Set up Lua global functions and variables
@@ -68,6 +78,7 @@ impl LuaRuntime {
         &self,
         lua: &Lua,
         params: &HashMap<String, serde_yaml::Value>,
+        device_ctx: Option<&DeviceContext>,
     ) -> LuaResult<()> {
         let globals = lua.globals();
 
@@ -77,6 +88,18 @@ impl LuaRuntime {
             params_table.set(key.as_str(), self.yaml_to_lua(lua, value)?)?;
         }
         globals.set("params", params_table)?;
+
+        // Add device table
+        let device_table = lua.create_table()?;
+        if let Some(ctx) = device_ctx {
+            if let Some(voltage) = ctx.battery_voltage {
+                device_table.set("battery_voltage", voltage)?;
+            }
+            if let Some(rssi) = ctx.rssi {
+                device_table.set("rssi", rssi)?;
+            }
+        }
+        globals.set("device", device_table)?;
 
         // http_get(url) -> string
         let http_get = lua.create_function(|_, url: String| {

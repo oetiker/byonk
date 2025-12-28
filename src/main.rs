@@ -15,7 +15,7 @@ mod rendering;
 mod services;
 
 use models::AppConfig;
-use services::{ContentPipeline, InMemoryRegistry, RenderService, UrlSigner};
+use services::{ContentCache, ContentPipeline, InMemoryRegistry, RenderService, UrlSigner};
 
 /// OpenAPI documentation
 #[derive(OpenApi)]
@@ -53,6 +53,7 @@ struct AppState {
     renderer: Arc<RenderService>,
     url_signer: Arc<UrlSigner>,
     content_pipeline: Arc<ContentPipeline>,
+    content_cache: Arc<ContentCache>,
 }
 
 #[tokio::main]
@@ -105,11 +106,14 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to initialize content pipeline"),
     );
 
+    let content_cache = Arc::new(ContentCache::new());
+
     let state = AppState {
         registry: registry.clone(),
         renderer: renderer.clone(),
         url_signer: url_signer.clone(),
         content_pipeline: content_pipeline.clone(),
+        content_cache: content_cache.clone(),
     };
 
     // Build router
@@ -155,6 +159,8 @@ async fn handle_display(
         axum::extract::State(state.registry),
         axum::extract::State(state.renderer),
         axum::extract::State(state.url_signer),
+        axum::extract::State(state.content_pipeline),
+        axum::extract::State(state.content_cache),
         headers,
     )
     .await
@@ -167,9 +173,10 @@ async fn handle_image(
     query: axum::extract::Query<api::display::ImageQuery>,
 ) -> Result<axum::response::Response, error::ApiError> {
     api::handle_image(
+        axum::extract::State(state.registry),
         axum::extract::State(state.renderer),
         axum::extract::State(state.url_signer),
-        axum::extract::State(state.content_pipeline),
+        axum::extract::State(state.content_cache),
         path,
         query,
     )

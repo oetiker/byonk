@@ -8,10 +8,21 @@ use crate::services::{LuaRuntime, RenderService, TemplateService};
 
 /// Result from running the content pipeline
 pub struct ContentResult {
-    /// Rendered PNG bytes
-    pub png_bytes: Vec<u8>,
+    /// Rendered PNG bytes (None if skip_update is true)
+    pub png_bytes: Option<Vec<u8>>,
     /// Refresh rate in seconds (from script)
     pub refresh_rate: u32,
+    /// If true, no new content - just tell device to check back later
+    pub skip_update: bool,
+}
+
+/// Device context passed to templates
+#[derive(Debug, Clone, Default)]
+pub struct DeviceContext {
+    /// Battery voltage (if available)
+    pub battery_voltage: Option<f32>,
+    /// WiFi signal strength (if available)
+    pub rssi: Option<i32>,
 }
 
 /// Error from the content pipeline
@@ -60,6 +71,7 @@ impl ContentPipeline {
         &self,
         device_mac: &str,
         spec: DisplaySpec,
+        device_ctx: Option<DeviceContext>,
     ) -> Result<ContentResult, ContentError> {
         // Look up device config
         let (screen_config, device_config) = self
@@ -80,7 +92,7 @@ impl ContentPipeline {
             })
             .ok_or_else(|| ContentError::ScreenNotFound(device_mac.to_string()))?;
 
-        self.generate_for_screen(screen_config, &device_config.params, spec)
+        self.generate_for_screen(screen_config, &device_config.params, spec, device_ctx)
     }
 
     /// Generate content for a specific screen
@@ -89,20 +101,71 @@ impl ContentPipeline {
         screen: &ScreenConfig,
         params: &HashMap<String, serde_yaml::Value>,
         spec: DisplaySpec,
+        device_ctx: Option<DeviceContext>,
     ) -> Result<ContentResult, ContentError> {
-        // Run the Lua script
-        let script_result = self.lua_runtime.run_script(&screen.script, params)?;
+        // Run the Lua script with device context
+        let script_result = self
+            .lua_runtime
+            .run_script(&screen.script, params, device_ctx.as_ref())?;
+
+        // Use script's refresh rate, or fall back to screen's default
+        let refresh_rate = if script_result.refresh_rate > 0 {
+            script_result.refresh_rate
+        } else {
+            screen.default_refresh
+        };
+
+        // If script says skip_update, return early without rendering
+        if script_result.skip_update {
+            tracing::debug!(
+                script = %screen.script.display(),
+                refresh_rate = refresh_rate,
+                "Script returned skip_update, skipping render"
+            );
+            return Ok(ContentResult {
+                png_bytes: None,
+                refresh_rate,
+                skip_update: true,
+            });
+        }
 
         tracing::debug!(
             script = %screen.script.display(),
-            refresh_rate = script_result.refresh_rate,
+            refresh_rate = refresh_rate,
             "Script executed successfully"
         );
+
+        // Build namespaced template context:
+        // - data.*   : from Lua script
+        // - device.* : device info (battery_voltage, rssi)
+        // - params.* : config params
+        let mut template_context = serde_json::Map::new();
+
+        // Add Lua data under "data" namespace
+        template_context.insert("data".to_string(), script_result.data.clone());
+
+        // Add device context under "device" namespace
+        let mut device_obj = serde_json::Map::new();
+        if let Some(ref ctx) = device_ctx {
+            if let Some(voltage) = ctx.battery_voltage {
+                device_obj.insert("battery_voltage".to_string(), serde_json::json!(voltage));
+            }
+            if let Some(rssi) = ctx.rssi {
+                device_obj.insert("rssi".to_string(), serde_json::json!(rssi));
+            }
+        }
+        template_context.insert("device".to_string(), serde_json::Value::Object(device_obj));
+
+        // Add params under "params" namespace
+        let params_json = serde_json::to_value(params).unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+        template_context.insert("params".to_string(), params_json);
+
+        let template_data = serde_json::Value::Object(template_context);
 
         // Render the template
         let svg_content = self
             .template_service
-            .render(&screen.template, &script_result.data)?;
+            .render(&screen.template, &template_data)?;
 
         tracing::debug!(
             template = %screen.template.display(),
@@ -116,16 +179,10 @@ impl ContentPipeline {
             .svg_renderer
             .render_to_png(svg_content.as_bytes(), spec)?;
 
-        // Use script's refresh rate, or fall back to screen's default
-        let refresh_rate = if script_result.refresh_rate > 0 {
-            script_result.refresh_rate
-        } else {
-            screen.default_refresh
-        };
-
         Ok(ContentResult {
-            png_bytes,
+            png_bytes: Some(png_bytes),
             refresh_rate,
+            skip_update: false,
         })
     }
 

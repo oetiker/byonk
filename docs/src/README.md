@@ -29,19 +29,19 @@ Point your TRMNL device to `http://your-server:3000` and it will start displayin
 
 ```mermaid
 architecture-beta
-    group fetch(cloud)[1. Fetch Data]
-    group layout(cloud)[2. Layout]
-    group render(cloud)[3. Render]
-    group output(cloud)[4. Display]
+    group fetch(cloud)[Fetch Data]
+    group layout(cloud)[Layout]
+    group render(cloud)[Render]
+    group output(cloud)[Display]
 
     service lua(server)[Lua Script] in fetch
     service svg(disk)[SVG Template] in layout
     service dither(disk)[Dithering] in render
     service png(internet)[E-ink PNG] in output
 
-    lua:R --> L:svg
-    svg:R --> L:dither
-    dither:R --> L:png
+    lua:R -- L:svg
+    svg:R -- L:dither
+    dither:R -- L:png
 ```
 
 1. **Lua scripts** fetch data from APIs or scrape websites

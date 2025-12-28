@@ -19,12 +19,12 @@ architecture-beta
     service template(disk)[Template Service] in pipeline
     service renderer(disk)[SVG Renderer] in pipeline
 
-    display:R --> L:router
-    router:R --> L:registry
-    router:R --> L:signer
-    router:B --> T:lua
-    lua:R --> L:template
-    template:R --> L:renderer
+    display:R -- L:router
+    router:R -- L:registry
+    router:R -- L:signer
+    router:B -- T:lua
+    lua:R -- L:template
+    template:R -- L:renderer
 ```
 
 ## Core Components
@@ -95,64 +95,61 @@ Converts SVG to PNG optimized for e-ink:
 
 ```mermaid
 sequenceDiagram
-    box rgb(240, 248, 255) TRMNL Device
-        participant Device as 📱 E-ink Display
+    box LightBlue TRMNL Device
+        participant Device as E-ink Display
     end
-    box rgb(245, 245, 245) Byonk Server
-        participant Router as 🌐 HTTP Router
-        participant Registry as 📋 Device Registry
-        participant Signer as 🔐 URL Signer
-        participant Cache as 💾 Content Cache
-        participant Lua as 📜 Lua Runtime
-        participant Template as 🎨 Template Service
-        participant Renderer as 🖼️ SVG Renderer
+    box LightGray Byonk Server
+        participant Router as HTTP Router
+        participant Registry as Device Registry
+        participant Signer as URL Signer
+        participant Cache as Content Cache
+        participant Lua as Lua Runtime
+        participant Template as Template Service
+        participant Renderer as SVG Renderer
     end
-    box rgb(255, 248, 240) External
-        participant API as 🌍 External APIs
+    box LightYellow External
+        participant API as External APIs
     end
 
-    Note over Device,Registry: Phase 1: Device Registration
-    Device->>+Router: GET /api/setup<br/>ID: AA:BB:CC:DD:EE:FF<br/>FW-Version: 1.7.1<br/>Model: og
+    Note over Device,Registry: Phase 1 - Device Registration
+    Device->>+Router: GET /api/setup
     Router->>Registry: lookup/create device
-    Registry-->>Router: api_key, friendly_id
-    Router-->>-Device: 200 OK<br/>{ api_key, friendly_id, status: 200 }
-    Note right of Device: Device stores api_key
+    Registry-->>Router: api_key
+    Router-->>-Device: {api_key, friendly_id}
+    Note right of Device: Store api_key
 
-    Note over Device,Renderer: Phase 2: Content Generation
-    Device->>+Router: GET /api/display<br/>ID: AA:BB:CC:DD:EE:FF<br/>Access-Token: {api_key}<br/>Width: 800, Height: 480
+    Note over Device,Renderer: Phase 2 - Content Generation
+    Device->>+Router: GET /api/display
     Router->>Registry: validate token
-    Registry-->>Router: device config + params
+    Registry-->>Router: device config
 
-    rect rgb(230, 245, 230)
+    rect rgb(230,245,230)
         Note over Lua,Renderer: Content Pipeline
-        Router->>+Lua: execute(script.lua, params, device)
-        Lua->>+API: http_get("https://api.example.com/data")
-        API-->>-Lua: JSON response
-        Lua->>Lua: json_decode, transform data
-        Lua-->>-Router: { data: {...}, refresh_rate: 300 }
+        Router->>+Lua: execute script
+        Lua->>+API: http_get(url)
+        API-->>-Lua: JSON data
+        Lua-->>-Router: {data, refresh_rate}
 
-        Router->>+Template: render(template.svg, data, device, params)
+        Router->>+Template: render SVG
         Template-->>-Router: SVG document
 
-        Router->>+Renderer: svg_to_png(svg, 800, 480)
-        Renderer->>Renderer: rasterize + Floyd-Steinberg dither
-        Renderer-->>-Router: 2-bit PNG (4 colors)
+        Router->>+Renderer: convert to PNG
+        Renderer-->>-Router: dithered PNG
     end
 
-    Router->>Cache: store(device_id, png, refresh_rate)
-    Router->>Signer: sign(image_url, expiry=1h)
+    Router->>Cache: store content
+    Router->>Signer: sign URL
     Signer-->>Router: signed URL
-    Router-->>-Device: 200 OK<br/>{ status: 0, image_url: "/api/image/...?sig=...",<br/>  refresh_rate: 300 }
+    Router-->>-Device: {image_url, refresh_rate}
 
-    Note over Device,Cache: Phase 3: Image Download
-    Device->>+Router: GET /api/image/AA-BB-CC-DD-EE-FF?sig=...&exp=...
-    Router->>Signer: verify(signature, expiry)
-    Signer-->>Router: valid ✓
-    Router->>Cache: get(device_id)
+    Note over Device,Cache: Phase 3 - Image Download
+    Device->>+Router: GET /api/image/:id
+    Router->>Signer: verify signature
+    Router->>Cache: get content
     Cache-->>Router: PNG bytes
-    Router-->>-Device: 200 OK<br/>Content-Type: image/png<br/>[PNG bytes]
+    Router-->>-Device: PNG image
 
-    Note right of Device: Display image,<br/>sleep for refresh_rate
+    Note right of Device: Display and sleep
 ```
 
 ### Request Details

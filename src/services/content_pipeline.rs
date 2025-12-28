@@ -104,9 +104,9 @@ impl ContentPipeline {
         device_ctx: Option<DeviceContext>,
     ) -> Result<ContentResult, ContentError> {
         // Run the Lua script with device context
-        let script_result = self
-            .lua_runtime
-            .run_script(&screen.script, params, device_ctx.as_ref())?;
+        let script_result =
+            self.lua_runtime
+                .run_script(&screen.script, params, device_ctx.as_ref())?;
 
         // Use script's refresh rate, or fall back to screen's default
         let refresh_rate = if script_result.refresh_rate > 0 {
@@ -157,7 +157,8 @@ impl ContentPipeline {
         template_context.insert("device".to_string(), serde_json::Value::Object(device_obj));
 
         // Add params under "params" namespace
-        let params_json = serde_json::to_value(params).unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+        let params_json = serde_json::to_value(params)
+            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
         template_context.insert("params".to_string(), params_json);
 
         let template_data = serde_json::Value::Object(template_context);

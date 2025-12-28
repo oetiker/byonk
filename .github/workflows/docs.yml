@@ -74,9 +74,7 @@ jobs:
 
       - name: Build documentation
         working-directory: docs
-        run: |
-          mdbook-mermaid install .
-          mdbook build
+        run: mdbook build
 
       - name: Setup Pages
         uses: actions/configure-pages@v4

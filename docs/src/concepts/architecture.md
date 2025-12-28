@@ -8,7 +8,7 @@ Byonk is designed as a content server that bridges dynamic data sources with e-i
 architecture-beta
     group server(server)[Byonk Server]
 
-    service display(internet)[E-ink Display]
+    service display(internet)[TRMNL Display]
     service router(server)[HTTP Router] in server
     service registry(database)[Device Registry] in server
     service signer(disk)[URL Signer] in server

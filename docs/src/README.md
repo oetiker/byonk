@@ -34,7 +34,7 @@ architecture-beta
     service lua(server)[Lua Script] in pipeline
     service svg(disk)[SVG Template] in pipeline
     service dither(disk)[Dithering] in pipeline
-    service png(internet)[E-ink PNG] in pipeline
+    service png(internet)[TRMNL PNG] in pipeline
 
     lua:R -- L:svg
     svg:R -- L:dither

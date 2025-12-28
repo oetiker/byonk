@@ -95,53 +95,86 @@ Converts SVG to PNG optimized for e-ink:
 
 ```mermaid
 sequenceDiagram
-    participant Device as 📱 TRMNL Device
-    participant Router as 🌐 HTTP Router
-    participant Registry as 📋 Device Registry
-    participant Pipeline as ⚙️ Content Pipeline
-    participant Lua as 📜 Lua Runtime
-    participant Template as 🎨 Template Service
-    participant Renderer as 🖼️ SVG Renderer
+    box rgb(240, 248, 255) TRMNL Device
+        participant Device as 📱 E-ink Display
+    end
+    box rgb(245, 245, 245) Byonk Server
+        participant Router as 🌐 HTTP Router
+        participant Registry as 📋 Device Registry
+        participant Signer as 🔐 URL Signer
+        participant Cache as 💾 Content Cache
+        participant Lua as 📜 Lua Runtime
+        participant Template as 🎨 Template Service
+        participant Renderer as 🖼️ SVG Renderer
+    end
+    box rgb(255, 248, 240) External
+        participant API as 🌍 External APIs
+    end
 
-    Note over Device,Router: 1. Device Setup (first connection)
-    Device->>Router: GET /api/setup<br/>Headers: ID, FW-Version, Model
-    Router->>Registry: Register device
-    Registry-->>Router: API key generated
-    Router-->>Device: { api_key, friendly_id }
+    Note over Device,Registry: Phase 1: Device Registration
+    Device->>+Router: GET /api/setup<br/>ID: AA:BB:CC:DD:EE:FF<br/>FW-Version: 1.7.1<br/>Model: og
+    Router->>Registry: lookup/create device
+    Registry-->>Router: api_key, friendly_id
+    Router-->>-Device: 200 OK<br/>{ api_key, friendly_id, status: 200 }
+    Note right of Device: Device stores api_key
 
-    Note over Device,Router: 2. Display Request (needs content)
-    Device->>Router: GET /api/display<br/>Headers: Access-Token, ID
-    Router->>Pipeline: Generate content
-    Pipeline->>Lua: Execute script
-    Lua-->>Pipeline: { data, refresh_rate }
-    Pipeline->>Template: Render SVG
-    Template-->>Pipeline: SVG document
-    Pipeline->>Renderer: Convert to PNG
-    Renderer-->>Pipeline: Dithered PNG
-    Pipeline-->>Router: Cache content
-    Router-->>Device: { image_url (signed), refresh_rate }
+    Note over Device,Renderer: Phase 2: Content Generation
+    Device->>+Router: GET /api/display<br/>ID: AA:BB:CC:DD:EE:FF<br/>Access-Token: {api_key}<br/>Width: 800, Height: 480
+    Router->>Registry: validate token
+    Registry-->>Router: device config + params
 
-    Note over Device,Router: 3. Image Fetch
-    Device->>Router: GET /api/image/:id?sig=...
-    Router-->>Device: PNG image bytes
+    rect rgb(230, 245, 230)
+        Note over Lua,Renderer: Content Pipeline
+        Router->>+Lua: execute(script.lua, params, device)
+        Lua->>+API: http_get("https://api.example.com/data")
+        API-->>-Lua: JSON response
+        Lua->>Lua: json_decode, transform data
+        Lua-->>-Router: { data: {...}, refresh_rate: 300 }
+
+        Router->>+Template: render(template.svg, data, device, params)
+        Template-->>-Router: SVG document
+
+        Router->>+Renderer: svg_to_png(svg, 800, 480)
+        Renderer->>Renderer: rasterize + Floyd-Steinberg dither
+        Renderer-->>-Router: 2-bit PNG (4 colors)
+    end
+
+    Router->>Cache: store(device_id, png, refresh_rate)
+    Router->>Signer: sign(image_url, expiry=1h)
+    Signer-->>Router: signed URL
+    Router-->>-Device: 200 OK<br/>{ status: 0, image_url: "/api/image/...?sig=...",<br/>  refresh_rate: 300 }
+
+    Note over Device,Cache: Phase 3: Image Download
+    Device->>+Router: GET /api/image/AA-BB-CC-DD-EE-FF?sig=...&exp=...
+    Router->>Signer: verify(signature, expiry)
+    Signer-->>Router: valid ✓
+    Router->>Cache: get(device_id)
+    Cache-->>Router: PNG bytes
+    Router-->>-Device: 200 OK<br/>Content-Type: image/png<br/>[PNG bytes]
+
+    Note right of Device: Display image,<br/>sleep for refresh_rate
 ```
 
 ### Request Details
 
-**1. Device Setup** — When a TRMNL device first connects, it registers and receives an API key for subsequent requests.
+| Phase | Endpoint | Purpose |
+|-------|----------|---------|
+| **1. Setup** | `GET /api/setup` | Device registers, receives API key |
+| **2. Display** | `GET /api/display` | Triggers content generation, returns signed image URL |
+| **3. Image** | `GET /api/image/:id` | Downloads cached PNG using signed URL |
 
-**2. Display Request** — The device requests content. Byonk runs the Lua script, renders the template, generates a dithered PNG, and returns a signed URL.
+The content pipeline (Phase 2) executes these steps:
 
-**3. Image Fetch** — Device fetches the cached PNG using the signed URL.
-
-The content pipeline performs these steps:
-
-1. **Verify signature** - Check HMAC and expiration
-2. **Lookup device** - Find screen config and params
-3. **Execute Lua** - Run script, get data + refresh_rate
-4. **Render template** - Apply data to SVG template
-5. **Generate PNG** - Convert SVG, apply dithering
-6. **Return image** - Send PNG to device
+1. **Load script** — Read `screens/{screen}.lua` from disk
+2. **Execute Lua** — Run script with `params` and `device` context
+3. **Fetch external data** — Script calls `http_get()` to fetch APIs
+4. **Load template** — Read `screens/{screen}.svg` from disk
+5. **Render SVG** — Apply `data`, `device`, `params` to Tera template
+6. **Rasterize** — Convert SVG to pixels at target resolution
+7. **Dither** — Floyd-Steinberg to 4 gray levels
+8. **Encode PNG** — 2-bit indexed color, ~10-90KB
+9. **Cache** — Store for image fetch request
+10. **Sign URL** — HMAC-SHA256 with 1-hour expiry
 
 ## Technology Stack
 

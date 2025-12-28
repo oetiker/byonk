@@ -5,26 +5,26 @@ Byonk is designed as a content server that bridges dynamic data sources with e-i
 ## System Overview
 
 ```mermaid
-flowchart TB
-    subgraph Device["TRMNL Device (e-ink display)"]
-        D[Device]
-    end
+architecture-beta
+    group device(internet)[TRMNL Device]
+    group server(server)[Byonk Server]
+    group services(cloud)[Core Services] in server
+    group pipeline(disk)[Content Pipeline] in server
 
-    D -->|"[1] GET /api/setup"| Router
-    D -->|"[2] GET /api/display"| Router
-    D -->|"[3] GET /api/image/:id"| Router
+    service display(internet)[E-ink Display] in device
+    service router(server)[HTTP Router] in server
+    service registry(database)[Device Registry] in services
+    service signer(disk)[URL Signer] in services
+    service lua(server)[Lua Runtime] in pipeline
+    service template(disk)[Template Service] in pipeline
+    service renderer(disk)[SVG Renderer] in pipeline
 
-    subgraph Server["Byonk Server"]
-        Router[HTTP Router]
-
-        Router --> Registry[Device Registry]
-        Router --> Signer[URL Signer]
-        Router --> Pipeline[Content Pipeline]
-
-        Pipeline --> Lua[Lua Runtime]
-        Pipeline --> Template[Template Service]
-        Pipeline --> Render[SVG Renderer]
-    end
+    display:R --> L:router
+    router:R --> L:registry
+    router:R --> L:signer
+    router:B --> T:lua
+    lua:R --> L:template
+    template:R --> L:renderer
 ```
 
 ## Core Components
@@ -93,42 +93,48 @@ Converts SVG to PNG optimized for e-ink:
 
 ## Request Flow
 
-### 1. Device Setup
+```mermaid
+sequenceDiagram
+    participant Device as 📱 TRMNL Device
+    participant Router as 🌐 HTTP Router
+    participant Registry as 📋 Device Registry
+    participant Pipeline as ⚙️ Content Pipeline
+    participant Lua as 📜 Lua Runtime
+    participant Template as 🎨 Template Service
+    participant Renderer as 🖼️ SVG Renderer
 
-When a TRMNL device first connects:
+    Note over Device,Router: 1. Device Setup (first connection)
+    Device->>Router: GET /api/setup<br/>Headers: ID, FW-Version, Model
+    Router->>Registry: Register device
+    Registry-->>Router: API key generated
+    Router-->>Device: { api_key, friendly_id }
 
-```
-Device → GET /api/setup (headers: ID, FW-Version, Model)
-       ← { status: 200, api_key: "...", friendly_id: "..." }
-```
+    Note over Device,Router: 2. Display Request (needs content)
+    Device->>Router: GET /api/display<br/>Headers: Access-Token, ID
+    Router->>Pipeline: Generate content
+    Pipeline->>Lua: Execute script
+    Lua-->>Pipeline: { data, refresh_rate }
+    Pipeline->>Template: Render SVG
+    Template-->>Pipeline: SVG document
+    Pipeline->>Renderer: Convert to PNG
+    Renderer-->>Pipeline: Dithered PNG
+    Pipeline-->>Router: Cache content
+    Router-->>Device: { image_url (signed), refresh_rate }
 
-The device stores the API key for subsequent requests.
-
-### 2. Display Request
-
-When the device needs content:
-
-```
-Device → GET /api/display (headers: Access-Token, ID, Width, Height)
-       ← {
-           status: 0,
-           image_url: "/api/image/94-A9-90-8C-6D-18?w=800&h=480&exp=...&sig=...",
-           refresh_rate: 300
-         }
-```
-
-The response contains a signed URL to fetch the actual image.
-
-### 3. Image Fetch
-
-Device fetches the rendered image:
-
-```
-Device → GET /api/image/94-A9-90-8C-6D-18?w=800&h=480&exp=...&sig=...
-       ← [PNG image bytes]
+    Note over Device,Router: 3. Image Fetch
+    Device->>Router: GET /api/image/:id?sig=...
+    Router-->>Device: PNG image bytes
 ```
 
-This triggers the full content pipeline:
+### Request Details
+
+**1. Device Setup** — When a TRMNL device first connects, it registers and receives an API key for subsequent requests.
+
+**2. Display Request** — The device requests content. Byonk runs the Lua script, renders the template, generates a dithered PNG, and returns a signed URL.
+
+**3. Image Fetch** — Device fetches the cached PNG using the signed URL.
+
+The content pipeline performs these steps:
 
 1. **Verify signature** - Check HMAC and expiration
 2. **Lookup device** - Find screen config and params

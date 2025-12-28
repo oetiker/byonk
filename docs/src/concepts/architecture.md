@@ -6,18 +6,15 @@ Byonk is designed as a content server that bridges dynamic data sources with e-i
 
 ```mermaid
 architecture-beta
-    group device(internet)[TRMNL Device]
     group server(server)[Byonk Server]
-    group services(cloud)[Core Services] in server
-    group pipeline(disk)[Content Pipeline] in server
 
-    service display(internet)[E-ink Display] in device
+    service display(internet)[E-ink Display]
     service router(server)[HTTP Router] in server
-    service registry(database)[Device Registry] in services
-    service signer(disk)[URL Signer] in services
-    service lua(server)[Lua Runtime] in pipeline
-    service template(disk)[Template Service] in pipeline
-    service renderer(disk)[SVG Renderer] in pipeline
+    service registry(database)[Device Registry] in server
+    service signer(disk)[URL Signer] in server
+    service lua(server)[Lua Runtime] in server
+    service template(disk)[Template Service] in server
+    service renderer(disk)[SVG Renderer] in server
 
     display:R -- L:router
     router:R -- L:registry

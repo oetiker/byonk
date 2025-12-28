@@ -1,7 +1,3 @@
----
-title: Advanced Topics
----
-
 # Advanced Topics
 
 This guide covers advanced techniques for building robust Byonk screens.
@@ -485,5 +481,5 @@ return {
 
 ## Next Steps
 
-- [HTTP API Reference](/api/http-api) - Full endpoint documentation
-- [Lua API Reference](/api/lua-api) - Complete function reference
+- [HTTP API Reference](../api/http-api.md) - Full endpoint documentation
+- [Lua API Reference](../api/lua-api.md) - Complete function reference

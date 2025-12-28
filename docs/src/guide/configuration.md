@@ -1,7 +1,3 @@
----
-title: Configuration
----
-
 # Configuration
 
 Byonk uses a YAML configuration file to define screens and map devices to them. By default, this file is `config.yaml` in the working directory.
@@ -168,5 +164,5 @@ default_screen: default
 
 ## Next Steps
 
-- [Understand the architecture](/concepts/architecture)
-- [Create your first screen](/tutorial/first-screen)
+- [Understand the architecture](../concepts/architecture.md)
+- [Create your first screen](../tutorial/first-screen.md)

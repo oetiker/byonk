@@ -1,7 +1,3 @@
----
-title: Content Pipeline
----
-
 # Content Pipeline
 
 The content pipeline is how Byonk transforms data into images for e-ink displays. This page explains each stage in detail.
@@ -87,17 +83,15 @@ The `refresh_rate` controls when the device fetches new content:
 - **Medium values** (300-900s): Regular updates (weather, calendar)
 - **High values** (3600+s): Static content
 
-:::tip Smart Refresh
-Calculate refresh rates dynamically. For transit, refresh after the next departure:
-
-```lua
-local seconds_until_departure = departure_time - time_now()
-return {
-  data = departures,
-  refresh_rate = seconds_until_departure + 30
-}
-```
-:::
+> **Tip:** Calculate refresh rates dynamically. For transit, refresh after the next departure:
+>
+> ```lua
+> local seconds_until_departure = departure_time - time_now()
+> return {
+>   data = departures,
+>   refresh_rate = seconds_until_departure + 30
+> }
+> ```
 
 ## Stage 2: Template Rendering
 
@@ -105,27 +99,55 @@ SVG templates use [Tera](https://tera.netlify.app/) syntax (similar to Jinja2).
 
 ### Input
 
-The template receives the `data` table from the Lua script as its context.
+The template receives a structured context with three namespaces:
+
+### Template Namespaces
+
+| Namespace | Source | Description |
+|-----------|--------|-------------|
+| `data.*` | Lua script `data` return | Your script's output |
+| `device.*` | Device headers | Battery voltage, RSSI |
+| `params.*` | config.yaml | Device-specific params |
+
+### Device Context Variables
+
+These are automatically available under `device.*` (when reported by the device):
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `device.battery_voltage` | float | Battery voltage (e.g., 4.12) |
+| `device.rssi` | integer | WiFi signal strength in dBm (e.g., -65) |
+
+```svg
+<!-- Show battery voltage in header -->
+<text x="780" y="30" text-anchor="end">
+  {% if device.battery_voltage %}{{ device.battery_voltage | round(precision=2) }}V{% endif %}
+</text>
+```
+
+> **Note:** Device info is also available in Lua scripts via the `device` global table.
 
 ### Syntax
 
 **Variables**:
 ```svg
-<text>{{ title }}</text>
-<text>{{ user.name }}</text>
+<text>{{ data.title }}</text>
+<text>{{ data.user.name }}</text>
+<text>{{ device.battery_voltage }}V</text>
+<text>{{ params.station }}</text>
 ```
 
 **Loops**:
 ```svg
-{% for item in items %}
+{% for item in data.items %}
 <text y="{{ 100 + loop.index0 * 30 }}">{{ item.name }}</text>
 {% endfor %}
 ```
 
 **Conditionals**:
 ```svg
-{% if error %}
-<text fill="red">{{ error }}</text>
+{% if data.error %}
+<text fill="red">{{ data.error }}</text>
 {% else %}
 <text>All good!</text>
 {% endif %}
@@ -135,9 +157,9 @@ The template receives the `data` table from the Lua script as its context.
 
 | Filter | Usage | Description |
 |--------|-------|-------------|
-| `truncate` | `{{ text \| truncate(length=30) }}` | Truncate with ellipsis |
-| `format_time` | `{{ ts \| format_time(format="%H:%M") }}` | Format Unix timestamp |
-| `length` | `{{ items \| length }}` | Get array/object length |
+| `truncate` | `{{ data.text \| truncate(length=30) }}` | Truncate with ellipsis |
+| `format_time` | `{{ data.ts \| format_time(format="%H:%M") }}` | Format Unix timestamp |
+| `length` | `{{ data.items \| length }}` | Get array/object length |
 
 ### Output
 

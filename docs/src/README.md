@@ -1,36 +1,15 @@
----
-pageType: home
-hero:
-  name: Byonk
-  text: Bring Your Own Ink
-  tagline: Self-hosted content server for TRMNL e-ink devices
-  actions:
-    - theme: brand
-      text: Get Started
-      link: /guide/
-    - theme: alt
-      text: View on GitHub
-      link: https://github.com/oetiker/byonk
-features:
-  - title: Lua Scripting
-    details: Fetch data from any API, scrape websites, process JSON - all with simple Lua scripts.
-    icon: 📜
-  - title: SVG Templates
-    details: Design pixel-perfect screens using SVG with Tera templating (Jinja2-style syntax).
-    icon: 🎨
-  - title: Variable Fonts
-    details: Full support for variable font weights via CSS font-variation-settings.
-    icon: ✨
-  - title: Smart Refresh
-    details: Scripts control when devices refresh - optimize for fresh data and battery life.
-    icon: 🔄
-  - title: 4-Level Grayscale
-    details: Floyd-Steinberg dithering optimized for e-paper's 4 gray levels.
-    icon: 🖼️
-  - title: Device Mapping
-    details: Assign different screens to different devices via simple YAML configuration.
-    icon: 📱
----
+# Byonk
+
+**Bring Your Own Ink** - Self-hosted content server for TRMNL e-ink devices
+
+## Features
+
+- **Lua Scripting** - Fetch data from any API, scrape websites, process JSON - all with simple Lua scripts.
+- **SVG Templates** - Design pixel-perfect screens using SVG with Tera templating (Jinja2-style syntax).
+- **Variable Fonts** - Full support for variable font weights via CSS font-variation-settings.
+- **Smart Refresh** - Scripts control when devices refresh - optimize for fresh data and battery life.
+- **4-Level Grayscale** - Floyd-Steinberg dithering optimized for e-paper's 4 gray levels.
+- **Device Mapping** - Assign different screens to different devices via simple YAML configuration.
 
 ## Quick Start
 
@@ -86,11 +65,11 @@ return {
 
 **Result on e-ink display:**
 
-![Transit departures screen](/samples/transit.png)
+![Transit departures screen](images/transit.png)
 
 ## Next Steps
 
-- [Installation Guide](/guide/) - Set up Byonk on your server
-- [Architecture](/concepts/architecture) - Understand how Byonk works
-- [Create Your First Screen](/tutorial/first-screen) - Build a custom display
-- [API Reference](/api/http-api) - HTTP and Lua API documentation
+- [Installation Guide](guide/installation.md) - Set up Byonk on your server
+- [Architecture](concepts/architecture.md) - Understand how Byonk works
+- [Create Your First Screen](tutorial/first-screen.md) - Build a custom display
+- [API Reference](api/http-api.md) - HTTP and Lua API documentation

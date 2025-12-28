@@ -1,21 +1,17 @@
----
-title: Tutorial Overview
----
-
 # Tutorial
 
 This tutorial series will teach you how to create custom screens for your TRMNL device using Byonk. You'll learn:
 
-1. **[Your First Screen](/tutorial/first-screen)** - Create a simple "Hello World" screen
-2. **[Lua Scripting](/tutorial/lua-scripting)** - Fetch data from APIs and process it
-3. **[SVG Templates](/tutorial/svg-templates)** - Design beautiful layouts
-4. **[Advanced Topics](/tutorial/advanced)** - HTML scraping, dynamic refresh, error handling
+1. **[Your First Screen](first-screen.md)** - Create a simple "Hello World" screen
+2. **[Lua Scripting](lua-scripting.md)** - Fetch data from APIs and process it
+3. **[SVG Templates](svg-templates.md)** - Design beautiful layouts
+4. **[Advanced Topics](advanced.md)** - HTML scraping, dynamic refresh, error handling
 
 ## Prerequisites
 
 Before starting, make sure you have:
 
-- Byonk [installed and running](/guide/installation)
+- Byonk [installed and running](../guide/installation.md)
 - A text editor for writing Lua and SVG files
 - Basic familiarity with programming concepts
 
@@ -73,10 +69,8 @@ screens/graytest.svg  - Four gray rectangles
 3. **Assign** the screen to a device
 4. **Test** by refreshing your device or checking `/swagger-ui`
 
-:::tip Hot Reloading
-Lua scripts and SVG templates are loaded fresh on every request. Just save your changes and refresh!
-:::
+> **Tip:** Lua scripts and SVG templates are loaded fresh on every request. Just save your changes and refresh!
 
 ## Ready to Start?
 
-Head to [Your First Screen](/tutorial/first-screen) to create your first custom display!
+Head to [Your First Screen](first-screen.md) to create your first custom display!

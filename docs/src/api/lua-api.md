@@ -1,7 +1,3 @@
----
-title: Lua API Reference
----
-
 # Lua API Reference
 
 This page documents all functions available to Lua scripts in Byonk.
@@ -18,6 +14,33 @@ local limit = params.limit or 10  -- With default
 ```
 
 **Type:** `table`
+
+### device
+
+A table containing device information (when available).
+
+```lua
+-- Check battery level
+if device.battery_voltage and device.battery_voltage < 3.3 then
+  log_warn("Low battery: " .. device.battery_voltage .. "V")
+end
+
+-- Check signal strength
+if device.rssi and device.rssi < -80 then
+  log_warn("Weak WiFi signal: " .. device.rssi .. " dBm")
+end
+```
+
+**Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `battery_voltage` | number or nil | Battery voltage (e.g., 4.12) |
+| `rssi` | number or nil | WiFi signal strength in dBm (e.g., -65) |
+
+**Type:** `table`
+
+> **Note:** Device fields may be `nil` if the device doesn't report them. Always check before using.
 
 ## HTTP Functions
 
@@ -365,9 +388,12 @@ Every script must return a table with this structure:
 return {
   data = {
     -- Any data structure
-    -- Passed to SVG template as context
+    -- Available in template as data.*
+    title = "My Title",
+    items = { ... }
   },
-  refresh_rate = 300  -- Seconds until next refresh
+  refresh_rate = 300,  -- Seconds until next refresh
+  skip_update = false  -- Optional: skip rendering, just check back later
 }
 ```
 
@@ -375,12 +401,18 @@ return {
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `data` | table | Data passed to the Tera template |
+| `data` | table | Data passed to the Tera template under `data.*` namespace |
 
 The `data` table can contain any Lua values:
 - Strings, numbers, booleans
 - Nested tables (become objects)
 - Arrays (1-indexed tables with sequential keys)
+
+In templates, access this data with the `data.` prefix:
+```svg
+<text>{{ data.title }}</text>
+{% for item in data.items %}...{% endfor %}
+```
 
 ### refresh_rate
 
@@ -394,6 +426,44 @@ The `data` table can contain any Lua values:
 - **3600+**: Static or slow-changing content
 
 If `refresh_rate` is 0 or omitted, the screen's `default_refresh` from config is used.
+
+### skip_update
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `skip_update` | boolean | If true, don't update the display - just tell device to check back later |
+
+When `skip_update` is `true`:
+- No new image is rendered
+- The device keeps its current display content
+- The device will check back after `refresh_rate` seconds
+
+This is useful when your data source hasn't changed:
+
+```lua
+-- Check if data has changed since last update
+local cached_hash = get_data_hash()
+local current_data = fetch_data()
+local new_hash = compute_hash(current_data)
+
+if cached_hash == new_hash then
+  -- No changes - tell device to check back in 5 minutes
+  return {
+    data = {},
+    refresh_rate = 300,
+    skip_update = true
+  }
+end
+
+-- Data changed - render new content
+return {
+  data = current_data,
+  refresh_rate = 300,
+  skip_update = false  -- or just omit it
+}
+```
+
+> **Note:** When `skip_update` is true, the `data` table is ignored since no rendering occurs.
 
 ## Standard Lua Functions
 

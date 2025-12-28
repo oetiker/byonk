@@ -1,7 +1,3 @@
----
-title: Device Mapping
----
-
 # Device Mapping
 
 Byonk allows you to show different content on different TRMNL devices. This page explains how devices are identified, registered, and mapped to screens.
@@ -232,10 +228,8 @@ This metadata is stored in the device registry and can be used for:
 
 ## Persistence
 
-:::warning
-The current implementation stores device registrations in memory. Registrations are lost on server restart.
-
-Devices will automatically re-register on their next request, but any collected metadata is lost.
-:::
+> **Warning:** The current implementation stores device registrations in memory. Registrations are lost on server restart.
+>
+> Devices will automatically re-register on their next request, but any collected metadata is lost.
 
 Future versions may add database persistence for device data.

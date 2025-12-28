@@ -1,7 +1,3 @@
----
-title: Installation
----
-
 # Installation
 
 Byonk is written in Rust and needs to be compiled from source. This guide covers building and running Byonk on your server.
@@ -29,9 +25,7 @@ cargo build --release
 
 The compiled binary will be at `./target/release/byonk`.
 
-:::tip
-The first build takes a few minutes as it compiles all dependencies. Subsequent builds are much faster.
-:::
+> **Tip:** The first build takes a few minutes as it compiles all dependencies. Subsequent builds are much faster.
 
 ## Running Byonk
 
@@ -75,9 +69,7 @@ byonk/
 | `SVG_DIR` | `./static/svgs` | Directory for static SVG files |
 | `URL_SECRET` | (random) | HMAC secret for signed image URLs |
 
-:::warning
-If `URL_SECRET` is not set, a random secret is generated on each startup. This means image URLs become invalid after a restart. For production, set a persistent secret.
-:::
+> **Warning:** If `URL_SECRET` is not set, a random secret is generated on each startup. This means image URLs become invalid after a restart. For production, set a persistent secret.
 
 ## Running as a Service
 
@@ -125,11 +117,9 @@ Docker support is planned for a future release.
 
 To use Byonk with your TRMNL device, you need to configure the device to point to your server instead of the default TRMNL cloud service.
 
-:::note
-Refer to TRMNL documentation for instructions on configuring a custom server URL.
-:::
+> **Note:** Refer to TRMNL documentation for instructions on configuring a custom server URL.
 
 ## Next Steps
 
-- [Configure](/guide/configuration) your screens and devices
-- [Create your first screen](/tutorial/first-screen)
+- [Configure](configuration.md) your screens and devices
+- [Create your first screen](../tutorial/first-screen.md)

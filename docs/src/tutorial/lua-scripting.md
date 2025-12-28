@@ -1,7 +1,3 @@
----
-title: Lua Scripting
----
-
 # Lua Scripting
 
 Lua scripts are the data engine of Byonk screens. They fetch, process, and transform data before it's rendered by the template. This guide covers all the APIs available to your scripts.
@@ -401,5 +397,5 @@ Don't refresh more often than necessary:
 
 ## Next Steps
 
-- [SVG Templates](/tutorial/svg-templates) - Design the visual layout
-- [Advanced Topics](/tutorial/advanced) - Error handling, caching strategies
+- [SVG Templates](svg-templates.md) - Design the visual layout
+- [Advanced Topics](advanced.md) - Error handling, caching strategies

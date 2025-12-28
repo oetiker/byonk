@@ -1,7 +1,3 @@
----
-title: SVG Templates
----
-
 # SVG Templates
 
 SVG templates define the visual layout of your screens. They use [Tera](https://tera.netlify.app/) templating syntax to insert data from your Lua scripts.
@@ -36,12 +32,41 @@ Byonk automatically scales your SVG to fit the display, but matching the aspect 
 
 ## Variables
 
+### Template Namespaces
+
+Variables in templates are organized into three namespaces:
+
+| Namespace | Source | Example |
+|-----------|--------|---------|
+| `data.*` | Lua script return value | `data.title`, `data.items` |
+| `device.*` | Device info (battery, signal) | `device.battery_voltage`, `device.rssi` |
+| `params.*` | Config params from config.yaml | `params.station`, `params.limit` |
+
+### Device Variables
+
+These are automatically available under `device.*` (when reported by the device):
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `device.battery_voltage` | float | Battery voltage (e.g., 4.12) |
+| `device.rssi` | integer | WiFi signal strength in dBm (e.g., -65) |
+
+```svg
+<!-- Display battery and signal in header -->
+<text class="status" x="780" y="25" text-anchor="end">
+  {% if device.battery_voltage %}{{ device.battery_voltage | round(precision=2) }}V{% endif %}
+  {% if device.rssi %} · {{ device.rssi }}dBm{% endif %}
+</text>
+```
+
+> **Note:** Device variables are only available if the device reports them. Always use `{% if device.variable %}` to check before using.
+
 ### Basic Interpolation
 
 ```svg
-<text>{{ title }}</text>
-<text>{{ user.name }}</text>
-<text>{{ items[0].label }}</text>
+<text>{{ data.title }}</text>
+<text>{{ data.user.name }}</text>
+<text>{{ data.items[0].label }}</text>
 ```
 
 ### Filters
@@ -50,23 +75,21 @@ Apply filters to modify values:
 
 ```svg
 <!-- Truncate long text -->
-<text>{{ description | truncate(length=50) }}</text>
+<text>{{ data.description | truncate(length=50) }}</text>
 
 <!-- Format timestamp (uses UTC) -->
-<text>{{ updated_at | format_time(format="%H:%M") }}</text>
+<text>{{ data.updated_at | format_time(format="%H:%M") }}</text>
 
 <!-- Get length -->
-<text>{{ items | length }} items</text>
+<text>{{ data.items | length }} items</text>
 ```
 
-:::tip Timezone Note
-The `format_time` template filter uses UTC timezone. For local time formatting, use `time_format()` in your Lua script and pass the pre-formatted string to the template.
-:::
+> **Tip:** The `format_time` template filter uses UTC timezone. For local time formatting, use `time_format()` in your Lua script and pass the pre-formatted string to the template.
 
 ### Default Values
 
 ```svg
-<text>{{ title | default(value="Untitled") }}</text>
+<text>{{ data.title | default(value="Untitled") }}</text>
 ```
 
 ## Control Flow
@@ -74,8 +97,8 @@ The `format_time` template filter uses UTC timezone. For local time formatting, 
 ### Conditionals
 
 ```svg
-{% if error %}
-  <text fill="red">Error: {{ error }}</text>
+{% if data.error %}
+  <text fill="red">Error: {{ data.error }}</text>
 {% else %}
   <text>All systems operational</text>
 {% endif %}
@@ -84,13 +107,13 @@ The `format_time` template filter uses UTC timezone. For local time formatting, 
 ### Comparisons
 
 ```svg
-{% if count > 0 %}
-  <text>{{ count }} items</text>
-{% elif count == 0 %}
+{% if data.count > 0 %}
+  <text>{{ data.count }} items</text>
+{% elif data.count == 0 %}
   <text>No items</text>
 {% endif %}
 
-{% if status == "active" %}
+{% if data.status == "active" %}
   <circle fill="green" r="10"/>
 {% endif %}
 ```
@@ -98,11 +121,11 @@ The `format_time` template filter uses UTC timezone. For local time formatting, 
 ### Boolean Checks
 
 ```svg
-{% if is_online %}
+{% if data.is_online %}
   <text fill="green">Online</text>
 {% endif %}
 
-{% if not items %}
+{% if not data.items %}
   <text>No data available</text>
 {% endif %}
 ```
@@ -112,7 +135,7 @@ The `format_time` template filter uses UTC timezone. For local time formatting, 
 ### Basic Loop
 
 ```svg
-{% for item in items %}
+{% for item in data.items %}
   <text y="{{ 100 + loop.index0 * 30 }}">{{ item.name }}</text>
 {% endfor %}
 ```
@@ -129,7 +152,7 @@ The `format_time` template filter uses UTC timezone. For local time formatting, 
 ### Positioning with Loops
 
 ```svg
-{% for dep in departures %}
+{% for dep in data.departures %}
   <!-- Calculate Y position based on index -->
   <text y="{{ 80 + loop.index0 * 40 }}">
     {{ dep.time }} - {{ dep.destination }}
@@ -140,7 +163,7 @@ The `format_time` template filter uses UTC timezone. For local time formatting, 
 ### Conditional Styling in Loops
 
 ```svg
-{% for item in items %}
+{% for item in data.items %}
   <!-- Alternating row backgrounds -->
   {% if loop.index0 is odd %}
     <rect y="{{ 100 + loop.index0 * 40 }}" width="800" height="40" fill="#f5f5f5"/>
@@ -153,8 +176,8 @@ The `format_time` template filter uses UTC timezone. For local time formatting, 
 ### Empty State
 
 ```svg
-{% if items | length > 0 %}
-  {% for item in items %}
+{% if data.items | length > 0 %}
+  {% for item in data.items %}
     <text>{{ item.name }}</text>
   {% endfor %}
 {% else %}
@@ -172,7 +195,7 @@ The `format_time` template filter uses UTC timezone. For local time formatting, 
       font-size="24"
       font-weight="bold"
       fill="black">
-  {{ title }}
+  {{ data.title }}
 </text>
 ```
 
@@ -186,8 +209,8 @@ The `format_time` template filter uses UTC timezone. For local time formatting, 
     .highlight { fill: #333; font-weight: bold; }
   </style>
 
-  <text class="title" x="20" y="40">{{ title }}</text>
-  <text class="subtitle" x="20" y="70">{{ subtitle }}</text>
+  <text class="title" x="20" y="40">{{ data.title }}</text>
+  <text class="subtitle" x="20" y="70">{{ data.subtitle }}</text>
 </svg>
 ```
 
@@ -203,9 +226,7 @@ Byonk supports variable fonts via CSS `font-variation-settings`:
 </style>
 ```
 
-:::note
-Place custom font files (e.g., `Outfit-Variable.ttf`) in the `fonts/` directory.
-:::
+> **Note:** Place custom font files (e.g., `Outfit-Variable.ttf`) in the `fonts/` directory.
 
 ## Colors and Grayscale
 
@@ -235,7 +256,7 @@ The included `graytest.svg` demonstrates all 4 levels:
 
 **Rendered output:**
 
-![Grayscale test showing 4 levels](/samples/graytest.png)
+![Grayscale test showing 4 levels](../images/graytest.png)
 
 ### Avoid
 
@@ -251,8 +272,8 @@ The included `graytest.svg` demonstrates all 4 levels:
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480">
   <!-- Header bar -->
   <rect width="800" height="70" fill="black"/>
-  <text x="30" y="48" fill="white" font-size="28">{{ title }}</text>
-  <text x="770" y="48" fill="#aaa" font-size="14" text-anchor="end">{{ time }}</text>
+  <text x="30" y="48" fill="white" font-size="28">{{ data.title }}</text>
+  <text x="770" y="48" fill="#aaa" font-size="14" text-anchor="end">{{ data.time }}</text>
 
   <!-- Content area -->
   <g transform="translate(0, 70)">
@@ -264,7 +285,7 @@ The included `graytest.svg` demonstrates all 4 levels:
 ### Grid Layout
 
 ```svg
-{% for item in items %}
+{% for item in data.items %}
   {% set col = loop.index0 % 3 %}
   {% set row = loop.index0 // 3 %}
 
@@ -293,7 +314,7 @@ The included `graytest.svg` demonstrates all 4 levels:
 ### Conditional Colors
 
 ```svg
-{% for item in items %}
+{% for item in data.items %}
   <text fill="{% if item.is_urgent %}red{% else %}black{% endif %}">
     {{ item.name }}
   </text>
@@ -303,17 +324,17 @@ The included `graytest.svg` demonstrates all 4 levels:
 ### Dynamic Classes
 
 ```svg
-<text class="{% if count > 100 %}highlight{% else %}normal{% endif %}">
-  {{ count }}
+<text class="{% if data.count > 100 %}highlight{% else %}normal{% endif %}">
+  {{ data.count }}
 </text>
 ```
 
 ### Status Indicators
 
 ```svg
-{% if status == "online" %}
+{% if data.status == "online" %}
   <circle cx="20" cy="20" r="8" fill="green"/>
-{% elif status == "warning" %}
+{% elif data.status == "warning" %}
   <circle cx="20" cy="20" r="8" fill="orange"/>
 {% else %}
   <circle cx="20" cy="20" r="8" fill="red"/>
@@ -326,10 +347,10 @@ The included `graytest.svg` demonstrates all 4 levels:
 
 ```svg
 <text>
-  {% if title | length > 30 %}
-    {{ title | truncate(length=30) }}
+  {% if data.title | length > 30 %}
+    {{ data.title | truncate(length=30) }}
   {% else %}
-    {{ title }}
+    {{ data.title }}
   {% endif %}
 </text>
 ```
@@ -371,14 +392,14 @@ return {
 ```svg
 <!-- Temporarily add this to see all data -->
 <text x="10" y="460" font-size="10" fill="#999">
-  Debug: {{ items | length }} items
+  Debug: {{ data.items | length }} items
 </text>
 ```
 
 ### Check for Missing Data
 
 ```svg
-{% if not title %}
+{% if not data.title %}
   <text fill="red">ERROR: title is missing!</text>
 {% endif %}
 ```
@@ -389,5 +410,5 @@ If your template has a syntax error, Byonk will display an error screen with the
 
 ## Next Steps
 
-- [Advanced Topics](/tutorial/advanced) - HTML scraping, error handling
-- [API Reference](/api/lua-api) - Complete Lua function reference
+- [Advanced Topics](advanced.md) - HTML scraping, error handling
+- [API Reference](../api/lua-api.md) - Complete Lua function reference

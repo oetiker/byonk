@@ -6,12 +6,12 @@
 # - curl installed
 #
 # Usage:
-#   ./scripts/generate-samples.sh
+#   ./generate-samples.sh
 
 set -e
 
 BYONK_URL="${BYONK_URL:-http://localhost:3000}"
-OUTPUT_DIR="$(dirname "$0")/../content/public/samples"
+OUTPUT_DIR="$(dirname "$0")/src/images"
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -62,4 +62,4 @@ fetch_sample "00:00:00:00:00:00" "default"
 echo ""
 echo "Done! Sample images saved to $OUTPUT_DIR/"
 echo ""
-echo "To use in docs, reference as: /samples/transit.png"
+echo "To use in docs, reference as: images/transit.png"

@@ -1,12 +1,8 @@
----
-title: Introduction
----
-
 # Introduction to Byonk
 
 **Byonk** (Bring Your Own Ink) is a self-hosted content server for [TRMNL](https://usetrmnl.com) e-ink devices. It lets you create custom screens using Lua scripts and SVG templates, giving you complete control over what your e-ink display shows.
 
-![Example screen showing transit departures](/samples/transit.png)
+![Example screen showing transit departures](../images/transit.png)
 
 ## Why Byonk?
 
@@ -71,6 +67,6 @@ devices:
 
 ## Next Steps
 
-1. [Install Byonk](/guide/installation) on your server
-2. [Configure](/guide/configuration) your screens and devices
-3. [Create your first screen](/tutorial/first-screen)
+1. [Install Byonk](installation.md) on your server
+2. [Configure](configuration.md) your screens and devices
+3. [Create your first screen](../tutorial/first-screen.md)

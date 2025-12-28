@@ -60,25 +60,20 @@ jobs:
           done
 
           # Generate samples
-          bash docs/scripts/generate-samples.sh
+          bash docs/generate-samples.sh
 
           # Stop Byonk
           kill $BYONK_PID || true
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: docs/package-lock.json
-
-      - name: Install dependencies
-        working-directory: docs
-        run: npm ci
+      - name: Install mdBook
+        run: |
+          mkdir -p ~/bin
+          curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.4.40/mdbook-v0.4.40-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C ~/bin
+          echo "$HOME/bin" >> $GITHUB_PATH
 
       - name: Build documentation
         working-directory: docs
-        run: npm run build
+        run: mdbook build
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -86,7 +81,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/doc_build
+          path: docs/book
 
   deploy:
     name: Deploy to GitHub Pages

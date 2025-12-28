@@ -1,7 +1,3 @@
----
-title: Architecture
----
-
 # Architecture Overview
 
 Byonk is designed as a content server that bridges dynamic data sources with e-ink displays. This page explains how the system is structured and how requests flow through it.
@@ -61,9 +57,7 @@ Stores device information in memory:
 - Device metadata (firmware version, model, battery level)
 - Last seen timestamps
 
-:::note
-The current implementation uses an in-memory store. Device registrations are lost on restart. The architecture supports adding database persistence in the future.
-:::
+> **Note:** The current implementation uses an in-memory store. Device registrations are lost on restart. The architecture supports adding database persistence in the future.
 
 ### URL Signer
 

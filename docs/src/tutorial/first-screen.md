@@ -1,7 +1,3 @@
----
-title: Your First Screen
----
-
 # Your First Screen
 
 Let's create a simple screen that displays a greeting and the current time. This will introduce you to the basic workflow of creating Byonk screens.
@@ -115,9 +111,7 @@ devices:
 
 Replace `YOUR:MAC:AD:DR:ES:S0` with your device's actual MAC address.
 
-:::tip Finding Your MAC Address
-Check the Byonk server logs when your device connects - the MAC address is printed there.
-:::
+> **Tip:** Check the Byonk server logs when your device connects - the MAC address is printed there.
 
 ## Step 5: Test It
 
@@ -210,7 +204,7 @@ return {
 
 Here's what a more complex screen looks like - the built-in transit departure display:
 
-![Transit departures screen](/samples/transit.png)
+![Transit departures screen](../images/transit.png)
 
 This screen demonstrates:
 - Fetching live data from an API
@@ -225,5 +219,5 @@ Check out `screens/transit.lua` and `screens/transit.svg` in the Byonk source fo
 
 Now that you have a basic screen working, learn more about:
 
-- [Lua Scripting](/tutorial/lua-scripting) - Fetch data from APIs
-- [SVG Templates](/tutorial/svg-templates) - Create complex layouts
+- [Lua Scripting](lua-scripting.md) - Fetch data from APIs
+- [SVG Templates](svg-templates.md) - Create complex layouts

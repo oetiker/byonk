@@ -1,7 +1,3 @@
----
-title: HTTP API Reference
----
-
 # HTTP API Reference
 
 > Bring Your Own Server API for TRMNL e-ink devices

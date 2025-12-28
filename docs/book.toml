@@ -1,0 +1,16 @@
+[book]
+title = "Byonk"
+description = "Self-hosted content server for TRMNL e-ink devices"
+authors = ["Tobias Oetiker"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/oetiker/byonk"
+edit-url-template = "https://github.com/oetiker/byonk/edit/main/docs/{path}"
+site-url = "/byonk/"

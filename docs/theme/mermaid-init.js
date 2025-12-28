@@ -1,1 +1,5 @@
-mermaid.initialize({ startOnLoad: true });
+mermaid.initialize({
+  startOnLoad: true,
+  securityLevel: 'loose',
+  logLevel: 'debug',
+});

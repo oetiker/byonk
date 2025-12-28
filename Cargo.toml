@@ -22,7 +22,7 @@ fontdb = "0.23"
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
 tera = "1"
 scraper = "0.22"
-reqwest = { version = "0.12", features = ["blocking"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

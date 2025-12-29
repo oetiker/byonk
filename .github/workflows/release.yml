@@ -190,7 +190,7 @@ jobs:
 
   build-container:
     name: Build Container
-    needs: version
+    needs: [version, build-binaries]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -199,6 +199,27 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.version.outputs.tag }}
+
+      - name: Download Linux AMD64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: byonk-x86_64-unknown-linux-gnu
+          path: artifacts/amd64
+
+      - name: Download Linux ARM64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: byonk-aarch64-unknown-linux-gnu
+          path: artifacts/arm64
+
+      - name: Extract binaries
+        run: |
+          mkdir -p binaries/amd64 binaries/arm64
+          tar -xzf artifacts/amd64/byonk-*-x86_64-unknown-linux-gnu.tar.gz -C binaries/amd64 --strip-components=1
+          tar -xzf artifacts/arm64/byonk-*-aarch64-unknown-linux-gnu.tar.gz -C binaries/arm64 --strip-components=1
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -214,14 +235,15 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: Dockerfile.release
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/${{ github.repository }}:latest
             ghcr.io/${{ github.repository }}:${{ needs.version.outputs.tag }}
             ghcr.io/${{ github.repository }}:${{ needs.version.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          build-args: |
+            BINARY_DIR=binaries
 
   create-release:
     name: Create GitHub Release
@@ -254,12 +276,16 @@ jobs:
           echo "Release notes:"
           cat release-notes.md
 
+      - name: List artifacts
+        run: ls -la artifacts/
+
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.version.outputs.tag }}
           name: Byonk ${{ needs.version.outputs.tag }}
           body_path: release-notes.md
           files: artifacts/*
+          fail_on_unmatched_files: true
           draft: false
           prerelease: false

@@ -16,8 +16,11 @@ Byonk (Bring Your Own Ink) is a self-hosted content server for TRMNL e-ink devic
 - **Update documentation** when user-visible features change or new ones are added (docs/src/)
 - **All changes must be documented in CHANGES.md** - new features, fixes, and changes go in the Unreleased section
 - **Commit in sensible intervals** - don't batch unrelated changes
-- **Run `cargo fmt`** before committing Rust code
-- **Run `cargo check`** to verify code compiles
+- **Use Makefile targets** for building:
+  - `make build` - build debug (runs fmt + clippy first)
+  - `make release` - build release (runs fmt + clippy first)
+  - `make check` - run fmt, clippy, and tests
+  - `make docs` - build documentation
 
 ## Release Process
 

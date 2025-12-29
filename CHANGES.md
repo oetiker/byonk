@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Renamed project branding from "TRMNL BOYS" to "Byonk - Bring Your Own Ink"
+- Makefile now runs fmt and clippy before build targets
+- Updated Makefile for mdBook (removed old rspress/npm targets)
 - Faster container builds using pre-built binaries instead of compiling from source
 - Switched from OpenSSL to rustls for better cross-platform compatibility
 

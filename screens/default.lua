@@ -7,8 +7,8 @@ local date_str = time_format(now, "%Y-%m-%d")
 
 return {
   data = {
-    title = "TRMNL BOYS",
-    subtitle = "Dynamic Content Server",
+    title = "Byonk",
+    subtitle = "Bring Your Own Ink",
     time = time_str,
     date = date_str,
     message = params.message or "Ready for scripted content!"

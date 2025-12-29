@@ -22,6 +22,8 @@ Or download a [pre-built binary](https://github.com/oetiker/byonk/releases) for 
 
 Point your TRMNL device to `http://your-server:3000` and it will start displaying content.
 
+![Default screen](images/default.png)
+
 ## How It Works
 
 ```mermaid

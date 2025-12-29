@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TV-style test pattern (graytest.svg) with 4 gray levels, gradients for dithering demo, and resolution test bars
 - Docker image tags for major (`0`), minor (`0.2`), and patch (`0.2.1`) versions
 - Documentation migrated to mdBook with mermaid diagrams
+- Updated installation docs for Docker and pre-built binaries
 
 ### Changed
 

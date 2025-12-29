@@ -15,14 +15,20 @@ Byonk lets you create custom screens for your TRMNL device using Lua scripts and
 
 ## Quick Start
 
-```bash
-# Clone and build
-git clone https://github.com/oetiker/byonk.git
-cd byonk
-cargo build --release
+### Docker (Recommended)
 
-# Run the server
-./target/release/byonk
+```bash
+docker run -d -p 3000:3000 ghcr.io/oetiker/byonk:latest
+```
+
+### Pre-built Binaries
+
+Download from [GitHub Releases](https://github.com/oetiker/byonk/releases) and run:
+
+```bash
+tar -xzf byonk-*.tar.gz
+cd byonk
+./byonk
 ```
 
 Point your TRMNL device to `http://your-server:3000` and it will start displaying content.

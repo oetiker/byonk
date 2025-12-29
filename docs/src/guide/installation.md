@@ -1,45 +1,64 @@
 # Installation
 
-Byonk is written in Rust and needs to be compiled from source. This guide covers building and running Byonk on your server.
+Byonk can be installed via Docker container or pre-built binaries.
 
-## Prerequisites
+## Docker (Recommended)
 
-- **Rust** toolchain (1.70 or later)
-- **Git** for cloning the repository
-
-Install Rust if you haven't already:
+The easiest way to run Byonk:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+docker run -d \
+  --name byonk \
+  -p 3000:3000 \
+  -v ./config.yaml:/app/config.yaml \
+  -v ./screens:/app/screens \
+  -v ./fonts:/app/fonts \
+  ghcr.io/oetiker/byonk:latest
 ```
 
-## Building from Source
+Available tags:
+- `latest` - Latest stable release
+- `0` - Latest v0.x release
+- `0.3` - Latest v0.3.x release
+- `0.3.0` - Specific version
 
-Clone the repository and build:
+### Docker Compose
+
+```yaml
+services:
+  byonk:
+    image: ghcr.io/oetiker/byonk:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./screens:/app/screens
+      - ./fonts:/app/fonts
+    environment:
+      - URL_SECRET=your-secret-here
+    restart: unless-stopped
+```
+
+## Pre-built Binaries
+
+Download the latest release from [GitHub Releases](https://github.com/oetiker/byonk/releases).
+
+Available platforms:
+- `x86_64-unknown-linux-gnu` - Linux (Intel/AMD 64-bit)
+- `aarch64-unknown-linux-gnu` - Linux (ARM 64-bit, e.g., Raspberry Pi 4)
+- `x86_64-apple-darwin` - macOS (Intel)
+- `aarch64-apple-darwin` - macOS (Apple Silicon)
+- `x86_64-pc-windows-msvc` - Windows
+
+Extract and run:
 
 ```bash
-git clone https://github.com/oetiker/byonk.git
+tar -xzf byonk-*.tar.gz
 cd byonk
-cargo build --release
+./byonk
 ```
 
-The compiled binary will be at `./target/release/byonk`.
-
-> **Tip:** The first build takes a few minutes as it compiles all dependencies. Subsequent builds are much faster.
-
-## Running Byonk
-
-Start the server:
-
-```bash
-./target/release/byonk
-```
-
-By default, Byonk listens on `0.0.0.0:3000`. You should see:
-
-```
-INFO byonk: Byonk server listening addr=0.0.0.0:3000
-```
+By default, Byonk listens on `0.0.0.0:3000`.
 
 ## Directory Structure
 
@@ -52,11 +71,8 @@ byonk/
 │   ├── default.lua
 │   ├── default.svg
 │   └── ...
-├── fonts/               # Custom fonts (optional)
-│   └── Outfit-Variable.ttf
-└── static/              # Static assets
-    └── svgs/
-        └── default.svg
+└── fonts/               # Custom fonts (optional)
+    └── Outfit-Variable.ttf
 ```
 
 ## Environment Variables
@@ -66,27 +82,24 @@ byonk/
 | `BIND_ADDR` | `0.0.0.0:3000` | Server bind address |
 | `CONFIG_FILE` | `./config.yaml` | Path to configuration file |
 | `SCREENS_DIR` | `./screens` | Directory containing Lua scripts and SVG templates |
-| `SVG_DIR` | `./static/svgs` | Directory for static SVG files |
 | `URL_SECRET` | (random) | HMAC secret for signed image URLs |
 
 > **Warning:** If `URL_SECRET` is not set, a random secret is generated on each startup. This means image URLs become invalid after a restart. For production, set a persistent secret.
 
-## Running as a Service
-
-### systemd (Linux)
+## Running as a Service (systemd)
 
 Create `/etc/systemd/system/byonk.service`:
 
 ```ini
 [Unit]
-Description=Byonk - TRMNL Content Server
+Description=Byonk Content Server
 After=network.target
 
 [Service]
 Type=simple
 User=byonk
 WorkingDirectory=/opt/byonk
-ExecStart=/opt/target/release/byonk
+ExecStart=/opt/byonk/byonk
 Environment="BIND_ADDR=0.0.0.0:3000"
 Environment="URL_SECRET=your-secret-here"
 Restart=always
@@ -103,10 +116,6 @@ sudo systemctl enable byonk
 sudo systemctl start byonk
 ```
 
-### Docker (Coming Soon)
-
-Docker support is planned for a future release.
-
 ## Verifying Installation
 
 1. Open `http://your-server:3000/health` - should return "OK"
@@ -115,7 +124,7 @@ Docker support is planned for a future release.
 
 ## Configuring Your TRMNL Device
 
-To use Byonk with your TRMNL device, you need to configure the device to point to your server instead of the default TRMNL cloud service.
+To use Byonk with your TRMNL device, configure the device to point to your server instead of the default TRMNL cloud service.
 
 > **Note:** Refer to TRMNL documentation for instructions on configuring a custom server URL.
 

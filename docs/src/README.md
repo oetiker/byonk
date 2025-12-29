@@ -14,14 +14,11 @@
 ## Quick Start
 
 ```bash
-# Clone and build
-git clone https://github.com/oetiker/byonk.git
-cd byonk
-cargo build --release
-
-# Run the server
-./target/release/byonk
+# Run with Docker
+docker run -d -p 3000:3000 ghcr.io/oetiker/byonk:latest
 ```
+
+Or download a [pre-built binary](https://github.com/oetiker/byonk/releases) for your platform.
 
 Point your TRMNL device to `http://your-server:3000` and it will start displaying content.
 

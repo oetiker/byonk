@@ -7,16 +7,27 @@ The content pipeline is how Byonk transforms data into images for e-ink displays
 ```mermaid
 flowchart TD
     A[Lua Script] -->|JSON data| B[SVG Template]
-    B -->|SVG document| C[Renderer]
-    C -->|dithered pixels| D[E-ink PNG]
+    B -->|SVG document| C[Cache]
+    C -->|cached SVG| D[Renderer]
+    D -->|dithered pixels| E[E-ink PNG]
 ```
 
 | Stage | Input | Processing | Output |
 |-------|-------|------------|--------|
 | **Lua Script** | API endpoints, params | Fetch data, parse JSON/HTML | Structured data |
 | **SVG Template** | Data + device context | Tera templating, layout | SVG document |
-| **Renderer** | SVG document | Rasterize, grayscale, dither | Pixel buffer |
+| **Cache** | SVG document | Hash content, store | Cached SVG + content hash |
+| **Renderer** | Cached SVG | Rasterize, grayscale, dither | Pixel buffer |
 | **E-ink PNG** | Pixel buffer | Quantize to 4 levels, encode | 2-bit PNG |
+
+### Content Change Detection
+
+TRMNL devices use the `filename` field in the `/api/display` response to detect content changes. Byonk computes a SHA-256 hash of the rendered SVG content and returns it as the filename. This means:
+
+- **Same content = same filename**: If your Lua script returns identical data and the template produces the same SVG, the device knows nothing changed
+- **Changed content = new filename**: Any change in the rendered SVG (data, template, or device context) produces a new hash
+
+This is why template rendering happens during `/api/display` rather than `/api/image` - the hash must be known before the device decides whether to fetch the image.
 
 ## Stage 1: Lua Script Execution
 
@@ -206,20 +217,36 @@ Y = 0.2126 × R + 0.7152 × G + 0.0722 × B
 
 This matches human perception of brightness.
 
-## Stage 4: Floyd-Steinberg Dithering
+## Stage 4: Blue-Noise Dithering
 
 E-ink displays only support 4 gray levels. Dithering creates the illusion of more shades.
 
+Byonk uses **blue-noise-modulated error diffusion** dithering, an improved algorithm that reduces visible "worm" artifacts while preserving sharp edges for UI content.
+
 ### How It Works
+
+The algorithm improves upon standard Floyd-Steinberg in three ways:
+
+1. **Serpentine scanning**: Alternates row direction (left-to-right, then right-to-left) to reduce directional artifacts
+2. **Blue noise modulation**: Adds subtle randomness to the quantization threshold, breaking up repetitive patterns
+3. **Energy-preserving error**: Error is computed from the un-noised value to maintain correct brightness
 
 ```
 For each pixel:
-  1. Quantize to nearest level: [0, 85, 170, 255]
-  2. Calculate error = old_value - new_value
-  3. Distribute error to neighbors:
-           X   7/16
-       3/16 5/16 1/16
+  1. Get blue noise value for this position (64×64 tiled pattern)
+  2. Add noise offset to pixel value (modulates threshold)
+  3. Quantize to nearest level: [0, 85, 170, 255]
+  4. Calculate error from ORIGINAL value (not noised)
+  5. Distribute error to neighbors (direction depends on row):
+
+     Left-to-right:      Right-to-left:
+         X   7/16        7/16   X
+     3/16 5/16 1/16      1/16 5/16 3/16
 ```
+
+### Why Blue Noise?
+
+Standard Floyd-Steinberg can produce visible "worm" patterns in mid-gray areas. Blue noise has a frequency distribution that appears random to the eye but lacks low-frequency components, producing more pleasing results on e-ink displays.
 
 ### Gray Levels
 

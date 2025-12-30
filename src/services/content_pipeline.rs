@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::error::RenderError;
 use crate::models::{AppConfig, DisplaySpec, ScreenConfig};
-use crate::services::{CachedContent, LuaRuntime, RenderService, TemplateService};
+use crate::services::{LuaRuntime, RenderService, TemplateService};
 
 /// Result from running a Lua script (before rendering)
 pub struct ScriptResult {
@@ -149,12 +149,13 @@ impl ContentPipeline {
         })
     }
 
-    /// Render PNG from cached content
-    pub fn render_from_cache(
+    /// Render SVG from script result (without PNG conversion)
+    /// This is called during /api/display to pre-render the template
+    pub fn render_svg_from_script(
         &self,
-        cached: &CachedContent,
-        spec: DisplaySpec,
-    ) -> Result<Vec<u8>, ContentError> {
+        result: &ScriptResult,
+        device_ctx: Option<&DeviceContext>,
+    ) -> Result<String, ContentError> {
         // Build namespaced template context:
         // - data.*   : from Lua script
         // - device.* : device info (battery_voltage, rssi)
@@ -162,11 +163,11 @@ impl ContentPipeline {
         let mut template_context = serde_json::Map::new();
 
         // Add Lua data under "data" namespace
-        template_context.insert("data".to_string(), cached.script_data.clone());
+        template_context.insert("data".to_string(), result.data.clone());
 
         // Add device context under "device" namespace
         let mut device_obj = serde_json::Map::new();
-        if let Some(ref ctx) = cached.device_context {
+        if let Some(ctx) = device_ctx {
             device_obj.insert("mac".to_string(), serde_json::json!(ctx.mac));
             if let Some(voltage) = ctx.battery_voltage {
                 device_obj.insert("battery_voltage".to_string(), serde_json::json!(voltage));
@@ -178,39 +179,41 @@ impl ContentPipeline {
         template_context.insert("device".to_string(), serde_json::Value::Object(device_obj));
 
         // Add params under "params" namespace
-        let params_json = serde_json::to_value(&cached.params)
+        let params_json = serde_json::to_value(&result.params)
             .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
         template_context.insert("params".to_string(), params_json);
 
         let template_data = serde_json::Value::Object(template_context);
 
-        // Render the template
+        // Render the template to SVG
         let svg_content = self
             .template_service
-            .render(&cached.template_path, &template_data)?;
+            .render(&result.template_path, &template_data)?;
 
         tracing::debug!(
-            template = %cached.template_path.display(),
+            template = %result.template_path.display(),
             svg_len = svg_content.len(),
-            "Template rendered"
+            "Template rendered to SVG"
         );
 
-        // Render SVG to PNG
+        Ok(svg_content)
+    }
+
+    /// Render PNG from cached SVG content
+    pub fn render_png_from_svg(
+        &self,
+        svg: &str,
+        spec: DisplaySpec,
+    ) -> Result<Vec<u8>, ContentError> {
         let png_bytes = self
             .renderer
             .svg_renderer
-            .render_to_png(svg_content.as_bytes(), spec)?;
-
+            .render_to_png(svg.as_bytes(), spec)?;
         Ok(png_bytes)
     }
 
-    /// Generate error content
-    pub fn generate_error(&self, error: &str, spec: DisplaySpec) -> Result<Vec<u8>, ContentError> {
-        let svg_content = self.template_service.render_error(error);
-        let png_bytes = self
-            .renderer
-            .svg_renderer
-            .render_to_png(svg_content.as_bytes(), spec)?;
-        Ok(png_bytes)
+    /// Render error SVG (without PNG conversion)
+    pub fn render_error_svg(&self, error: &str) -> String {
+        self.template_service.render_error(error)
     }
 }

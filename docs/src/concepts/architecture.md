@@ -86,7 +86,7 @@ Converts SVG to PNG optimized for e-ink:
 
 - Uses [resvg](https://github.com/RazrFalcon/resvg) for rendering
 - Loads custom fonts from `fonts/` directory
-- Floyd-Steinberg dithering to 4 gray levels
+- Blue-noise dithering to 4 gray levels
 - Outputs 2-bit indexed PNG
 
 ## Request Flow
@@ -108,7 +108,7 @@ sequenceDiagram
     Note right of Device: Store api_key
 ```
 
-### Phase 2: Data Fetching
+### Phase 2: Content Generation
 
 ```mermaid
 sequenceDiagram
@@ -116,6 +116,7 @@ sequenceDiagram
     participant Router
     participant Lua
     participant API as External API
+    participant Template
     participant Cache
 
     Device->>+Router: GET /api/display
@@ -123,8 +124,11 @@ sequenceDiagram
     Lua->>+API: http_get(url)
     API-->>-Lua: JSON data
     Lua-->>-Router: {data, refresh_rate}
-    Router->>Cache: store data
-    Router-->>-Device: {image_url, refresh_rate}
+    Router->>+Template: render SVG with data
+    Template-->>-Router: SVG document
+    Router->>Cache: store SVG + hash
+    Router-->>-Device: {image_url, filename, refresh_rate}
+    Note right of Device: filename is content hash
 ```
 
 ### Phase 3: Image Rendering
@@ -134,14 +138,11 @@ sequenceDiagram
     participant Device
     participant Router
     participant Cache
-    participant Template
     participant Renderer
 
     Device->>+Router: GET /api/image/:id
-    Router->>Cache: get cached data
-    Cache-->>Router: {data, context}
-    Router->>+Template: render SVG with data
-    Template-->>-Router: SVG document
+    Router->>Cache: get cached SVG
+    Cache-->>Router: SVG document
     Router->>+Renderer: convert to PNG
     Renderer-->>-Router: dithered PNG
     Router-->>-Device: PNG image
@@ -153,21 +154,23 @@ sequenceDiagram
 | Phase | Endpoint | Purpose |
 |-------|----------|---------|
 | **1. Setup** | `GET /api/setup` | Device registers, receives API key |
-| **2. Display** | `GET /api/display` | Runs Lua script, caches data, returns signed image URL |
-| **3. Image** | `GET /api/image/:id` | Renders SVG template to PNG, returns image |
+| **2. Display** | `GET /api/display` | Runs Lua script, renders SVG, caches it, returns signed image URL and content hash |
+| **3. Image** | `GET /api/image/:id` | Converts cached SVG to PNG, returns image |
 
-**Phase 2** (data fetching):
+**Phase 2** (content generation):
 1. Load and execute Lua script with `params` and `device` context
 2. Script fetches external data via `http_get()`
-3. Cache script output (JSON data)
-4. Sign image URL and return to device
+3. Render SVG template with script data
+4. Cache rendered SVG with content hash
+5. Sign image URL and return to device with `filename` set to content hash
+
+The `filename` field contains a hash of the rendered SVG content. This allows TRMNL devices to detect when content has actually changed, even if the same screen is configured.
 
 **Phase 3** (image rendering):
 1. Verify URL signature
-2. Retrieve cached data
-3. Render SVG template with data
-4. Convert SVG to PNG with Floyd-Steinberg dithering
-5. Return PNG to device
+2. Retrieve cached SVG
+3. Convert SVG to PNG with blue-noise dithering
+4. Return PNG to device
 
 ## Technology Stack
 

@@ -151,19 +151,14 @@ fn run_render_command(mac: &str, output: &PathBuf, device_type: &str) -> anyhow:
         .run_script_for_device(mac, Some(device_context.clone()))
         .map_err(|e| anyhow::anyhow!("Script error: {e}"))?;
 
-    // Build cached content for rendering
-    let cached_content = services::CachedContent {
-        script_data: script_result.data,
-        device_context: Some(device_context),
-        screen_name: script_result.screen_name,
-        template_path: script_result.template_path,
-        params: script_result.params,
-        generated_at: chrono::Utc::now(),
-    };
+    // Render SVG from script result
+    let svg_content = content_pipeline
+        .render_svg_from_script(&script_result, Some(&device_context))
+        .map_err(|e| anyhow::anyhow!("Template error: {e}"))?;
 
     // Render to PNG
     let png_bytes = content_pipeline
-        .render_from_cache(&cached_content, display_spec)
+        .render_png_from_svg(&svg_content, display_spec)
         .map_err(|e| anyhow::anyhow!("Render error: {e}"))?;
 
     // Write to file

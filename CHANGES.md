@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- Content change detection: `/api/display` now returns a content-based hash as the `filename`, allowing TRMNL devices to detect when screen content has actually changed
+
 ### Changed
+
+- SVG template rendering now happens during `/api/display` instead of `/api/image`, enabling the content hash to be computed before the device fetches the image
+- Content cache now stores pre-rendered SVG instead of raw script data, making `/api/image` faster
 
 ### Fixed
 

@@ -1,24 +1,42 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use super::DeviceContext;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 
-/// Cached script output ready for rendering
+/// Cached rendered SVG ready for PNG conversion
 #[derive(Clone)]
 pub struct CachedContent {
-    /// Data returned by the Lua script
-    pub script_data: serde_json::Value,
-    /// Device context (battery, rssi) at time of script execution
-    pub device_context: Option<DeviceContext>,
-    /// Screen name (for finding the template)
+    /// Pre-rendered SVG content (template already applied)
+    pub rendered_svg: String,
+    /// Hash of the SVG content (used as filename for change detection)
+    pub content_hash: String,
+    /// Screen name (for logging)
     pub screen_name: String,
-    /// Template path
-    pub template_path: std::path::PathBuf,
-    /// Config params for this device
-    pub params: HashMap<String, serde_yaml::Value>,
     /// When this content was generated
     pub generated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl CachedContent {
+    /// Create a new cached content entry from rendered SVG
+    pub fn new(rendered_svg: String, screen_name: String) -> Self {
+        let content_hash = compute_svg_hash(&rendered_svg);
+        Self {
+            rendered_svg,
+            content_hash,
+            screen_name,
+            generated_at: chrono::Utc::now(),
+        }
+    }
+}
+
+/// Compute a short hash of the SVG content for use as filename
+fn compute_svg_hash(svg: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(svg.as_bytes());
+    let result = hasher.finalize();
+    // Use first 8 bytes (16 hex chars) for a reasonably short but unique filename
+    hex::encode(&result[..8])
 }
 
 /// Cache for script output, keyed by device MAC

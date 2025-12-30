@@ -5,7 +5,6 @@ use axum::{
     response::{IntoResponse, Json, Response},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
 use utoipa::ToSchema;
 
@@ -160,7 +159,7 @@ pub async fn handle_display<R: DeviceRegistry>(
         rssi: device.rssi,
     };
 
-    // Run script and cache the result (PNG rendering happens in /api/image)
+    // Run script, render SVG, and cache the result (PNG rendering happens in /api/image)
     let device_mac = device.device_id.to_string();
     let pipeline = content_pipeline.clone();
     let mac = device_mac.clone();
@@ -168,45 +167,50 @@ pub async fn handle_display<R: DeviceRegistry>(
     let ctx = device_ctx.clone();
 
     // Run in spawn_blocking because Lua scripts use blocking HTTP requests
-    let (refresh_rate, skip_update, error_msg) = tokio::task::spawn_blocking(move || {
-        match pipeline.run_script_for_device(&mac, Some(ctx.clone())) {
-            Ok(result) => {
-                if result.skip_update {
-                    (result.refresh_rate, true, None)
-                } else {
-                    // Cache the script output for later rendering
-                    let cached = CachedContent {
-                        script_data: result.data,
-                        device_context: Some(ctx),
-                        screen_name: result.screen_name,
-                        template_path: result.template_path,
-                        params: result.params,
-                        generated_at: chrono::Utc::now(),
-                    };
+    let (refresh_rate, skip_update, content_hash, error_msg) =
+        tokio::task::spawn_blocking(move || {
+            match pipeline.run_script_for_device(&mac, Some(ctx.clone())) {
+                Ok(result) => {
+                    if result.skip_update {
+                        (result.refresh_rate, true, None, None)
+                    } else {
+                        // Render SVG from script result (template processing happens here)
+                        match pipeline.render_svg_from_script(&result, Some(&ctx)) {
+                            Ok(svg) => {
+                                // Cache the pre-rendered SVG with its content hash
+                                let cached = CachedContent::new(svg, result.screen_name.clone());
+                                let hash = cached.content_hash.clone();
+                                let rt = tokio::runtime::Handle::current();
+                                rt.block_on(cache.store(&mac, cached));
+                                (result.refresh_rate, false, Some(hash), None)
+                            }
+                            Err(e) => {
+                                // Template rendering failed - cache error SVG
+                                let error_msg = e.to_string();
+                                let error_svg = pipeline.render_error_svg(&error_msg);
+                                let cached = CachedContent::new(error_svg, "_error".to_string());
+                                let hash = cached.content_hash.clone();
+                                let rt = tokio::runtime::Handle::current();
+                                rt.block_on(cache.store(&mac, cached));
+                                (60, false, Some(hash), Some(error_msg))
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Script error - cache error SVG
+                    let error_msg = e.to_string();
+                    let error_svg = pipeline.render_error_svg(&error_msg);
+                    let cached = CachedContent::new(error_svg, "_error".to_string());
+                    let hash = cached.content_hash.clone();
                     let rt = tokio::runtime::Handle::current();
                     rt.block_on(cache.store(&mac, cached));
-                    (result.refresh_rate, false, None)
+                    (60, false, Some(hash), Some(error_msg))
                 }
             }
-            Err(e) => {
-                // Cache error state - will be rendered as error screen in /api/image
-                let error_msg = e.to_string();
-                let cached = CachedContent {
-                    script_data: serde_json::json!({"error": error_msg}),
-                    device_context: Some(ctx),
-                    screen_name: "_error".to_string(),
-                    template_path: std::path::PathBuf::new(),
-                    params: HashMap::new(),
-                    generated_at: chrono::Utc::now(),
-                };
-                let rt = tokio::runtime::Handle::current();
-                rt.block_on(cache.store(&mac, cached));
-                (60, false, Some(error_msg))
-            }
-        }
-    })
-    .await
-    .map_err(|e| ApiError::Internal(format!("Task error: {e}")))?;
+        })
+        .await
+        .map_err(|e| ApiError::Internal(format!("Task error: {e}")))?;
 
     if let Some(ref error) = error_msg {
         tracing::error!(error = %error, "Script error, cached for error rendering");
@@ -251,10 +255,11 @@ pub async fn handle_display<R: DeviceRegistry>(
 
     // Return JSON response
     // Note: firmware expects status=0 for success (not 200!)
+    // The filename is a hash of the SVG content, so TRMNL can detect changes
     Ok(Json(DisplayJsonResponse {
         status: 0,
         image_url,
-        filename: "default".to_string(),
+        filename: content_hash.unwrap_or_else(|| "unchanged".to_string()),
         update_firmware: false,
         firmware_url: None,
         refresh_rate,
@@ -324,25 +329,15 @@ pub async fn handle_image<R: DeviceRegistry>(
         "Image request received"
     );
 
-    // Get cached script output and render to PNG
+    // Get cached SVG and render to PNG
     let png_bytes = if let Some(cached) = content_cache.get(&device_mac).await {
-        // Check if this is an error cache entry
-        if cached.screen_name == "_error" {
-            let error_msg = cached
-                .script_data
-                .get("error")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unknown error");
-            tracing::warn!(error = %error_msg, "Rendering error screen from cached error");
-            content_pipeline.generate_error(error_msg, spec)?
-        } else {
-            tracing::info!(
-                screen = %cached.screen_name,
-                age_secs = (chrono::Utc::now() - cached.generated_at).num_seconds(),
-                "Rendering PNG from cached script output"
-            );
-            content_pipeline.render_from_cache(&cached, spec)?
-        }
+        tracing::info!(
+            screen = %cached.screen_name,
+            content_hash = %cached.content_hash,
+            age_secs = (chrono::Utc::now() - cached.generated_at).num_seconds(),
+            "Rendering PNG from cached SVG"
+        );
+        content_pipeline.render_png_from_svg(&cached.rendered_svg, spec)?
     } else {
         // No cached content - this shouldn't happen since /api/display must be called first
         // to generate the signed URL

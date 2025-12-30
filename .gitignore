@@ -1,7 +1,7 @@
 target/
 *.swp
 .DS_Store
-
+.claude
 # Documentation build output
 docs/node_modules/
 docs/doc_build/

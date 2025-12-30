@@ -43,7 +43,7 @@ Design screens using familiar SVG with Tera templating:
 
 ### E-ink Optimized
 
-- 4-level grayscale with Floyd-Steinberg dithering
+- 4-level grayscale with blue-noise dithering
 - Variable font support for crisp text
 - Automatic sizing for different TRMNL models
 

@@ -8,7 +8,7 @@
 - **SVG Templates** - Design pixel-perfect screens using SVG with Tera templating (Jinja2-style syntax).
 - **Variable Fonts** - Full support for variable font weights via CSS font-variation-settings.
 - **Smart Refresh** - Scripts control when devices refresh - optimize for fresh data and battery life.
-- **4-Level Grayscale** - Floyd-Steinberg dithering optimized for e-paper's 4 gray levels.
+- **4-Level Grayscale** - Blue-noise dithering optimized for e-paper's 4 gray levels.
 - **Device Mapping** - Assign different screens to different devices via simple YAML configuration.
 
 ## Quick Start

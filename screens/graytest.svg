@@ -88,7 +88,7 @@
 
   <!-- Byonk branding -->
   <text x="400" y="420" text-anchor="middle" fill="white" font-family="Outfit" font-size="28" font-weight="700">BYONK E-INK TEST PATTERN</text>
-  <text x="400" y="455" text-anchor="middle" fill="rgb(170,170,170)" font-family="Outfit" font-size="16">800 x 480 | 4 Gray Levels | Floyd-Steinberg Dithering</text>
+  <text x="400" y="455" text-anchor="middle" fill="rgb(170,170,170)" font-family="Outfit" font-size="16">800 x 480 | 4 Gray Levels | Blue-Noise Dithering</text>
 
   <!-- Corner markers -->
   <rect x="0" y="380" width="40" height="40" fill="white"/>

@@ -9,7 +9,7 @@ Byonk lets you create custom screens for your TRMNL device using Lua scripts and
 - **Lua Scripting** - Fetch data from APIs, scrape websites, process JSON
 - **SVG Templates** - Design screens with Tera templating (Jinja2-style)
 - **Variable Fonts** - Full support for variable font weight/width via CSS
-- **4-Level Grayscale** - Floyd-Steinberg dithering optimized for e-paper
+- **4-Level Grayscale** - Blue-noise dithering optimized for e-paper
 - **Dynamic Refresh** - Scripts control when the device should refresh
 - **Device Mapping** - Assign different screens to different devices
 

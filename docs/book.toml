@@ -12,7 +12,7 @@ build-dir = "book"
 command = "mdbook-mermaid"
 
 [output.html]
-additional-js = ["theme/mermaid.min.js", "theme/mermaid-init.js"]
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
 default-theme = "light"
 preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/oetiker/byonk"

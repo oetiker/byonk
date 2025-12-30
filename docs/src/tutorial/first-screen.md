@@ -59,17 +59,17 @@ Create a new file `screens/hello.svg`:
 
   <!-- Greeting -->
   <text class="greeting" x="400" y="120" text-anchor="middle">
-    {{ greeting }}
+    {{ data.greeting }}
   </text>
 
   <!-- Large time display -->
   <text class="time" x="400" y="260" text-anchor="middle">
-    {{ time }}
+    {{ data.time }}
   </text>
 
   <!-- Date below -->
   <text class="date" x="400" y="320" text-anchor="middle">
-    {{ date }}
+    {{ data.date }}
   </text>
 
   <!-- Footer -->
@@ -80,7 +80,7 @@ Create a new file `screens/hello.svg`:
 ```
 
 **Template features used:**
-- `{{ variable }}` - Inserts values from the Lua script's `data` table
+- `{{ data.variable }}` - Inserts values from the Lua script's `data` table
 - CSS styling for fonts and colors
 - `text-anchor="middle"` for centered text
 
@@ -126,17 +126,9 @@ Replace `YOUR:MAC:AD:DR:ES:S0` with your device's actual MAC address.
 
 ## Understanding the Result
 
-Your screen should show:
+Your screen should look like this:
 
-```
-        Hello, World!
-
-          14:32:05
-
-    Friday, December 27, 2024
-
-      My first Byonk screen!
-```
+![Hello World screen](../images/hello.png)
 
 ## Adding Parameters
 

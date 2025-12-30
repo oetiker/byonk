@@ -37,6 +37,9 @@ utoipa-swagger-ui = { version = "8", features = ["axum"] }
 thiserror = "2"
 anyhow = "1"
 
+# CLI
+clap = { version = "4", features = ["derive"] }
+
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"

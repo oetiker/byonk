@@ -9,10 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- CLI `render` subcommand: `byonk render --mac XX:XX:XX:XX:XX:XX --output file.png` renders screens directly without starting a server
+- Hello world tutorial screen (`screens/hello.lua`, `screens/hello.svg`) with screenshot in documentation
+
 ### Changed
 
-- `make docs-samples` now automatically builds and starts the server if needed
+- `make docs-samples` now uses CLI render command (no server needed)
 - PNG output now uses native 2-bit grayscale instead of indexed color for faster firmware decoding
+- Standardized documentation diagrams to use appropriate Mermaid types (flowchart, sequenceDiagram)
+- Split complex architecture sequence diagram into focused phase-specific diagrams
+- Upgraded mdBook to v0.5.2 and mdbook-mermaid to v0.17.0 in CI workflow
+- Simplified mermaid setup: removed manual theme/mermaid.js, now managed by mdbook-mermaid
 
 ### Fixed
 

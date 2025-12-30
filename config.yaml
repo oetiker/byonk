@@ -26,6 +26,12 @@ screens:
     template: graytest.svg
     default_refresh: 3600
 
+  # Hello world tutorial screen
+  hello:
+    script: hello.lua
+    template: hello.svg
+    default_refresh: 60
+
 # Map device MAC addresses to screens
 # MAC addresses should be uppercase with colons (e.g., "94:A9:90:8C:6D:18")
 devices:
@@ -33,12 +39,17 @@ devices:
   "94:A9:90:8C:6D:18":
     screen: transit
     params:
-      station: "Olten, Südwest"
+      station: "Trans, Dorf"
       limit: 8
 
   # Test device for gray levels
   "TE:ST:GR:AY:00:00":
     screen: graytest
+    params: {}
+
+  # Test device for hello tutorial
+  "TE:ST:HE:LL:00:00":
+    screen: hello
     params: {}
 
   # Example: Device showing Floerli room "Rosa"

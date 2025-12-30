@@ -18,27 +18,17 @@ Byonk uses this MAC address to:
 
 ## Device Registration Flow
 
-```
-┌─────────────┐                           ┌─────────────┐
-│   Device    │                           │   Byonk     │
-└──────┬──────┘                           └──────┬──────┘
-       │                                         │
-       │  GET /api/setup                         │
-       │  Headers: ID, FW-Version, Model         │
-       │─────────────────────────────────────────▶
-       │                                         │
-       │         { api_key, friendly_id }        │
-       │◀─────────────────────────────────────────
-       │                                         │
-       │  (Device stores api_key)                │
-       │                                         │
-       │  GET /api/display                       │
-       │  Headers: Access-Token, ID              │
-       │─────────────────────────────────────────▶
-       │                                         │
-       │         { image_url, refresh_rate }     │
-       │◀─────────────────────────────────────────
-       │                                         │
+```mermaid
+sequenceDiagram
+    participant Device
+    participant Byonk
+
+    Device->>Byonk: GET /api/setup<br/>Headers: ID, FW-Version, Model
+    Byonk-->>Device: {api_key, friendly_id}
+    Note right of Device: Store api_key
+
+    Device->>Byonk: GET /api/display<br/>Headers: Access-Token, ID
+    Byonk-->>Device: {image_url, refresh_rate}
 ```
 
 ### Setup Response

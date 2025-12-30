@@ -5,23 +5,24 @@ Byonk is designed as a content server that bridges dynamic data sources with e-i
 ## System Overview
 
 ```mermaid
-architecture-beta
-    group server(server)[Byonk Server]
+flowchart LR
+    Display[TRMNL Display]
 
-    service display(internet)[TRMNL Display]
-    service router(server)[HTTP Router] in server
-    service registry(database)[Device Registry] in server
-    service signer(disk)[URL Signer] in server
-    service lua(server)[Lua Runtime] in server
-    service template(disk)[Template Service] in server
-    service renderer(disk)[SVG Renderer] in server
+    subgraph Server[Byonk Server]
+        Router[HTTP Router]
+        Registry[(Device Registry)]
+        Signer[URL Signer]
+        Lua[Lua Runtime]
+        Template[Template Service]
+        Renderer[SVG Renderer]
+    end
 
-    display:R -- L:router
-    router:R -- L:registry
-    router:R -- L:signer
-    router:B -- T:lua
-    lua:R -- L:template
-    template:R -- L:renderer
+    Display --> Router
+    Router --> Registry
+    Router --> Signer
+    Router --> Lua
+    Lua --> Template
+    Template --> Renderer
 ```
 
 ## Core Components
@@ -90,62 +91,60 @@ Converts SVG to PNG optimized for e-ink:
 
 ## Request Flow
 
+The device-server interaction happens in three phases:
+
+### Phase 1: Device Registration
+
 ```mermaid
 sequenceDiagram
-    box LightBlue TRMNL Device
-        participant Device as E-ink Display
-    end
-    box LightGray Byonk Server
-        participant Router as HTTP Router
-        participant Registry as Device Registry
-        participant Signer as URL Signer
-        participant Cache as Content Cache
-        participant Lua as Lua Runtime
-        participant Template as Template Service
-        participant Renderer as SVG Renderer
-    end
-    box LightYellow External
-        participant API as External APIs
-    end
+    participant Device as E-ink Display
+    participant Router as HTTP Router
+    participant Registry as Device Registry
 
-    Note over Device,Registry: Phase 1 - Device Registration
     Device->>+Router: GET /api/setup
     Router->>Registry: lookup/create device
     Registry-->>Router: api_key
     Router-->>-Device: {api_key, friendly_id}
     Note right of Device: Store api_key
+```
 
-    Note over Device,Renderer: Phase 2 - Content Generation
+### Phase 2: Data Fetching
+
+```mermaid
+sequenceDiagram
+    participant Device
+    participant Router
+    participant Lua
+    participant API as External API
+    participant Cache
+
     Device->>+Router: GET /api/display
-    Router->>Registry: validate token
-    Registry-->>Router: device config
-
-    rect rgb(230,245,230)
-        Note over Lua,Renderer: Content Pipeline
-        Router->>+Lua: execute script
-        Lua->>+API: http_get(url)
-        API-->>-Lua: JSON data
-        Lua-->>-Router: {data, refresh_rate}
-
-        Router->>+Template: render SVG
-        Template-->>-Router: SVG document
-
-        Router->>+Renderer: convert to PNG
-        Renderer-->>-Router: dithered PNG
-    end
-
-    Router->>Cache: store content
-    Router->>Signer: sign URL
-    Signer-->>Router: signed URL
+    Router->>+Lua: execute script
+    Lua->>+API: http_get(url)
+    API-->>-Lua: JSON data
+    Lua-->>-Router: {data, refresh_rate}
+    Router->>Cache: store data
     Router-->>-Device: {image_url, refresh_rate}
+```
 
-    Note over Device,Cache: Phase 3 - Image Download
+### Phase 3: Image Rendering
+
+```mermaid
+sequenceDiagram
+    participant Device
+    participant Router
+    participant Cache
+    participant Template
+    participant Renderer
+
     Device->>+Router: GET /api/image/:id
-    Router->>Signer: verify signature
-    Router->>Cache: get content
-    Cache-->>Router: PNG bytes
+    Router->>Cache: get cached data
+    Cache-->>Router: {data, context}
+    Router->>+Template: render SVG with data
+    Template-->>-Router: SVG document
+    Router->>+Renderer: convert to PNG
+    Renderer-->>-Router: dithered PNG
     Router-->>-Device: PNG image
-
     Note right of Device: Display and sleep
 ```
 
@@ -154,21 +153,21 @@ sequenceDiagram
 | Phase | Endpoint | Purpose |
 |-------|----------|---------|
 | **1. Setup** | `GET /api/setup` | Device registers, receives API key |
-| **2. Display** | `GET /api/display` | Triggers content generation, returns signed image URL |
-| **3. Image** | `GET /api/image/:id` | Downloads cached PNG using signed URL |
+| **2. Display** | `GET /api/display` | Runs Lua script, caches data, returns signed image URL |
+| **3. Image** | `GET /api/image/:id` | Renders SVG template to PNG, returns image |
 
-The content pipeline (Phase 2) executes these steps:
+**Phase 2** (data fetching):
+1. Load and execute Lua script with `params` and `device` context
+2. Script fetches external data via `http_get()`
+3. Cache script output (JSON data)
+4. Sign image URL and return to device
 
-1. **Load script** — Read `screens/{screen}.lua` from disk
-2. **Execute Lua** — Run script with `params` and `device` context
-3. **Fetch external data** — Script calls `http_get()` to fetch APIs
-4. **Load template** — Read `screens/{screen}.svg` from disk
-5. **Render SVG** — Apply `data`, `device`, `params` to Tera template
-6. **Rasterize** — Convert SVG to pixels at target resolution
-7. **Dither** — Floyd-Steinberg to 4 gray levels
-8. **Encode PNG** — 2-bit indexed color, ~10-90KB
-9. **Cache** — Store for image fetch request
-10. **Sign URL** — HMAC-SHA256 with 1-hour expiry
+**Phase 3** (image rendering):
+1. Verify URL signature
+2. Retrieve cached data
+3. Render SVG template with data
+4. Convert SVG to PNG with Floyd-Steinberg dithering
+5. Return PNG to device
 
 ## Technology Stack
 

@@ -27,17 +27,8 @@ Point your TRMNL device to `http://your-server:3000` and it will start displayin
 ## How It Works
 
 ```mermaid
-architecture-beta
-    group pipeline(cloud)[Content Pipeline]
-
-    service lua(server)[Lua Script] in pipeline
-    service svg(disk)[SVG Template] in pipeline
-    service dither(disk)[Dithering] in pipeline
-    service png(internet)[TRMNL PNG] in pipeline
-
-    lua:R -- L:svg
-    svg:R -- L:dither
-    dither:R -- L:png
+flowchart LR
+    A[Lua Script] --> B[SVG Template] --> C[Dithering] --> D[TRMNL PNG]
 ```
 
 1. **Lua scripts** fetch data from APIs or scrape websites

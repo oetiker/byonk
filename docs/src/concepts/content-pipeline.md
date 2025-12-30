@@ -4,16 +4,19 @@ The content pipeline is how Byonk transforms data into images for e-ink displays
 
 ## Pipeline Overview
 
+```mermaid
+flowchart TD
+    A[Lua Script] -->|JSON data| B[SVG Template]
+    B -->|SVG document| C[Renderer]
+    C -->|dithered pixels| D[E-ink PNG]
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  Lua Script │ ──▶ │ SVG Template│ ──▶ │  Renderer   │ ──▶ │  E-ink PNG  │
-└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
-     │                    │                    │                    │
-     ▼                    ▼                    ▼                    ▼
-  Fetch data         Apply layout        Convert SVG         Optimize for
-  Process JSON       Tera templating     Grayscale           e-paper
-  Return data        Generate SVG        Dithering           2-bit PNG
-```
+
+| Stage | Input | Processing | Output |
+|-------|-------|------------|--------|
+| **Lua Script** | API endpoints, params | Fetch data, parse JSON/HTML | Structured data |
+| **SVG Template** | Data + device context | Tera templating, layout | SVG document |
+| **Renderer** | SVG document | Rasterize, grayscale, dither | Pixel buffer |
+| **E-ink PNG** | Pixel buffer | Quantize to 4 levels, encode | 2-bit PNG |
 
 ## Stage 1: Lua Script Execution
 

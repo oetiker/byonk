@@ -6,3 +6,6 @@ target/
 docs/node_modules/
 docs/doc_build/
 docs/.rspress/
+docs/book/
+docs/mermaid.min.js
+docs/mermaid-init.js

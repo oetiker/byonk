@@ -2,6 +2,8 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -16,6 +18,34 @@ mod services;
 
 use models::AppConfig;
 use services::{ContentCache, ContentPipeline, InMemoryRegistry, RenderService, UrlSigner};
+
+#[derive(Parser)]
+#[command(name = "byonk")]
+#[command(about = "Bring Your Own Ink - content server for TRMNL e-ink devices")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Start the HTTP server (default)
+    Serve,
+    /// Render a screen directly to a PNG file
+    Render {
+        /// Device MAC address (determines which screen to render)
+        #[arg(short, long)]
+        mac: String,
+
+        /// Output PNG file path
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Device type: "og" (800x480) or "x" (1872x1404)
+        #[arg(short, long, default_value = "og")]
+        device: String,
+    },
+}
 
 /// OpenAPI documentation
 #[derive(OpenApi)]
@@ -58,6 +88,89 @@ struct AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Some(Commands::Render { mac, output, device }) => {
+            run_render_command(&mac, &output, &device)
+        }
+        Some(Commands::Serve) | None => run_server().await,
+    }
+}
+
+/// Render a screen directly to a PNG file (no server needed)
+fn run_render_command(mac: &str, output: &PathBuf, device_type: &str) -> anyhow::Result<()> {
+    use models::DisplaySpec;
+    use services::DeviceContext;
+
+    // Minimal logging for CLI
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "byonk=warn".into()),
+        )
+        .with(tracing_subscriber::fmt::layer().without_time())
+        .init();
+
+    // Configuration
+    let svg_dir = std::env::var("SVG_DIR").unwrap_or_else(|_| "./static/svgs".to_string());
+    let screens_dir = std::env::var("SCREENS_DIR").unwrap_or_else(|_| "./screens".to_string());
+    let config_path = std::env::var("CONFIG_FILE").unwrap_or_else(|_| "./config.yaml".to_string());
+
+    // Load config and initialize services
+    let config = Arc::new(AppConfig::load_or_default(std::path::Path::new(&config_path)));
+    let renderer = Arc::new(RenderService::new(&svg_dir)?);
+    let content_pipeline = Arc::new(
+        ContentPipeline::new(
+            config.clone(),
+            std::path::Path::new(&screens_dir),
+            renderer.clone(),
+        )
+        .expect("Failed to initialize content pipeline"),
+    );
+
+    // Parse device type
+    let display_spec = match device_type {
+        "x" => DisplaySpec::X,
+        _ => DisplaySpec::OG,
+    };
+
+    // Create device context
+    let device_context = DeviceContext {
+        mac: mac.to_string(),
+        battery_voltage: None,
+        rssi: None,
+    };
+
+    // Run the Lua script
+    let script_result = content_pipeline
+        .run_script_for_device(mac, Some(device_context.clone()))
+        .map_err(|e| anyhow::anyhow!("Script error: {}", e))?;
+
+    // Build cached content for rendering
+    let cached_content = services::CachedContent {
+        script_data: script_result.data,
+        device_context: Some(device_context),
+        screen_name: script_result.screen_name,
+        template_path: script_result.template_path,
+        params: script_result.params,
+        generated_at: chrono::Utc::now(),
+    };
+
+    // Render to PNG
+    let png_bytes = content_pipeline
+        .render_from_cache(&cached_content, display_spec)
+        .map_err(|e| anyhow::anyhow!("Render error: {}", e))?;
+
+    // Write to file
+    std::fs::write(output, &png_bytes)?;
+    println!("Rendered {} ({} bytes)", output.display(), png_bytes.len());
+
+    Ok(())
+}
+
+/// Run the HTTP server
+async fn run_server() -> anyhow::Result<()> {
     // Initialize tracing
     tracing_subscriber::registry()
         .with(

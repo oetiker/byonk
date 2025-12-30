@@ -9,13 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.3.0 - 2025-12-30
+
+### New
+
 - Default screen is now a TV-style test pattern showing device MAC, battery voltage, RSSI, 4 gray levels, gradient for dithering demo, and resolution test bars
 - Device MAC address (`device.mac`) now available in both Lua scripts and templates
 - Docker image tags for major (`0`), minor (`0.2`), and patch (`0.2.1`) versions
 - Documentation migrated to mdBook with mermaid diagrams
 - Updated installation docs for Docker and pre-built binaries
 - Added CLAUDE.md with project guidelines
-
 ### Changed
 
 - Renamed project branding from "TRMNL BOYS" to "Byonk - Bring Your Own Ink"

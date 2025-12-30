@@ -91,9 +91,11 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Render { mac, output, device }) => {
-            run_render_command(&mac, &output, &device)
-        }
+        Some(Commands::Render {
+            mac,
+            output,
+            device,
+        }) => run_render_command(&mac, &output, &device),
         Some(Commands::Serve) | None => run_server().await,
     }
 }
@@ -118,7 +120,9 @@ fn run_render_command(mac: &str, output: &PathBuf, device_type: &str) -> anyhow:
     let config_path = std::env::var("CONFIG_FILE").unwrap_or_else(|_| "./config.yaml".to_string());
 
     // Load config and initialize services
-    let config = Arc::new(AppConfig::load_or_default(std::path::Path::new(&config_path)));
+    let config = Arc::new(AppConfig::load_or_default(std::path::Path::new(
+        &config_path,
+    )));
     let renderer = Arc::new(RenderService::new(&svg_dir)?);
     let content_pipeline = Arc::new(
         ContentPipeline::new(
@@ -145,7 +149,7 @@ fn run_render_command(mac: &str, output: &PathBuf, device_type: &str) -> anyhow:
     // Run the Lua script
     let script_result = content_pipeline
         .run_script_for_device(mac, Some(device_context.clone()))
-        .map_err(|e| anyhow::anyhow!("Script error: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Script error: {e}"))?;
 
     // Build cached content for rendering
     let cached_content = services::CachedContent {
@@ -160,7 +164,7 @@ fn run_render_command(mac: &str, output: &PathBuf, device_type: &str) -> anyhow:
     // Render to PNG
     let png_bytes = content_pipeline
         .render_from_cache(&cached_content, display_spec)
-        .map_err(|e| anyhow::anyhow!("Render error: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Render error: {e}"))?;
 
     // Write to file
     std::fs::write(output, &png_bytes)?;

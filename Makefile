@@ -62,8 +62,8 @@ docs:
 docs-dev:
 	cd docs && mdbook serve
 
-# Generate sample screen images (requires Byonk running on :3000)
-docs-samples:
+# Generate sample screen images (auto-starts server if needed)
+docs-samples: release
 	./docs/generate-samples.sh
 
 # =============================================================================
@@ -96,6 +96,6 @@ help:
 	@echo "Documentation:"
 	@echo "  make docs         Build documentation"
 	@echo "  make docs-dev     Start docs dev server"
-	@echo "  make docs-samples Generate sample images (server must be running)"
+	@echo "  make docs-samples Generate sample images (auto-starts server)"
 	@echo ""
 	@echo "  make help         Show this help"

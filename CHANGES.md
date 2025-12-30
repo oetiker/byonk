@@ -11,7 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `make docs-samples` now automatically builds and starts the server if needed
+- PNG output now uses native 2-bit grayscale instead of indexed color for faster firmware decoding
+
 ### Fixed
+
+- Release builds now use static musl binaries, fixing glibc/musl mismatch in Docker images
 
 ## 0.3.0 - 2025-12-30
 

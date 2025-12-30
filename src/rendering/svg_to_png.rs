@@ -121,31 +121,30 @@ impl SvgRenderer {
             .collect()
     }
 
-    /// Encode grayscale data to 2-bit indexed PNG for e-ink displays
+    /// Encode grayscale data to 2-bit native grayscale PNG for e-ink displays.
+    ///
+    /// Uses PNG color type 0 (Grayscale) with 2-bit depth for optimal firmware
+    /// decoding:
+    /// - PNG 0 → black
+    /// - PNG 1 → dark gray
+    /// - PNG 2 → light gray
+    /// - PNG 3 → white
     fn encode_png(&self, gray_data: &[u8], spec: DisplaySpec) -> Result<Vec<u8>, RenderError> {
         let mut buf = Cursor::new(Vec::new());
 
         {
-            // Create PNG encoder with 2-bit indexed color
+            // Create PNG encoder with 2-bit native grayscale (not indexed)
+            // This allows the TRMNL firmware to use the optimized direct path
+            // instead of going through ReduceBpp with palette lookup
             let mut encoder = png::Encoder::new(&mut buf, spec.width, spec.height);
-            encoder.set_color(png::ColorType::Indexed);
+            encoder.set_color(png::ColorType::Grayscale);
             encoder.set_depth(png::BitDepth::Two);
-
-            // 4-level grayscale palette (2-bit = 4 colors)
-            // Index 0 = black, 1 = dark gray, 2 = light gray, 3 = white
-            let palette: Vec<u8> = vec![
-                0, 0, 0, // 0: black
-                85, 85, 85, // 1: dark gray (~33%)
-                170, 170, 170, // 2: light gray (~67%)
-                255, 255, 255, // 3: white
-            ];
-            encoder.set_palette(palette);
 
             let mut writer = encoder
                 .write_header()
                 .map_err(|e| RenderError::PngEncode(e.to_string()))?;
 
-            // Convert 8-bit grayscale to 2-bit indexed, packing 4 pixels per byte
+            // Convert 8-bit grayscale to 2-bit, packing 4 pixels per byte
             let packed_data = self.pack_2bit(gray_data, spec.width);
 
             writer
@@ -161,7 +160,13 @@ impl SvgRenderer {
         Ok(png_bytes)
     }
 
-    /// Pack 8-bit grayscale pixels into 2-bit indexed format (4 pixels per byte)
+    /// Pack 8-bit grayscale pixels into 2-bit grayscale format (4 pixels per byte)
+    ///
+    /// Maps grayscale values directly to 2-bit values:
+    /// - Input 0 (black)   → PNG 0 (black)
+    /// - Input 85 (dark)   → PNG 1 (dark gray)
+    /// - Input 170 (light) → PNG 2 (light gray)
+    /// - Input 255 (white) → PNG 3 (white)
     fn pack_2bit(&self, gray_data: &[u8], width: u32) -> Vec<u8> {
         // Each row needs to be byte-aligned
         let bytes_per_row = (width as usize).div_ceil(4);
@@ -174,16 +179,16 @@ impl SvgRenderer {
             let mut bit_pos = 6; // Start from high bits (2 bits per pixel)
 
             for (i, &pixel) in row.iter().enumerate() {
-                // Map 8-bit grayscale to 2-bit index (0-3)
+                // Map 8-bit grayscale to 2-bit value (0-3)
                 // After dithering, pixels should already be quantized to 4 levels
-                let index = match pixel {
+                let value = match pixel {
                     0..=63 => 0,    // black
                     64..=127 => 1,  // dark gray
                     128..=191 => 2, // light gray
                     192..=255 => 3, // white
                 };
 
-                byte |= index << bit_pos;
+                byte |= value << bit_pos;
 
                 if bit_pos == 0 || i == row.len() - 1 {
                     packed.push(byte);

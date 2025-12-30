@@ -1,19 +1,98 @@
 #!/bin/bash
 # Generate sample screen images for documentation
 #
-# Prerequisites:
-# - Byonk server running at http://localhost:3000
-# - curl installed
-#
 # Usage:
-#   ./generate-samples.sh
+#   ./generate-samples.sh           # Uses running server or starts one
+#   ./generate-samples.sh --no-auto # Requires server already running
+#
+# Environment:
+#   BYONK_URL - Server URL (default: http://localhost:3000)
+#   BYONK_BIN - Path to byonk binary (default: auto-detect)
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BYONK_URL="${BYONK_URL:-http://localhost:3000}"
-OUTPUT_DIR="$(dirname "$0")/src/images"
+OUTPUT_DIR="$SCRIPT_DIR/src/images"
+AUTO_START=true
+SERVER_PID=""
+
+# Parse arguments
+if [[ "$1" == "--no-auto" ]]; then
+    AUTO_START=false
+fi
+
+# Find byonk binary
+find_byonk() {
+    if [[ -n "$BYONK_BIN" ]]; then
+        echo "$BYONK_BIN"
+    elif [[ -x "$PROJECT_DIR/target/release/byonk" ]]; then
+        echo "$PROJECT_DIR/target/release/byonk"
+    elif [[ -x "$PROJECT_DIR/target/debug/byonk" ]]; then
+        echo "$PROJECT_DIR/target/debug/byonk"
+    else
+        echo ""
+    fi
+}
+
+# Check if server is responding
+server_ready() {
+    curl -s -o /dev/null -w "%{http_code}" "$BYONK_URL/api/display" -H "ID: test" -H "Access-Token: test" 2>/dev/null | grep -q "200"
+}
+
+# Cleanup on exit
+cleanup() {
+    if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
+        echo "Stopping byonk server (PID $SERVER_PID)..."
+        kill "$SERVER_PID" 2>/dev/null || true
+        wait "$SERVER_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+
+# Start server if needed
+start_server_if_needed() {
+    if server_ready; then
+        echo "Using existing server at $BYONK_URL"
+        return 0
+    fi
+
+    if [[ "$AUTO_START" != "true" ]]; then
+        echo "Error: Server not running at $BYONK_URL"
+        echo "Start byonk first or run without --no-auto"
+        exit 1
+    fi
+
+    local byonk_bin
+    byonk_bin=$(find_byonk)
+    if [[ -z "$byonk_bin" ]]; then
+        echo "Error: byonk binary not found. Run 'make build' or 'make release' first."
+        exit 1
+    fi
+
+    echo "Starting byonk server from $byonk_bin..."
+    cd "$PROJECT_DIR"
+    "$byonk_bin" &
+    SERVER_PID=$!
+
+    # Wait for server to be ready (max 10 seconds)
+    echo "Waiting for server to start..."
+    for i in {1..20}; do
+        if server_ready; then
+            echo "Server ready!"
+            return 0
+        fi
+        sleep 0.5
+    done
+
+    echo "Error: Server failed to start within 10 seconds"
+    exit 1
+}
 
 mkdir -p "$OUTPUT_DIR"
+
+start_server_if_needed
 
 echo "Generating sample images from $BYONK_URL..."
 

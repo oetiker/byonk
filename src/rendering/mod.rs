@@ -1,3 +1,4 @@
+pub mod blue_noise;
 pub mod dither;
 pub mod svg_to_png;
 

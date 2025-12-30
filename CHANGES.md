@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Improved dithering quality: switched to blue-noise-modulated error diffusion with serpentine scanning, reducing visible "worm" artifacts while preserving sharp edges for UI content
+
 ### Fixed
 
 ## 0.3.2 - 2025-12-30

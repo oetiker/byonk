@@ -1,6 +1,6 @@
 use crate::error::RenderError;
 use crate::models::DisplaySpec;
-use crate::rendering::dither::floyd_steinberg;
+use crate::rendering::dither::blue_noise_dither;
 use resvg::usvg::{self, Transform};
 use std::io::Cursor;
 use std::sync::Arc;
@@ -87,8 +87,8 @@ impl SvgRenderer {
         // Convert RGBA to grayscale
         let gray_data = self.to_grayscale(pixmap.data());
 
-        // Apply Floyd-Steinberg dithering for 2-bit output
-        let dithered = floyd_steinberg(&gray_data, spec.width, spec.height, self.levels);
+        // Apply blue-noise-modulated error diffusion for 2-bit output
+        let dithered = blue_noise_dither(&gray_data, spec.width, spec.height, self.levels, None);
 
         // Encode to PNG
         self.encode_png(&dithered, spec)

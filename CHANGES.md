@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
-- TV-style test pattern (graytest.svg) with 4 gray levels, gradients for dithering demo, and resolution test bars
+- Default screen is now a TV-style test pattern showing device MAC, battery voltage, RSSI, 4 gray levels, gradient for dithering demo, and resolution test bars
+- Device MAC address (`device.mac`) now available in both Lua scripts and templates
 - Docker image tags for major (`0`), minor (`0.2`), and patch (`0.2.1`) versions
 - Documentation migrated to mdBook with mermaid diagrams
 - Updated installation docs for Docker and pre-built binaries
@@ -22,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated Makefile for mdBook (removed old rspress/npm targets)
 - Faster container builds using pre-built binaries instead of compiling from source
 - Switched from OpenSSL to rustls for better cross-platform compatibility
+- Refactored content caching: `/api/display` now caches Lua script output (JSON data) instead of rendered PNGs; PNG rendering happens on-demand in `/api/image` when requested
+- Removed unused static fallback SVG (`static/svgs/default.svg`) and ContentProvider
 
 ### Fixed
 

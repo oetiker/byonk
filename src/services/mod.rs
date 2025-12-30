@@ -1,6 +1,5 @@
 pub mod content_cache;
 pub mod content_pipeline;
-pub mod content_provider;
 pub mod device_registry;
 pub mod lua_runtime;
 pub mod renderer;
@@ -9,7 +8,6 @@ pub mod url_signer;
 
 pub use content_cache::{CachedContent, ContentCache};
 pub use content_pipeline::{ContentPipeline, DeviceContext};
-pub use content_provider::ContentProvider;
 pub use device_registry::{DeviceRegistry, InMemoryRegistry};
 pub use lua_runtime::{LuaRuntime, ScriptError};
 pub use renderer::RenderService;

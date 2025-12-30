@@ -92,6 +92,7 @@ impl LuaRuntime {
         // Add device table
         let device_table = lua.create_table()?;
         if let Some(ctx) = device_ctx {
+            device_table.set("mac", ctx.mac.as_str())?;
             if let Some(voltage) = ctx.battery_voltage {
                 device_table.set("battery_voltage", voltage)?;
             }

@@ -20,8 +20,17 @@ pub enum ApiError {
     #[error("Rendering error: {0}")]
     Render(#[from] RenderError),
 
+    #[error("Content error: {0}")]
+    Content(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
+}
+
+impl From<crate::services::content_pipeline::ContentError> for ApiError {
+    fn from(e: crate::services::content_pipeline::ContentError) -> Self {
+        ApiError::Content(e.to_string())
+    }
 }
 
 #[derive(Debug, Error)]
@@ -41,9 +50,6 @@ pub enum RenderError {
     #[error("PNG encode error: {0}")]
     PngEncode(String),
 
-    #[error("SVG file not found: {0}")]
-    SvgNotFound(String),
-
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -55,6 +61,7 @@ impl IntoResponse for ApiError {
             ApiError::DeviceNotFound => (StatusCode::NOT_FOUND, self.to_string()),
             ApiError::InvalidSignature => (StatusCode::FORBIDDEN, self.to_string()),
             ApiError::Render(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            ApiError::Content(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
             ApiError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
 

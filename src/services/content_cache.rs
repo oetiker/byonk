@@ -2,18 +2,26 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// Cached content ready to be served
+use super::DeviceContext;
+
+/// Cached script output ready for rendering
 #[derive(Clone)]
 pub struct CachedContent {
-    /// Rendered PNG bytes
-    pub png_bytes: Vec<u8>,
-    /// Refresh rate returned by the script
-    pub refresh_rate: u32,
+    /// Data returned by the Lua script
+    pub script_data: serde_json::Value,
+    /// Device context (battery, rssi) at time of script execution
+    pub device_context: Option<DeviceContext>,
+    /// Screen name (for finding the template)
+    pub screen_name: String,
+    /// Template path
+    pub template_path: std::path::PathBuf,
+    /// Config params for this device
+    pub params: HashMap<String, serde_yaml::Value>,
     /// When this content was generated
     pub generated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Cache for rendered content, keyed by device MAC
+/// Cache for script output, keyed by device MAC
 pub struct ContentCache {
     cache: Arc<RwLock<HashMap<String, CachedContent>>>,
 }
@@ -25,7 +33,7 @@ impl ContentCache {
         }
     }
 
-    /// Store rendered content for a device
+    /// Store script output for a device
     pub async fn store(&self, device_mac: &str, content: CachedContent) {
         let mut cache = self.cache.write().await;
         cache.insert(device_mac.to_string(), content);

@@ -1,43 +1,155 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
-  <style>
-    /* Using font-variation-settings for variable font support */
-    .header { font-family: Outfit; font-size: 36px; font-variation-settings: "wght" 700; fill: white; }
-    .time { font-family: Outfit; font-size: 72px; font-variation-settings: "wght" 700; fill: black; }
-    .date { font-family: Outfit; font-size: 24px; font-variation-settings: "wght" 400; fill: rgb(100,100,100); }
-    .subtitle { font-family: Outfit; font-size: 24px; font-variation-settings: "wght" 400; fill: rgb(85,85,85); }
-    .message { font-family: Outfit; font-size: 18px; font-variation-settings: "wght" 400; fill: black; }
-    .footer { font-family: Outfit; font-size: 12px; font-variation-settings: "wght" 400; fill: rgb(150,150,150); }
-  </style>
+  <defs>
+    <!-- Horizontal gradient for dithering test -->
+    <linearGradient id="hGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:rgb(0,0,0)"/>
+      <stop offset="100%" style="stop-color:rgb(255,255,255)"/>
+    </linearGradient>
+  </defs>
 
-  <rect width="800" height="480" fill="white"/>
+  <!-- Black outer border -->
+  <rect width="800" height="480" fill="rgb(0,0,0)"/>
 
-  <!-- Header -->
-  <rect x="0" y="0" width="800" height="80" fill="black"/>
-  <text class="header" x="400" y="55" text-anchor="middle">
-    {{ data.title }}
+  <!-- Gray background with margin -->
+  <rect x="8" y="8" width="784" height="464" fill="rgb(128,128,128)"/>
+
+  <!-- Dashed white border -->
+  <rect x="8" y="8" width="784" height="464" fill="none"
+        stroke="white" stroke-width="6" stroke-dasharray="20,20"/>
+
+  <!-- Horizontal grid lines -->
+  <line x1="8" y1="80" x2="792" y2="80" stroke="white" stroke-width="2"/>
+  <line x1="8" y1="160" x2="792" y2="160" stroke="white" stroke-width="2"/>
+  <line x1="8" y1="320" x2="792" y2="320" stroke="white" stroke-width="2"/>
+  <line x1="8" y1="400" x2="792" y2="400" stroke="white" stroke-width="2"/>
+
+  <!-- Vertical grid lines -->
+  <line x1="100" y1="8" x2="100" y2="472" stroke="white" stroke-width="2"/>
+  <line x1="200" y1="8" x2="200" y2="472" stroke="white" stroke-width="2"/>
+  <line x1="600" y1="8" x2="600" y2="472" stroke="white" stroke-width="2"/>
+  <line x1="700" y1="8" x2="700" y2="472" stroke="white" stroke-width="2"/>
+
+  <!-- Center crosshairs -->
+  <line x1="300" y1="240" x2="500" y2="240" stroke="white" stroke-width="2"/>
+  <line x1="400" y1="140" x2="400" y2="340" stroke="white" stroke-width="2"/>
+
+  <!-- Central white circle -->
+  <circle cx="400" cy="240" r="120" fill="white"/>
+
+  <!-- Gray ring inside circle -->
+  <circle cx="400" cy="240" r="100" fill="none" stroke="rgb(128,128,128)" stroke-width="16"/>
+
+  <!-- Inner circle details -->
+  <circle cx="400" cy="240" r="60" fill="none" stroke="black" stroke-width="2"/>
+  <circle cx="400" cy="240" r="30" fill="none" stroke="black" stroke-width="2"/>
+  <circle cx="400" cy="240" r="5" fill="black"/>
+
+  <!-- Crosshairs in center circle -->
+  <line x1="340" y1="240" x2="460" y2="240" stroke="black" stroke-width="1"/>
+  <line x1="400" y1="180" x2="400" y2="300" stroke="black" stroke-width="1"/>
+
+  <!-- Top corners: Gray level squares -->
+  <!-- Top left: 4 gray levels -->
+  <rect x="12" y="12" width="42" height="64" fill="rgb(255,255,255)"/>
+  <rect x="54" y="12" width="42" height="64" fill="rgb(170,170,170)"/>
+  <rect x="12" y="12" width="84" height="16" fill="rgb(0,0,0)"/>
+  <text x="54" y="56" text-anchor="middle" fill="black" font-family="Outfit" font-size="10">255</text>
+  <text x="54" y="68" text-anchor="middle" fill="black" font-family="Outfit" font-size="8">170</text>
+
+  <!-- Top right: 4 gray levels -->
+  <rect x="704" y="12" width="42" height="64" fill="rgb(85,85,85)"/>
+  <rect x="746" y="12" width="42" height="64" fill="rgb(0,0,0)"/>
+  <rect x="704" y="12" width="84" height="16" fill="rgb(255,255,255)"/>
+  <text x="746" y="56" text-anchor="middle" fill="white" font-family="Outfit" font-size="10">85</text>
+  <text x="746" y="68" text-anchor="middle" fill="white" font-family="Outfit" font-size="8">0</text>
+
+  <!-- Top center: Byonk title -->
+  <rect x="250" y="12" width="300" height="60" fill="black"/>
+  <text x="400" y="38" text-anchor="middle" fill="white" font-family="Outfit" font-size="24" font-weight="700">Byonk</text>
+  <text x="400" y="58" text-anchor="middle" fill="rgb(170,170,170)" font-family="Outfit" font-size="12">Bring Your Own Ink</text>
+
+  <!-- Resolution test bars - left side -->
+  <g transform="translate(20, 170)">
+    <!-- Wide bars -->
+    <rect x="0" y="0" width="12" height="60" fill="black"/>
+    <rect x="12" y="0" width="12" height="60" fill="white"/>
+    <rect x="24" y="0" width="12" height="60" fill="black"/>
+    <rect x="36" y="0" width="12" height="60" fill="white"/>
+    <!-- Medium bars -->
+    <rect x="52" y="0" width="6" height="60" fill="black"/>
+    <rect x="58" y="0" width="6" height="60" fill="white"/>
+    <rect x="64" y="0" width="6" height="60" fill="black"/>
+    <rect x="70" y="0" width="6" height="60" fill="white"/>
+  </g>
+
+  <!-- Resolution test bars - right side -->
+  <g transform="translate(700, 170)">
+    <!-- Narrow bars -->
+    <rect x="0" y="0" width="3" height="60" fill="black"/>
+    <rect x="3" y="0" width="3" height="60" fill="white"/>
+    <rect x="6" y="0" width="3" height="60" fill="black"/>
+    <rect x="9" y="0" width="3" height="60" fill="white"/>
+    <rect x="12" y="0" width="3" height="60" fill="black"/>
+    <rect x="15" y="0" width="3" height="60" fill="white"/>
+    <!-- Very narrow bars -->
+    <rect x="22" y="0" width="2" height="60" fill="black"/>
+    <rect x="24" y="0" width="2" height="60" fill="white"/>
+    <rect x="26" y="0" width="2" height="60" fill="black"/>
+    <rect x="28" y="0" width="2" height="60" fill="white"/>
+    <rect x="30" y="0" width="2" height="60" fill="black"/>
+    <rect x="32" y="0" width="2" height="60" fill="white"/>
+    <!-- Finest bars -->
+    <rect x="38" y="0" width="1" height="60" fill="black"/>
+    <rect x="39" y="0" width="1" height="60" fill="white"/>
+    <rect x="40" y="0" width="1" height="60" fill="black"/>
+    <rect x="41" y="0" width="1" height="60" fill="white"/>
+    <rect x="42" y="0" width="1" height="60" fill="black"/>
+    <rect x="43" y="0" width="1" height="60" fill="white"/>
+    <rect x="44" y="0" width="1" height="60" fill="black"/>
+    <rect x="45" y="0" width="1" height="60" fill="white"/>
+  </g>
+
+  <!-- Bottom section: Gradient dithering test -->
+  <rect x="100" y="325" width="600" height="35" fill="url(#hGradient)"/>
+  <text x="400" y="350" text-anchor="middle" fill="white" font-family="Outfit" font-size="11" font-weight="600"
+        style="text-shadow: 1px 1px 0 black, -1px -1px 0 black, 1px -1px 0 black, -1px 1px 0 black;">
+    DITHERING TEST
   </text>
 
-  <!-- Time display -->
-  <text class="time" x="400" y="180" text-anchor="middle">
-    {{ data.time }}
+  <!-- Gray step wedge -->
+  <rect x="100" y="362" width="150" height="30" fill="rgb(0,0,0)"/>
+  <rect x="250" y="362" width="150" height="30" fill="rgb(85,85,85)"/>
+  <rect x="400" y="362" width="150" height="30" fill="rgb(170,170,170)"/>
+  <rect x="550" y="362" width="150" height="30" fill="rgb(255,255,255)" stroke="rgb(128,128,128)"/>
+  <text x="175" y="382" text-anchor="middle" fill="white" font-family="Outfit" font-size="12">0</text>
+  <text x="325" y="382" text-anchor="middle" fill="white" font-family="Outfit" font-size="12">85</text>
+  <text x="475" y="382" text-anchor="middle" fill="black" font-family="Outfit" font-size="12">170</text>
+  <text x="625" y="382" text-anchor="middle" fill="black" font-family="Outfit" font-size="12">255</text>
+
+  <!-- Bottom info bar -->
+  <rect x="12" y="404" width="776" height="60" fill="rgb(0,0,0)"/>
+
+  <!-- MAC Address - centered prominently -->
+  <text x="400" y="430" text-anchor="middle" fill="white" font-family="monospace" font-size="20" font-weight="700">{{ device.mac | default(value="00:00:00:00:00:00") }}</text>
+
+  <!-- Device status row -->
+  <text x="150" y="455" text-anchor="middle" fill="rgb(170,170,170)" font-family="Outfit" font-size="13">
+    {% if device.battery_voltage %}{{ device.battery_voltage | round(precision=2) }}V{% else %}--{% endif %}
   </text>
-  <text class="date" x="400" y="220" text-anchor="middle">
-    {{ data.date }}
+  <text x="400" y="455" text-anchor="middle" fill="rgb(170,170,170)" font-family="Outfit" font-size="13">
+    {{ data.time }} {{ data.date }}
+  </text>
+  <text x="650" y="455" text-anchor="middle" fill="rgb(170,170,170)" font-family="Outfit" font-size="13">
+    {% if device.rssi %}{{ device.rssi }}dBm{% else %}--{% endif %}
   </text>
 
-  <!-- Subtitle -->
-  <text class="subtitle" x="400" y="300" text-anchor="middle">
-    {{ data.subtitle }}
-  </text>
+  <!-- Corner markers -->
+  <rect x="12" y="404" width="20" height="20" fill="white"/>
+  <rect x="768" y="404" width="20" height="20" fill="white"/>
+  <rect x="12" y="444" width="20" height="20" fill="white"/>
+  <rect x="768" y="444" width="20" height="20" fill="white"/>
 
-  <!-- Message box -->
-  <rect x="50" y="340" width="700" height="80" fill="rgb(240,240,240)" stroke="rgb(200,200,200)" stroke-width="1" rx="10"/>
-  <text class="message" x="400" y="390" text-anchor="middle">
-    {{ data.message }}
-  </text>
-
-  <!-- Footer -->
-  <text class="footer" x="400" y="460" text-anchor="middle">
-    Scripted content powered by Lua + Tera
-  </text>
+  <!-- Small corner circles for geometry -->
+  <circle cx="50" cy="440" r="12" fill="none" stroke="white" stroke-width="2"/>
+  <circle cx="750" cy="440" r="12" fill="none" stroke="white" stroke-width="2"/>
 </svg>

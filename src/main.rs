@@ -177,6 +177,7 @@ async fn handle_image(
         axum::extract::State(state.renderer),
         axum::extract::State(state.url_signer),
         axum::extract::State(state.content_cache),
+        axum::extract::State(state.content_pipeline),
         path,
         query,
     )

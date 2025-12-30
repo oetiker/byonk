@@ -3,13 +3,13 @@
     /* Using font-variation-settings for variable font support */
     .title { font-family: Outfit; font-size: 28px; font-variation-settings: "wght" 700; fill: white; }
     .time { font-family: Outfit; font-size: 14px; font-variation-settings: "wght" 400; fill: white; }
-    .col-header { font-family: Outfit; font-size: 14px; font-variation-settings: "wght" 600; fill: rgb(100,100,100); }
+    .col-header { font-family: Outfit; font-size: 14px; font-variation-settings: "wght" 600; fill: rgb(85,85,85); }
     .line-badge { font-family: Outfit; font-size: 16px; font-variation-settings: "wght" 700; fill: white; }
     .destination { font-family: Outfit; font-size: 18px; font-variation-settings: "wght" 400; fill: black; }
     .dep-time { font-family: Outfit; font-size: 22px; font-variation-settings: "wght" 700; fill: black; }
-    .delay { font-family: Outfit; font-size: 14px; font-variation-settings: "wght" 500; fill: rgb(200,50,50); }
-    .muted { font-family: Outfit; font-size: 24px; font-variation-settings: "wght" 400; fill: rgb(150,150,150); }
-    .footer { font-family: Outfit; font-size: 11px; font-variation-settings: "wght" 400; fill: rgb(150,150,150); }
+    .delay { font-family: Outfit; font-size: 14px; font-variation-settings: "wght" 500; fill: black; }
+    .muted { font-family: Outfit; font-size: 24px; font-variation-settings: "wght" 400; fill: rgb(170,170,170); }
+    .footer { font-family: Outfit; font-size: 11px; font-variation-settings: "wght" 400; fill: rgb(85,85,85); }
   </style>
 
   <rect width="800" height="480" fill="white"/>
@@ -30,12 +30,12 @@
   {% for dep in data.departures %}
   <!-- Row {{ loop.index }} -->
   {% if loop.index0 is odd %}
-  <rect x="0" y="{{ 105 + loop.index0 * 45 }}" width="800" height="45" fill="rgb(250,250,250)"/>
+  <rect x="0" y="{{ 105 + loop.index0 * 45 }}" width="800" height="45"   fill="rgb(240,240,240)"/>
   {% endif %}
 
   <!-- Line badge -->
   <rect x="20" y="{{ 112 + loop.index0 * 45 }}" width="70" height="30" rx="5"
-        fill="{% if dep.category == 'S' %}rgb(0,100,180){% elif dep.category == 'B' or dep.category == 'BN' %}rgb(180,50,50){% elif dep.category == 'T' %}rgb(50,150,50){% else %}rgb(100,100,100){% endif %}"/>
+        fill="{% if dep.category == 'S' %}rgb(85,85,85){% elif dep.category == 'B' or dep.category == 'BN' %}rgb(85,85,85){% elif dep.category == 'T' %}rgb(50,150,50){% else %}rgb(85,85,85){% endif %}"/>
   <text class="line-badge" x="55" y="{{ 134 + loop.index0 * 45 }}" text-anchor="middle">{{ dep.line }}</text>
 
   <!-- Destination -->

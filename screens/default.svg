@@ -1,155 +1,194 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
   <defs>
-    <!-- Horizontal gradient for dithering test -->
+    <style>
+      /* Colors */
+      .black { fill: #000 }
+      .white { fill: #fff }
+      .gray { fill: #555 }
+      .gray-light { fill: #aaa }
+      .gray-dark { fill: #555 }
+
+      /* Strokes */
+      .stroke-white { stroke: #fff }
+      .stroke-black { stroke: #000 }
+      .stroke-gray { stroke: #555 }
+      .stroke-w1 { stroke-width: 1 }
+      .stroke-w2 { stroke-width: 2 }
+      .stroke-w16 { stroke-width: 16 }
+      .no-fill { fill: none }
+
+      /* Text base */
+      text { text-anchor: middle; font-family: Outfit; font-weight: 500; }
+
+      /* Text sizes */
+      .text-xs { font-size: 12px }
+      .text-sm { font-size: 15px }
+      .text-md { font-size: 17px }
+      .text-lg { font-size: 18px }
+      .text-xl { font-size: 20px }
+      .text-2xl { font-size: 24px }
+      .text-3xl { font-size: 30px }
+
+      /* Text colors */
+      .text-white { fill: #fff }
+      .text-black { fill: #000 }
+      .text-gray { fill: #aaa }
+
+      /* Text weights */
+      .font-bold { font-weight: 700 }
+      .font-semibold { font-weight: 600 }
+
+      /* Special */
+      .mono { font-family: monospace }
+      .text-shadow {
+        text-shadow: 1px 1px 0 black, -1px -1px 0 black, 1px -1px 0 black, -1px 1px 0 black;
+      }
+
+      /* Grid lines */
+      .grid-line { stroke: #fff; stroke-width: 2 }
+
+      /* Dashed border */
+      .dashed-border { stroke: #fff; stroke-width: 6; stroke-dasharray: 20,20; fill: none }
+    </style>
     <linearGradient id="hGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:rgb(0,0,0)"/>
-      <stop offset="100%" style="stop-color:rgb(255,255,255)"/>
+      <stop offset="0%" stop-color="#000"/>
+      <stop offset="100%" stop-color="#fff"/>
     </linearGradient>
   </defs>
 
   <!-- Black outer border -->
-  <rect width="800" height="480" fill="rgb(0,0,0)"/>
+  <rect width="800" height="480" class="black"/>
 
   <!-- Gray background with margin -->
-  <rect x="8" y="8" width="784" height="464" fill="rgb(128,128,128)"/>
+  <rect x="8" y="8" width="784" height="464" class="gray"/>
 
   <!-- Dashed white border -->
-  <rect x="8" y="8" width="784" height="464" fill="none"
-        stroke="white" stroke-width="6" stroke-dasharray="20,20"/>
+  <rect x="8" y="8" width="784" height="464" class="dashed-border"/>
 
   <!-- Horizontal grid lines -->
-  <line x1="8" y1="80" x2="792" y2="80" stroke="white" stroke-width="2"/>
-  <line x1="8" y1="160" x2="792" y2="160" stroke="white" stroke-width="2"/>
-  <line x1="8" y1="320" x2="792" y2="320" stroke="white" stroke-width="2"/>
-  <line x1="8" y1="400" x2="792" y2="400" stroke="white" stroke-width="2"/>
+  <line x1="8" y1="80" x2="792" y2="80" class="grid-line"/>
+  <line x1="8" y1="160" x2="792" y2="160" class="grid-line"/>
+  <line x1="8" y1="320" x2="792" y2="320" class="grid-line"/>
+  <line x1="8" y1="400" x2="792" y2="400" class="grid-line"/>
 
   <!-- Vertical grid lines -->
-  <line x1="100" y1="8" x2="100" y2="472" stroke="white" stroke-width="2"/>
-  <line x1="200" y1="8" x2="200" y2="472" stroke="white" stroke-width="2"/>
-  <line x1="600" y1="8" x2="600" y2="472" stroke="white" stroke-width="2"/>
-  <line x1="700" y1="8" x2="700" y2="472" stroke="white" stroke-width="2"/>
+  <line x1="100" y1="8" x2="100" y2="472" class="grid-line"/>
+  <line x1="200" y1="8" x2="200" y2="472" class="grid-line"/>
+  <line x1="600" y1="8" x2="600" y2="472" class="grid-line"/>
+  <line x1="700" y1="8" x2="700" y2="472" class="grid-line"/>
 
   <!-- Center crosshairs -->
-  <line x1="300" y1="240" x2="500" y2="240" stroke="white" stroke-width="2"/>
-  <line x1="400" y1="140" x2="400" y2="340" stroke="white" stroke-width="2"/>
+  <line x1="300" y1="240" x2="500" y2="240" class="grid-line"/>
+  <line x1="400" y1="140" x2="400" y2="340" class="grid-line"/>
 
   <!-- Central white circle -->
-  <circle cx="400" cy="240" r="120" fill="white"/>
+  <circle cx="400" cy="240" r="120" class="white"/>
 
   <!-- Gray ring inside circle -->
-  <circle cx="400" cy="240" r="100" fill="none" stroke="rgb(128,128,128)" stroke-width="16"/>
+  <circle cx="400" cy="240" r="100" class="stroke-gray stroke-w16 no-fill"/>
 
   <!-- Inner circle details -->
-  <circle cx="400" cy="240" r="60" fill="none" stroke="black" stroke-width="2"/>
-  <circle cx="400" cy="240" r="30" fill="none" stroke="black" stroke-width="2"/>
-  <circle cx="400" cy="240" r="5" fill="black"/>
+  <circle cx="400" cy="240" r="60" class="stroke-black stroke-w2 no-fill"/>
+  <circle cx="400" cy="240" r="30" class="stroke-black stroke-w2 no-fill"/>
+  <circle cx="400" cy="240" r="5" class="black"/>
 
   <!-- Crosshairs in center circle -->
-  <line x1="340" y1="240" x2="460" y2="240" stroke="black" stroke-width="1"/>
-  <line x1="400" y1="180" x2="400" y2="300" stroke="black" stroke-width="1"/>
+  <line x1="340" y1="240" x2="460" y2="240" class="stroke-black stroke-w1"/>
+  <line x1="400" y1="180" x2="400" y2="300" class="stroke-black stroke-w1"/>
 
   <!-- Top corners: Gray level squares -->
   <!-- Top left: 4 gray levels -->
-  <rect x="12" y="12" width="42" height="64" fill="rgb(255,255,255)"/>
-  <rect x="54" y="12" width="42" height="64" fill="rgb(170,170,170)"/>
-  <rect x="12" y="12" width="84" height="16" fill="rgb(0,0,0)"/>
-  <text x="54" y="56" text-anchor="middle" fill="black" font-family="Outfit" font-size="10">255</text>
-  <text x="54" y="68" text-anchor="middle" fill="black" font-family="Outfit" font-size="8">170</text>
+  <rect x="12" y="12" width="42" height="64" class="white"/>
+  <rect x="54" y="12" width="42" height="64" class="gray-light"/>
+  <rect x="12" y="12" width="84" height="16" class="black"/>
+  <text x="33" y="50" class="text-sm text-black">255</text>
+  <text x="75" y="50" class="text-sm text-black">170</text>
 
   <!-- Top right: 4 gray levels -->
-  <rect x="704" y="12" width="42" height="64" fill="rgb(85,85,85)"/>
-  <rect x="746" y="12" width="42" height="64" fill="rgb(0,0,0)"/>
-  <rect x="704" y="12" width="84" height="16" fill="rgb(255,255,255)"/>
-  <text x="746" y="56" text-anchor="middle" fill="white" font-family="Outfit" font-size="10">85</text>
-  <text x="746" y="68" text-anchor="middle" fill="white" font-family="Outfit" font-size="8">0</text>
+  <rect x="704" y="12" width="42" height="64" class="gray-dark"/>
+  <rect x="746" y="12" width="42" height="64" class="black"/>
+  <rect x="704" y="12" width="84" height="16" class="white"/>
+  <text x="725" y="50" class="text-sm text-white">85</text>
+  <text x="767" y="50" class="text-sm text-white">0</text>
 
   <!-- Top center: Byonk title -->
-  <rect x="250" y="12" width="300" height="60" fill="black"/>
-  <text x="400" y="38" text-anchor="middle" fill="white" font-family="Outfit" font-size="24" font-weight="700">Byonk</text>
-  <text x="400" y="58" text-anchor="middle" fill="rgb(170,170,170)" font-family="Outfit" font-size="12">Bring Your Own Ink</text>
+  <rect x="250" y="12" width="300" height="60" class="black"/>
+  <text x="400" y="38" class="text-2xl text-white font-bold">Byonk</text>
+  <text x="400" y="58" class="text-lg font-semi-bold text-white">Bring Your Own Ink</text>
 
   <!-- Resolution test bars - left side -->
   <g transform="translate(20, 170)">
     <!-- Wide bars -->
-    <rect x="0" y="0" width="12" height="60" fill="black"/>
-    <rect x="12" y="0" width="12" height="60" fill="white"/>
-    <rect x="24" y="0" width="12" height="60" fill="black"/>
-    <rect x="36" y="0" width="12" height="60" fill="white"/>
+    <rect x="0" y="0" width="12" height="60" class="black"/>
+    <rect x="12" y="0" width="12" height="60" class="white"/>
+    <rect x="24" y="0" width="12" height="60" class="black"/>
+    <rect x="36" y="0" width="12" height="60" class="white"/>
     <!-- Medium bars -->
-    <rect x="52" y="0" width="6" height="60" fill="black"/>
-    <rect x="58" y="0" width="6" height="60" fill="white"/>
-    <rect x="64" y="0" width="6" height="60" fill="black"/>
-    <rect x="70" y="0" width="6" height="60" fill="white"/>
+    <rect x="52" y="0" width="6" height="60" class="black"/>
+    <rect x="58" y="0" width="6" height="60" class="white"/>
+    <rect x="64" y="0" width="6" height="60" class="black"/>
+    <rect x="70" y="0" width="6" height="60" class="white"/>
   </g>
 
   <!-- Resolution test bars - right side -->
   <g transform="translate(700, 170)">
     <!-- Narrow bars -->
-    <rect x="0" y="0" width="3" height="60" fill="black"/>
-    <rect x="3" y="0" width="3" height="60" fill="white"/>
-    <rect x="6" y="0" width="3" height="60" fill="black"/>
-    <rect x="9" y="0" width="3" height="60" fill="white"/>
-    <rect x="12" y="0" width="3" height="60" fill="black"/>
-    <rect x="15" y="0" width="3" height="60" fill="white"/>
+    <rect x="0" y="0" width="3" height="60" class="black"/>
+    <rect x="3" y="0" width="3" height="60" class="white"/>
+    <rect x="6" y="0" width="3" height="60" class="black"/>
+    <rect x="9" y="0" width="3" height="60" class="white"/>
+    <rect x="12" y="0" width="3" height="60" class="black"/>
+    <rect x="15" y="0" width="3" height="60" class="white"/>
     <!-- Very narrow bars -->
-    <rect x="22" y="0" width="2" height="60" fill="black"/>
-    <rect x="24" y="0" width="2" height="60" fill="white"/>
-    <rect x="26" y="0" width="2" height="60" fill="black"/>
-    <rect x="28" y="0" width="2" height="60" fill="white"/>
-    <rect x="30" y="0" width="2" height="60" fill="black"/>
-    <rect x="32" y="0" width="2" height="60" fill="white"/>
+    <rect x="22" y="0" width="2" height="60" class="black"/>
+    <rect x="24" y="0" width="2" height="60" class="white"/>
+    <rect x="26" y="0" width="2" height="60" class="black"/>
+    <rect x="28" y="0" width="2" height="60" class="white"/>
+    <rect x="30" y="0" width="2" height="60" class="black"/>
+    <rect x="32" y="0" width="2" height="60" class="white"/>
     <!-- Finest bars -->
-    <rect x="38" y="0" width="1" height="60" fill="black"/>
-    <rect x="39" y="0" width="1" height="60" fill="white"/>
-    <rect x="40" y="0" width="1" height="60" fill="black"/>
-    <rect x="41" y="0" width="1" height="60" fill="white"/>
-    <rect x="42" y="0" width="1" height="60" fill="black"/>
-    <rect x="43" y="0" width="1" height="60" fill="white"/>
-    <rect x="44" y="0" width="1" height="60" fill="black"/>
-    <rect x="45" y="0" width="1" height="60" fill="white"/>
+    <rect x="38" y="0" width="1" height="60" class="black"/>
+    <rect x="39" y="0" width="1" height="60" class="white"/>
+    <rect x="40" y="0" width="1" height="60" class="black"/>
+    <rect x="41" y="0" width="1" height="60" class="white"/>
+    <rect x="42" y="0" width="1" height="60" class="black"/>
+    <rect x="43" y="0" width="1" height="60" class="white"/>
+    <rect x="44" y="0" width="1" height="60" class="black"/>
+    <rect x="45" y="0" width="1" height="60" class="white"/>
   </g>
 
   <!-- Bottom section: Gradient dithering test -->
   <rect x="100" y="325" width="600" height="35" fill="url(#hGradient)"/>
-  <text x="400" y="350" text-anchor="middle" fill="white" font-family="Outfit" font-size="11" font-weight="600"
-        style="text-shadow: 1px 1px 0 black, -1px -1px 0 black, 1px -1px 0 black, -1px 1px 0 black;">
-    DITHERING TEST
-  </text>
+  <text x="400" y="350" class="text-md text-white font-semibold">DITHERING TEST</text>
 
   <!-- Gray step wedge -->
-  <rect x="100" y="362" width="150" height="30" fill="rgb(0,0,0)"/>
-  <rect x="250" y="362" width="150" height="30" fill="rgb(85,85,85)"/>
-  <rect x="400" y="362" width="150" height="30" fill="rgb(170,170,170)"/>
-  <rect x="550" y="362" width="150" height="30" fill="rgb(255,255,255)" stroke="rgb(128,128,128)"/>
-  <text x="175" y="382" text-anchor="middle" fill="white" font-family="Outfit" font-size="12">0</text>
-  <text x="325" y="382" text-anchor="middle" fill="white" font-family="Outfit" font-size="12">85</text>
-  <text x="475" y="382" text-anchor="middle" fill="black" font-family="Outfit" font-size="12">170</text>
-  <text x="625" y="382" text-anchor="middle" fill="black" font-family="Outfit" font-size="12">255</text>
+  <rect x="100" y="362" width="150" height="30" class="black"/>
+  <rect x="250" y="362" width="150" height="30" class="gray-dark"/>
+  <rect x="400" y="362" width="150" height="30" class="gray-light"/>
+  <rect x="550" y="362" width="150" height="30" class="white stroke-gray"/>
+  <text x="175" y="382" class="text-lg text-white">0</text>
+  <text x="325" y="382" class="text-lg text-white">85</text>
+  <text x="475" y="382" class="text-lg text-black">170</text>
+  <text x="625" y="382" class="text-lg text-black">255</text>
 
   <!-- Bottom info bar -->
-  <rect x="12" y="404" width="776" height="60" fill="rgb(0,0,0)"/>
+  <rect x="12" y="404" width="776" height="60" class="white"/>
 
   <!-- MAC Address - centered prominently -->
-  <text x="400" y="430" text-anchor="middle" fill="white" font-family="monospace" font-size="20" font-weight="700">{{ device.mac | default(value="00:00:00:00:00:00") }}</text>
+  <text x="400" y="430" class="text-3xl text-black mono">{{ device.mac | default(value="00:00:00:00:00:00") }}</text>
 
   <!-- Device status row -->
-  <text x="150" y="455" text-anchor="middle" fill="rgb(170,170,170)" font-family="Outfit" font-size="13">
-    {% if device.battery_voltage %}{{ device.battery_voltage | round(precision=2) }}V{% else %}--{% endif %}
-  </text>
-  <text x="400" y="455" text-anchor="middle" fill="rgb(170,170,170)" font-family="Outfit" font-size="13">
-    {{ data.time }} {{ data.date }}
-  </text>
-  <text x="650" y="455" text-anchor="middle" fill="rgb(170,170,170)" font-family="Outfit" font-size="13">
-    {% if device.rssi %}{{ device.rssi }}dBm{% else %}--{% endif %}
-  </text>
+  <text x="150" y="455" class="text-xl text-gray">{% if device.battery_voltage %}{{ device.battery_voltage | round(precision=2) }}V{% else %}--{% endif %}</text>
+  <text x="400" y="455" class="text-xl text-gray">{{ data.time }} {{ data.date }}</text>
+  <text x="650" y="455" class="text-xl text-gray">{% if device.rssi %}{{ device.rssi }}dBm{% else %}--{% endif %}</text>
 
   <!-- Corner markers -->
-  <rect x="12" y="404" width="20" height="20" fill="white"/>
-  <rect x="768" y="404" width="20" height="20" fill="white"/>
-  <rect x="12" y="444" width="20" height="20" fill="white"/>
-  <rect x="768" y="444" width="20" height="20" fill="white"/>
+  <rect x="12" y="404" width="20" height="20" class="white"/>
+  <rect x="768" y="404" width="20" height="20" class="white"/>
+  <rect x="12" y="444" width="20" height="20" class="white"/>
+  <rect x="768" y="444" width="20" height="20" class="white"/>
 
   <!-- Small corner circles for geometry -->
-  <circle cx="50" cy="440" r="12" fill="none" stroke="white" stroke-width="2"/>
-  <circle cx="750" cy="440" r="12" fill="none" stroke="white" stroke-width="2"/>
+  <circle cx="50" cy="440" r="12" class="stroke-white stroke-w2 no-fill"/>
+  <circle cx="750" cy="440" r="12" class="stroke-white stroke-w2 no-fill"/>
 </svg>

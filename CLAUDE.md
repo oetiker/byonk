@@ -13,6 +13,7 @@ Byonk (Bring Your Own Ink) is a self-hosted content server for TRMNL e-ink devic
 
 ## Workflow Reminders
 
+- **Always `git pull` first** before starting work to avoid conflicts
 - **Update documentation** when user-visible features change or new ones are added (docs/src/)
 - **All changes must be documented in CHANGES.md** - new features, fixes, and changes go in the Unreleased section
 - **Commit in sensible intervals** - don't batch unrelated changes

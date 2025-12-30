@@ -1,29 +1,30 @@
-# Lightweight release image using pre-built binaries
-FROM alpine:3.21 AS base
-
-# Install CA certificates for HTTPS
+# Minimal release image using pre-built static musl binaries
+FROM alpine:3.21 AS certs
 RUN apk add --no-cache ca-certificates
 
+# AMD64 variant
+FROM scratch AS amd64
+COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 WORKDIR /app
-
-# Copy static assets
+ARG BINARY_DIR=binaries
+COPY ${BINARY_DIR}/amd64/byonk /app/byonk
 COPY fonts ./fonts
 COPY screens ./screens
 COPY config.yaml ./config.yaml
-
 EXPOSE 3000
-
 ENTRYPOINT ["/app/byonk"]
 
-# AMD64 variant
-FROM base AS amd64
-ARG BINARY_DIR=binaries
-COPY ${BINARY_DIR}/amd64/byonk /app/byonk
-
 # ARM64 variant
-FROM base AS arm64
+FROM scratch AS arm64
+COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+WORKDIR /app
 ARG BINARY_DIR=binaries
 COPY ${BINARY_DIR}/arm64/byonk /app/byonk
+COPY fonts ./fonts
+COPY screens ./screens
+COPY config.yaml ./config.yaml
+EXPOSE 3000
+ENTRYPOINT ["/app/byonk"]
 
 # Final stage - select based on target platform
 FROM ${TARGETARCH}

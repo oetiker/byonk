@@ -103,10 +103,11 @@ jobs:
     strategy:
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
+          - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             archive: tar.gz
-          - target: aarch64-unknown-linux-gnu
+            cross: true
+          - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             archive: tar.gz
             cross: true
@@ -136,7 +137,7 @@ jobs:
       - name: Build binary
         run: |
           if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }}
+            RUSTFLAGS="-C target-feature=+crt-static" cross build --release --target ${{ matrix.target }}
           else
             cargo build --release --target ${{ matrix.target }}
           fi
@@ -203,20 +204,20 @@ jobs:
       - name: Download Linux AMD64 binary
         uses: actions/download-artifact@v4
         with:
-          name: byonk-x86_64-unknown-linux-gnu
+          name: byonk-x86_64-unknown-linux-musl
           path: artifacts/amd64
 
       - name: Download Linux ARM64 binary
         uses: actions/download-artifact@v4
         with:
-          name: byonk-aarch64-unknown-linux-gnu
+          name: byonk-aarch64-unknown-linux-musl
           path: artifacts/arm64
 
       - name: Extract binaries
         run: |
           mkdir -p binaries/amd64 binaries/arm64
-          tar -xzf artifacts/amd64/byonk-*-x86_64-unknown-linux-gnu.tar.gz -C binaries/amd64 --strip-components=1
-          tar -xzf artifacts/arm64/byonk-*-aarch64-unknown-linux-gnu.tar.gz -C binaries/arm64 --strip-components=1
+          tar -xzf artifacts/amd64/byonk-*-x86_64-unknown-linux-musl.tar.gz -C binaries/amd64 --strip-components=1
+          tar -xzf artifacts/arm64/byonk-*-aarch64-unknown-linux-musl.tar.gz -C binaries/arm64 --strip-components=1
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

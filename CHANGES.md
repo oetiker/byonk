@@ -9,9 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.3.1 - 2025-12-30
+
+### New
+
 - CLI `render` subcommand: `byonk render --mac XX:XX:XX:XX:XX:XX --output file.png` renders screens directly without starting a server
 - Hello world tutorial screen (`screens/hello.lua`, `screens/hello.svg`) with screenshot in documentation
-
 ### Changed
 
 - `make docs-samples` now uses CLI render command (no server needed)

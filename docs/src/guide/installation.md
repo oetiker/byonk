@@ -74,7 +74,6 @@ services:
       - SCREENS_DIR=/data/screens
       - FONTS_DIR=/data/fonts
       - CONFIG_FILE=/data/config.yaml
-      - URL_SECRET=your-secret-here
     volumes:
       - ./data:/data  # Empty on first run = auto-seeded
     restart: unless-stopped
@@ -139,11 +138,8 @@ data/
 | `CONFIG_FILE` | *(embedded)* | Path to configuration file |
 | `SCREENS_DIR` | *(embedded)* | Directory containing Lua scripts and SVG templates |
 | `FONTS_DIR` | *(embedded)* | Directory containing font files |
-| `URL_SECRET` | *(random)* | HMAC secret for signed image URLs |
 
 When path variables are not set, Byonk uses embedded assets (no filesystem access).
-
-> **Warning:** If `URL_SECRET` is not set, a random secret is generated on each startup. This means image URLs become invalid after a restart. For production, set a persistent secret.
 
 ## Running as a Service (systemd)
 
@@ -158,9 +154,8 @@ After=network.target
 Type=simple
 User=byonk
 WorkingDirectory=/opt/byonk
-ExecStart=/opt/byonk/byonk
+ExecStart=/opt/byonk/byonk serve
 Environment="BIND_ADDR=0.0.0.0:3000"
-Environment="URL_SECRET=your-secret-here"
 Restart=always
 RestartSec=5
 

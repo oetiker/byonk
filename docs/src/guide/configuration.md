@@ -243,7 +243,6 @@ This lets you customize individual screens while keeping embedded defaults for o
 | `FONTS_DIR` | *(embedded)* | Directory for font files |
 | `CONFIG_FILE` | *(embedded)* | Path to config.yaml |
 | `BIND_ADDR` | `0.0.0.0:3000` | Server listen address |
-| `URL_SECRET` | *(random)* | HMAC secret for signed image URLs |
 
 When a path env var is not set, embedded assets are used exclusively (no filesystem access).
 

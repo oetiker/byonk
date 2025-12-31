@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Content cache now stores pre-rendered SVG instead of raw script data, making `/api/image` faster
 - PNG compression improved: uses maximum compression with Paeth filter for smaller file sizes
 
+### Removed
+
+- `URL_SECRET` environment variable and URL signing (replaced by content hash-based URLs)
+
 ### Fixed
 
 ## 0.4.0 - 2025-12-30

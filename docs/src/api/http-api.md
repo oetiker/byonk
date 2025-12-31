@@ -12,7 +12,7 @@ Byonk provides a REST API for TRMNL device communication. The API handles device
 |----------|-------------|
 | `GET /api/setup` | Device registration |
 | `GET /api/display` | Get display content URL |
-| `GET /api/image/:id` | Get rendered PNG |
+| `GET /api/image/{hash}.png` | Get rendered PNG by content hash |
 | `POST /api/log` | Submit device logs |
 | `GET /health` | Health check |
 
@@ -61,23 +61,26 @@ The firmware expects status=0 for success (not HTTP 200).
 
 **404**: Device not found
 
-### GET /api/image/{device_id}
+### GET /api/image/{hash}.png
 
-**Get rendered PNG image for a device**
+**Get rendered PNG image by content hash**
 
 Returns the actual PNG image data rendered from SVG with dithering applied.
+The content hash is provided in the `/api/display` response and ensures clients can detect when content has changed.
 
 #### Parameters
 
 | Name | In | Required | Description |
 |------|-----|----------|-------------|
-| `device_id` | path | Yes | Device ID (MAC with colons replaced by dashes) |
-| `Width` | header | No | Display width in pixels (default: 800) |
-| `Height` | header | No | Display height in pixels (default: 480) |
+| `hash` | path | Yes | Content hash from `/api/display` response |
+| `w` | query | No | Display width in pixels (default: 800) |
+| `h` | query | No | Display height in pixels (default: 480) |
 
 #### Responses
 
 **200**: PNG image
+
+**404**: Content not found (hash expired or invalid)
 
 **500**: Rendering error
 

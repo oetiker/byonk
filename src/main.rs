@@ -18,7 +18,7 @@ mod rendering;
 mod services;
 
 use models::AppConfig;
-use services::{ContentCache, ContentPipeline, InMemoryRegistry, RenderService, UrlSigner};
+use services::{ContentCache, ContentPipeline, InMemoryRegistry, RenderService};
 
 #[derive(Parser)]
 #[command(name = "byonk")]
@@ -108,8 +108,6 @@ struct ApiDoc;
 struct AppState {
     registry: Arc<InMemoryRegistry>,
     renderer: Arc<RenderService>,
-    #[allow(dead_code)]
-    url_signer: Arc<UrlSigner>,
     content_pipeline: Arc<ContentPipeline>,
     content_cache: Arc<ContentCache>,
 }
@@ -300,7 +298,6 @@ fn run_status_command() {
     let config_file = std::env::var("CONFIG_FILE").ok();
     let screens_dir = std::env::var("SCREENS_DIR").ok();
     let fonts_dir = std::env::var("FONTS_DIR").ok();
-    let url_secret = std::env::var("URL_SECRET").ok();
 
     // Header
     println!("Byonk v{VERSION} - Bring Your Own Ink");
@@ -323,14 +320,6 @@ fn run_status_command() {
     println!(
         "  FONTS_DIR   = {}",
         fonts_dir.as_deref().unwrap_or("(not set)")
-    );
-    println!(
-        "  URL_SECRET  = {}",
-        if url_secret.is_some() {
-            "(set)"
-        } else {
-            "(not set)"
-        }
     );
 
     // Asset sources section
@@ -465,18 +454,6 @@ async fn run_server() -> anyhow::Result<()> {
     let registry = Arc::new(InMemoryRegistry::new());
     let renderer = Arc::new(RenderService::new(&asset_loader)?);
 
-    // URL signer for secure image URLs - use URL_SECRET env var or random
-    let url_signer = Arc::new(
-        std::env::var("URL_SECRET")
-            .map(|s| UrlSigner::new(&s))
-            .unwrap_or_else(|_| {
-                tracing::warn!(
-                    "No URL_SECRET set, using random secret (URLs won't survive restarts)"
-                );
-                UrlSigner::with_random_secret()
-            }),
-    );
-
     // Content pipeline for scripted content
     let content_pipeline = Arc::new(
         ContentPipeline::new(config.clone(), asset_loader, renderer.clone())
@@ -488,7 +465,6 @@ async fn run_server() -> anyhow::Result<()> {
     let state = AppState {
         registry: registry.clone(),
         renderer: renderer.clone(),
-        url_signer: url_signer.clone(),
         content_pipeline: content_pipeline.clone(),
         content_cache: content_cache.clone(),
     };

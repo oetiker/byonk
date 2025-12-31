@@ -408,6 +408,100 @@ return {
 
 If your template has a syntax error, Byonk will display an error screen with the message. Check the server logs for details.
 
+## Embedding Images
+
+Byonk supports embedding images in your SVG templates. You can include PNG, JPEG, GIF, WebP, and SVG files.
+
+### Asset Directory Structure
+
+Place your screen assets in a subdirectory matching your screen name:
+
+```
+screens/
+├── hello.lua         # Script at top level
+├── hello.svg         # Template at top level
+└── hello/            # Assets for "hello" screen
+    ├── logo.png
+    ├── icon.svg
+    └── background.jpg
+```
+
+### Method 1: Direct in SVG (Automatic Resolution)
+
+Simply reference images by filename in your SVG template. Byonk automatically resolves relative paths to the screen's asset directory and embeds them as data URIs:
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480">
+  <!-- This automatically loads screens/hello/logo.png -->
+  <image x="10" y="10" width="64" height="64" href="logo.png"/>
+
+  <text x="100" y="50">{{ data.greeting }}</text>
+</svg>
+```
+
+**Supported image formats:**
+- PNG (`.png`)
+- JPEG (`.jpg`, `.jpeg`)
+- GIF (`.gif`)
+- WebP (`.webp`)
+- SVG (`.svg`)
+
+**Notes:**
+- Paths are relative to the screen's asset directory
+- URLs starting with `data:`, `http://`, or `https://` are left unchanged
+- Missing images log a warning but don't break rendering
+
+### Method 2: Via Lua (For Dynamic Images)
+
+For more control, use `read_asset()` and `base64_encode()` in your Lua script:
+
+**screens/hello.lua:**
+```lua
+local icon = read_asset("icon.png")
+
+return {
+    data = {
+        greeting = "Hello World!",
+        icon_src = "data:image/png;base64," .. base64_encode(icon)
+    },
+    refresh_rate = 3600
+}
+```
+
+**screens/hello.svg:**
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480">
+  <image x="10" y="10" width="64" height="64" href="{{ data.icon_src }}"/>
+  <text x="100" y="50">{{ data.greeting }}</text>
+</svg>
+```
+
+This method is useful when you need to:
+- Conditionally include images
+- Fetch images from external URLs
+- Process or transform image data
+
+### Background Images
+
+To use a full-screen background image:
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
+  <!-- Background image -->
+  <image x="0" y="0" width="800" height="480" href="background.png" preserveAspectRatio="xMidYMid slice"/>
+
+  <!-- Content on top -->
+  <text x="400" y="240" text-anchor="middle" fill="white" font-size="32">
+    {{ data.title }}
+  </text>
+</svg>
+```
+
+**Tips for background images:**
+- Use `preserveAspectRatio="xMidYMid slice"` to cover the entire area
+- Consider e-ink limitations: high-contrast images work best
+- Keep file sizes reasonable for fast rendering
+
 ## Next Steps
 
 - [Advanced Topics](advanced.md) - HTML scraping, error handling

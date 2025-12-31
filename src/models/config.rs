@@ -1,3 +1,4 @@
+use crate::assets::AssetLoader;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -52,27 +53,26 @@ pub struct DeviceConfig {
 }
 
 impl AppConfig {
-    /// Load configuration from a YAML file
-    pub fn load(path: &std::path::Path) -> Result<Self, ConfigError> {
-        let content =
-            std::fs::read_to_string(path).map_err(|e| ConfigError::Io(path.to_path_buf(), e))?;
-
-        serde_yaml::from_str(&content).map_err(|e| ConfigError::Parse(e.to_string()))
-    }
-
-    /// Load configuration or return defaults
-    pub fn load_or_default(path: &std::path::Path) -> Self {
-        match Self::load(path) {
-            Ok(config) => {
-                tracing::info!(
-                    screens = config.screens.len(),
-                    devices = config.devices.len(),
-                    "Loaded configuration"
-                );
-                config
-            }
+    /// Load configuration from AssetLoader (embedded or external)
+    pub fn load_from_assets(loader: &AssetLoader) -> Self {
+        match loader.read_config_string() {
+            Ok(content) => match serde_yaml::from_str(&content) {
+                Ok(config) => {
+                    let config: Self = config;
+                    tracing::info!(
+                        screens = config.screens.len(),
+                        devices = config.devices.len(),
+                        "Loaded configuration"
+                    );
+                    config
+                }
+                Err(e) => {
+                    tracing::warn!(%e, "Failed to parse config, using defaults");
+                    Self::default()
+                }
+            },
             Err(e) => {
-                tracing::warn!(%e, "Failed to load config, using defaults");
+                tracing::warn!(%e, "Failed to read config, using defaults");
                 Self::default()
             }
         }
@@ -121,13 +121,4 @@ impl Default for AppConfig {
             default_screen: Some("default".to_string()),
         }
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum ConfigError {
-    #[error("Failed to read config file {0}: {1}")]
-    Io(PathBuf, std::io::Error),
-
-    #[error("Failed to parse config: {0}")]
-    Parse(String),
 }

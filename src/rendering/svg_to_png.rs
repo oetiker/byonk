@@ -2,6 +2,7 @@ use crate::error::RenderError;
 use crate::models::DisplaySpec;
 use crate::rendering::dither::blue_noise_dither;
 use resvg::usvg::{self, Transform};
+use std::borrow::Cow;
 use std::io::Cursor;
 use std::sync::Arc;
 use tiny_skia::Pixmap;
@@ -15,17 +16,17 @@ pub struct SvgRenderer {
 }
 
 impl SvgRenderer {
-    pub fn new() -> Self {
+    /// Create a new SVG renderer with fonts loaded from the provided data
+    ///
+    /// The `fonts` parameter is a list of (filename, data) tuples, typically
+    /// from `AssetLoader::get_fonts()`.
+    pub fn with_fonts(fonts: Vec<(String, Cow<'static, [u8]>)>) -> Self {
         let mut fontdb = fontdb::Database::new();
 
-        // Load custom fonts from fonts/ directory first
-        let fonts_dir = std::path::Path::new("fonts");
-        if fonts_dir.exists() {
-            fontdb.load_fonts_dir(fonts_dir);
-            tracing::info!(
-                path = ?fonts_dir,
-                "Loaded custom fonts from fonts/ directory"
-            );
+        // Load fonts from provided data (embedded or external)
+        for (name, data) in fonts {
+            fontdb.load_font_data(data.into_owned());
+            tracing::debug!(font = %name, "Loaded font");
         }
 
         // Load system fonts as fallback
@@ -47,6 +48,11 @@ impl SvgRenderer {
             levels: 4, // 2-bit = 4 levels
             fontdb: Arc::new(fontdb),
         }
+    }
+
+    /// Create a new SVG renderer with no custom fonts (system fonts only)
+    pub fn new() -> Self {
+        Self::with_fonts(Vec::new())
     }
 
     /// Render SVG to grayscale PNG with dithering

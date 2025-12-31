@@ -1,5 +1,8 @@
 use std::path::Path;
+use std::sync::Arc;
 use tera::{Context, Tera};
+
+use crate::assets::AssetLoader;
 
 /// Error type for template rendering
 #[derive(Debug, thiserror::Error)]
@@ -12,30 +15,29 @@ pub enum TemplateError {
 
     #[error("Failed to read template: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Image resolution error: {0}")]
+    ImageResolution(String),
 }
 
 /// Service for rendering SVG templates with Tera
 pub struct TemplateService {
-    screens_dir: std::path::PathBuf,
+    asset_loader: Arc<AssetLoader>,
 }
 
 impl TemplateService {
     /// Create a new template service
-    pub fn new(screens_dir: &Path) -> Result<Self, TemplateError> {
+    pub fn new(asset_loader: Arc<AssetLoader>) -> Result<Self, TemplateError> {
         // Count templates for logging
-        let glob_pattern = screens_dir.join("**/*.svg");
-        let glob_str = glob_pattern.to_str().unwrap_or("screens/**/*.svg");
-
-        let template_count = match Tera::new(glob_str) {
-            Ok(t) => t.get_template_names().count(),
-            Err(_) => 0,
-        };
+        let template_count = asset_loader
+            .list_screens()
+            .iter()
+            .filter(|s| s.ends_with(".svg"))
+            .count();
 
         tracing::info!(templates = template_count, "Template service initialized");
 
-        Ok(Self {
-            screens_dir: screens_dir.to_path_buf(),
-        })
+        Ok(Self { asset_loader })
     }
 
     /// Register custom Tera filters
@@ -77,18 +79,20 @@ impl TemplateService {
     }
 
     /// Render a template with the given data
-    /// Templates are always loaded fresh from disk to support live editing
+    /// Templates are always loaded fresh to support live editing
     pub fn render(
         &self,
         template_path: &Path,
         data: &serde_json::Value,
+        screen_name: &str,
     ) -> Result<String, TemplateError> {
         let template_name = template_path.to_str().unwrap_or("unknown");
 
-        // Always load template fresh from disk (like Lua scripts)
-        let full_path = self.screens_dir.join(template_path);
-        let template_content = std::fs::read_to_string(&full_path)
-            .map_err(|_| TemplateError::NotFound(full_path.display().to_string()))?;
+        // Always load template fresh (like Lua scripts)
+        let template_content = self
+            .asset_loader
+            .read_screen_string(template_path)
+            .map_err(|e| TemplateError::NotFound(e.to_string()))?;
 
         let mut tera = Tera::default();
         tera.add_raw_template(template_name, &template_content)?;
@@ -97,7 +101,94 @@ impl TemplateService {
         let context = Context::from_serialize(data)?;
         let svg = tera.render(template_name, &context)?;
 
+        // Resolve relative image references to data URIs
+        let svg = self.resolve_image_refs(&svg, screen_name)?;
+
         Ok(svg)
+    }
+
+    /// Resolve relative image href attributes to data URIs
+    ///
+    /// Scans for `<image ... href="..."/>` elements and replaces relative paths
+    /// with base64-encoded data URIs. Paths like `logo.png` are resolved to
+    /// `screens/<screen_name>/logo.png`.
+    fn resolve_image_refs(&self, svg: &str, screen_name: &str) -> Result<String, TemplateError> {
+        use base64::Engine;
+        use regex::Regex;
+
+        // Match <image ... href="..." or xlink:href="..." ...>
+        // We need to handle both href and xlink:href attributes
+        let re = Regex::new(r#"<image\s+([^>]*?)(?:xlink:)?href\s*=\s*"([^"]+)"([^>]*)>"#)
+            .map_err(|e| TemplateError::ImageResolution(format!("Regex error: {e}")))?;
+
+        let mut result = svg.to_string();
+
+        // Collect all matches first to avoid modifying while iterating
+        let matches: Vec<_> = re.captures_iter(svg).collect();
+
+        for cap in matches {
+            let full_match = cap.get(0).unwrap().as_str();
+            let before_href = cap.get(1).unwrap().as_str();
+            let href = cap.get(2).unwrap().as_str();
+            let after_href = cap.get(3).unwrap().as_str();
+
+            // Skip if already a data URI or absolute URL
+            if href.starts_with("data:")
+                || href.starts_with("http://")
+                || href.starts_with("https://")
+            {
+                continue;
+            }
+
+            // Build the asset path: screens/<screen_name>/<href>
+            let asset_path_str = format!("{screen_name}/{href}");
+            let asset_path = std::path::Path::new(&asset_path_str);
+
+            // Try to read the asset
+            match self.asset_loader.read_screen(asset_path) {
+                Ok(data) => {
+                    // Determine MIME type from extension
+                    let mime_type = match std::path::Path::new(href)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.to_lowercase())
+                        .as_deref()
+                    {
+                        Some("png") => "image/png",
+                        Some("jpg" | "jpeg") => "image/jpeg",
+                        Some("gif") => "image/gif",
+                        Some("webp") => "image/webp",
+                        Some("svg") => "image/svg+xml",
+                        _ => "application/octet-stream",
+                    };
+
+                    // Encode to base64
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(&*data);
+                    let data_uri = format!("data:{mime_type};base64,{encoded}");
+
+                    // Build replacement element
+                    let replacement = format!("<image {before_href}href=\"{data_uri}\"{after_href}>");
+                    result = result.replace(full_match, &replacement);
+
+                    tracing::trace!(
+                        screen = screen_name,
+                        asset = href,
+                        "Resolved image reference to data URI"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        screen = screen_name,
+                        asset = href,
+                        error = %e,
+                        "Failed to resolve image reference"
+                    );
+                    // Leave the original href unchanged - resvg might still handle it
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     /// Render an error screen

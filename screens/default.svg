@@ -59,8 +59,8 @@
   <!-- Black outer border -->
   <rect width="800" height="480" class="black"/>
 
-  <!-- Gray background with margin -->
-  <rect x="8" y="8" width="784" height="464" class="gray"/>
+  <!-- Textured background image (replaces solid gray) -->
+  <image x="8" y="8" width="784" height="464" href="background.jpg" preserveAspectRatio="xMidYMid slice"/>
 
   <!-- Dashed white border -->
   <rect x="8" y="8" width="784" height="464" class="dashed-border"/>

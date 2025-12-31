@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::DeviceContext;
+use crate::assets::AssetLoader;
 
 /// Result from running a Lua script
 #[derive(Debug)]
@@ -31,14 +32,12 @@ pub enum ScriptError {
 
 /// Lua runtime for executing screen scripts
 pub struct LuaRuntime {
-    screens_dir: std::path::PathBuf,
+    asset_loader: Arc<AssetLoader>,
 }
 
 impl LuaRuntime {
-    pub fn new(screens_dir: &std::path::Path) -> Self {
-        Self {
-            screens_dir: screens_dir.to_path_buf(),
-        }
+    pub fn new(asset_loader: Arc<AssetLoader>) -> Self {
+        Self { asset_loader }
     }
 
     /// Run a Lua script with the given parameters
@@ -48,15 +47,22 @@ impl LuaRuntime {
         params: &HashMap<String, serde_yaml::Value>,
         device_ctx: Option<&DeviceContext>,
     ) -> Result<ScriptResult, ScriptError> {
-        let full_path = self.screens_dir.join(script_path);
-
-        let script_content = std::fs::read_to_string(&full_path)
-            .map_err(|_| ScriptError::NotFound(full_path.display().to_string()))?;
+        let script_content = self
+            .asset_loader
+            .read_screen_string(script_path)
+            .map_err(|e| ScriptError::NotFound(e.to_string()))?;
 
         let lua = Lua::new();
 
+        // Derive screen name from script path (e.g., "transit.lua" -> "transit")
+        let screen_name = script_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("default")
+            .to_string();
+
         // Set up the Lua environment
-        self.setup_globals(&lua, params, device_ctx)?;
+        self.setup_globals(&lua, params, device_ctx, &screen_name)?;
 
         // Execute the script
         let result: Table = lua.load(&script_content).eval()?;
@@ -79,6 +85,7 @@ impl LuaRuntime {
         lua: &Lua,
         params: &HashMap<String, serde_yaml::Value>,
         device_ctx: Option<&DeviceContext>,
+        screen_name: &str,
     ) -> LuaResult<()> {
         let globals = lua.globals();
 
@@ -101,6 +108,31 @@ impl LuaRuntime {
             }
         }
         globals.set("device", device_table)?;
+
+        // base64_encode(data) -> string
+        let base64_encode = lua.create_function(|_, data: mlua::String| {
+            use base64::Engine;
+            Ok(base64::engine::general_purpose::STANDARD.encode(data.as_bytes()))
+        })?;
+        globals.set("base64_encode", base64_encode)?;
+
+        // read_asset(path) -> string (binary data)
+        // Reads from screens/<screen_name>/<path>
+        let asset_loader = self.asset_loader.clone();
+        let screen_prefix = screen_name.to_string();
+        let read_asset = lua.create_function(move |lua, path: String| {
+            let full_path = format!("{screen_prefix}/{path}");
+            let asset_path = std::path::Path::new(&full_path);
+
+            match asset_loader.read_screen(asset_path) {
+                Ok(data) => {
+                    // Return as Lua string (which can contain binary data)
+                    lua.create_string(&*data)
+                }
+                Err(e) => Err(mlua::Error::external(format!("Failed to read asset: {e}"))),
+            }
+        })?;
+        globals.set("read_asset", read_asset)?;
 
         // http_get(url) -> string
         let http_get = lua.create_function(|_, url: String| {

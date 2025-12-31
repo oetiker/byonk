@@ -334,6 +334,75 @@ local ts = time_parse("2024-12-27 14:30", "%Y-%m-%d %H:%M")
 
 **Note:** Uses local timezone for interpretation.
 
+## Asset Functions
+
+### read_asset(path)
+
+Reads a file from the current screen's asset directory.
+
+```lua
+-- From hello.lua, reads screens/hello/logo.png
+local logo_bytes = read_asset("logo.png")
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `path` | string | Relative path within the screen's asset directory |
+
+**Returns:** `string` - Binary file contents
+
+**Throws:** Error if the file cannot be read
+
+**Asset directory convention:**
+
+```
+screens/
+├── hello.lua         # Script at top level
+├── hello.svg         # Template at top level
+└── hello/            # Assets for "hello" screen
+    ├── logo.png
+    └── icon.svg
+```
+
+When `read_asset("logo.png")` is called from `hello.lua`, it reads `screens/hello/logo.png`.
+
+**Example: Embedding an image in data:**
+
+```lua
+local logo = read_asset("logo.png")
+local logo_b64 = base64_encode(logo)
+
+return {
+    data = {
+        logo_src = "data:image/png;base64," .. logo_b64
+    },
+    refresh_rate = 3600
+}
+```
+
+### base64_encode(data)
+
+Encodes binary data (string) to a base64 string.
+
+```lua
+local encoded = base64_encode(raw_bytes)
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `data` | string | Binary data to encode |
+
+**Returns:** `string` - Base64-encoded string
+
+**Example: Creating a data URI:**
+
+```lua
+local image_data = read_asset("icon.png")
+local data_uri = "data:image/png;base64," .. base64_encode(image_data)
+```
+
 ## Logging Functions
 
 ### log_info(message)

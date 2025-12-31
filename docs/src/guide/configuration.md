@@ -1,6 +1,8 @@
 # Configuration
 
-Byonk uses a YAML configuration file to define screens and map devices to them. By default, this file is `config.yaml` in the working directory.
+Byonk embeds all screens, fonts, and configuration in the binary itself. This means you can run Byonk with zero configuration - it works out of the box.
+
+For customization, Byonk uses a YAML configuration file to define screens and map devices to them.
 
 ## Configuration Structure
 
@@ -153,14 +155,135 @@ devices:
 default_screen: default
 ```
 
+## Embedded Assets
+
+Byonk includes default screens, fonts, and configuration embedded in the binary. This enables zero-config operation:
+
+```bash
+# Just run it - embedded defaults work immediately
+byonk serve
+```
+
+To see what's embedded:
+
+```bash
+byonk init --list
+```
+
+### Customization Modes
+
+**1. Zero-config (embedded only):**
+```bash
+byonk serve
+# Uses embedded screens, fonts, and config
+```
+
+**2. Full customization (env vars + volume mounts):**
+```bash
+export SCREENS_DIR=/data/screens
+export FONTS_DIR=/data/fonts
+export CONFIG_FILE=/data/config.yaml
+byonk serve
+# Empty paths are auto-seeded with embedded defaults
+# Then uses external files (with embedded fallback)
+```
+
+**3. Extract for editing:**
+```bash
+byonk init --all
+# Extracts embedded assets to ./screens/, ./fonts/, ./config.yaml
+```
+
+### Init Command
+
+The `byonk init` command extracts embedded assets to the filesystem:
+
+```bash
+# List embedded assets
+byonk init --list
+
+# Extract everything
+byonk init --all
+
+# Extract specific categories
+byonk init --screens
+byonk init --fonts
+byonk init --config
+
+# Force overwrite existing files
+byonk init --all --force
+
+# Extract to custom locations (via env vars)
+SCREENS_DIR=/my/screens byonk init --screens
+```
+
+### Auto-Seeding
+
+When you set an environment variable pointing to an empty or missing directory, Byonk automatically seeds it with embedded assets on startup:
+
+```bash
+# This creates /data/screens with embedded screens on first run
+SCREENS_DIR=/data/screens byonk serve
+```
+
+### Merge Behavior
+
+External files take precedence over embedded assets:
+
+1. If external file exists → use it
+2. If external file is missing → fall back to embedded
+
+This lets you customize individual screens while keeping embedded defaults for others.
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SCREENS_DIR` | *(embedded)* | Directory for Lua scripts and SVG templates |
+| `FONTS_DIR` | *(embedded)* | Directory for font files |
+| `CONFIG_FILE` | *(embedded)* | Path to config.yaml |
+| `BIND_ADDR` | `0.0.0.0:3000` | Server listen address |
+| `URL_SECRET` | *(random)* | HMAC secret for signed image URLs |
+
+When a path env var is not set, embedded assets are used exclusively (no filesystem access).
+
 ## File Locations
 
 | File | Location | Hot Reload |
 |------|----------|------------|
-| Configuration | `$CONFIG_FILE` or `./config.yaml` | No (restart required) |
-| Lua scripts | `$SCREENS_DIR/*.lua` or `./screens/*.lua` | Yes |
-| SVG templates | `$SCREENS_DIR/*.svg` or `./screens/*.svg` | Yes |
-| Fonts | `./fonts/` | No (restart required) |
+| Configuration | `$CONFIG_FILE` or embedded | No (restart required) |
+| Lua scripts | `$SCREENS_DIR/*.lua` or embedded | Yes |
+| SVG templates | `$SCREENS_DIR/*.svg` or embedded | Yes |
+| Fonts | `$FONTS_DIR/` or embedded | No (restart required) |
+
+## Docker Usage
+
+For Docker, mount volumes and set env vars to enable customization:
+
+```yaml
+services:
+  byonk:
+    image: ghcr.io/oetiker/byonk
+    ports:
+      - "3000:3000"
+    environment:
+      - SCREENS_DIR=/data/screens
+      - FONTS_DIR=/data/fonts
+      - CONFIG_FILE=/data/config.yaml
+    volumes:
+      - ./data:/data  # Empty on first run = auto-seeded
+```
+
+Or run without volumes for pure embedded mode:
+
+```yaml
+services:
+  byonk:
+    image: ghcr.io/oetiker/byonk
+    ports:
+      - "3000:3000"
+    # No volumes = uses embedded assets only
+```
 
 ## Next Steps
 

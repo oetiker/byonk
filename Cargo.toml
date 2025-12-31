@@ -52,6 +52,11 @@ hex = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# Asset embedding
+rust-embed = { version = "8", features = ["include-exclude"] }
+base64 = "0.22"
+regex = "1"
+
 [patch.crates-io]
 # Use our patched resvg with variable font support
 # https://github.com/oetiker/resvg

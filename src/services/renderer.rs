@@ -1,6 +1,6 @@
+use crate::assets::AssetLoader;
 use crate::error::RenderError;
 use crate::rendering::SvgRenderer;
-use std::path::Path;
 use std::sync::Arc;
 
 /// High-level render service that provides SVG rendering
@@ -10,9 +10,10 @@ pub struct RenderService {
 }
 
 impl RenderService {
-    pub fn new(_svg_dir: impl AsRef<Path>) -> Result<Self, RenderError> {
+    pub fn new(asset_loader: &AssetLoader) -> Result<Self, RenderError> {
+        let fonts = asset_loader.get_fonts();
         Ok(Self {
-            svg_renderer: Arc::new(SvgRenderer::new()),
+            svg_renderer: Arc::new(SvgRenderer::with_fonts(fonts)),
         })
     }
 }

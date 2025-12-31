@@ -231,6 +231,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "base64",
  "chrono",
  "clap",
  "fontdb",
@@ -239,8 +240,10 @@ dependencies = [
  "mlua",
  "png",
  "rand 0.8.5",
+ "regex",
  "reqwest",
  "resvg",
+ "rust-embed",
  "scraper",
  "serde",
  "serde_json",
@@ -1913,6 +1916,7 @@ version = "8.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60b161f275cb337fe0a44d924a5f4df0ed69c2c39519858f931ce61c779d3475"
 dependencies = [
+ "globset",
  "sha2",
  "walkdir",
 ]

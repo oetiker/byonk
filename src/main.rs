@@ -11,6 +11,7 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 mod api;
+mod assets;
 mod error;
 mod models;
 mod rendering;
@@ -44,6 +45,32 @@ enum Commands {
         /// Device type: "og" (800x480) or "x" (1872x1404)
         #[arg(short, long, default_value = "og")]
         device: String,
+    },
+    /// Extract embedded assets to filesystem for customization
+    Init {
+        /// Extract screen files (Lua scripts and SVG templates)
+        #[arg(long)]
+        screens: bool,
+
+        /// Extract font files
+        #[arg(long)]
+        fonts: bool,
+
+        /// Extract config.yaml
+        #[arg(long)]
+        config: bool,
+
+        /// Extract all assets
+        #[arg(long)]
+        all: bool,
+
+        /// Overwrite existing files
+        #[arg(long, short)]
+        force: bool,
+
+        /// List embedded assets without extracting
+        #[arg(long)]
+        list: bool,
     },
 }
 
@@ -96,12 +123,21 @@ async fn main() -> anyhow::Result<()> {
             output,
             device,
         }) => run_render_command(&mac, &output, &device),
+        Some(Commands::Init {
+            screens,
+            fonts,
+            config,
+            all,
+            force,
+            list,
+        }) => run_init_command(screens, fonts, config, all, force, list),
         Some(Commands::Serve) | None => run_server().await,
     }
 }
 
 /// Render a screen directly to a PNG file (no server needed)
 fn run_render_command(mac: &str, output: &PathBuf, device_type: &str) -> anyhow::Result<()> {
+    use assets::AssetLoader;
     use models::DisplaySpec;
     use services::DeviceContext;
 
@@ -114,23 +150,24 @@ fn run_render_command(mac: &str, output: &PathBuf, device_type: &str) -> anyhow:
         .with(tracing_subscriber::fmt::layer().without_time())
         .init();
 
-    // Configuration
-    let svg_dir = std::env::var("SVG_DIR").unwrap_or_else(|_| "./static/svgs".to_string());
-    let screens_dir = std::env::var("SCREENS_DIR").unwrap_or_else(|_| "./screens".to_string());
-    let config_path = std::env::var("CONFIG_FILE").unwrap_or_else(|_| "./config.yaml".to_string());
+    // Create asset loader with optional external paths from env vars
+    let screens_dir = std::env::var("SCREENS_DIR").ok().map(PathBuf::from);
+    let fonts_dir = std::env::var("FONTS_DIR").ok().map(PathBuf::from);
+    let config_file = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
+
+    let asset_loader = Arc::new(AssetLoader::new(screens_dir, fonts_dir, config_file));
+
+    // Seed if configured paths are empty
+    if let Err(e) = asset_loader.seed_if_configured() {
+        tracing::warn!(%e, "Failed to seed assets");
+    }
 
     // Load config and initialize services
-    let config = Arc::new(AppConfig::load_or_default(std::path::Path::new(
-        &config_path,
-    )));
-    let renderer = Arc::new(RenderService::new(&svg_dir)?);
+    let config = Arc::new(AppConfig::load_from_assets(&asset_loader));
+    let renderer = Arc::new(RenderService::new(&asset_loader)?);
     let content_pipeline = Arc::new(
-        ContentPipeline::new(
-            config.clone(),
-            std::path::Path::new(&screens_dir),
-            renderer.clone(),
-        )
-        .expect("Failed to initialize content pipeline"),
+        ContentPipeline::new(config.clone(), asset_loader, renderer.clone())
+            .expect("Failed to initialize content pipeline"),
     );
 
     // Parse device type
@@ -168,8 +205,89 @@ fn run_render_command(mac: &str, output: &PathBuf, device_type: &str) -> anyhow:
     Ok(())
 }
 
+/// Extract embedded assets to filesystem
+fn run_init_command(
+    screens: bool,
+    fonts: bool,
+    config: bool,
+    all: bool,
+    force: bool,
+    list: bool,
+) -> anyhow::Result<()> {
+    use assets::{AssetCategory, AssetLoader};
+
+    if list {
+        println!("Embedded assets:\n");
+        println!("Screens:");
+        for f in AssetLoader::list_embedded(AssetCategory::Screens) {
+            println!("  {f}");
+        }
+        println!("\nFonts:");
+        for f in AssetLoader::list_embedded(AssetCategory::Fonts) {
+            println!("  {f}");
+        }
+        println!("\nConfig:");
+        for f in AssetLoader::list_embedded(AssetCategory::Config) {
+            println!("  {f}");
+        }
+        return Ok(());
+    }
+
+    // Determine which categories to extract
+    let mut categories = Vec::new();
+    if all || screens {
+        categories.push(AssetCategory::Screens);
+    }
+    if all || fonts {
+        categories.push(AssetCategory::Fonts);
+    }
+    if all || config {
+        categories.push(AssetCategory::Config);
+    }
+
+    if categories.is_empty() {
+        eprintln!("No categories specified. Use --all, --screens, --fonts, or --config");
+        eprintln!("\nRun 'byonk init --list' to see embedded assets.");
+        std::process::exit(1);
+    }
+
+    // Create asset loader with paths from env vars (or defaults)
+    let screens_dir = std::env::var("SCREENS_DIR").ok().map(PathBuf::from);
+    let fonts_dir = std::env::var("FONTS_DIR").ok().map(PathBuf::from);
+    let config_file = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
+
+    let loader = AssetLoader::new(screens_dir, fonts_dir, config_file);
+
+    // Extract assets
+    let report = loader.init(&categories, force)?;
+
+    if !report.written.is_empty() {
+        println!("Extracted {} files:", report.written.len());
+        for f in &report.written {
+            println!("  + {f}");
+        }
+    }
+    if !report.skipped.is_empty() {
+        println!(
+            "\nSkipped {} existing files (use --force to overwrite):",
+            report.skipped.len()
+        );
+        for f in &report.skipped {
+            println!("  - {f}");
+        }
+    }
+
+    if report.written.is_empty() && report.skipped.is_empty() {
+        println!("No files to extract.");
+    }
+
+    Ok(())
+}
+
 /// Run the HTTP server
 async fn run_server() -> anyhow::Result<()> {
+    use assets::AssetLoader;
+
     // Initialize tracing
     tracing_subscriber::registry()
         .with(
@@ -179,22 +297,48 @@ async fn run_server() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Configuration
-    let svg_dir = std::env::var("SVG_DIR").unwrap_or_else(|_| "./static/svgs".to_string());
-    let screens_dir = std::env::var("SCREENS_DIR").unwrap_or_else(|_| "./screens".to_string());
-    let config_path = std::env::var("CONFIG_FILE").unwrap_or_else(|_| "./config.yaml".to_string());
+    // Create asset loader with optional external paths from env vars
+    let screens_dir = std::env::var("SCREENS_DIR").ok().map(PathBuf::from);
+    let fonts_dir = std::env::var("FONTS_DIR").ok().map(PathBuf::from);
+    let config_file = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
 
-    tracing::info!(svg_dir = %svg_dir, screens_dir = %screens_dir, "Loading content directories");
+    let asset_loader = Arc::new(AssetLoader::new(
+        screens_dir.clone(),
+        fonts_dir.clone(),
+        config_file.clone(),
+    ));
+
+    // Log asset sources
+    tracing::info!(
+        screens = ?screens_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
+        fonts = ?fonts_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
+        config = ?config_file.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
+        "Asset sources configured"
+    );
+
+    // Seed if configured paths are empty
+    match asset_loader.seed_if_configured() {
+        Ok(report) if !report.is_empty() => {
+            tracing::info!(
+                screens = report.screens_seeded.len(),
+                fonts = report.fonts_seeded.len(),
+                config = report.config_seeded,
+                "Seeded empty directories with embedded assets"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(%e, "Failed to seed assets");
+        }
+        _ => {}
+    }
 
     // Load application config
-    let config = Arc::new(AppConfig::load_or_default(std::path::Path::new(
-        &config_path,
-    )));
+    let config = Arc::new(AppConfig::load_from_assets(&asset_loader));
 
     // Initialize services
     let registry = Arc::new(InMemoryRegistry::new());
-    let renderer = Arc::new(RenderService::new(&svg_dir)?);
+    let renderer = Arc::new(RenderService::new(&asset_loader)?);
 
     // URL signer for secure image URLs - use URL_SECRET env var or random
     let url_signer = Arc::new(
@@ -210,12 +354,8 @@ async fn run_server() -> anyhow::Result<()> {
 
     // Content pipeline for scripted content
     let content_pipeline = Arc::new(
-        ContentPipeline::new(
-            config.clone(),
-            std::path::Path::new(&screens_dir),
-            renderer.clone(),
-        )
-        .expect("Failed to initialize content pipeline"),
+        ContentPipeline::new(config.clone(), asset_loader, renderer.clone())
+            .expect("Failed to initialize content pipeline"),
     );
 
     let content_cache = Arc::new(ContentCache::new());

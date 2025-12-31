@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 
+use crate::assets::AssetLoader;
 use crate::error::RenderError;
 use crate::models::{AppConfig, DisplaySpec, ScreenConfig};
 use crate::services::{LuaRuntime, RenderService, TemplateService};
@@ -60,11 +60,11 @@ pub struct ContentPipeline {
 impl ContentPipeline {
     pub fn new(
         config: Arc<AppConfig>,
-        screens_dir: &Path,
+        asset_loader: Arc<AssetLoader>,
         renderer: Arc<RenderService>,
     ) -> Result<Self, ContentError> {
-        let lua_runtime = LuaRuntime::new(screens_dir);
-        let template_service = TemplateService::new(screens_dir)?;
+        let lua_runtime = LuaRuntime::new(asset_loader.clone());
+        let template_service = TemplateService::new(asset_loader)?;
 
         Ok(Self {
             config,
@@ -185,10 +185,10 @@ impl ContentPipeline {
 
         let template_data = serde_json::Value::Object(template_context);
 
-        // Render the template to SVG
+        // Render the template to SVG (with image reference resolution)
         let svg_content = self
             .template_service
-            .render(&result.template_path, &template_data)?;
+            .render(&result.template_path, &template_data, &result.screen_name)?;
 
         tracing::debug!(
             template = %result.template_path.display(),

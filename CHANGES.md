@@ -9,7 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- Embedded assets: All screens, fonts, and config are now embedded in the binary using rust-embed
+- Zero-config operation: Binary works standalone without any external files
+- `byonk init` command: Extract embedded assets to filesystem for customization (`--screens`, `--fonts`, `--config`, `--all`, `--list`)
+- Auto-seeding: When `SCREENS_DIR`, `FONTS_DIR`, or `CONFIG_FILE` env vars are set and the path is empty/missing, embedded assets are automatically extracted there
+- Merge behavior: External files override embedded assets, with fallback to embedded for missing files
+- New `FONTS_DIR` environment variable for configurable font directory
+- Lua `base64_encode(data)` function: Encode binary data to base64 strings
+- Lua `read_asset(path)` function: Read files from screen asset directories (`screens/<screen>/`)
+- Automatic SVG image resolution: `<image href="logo.png"/>` in templates automatically resolves to `screens/<screen>/logo.png` and embeds as data URI
+- Default command shows status: Running `byonk` without arguments displays environment variables and asset sources instead of starting the server
+- Simplified image URLs: Use content hash in path (`/api/image/{hash}.png`) instead of signed URLs with expiration
+
 ### Changed
+
+- PNG compression improved: uses maximum compression with Paeth filter for smaller file sizes
+
+### Removed
+
+- `URL_SECRET` environment variable and URL signing (replaced by content hash-based URLs)
 
 ### Fixed
 

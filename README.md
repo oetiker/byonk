@@ -121,10 +121,9 @@ Templates use Tera syntax (similar to Jinja2):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `BIND_ADDR` | `0.0.0.0:3000` | Server bind address |
-| `SVG_DIR` | `./static/svgs` | Static SVG directory |
-| `SCREENS_DIR` | `./screens` | Lua scripts and templates |
-| `CONFIG_FILE` | `./config.yaml` | Configuration file |
-| `URL_SECRET` | (random) | HMAC secret for signed URLs |
+| `SCREENS_DIR` | (embedded) | Lua scripts and SVG templates |
+| `FONTS_DIR` | (embedded) | Custom fonts directory |
+| `CONFIG_FILE` | (embedded) | Configuration file path |
 
 ## API Endpoints
 
@@ -132,7 +131,7 @@ Templates use Tera syntax (similar to Jinja2):
 |----------|-------------|
 | `GET /api/setup` | Device registration |
 | `GET /api/display` | Get display content (JSON with image URL) |
-| `GET /api/image/:device_id` | Get rendered PNG image |
+| `GET /api/image/{hash}.png` | Get rendered PNG image by content hash |
 | `POST /api/log` | Device log submission |
 | `GET /swagger-ui` | OpenAPI documentation |
 | `GET /health` | Health check |

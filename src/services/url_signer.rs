@@ -1,15 +1,20 @@
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
+#[allow(dead_code)]
 type HmacSha256 = Hmac<Sha256>;
 
 /// URL signing service for secure image URLs
+/// Note: Currently unused since we use content hashes in URLs instead,
+/// but kept for potential future use.
+#[allow(dead_code)]
 pub struct UrlSigner {
     secret: Vec<u8>,
     /// Signature validity in seconds (default: 1 hour)
     validity_secs: i64,
 }
 
+#[allow(dead_code)]
 impl UrlSigner {
     pub fn new(secret: &str) -> Self {
         Self {

@@ -12,7 +12,6 @@ use crate::error::ApiError;
 use crate::models::{ApiKey, Device, DeviceId, DeviceModel, DisplaySpec};
 use crate::services::{
     CachedContent, ContentCache, ContentPipeline, DeviceContext, DeviceRegistry, RenderService,
-    UrlSigner,
 };
 
 // Maximum allowed display dimensions to prevent DoS
@@ -26,12 +25,6 @@ pub struct ImageQuery {
     pub w: Option<u32>,
     #[serde(default)]
     pub h: Option<u32>,
-    /// Expiration timestamp for signed URLs
-    #[serde(default)]
-    pub exp: Option<i64>,
-    /// HMAC signature for URL verification
-    #[serde(default)]
-    pub sig: Option<String>,
 }
 
 /// Get display content for a device
@@ -62,7 +55,6 @@ pub struct ImageQuery {
 pub async fn handle_display<R: DeviceRegistry>(
     State(registry): State<Arc<R>>,
     State(_renderer): State<Arc<RenderService>>,
-    State(url_signer): State<Arc<UrlSigner>>,
     State(content_pipeline): State<Arc<ContentPipeline>>,
     State(content_cache): State<Arc<ContentCache>>,
     headers: HeaderMap,
@@ -177,11 +169,11 @@ pub async fn handle_display<R: DeviceRegistry>(
                         // Render SVG from script result (template processing happens here)
                         match pipeline.render_svg_from_script(&result, Some(&ctx)) {
                             Ok(svg) => {
-                                // Cache the pre-rendered SVG with its content hash
+                                // Cache the pre-rendered SVG (keyed by content hash)
                                 let cached = CachedContent::new(svg, result.screen_name.clone());
                                 let hash = cached.content_hash.clone();
                                 let rt = tokio::runtime::Handle::current();
-                                rt.block_on(cache.store(&mac, cached));
+                                rt.block_on(cache.store(cached));
                                 (result.refresh_rate, false, Some(hash), None)
                             }
                             Err(e) => {
@@ -191,7 +183,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                                 let cached = CachedContent::new(error_svg, "_error".to_string());
                                 let hash = cached.content_hash.clone();
                                 let rt = tokio::runtime::Handle::current();
-                                rt.block_on(cache.store(&mac, cached));
+                                rt.block_on(cache.store(cached));
                                 (60, false, Some(hash), Some(error_msg))
                             }
                         }
@@ -204,7 +196,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                     let cached = CachedContent::new(error_svg, "_error".to_string());
                     let hash = cached.content_hash.clone();
                     let rt = tokio::runtime::Handle::current();
-                    rt.block_on(cache.store(&mac, cached));
+                    rt.block_on(cache.store(cached));
                     (60, false, Some(hash), Some(error_msg))
                 }
             }
@@ -227,23 +219,14 @@ pub async fn handle_display<R: DeviceRegistry>(
             "Returning display response without image (skip_update)"
         );
         None
-    } else {
-        // Build full image URL - device needs absolute URL for separate HTTP request
-        // Get the Host header to construct the base URL
+    } else if let Some(ref hash) = content_hash {
+        // Build full image URL using content hash (no signature needed - hash is unpredictable)
         let host = headers
             .get("Host")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("localhost:3000");
 
-        // URL-encode the device ID (MAC address contains colons)
-        let encoded_device_id = device.device_id.to_string().replace(':', "-");
-        let path = format!("/api/image/{encoded_device_id}");
-
-        // Sign the URL to prevent unauthorized access
-        let (signature, expires) = url_signer.sign(&path);
-        let url = format!(
-            "http://{host}/api/image/{encoded_device_id}?w={width}&h={height}&exp={expires}&sig={signature}"
-        );
+        let url = format!("http://{host}/api/image/{hash}.png?w={width}&h={height}");
 
         tracing::info!(
             image_url = %url,
@@ -251,6 +234,8 @@ pub async fn handle_display<R: DeviceRegistry>(
             "Returning display response with image URL"
         );
         Some(url)
+    } else {
+        None
     };
 
     // Return JSON response
@@ -270,18 +255,20 @@ pub async fn handle_display<R: DeviceRegistry>(
     .into_response())
 }
 
-/// Get rendered PNG image for a device
+/// Get rendered PNG image by content hash
 ///
 /// Returns the actual PNG image data rendered from SVG with dithering applied.
+/// The content hash in the filename ensures uniqueness and enables client-side caching.
 #[utoipa::path(
     get,
-    path = "/api/image/{device_id}",
+    path = "/api/image/{hash}.png",
     responses(
         (status = 200, description = "PNG image", content_type = "image/png"),
+        (status = 404, description = "Content not found"),
         (status = 500, description = "Rendering error"),
     ),
     params(
-        ("device_id" = String, Path, description = "Device ID (MAC with colons replaced by dashes)"),
+        ("hash" = String, Path, description = "Content hash (from /api/display response)"),
         ("w" = Option<u32>, Query, description = "Display width in pixels (default: 800)"),
         ("h" = Option<u32>, Query, description = "Display height in pixels (default: 480)"),
     ),
@@ -290,23 +277,17 @@ pub async fn handle_display<R: DeviceRegistry>(
 pub async fn handle_image<R: DeviceRegistry>(
     State(_registry): State<Arc<R>>,
     State(_renderer): State<Arc<RenderService>>,
-    State(url_signer): State<Arc<UrlSigner>>,
     State(content_cache): State<Arc<ContentCache>>,
     State(content_pipeline): State<Arc<ContentPipeline>>,
-    Path(device_id): Path<String>,
+    Path(hash_with_ext): Path<String>,
     Query(query): Query<ImageQuery>,
 ) -> Result<Response, ApiError> {
-    // Verify URL signature to prevent unauthorized access
-    let path = format!("/api/image/{device_id}");
-    let signature = query.sig.as_deref().ok_or(ApiError::InvalidSignature)?;
-    let expires = query.exp.ok_or(ApiError::InvalidSignature)?;
+    // Strip .png extension from hash
+    let content_hash = hash_with_ext
+        .strip_suffix(".png")
+        .unwrap_or(&hash_with_ext);
 
-    if !url_signer.verify(&path, signature, expires) {
-        tracing::warn!(device_id = %device_id, "Invalid or expired image URL signature");
-        return Err(ApiError::InvalidSignature);
-    }
-
-    // Parse dimensions from query parameters (w, h) for fallback rendering
+    // Parse dimensions from query parameters
     let width: u32 = query
         .w
         .filter(|&w| w > 0 && w <= MAX_DISPLAY_WIDTH)
@@ -318,19 +299,15 @@ pub async fn handle_image<R: DeviceRegistry>(
 
     let spec = DisplaySpec::from_dimensions(width, height)?;
 
-    // Convert device_id back to MAC format
-    let device_mac = device_id.replace('-', ":");
-
     tracing::info!(
-        device_id = %device_id,
-        device_mac = %device_mac,
+        content_hash = %content_hash,
         width = width,
         height = height,
         "Image request received"
     );
 
-    // Get cached SVG and render to PNG
-    let png_bytes = if let Some(cached) = content_cache.get(&device_mac).await {
+    // Get cached SVG by content hash and render to PNG
+    let png_bytes = if let Some(cached) = content_cache.get(content_hash).await {
         tracing::info!(
             screen = %cached.screen_name,
             content_hash = %cached.content_hash,
@@ -339,13 +316,11 @@ pub async fn handle_image<R: DeviceRegistry>(
         );
         content_pipeline.render_png_from_svg(&cached.rendered_svg, spec)?
     } else {
-        // No cached content - this shouldn't happen since /api/display must be called first
-        // to generate the signed URL
-        tracing::error!(
-            device_mac = %device_mac,
-            "No cached content found - signature valid but cache missing"
+        tracing::warn!(
+            content_hash = %content_hash,
+            "Content not found in cache"
         );
-        return Err(ApiError::Internal("Cache expired".to_string()));
+        return Err(ApiError::NotFound);
     };
 
     tracing::info!(size_bytes = png_bytes.len(), "Image rendered and served");

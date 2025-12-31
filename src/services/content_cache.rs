@@ -39,7 +39,7 @@ fn compute_svg_hash(svg: &str) -> String {
     hex::encode(&result[..8])
 }
 
-/// Cache for script output, keyed by device MAC
+/// Cache for rendered SVG content, keyed by content hash
 pub struct ContentCache {
     cache: Arc<RwLock<HashMap<String, CachedContent>>>,
 }
@@ -51,23 +51,23 @@ impl ContentCache {
         }
     }
 
-    /// Store script output for a device
-    pub async fn store(&self, device_mac: &str, content: CachedContent) {
+    /// Store rendered content (keyed by its content hash)
+    pub async fn store(&self, content: CachedContent) {
         let mut cache = self.cache.write().await;
-        cache.insert(device_mac.to_string(), content);
+        cache.insert(content.content_hash.clone(), content);
     }
 
-    /// Retrieve cached content for a device
-    pub async fn get(&self, device_mac: &str) -> Option<CachedContent> {
+    /// Retrieve cached content by its hash
+    pub async fn get(&self, content_hash: &str) -> Option<CachedContent> {
         let cache = self.cache.read().await;
-        cache.get(device_mac).cloned()
+        cache.get(content_hash).cloned()
     }
 
-    /// Remove cached content for a device
+    /// Remove cached content by hash
     #[allow(dead_code)]
-    pub async fn remove(&self, device_mac: &str) {
+    pub async fn remove(&self, content_hash: &str) {
         let mut cache = self.cache.write().await;
-        cache.remove(device_mac);
+        cache.remove(content_hash);
     }
 }
 

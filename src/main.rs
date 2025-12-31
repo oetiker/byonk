@@ -108,6 +108,7 @@ struct ApiDoc;
 struct AppState {
     registry: Arc<InMemoryRegistry>,
     renderer: Arc<RenderService>,
+    #[allow(dead_code)]
     url_signer: Arc<UrlSigner>,
     content_pipeline: Arc<ContentPipeline>,
     content_cache: Arc<ContentCache>,
@@ -131,7 +132,11 @@ async fn main() -> anyhow::Result<()> {
             force,
             list,
         }) => run_init_command(screens, fonts, config, all, force, list),
-        Some(Commands::Serve) | None => run_server().await,
+        Some(Commands::Serve) => run_server().await,
+        None => {
+            run_status_command();
+            Ok(())
+        }
     }
 }
 
@@ -284,6 +289,126 @@ fn run_init_command(
     Ok(())
 }
 
+/// Display status and configuration information
+fn run_status_command() {
+    use assets::{AssetCategory, AssetLoader};
+
+    const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+    // Read environment variables
+    let bind_addr = std::env::var("BIND_ADDR").ok();
+    let config_file = std::env::var("CONFIG_FILE").ok();
+    let screens_dir = std::env::var("SCREENS_DIR").ok();
+    let fonts_dir = std::env::var("FONTS_DIR").ok();
+    let url_secret = std::env::var("URL_SECRET").ok();
+
+    // Header
+    println!("Byonk v{VERSION} - Bring Your Own Ink");
+    println!("Content server for TRMNL e-ink devices\n");
+
+    // Environment variables section
+    println!("Environment Variables:");
+    println!(
+        "  BIND_ADDR   = {}",
+        bind_addr.as_deref().unwrap_or("0.0.0.0:3000 (default)")
+    );
+    println!(
+        "  CONFIG_FILE = {}",
+        config_file.as_deref().unwrap_or("(not set)")
+    );
+    println!(
+        "  SCREENS_DIR = {}",
+        screens_dir.as_deref().unwrap_or("(not set)")
+    );
+    println!(
+        "  FONTS_DIR   = {}",
+        fonts_dir.as_deref().unwrap_or("(not set)")
+    );
+    println!(
+        "  URL_SECRET  = {}",
+        if url_secret.is_some() {
+            "(set)"
+        } else {
+            "(not set)"
+        }
+    );
+
+    // Asset sources section
+    println!("\nAsset Sources:");
+
+    // Create asset loader to check actual sources
+    let loader = AssetLoader::new(
+        screens_dir.clone().map(PathBuf::from),
+        fonts_dir.clone().map(PathBuf::from),
+        config_file.clone().map(PathBuf::from),
+    );
+
+    // Config source
+    let config_source = if let Some(ref path) = config_file {
+        let p = PathBuf::from(path);
+        if p.exists() {
+            path.to_string()
+        } else {
+            "embedded (file not found)".to_string()
+        }
+    } else {
+        "embedded".to_string()
+    };
+    println!("  Config:  {config_source}");
+
+    // Helper for pluralization
+    fn plural(n: usize) -> &'static str {
+        if n == 1 { "file" } else { "files" }
+    }
+
+    // Screens source
+    let screens_list = loader.list_screens();
+    let screens_count = screens_list.len();
+    let embedded_screens = AssetLoader::list_embedded(AssetCategory::Screens);
+    let embedded_count = embedded_screens.len();
+
+    if let Some(ref path) = screens_dir {
+        let p = PathBuf::from(path);
+        if p.exists() {
+            println!(
+                "  Screens: {path} ({screens_count} {}, {embedded_count} embedded)",
+                plural(screens_count)
+            );
+        } else {
+            println!("  Screens: embedded ({embedded_count} {})", plural(embedded_count));
+        }
+    } else {
+        println!("  Screens: embedded ({embedded_count} {})", plural(embedded_count));
+    }
+
+    // Fonts source
+    let fonts = loader.get_fonts();
+    let fonts_count = fonts.len();
+    let embedded_fonts = AssetLoader::list_embedded(AssetCategory::Fonts);
+    let embedded_fonts_count = embedded_fonts.len();
+
+    if let Some(ref path) = fonts_dir {
+        let p = PathBuf::from(path);
+        if p.exists() {
+            println!(
+                "  Fonts:   {path} ({fonts_count} {}, {embedded_fonts_count} embedded)",
+                plural(fonts_count)
+            );
+        } else {
+            println!("  Fonts:   embedded ({embedded_fonts_count} {})", plural(embedded_fonts_count));
+        }
+    } else {
+        println!("  Fonts:   embedded ({embedded_fonts_count} {})", plural(embedded_fonts_count));
+    }
+
+    // Commands section
+    println!("\nCommands:");
+    println!("  byonk serve    Start the HTTP server");
+    println!("  byonk render   Render a screen to PNG file");
+    println!("  byonk init     Extract embedded assets");
+    println!("\nRun 'byonk --help' for more details.");
+}
+
 /// Run the HTTP server
 async fn run_server() -> anyhow::Result<()> {
     use assets::AssetLoader;
@@ -373,7 +498,7 @@ async fn run_server() -> anyhow::Result<()> {
         // TRMNL API endpoints
         .route("/api/setup", get(handle_setup))
         .route("/api/display", get(handle_display))
-        .route("/api/image/:device_id", get(handle_image))
+        .route("/api/image/:hash", get(handle_image))
         .route("/api/log", post(api::handle_log))
         // OpenAPI documentation
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
@@ -410,7 +535,6 @@ async fn handle_display(
     api::handle_display(
         axum::extract::State(state.registry),
         axum::extract::State(state.renderer),
-        axum::extract::State(state.url_signer),
         axum::extract::State(state.content_pipeline),
         axum::extract::State(state.content_cache),
         headers,
@@ -427,7 +551,6 @@ async fn handle_image(
     api::handle_image(
         axum::extract::State(state.registry),
         axum::extract::State(state.renderer),
-        axum::extract::State(state.url_signer),
         axum::extract::State(state.content_cache),
         axum::extract::State(state.content_pipeline),
         path,

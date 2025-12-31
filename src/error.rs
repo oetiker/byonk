@@ -14,8 +14,8 @@ pub enum ApiError {
     #[error("Device not found")]
     DeviceNotFound,
 
-    #[error("Invalid or expired URL signature")]
-    InvalidSignature,
+    #[error("Not found")]
+    NotFound,
 
     #[error("Rendering error: {0}")]
     Render(#[from] RenderError),
@@ -59,7 +59,7 @@ impl IntoResponse for ApiError {
         let (status, message) = match &self {
             ApiError::MissingHeader(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             ApiError::DeviceNotFound => (StatusCode::NOT_FOUND, self.to_string()),
-            ApiError::InvalidSignature => (StatusCode::FORBIDDEN, self.to_string()),
+            ApiError::NotFound => (StatusCode::NOT_FOUND, self.to_string()),
             ApiError::Render(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
             ApiError::Content(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
             ApiError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),

@@ -145,6 +145,9 @@ impl SvgRenderer {
             let mut encoder = png::Encoder::new(&mut buf, spec.width, spec.height);
             encoder.set_color(png::ColorType::Grayscale);
             encoder.set_depth(png::BitDepth::Two);
+            // Use maximum compression to reduce file size for memory-constrained devices
+            encoder.set_compression(png::Compression::Best);
+            encoder.set_filter(png::FilterType::Paeth);
 
             let mut writer = encoder
                 .write_header()

@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - SVG template rendering now happens during `/api/display` instead of `/api/image`, enabling the content hash to be computed before the device fetches the image
 - Content cache now stores pre-rendered SVG instead of raw script data, making `/api/image` faster
+- PNG compression improved: uses maximum compression with Paeth filter for smaller file sizes
 
 ### Fixed
 

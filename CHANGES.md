@@ -9,9 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.5.1 - 2026-01-01
+
+### New
+
 - Extended device context: `device.model`, `device.firmware_version`, `device.width`, and `device.height` now available in Lua scripts and SVG templates
 - CLI render options: `--battery`, `--rssi`, and `--firmware` flags for testing templates with device data
-
 ### Changed
 
 ### Fixed

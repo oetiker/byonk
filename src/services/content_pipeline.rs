@@ -186,9 +186,11 @@ impl ContentPipeline {
         let template_data = serde_json::Value::Object(template_context);
 
         // Render the template to SVG (with image reference resolution)
-        let svg_content = self
-            .template_service
-            .render(&result.template_path, &template_data, &result.screen_name)?;
+        let svg_content = self.template_service.render(
+            &result.template_path,
+            &template_data,
+            &result.screen_name,
+        )?;
 
         tracing::debug!(
             template = %result.template_path.display(),

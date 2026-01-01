@@ -167,7 +167,8 @@ impl TemplateService {
                     let data_uri = format!("data:{mime_type};base64,{encoded}");
 
                     // Build replacement element
-                    let replacement = format!("<image {before_href}href=\"{data_uri}\"{after_href}>");
+                    let replacement =
+                        format!("<image {before_href}href=\"{data_uri}\"{after_href}>");
                     result = result.replace(full_match, &replacement);
 
                     tracing::trace!(

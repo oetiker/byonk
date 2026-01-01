@@ -347,7 +347,11 @@ fn run_status_command() {
 
     // Helper for pluralization
     fn plural(n: usize) -> &'static str {
-        if n == 1 { "file" } else { "files" }
+        if n == 1 {
+            "file"
+        } else {
+            "files"
+        }
     }
 
     // Screens source
@@ -364,10 +368,16 @@ fn run_status_command() {
                 plural(screens_count)
             );
         } else {
-            println!("  Screens: embedded ({embedded_count} {})", plural(embedded_count));
+            println!(
+                "  Screens: embedded ({embedded_count} {})",
+                plural(embedded_count)
+            );
         }
     } else {
-        println!("  Screens: embedded ({embedded_count} {})", plural(embedded_count));
+        println!(
+            "  Screens: embedded ({embedded_count} {})",
+            plural(embedded_count)
+        );
     }
 
     // Fonts source
@@ -384,10 +394,16 @@ fn run_status_command() {
                 plural(fonts_count)
             );
         } else {
-            println!("  Fonts:   embedded ({embedded_fonts_count} {})", plural(embedded_fonts_count));
+            println!(
+                "  Fonts:   embedded ({embedded_fonts_count} {})",
+                plural(embedded_fonts_count)
+            );
         }
     } else {
-        println!("  Fonts:   embedded ({embedded_fonts_count} {})", plural(embedded_fonts_count));
+        println!(
+            "  Fonts:   embedded ({embedded_fonts_count} {})",
+            plural(embedded_fonts_count)
+        );
     }
 
     // Commands section

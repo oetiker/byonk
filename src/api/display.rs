@@ -283,9 +283,7 @@ pub async fn handle_image<R: DeviceRegistry>(
     Query(query): Query<ImageQuery>,
 ) -> Result<Response, ApiError> {
     // Strip .png extension from hash
-    let content_hash = hash_with_ext
-        .strip_suffix(".png")
-        .unwrap_or(&hash_with_ext);
+    let content_hash = hash_with_ext.strip_suffix(".png").unwrap_or(&hash_with_ext);
 
     // Parse dimensions from query parameters
     let width: u32 = query

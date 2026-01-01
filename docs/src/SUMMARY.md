@@ -4,7 +4,6 @@
 
 # Getting Started
 
-- [Introduction](guide/index.md)
 - [Installation](guide/installation.md)
 - [Configuration](guide/configuration.md)
 

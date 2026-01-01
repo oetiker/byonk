@@ -170,6 +170,62 @@ sudo systemctl enable byonk
 sudo systemctl start byonk
 ```
 
+## CLI Commands
+
+### Status (Default)
+
+Running `byonk` without arguments shows current configuration:
+
+```bash
+./byonk
+```
+
+### Server
+
+Start the HTTP server:
+
+```bash
+./byonk serve
+```
+
+### Render
+
+Render a screen directly to PNG (useful for testing):
+
+```bash
+./byonk render --mac "00:00:00:00:00:00" --output test.png
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-m, --mac` | Device MAC address (required) |
+| `-o, --output` | Output PNG file path (required) |
+| `-d, --device` | Device type: "og" (800x480) or "x" (1872x1404) |
+| `-b, --battery` | Battery voltage for testing (e.g., 4.12) |
+| `-r, --rssi` | WiFi signal strength for testing (e.g., -67) |
+| `-f, --firmware` | Firmware version string for testing |
+
+**Example with all device info:**
+
+```bash
+./byonk render -m "AC:15:18:D4:7B:E2" -o test.png \
+  --battery=4.12 --rssi=-67 --firmware="1.2.3"
+```
+
+> **Note:** Use `=` syntax for negative numbers (e.g., `--rssi=-67`).
+
+### Init
+
+Extract embedded assets for customization:
+
+```bash
+./byonk init --all        # Extract everything
+./byonk init --screens    # Extract screens only
+./byonk init --list       # List embedded assets
+```
+
 ## Verifying Installation
 
 1. Open `http://your-server:3000/health` - should return "OK"

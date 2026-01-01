@@ -106,6 +106,18 @@ impl LuaRuntime {
             if let Some(rssi) = ctx.rssi {
                 device_table.set("rssi", rssi)?;
             }
+            if let Some(ref model) = ctx.model {
+                device_table.set("model", model.as_str())?;
+            }
+            if let Some(ref fw) = ctx.firmware_version {
+                device_table.set("firmware_version", fw.as_str())?;
+            }
+            if let Some(width) = ctx.width {
+                device_table.set("width", width)?;
+            }
+            if let Some(height) = ctx.height {
+                device_table.set("height", height)?;
+            }
         }
         globals.set("device", device_table)?;
 

@@ -44,12 +44,17 @@ Variables in templates are organized into three namespaces:
 
 ### Device Variables
 
-These are automatically available under `device.*` (when reported by the device):
+These are automatically available under `device.*`:
 
 | Variable | Type | Description |
 |----------|------|-------------|
-| `device.battery_voltage` | float | Battery voltage (e.g., 4.12) |
-| `device.rssi` | integer | WiFi signal strength in dBm (e.g., -65) |
+| `device.mac` | string | Device MAC address (e.g., "AC:15:18:D4:7B:E2") |
+| `device.battery_voltage` | float or nil | Battery voltage (e.g., 4.12) |
+| `device.rssi` | integer or nil | WiFi signal strength in dBm (e.g., -65) |
+| `device.model` | string or nil | Device model ("og" or "x") |
+| `device.firmware_version` | string or nil | Firmware version string |
+| `device.width` | integer or nil | Display width in pixels (800 or 1872) |
+| `device.height` | integer or nil | Display height in pixels (480 or 1404) |
 
 ```svg
 <!-- Display battery and signal in header -->
@@ -57,9 +62,16 @@ These are automatically available under `device.*` (when reported by the device)
   {% if device.battery_voltage %}{{ device.battery_voltage | round(precision=2) }}V{% endif %}
   {% if device.rssi %} · {{ device.rssi }}dBm{% endif %}
 </text>
+
+<!-- Responsive layout based on device dimensions -->
+{% if device.width == 1872 %}
+  <!-- TRMNL X layout (1872x1404) -->
+{% else %}
+  <!-- TRMNL OG layout (800x480) -->
+{% endif %}
 ```
 
-> **Note:** Device variables are only available if the device reports them. Always use `{% if device.variable %}` to check before using.
+> **Note:** Some device variables may be `nil` if the device doesn't report them. Always use `{% if device.variable %}` to check before using.
 
 ### Basic Interpolation
 

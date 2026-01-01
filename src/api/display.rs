@@ -149,6 +149,10 @@ pub async fn handle_display<R: DeviceRegistry>(
         mac: device.device_id.to_string(),
         battery_voltage: device.battery_voltage,
         rssi: device.rssi,
+        model: Some(device.model.to_string()),
+        firmware_version: Some(device.firmware_version.clone()),
+        width: Some(width),
+        height: Some(height),
     };
 
     // Run script, render SVG, and cache the result (PNG rendering happens in /api/image)

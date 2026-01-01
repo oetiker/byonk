@@ -42,6 +42,13 @@ devices:
       station: "Trans, Dorf"
       limit: 8
 
+  # Test device for transit (docs sample)
+  "TR:AN:SI:T0:00:00":
+    screen: transit
+    params:
+      station: "Trans, Dorf"
+      limit: 8
+
   # Test device for gray levels
   "TE:ST:GR:AY:00:00":
     screen: graytest

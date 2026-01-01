@@ -29,14 +29,26 @@ end
 if device.rssi and device.rssi < -80 then
   log_warn("Weak WiFi signal: " .. device.rssi .. " dBm")
 end
+
+-- Responsive layout based on device type
+if device.width == 1872 then
+  -- TRMNL X layout
+else
+  -- TRMNL OG layout
+end
 ```
 
 **Fields:**
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `mac` | string | Device MAC address (e.g., "AC:15:18:D4:7B:E2") |
 | `battery_voltage` | number or nil | Battery voltage (e.g., 4.12) |
 | `rssi` | number or nil | WiFi signal strength in dBm (e.g., -65) |
+| `model` | string or nil | Device model ("og" or "x") |
+| `firmware_version` | string or nil | Firmware version string |
+| `width` | number or nil | Display width in pixels (800 or 1872) |
+| `height` | number or nil | Display height in pixels (480 or 1404) |
 
 **Type:** `table`
 

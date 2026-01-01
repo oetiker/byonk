@@ -45,6 +45,18 @@ enum Commands {
         /// Device type: "og" (800x480) or "x" (1872x1404)
         #[arg(short, long, default_value = "og")]
         device: String,
+
+        /// Battery voltage (e.g., 4.12)
+        #[arg(short, long)]
+        battery: Option<f32>,
+
+        /// WiFi signal strength in dBm (e.g., -67)
+        #[arg(short, long)]
+        rssi: Option<i32>,
+
+        /// Firmware version string
+        #[arg(short, long)]
+        firmware: Option<String>,
     },
     /// Extract embedded assets to filesystem for customization
     Init {
@@ -121,7 +133,10 @@ async fn main() -> anyhow::Result<()> {
             mac,
             output,
             device,
-        }) => run_render_command(&mac, &output, &device),
+            battery,
+            rssi,
+            firmware,
+        }) => run_render_command(&mac, &output, &device, battery, rssi, firmware),
         Some(Commands::Init {
             screens,
             fonts,
@@ -139,7 +154,14 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Render a screen directly to a PNG file (no server needed)
-fn run_render_command(mac: &str, output: &PathBuf, device_type: &str) -> anyhow::Result<()> {
+fn run_render_command(
+    mac: &str,
+    output: &PathBuf,
+    device_type: &str,
+    battery: Option<f32>,
+    rssi: Option<i32>,
+    firmware: Option<String>,
+) -> anyhow::Result<()> {
     use assets::AssetLoader;
     use models::DisplaySpec;
     use services::DeviceContext;
@@ -179,11 +201,15 @@ fn run_render_command(mac: &str, output: &PathBuf, device_type: &str) -> anyhow:
         _ => DisplaySpec::OG,
     };
 
-    // Create device context
+    // Create device context with all provided fields
     let device_context = DeviceContext {
         mac: mac.to_string(),
-        battery_voltage: None,
-        rssi: None,
+        battery_voltage: battery,
+        rssi,
+        model: Some(device_type.to_string()),
+        firmware_version: firmware,
+        width: Some(display_spec.width),
+        height: Some(display_spec.height),
     };
 
     // Run the Lua script

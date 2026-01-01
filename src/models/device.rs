@@ -59,6 +59,15 @@ impl DeviceModel {
     }
 }
 
+impl fmt::Display for DeviceModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DeviceModel::OG => write!(f, "og"),
+            DeviceModel::X => write!(f, "x"),
+        }
+    }
+}
+
 /// Registered device with metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {

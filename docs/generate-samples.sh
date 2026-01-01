@@ -54,8 +54,10 @@ FAILED=0
 render_screen() {
     local mac="$1"
     local name="$2"
+    shift 2
+    local extra_args="$@"
     echo "  Rendering $name (MAC: $mac)..."
-    if "$BYONK" render --mac "$mac" --output "$OUTPUT_DIR/$name.png" 2>&1; then
+    if "$BYONK" render --mac "$mac" --output "$OUTPUT_DIR/$name.png" $extra_args 2>&1; then
         echo "    -> OK: $OUTPUT_DIR/$name.png ($(stat -f%z "$OUTPUT_DIR/$name.png" 2>/dev/null || stat -c%s "$OUTPUT_DIR/$name.png" 2>/dev/null) bytes)"
     else
         echo "    -> FAILED"
@@ -64,9 +66,9 @@ render_screen() {
 }
 
 # Generate samples for configured devices
-render_screen "94:A9:90:8C:6D:18" "transit"
+render_screen "TR:AN:SI:T0:00:00" "transit"
 render_screen "TE:ST:GR:AY:00:00" "graytest"
-render_screen "00:00:00:00:00:00" "default"
+render_screen "00:00:00:00:00:00" "default" --battery=4.12 --rssi=-65
 render_screen "TE:ST:HE:LL:00:00" "hello"
 
 echo ""

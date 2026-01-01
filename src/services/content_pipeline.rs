@@ -31,6 +31,14 @@ pub struct DeviceContext {
     pub battery_voltage: Option<f32>,
     /// WiFi signal strength (if available)
     pub rssi: Option<i32>,
+    /// Device model ("og" or "x")
+    pub model: Option<String>,
+    /// Firmware version
+    pub firmware_version: Option<String>,
+    /// Display width in pixels
+    pub width: Option<u32>,
+    /// Display height in pixels
+    pub height: Option<u32>,
 }
 
 /// Error from the content pipeline
@@ -174,6 +182,18 @@ impl ContentPipeline {
             }
             if let Some(rssi) = ctx.rssi {
                 device_obj.insert("rssi".to_string(), serde_json::json!(rssi));
+            }
+            if let Some(ref model) = ctx.model {
+                device_obj.insert("model".to_string(), serde_json::json!(model));
+            }
+            if let Some(ref fw) = ctx.firmware_version {
+                device_obj.insert("firmware_version".to_string(), serde_json::json!(fw));
+            }
+            if let Some(width) = ctx.width {
+                device_obj.insert("width".to_string(), serde_json::json!(width));
+            }
+            if let Some(height) = ctx.height {
+                device_obj.insert("height".to_string(), serde_json::json!(height));
             }
         }
         template_context.insert("device".to_string(), serde_json::Value::Object(device_obj));

@@ -7,10 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### New
+
+### Changed
+
+### Fixed
+
+## 0.5.0 - 2026-01-01
+
 ### Changed
 
 - Redesigned default screen: cleaner layout with full-bleed background image, large centered BYONK logo with drop shadow, vertical grayscale swatches on left edge, vertical gradient bar on right edge, and compact info bar at bottom
-
 ### New
 
 - Embedded assets: All screens, fonts, and config are now embedded in the binary using rust-embed

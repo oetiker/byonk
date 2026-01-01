@@ -1,10 +1,10 @@
 use axum::{
     body::Bytes,
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::sync::Arc;
 use utoipa::ToSchema;
 
@@ -17,15 +17,6 @@ use crate::services::{
 // Maximum allowed display dimensions to prevent DoS
 const MAX_DISPLAY_WIDTH: u32 = 2000;
 const MAX_DISPLAY_HEIGHT: u32 = 2000;
-
-/// Query parameters for image endpoint
-#[derive(Debug, Deserialize)]
-pub struct ImageQuery {
-    #[serde(default)]
-    pub w: Option<u32>,
-    #[serde(default)]
-    pub h: Option<u32>,
-}
 
 /// Get display content for a device
 ///
@@ -174,7 +165,12 @@ pub async fn handle_display<R: DeviceRegistry>(
                         match pipeline.render_svg_from_script(&result, Some(&ctx)) {
                             Ok(svg) => {
                                 // Cache the pre-rendered SVG (keyed by content hash)
-                                let cached = CachedContent::new(svg, result.screen_name.clone());
+                                let cached = CachedContent::new(
+                                    svg,
+                                    result.screen_name.clone(),
+                                    width,
+                                    height,
+                                );
                                 let hash = cached.content_hash.clone();
                                 let rt = tokio::runtime::Handle::current();
                                 rt.block_on(cache.store(cached));
@@ -184,7 +180,12 @@ pub async fn handle_display<R: DeviceRegistry>(
                                 // Template rendering failed - cache error SVG
                                 let error_msg = e.to_string();
                                 let error_svg = pipeline.render_error_svg(&error_msg);
-                                let cached = CachedContent::new(error_svg, "_error".to_string());
+                                let cached = CachedContent::new(
+                                    error_svg,
+                                    "_error".to_string(),
+                                    width,
+                                    height,
+                                );
                                 let hash = cached.content_hash.clone();
                                 let rt = tokio::runtime::Handle::current();
                                 rt.block_on(cache.store(cached));
@@ -197,7 +198,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                     // Script error - cache error SVG
                     let error_msg = e.to_string();
                     let error_svg = pipeline.render_error_svg(&error_msg);
-                    let cached = CachedContent::new(error_svg, "_error".to_string());
+                    let cached = CachedContent::new(error_svg, "_error".to_string(), width, height);
                     let hash = cached.content_hash.clone();
                     let rt = tokio::runtime::Handle::current();
                     rt.block_on(cache.store(cached));
@@ -230,7 +231,7 @@ pub async fn handle_display<R: DeviceRegistry>(
             .and_then(|v| v.to_str().ok())
             .unwrap_or("localhost:3000");
 
-        let url = format!("http://{host}/api/image/{hash}.png?w={width}&h={height}");
+        let url = format!("http://{host}/api/image/{hash}.png");
 
         tracing::info!(
             image_url = %url,
@@ -273,8 +274,6 @@ pub async fn handle_display<R: DeviceRegistry>(
     ),
     params(
         ("hash" = String, Path, description = "Content hash (from /api/display response)"),
-        ("w" = Option<u32>, Query, description = "Display width in pixels (default: 800)"),
-        ("h" = Option<u32>, Query, description = "Display height in pixels (default: 480)"),
     ),
     tag = "Display"
 )]
@@ -284,46 +283,28 @@ pub async fn handle_image<R: DeviceRegistry>(
     State(content_cache): State<Arc<ContentCache>>,
     State(content_pipeline): State<Arc<ContentPipeline>>,
     Path(hash_with_ext): Path<String>,
-    Query(query): Query<ImageQuery>,
 ) -> Result<Response, ApiError> {
     // Strip .png extension from hash
     let content_hash = hash_with_ext.strip_suffix(".png").unwrap_or(&hash_with_ext);
 
-    // Parse dimensions from query parameters
-    let width: u32 = query
-        .w
-        .filter(|&w| w > 0 && w <= MAX_DISPLAY_WIDTH)
-        .unwrap_or(800);
-    let height: u32 = query
-        .h
-        .filter(|&h| h > 0 && h <= MAX_DISPLAY_HEIGHT)
-        .unwrap_or(480);
+    // Get cached SVG by content hash and render to PNG
+    let cached = content_cache.get(content_hash).await.ok_or_else(|| {
+        tracing::warn!(content_hash = %content_hash, "Content not found in cache");
+        ApiError::NotFound
+    })?;
 
-    let spec = DisplaySpec::from_dimensions(width, height)?;
+    let spec = DisplaySpec::from_dimensions(cached.width, cached.height)?;
 
     tracing::info!(
         content_hash = %content_hash,
-        width = width,
-        height = height,
-        "Image request received"
+        screen = %cached.screen_name,
+        width = cached.width,
+        height = cached.height,
+        age_secs = (chrono::Utc::now() - cached.generated_at).num_seconds(),
+        "Rendering PNG from cached SVG"
     );
 
-    // Get cached SVG by content hash and render to PNG
-    let png_bytes = if let Some(cached) = content_cache.get(content_hash).await {
-        tracing::info!(
-            screen = %cached.screen_name,
-            content_hash = %cached.content_hash,
-            age_secs = (chrono::Utc::now() - cached.generated_at).num_seconds(),
-            "Rendering PNG from cached SVG"
-        );
-        content_pipeline.render_png_from_svg(&cached.rendered_svg, spec)?
-    } else {
-        tracing::warn!(
-            content_hash = %content_hash,
-            "Content not found in cache"
-        );
-        return Err(ApiError::NotFound);
-    };
+    let png_bytes = content_pipeline.render_png_from_svg(&cached.rendered_svg, spec)?;
 
     tracing::info!(size_bytes = png_bytes.len(), "Image rendered and served");
 

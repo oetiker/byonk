@@ -564,7 +564,6 @@ async fn handle_display(
 async fn handle_image(
     axum::extract::State(state): axum::extract::State<AppState>,
     path: axum::extract::Path<String>,
-    query: axum::extract::Query<api::display::ImageQuery>,
 ) -> Result<axum::response::Response, error::ApiError> {
     api::handle_image(
         axum::extract::State(state.registry),
@@ -572,7 +571,6 @@ async fn handle_image(
         axum::extract::State(state.content_cache),
         axum::extract::State(state.content_pipeline),
         path,
-        query,
     )
     .await
 }

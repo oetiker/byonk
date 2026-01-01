@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Simplified image URLs: removed `?w=...&h=...` query parameters, dimensions are now stored in cache
+
 ### Fixed
 
 ## 0.5.1 - 2026-01-01

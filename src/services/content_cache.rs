@@ -15,17 +15,23 @@ pub struct CachedContent {
     pub screen_name: String,
     /// When this content was generated
     pub generated_at: chrono::DateTime<chrono::Utc>,
+    /// Target display width for PNG rendering
+    pub width: u32,
+    /// Target display height for PNG rendering
+    pub height: u32,
 }
 
 impl CachedContent {
     /// Create a new cached content entry from rendered SVG
-    pub fn new(rendered_svg: String, screen_name: String) -> Self {
+    pub fn new(rendered_svg: String, screen_name: String, width: u32, height: u32) -> Self {
         let content_hash = compute_svg_hash(&rendered_svg);
         Self {
             rendered_svg,
             content_hash,
             screen_name,
             generated_at: chrono::Utc::now(),
+            width,
+            height,
         }
     }
 }

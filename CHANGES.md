@@ -11,9 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+### Fixed
+
+## 0.5.3 - 2026-01-05
+
+### Changed
+
 - Simplified image URLs: removed `?w=...&h=...` query parameters, dimensions are now stored in cache
 - Tutorial now includes Step 0 explaining how to set up a workspace with environment variables
-
 ### Fixed
 
 - CLI help no longer claims `serve` is the default command (status display is the default)

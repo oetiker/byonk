@@ -12,8 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Simplified image URLs: removed `?w=...&h=...` query parameters, dimensions are now stored in cache
+- Tutorial now includes Step 0 explaining how to set up a workspace with environment variables
 
 ### Fixed
+
+- CLI help no longer claims `serve` is the default command (status display is the default)
+- Docker container now defaults to `serve` command, so `docker run` starts the server as expected
+- Documentation: updated architecture docs to reflect content hash URLs (removed outdated signed URL references)
+- Documentation: removed obsolete `w` and `h` query parameters from HTTP API docs
 
 ## 0.5.1 - 2026-01-01
 

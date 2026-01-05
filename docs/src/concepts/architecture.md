@@ -11,7 +11,7 @@ flowchart LR
     subgraph Server[Byonk Server]
         Router[HTTP Router]
         Registry[(Device Registry)]
-        Signer[URL Signer]
+        Cache[(Content Cache)]
         Lua[Lua Runtime]
         Template[Template Service]
         Renderer[SVG Renderer]
@@ -19,7 +19,7 @@ flowchart LR
 
     Display --> Router
     Router --> Registry
-    Router --> Signer
+    Router --> Cache
     Router --> Lua
     Lua --> Template
     Template --> Renderer
@@ -46,13 +46,13 @@ Stores device information in memory:
 
 > **Note:** The current implementation uses an in-memory store. Device registrations are lost on restart. The architecture supports adding database persistence in the future.
 
-### URL Signer
+### Content Cache
 
-Provides security for image URLs using HMAC-SHA256:
+Stores rendered content between the display and image requests:
 
-- Signs image URLs with expiration timestamps
-- Validates signatures on image requests
-- Prevents unauthorized access to device content
+- Caches rendered SVG documents by content hash
+- Enables content change detection via hash comparison
+- Allows devices to skip unchanged content
 
 ### Content Pipeline
 
@@ -154,23 +154,22 @@ sequenceDiagram
 | Phase | Endpoint | Purpose |
 |-------|----------|---------|
 | **1. Setup** | `GET /api/setup` | Device registers, receives API key |
-| **2. Display** | `GET /api/display` | Runs Lua script, renders SVG, caches it, returns signed image URL and content hash |
-| **3. Image** | `GET /api/image/:id` | Converts cached SVG to PNG, returns image |
+| **2. Display** | `GET /api/display` | Runs Lua script, renders SVG, caches it, returns image URL with content hash |
+| **3. Image** | `GET /api/image/:hash` | Converts cached SVG to PNG, returns image |
 
 **Phase 2** (content generation):
 1. Load and execute Lua script with `params` and `device` context
 2. Script fetches external data via `http_get()`
 3. Render SVG template with script data
 4. Cache rendered SVG with content hash
-5. Sign image URL and return to device with `filename` set to content hash
+5. Return image URL and `filename` (content hash) to device
 
 The `filename` field contains a hash of the rendered SVG content. This allows TRMNL devices to detect when content has actually changed, even if the same screen is configured.
 
 **Phase 3** (image rendering):
-1. Verify URL signature
-2. Retrieve cached SVG
-3. Convert SVG to PNG with blue-noise dithering
-4. Return PNG to device
+1. Look up cached SVG by content hash
+2. Convert SVG to PNG with blue-noise dithering
+3. Return PNG to device
 
 ## Technology Stack
 
@@ -210,13 +209,13 @@ If content generation fails, devices receive an error screen rather than nothing
 
 ## Security Model
 
-### Signed URLs
+### Content-Based URLs
 
-Image URLs are signed with HMAC-SHA256:
+Image URLs use content hashes instead of signatures:
 
-- 1-hour expiration
-- Prevents URL enumeration
-- Protects against unauthorized access
+- URL path contains SHA-256 hash of rendered content
+- Same content always produces the same URL
+- No expiration - content is immutable by hash
 
 ### No Authentication Required
 

@@ -13,6 +13,7 @@ COPY screens ./screens
 COPY config.yaml ./config.yaml
 EXPOSE 3000
 ENTRYPOINT ["/app/byonk"]
+CMD ["serve"]
 
 # ARM64 variant
 FROM scratch AS arm64
@@ -25,6 +26,7 @@ COPY screens ./screens
 COPY config.yaml ./config.yaml
 EXPOSE 3000
 ENTRYPOINT ["/app/byonk"]
+CMD ["serve"]
 
 # Final stage - select based on target platform
 FROM ${TARGETARCH}

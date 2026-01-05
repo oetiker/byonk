@@ -38,3 +38,4 @@ COPY config.yaml ./config.yaml
 EXPOSE 3000
 
 ENTRYPOINT ["/app/byonk"]
+CMD ["serve"]

@@ -30,7 +30,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start the HTTP server (default)
+    /// Start the HTTP server
     Serve,
     /// Render a screen directly to a PNG file
     Render {

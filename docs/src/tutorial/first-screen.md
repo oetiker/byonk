@@ -2,6 +2,31 @@
 
 Let's create a simple screen that displays a greeting and the current time. This will introduce you to the basic workflow of creating Byonk screens.
 
+## Step 0: Set Up Your Workspace
+
+Byonk embeds all assets in the binary. To customize screens, you must set environment variables pointing to external directories.
+
+**For binary users:**
+```bash
+# Set paths and start server (auto-seeds empty directories)
+export SCREENS_DIR=./screens
+export CONFIG_FILE=./config.yaml
+byonk serve
+```
+
+**For Docker users:**
+```bash
+docker run -d -p 3000:3000 \
+  -e SCREENS_DIR=/data/screens \
+  -e CONFIG_FILE=/data/config.yaml \
+  -v ./data:/data \
+  ghcr.io/oetiker/byonk
+```
+
+On first run, empty directories are automatically populated with defaults. You can then edit the files in `screens/` and `config.yaml`.
+
+> **Tip:** Keep the server running in a terminal. Lua scripts and SVG templates are reloaded on every request - just save and refresh!
+
 ## Step 1: Create the Lua Script
 
 Create a new file `screens/hello.lua`:
@@ -119,7 +144,7 @@ Replace `YOUR:MAC:AD:DR:ES:S0` with your device's actual MAC address.
 
 2. **Check the API** at `http://localhost:3000/swagger-ui`:
    - Use the `/api/display` endpoint with your device's MAC
-   - You'll get a signed image URL
+   - You'll get an image URL with a content hash
    - Open that URL to see your screen!
 
 3. **Or wait for your device** to refresh automatically
@@ -169,7 +194,7 @@ Now your screen will say "Hello, Alice!" instead of "Hello, World!".
 Check the Byonk logs for script errors:
 
 ```bash
-./target/release/byonk
+byonk serve
 # Look for ERROR or WARN lines
 ```
 

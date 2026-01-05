@@ -73,14 +73,12 @@ The content hash is provided in the `/api/display` response and ensures clients 
 | Name | In | Required | Description |
 |------|-----|----------|-------------|
 | `hash` | path | Yes | Content hash from `/api/display` response |
-| `w` | query | No | Display width in pixels (default: 800) |
-| `h` | query | No | Display height in pixels (default: 480) |
 
 #### Responses
 
 **200**: PNG image
 
-**404**: Content not found (hash expired or invalid)
+**404**: Content not found (cache miss or invalid hash)
 
 **500**: Rendering error
 

@@ -6,7 +6,7 @@ Byonk can be installed via Docker container or pre-built binaries. All screens, 
 
 ```bash
 # Just run it - embedded assets work immediately
-docker run -p 3000:3000 ghcr.io/oetiker/byonk:latest
+docker run --pull always -p 3000:3000 ghcr.io/oetiker/byonk:latest
 ```
 
 That's it! The server is running with embedded default screens.
@@ -18,7 +18,7 @@ That's it! The server is running with embedded default screens.
 The simplest way to run Byonk:
 
 ```bash
-docker run -d \
+docker run -d --pull always \
   --name byonk \
   -p 3000:3000 \
   ghcr.io/oetiker/byonk:latest
@@ -31,7 +31,7 @@ This uses embedded screens, fonts, and config - no volumes needed.
 To customize screens and config, mount volumes and set environment variables:
 
 ```bash
-docker run -d \
+docker run -d --pull always \
   --name byonk \
   -p 3000:3000 \
   -e SCREENS_DIR=/data/screens \

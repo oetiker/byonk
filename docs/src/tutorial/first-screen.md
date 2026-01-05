@@ -16,7 +16,7 @@ byonk serve
 
 **For Docker users:**
 ```bash
-docker run -d -p 3000:3000 \
+docker run -d --pull always -p 3000:3000 \
   -e SCREENS_DIR=/data/screens \
   -e CONFIG_FILE=/data/config.yaml \
   -v ./data:/data \

@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Documentation: Docker commands now include `--pull always` to ensure users get the latest container image
+
 ### Fixed
 
 - Hello tutorial screen now uses bundled Outfit font with explicit weights to render correctly on systems without sans-serif fonts (fixes blank screenshot in docs)

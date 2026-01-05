@@ -78,8 +78,8 @@
   <image x="0" y="0" width="800" height="480" href="background.jpg" preserveAspectRatio="xMidYMid slice"/>
 
   <!-- Hero title - semi-transparent white text with shadow -->
-  <text x="400" y="100" class="text-hero text-white font-black" opacity="0.6" filter="url(#shadow)">BYONK</text>
-  <text x="400" y="140" class="text-tagline text-white font-semibold" opacity="0.7" filter="url(#shadow)" textLength="335" lengthAdjust="spacing">Bring Your Own Ink</text>
+  <text x="400" y="130" class="text-hero text-white font-black" opacity="0.8" filter="url(#shadow)">BYONK</text>
+  <text x="400" y="165" class="text-tagline text-white font-semibold"  opacity="0.8" filter="url(#shadow)" textLength="335" lengthAdjust="spacing">Bring Your Own Ink</text>
 
   <!-- 4 Grayscale swatches - vertical left edge (50% height) -->
   <g filter="url(#shadow-light)">

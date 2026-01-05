@@ -61,21 +61,28 @@ Create a new file `screens/hello.svg`:
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
   <style>
     .greeting {
-      font-family: sans-serif;
+      font-family: Outfit, sans-serif;
       font-size: 48px;
-      font-weight: bold;
+      font-weight: 700;
       fill: black;
     }
     .time {
-      font-family: sans-serif;
+      font-family: Outfit, sans-serif;
       font-size: 72px;
-      font-weight: bold;
+      font-weight: 700;
       fill: black;
     }
     .date {
-      font-family: sans-serif;
+      font-family: Outfit, sans-serif;
       font-size: 24px;
+      font-weight: 400;
       fill: #555;
+    }
+    .footer {
+      font-family: Outfit, sans-serif;
+      font-size: 14px;
+      font-weight: 400;
+      fill: #999;
     }
   </style>
 
@@ -98,7 +105,7 @@ Create a new file `screens/hello.svg`:
   </text>
 
   <!-- Footer -->
-  <text x="400" y="450" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#999">
+  <text class="footer" x="400" y="450" text-anchor="middle">
     My first Byonk screen!
   </text>
 </svg>

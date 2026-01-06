@@ -228,6 +228,64 @@ impl LuaRuntime {
         })?;
         globals.set("log_error", log_error)?;
 
+        // qr_svg(data, x, y, module_size, [options]) -> string
+        // Generates a pixel-aligned QR code as an SVG fragment
+        let qr_svg = lua.create_function(
+            |_, (data, x, y, module_size, options): (String, i32, i32, i32, Option<Table>)| {
+                use fast_qr::ECL;
+
+                // Parse options
+                let ec_level = options
+                    .as_ref()
+                    .and_then(|opts| opts.get::<String>("ec_level").ok())
+                    .map(|s| match s.to_uppercase().as_str() {
+                        "L" => ECL::L,
+                        "Q" => ECL::Q,
+                        "H" => ECL::H,
+                        _ => ECL::M,
+                    })
+                    .unwrap_or(ECL::M);
+
+                let quiet_zone: i32 = options
+                    .as_ref()
+                    .and_then(|opts| opts.get::<i32>("quiet_zone").ok())
+                    .unwrap_or(4);
+
+                // Generate QR code
+                let qr = fast_qr::QRBuilder::new(data)
+                    .ecl(ec_level)
+                    .build()
+                    .map_err(|e| mlua::Error::external(format!("QR code generation failed: {e}")))?;
+
+                let qr_size = qr.size as i32;
+                let total_size = (qr_size + 2 * quiet_zone) * module_size;
+
+                // Build SVG manually for pixel-perfect alignment
+                let mut svg = format!(
+                    r#"<g transform="translate({x},{y})"><rect x="0" y="0" width="{total_size}" height="{total_size}" fill="white"/>"#
+                );
+
+                // Add black modules
+                for row in 0..qr_size {
+                    for col in 0..qr_size {
+                        // qr[row] returns a slice, qr[row][col] returns the Module
+                        // Module::DARK is true, so we check if the module value is true (dark)
+                        if qr[row as usize][col as usize].value() {
+                            let px = (col + quiet_zone) * module_size;
+                            let py = (row + quiet_zone) * module_size;
+                            svg.push_str(&format!(
+                                r#"<rect x="{px}" y="{py}" width="{module_size}" height="{module_size}" fill="black"/>"#
+                            ));
+                        }
+                    }
+                }
+
+                svg.push_str("</g>");
+                Ok(svg)
+            },
+        )?;
+        globals.set("qr_svg", qr_svg)?;
+
         Ok(())
     }
 

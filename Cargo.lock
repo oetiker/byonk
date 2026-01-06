@@ -226,7 +226,7 @@ checksum = "5dd9dc738b7a8311c7ade152424974d8115f2cdad61e8dab8dac9f2362298510"
 
 [[package]]
 name = "byonk"
-version = "0.5.1"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -234,6 +234,7 @@ dependencies = [
  "base64",
  "chrono",
  "clap",
+ "fast_qr",
  "fontdb",
  "hex",
  "hmac",
@@ -599,6 +600,12 @@ checksum = "ad9cdb4b747e485a12abb0e6566612956c7a1bafa3bdb8d682c5b6d403589e48"
 dependencies = [
  "num-traits",
 ]
+
+[[package]]
+name = "fast_qr"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f5ea9788036fedaf55f43a2db0ba01eedf47d26fd6852f01e5cf51952571d57"
 
 [[package]]
 name = "fdeflate"

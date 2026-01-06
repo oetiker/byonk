@@ -194,6 +194,50 @@ devices:
 
 Now your screen will say "Hello, Alice!" instead of "Hello, World!".
 
+## Adding a QR Code
+
+Let's add a QR code to the screen that links to documentation. QR codes are useful for providing quick access to related content.
+
+**Update screens/hello.lua:**
+```lua
+local now = time_now()
+local name = params.name or "World"
+
+return {
+  data = {
+    greeting = "Hello, " .. name .. "!",
+    time = time_format(now, "%H:%M:%S"),
+    date = time_format(now, "%A, %B %d, %Y"),
+    -- Generate a QR code at position (650, 350) with 4px modules
+    qr_code = qr_svg("https://www.youtube.com/watch?v=dQw4w9WgXcQ", 650, 350, 4)
+  },
+  refresh_rate = 60
+}
+```
+
+**Update screens/hello.svg** to include the QR code:
+```svg
+<!-- Add before the closing </svg> tag -->
+
+<!-- QR Code - use 'safe' filter to render SVG -->
+{{ data.qr_code | safe }}
+```
+
+The `qr_svg()` function generates pixel-aligned QR codes optimized for e-ink displays:
+- First argument: the data to encode (URL, text, etc.)
+- `x`, `y`: position in pixels (use integers for crisp rendering)
+- `module_size`: size of each QR "pixel" (3-6 works well for 800x480)
+
+**Optional settings:**
+```lua
+qr_svg("https://example.com", 10, 10, 4, {
+  ec_level = "H",    -- Error correction: L/M/Q/H (default: M)
+  quiet_zone = 2     -- Margin in modules (default: 4)
+})
+```
+
+> **Tip:** Use the `| safe` filter in templates to render SVG content without escaping.
+
 ## Troubleshooting
 
 ### Screen shows error

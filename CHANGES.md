@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- Lua `qr_svg()` function: Generate pixel-aligned QR codes for embedding in SVG templates
+
 ### Changed
 
 - Documentation: Docker commands now include `--pull always` to ensure users get the latest container image

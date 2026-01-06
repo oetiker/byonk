@@ -415,6 +415,67 @@ local image_data = read_asset("icon.png")
 local data_uri = "data:image/png;base64," .. base64_encode(image_data)
 ```
 
+## QR Code Functions
+
+### qr_svg(data, x, y, module_size, [options])
+
+Generates a pixel-aligned QR code as an SVG fragment for embedding in templates.
+
+```lua
+-- Simple usage
+local qr = qr_svg("https://example.com", 10, 10, 4)
+
+-- With options
+local qr = qr_svg("https://example.com", 10, 10, 4, {
+  ec_level = "H",    -- Higher error correction
+  quiet_zone = 2     -- Smaller margin
+})
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `data` | string | Content to encode (URL, text, etc.) |
+| `x` | integer | X position in pixels |
+| `y` | integer | Y position in pixels |
+| `module_size` | integer | Size of each QR module in pixels (recommended: 3-6) |
+| `options` | table (optional) | Additional options (see below) |
+
+**Options:**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `ec_level` | string | "M" | Error correction level: "L" (7%), "M" (15%), "Q" (25%), "H" (30%) |
+| `quiet_zone` | integer | 4 | Margin around QR code in modules |
+
+**Returns:** `string` - SVG fragment (`<g>` element with `<rect>` elements)
+
+**Throws:** Error if QR code generation fails (e.g., data too large)
+
+**Example in template:**
+
+```lua
+-- hello.lua
+return {
+  data = {
+    qr_code = qr_svg("https://www.youtube.com/watch?v=dQw4w9WgXcQ", 650, 350, 4)
+  },
+  refresh_rate = 3600
+}
+```
+
+```svg
+<!-- hello.svg -->
+{{ data.qr_code | safe }}
+```
+
+**Pixel alignment notes:**
+- Use integer values for `x`, `y`, and `module_size` for crisp rendering on e-ink displays
+- Module size 3-6 pixels works well for 800x480 displays
+- Total QR code size = `(qr_modules + 2 * quiet_zone) * module_size`
+- Higher error correction allows the QR code to remain scannable even if partially obscured
+
 ## Logging Functions
 
 ### log_info(message)

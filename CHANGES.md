@@ -9,8 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
-- Lua `qr_svg()` function: Generate pixel-aligned QR codes with anchor-based positioning for embedding in SVG templates. Supports `anchor` option ("top-left", "top-right", "bottom-left", "bottom-right", "center") so you don't need to calculate QR code size for positioning.
+### Changed
 
+### Fixed
+
+## 0.6.0 - 2026-01-08
+
+### New
+
+- Lua `qr_svg()` function: Generate pixel-aligned QR codes with anchor-based positioning for embedding in SVG templates. Supports `anchor` option ("top-left", "top-right", "bottom-left", "bottom-right", "center") so you don't need to calculate QR code size for positioning.
 ### Changed
 
 - Hello screen now includes QR code example demonstrating the `qr_svg()` function with anchor-based positioning

@@ -156,12 +156,6 @@ Replace `YOUR:MAC:AD:DR:ES:S0` with your device's actual MAC address.
 
 3. **Or wait for your device** to refresh automatically
 
-## Understanding the Result
-
-Your screen should look like this:
-
-![Hello World screen](../images/hello.png)
-
 ## Adding Parameters
 
 Let's make the greeting customizable. Update your files:
@@ -208,8 +202,12 @@ return {
     greeting = "Hello, " .. name .. "!",
     time = time_format(now, "%H:%M:%S"),
     date = time_format(now, "%A, %B %d, %Y"),
-    -- Generate a QR code at position (650, 350) with 4px modules
-    qr_code = qr_svg("https://www.youtube.com/watch?v=dQw4w9WgXcQ", 650, 350, 4)
+    -- Generate a QR code anchored to bottom-right corner with 10px margin
+    qr_code = qr_svg("https://www.youtube.com/watch?v=dQw4w9WgXcQ", {
+      x = 790, y = 470,
+      anchor = "bottom-right",
+      module_size = 4
+    })
   },
   refresh_rate = 60
 }
@@ -223,20 +221,34 @@ return {
 {{ data.qr_code | safe }}
 ```
 
-The `qr_svg()` function generates pixel-aligned QR codes optimized for e-ink displays:
-- First argument: the data to encode (URL, text, etc.)
-- `x`, `y`: position in pixels (use integers for crisp rendering)
-- `module_size`: size of each QR "pixel" (3-6 works well for 800x480)
+The `qr_svg()` function generates pixel-aligned QR codes optimized for e-ink displays. The `anchor` option lets you position the QR code relative to any corner without needing to know its size:
 
-**Optional settings:**
+| Anchor | Description |
+|--------|-------------|
+| `top-left` | x,y is the top-left corner (default) |
+| `top-right` | x,y is the top-right corner |
+| `bottom-left` | x,y is the bottom-left corner |
+| `bottom-right` | x,y is the bottom-right corner |
+| `center` | x,y is the center |
+
+**All options:**
 ```lua
-qr_svg("https://example.com", 10, 10, 4, {
-  ec_level = "H",    -- Error correction: L/M/Q/H (default: M)
-  quiet_zone = 2     -- Margin in modules (default: 4)
+qr_svg("https://example.com", {
+  x = 790, y = 470,        -- Position (required)
+  anchor = "bottom-right", -- Anchor point (default: "top-left")
+  module_size = 4,         -- QR "pixel" size (default: 4, recommended: 3-6)
+  ec_level = "M",          -- Error correction: L/M/Q/H (default: M)
+  quiet_zone = 4           -- Margin in modules (default: 4)
 })
 ```
 
 > **Tip:** Use the `| safe` filter in templates to render SVG content without escaping.
+
+## Understanding the Result
+
+Your screen should look like this:
+
+![Hello World screen](../images/hello.png)
 
 ## Troubleshooting
 

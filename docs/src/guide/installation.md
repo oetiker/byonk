@@ -97,6 +97,13 @@ tar -xzf byonk-*.tar.gz
 ./byonk
 ```
 
+This will show you a short usage message. If you want to directly test the
+server, try
+
+```bash
+./byonk serve
+```
+
 By default, Byonk listens on `0.0.0.0:3000` and uses embedded assets.
 
 ### Extracting Embedded Assets

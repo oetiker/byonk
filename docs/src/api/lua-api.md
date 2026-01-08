@@ -417,18 +417,25 @@ local data_uri = "data:image/png;base64," .. base64_encode(image_data)
 
 ## QR Code Functions
 
-### qr_svg(data, x, y, module_size, [options])
+### qr_svg(data, options)
 
-Generates a pixel-aligned QR code as an SVG fragment for embedding in templates.
+Generates a pixel-aligned QR code as an SVG fragment for embedding in templates. Supports anchor-based positioning so you don't need to calculate the QR code size.
 
 ```lua
--- Simple usage
-local qr = qr_svg("https://example.com", 10, 10, 4)
+-- Position QR code with bottom-right corner at (790, 470)
+local qr = qr_svg("https://example.com", {
+  x = 790, y = 470,
+  anchor = "bottom-right",
+  module_size = 4
+})
 
--- With options
-local qr = qr_svg("https://example.com", 10, 10, 4, {
-  ec_level = "H",    -- Higher error correction
-  quiet_zone = 2     -- Smaller margin
+-- With all options
+local qr = qr_svg("https://example.com", {
+  x = 400, y = 240,
+  anchor = "center",
+  module_size = 5,
+  ec_level = "H",
+  quiet_zone = 2
 })
 ```
 
@@ -437,21 +444,32 @@ local qr = qr_svg("https://example.com", 10, 10, 4, {
 | Name | Type | Description |
 |------|------|-------------|
 | `data` | string | Content to encode (URL, text, etc.) |
-| `x` | integer | X position in pixels |
-| `y` | integer | Y position in pixels |
-| `module_size` | integer | Size of each QR module in pixels (recommended: 3-6) |
-| `options` | table (optional) | Additional options (see below) |
+| `options` | table | Positioning and rendering options (see below) |
 
 **Options:**
 
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
+| `x` | integer | (required) | X position in pixels |
+| `y` | integer | (required) | Y position in pixels |
+| `anchor` | string | "top-left" | Which corner of the QR code is at x,y position |
+| `module_size` | integer | 4 | Size of each QR module in pixels (recommended: 3-6) |
 | `ec_level` | string | "M" | Error correction level: "L" (7%), "M" (15%), "Q" (25%), "H" (30%) |
 | `quiet_zone` | integer | 4 | Margin around QR code in modules |
 
+**Anchor values:**
+
+| Anchor | Description |
+|--------|-------------|
+| `top-left` | x,y is the top-left corner of the QR code |
+| `top-right` | x,y is the top-right corner |
+| `bottom-left` | x,y is the bottom-left corner |
+| `bottom-right` | x,y is the bottom-right corner |
+| `center` | x,y is the center of the QR code |
+
 **Returns:** `string` - SVG fragment (`<g>` element with `<rect>` elements)
 
-**Throws:** Error if QR code generation fails (e.g., data too large)
+**Throws:** Error if QR code generation fails or if an invalid anchor is specified.
 
 **Example in template:**
 
@@ -459,7 +477,12 @@ local qr = qr_svg("https://example.com", 10, 10, 4, {
 -- hello.lua
 return {
   data = {
-    qr_code = qr_svg("https://www.youtube.com/watch?v=dQw4w9WgXcQ", 650, 350, 4)
+    -- QR code anchored to bottom-right with 10px margin
+    qr_code = qr_svg("https://www.youtube.com/watch?v=dQw4w9WgXcQ", {
+      x = 790, y = 470,
+      anchor = "bottom-right",
+      module_size = 4
+    })
   },
   refresh_rate = 3600
 }
@@ -473,7 +496,6 @@ return {
 **Pixel alignment notes:**
 - Use integer values for `x`, `y`, and `module_size` for crisp rendering on e-ink displays
 - Module size 3-6 pixels works well for 800x480 displays
-- Total QR code size = `(qr_modules + 2 * quiet_zone) * module_size`
 - Higher error correction allows the QR code to remain scannable even if partially obscured
 
 ## Logging Functions

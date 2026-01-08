@@ -48,4 +48,7 @@
   <text class="footer" x="400" y="450" text-anchor="middle">
     My first Byonk screen!
   </text>
+
+  <!-- QR Code - use 'safe' filter to render SVG -->
+  {{ data.qr_code | safe }}
 </svg>

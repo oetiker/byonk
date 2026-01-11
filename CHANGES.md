@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** `qr_svg()` now uses margin-based positioning (`top`, `left`, `right`, `bottom`) instead of absolute `x`, `y` coordinates. Screen dimensions are automatically read from device context.
+
 ### Fixed
 
 ## 0.6.0 - 2026-01-08

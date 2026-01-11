@@ -204,8 +204,9 @@ return {
     date = time_format(now, "%A, %B %d, %Y"),
     -- Generate a QR code anchored to bottom-right corner with 10px margin
     qr_code = qr_svg("https://www.youtube.com/watch?v=dQw4w9WgXcQ", {
-      x = 790, y = 470,
       anchor = "bottom-right",
+      right = 10,
+      bottom = 10,
       module_size = 4
     })
   },
@@ -221,24 +222,25 @@ return {
 {{ data.qr_code | safe }}
 ```
 
-The `qr_svg()` function generates pixel-aligned QR codes optimized for e-ink displays. The `anchor` option lets you position the QR code relative to any corner without needing to know its size:
+The `qr_svg()` function generates pixel-aligned QR codes optimized for e-ink displays. Use `anchor` to specify which corner, and `top`/`left`/`right`/`bottom` for margins from that edge:
 
-| Anchor | Description |
-|--------|-------------|
-| `top-left` | x,y is the top-left corner (default) |
-| `top-right` | x,y is the top-right corner |
-| `bottom-left` | x,y is the bottom-left corner |
-| `bottom-right` | x,y is the bottom-right corner |
-| `center` | x,y is the center |
+| Anchor | Margin options |
+|--------|----------------|
+| `top-left` | `top`, `left` |
+| `top-right` | `top`, `right` |
+| `bottom-left` | `bottom`, `left` |
+| `bottom-right` | `bottom`, `right` |
+| `center` | (centered on screen) |
 
 **All options:**
 ```lua
 qr_svg("https://example.com", {
-  x = 790, y = 470,        -- Position (required)
-  anchor = "bottom-right", -- Anchor point (default: "top-left")
+  anchor = "bottom-right", -- Which corner (default: "top-left")
+  right = 10,              -- Margin from right edge in pixels
+  bottom = 10,             -- Margin from bottom edge in pixels
   module_size = 4,         -- QR "pixel" size (default: 4, recommended: 3-6)
   ec_level = "M",          -- Error correction: L/M/Q/H (default: M)
-  quiet_zone = 4           -- Margin in modules (default: 4)
+  quiet_zone = 4           -- QR quiet zone in modules (default: 4)
 })
 ```
 

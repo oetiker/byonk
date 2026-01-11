@@ -231,28 +231,37 @@ impl LuaRuntime {
         // qr_svg(data, options) -> string
         // Generates a pixel-aligned QR code as an SVG fragment
         // Options:
-        //   x, y: position (required)
-        //   module_size: size of each QR "pixel" (default: 4)
         //   anchor: positioning anchor - "top-left", "top-right", "bottom-left", "bottom-right", "center" (default: "top-left")
+        //   top, left, right, bottom: margin from respective edge in pixels (default: 0)
+        //   module_size: size of each QR "pixel" (default: 4)
         //   ec_level: error correction level - "L", "M", "Q", "H" (default: "M")
         //   quiet_zone: margin in modules (default: 4)
-        let qr_svg = lua.create_function(|_, (data, options): (String, Table)| {
+        let qr_svg = lua.create_function(|lua, (data, options): (String, Table)| {
             use fast_qr::ECL;
 
-            // Parse required options
-            let x: i32 = options
-                .get::<i32>("x")
-                .map_err(|_| mlua::Error::external("qr_svg: 'x' option is required"))?;
-            let y: i32 = options
-                .get::<i32>("y")
-                .map_err(|_| mlua::Error::external("qr_svg: 'y' option is required"))?;
+            // Get screen dimensions from device context (defaults for TRMNL OG)
+            let globals = lua.globals();
+            let (screen_width, screen_height) = if let Ok(device) = globals.get::<Table>("device") {
+                let w = device.get::<u32>("width").unwrap_or(800);
+                let h = device.get::<u32>("height").unwrap_or(480);
+                (w as i32, h as i32)
+            } else {
+                (800, 480)
+            };
 
-            // Parse optional options
-            let module_size: i32 = options.get::<i32>("module_size").unwrap_or(4);
-
+            // Parse anchor
             let anchor: String = options
                 .get::<String>("anchor")
                 .unwrap_or_else(|_| "top-left".to_string());
+
+            // Parse margins (default: 0)
+            let margin_top: i32 = options.get::<i32>("top").unwrap_or(0);
+            let margin_left: i32 = options.get::<i32>("left").unwrap_or(0);
+            let margin_right: i32 = options.get::<i32>("right").unwrap_or(0);
+            let margin_bottom: i32 = options.get::<i32>("bottom").unwrap_or(0);
+
+            // Parse other options
+            let module_size: i32 = options.get::<i32>("module_size").unwrap_or(4);
 
             let ec_level = options
                 .get::<String>("ec_level")
@@ -276,13 +285,13 @@ impl LuaRuntime {
             let qr_size = qr.size as i32;
             let total_size = (qr_size + 2 * quiet_zone) * module_size;
 
-            // Calculate actual top-left position based on anchor
+            // Calculate actual top-left position based on anchor and margins
             let (actual_x, actual_y) = match anchor.to_lowercase().as_str() {
-                "top-left" => (x, y),
-                "top-right" => (x - total_size, y),
-                "bottom-left" => (x, y - total_size),
-                "bottom-right" => (x - total_size, y - total_size),
-                "center" => (x - total_size / 2, y - total_size / 2),
+                "top-left" => (margin_left, margin_top),
+                "top-right" => (screen_width - total_size - margin_right, margin_top),
+                "bottom-left" => (margin_left, screen_height - total_size - margin_bottom),
+                "bottom-right" => (screen_width - total_size - margin_right, screen_height - total_size - margin_bottom),
+                "center" => ((screen_width - total_size) / 2, (screen_height - total_size) / 2),
                 _ => {
                     return Err(mlua::Error::external(format!(
                         "qr_svg: invalid anchor '{anchor}'. Valid values: top-left, top-right, bottom-left, bottom-right, center"

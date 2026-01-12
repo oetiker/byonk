@@ -13,7 +13,7 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "trace"] }
 
 # Rendering
-resvg = "0.45"
+resvg = "0.46"
 tiny-skia = "0.11"
 png = "0.17"
 fontdb = "0.23"
@@ -61,5 +61,6 @@ fast_qr = { version = "0.13", features = ["svg"] }
 [patch.crates-io]
 # Use our patched resvg with variable font support
 # https://github.com/oetiker/resvg
-resvg = { git = "https://github.com/oetiker/resvg.git", branch = "varfont-support" }
-usvg = { git = "https://github.com/oetiker/resvg.git", branch = "varfont-support" }
+resvg = { git = "https://github.com/oetiker/resvg.git", branch = "skrifa" }
+usvg = { git = "https://github.com/oetiker/resvg.git", branch = "skrifa" }
+fontdb = { git = "https://github.com/oetiker/resvg.git", branch = "skrifa" }

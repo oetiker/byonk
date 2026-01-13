@@ -47,3 +47,82 @@ impl DisplaySpec {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_og_dimensions() {
+        let spec = DisplaySpec::from_dimensions(800, 480).unwrap();
+        assert_eq!(spec, DisplaySpec::OG);
+        assert_eq!(spec.width, 800);
+        assert_eq!(spec.height, 480);
+        assert_eq!(spec.max_size_bytes, 90_000);
+    }
+
+    #[test]
+    fn test_x_dimensions() {
+        let spec = DisplaySpec::from_dimensions(1872, 1404).unwrap();
+        assert_eq!(spec, DisplaySpec::X);
+        assert_eq!(spec.width, 1872);
+        assert_eq!(spec.height, 1404);
+        assert_eq!(spec.max_size_bytes, 750_000);
+    }
+
+    #[test]
+    fn test_smaller_dimensions_fallback_to_og() {
+        // Dimensions smaller than OG should fall back to OG
+        let spec = DisplaySpec::from_dimensions(640, 480).unwrap();
+        assert_eq!(spec, DisplaySpec::OG);
+
+        let spec = DisplaySpec::from_dimensions(400, 300).unwrap();
+        assert_eq!(spec, DisplaySpec::OG);
+
+        let spec = DisplaySpec::from_dimensions(100, 100).unwrap();
+        assert_eq!(spec, DisplaySpec::OG);
+    }
+
+    #[test]
+    fn test_larger_dimensions_fallback_to_x() {
+        // Dimensions larger than OG should fall back to X
+        let spec = DisplaySpec::from_dimensions(1024, 768).unwrap();
+        assert_eq!(spec, DisplaySpec::X);
+
+        let spec = DisplaySpec::from_dimensions(801, 480).unwrap();
+        assert_eq!(spec, DisplaySpec::X);
+
+        let spec = DisplaySpec::from_dimensions(800, 481).unwrap();
+        assert_eq!(spec, DisplaySpec::X);
+    }
+
+    #[test]
+    fn test_validate_size_ok() {
+        let spec = DisplaySpec::OG;
+        assert!(spec.validate_size(50_000).is_ok());
+        assert!(spec.validate_size(90_000).is_ok());
+    }
+
+    #[test]
+    fn test_validate_size_too_large() {
+        let spec = DisplaySpec::OG;
+        let result = spec.validate_size(90_001);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            RenderError::ImageTooLarge { size, max } => {
+                assert_eq!(size, 90_001);
+                assert_eq!(max, 90_000);
+            }
+            _ => panic!("Expected ImageTooLarge error"),
+        }
+    }
+
+    #[test]
+    fn test_validate_size_x_model() {
+        let spec = DisplaySpec::X;
+        assert!(spec.validate_size(500_000).is_ok());
+        assert!(spec.validate_size(750_000).is_ok());
+        assert!(spec.validate_size(750_001).is_err());
+    }
+}

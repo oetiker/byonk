@@ -146,20 +146,246 @@ impl LuaRuntime {
         })?;
         globals.set("read_asset", read_asset)?;
 
-        // http_get(url) -> string
-        let http_get = lua.create_function(|_, url: String| {
-            tracing::debug!(url = %url, "Lua http_get");
-            match reqwest::blocking::get(&url) {
-                Ok(response) => match response.text() {
-                    Ok(text) => Ok(text),
-                    Err(e) => Err(mlua::Error::external(format!(
-                        "Failed to read response: {e}"
-                    ))),
-                },
-                Err(e) => Err(mlua::Error::external(format!("HTTP request failed: {e}"))),
-            }
-        })?;
+        // http_request(url, options?) -> string
+        // Core HTTP function with method option
+        // options:
+        //   method: "GET", "POST", "PUT", "DELETE", etc. (default: "GET")
+        //   params: table of query parameters (auto URL-encoded)
+        //   headers: table of header name -> value pairs
+        //   body: string body to send
+        //   json: table to send as JSON (auto-serializes and sets Content-Type)
+        //   basic_auth: { username = "...", password = "..." }
+        //   timeout: number of seconds (default: 30)
+        //   follow_redirects: boolean (default: true)
+        //   max_redirects: number (default: 10)
+        //   danger_accept_invalid_certs: boolean (default: false) - accept self-signed certs
+        //   ca_cert: path to CA certificate PEM file for server verification
+        //   client_cert: path to client certificate PEM file for mTLS
+        //   client_key: path to client private key PEM file for mTLS
+        let http_request =
+            lua.create_function(|lua, (url, options): (String, Option<Table>)| {
+                let method = options
+                    .as_ref()
+                    .and_then(|opts| opts.get::<String>("method").ok())
+                    .unwrap_or_else(|| "GET".to_string());
+
+                tracing::debug!(url = %url, method = %method, "Lua http_request");
+
+                let mut client_builder = reqwest::blocking::Client::builder();
+                let mut timeout_secs = 30u64;
+                let mut follow_redirects = true;
+                let mut max_redirects = 10usize;
+                let mut danger_accept_invalid_certs = false;
+
+                // Certificate paths (will be parsed from options)
+                let mut ca_cert_path: Option<String> = None;
+                let mut client_cert_path: Option<String> = None;
+                let mut client_key_path: Option<String> = None;
+
+                // Parse options if provided
+                if let Some(ref opts) = options {
+                    if let Ok(t) = opts.get::<u64>("timeout") {
+                        timeout_secs = t;
+                    }
+                    if let Ok(f) = opts.get::<bool>("follow_redirects") {
+                        follow_redirects = f;
+                    }
+                    if let Ok(m) = opts.get::<usize>("max_redirects") {
+                        max_redirects = m;
+                    }
+                    if let Ok(d) = opts.get::<bool>("danger_accept_invalid_certs") {
+                        danger_accept_invalid_certs = d;
+                    }
+                    if let Ok(ca) = opts.get::<String>("ca_cert") {
+                        ca_cert_path = Some(ca);
+                    }
+                    if let Ok(cert) = opts.get::<String>("client_cert") {
+                        client_cert_path = Some(cert);
+                    }
+                    if let Ok(key) = opts.get::<String>("client_key") {
+                        client_key_path = Some(key);
+                    }
+                }
+
+                client_builder =
+                    client_builder.timeout(std::time::Duration::from_secs(timeout_secs));
+
+                // Configure redirect policy
+                if follow_redirects {
+                    client_builder =
+                        client_builder.redirect(reqwest::redirect::Policy::limited(max_redirects));
+                } else {
+                    client_builder = client_builder.redirect(reqwest::redirect::Policy::none());
+                }
+
+                // Configure TLS certificate validation
+                if danger_accept_invalid_certs {
+                    tracing::warn!(url = %url, "Accepting invalid TLS certificates - this is insecure!");
+                    client_builder = client_builder.danger_accept_invalid_certs(true);
+                }
+
+                // Add custom CA certificate if provided
+                if let Some(ca_path) = ca_cert_path {
+                    let ca_data = std::fs::read(&ca_path).map_err(|e| {
+                        mlua::Error::external(format!("Failed to read CA certificate file '{}': {}", ca_path, e))
+                    })?;
+                    let ca_cert = reqwest::Certificate::from_pem(&ca_data).map_err(|e| {
+                        mlua::Error::external(format!("Failed to parse CA certificate: {}", e))
+                    })?;
+                    client_builder = client_builder.add_root_certificate(ca_cert);
+                    tracing::debug!(ca_cert = %ca_path, "Added custom CA certificate");
+                }
+
+                // Add client certificate for mTLS if both cert and key are provided
+                if let (Some(cert_path), Some(key_path)) = (client_cert_path.clone(), client_key_path.clone()) {
+                    // Read and combine certificate and key into a single PEM buffer
+                    let cert_data = std::fs::read(&cert_path).map_err(|e| {
+                        mlua::Error::external(format!("Failed to read client certificate file '{}': {}", cert_path, e))
+                    })?;
+                    let key_data = std::fs::read(&key_path).map_err(|e| {
+                        mlua::Error::external(format!("Failed to read client key file '{}': {}", key_path, e))
+                    })?;
+
+                    // Create combined PEM buffer (cert + key)
+                    let mut pem_buffer = cert_data.clone();
+                    pem_buffer.push(b'\n');
+                    pem_buffer.extend_from_slice(&key_data);
+
+                    let identity = reqwest::Identity::from_pem(&pem_buffer).map_err(|e| {
+                        mlua::Error::external(format!("Failed to create client identity from cert/key: {}", e))
+                    })?;
+                    client_builder = client_builder.identity(identity);
+                    tracing::debug!(client_cert = %cert_path, client_key = %key_path, "Added client certificate for mTLS");
+                } else if client_cert_path.is_some() || client_key_path.is_some() {
+                    return Err(mlua::Error::external(
+                        "Both client_cert and client_key must be provided together for mTLS"
+                    ));
+                }
+
+                let client = client_builder.build().map_err(|e| {
+                    mlua::Error::external(format!("Failed to build HTTP client: {e}"))
+                })?;
+
+                let mut request = match method.to_uppercase().as_str() {
+                    "GET" => client.get(&url),
+                    "POST" => client.post(&url),
+                    "PUT" => client.put(&url),
+                    "DELETE" => client.delete(&url),
+                    "PATCH" => client.patch(&url),
+                    "HEAD" => client.head(&url),
+                    _ => {
+                        return Err(mlua::Error::external(format!(
+                            "Unsupported HTTP method: {method}"
+                        )))
+                    }
+                };
+
+                if let Some(ref opts) = options {
+                    // Warn about unknown options
+                    const KNOWN_OPTIONS: &[&str] = &[
+                        "method",
+                        "params",
+                        "headers",
+                        "body",
+                        "json",
+                        "basic_auth",
+                        "timeout",
+                        "follow_redirects",
+                        "max_redirects",
+                        "danger_accept_invalid_certs",
+                        "ca_cert",
+                        "client_cert",
+                        "client_key",
+                    ];
+                    for key in opts.clone().pairs::<String, Value>().flatten() {
+                        if !KNOWN_OPTIONS.contains(&key.0.as_str()) {
+                            tracing::warn!(
+                                option = %key.0,
+                                "http_request: unknown option (valid options: {})",
+                                KNOWN_OPTIONS.join(", ")
+                            );
+                        }
+                    }
+
+                    // Add query parameters
+                    if let Ok(params_table) = opts.get::<Table>("params") {
+                        let params: Vec<(String, String)> = params_table
+                            .pairs::<String, Value>()
+                            .flatten()
+                            .map(|(k, v)| {
+                                let v_str = match v {
+                                    Value::String(s) => {
+                                        s.to_str().map(|s| s.to_string()).unwrap_or_default()
+                                    }
+                                    Value::Integer(i) => i.to_string(),
+                                    Value::Number(n) => n.to_string(),
+                                    Value::Boolean(b) => b.to_string(),
+                                    _ => String::new(),
+                                };
+                                (k, v_str)
+                            })
+                            .collect();
+                        request = request.query(&params);
+                    }
+
+                    // Add custom headers
+                    if let Ok(headers_table) = opts.get::<Table>("headers") {
+                        for (name, value) in headers_table.pairs::<String, String>().flatten() {
+                            request = request.header(&name, &value);
+                        }
+                    }
+
+                    // Add basic auth
+                    if let Ok(auth_table) = opts.get::<Table>("basic_auth") {
+                        let username: String = auth_table.get("username").unwrap_or_default();
+                        let password: String = auth_table.get("password").unwrap_or_default();
+                        if !username.is_empty() {
+                            request = request.basic_auth(username, Some(password));
+                        }
+                    }
+
+                    // Add body - json takes precedence over body
+                    if let Ok(json_table) = opts.get::<Table>("json") {
+                        let json_value = lua_value_to_json(lua, Value::Table(json_table))?;
+                        let json_str = serde_json::to_string(&json_value).map_err(|e| {
+                            mlua::Error::external(format!("JSON encode error: {e}"))
+                        })?;
+                        request = request
+                            .header("Content-Type", "application/json")
+                            .body(json_str);
+                    } else if let Ok(body) = opts.get::<String>("body") {
+                        request = request.body(body);
+                    }
+                }
+
+                match request.send() {
+                    Ok(response) => match response.text() {
+                        Ok(text) => Ok(text),
+                        Err(e) => Err(mlua::Error::external(format!(
+                            "Failed to read response: {e}"
+                        ))),
+                    },
+                    Err(e) => Err(mlua::Error::external(format!("HTTP request failed: {e}"))),
+                }
+            })?;
+        globals.set("http_request", http_request.clone())?;
+
+        // http_get(url, options?) - convenience wrapper for GET requests
+        let http_get = http_request.clone();
         globals.set("http_get", http_get)?;
+
+        // http_post(url, options?) - convenience wrapper for POST requests
+        let http_post =
+            lua.create_function(move |lua, (url, options): (String, Option<Table>)| {
+                // Create options table with method = "POST"
+                let opts = match options {
+                    Some(t) => t,
+                    None => lua.create_table()?,
+                };
+                opts.set("method", "POST")?;
+                http_request.call::<String>((url, Some(opts)))
+            })?;
+        globals.set("http_post", http_post)?;
 
         // html_parse(html) -> Document
         let html_parse = lua.create_function(|_, html: String| {

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- New `http_request()` function with full HTTP method control (GET, POST, PUT, DELETE, PATCH, HEAD) and comprehensive options
+- New `http_post()` convenience function for POST requests with `body` or `json` options
+- `http_get()` and `http_request()` now support: `params` (auto URL-encoded query parameters), `headers`, `body`, `json` (auto-serialized with Content-Type), `basic_auth`, `timeout`, `follow_redirects`, `max_redirects`, and `danger_accept_invalid_certs` (for self-signed/expired certificates)
+- TLS certificate options for HTTP functions: `ca_cert` (custom CA for server verification), `client_cert` and `client_key` (mTLS client authentication)
+- Comprehensive test suite with 194 tests covering API endpoints, Lua functions, error paths, TLS/HTTPS scenarios, unit tests, and end-to-end flows
+- Coverage reporting via `make coverage`, `make coverage-text`, and `make coverage-ci` (lcov format for CI)
+- Mock HTTP server infrastructure for testing Lua HTTP functions without external requests
+- Mock HTTPS server infrastructure for testing TLS certificate handling (self-signed certs, custom CA, mTLS)
+- Unit tests for core modules: config parsing, display specs, error handling, template rendering, asset loading
+
 ### Changed
 
 ### Fixed

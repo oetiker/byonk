@@ -140,4 +140,78 @@ mod tests {
         // They shouldn't be identical
         assert_ne!(top_edge, bottom_edge, "Edges should differ for good tiling");
     }
+
+    #[test]
+    fn test_blue_noise_left_right_edges() {
+        // Check left and right edges are different
+        let left_edge: Vec<u8> = BLUE_NOISE_64.iter().map(|row| row[0]).collect();
+        let right_edge: Vec<u8> = BLUE_NOISE_64.iter().map(|row| row[63]).collect();
+
+        assert_ne!(left_edge, right_edge, "Left and right edges should differ");
+    }
+
+    #[test]
+    fn test_blue_noise_dimensions() {
+        assert_eq!(BLUE_NOISE_64.len(), 64);
+        assert_eq!(BLUE_NOISE_64[0].len(), 64);
+        assert_eq!(BLUE_NOISE_64[63].len(), 64);
+    }
+
+    #[test]
+    fn test_blue_noise_value_range() {
+        // All values should be in 0-255 range (u8 guarantees this, but let's verify)
+        for row in &BLUE_NOISE_64 {
+            for &val in row {
+                assert!(val <= 255);
+            }
+        }
+    }
+
+    #[test]
+    fn test_blue_noise_mean_near_center() {
+        // Mean should be roughly around 127-128 for a good distribution
+        let sum: u64 = BLUE_NOISE_64
+            .iter()
+            .flat_map(|row| row.iter())
+            .map(|&v| v as u64)
+            .sum();
+        let mean = sum / (64 * 64);
+
+        assert!(
+            (100..156).contains(&mean),
+            "Mean {} should be near 128",
+            mean
+        );
+    }
+
+    #[test]
+    fn test_blue_noise_quadrant_variation() {
+        // Each quadrant should have variation (not all same value)
+        let quadrants = [
+            (0..32, 0..32),   // top-left
+            (0..32, 32..64),  // top-right
+            (32..64, 0..32),  // bottom-left
+            (32..64, 32..64), // bottom-right
+        ];
+
+        for (row_range, col_range) in &quadrants {
+            let mut min = 255u8;
+            let mut max = 0u8;
+
+            for i in row_range.clone() {
+                for j in col_range.clone() {
+                    let val = BLUE_NOISE_64[i][j];
+                    min = min.min(val);
+                    max = max.max(val);
+                }
+            }
+
+            assert!(
+                max - min > 100,
+                "Quadrant should have good value spread, got min={} max={}",
+                min,
+                max
+            );
+        }
+    }
 }

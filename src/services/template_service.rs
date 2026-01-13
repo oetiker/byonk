@@ -225,3 +225,64 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_html_escape_basic() {
+        assert_eq!(html_escape("hello"), "hello");
+        assert_eq!(html_escape(""), "");
+    }
+
+    #[test]
+    fn test_html_escape_special_chars() {
+        assert_eq!(html_escape("<script>"), "&lt;script&gt;");
+        assert_eq!(html_escape("a & b"), "a &amp; b");
+        assert_eq!(html_escape("\"quoted\""), "&quot;quoted&quot;");
+        assert_eq!(html_escape("it's"), "it&#39;s");
+    }
+
+    #[test]
+    fn test_html_escape_multiple() {
+        assert_eq!(
+            html_escape("<a href=\"test\">link</a>"),
+            "&lt;a href=&quot;test&quot;&gt;link&lt;/a&gt;"
+        );
+    }
+
+    #[test]
+    fn test_template_error_display() {
+        let err = TemplateError::NotFound("test.svg".to_string());
+        assert_eq!(err.to_string(), "Template not found: test.svg");
+
+        let err = TemplateError::ImageResolution("failed".to_string());
+        assert_eq!(err.to_string(), "Image resolution error: failed");
+    }
+
+    #[test]
+    fn test_render_error_svg() {
+        let loader = Arc::new(crate::assets::AssetLoader::new(None, None, None));
+        let service = TemplateService::new(loader).unwrap();
+
+        let error_svg = service.render_error("Test error message");
+
+        assert!(error_svg.contains("<svg"));
+        assert!(error_svg.contains("</svg>"));
+        assert!(error_svg.contains("Error"));
+        assert!(error_svg.contains("Test error message"));
+    }
+
+    #[test]
+    fn test_render_error_escapes_html() {
+        let loader = Arc::new(crate::assets::AssetLoader::new(None, None, None));
+        let service = TemplateService::new(loader).unwrap();
+
+        let error_svg = service.render_error("<script>alert('xss')</script>");
+
+        // Should be escaped
+        assert!(error_svg.contains("&lt;script&gt;"));
+        assert!(!error_svg.contains("<script>alert"));
+    }
+}

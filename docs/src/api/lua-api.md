@@ -56,27 +56,159 @@ end
 
 ## HTTP Functions
 
-### http_get(url)
+Byonk provides three HTTP functions: `http_request` (full control), `http_get` (GET shorthand), and `http_post` (POST shorthand).
 
-Performs an HTTP GET request and returns the response body.
+### http_request(url, options?)
+
+Core HTTP function with full control over the request method and options.
 
 ```lua
-local response = http_get("https://api.example.com/data")
+-- GET request (default)
+local response = http_request("https://api.example.com/data")
+
+-- POST with JSON body
+local response = http_request("https://api.example.com/users", {
+  method = "POST",
+  json = { name = "Alice", email = "alice@example.com" }
+})
+
+-- PUT request with headers
+local response = http_request("https://api.example.com/users/123", {
+  method = "PUT",
+  headers = { ["Authorization"] = "Bearer " .. params.token },
+  json = { name = "Alice Updated" }
+})
+
+-- DELETE request
+local response = http_request("https://api.example.com/users/123", {
+  method = "DELETE",
+  headers = { ["Authorization"] = "Bearer " .. params.token }
+})
 ```
 
 **Parameters:**
 | Name | Type | Description |
 |------|------|-------------|
 | `url` | string | The URL to fetch |
+| `options` | table (optional) | Request options (see below) |
+
+**Options:**
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `method` | string | "GET" | HTTP method: "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD" |
+| `params` | table | none | Query parameters (automatically URL-encoded) |
+| `headers` | table | none | Key-value pairs of HTTP headers |
+| `body` | string | none | Request body as string |
+| `json` | table | none | Request body as JSON (auto-serializes, sets Content-Type) |
+| `basic_auth` | table | none | Basic auth: `{ username = "...", password = "..." }` |
+| `timeout` | number | 30 | Request timeout in seconds |
+| `follow_redirects` | boolean | true | Whether to follow HTTP redirects |
+| `max_redirects` | number | 10 | Maximum number of redirects to follow |
+| `danger_accept_invalid_certs` | boolean | false | Accept self-signed/expired certificates (insecure!) |
+| `ca_cert` | string | none | Path to CA certificate PEM file for server verification |
+| `client_cert` | string | none | Path to client certificate PEM file for mTLS |
+| `client_key` | string | none | Path to client private key PEM file for mTLS |
 
 **Returns:** `string` - The response body
 
 **Throws:** Error if the request fails
 
+**JSON option details:**
+
+The `json` option supports complex nested structures. Tables with sequential integer keys (starting at 1) become JSON arrays; tables with string keys become JSON objects. Use bracket syntax for keys with spaces or special characters:
+
+```lua
+http_post("https://api.example.com/data", {
+  json = {
+    -- Nested objects and arrays
+    users = {
+      { name = "Alice", tags = {"admin", "user"} },
+      { name = "Bob", roles = { level = 2, active = true } }
+    },
+    -- Keys with spaces or special characters
+    ["Content-Type"] = "application/json",
+    ["my key with spaces"] = "works fine",
+    -- Mixed types
+    count = 42,
+    enabled = true,
+    optional = nil  -- becomes JSON null
+  }
+})
+```
+
+### http_get(url, options?)
+
+Convenience wrapper for GET requests. Same as `http_request` with `method = "GET"`.
+
+```lua
+-- Simple usage
+local response = http_get("https://api.example.com/data")
+
+-- With query parameters (auto URL-encoded)
+local response = http_get("https://api.example.com/search", {
+  params = {
+    query = "hello world",  -- becomes ?query=hello%20world&limit=10
+    limit = 10
+  }
+})
+
+-- With authentication header
+local response = http_get("https://api.example.com/data", {
+  headers = { ["Authorization"] = "Bearer " .. params.api_token }
+})
+
+-- With basic auth
+local response = http_get("https://api.example.com/data", {
+  basic_auth = { username = params.user, password = params.pass }
+})
+
+-- Accept self-signed certificates (for internal APIs)
+local response = http_get("https://internal.example.com/data", {
+  danger_accept_invalid_certs = true
+})
+
+-- Use custom CA certificate for server verification
+local response = http_get("https://internal.example.com/data", {
+  ca_cert = "/path/to/ca.pem"
+})
+
+-- Mutual TLS (mTLS) with client certificate
+local response = http_get("https://secure-api.example.com/data", {
+  ca_cert = "/path/to/ca.pem",
+  client_cert = "/path/to/client.pem",
+  client_key = "/path/to/client-key.pem"
+})
+```
+
+### http_post(url, options?)
+
+Convenience wrapper for POST requests. Same as `http_request` with `method = "POST"`.
+
+```lua
+-- POST with JSON body
+local response = http_post("https://api.example.com/data", {
+  json = { key = "value", count = 42 }
+})
+
+-- POST with form-like body
+local response = http_post("https://api.example.com/data", {
+  headers = { ["Content-Type"] = "application/x-www-form-urlencoded" },
+  body = "key=value&count=42"
+})
+
+-- POST with authentication
+local response = http_post("https://api.example.com/data", {
+  headers = { ["Authorization"] = "Bearer " .. params.token },
+  json = { action = "update" }
+})
+```
+
 **Example with error handling:**
 ```lua
 local ok, response = pcall(function()
-  return http_get("https://api.example.com/data")
+  return http_get("https://api.example.com/data", {
+    headers = { ["Authorization"] = "Bearer " .. params.token }
+  })
 end)
 
 if not ok then

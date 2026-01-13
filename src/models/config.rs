@@ -122,3 +122,174 @@ impl Default for AppConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let config = AppConfig::default();
+
+        assert_eq!(config.default_screen, Some("default".to_string()));
+        assert!(config.screens.contains_key("default"));
+        assert!(config.devices.is_empty());
+
+        let default_screen = config.screens.get("default").unwrap();
+        assert_eq!(default_screen.script, PathBuf::from("default.lua"));
+        assert_eq!(default_screen.template, PathBuf::from("default.svg"));
+        assert_eq!(default_screen.default_refresh, 900);
+    }
+
+    #[test]
+    fn test_get_screen_for_device_found() {
+        let mut config = AppConfig::default();
+
+        // Add a custom screen
+        config.screens.insert(
+            "custom".to_string(),
+            ScreenConfig {
+                script: PathBuf::from("custom.lua"),
+                template: PathBuf::from("custom.svg"),
+                default_refresh: 300,
+            },
+        );
+
+        // Map a device to that screen
+        config.devices.insert(
+            "AA:BB:CC:DD:EE:FF".to_string(),
+            DeviceConfig {
+                screen: "custom".to_string(),
+                params: HashMap::new(),
+            },
+        );
+
+        let result = config.get_screen_for_device("AA:BB:CC:DD:EE:FF");
+        assert!(result.is_some());
+
+        let (screen_config, device_config) = result.unwrap();
+        assert_eq!(screen_config.script, PathBuf::from("custom.lua"));
+        assert_eq!(device_config.screen, "custom");
+    }
+
+    #[test]
+    fn test_get_screen_for_device_normalizes_mac() {
+        let mut config = AppConfig::default();
+
+        config.screens.insert(
+            "test".to_string(),
+            ScreenConfig {
+                script: PathBuf::from("test.lua"),
+                template: PathBuf::from("test.svg"),
+                default_refresh: 600,
+            },
+        );
+
+        config.devices.insert(
+            "AA:BB:CC:DD:EE:FF".to_string(),
+            DeviceConfig {
+                screen: "test".to_string(),
+                params: HashMap::new(),
+            },
+        );
+
+        // Should match with lowercase input
+        let result = config.get_screen_for_device("aa:bb:cc:dd:ee:ff");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_get_screen_for_device_not_found() {
+        let config = AppConfig::default();
+
+        let result = config.get_screen_for_device("UNKNOWN:MAC:ADDRESS");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_screen_for_device_missing_screen() {
+        let mut config = AppConfig::default();
+
+        // Map device to non-existent screen
+        config.devices.insert(
+            "AA:BB:CC:DD:EE:FF".to_string(),
+            DeviceConfig {
+                screen: "nonexistent".to_string(),
+                params: HashMap::new(),
+            },
+        );
+
+        let result = config.get_screen_for_device("AA:BB:CC:DD:EE:FF");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_default_screen() {
+        let config = AppConfig::default();
+
+        let result = config.get_default_screen();
+        assert!(result.is_some());
+
+        let screen = result.unwrap();
+        assert_eq!(screen.script, PathBuf::from("default.lua"));
+    }
+
+    #[test]
+    fn test_get_default_screen_missing() {
+        let mut config = AppConfig::default();
+        config.screens.clear();
+
+        let result = config.get_default_screen();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_default_screen_none_configured() {
+        let mut config = AppConfig::default();
+        config.default_screen = None;
+
+        let result = config.get_default_screen();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_screen_config_default_refresh() {
+        // Test that default_refresh function returns 900
+        assert_eq!(default_refresh(), 900);
+    }
+
+    #[test]
+    fn test_default_screen_function() {
+        // Test that default_screen function returns Some("default")
+        assert_eq!(default_screen(), Some("default".to_string()));
+    }
+
+    #[test]
+    fn test_deserialize_config() {
+        let yaml = r#"
+screens:
+  hello:
+    script: hello.lua
+    template: hello.svg
+    default_refresh: 60
+devices:
+  "AA:BB:CC:DD:EE:FF":
+    screen: hello
+    params:
+      name: "Test User"
+default_screen: hello
+"#;
+
+        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(config.default_screen, Some("hello".to_string()));
+        assert!(config.screens.contains_key("hello"));
+        assert!(config.devices.contains_key("AA:BB:CC:DD:EE:FF"));
+
+        let hello = config.screens.get("hello").unwrap();
+        assert_eq!(hello.default_refresh, 60);
+
+        let device = config.devices.get("AA:BB:CC:DD:EE:FF").unwrap();
+        assert_eq!(device.screen, "hello");
+    }
+}

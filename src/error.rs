@@ -73,3 +73,116 @@ impl IntoResponse for ApiError {
         (status, body).into_response()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_api_error_missing_header() {
+        let error = ApiError::MissingHeader("Authorization");
+        assert_eq!(error.to_string(), "Missing required header: Authorization");
+    }
+
+    #[test]
+    fn test_api_error_device_not_found() {
+        let error = ApiError::DeviceNotFound;
+        assert_eq!(error.to_string(), "Device not found");
+    }
+
+    #[test]
+    fn test_api_error_not_found() {
+        let error = ApiError::NotFound;
+        assert_eq!(error.to_string(), "Not found");
+    }
+
+    #[test]
+    fn test_api_error_content() {
+        let error = ApiError::Content("Script failed".to_string());
+        assert_eq!(error.to_string(), "Content error: Script failed");
+    }
+
+    #[test]
+    fn test_api_error_internal() {
+        let error = ApiError::Internal("Database error".to_string());
+        assert_eq!(error.to_string(), "Internal error: Database error");
+    }
+
+    #[test]
+    fn test_render_error_svg_parse() {
+        let error = RenderError::SvgParse("Invalid XML".to_string());
+        assert_eq!(error.to_string(), "SVG parse error: Invalid XML");
+    }
+
+    #[test]
+    fn test_render_error_unsupported_dimensions() {
+        let error = RenderError::UnsupportedDimensions {
+            width: 9999,
+            height: 9999,
+        };
+        assert_eq!(error.to_string(), "Unsupported dimensions: 9999x9999");
+    }
+
+    #[test]
+    fn test_render_error_image_too_large() {
+        let error = RenderError::ImageTooLarge {
+            size: 100_000,
+            max: 90_000,
+        };
+        assert_eq!(
+            error.to_string(),
+            "Image too large: 100000 bytes (max 90000)"
+        );
+    }
+
+    #[test]
+    fn test_render_error_pixmap_allocation() {
+        let error = RenderError::PixmapAllocation;
+        assert_eq!(error.to_string(), "Failed to allocate pixmap");
+    }
+
+    #[test]
+    fn test_render_error_png_encode() {
+        let error = RenderError::PngEncode("Encoding failed".to_string());
+        assert_eq!(error.to_string(), "PNG encode error: Encoding failed");
+    }
+
+    #[test]
+    fn test_api_error_from_render_error() {
+        let render_error = RenderError::PixmapAllocation;
+        let api_error: ApiError = render_error.into();
+        match api_error {
+            ApiError::Render(_) => {}
+            _ => panic!("Expected Render variant"),
+        }
+    }
+
+    #[test]
+    fn test_api_error_into_response_status_codes() {
+        use axum::response::IntoResponse;
+
+        // MissingHeader -> BAD_REQUEST
+        let response = ApiError::MissingHeader("ID").into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // DeviceNotFound -> NOT_FOUND
+        let response = ApiError::DeviceNotFound.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        // NotFound -> NOT_FOUND
+        let response = ApiError::NotFound.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        // Content -> INTERNAL_SERVER_ERROR
+        let response = ApiError::Content("error".to_string()).into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Internal -> INTERNAL_SERVER_ERROR
+        let response = ApiError::Internal("error".to_string()).into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Render -> INTERNAL_SERVER_ERROR
+        let response = ApiError::Render(RenderError::PixmapAllocation).into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+}

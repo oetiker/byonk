@@ -23,6 +23,7 @@ mlua = { version = "0.10", features = ["lua54", "vendored"] }
 tera = "1"
 scraper = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+rustls-pemfile = "2"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -57,6 +58,30 @@ rust-embed = { version = "8", features = ["include-exclude"] }
 base64 = "0.22"
 regex = "1"
 fast_qr = { version = "0.13", features = ["svg"] }
+
+[dev-dependencies]
+# HTTP testing
+hyper = "1"
+http-body-util = "0.1"
+
+# Mock HTTP server for Lua API tests
+wiremock = "0.6"
+
+# TLS testing (mock HTTPS server, certificate generation)
+rcgen = "0.13"
+rustls = { version = "0.23", features = ["ring"] }
+rustls-pemfile = "2"
+tokio-rustls = "0.26"
+hyper-util = { version = "0.1", features = ["server", "tokio"] }
+
+# Better test output
+pretty_assertions = "1"
+
+# Temporary files/directories for tests
+tempfile = "3"
+
+# Base64 for auth tests
+base64 = "0.22"
 
 [patch.crates-io]
 # Use our patched resvg with variable font support

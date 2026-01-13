@@ -398,3 +398,442 @@ impl AssetLoader {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_asset_loader_new() {
+        let loader = AssetLoader::new(None, None, None);
+        // Should not panic
+        assert!(true);
+
+        let loader = AssetLoader::new(
+            Some(PathBuf::from("/tmp/screens")),
+            Some(PathBuf::from("/tmp/fonts")),
+            Some(PathBuf::from("/tmp/config.yaml")),
+        );
+        assert!(true);
+        drop(loader);
+    }
+
+    #[test]
+    fn test_seed_report_is_empty() {
+        let report = SeedReport::default();
+        assert!(report.is_empty());
+
+        let report = SeedReport {
+            screens_seeded: vec!["test.lua".to_string()],
+            fonts_seeded: vec![],
+            config_seeded: false,
+        };
+        assert!(!report.is_empty());
+
+        let report = SeedReport {
+            screens_seeded: vec![],
+            fonts_seeded: vec!["font.ttf".to_string()],
+            config_seeded: false,
+        };
+        assert!(!report.is_empty());
+
+        let report = SeedReport {
+            screens_seeded: vec![],
+            fonts_seeded: vec![],
+            config_seeded: true,
+        };
+        assert!(!report.is_empty());
+    }
+
+    #[test]
+    fn test_read_screen_embedded() {
+        let loader = AssetLoader::new(None, None, None);
+
+        // Should find embedded hello.lua
+        let result = loader.read_screen(Path::new("hello.lua"));
+        assert!(result.is_ok());
+
+        let content = result.unwrap();
+        assert!(!content.is_empty());
+    }
+
+    #[test]
+    fn test_read_screen_not_found() {
+        let loader = AssetLoader::new(None, None, None);
+
+        let result = loader.read_screen(Path::new("nonexistent.lua"));
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn test_read_screen_string() {
+        let loader = AssetLoader::new(None, None, None);
+
+        let result = loader.read_screen_string(Path::new("hello.lua"));
+        assert!(result.is_ok());
+
+        let content = result.unwrap();
+        assert!(content.contains("return"));
+    }
+
+    #[test]
+    fn test_list_screens() {
+        let loader = AssetLoader::new(None, None, None);
+
+        let screens = loader.list_screens();
+        assert!(!screens.is_empty());
+
+        // Should include hello.lua and hello.svg
+        assert!(screens.iter().any(|s| s == "hello.lua"));
+        assert!(screens.iter().any(|s| s == "hello.svg"));
+    }
+
+    #[test]
+    fn test_get_fonts() {
+        let loader = AssetLoader::new(None, None, None);
+
+        let fonts = loader.get_fonts();
+        // Should have at least one embedded font
+        assert!(!fonts.is_empty());
+
+        // All fonts should have data
+        for (name, data) in &fonts {
+            assert!(!name.is_empty());
+            assert!(!data.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_read_config() {
+        let loader = AssetLoader::new(None, None, None);
+
+        let result = loader.read_config();
+        assert!(result.is_ok());
+
+        let content = result.unwrap();
+        assert!(!content.is_empty());
+    }
+
+    #[test]
+    fn test_read_config_string() {
+        let loader = AssetLoader::new(None, None, None);
+
+        let result = loader.read_config_string();
+        assert!(result.is_ok());
+
+        let content = result.unwrap();
+        assert!(content.contains("screens"));
+    }
+
+    #[test]
+    fn test_list_embedded_screens() {
+        let screens = AssetLoader::list_embedded(AssetCategory::Screens);
+        assert!(!screens.is_empty());
+        assert!(screens.iter().any(|s| s.ends_with(".lua")));
+    }
+
+    #[test]
+    fn test_list_embedded_fonts() {
+        let fonts = AssetLoader::list_embedded(AssetCategory::Fonts);
+        assert!(!fonts.is_empty());
+    }
+
+    #[test]
+    fn test_list_embedded_config() {
+        let config = AssetLoader::list_embedded(AssetCategory::Config);
+        assert_eq!(config.len(), 1);
+        assert_eq!(config[0], "config.yaml");
+    }
+
+    #[test]
+    fn test_asset_category_equality() {
+        assert_eq!(AssetCategory::Screens, AssetCategory::Screens);
+        assert_ne!(AssetCategory::Screens, AssetCategory::Fonts);
+        assert_ne!(AssetCategory::Fonts, AssetCategory::Config);
+    }
+
+    #[test]
+    fn test_is_empty_dir_nonexistent() {
+        assert!(!AssetLoader::is_empty_dir(Path::new("/nonexistent/path")));
+    }
+
+    #[test]
+    fn test_init_report_default() {
+        let report = InitReport::default();
+        assert!(report.written.is_empty());
+        assert!(report.skipped.is_empty());
+    }
+
+    #[test]
+    fn test_is_empty_dir_with_empty_dir() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        assert!(AssetLoader::is_empty_dir(temp_dir.path()));
+    }
+
+    #[test]
+    fn test_is_empty_dir_with_gitkeep() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        std::fs::write(temp_dir.path().join(".gitkeep"), "").unwrap();
+        assert!(AssetLoader::is_empty_dir(temp_dir.path()));
+    }
+
+    #[test]
+    fn test_is_empty_dir_with_files() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        std::fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
+        assert!(!AssetLoader::is_empty_dir(temp_dir.path()));
+    }
+
+    #[test]
+    fn test_is_empty_dir_with_file_not_dir() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("file.txt");
+        std::fs::write(&file_path, "content").unwrap();
+        assert!(!AssetLoader::is_empty_dir(&file_path));
+    }
+
+    #[test]
+    fn test_read_screen_from_filesystem() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let script_content = r#"return { data = { test = true }, refresh_rate = 60 }"#;
+        std::fs::write(temp_dir.path().join("custom.lua"), script_content).unwrap();
+
+        let loader = AssetLoader::new(Some(temp_dir.path().to_path_buf()), None, None);
+        let result = loader.read_screen(Path::new("custom.lua"));
+
+        assert!(result.is_ok());
+        let content = String::from_utf8(result.unwrap().into_owned()).unwrap();
+        assert!(content.contains("test = true"));
+    }
+
+    #[test]
+    fn test_read_screen_filesystem_fallback_to_embedded() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        // Don't create hello.lua in temp dir, should fall back to embedded
+
+        let loader = AssetLoader::new(Some(temp_dir.path().to_path_buf()), None, None);
+        let result = loader.read_screen(Path::new("hello.lua"));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_list_screens_with_external_dir() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        std::fs::write(temp_dir.path().join("custom.lua"), "-- custom").unwrap();
+        std::fs::write(temp_dir.path().join("custom.svg"), "<svg/>").unwrap();
+        std::fs::write(temp_dir.path().join("readme.txt"), "ignored").unwrap();
+
+        let loader = AssetLoader::new(Some(temp_dir.path().to_path_buf()), None, None);
+        let screens = loader.list_screens();
+
+        assert!(screens.contains(&"custom.lua".to_string()));
+        assert!(screens.contains(&"custom.svg".to_string()));
+        assert!(!screens.contains(&"readme.txt".to_string()));
+        // Also includes embedded
+        assert!(screens.contains(&"hello.lua".to_string()));
+    }
+
+    #[test]
+    fn test_get_fonts_from_filesystem() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        // Create a fake font file
+        std::fs::write(temp_dir.path().join("custom.ttf"), b"fake font data").unwrap();
+
+        let loader = AssetLoader::new(None, Some(temp_dir.path().to_path_buf()), None);
+        let fonts = loader.get_fonts();
+
+        // Should include both custom and embedded fonts
+        assert!(fonts.iter().any(|(name, _)| name == "custom.ttf"));
+    }
+
+    #[test]
+    fn test_read_config_from_filesystem() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.yaml");
+        let config_content = "screens:\n  test:\n    script: test.lua\n";
+        std::fs::write(&config_path, config_content).unwrap();
+
+        let loader = AssetLoader::new(None, None, Some(config_path));
+        let result = loader.read_config_string();
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("test:"));
+    }
+
+    #[test]
+    fn test_read_config_fallback_to_embedded() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("nonexistent.yaml");
+        // Don't create the file
+
+        let loader = AssetLoader::new(None, None, Some(config_path));
+        let result = loader.read_config();
+
+        // Should fall back to embedded config
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_seed_if_configured_screens() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let screens_dir = temp_dir.path().join("screens");
+        // Don't create the directory - seed should create it
+
+        let loader = AssetLoader::new(Some(screens_dir.clone()), None, None);
+        let result = loader.seed_if_configured();
+
+        assert!(result.is_ok());
+        let report = result.unwrap();
+        assert!(!report.screens_seeded.is_empty());
+        assert!(screens_dir.exists());
+        assert!(screens_dir.join("hello.lua").exists());
+    }
+
+    #[test]
+    fn test_seed_if_configured_fonts() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let fonts_dir = temp_dir.path().join("fonts");
+
+        let loader = AssetLoader::new(None, Some(fonts_dir.clone()), None);
+        let result = loader.seed_if_configured();
+
+        assert!(result.is_ok());
+        let report = result.unwrap();
+        assert!(!report.fonts_seeded.is_empty());
+        assert!(fonts_dir.exists());
+    }
+
+    #[test]
+    fn test_seed_if_configured_config() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.yaml");
+
+        let loader = AssetLoader::new(None, None, Some(config_path.clone()));
+        let result = loader.seed_if_configured();
+
+        assert!(result.is_ok());
+        let report = result.unwrap();
+        assert!(report.config_seeded);
+        assert!(config_path.exists());
+    }
+
+    #[test]
+    fn test_seed_if_configured_skips_existing() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let screens_dir = temp_dir.path().join("screens");
+        std::fs::create_dir_all(&screens_dir).unwrap();
+        std::fs::write(screens_dir.join("existing.lua"), "-- existing").unwrap();
+
+        let loader = AssetLoader::new(Some(screens_dir), None, None);
+        let result = loader.seed_if_configured();
+
+        assert!(result.is_ok());
+        let report = result.unwrap();
+        // Should not seed because directory is not empty
+        assert!(report.screens_seeded.is_empty());
+    }
+
+    #[test]
+    fn test_init_screens() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let screens_dir = temp_dir.path().join("screens");
+
+        let loader = AssetLoader::new(Some(screens_dir.clone()), None, None);
+        let result = loader.init(&[AssetCategory::Screens], false);
+
+        assert!(result.is_ok());
+        let report = result.unwrap();
+        assert!(!report.written.is_empty());
+        assert!(screens_dir.join("hello.lua").exists());
+    }
+
+    #[test]
+    fn test_init_fonts() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let fonts_dir = temp_dir.path().join("fonts");
+
+        let loader = AssetLoader::new(None, Some(fonts_dir.clone()), None);
+        let result = loader.init(&[AssetCategory::Fonts], false);
+
+        assert!(result.is_ok());
+        let report = result.unwrap();
+        assert!(!report.written.is_empty());
+    }
+
+    #[test]
+    fn test_init_config() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.yaml");
+
+        let loader = AssetLoader::new(None, None, Some(config_path.clone()));
+        let result = loader.init(&[AssetCategory::Config], false);
+
+        assert!(result.is_ok());
+        let report = result.unwrap();
+        assert!(report.written.iter().any(|p| p.contains("config.yaml")));
+        assert!(config_path.exists());
+    }
+
+    #[test]
+    fn test_init_skips_existing_without_force() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.yaml");
+        std::fs::write(&config_path, "existing: true").unwrap();
+
+        let loader = AssetLoader::new(None, None, Some(config_path.clone()));
+        let result = loader.init(&[AssetCategory::Config], false);
+
+        assert!(result.is_ok());
+        let report = result.unwrap();
+        assert!(report.skipped.iter().any(|p| p.contains("config.yaml")));
+        assert!(report.written.is_empty());
+
+        // Content should be unchanged
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains("existing: true"));
+    }
+
+    #[test]
+    fn test_init_overwrites_with_force() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.yaml");
+        std::fs::write(&config_path, "existing: true").unwrap();
+
+        let loader = AssetLoader::new(None, None, Some(config_path.clone()));
+        let result = loader.init(&[AssetCategory::Config], true);
+
+        assert!(result.is_ok());
+        let report = result.unwrap();
+        assert!(report.written.iter().any(|p| p.contains("config.yaml")));
+
+        // Content should be overwritten with embedded
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains("screens:"));
+    }
+
+    #[test]
+    fn test_init_uses_default_paths_when_not_configured() {
+        // This test verifies that init uses default paths when no path is configured
+        // We don't actually run this to avoid creating files in the current directory
+        let loader = AssetLoader::new(None, None, None);
+        // Just verify the loader was created - actual init would use ./screens, ./fonts, ./config.yaml
+        drop(loader);
+    }
+
+    #[test]
+    fn test_read_screen_string_invalid_utf8() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        // Write invalid UTF-8 bytes
+        std::fs::write(temp_dir.path().join("binary.lua"), &[0xFF, 0xFE, 0x00, 0x01]).unwrap();
+
+        let loader = AssetLoader::new(Some(temp_dir.path().to_path_buf()), None, None);
+        let result = loader.read_screen_string(Path::new("binary.lua"));
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+    }
+}

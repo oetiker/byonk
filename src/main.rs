@@ -10,15 +10,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-mod api;
-mod assets;
-mod error;
-mod models;
-mod rendering;
-mod services;
-
-use models::AppConfig;
-use services::{ContentCache, ContentPipeline, InMemoryRegistry, RenderService};
+use byonk::api;
+use byonk::error;
+use byonk::models::AppConfig;
+use byonk::services::{ContentCache, ContentPipeline, InMemoryRegistry, RenderService};
 
 #[derive(Parser)]
 #[command(name = "byonk")]
@@ -162,9 +157,9 @@ fn run_render_command(
     rssi: Option<i32>,
     firmware: Option<String>,
 ) -> anyhow::Result<()> {
-    use assets::AssetLoader;
-    use models::DisplaySpec;
-    use services::DeviceContext;
+    use byonk::assets::AssetLoader;
+    use byonk::models::DisplaySpec;
+    use byonk::services::DeviceContext;
 
     // Minimal logging for CLI
     tracing_subscriber::registry()
@@ -243,7 +238,7 @@ fn run_init_command(
     force: bool,
     list: bool,
 ) -> anyhow::Result<()> {
-    use assets::{AssetCategory, AssetLoader};
+    use byonk::assets::{AssetCategory, AssetLoader};
 
     if list {
         println!("Embedded assets:\n");
@@ -315,7 +310,7 @@ fn run_init_command(
 
 /// Display status and configuration information
 fn run_status_command() {
-    use assets::{AssetCategory, AssetLoader};
+    use byonk::assets::{AssetCategory, AssetLoader};
 
     const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -442,7 +437,7 @@ fn run_status_command() {
 
 /// Run the HTTP server
 async fn run_server() -> anyhow::Result<()> {
-    use assets::AssetLoader;
+    use byonk::assets::AssetLoader;
 
     // Initialize tracing
     tracing_subscriber::registry()

@@ -82,3 +82,172 @@ impl Default for ContentCache {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cached_content_new() {
+        let content = CachedContent::new(
+            "<svg></svg>".to_string(),
+            "test_screen".to_string(),
+            800,
+            480,
+        );
+
+        assert_eq!(content.rendered_svg, "<svg></svg>");
+        assert_eq!(content.screen_name, "test_screen");
+        assert_eq!(content.width, 800);
+        assert_eq!(content.height, 480);
+        assert!(!content.content_hash.is_empty());
+    }
+
+    #[test]
+    fn test_cached_content_hash_consistency() {
+        let svg = "<svg><text>Hello</text></svg>".to_string();
+
+        let content1 = CachedContent::new(svg.clone(), "screen1".to_string(), 800, 480);
+        let content2 = CachedContent::new(svg.clone(), "screen2".to_string(), 1872, 1404);
+
+        // Same SVG content should produce same hash regardless of screen name or dimensions
+        assert_eq!(content1.content_hash, content2.content_hash);
+    }
+
+    #[test]
+    fn test_cached_content_hash_differs_for_different_content() {
+        let content1 = CachedContent::new("<svg>A</svg>".to_string(), "screen".to_string(), 800, 480);
+        let content2 = CachedContent::new("<svg>B</svg>".to_string(), "screen".to_string(), 800, 480);
+
+        assert_ne!(content1.content_hash, content2.content_hash);
+    }
+
+    #[test]
+    fn test_compute_svg_hash_deterministic() {
+        let svg = "<svg><rect/></svg>";
+        let hash1 = compute_svg_hash(svg);
+        let hash2 = compute_svg_hash(svg);
+
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_compute_svg_hash_length() {
+        let hash = compute_svg_hash("<svg></svg>");
+        // 8 bytes = 16 hex characters
+        assert_eq!(hash.len(), 16);
+    }
+
+    #[test]
+    fn test_compute_svg_hash_is_hex() {
+        let hash = compute_svg_hash("<svg>test</svg>");
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[tokio::test]
+    async fn test_content_cache_new() {
+        let cache = ContentCache::new();
+        // Should not panic
+        assert!(cache.get("nonexistent").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_content_cache_default() {
+        let cache = ContentCache::default();
+        assert!(cache.get("nonexistent").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_content_cache_store_and_get() {
+        let cache = ContentCache::new();
+        let content = CachedContent::new("<svg>hello</svg>".to_string(), "test".to_string(), 800, 480);
+        let hash = content.content_hash.clone();
+
+        cache.store(content).await;
+
+        let retrieved = cache.get(&hash).await;
+        assert!(retrieved.is_some());
+
+        let retrieved = retrieved.unwrap();
+        assert_eq!(retrieved.rendered_svg, "<svg>hello</svg>");
+        assert_eq!(retrieved.screen_name, "test");
+    }
+
+    #[tokio::test]
+    async fn test_content_cache_get_nonexistent() {
+        let cache = ContentCache::new();
+        let result = cache.get("does_not_exist").await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_content_cache_remove() {
+        let cache = ContentCache::new();
+        let content = CachedContent::new("<svg>test</svg>".to_string(), "screen".to_string(), 800, 480);
+        let hash = content.content_hash.clone();
+
+        cache.store(content).await;
+        assert!(cache.get(&hash).await.is_some());
+
+        cache.remove(&hash).await;
+        assert!(cache.get(&hash).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_content_cache_overwrite() {
+        let cache = ContentCache::new();
+
+        // Store first content
+        let content1 = CachedContent::new("<svg>v1</svg>".to_string(), "screen".to_string(), 800, 480);
+        let hash1 = content1.content_hash.clone();
+        cache.store(content1).await;
+
+        // Store different content with same hash (simulating update - though this shouldn't happen)
+        // Actually, same SVG would have same hash, so let's test that storing same content works
+        let content2 = CachedContent::new("<svg>v1</svg>".to_string(), "updated".to_string(), 1872, 1404);
+        cache.store(content2).await;
+
+        let retrieved = cache.get(&hash1).await.unwrap();
+        // Screen name should be updated
+        assert_eq!(retrieved.screen_name, "updated");
+    }
+
+    #[tokio::test]
+    async fn test_content_cache_multiple_entries() {
+        let cache = ContentCache::new();
+
+        let content1 = CachedContent::new("<svg>A</svg>".to_string(), "screen_a".to_string(), 800, 480);
+        let content2 = CachedContent::new("<svg>B</svg>".to_string(), "screen_b".to_string(), 800, 480);
+        let content3 = CachedContent::new("<svg>C</svg>".to_string(), "screen_c".to_string(), 1872, 1404);
+
+        let hash1 = content1.content_hash.clone();
+        let hash2 = content2.content_hash.clone();
+        let hash3 = content3.content_hash.clone();
+
+        cache.store(content1).await;
+        cache.store(content2).await;
+        cache.store(content3).await;
+
+        assert!(cache.get(&hash1).await.is_some());
+        assert!(cache.get(&hash2).await.is_some());
+        assert!(cache.get(&hash3).await.is_some());
+
+        // Remove one, others should remain
+        cache.remove(&hash2).await;
+        assert!(cache.get(&hash1).await.is_some());
+        assert!(cache.get(&hash2).await.is_none());
+        assert!(cache.get(&hash3).await.is_some());
+    }
+
+    #[test]
+    fn test_cached_content_clone() {
+        let content = CachedContent::new("<svg>test</svg>".to_string(), "screen".to_string(), 800, 480);
+        let cloned = content.clone();
+
+        assert_eq!(cloned.rendered_svg, content.rendered_svg);
+        assert_eq!(cloned.content_hash, content.content_hash);
+        assert_eq!(cloned.screen_name, content.screen_name);
+        assert_eq!(cloned.width, content.width);
+        assert_eq!(cloned.height, content.height);
+    }
+}

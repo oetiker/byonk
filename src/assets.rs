@@ -405,17 +405,18 @@ mod tests {
 
     #[test]
     fn test_asset_loader_new() {
-        let loader = AssetLoader::new(None, None, None);
-        // Should not panic
-        assert!(true);
+        let _loader = AssetLoader::new(None, None, None);
+        // Should not panic - if we get here, construction succeeded
 
         let loader = AssetLoader::new(
             Some(PathBuf::from("/tmp/screens")),
             Some(PathBuf::from("/tmp/fonts")),
             Some(PathBuf::from("/tmp/config.yaml")),
         );
-        assert!(true);
-        drop(loader);
+        // Verify paths are stored correctly
+        assert!(loader.screens_dir.is_some());
+        assert!(loader.fonts_dir.is_some());
+        assert!(loader.config_file.is_some());
     }
 
     #[test]
@@ -828,7 +829,7 @@ mod tests {
     fn test_read_screen_string_invalid_utf8() {
         let temp_dir = tempfile::tempdir().unwrap();
         // Write invalid UTF-8 bytes
-        std::fs::write(temp_dir.path().join("binary.lua"), &[0xFF, 0xFE, 0x00, 0x01]).unwrap();
+        std::fs::write(temp_dir.path().join("binary.lua"), [0xFF, 0xFE, 0x00, 0x01]).unwrap();
 
         let loader = AssetLoader::new(Some(temp_dir.path().to_path_buf()), None, None);
         let result = loader.read_screen_string(Path::new("binary.lua"));

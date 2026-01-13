@@ -1,5 +1,9 @@
 # Byonk
 
+[![CI](https://github.com/oetiker/byonk/actions/workflows/ci.yml/badge.svg)](https://github.com/oetiker/byonk/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/oetiker/byonk)](https://github.com/oetiker/byonk/releases/latest)
+[![License](https://img.shields.io/github/license/oetiker/byonk)](LICENSE)
+
 **Bring Your Own Ink** - A self-hosted content server for [TRMNL](https://usetrmnl.com) e-ink devices.
 
 Byonk lets you create custom screens for your TRMNL device using Lua scripts and SVG templates. Fetch data from any source, render it beautifully, and display it on your e-ink screen.

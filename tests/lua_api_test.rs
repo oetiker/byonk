@@ -37,9 +37,13 @@ async fn test_lua_params_and_device_globals() {
     // by running the hello screen which uses these
     let app = common::TestApp::new();
 
-    let (api_key, _) = app.register_device(common::fixtures::macs::HELLO_DEVICE).await;
+    let (api_key, _) = app
+        .register_device(common::fixtures::macs::HELLO_DEVICE)
+        .await;
     let headers = common::fixtures::display_headers(common::fixtures::macs::HELLO_DEVICE, &api_key);
-    let response = app.get_with_headers("/api/display", &common::fixtures::as_str_pairs(&headers)).await;
+    let response = app
+        .get_with_headers("/api/display", &common::fixtures::as_str_pairs(&headers))
+        .await;
 
     // If params/device globals work, the script executes successfully
     common::assert_ok(&response);
@@ -51,9 +55,13 @@ async fn test_lua_time_functions() {
     // hello.lua uses time_now() and time_format()
     let app = common::TestApp::new();
 
-    let (api_key, _) = app.register_device(common::fixtures::macs::HELLO_DEVICE).await;
+    let (api_key, _) = app
+        .register_device(common::fixtures::macs::HELLO_DEVICE)
+        .await;
     let headers = common::fixtures::display_headers(common::fixtures::macs::HELLO_DEVICE, &api_key);
-    let response = app.get_with_headers("/api/display", &common::fixtures::as_str_pairs(&headers)).await;
+    let response = app
+        .get_with_headers("/api/display", &common::fixtures::as_str_pairs(&headers))
+        .await;
 
     // Script uses time functions successfully
     common::assert_ok(&response);
@@ -66,9 +74,13 @@ async fn test_lua_qr_svg_function() {
     // hello.lua uses qr_svg() with anchor positioning
     let app = common::TestApp::new();
 
-    let (api_key, _) = app.register_device(common::fixtures::macs::HELLO_DEVICE).await;
+    let (api_key, _) = app
+        .register_device(common::fixtures::macs::HELLO_DEVICE)
+        .await;
     let headers = common::fixtures::display_headers(common::fixtures::macs::HELLO_DEVICE, &api_key);
-    let response = app.get_with_headers("/api/display", &common::fixtures::as_str_pairs(&headers)).await;
+    let response = app
+        .get_with_headers("/api/display", &common::fixtures::as_str_pairs(&headers))
+        .await;
     common::assert_ok(&response);
 
     // Fetch the image and verify it contains QR code (visually represented as SVG group)
@@ -167,7 +179,9 @@ async fn test_lua_http_basic_auth() {
 async fn test_lua_http_error_handling() {
     let server = MockHttpServer::start().await;
 
-    server.mock_error("/error", 500, "Internal Server Error").await;
+    server
+        .mock_error("/error", 500, "Internal Server Error")
+        .await;
 
     let url = server.url_for("/error");
     assert!(url.contains("/error"));
@@ -224,11 +238,7 @@ mod lua_unit_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(
-                std::path::Path::new("test_json.lua"),
-                &HashMap::new(),
-                None,
-            )
+            .run_script(std::path::Path::new("test_json.lua"), &HashMap::new(), None)
             .expect("Script should run");
 
         assert!(result.data["matches"].as_bool().unwrap());
@@ -314,11 +324,7 @@ mod lua_unit_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(
-                std::path::Path::new("test_time.lua"),
-                &HashMap::new(),
-                None,
-            )
+            .run_script(std::path::Path::new("test_time.lua"), &HashMap::new(), None)
             .expect("Script should run");
 
         assert!(result.data["is_number"].as_bool().unwrap());
@@ -425,7 +431,13 @@ mod lua_unit_tests {
 
     #[test]
     fn test_qr_svg_anchors() {
-        let anchors = ["top-left", "top-right", "bottom-left", "bottom-right", "center"];
+        let anchors = [
+            "top-left",
+            "top-right",
+            "bottom-left",
+            "bottom-right",
+            "center",
+        ];
 
         for anchor in anchors {
             let script = format!(
@@ -502,7 +514,11 @@ mod lua_unit_tests {
         assert_eq!(result.data["mac"], "AA:BB:CC:DD:EE:FF");
         // Use approximate comparison for floats (f32 precision)
         let battery = result.data["battery"].as_f64().unwrap();
-        assert!((battery - 4.12).abs() < 0.01, "Battery should be ~4.12, got {}", battery);
+        assert!(
+            (battery - 4.12).abs() < 0.01,
+            "Battery should be ~4.12, got {}",
+            battery
+        );
         assert_eq!(result.data["rssi"], -67);
         assert_eq!(result.data["model"], "x");
         assert_eq!(result.data["firmware"], "2.0.0");
@@ -582,11 +598,7 @@ mod lua_unit_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(
-                std::path::Path::new("test_html.lua"),
-                &HashMap::new(),
-                None,
-            )
+            .run_script(std::path::Path::new("test_html.lua"), &HashMap::new(), None)
             .expect("Script should run");
 
         assert_eq!(result.data["title_text"], "Title");
@@ -652,11 +664,7 @@ mod lua_unit_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(
-                std::path::Path::new("test_skip.lua"),
-                &HashMap::new(),
-                None,
-            )
+            .run_script(std::path::Path::new("test_skip.lua"), &HashMap::new(), None)
             .expect("Script should run");
 
         assert!(result.skip_update);
@@ -701,11 +709,7 @@ mod lua_error_tests {
         let asset_loader = Arc::new(AssetLoader::new(None, None, None));
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(
-            Path::new("nonexistent_script.lua"),
-            &HashMap::new(),
-            None,
-        );
+        let result = runtime.run_script(Path::new("nonexistent_script.lua"), &HashMap::new(), None);
 
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -725,11 +729,7 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("bad_syntax.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(
-            Path::new("bad_syntax.lua"),
-            &HashMap::new(),
-            None,
-        );
+        let result = runtime.run_script(Path::new("bad_syntax.lua"), &HashMap::new(), None);
 
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -748,11 +748,7 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("runtime_error.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(
-            Path::new("runtime_error.lua"),
-            &HashMap::new(),
-            None,
-        );
+        let result = runtime.run_script(Path::new("runtime_error.lua"), &HashMap::new(), None);
 
         assert!(result.is_err());
     }
@@ -769,11 +765,7 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("no_data.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(
-            Path::new("no_data.lua"),
-            &HashMap::new(),
-            None,
-        );
+        let result = runtime.run_script(Path::new("no_data.lua"), &HashMap::new(), None);
 
         assert!(result.is_err());
     }
@@ -787,11 +779,7 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("bad_return.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(
-            Path::new("bad_return.lua"),
-            &HashMap::new(),
-            None,
-        );
+        let result = runtime.run_script(Path::new("bad_return.lua"), &HashMap::new(), None);
 
         assert!(result.is_err());
     }
@@ -809,11 +797,7 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("bad_json.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(
-            Path::new("bad_json.lua"),
-            &HashMap::new(),
-            None,
-        );
+        let result = runtime.run_script(Path::new("bad_json.lua"), &HashMap::new(), None);
 
         // json_decode raises an error for invalid JSON
         assert!(result.is_err());
@@ -833,11 +817,7 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("bad_selector.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(
-            Path::new("bad_selector.lua"),
-            &HashMap::new(),
-            None,
-        );
+        let result = runtime.run_script(Path::new("bad_selector.lua"), &HashMap::new(), None);
 
         // Should handle gracefully (returns nil or error)
         // Either outcome is acceptable for error handling test
@@ -857,11 +837,7 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("bad_time.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(
-            Path::new("bad_time.lua"),
-            &HashMap::new(),
-            None,
-        );
+        let result = runtime.run_script(Path::new("bad_time.lua"), &HashMap::new(), None);
 
         // time_parse raises an error for invalid input
         assert!(result.is_err());
@@ -880,11 +856,7 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("bad_b64.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(
-            Path::new("bad_b64.lua"),
-            &HashMap::new(),
-            None,
-        );
+        let result = runtime.run_script(Path::new("bad_b64.lua"), &HashMap::new(), None);
 
         // base64_decode raises an error for invalid input
         assert!(result.is_err());
@@ -903,11 +875,7 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("empty.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(
-            Path::new("empty.lua"),
-            &HashMap::new(),
-            None,
-        );
+        let result = runtime.run_script(Path::new("empty.lua"), &HashMap::new(), None);
 
         // Empty script returns nil, which is an error
         assert!(result.is_err());
@@ -931,7 +899,10 @@ mod lua_error_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let mut params = HashMap::new();
-        params.insert("name".to_string(), serde_yaml::Value::String("test".to_string()));
+        params.insert(
+            "name".to_string(),
+            serde_yaml::Value::String("test".to_string()),
+        );
         params.insert("count".to_string(), serde_yaml::Value::Number(42.into()));
         params.insert("enabled".to_string(), serde_yaml::Value::Bool(true));
 
@@ -942,11 +913,7 @@ mod lua_error_tests {
         );
         params.insert("config".to_string(), serde_yaml::Value::Mapping(nested));
 
-        let result = runtime.run_script(
-            Path::new("params_test.lua"),
-            &params,
-            None,
-        );
+        let result = runtime.run_script(Path::new("params_test.lua"), &params, None);
 
         assert!(result.is_ok());
         let data = result.unwrap();
@@ -1562,8 +1529,7 @@ mod lua_http_tests {
             .and(wiremock::matchers::query_param("pi", "3.14"))
             .and(wiremock::matchers::query_param("enabled", "true"))
             .respond_with(
-                wiremock::ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"ok": true})),
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})),
             )
             .mount(&server.server)
             .await;
@@ -1595,8 +1561,7 @@ mod lua_http_tests {
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path("/test"))
             .respond_with(
-                wiremock::ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"ok": true})),
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})),
             )
             .mount(&server.server)
             .await;

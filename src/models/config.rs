@@ -245,8 +245,10 @@ mod tests {
 
     #[test]
     fn test_get_default_screen_none_configured() {
-        let mut config = AppConfig::default();
-        config.default_screen = None;
+        let config = AppConfig {
+            default_screen: None,
+            ..Default::default()
+        };
 
         let result = config.get_default_screen();
         assert!(result.is_none());

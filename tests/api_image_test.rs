@@ -12,7 +12,9 @@ async fn test_image_retrieval() {
     // First get display to generate content
     let (api_key, _) = app.register_device(macs::GRAY_DEVICE).await;
     let headers = fixtures::display_headers(macs::GRAY_DEVICE, &api_key);
-    let display_response = app.get_with_headers("/api/display", &fixtures::as_str_pairs(&headers)).await;
+    let display_response = app
+        .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
+        .await;
     let image_url = common::assert_valid_display_response(&display_response);
 
     // Extract path from URL (e.g., http://localhost:3000/api/image/abc123.png -> /api/image/abc123.png)
@@ -47,7 +49,9 @@ async fn test_image_without_png_extension() {
     // Generate content first
     let (api_key, _) = app.register_device(macs::GRAY_DEVICE).await;
     let headers = fixtures::display_headers(macs::GRAY_DEVICE, &api_key);
-    let display_response = app.get_with_headers("/api/display", &fixtures::as_str_pairs(&headers)).await;
+    let display_response = app
+        .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
+        .await;
     let json: serde_json::Value = display_response.json();
     let hash = json["filename"].as_str().unwrap();
 
@@ -63,7 +67,9 @@ async fn test_image_content_type_header() {
 
     let (api_key, _) = app.register_device(macs::GRAY_DEVICE).await;
     let headers = fixtures::display_headers(macs::GRAY_DEVICE, &api_key);
-    let display_response = app.get_with_headers("/api/display", &fixtures::as_str_pairs(&headers)).await;
+    let display_response = app
+        .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
+        .await;
     let image_url = common::assert_valid_display_response(&display_response);
     let path = image_url.split("localhost:3000").nth(1).unwrap();
 
@@ -91,8 +97,11 @@ async fn test_image_different_screen_sizes() {
 
     // Request with different sizes and verify both work
     for (width, height) in [(800, 480), (1872, 1404)] {
-        let headers = fixtures::display_headers_with_size(macs::GRAY_DEVICE, &api_key, width, height);
-        let display_response = app.get_with_headers("/api/display", &fixtures::as_str_pairs(&headers)).await;
+        let headers =
+            fixtures::display_headers_with_size(macs::GRAY_DEVICE, &api_key, width, height);
+        let display_response = app
+            .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
+            .await;
         let image_url = common::assert_valid_display_response(&display_response);
         let path = image_url.split("localhost:3000").nth(1).unwrap();
 

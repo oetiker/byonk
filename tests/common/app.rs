@@ -43,9 +43,8 @@ impl TestApp {
 
         // Initialize services
         let registry = Arc::new(InMemoryRegistry::new());
-        let renderer = Arc::new(
-            RenderService::new(&asset_loader).expect("Failed to create render service"),
-        );
+        let renderer =
+            Arc::new(RenderService::new(&asset_loader).expect("Failed to create render service"));
         let content_pipeline = Arc::new(
             ContentPipeline::new(config, asset_loader, renderer.clone())
                 .expect("Failed to create content pipeline"),
@@ -91,7 +90,12 @@ impl TestApp {
     }
 
     /// Make a POST request with JSON body
-    pub async fn post_json(&self, path: &str, headers: &[(&str, &str)], body: &str) -> TestResponse {
+    pub async fn post_json(
+        &self,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: &str,
+    ) -> TestResponse {
         let mut builder = Request::post(path).header("Content-Type", "application/json");
         for (name, value) in headers {
             builder = builder.header(*name, *value);

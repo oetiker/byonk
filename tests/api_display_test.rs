@@ -12,7 +12,9 @@ async fn test_display_auto_registers_device() {
 
     // Use display endpoint with a new device (auto-registration)
     let headers = fixtures::display_headers(macs::UNKNOWN_DEVICE, "any-api-key");
-    let response = app.get_with_headers("/api/display", &fixtures::as_str_pairs(&headers)).await;
+    let response = app
+        .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
+        .await;
 
     common::assert_ok(&response);
     let image_url = common::assert_valid_display_response(&response);
@@ -28,7 +30,9 @@ async fn test_display_with_registered_device() {
 
     // Now request display
     let headers = fixtures::display_headers(macs::HELLO_DEVICE, &api_key);
-    let response = app.get_with_headers("/api/display", &fixtures::as_str_pairs(&headers)).await;
+    let response = app
+        .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
+        .await;
 
     common::assert_ok(&response);
     let image_url = common::assert_valid_display_response(&response);
@@ -41,7 +45,11 @@ async fn test_display_missing_access_token() {
     let app = TestApp::new();
 
     // Missing Access-Token header
-    let headers = [("ID", macs::TEST_DEVICE), ("Width", "800"), ("Height", "480")];
+    let headers = [
+        ("ID", macs::TEST_DEVICE),
+        ("Width", "800"),
+        ("Height", "480"),
+    ];
 
     let response = app.get_with_headers("/api/display", &headers).await;
 
@@ -102,7 +110,9 @@ async fn test_display_clamps_excessive_dimensions() {
 
     // Request with excessive dimensions (should be clamped to max)
     let headers = fixtures::display_headers_with_size(macs::HELLO_DEVICE, &api_key, 5000, 5000);
-    let response = app.get_with_headers("/api/display", &fixtures::as_str_pairs(&headers)).await;
+    let response = app
+        .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
+        .await;
 
     // Should succeed with clamped dimensions (defaults to 800x480 when invalid)
     common::assert_ok(&response);
@@ -148,7 +158,9 @@ async fn test_display_with_graytest_screen() {
     let (api_key, _) = app.register_device(macs::GRAY_DEVICE).await;
 
     let headers = fixtures::display_headers(macs::GRAY_DEVICE, &api_key);
-    let response = app.get_with_headers("/api/display", &fixtures::as_str_pairs(&headers)).await;
+    let response = app
+        .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
+        .await;
 
     common::assert_ok(&response);
     let json: serde_json::Value = response.json();

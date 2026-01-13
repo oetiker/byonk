@@ -25,7 +25,9 @@ async fn test_complete_device_flow() {
 
     // Step 2: Request display content
     let display_headers = fixtures::display_headers(macs::HELLO_DEVICE, api_key);
-    let display_response = app.get_with_headers("/api/display", &fixtures::as_str_pairs(&display_headers)).await;
+    let display_response = app
+        .get_with_headers("/api/display", &fixtures::as_str_pairs(&display_headers))
+        .await;
     let image_url = common::assert_valid_display_response(&display_response);
     assert!(!image_url.is_empty());
 
@@ -58,7 +60,9 @@ async fn test_multiple_devices_different_screens() {
         let (api_key, _) = app.register_device(mac).await;
 
         let headers = fixtures::display_headers(mac, &api_key);
-        let response = app.get_with_headers("/api/display", &fixtures::as_str_pairs(&headers)).await;
+        let response = app
+            .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
+            .await;
         common::assert_ok(&response);
 
         let json: serde_json::Value = response.json();

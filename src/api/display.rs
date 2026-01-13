@@ -77,7 +77,7 @@ pub async fn handle_display<R: DeviceRegistry>(
         .filter(|&h| h > 0 && h <= MAX_DISPLAY_HEIGHT)
         .unwrap_or(480);
 
-    let api_key = ApiKey::from_str(api_key_str);
+    let api_key = ApiKey::new(api_key_str);
 
     // Find device by API key, or auto-register if not found
     let mut device = match registry.find_by_api_key(&api_key).await? {
@@ -95,7 +95,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                 .unwrap_or("unknown")
                 .to_string();
 
-            let model = DeviceModel::from_str(model_str);
+            let model = DeviceModel::parse(model_str);
             let new_device = Device::new(device_id.clone(), model, fw_version);
 
             tracing::info!(
@@ -358,7 +358,7 @@ pub async fn handle_display_json<R: DeviceRegistry>(
         .and_then(|v| v.to_str().ok())
         .ok_or(ApiError::MissingHeader("Access-Token"))?;
 
-    let api_key = ApiKey::from_str(api_key_str);
+    let api_key = ApiKey::new(api_key_str);
 
     // Find device by API key
     let device = registry

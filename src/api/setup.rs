@@ -67,7 +67,7 @@ pub async fn handle_setup<R: DeviceRegistry>(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("og");
 
-    let model = DeviceModel::from_str(model_str);
+    let model = DeviceModel::parse(model_str);
     let device_id = DeviceId::new(device_id_str);
 
     tracing::info!(

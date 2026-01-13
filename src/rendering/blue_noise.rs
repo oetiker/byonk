@@ -158,16 +158,6 @@ mod tests {
     }
 
     #[test]
-    fn test_blue_noise_value_range() {
-        // All values should be in 0-255 range (u8 guarantees this, but let's verify)
-        for row in &BLUE_NOISE_64 {
-            for &val in row {
-                assert!(val <= 255);
-            }
-        }
-    }
-
-    #[test]
     fn test_blue_noise_mean_near_center() {
         // Mean should be roughly around 127-128 for a good distribution
         let sum: u64 = BLUE_NOISE_64

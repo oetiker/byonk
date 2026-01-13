@@ -1,7 +1,7 @@
 //! Mock HTTP server for testing Lua HTTP functions.
 
 use wiremock::{
-    matchers::{method, path, query_param, header, body_string_contains},
+    matchers::{header, method, path, query_param},
     Mock, MockServer, ResponseTemplate,
 };
 
@@ -36,15 +36,6 @@ impl MockHttpServer {
                     .set_body_json(response)
                     .insert_header("content-type", "application/json"),
             )
-            .mount(&self.server)
-            .await;
-    }
-
-    /// Mock a GET endpoint returning plain text
-    pub async fn mock_get_text(&self, endpoint: &str, body: &str) {
-        Mock::given(method("GET"))
-            .and(path(endpoint))
-            .respond_with(ResponseTemplate::new(200).set_body_string(body))
             .mount(&self.server)
             .await;
     }
@@ -96,25 +87,6 @@ impl MockHttpServer {
             .await;
     }
 
-    /// Mock a POST endpoint checking for specific body content
-    pub async fn mock_post_with_body(
-        &self,
-        endpoint: &str,
-        body_contains: &str,
-        response: serde_json::Value,
-    ) {
-        Mock::given(method("POST"))
-            .and(path(endpoint))
-            .and(body_string_contains(body_contains))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(response)
-                    .insert_header("content-type", "application/json"),
-            )
-            .mount(&self.server)
-            .await;
-    }
-
     /// Mock an endpoint requiring basic auth
     pub async fn mock_with_basic_auth(
         &self,
@@ -139,37 +111,6 @@ impl MockHttpServer {
         Mock::given(method("GET"))
             .and(path(endpoint))
             .respond_with(ResponseTemplate::new(status).set_body_string(message))
-            .mount(&self.server)
-            .await;
-    }
-
-    /// Mock an endpoint with custom headers in response
-    pub async fn mock_with_headers(
-        &self,
-        endpoint: &str,
-        response_headers: &[(&str, &str)],
-        body: &str,
-    ) {
-        let mut template = ResponseTemplate::new(200).set_body_string(body);
-        for (name, value) in response_headers {
-            template = template.insert_header(*name, *value);
-        }
-        Mock::given(method("GET"))
-            .and(path(endpoint))
-            .respond_with(template)
-            .mount(&self.server)
-            .await;
-    }
-
-    /// Mock an endpoint that times out (responds after delay)
-    pub async fn mock_slow(&self, endpoint: &str, delay_ms: u64, response: &str) {
-        Mock::given(method("GET"))
-            .and(path(endpoint))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string(response)
-                    .set_delay(std::time::Duration::from_millis(delay_ms)),
-            )
             .mount(&self.server)
             .await;
     }

@@ -116,8 +116,10 @@ mod tests {
 
     #[test]
     fn test_cached_content_hash_differs_for_different_content() {
-        let content1 = CachedContent::new("<svg>A</svg>".to_string(), "screen".to_string(), 800, 480);
-        let content2 = CachedContent::new("<svg>B</svg>".to_string(), "screen".to_string(), 800, 480);
+        let content1 =
+            CachedContent::new("<svg>A</svg>".to_string(), "screen".to_string(), 800, 480);
+        let content2 =
+            CachedContent::new("<svg>B</svg>".to_string(), "screen".to_string(), 800, 480);
 
         assert_ne!(content1.content_hash, content2.content_hash);
     }
@@ -160,7 +162,8 @@ mod tests {
     #[tokio::test]
     async fn test_content_cache_store_and_get() {
         let cache = ContentCache::new();
-        let content = CachedContent::new("<svg>hello</svg>".to_string(), "test".to_string(), 800, 480);
+        let content =
+            CachedContent::new("<svg>hello</svg>".to_string(), "test".to_string(), 800, 480);
         let hash = content.content_hash.clone();
 
         cache.store(content).await;
@@ -183,7 +186,12 @@ mod tests {
     #[tokio::test]
     async fn test_content_cache_remove() {
         let cache = ContentCache::new();
-        let content = CachedContent::new("<svg>test</svg>".to_string(), "screen".to_string(), 800, 480);
+        let content = CachedContent::new(
+            "<svg>test</svg>".to_string(),
+            "screen".to_string(),
+            800,
+            480,
+        );
         let hash = content.content_hash.clone();
 
         cache.store(content).await;
@@ -198,13 +206,19 @@ mod tests {
         let cache = ContentCache::new();
 
         // Store first content
-        let content1 = CachedContent::new("<svg>v1</svg>".to_string(), "screen".to_string(), 800, 480);
+        let content1 =
+            CachedContent::new("<svg>v1</svg>".to_string(), "screen".to_string(), 800, 480);
         let hash1 = content1.content_hash.clone();
         cache.store(content1).await;
 
         // Store different content with same hash (simulating update - though this shouldn't happen)
         // Actually, same SVG would have same hash, so let's test that storing same content works
-        let content2 = CachedContent::new("<svg>v1</svg>".to_string(), "updated".to_string(), 1872, 1404);
+        let content2 = CachedContent::new(
+            "<svg>v1</svg>".to_string(),
+            "updated".to_string(),
+            1872,
+            1404,
+        );
         cache.store(content2).await;
 
         let retrieved = cache.get(&hash1).await.unwrap();
@@ -216,9 +230,16 @@ mod tests {
     async fn test_content_cache_multiple_entries() {
         let cache = ContentCache::new();
 
-        let content1 = CachedContent::new("<svg>A</svg>".to_string(), "screen_a".to_string(), 800, 480);
-        let content2 = CachedContent::new("<svg>B</svg>".to_string(), "screen_b".to_string(), 800, 480);
-        let content3 = CachedContent::new("<svg>C</svg>".to_string(), "screen_c".to_string(), 1872, 1404);
+        let content1 =
+            CachedContent::new("<svg>A</svg>".to_string(), "screen_a".to_string(), 800, 480);
+        let content2 =
+            CachedContent::new("<svg>B</svg>".to_string(), "screen_b".to_string(), 800, 480);
+        let content3 = CachedContent::new(
+            "<svg>C</svg>".to_string(),
+            "screen_c".to_string(),
+            1872,
+            1404,
+        );
 
         let hash1 = content1.content_hash.clone();
         let hash2 = content2.content_hash.clone();
@@ -241,7 +262,12 @@ mod tests {
 
     #[test]
     fn test_cached_content_clone() {
-        let content = CachedContent::new("<svg>test</svg>".to_string(), "screen".to_string(), 800, 480);
+        let content = CachedContent::new(
+            "<svg>test</svg>".to_string(),
+            "screen".to_string(),
+            800,
+            480,
+        );
         let cloned = content.clone();
 
         assert_eq!(cloned.rendered_svg, content.rendered_svg);

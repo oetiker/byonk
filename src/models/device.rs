@@ -32,7 +32,7 @@ impl ApiKey {
         Self(key)
     }
 
-    pub fn from_str(s: impl Into<String>) -> Self {
+    pub fn new(s: impl Into<String>) -> Self {
         Self(s.into())
     }
 
@@ -51,7 +51,7 @@ pub enum DeviceModel {
 }
 
 impl DeviceModel {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "x" => DeviceModel::X,
             _ => DeviceModel::OG,

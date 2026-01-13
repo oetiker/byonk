@@ -26,14 +26,14 @@ fn init_crypto() {
 
 /// Generated certificate files for testing
 pub struct CertFiles {
-    /// Temporary directory holding the certificate files
-    pub temp_dir: TempDir,
+    /// Temporary directory holding the certificate files (must stay alive)
+    pub _temp_dir: TempDir,
     /// Path to CA certificate (PEM)
     pub ca_cert: PathBuf,
-    /// Path to server certificate (PEM)
-    pub server_cert: PathBuf,
-    /// Path to server private key (PEM)
-    pub server_key: PathBuf,
+    /// Path to server certificate (PEM) - written but not used by tests
+    pub _server_cert: PathBuf,
+    /// Path to server private key (PEM) - written but not used by tests
+    pub _server_key: PathBuf,
     /// Path to client certificate (PEM)
     pub client_cert: PathBuf,
     /// Path to client private key (PEM)
@@ -57,18 +57,19 @@ impl CertFiles {
         // Generate CA key pair and certificate
         let ca_key = KeyPair::generate()?;
         let mut ca_params = CertificateParams::default();
-        ca_params.distinguished_name.push(DnType::CommonName, "Test CA");
+        ca_params
+            .distinguished_name
+            .push(DnType::CommonName, "Test CA");
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        ca_params.key_usages = vec![
-            KeyUsagePurpose::KeyCertSign,
-            KeyUsagePurpose::CrlSign,
-        ];
+        ca_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
         let ca_cert = ca_params.self_signed(&ca_key)?;
 
         // Generate server key pair and certificate
         let server_key = KeyPair::generate()?;
         let mut server_params = CertificateParams::default();
-        server_params.distinguished_name.push(DnType::CommonName, "localhost");
+        server_params
+            .distinguished_name
+            .push(DnType::CommonName, "localhost");
         server_params.subject_alt_names = vec![
             SanType::DnsName("localhost".try_into()?),
             SanType::IpAddress(std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))),
@@ -83,7 +84,9 @@ impl CertFiles {
         // Generate client key pair and certificate
         let client_key = KeyPair::generate()?;
         let mut client_params = CertificateParams::default();
-        client_params.distinguished_name.push(DnType::CommonName, "Test Client");
+        client_params
+            .distinguished_name
+            .push(DnType::CommonName, "Test Client");
         client_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
         client_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
         let client_cert = client_params.signed_by(&client_key, &ca_cert, &ca_key)?;
@@ -97,9 +100,11 @@ impl CertFiles {
 
         std::fs::File::create(&ca_cert_path)?.write_all(ca_cert.pem().as_bytes())?;
         std::fs::File::create(&server_cert_path)?.write_all(server_cert.pem().as_bytes())?;
-        std::fs::File::create(&server_key_path)?.write_all(server_key.serialize_pem().as_bytes())?;
+        std::fs::File::create(&server_key_path)?
+            .write_all(server_key.serialize_pem().as_bytes())?;
         std::fs::File::create(&client_cert_path)?.write_all(client_cert.pem().as_bytes())?;
-        std::fs::File::create(&client_key_path)?.write_all(client_key.serialize_pem().as_bytes())?;
+        std::fs::File::create(&client_key_path)?
+            .write_all(client_key.serialize_pem().as_bytes())?;
 
         // Keep DER versions for rustls server config
         let ca_cert_der = CertificateDer::from(ca_cert.der().to_vec());
@@ -107,10 +112,10 @@ impl CertFiles {
         let server_key_der = PrivateKeyDer::try_from(server_key.serialize_der()).unwrap();
 
         Ok(Self {
-            temp_dir,
+            _temp_dir: temp_dir,
             ca_cert: ca_cert_path,
-            server_cert: server_cert_path,
-            server_key: server_key_path,
+            _server_cert: server_cert_path,
+            _server_key: server_key_path,
             client_cert: client_cert_path,
             client_key: client_key_path,
             ca_cert_der,
@@ -129,7 +134,7 @@ pub struct MockHttpsServer {
     /// Shutdown signal sender
     shutdown_tx: Option<oneshot::Sender<()>>,
     /// Server task handle
-    handle: Option<tokio::task::JoinHandle<()>>,
+    _handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl MockHttpsServer {
@@ -154,9 +159,10 @@ impl MockHttpsServer {
             let mut root_store = rustls::RootCertStore::empty();
             root_store.add(certs.ca_cert_der.clone())?;
 
-            let client_verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(root_store))
-                .build()
-                .map_err(|e| format!("Failed to build client verifier: {}", e))?;
+            let client_verifier =
+                rustls::server::WebPkiClientVerifier::builder(Arc::new(root_store))
+                    .build()
+                    .map_err(|e| format!("Failed to build client verifier: {}", e))?;
 
             rustls::ServerConfig::builder()
                 .with_client_cert_verifier(client_verifier)
@@ -212,28 +218,13 @@ impl MockHttpsServer {
             addr,
             certs,
             shutdown_tx: Some(shutdown_tx),
-            handle: Some(handle),
+            _handle: Some(handle),
         })
     }
 
     /// Get the base URL of the mock server
     pub fn url(&self) -> String {
         format!("https://127.0.0.1:{}", self.addr.port())
-    }
-
-    /// Get URL for a specific path
-    pub fn url_for(&self, path: &str) -> String {
-        format!("{}{}", self.url(), path)
-    }
-
-    /// Shutdown the server
-    pub async fn shutdown(mut self) {
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
-        }
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.await;
-        }
     }
 }
 

@@ -8,7 +8,8 @@ use super::app::TestResponse;
 /// Assert response has expected status code
 pub fn assert_status(response: &TestResponse, expected: StatusCode) {
     assert_eq!(
-        response.status, expected,
+        response.status,
+        expected,
         "Expected status {}, got {}. Body: {}",
         expected,
         response.status,
@@ -62,7 +63,10 @@ pub fn assert_valid_setup_response(response: &TestResponse) {
     let json: serde_json::Value = response.json();
 
     assert_eq!(json["status"], 200);
-    assert!(json["api_key"].is_string(), "Expected api_key to be a string");
+    assert!(
+        json["api_key"].is_string(),
+        "Expected api_key to be a string"
+    );
     assert!(
         json["friendly_id"].is_string(),
         "Expected friendly_id to be a string"
@@ -98,6 +102,9 @@ pub fn assert_skip_update_response(response: &TestResponse) {
     let json: serde_json::Value = response.json();
 
     assert_eq!(json["status"], 0);
-    assert!(json["image_url"].is_null(), "Expected no image_url for skip_update");
+    assert!(
+        json["image_url"].is_null(),
+        "Expected no image_url for skip_update"
+    );
     assert_eq!(json["filename"], "unchanged");
 }

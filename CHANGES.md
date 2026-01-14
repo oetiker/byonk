@@ -9,8 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
-- Integration tests verifying actual TCP connection closure behavior
+### Changed
 
+### Fixed
+
+## 0.7.1 - 2026-01-14
+
+### New
+
+- Integration tests verifying actual TCP connection closure behavior
 ### Changed
 
 - Refactored server setup into shared `server` module used by both production and tests

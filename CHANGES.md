@@ -9,9 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- Integration tests verifying actual TCP connection closure behavior
+
 ### Changed
 
+- Refactored server setup into shared `server` module used by both production and tests
+
 ### Fixed
+
+- Disabled HTTP keep-alive to prevent connection accumulation from ESP32 clients that request keep-alive but never reuse connections ([firmware PR #274](https://github.com/usetrmnl/trmnl-firmware/pull/274))
 
 ## 0.7.0 - 2026-01-13
 
@@ -26,18 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Mock HTTP server infrastructure for testing Lua HTTP functions without external requests
 - Mock HTTPS server infrastructure for testing TLS certificate handling (self-signed certs, custom CA, mTLS)
 - Unit tests for core modules: config parsing, display specs, error handling, template rendering, asset loading
-### Changed
-
-### Fixed
-
-## 0.6.2 - 2026-01-12
 
 ## 0.6.1 - 2026-01-11
 
 ### Changed
 
 - **Breaking:** `qr_svg()` now uses margin-based positioning (`top`, `left`, `right`, `bottom`) instead of absolute `x`, `y` coordinates. Screen dimensions are automatically read from device context.
-### Fixed
 
 ## 0.6.0 - 2026-01-08
 

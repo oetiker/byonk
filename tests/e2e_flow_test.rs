@@ -167,3 +167,54 @@ async fn test_health_endpoint() {
     common::assert_ok(&response);
     assert_eq!(response.text(), "OK");
 }
+
+/// Verify that all responses include "Connection: close" header.
+/// This prevents connection accumulation from ESP32 clients that request
+/// keep-alive but never reuse connections.
+/// See: https://github.com/usetrmnl/trmnl-firmware/pull/274
+#[tokio::test]
+async fn test_connection_close_header() {
+    let app = TestApp::new();
+
+    // Test health endpoint
+    let response = app.get("/health").await;
+    assert_eq!(
+        response
+            .headers
+            .get("connection")
+            .map(|v| v.to_str().unwrap()),
+        Some("close"),
+        "Health endpoint should have Connection: close header"
+    );
+
+    // Test setup endpoint
+    let setup_headers = [
+        ("ID", macs::TEST_DEVICE),
+        ("FW-Version", "1.0.0"),
+        ("Model", "og"),
+    ];
+    let response = app.get_with_headers("/api/setup", &setup_headers).await;
+    assert_eq!(
+        response
+            .headers
+            .get("connection")
+            .map(|v| v.to_str().unwrap()),
+        Some("close"),
+        "Setup endpoint should have Connection: close header"
+    );
+
+    // Test display endpoint
+    let (api_key, _) = app.register_device(macs::GRAY_DEVICE).await;
+    let display_headers = fixtures::display_headers(macs::GRAY_DEVICE, &api_key);
+    let response = app
+        .get_with_headers("/api/display", &fixtures::as_str_pairs(&display_headers))
+        .await;
+    assert_eq!(
+        response
+            .headers
+            .get("connection")
+            .map(|v| v.to_str().unwrap()),
+        Some("close"),
+        "Display endpoint should have Connection: close header"
+    );
+}

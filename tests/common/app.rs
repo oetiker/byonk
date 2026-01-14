@@ -3,31 +3,18 @@
 use axum::{
     body::Body,
     http::{Request, StatusCode},
-    routing::{get, post},
-    Router,
 };
 use http_body_util::BodyExt;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-use byonk::api::{handle_display, handle_image, handle_log, handle_setup};
 use byonk::assets::AssetLoader;
-use byonk::error::ApiError;
-use byonk::models::AppConfig;
-use byonk::services::{ContentCache, ContentPipeline, InMemoryRegistry, RenderService};
-
-/// Application state shared across all handlers (mirrors main.rs)
-#[derive(Clone)]
-pub struct AppState {
-    pub registry: Arc<InMemoryRegistry>,
-    pub renderer: Arc<RenderService>,
-    pub content_pipeline: Arc<ContentPipeline>,
-    pub content_cache: Arc<ContentCache>,
-}
+use byonk::server::{build_router, create_app_state, AppState};
+use byonk::services::{ContentCache, DeviceRegistry, InMemoryRegistry};
 
 /// Test application with router and direct access to services
 pub struct TestApp {
-    router: Router,
+    router: axum::Router,
     pub registry: Arc<InMemoryRegistry>,
     pub content_cache: Arc<ContentCache>,
 }
@@ -38,40 +25,27 @@ impl TestApp {
         // Create asset loader with embedded assets only (no external paths)
         let asset_loader = Arc::new(AssetLoader::new(None, None, None));
 
-        // Load application config
-        let config = Arc::new(AppConfig::load_from_assets(&asset_loader));
+        // Create application state using shared server module
+        let state = create_app_state(asset_loader).expect("Failed to create app state");
 
-        // Initialize services
-        let registry = Arc::new(InMemoryRegistry::new());
-        let renderer =
-            Arc::new(RenderService::new(&asset_loader).expect("Failed to create render service"));
-        let content_pipeline = Arc::new(
-            ContentPipeline::new(config, asset_loader, renderer.clone())
-                .expect("Failed to create content pipeline"),
-        );
-        let content_cache = Arc::new(ContentCache::new());
+        // Keep references for test assertions
+        let registry = state.registry.clone();
+        let content_cache = state.content_cache.clone();
 
-        let state = AppState {
-            registry: registry.clone(),
-            renderer: renderer.clone(),
-            content_pipeline: content_pipeline.clone(),
-            content_cache: content_cache.clone(),
-        };
-
-        // Build router (mirrors main.rs structure)
-        let router = Router::new()
-            .route("/api/setup", get(wrap_setup))
-            .route("/api/display", get(wrap_display))
-            .route("/api/image/:hash", get(wrap_image))
-            .route("/api/log", post(handle_log))
-            .route("/health", get(|| async { "OK" }))
-            .with_state(state);
+        // Build router using shared server module (same as production)
+        let router = build_router(state);
 
         Self {
             router,
             registry,
             content_cache,
         }
+    }
+
+    /// Create a test app and return the state for custom router configuration
+    pub fn create_state() -> AppState {
+        let asset_loader = Arc::new(AssetLoader::new(None, None, None));
+        create_app_state(asset_loader).expect("Failed to create app state")
     }
 
     /// Make a GET request to the given path
@@ -176,40 +150,4 @@ impl TestResponse {
     pub fn is_png(&self) -> bool {
         self.body.len() >= 8 && &self.body[0..8] == b"\x89PNG\r\n\x1a\n"
     }
-}
-
-// Wrapper handlers to match state extraction pattern from main.rs
-async fn wrap_setup(
-    axum::extract::State(state): axum::extract::State<AppState>,
-    headers: axum::http::HeaderMap,
-) -> Result<impl axum::response::IntoResponse, ApiError> {
-    handle_setup(axum::extract::State(state.registry), headers).await
-}
-
-async fn wrap_display(
-    axum::extract::State(state): axum::extract::State<AppState>,
-    headers: axum::http::HeaderMap,
-) -> Result<axum::response::Response, ApiError> {
-    handle_display(
-        axum::extract::State(state.registry),
-        axum::extract::State(state.renderer),
-        axum::extract::State(state.content_pipeline),
-        axum::extract::State(state.content_cache),
-        headers,
-    )
-    .await
-}
-
-async fn wrap_image(
-    axum::extract::State(state): axum::extract::State<AppState>,
-    path: axum::extract::Path<String>,
-) -> Result<axum::response::Response, ApiError> {
-    handle_image(
-        axum::extract::State(state.registry),
-        axum::extract::State(state.renderer),
-        axum::extract::State(state.content_cache),
-        axum::extract::State(state.content_pipeline),
-        path,
-    )
-    .await
 }

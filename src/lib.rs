@@ -8,4 +8,5 @@ pub mod assets;
 pub mod error;
 pub mod models;
 pub mod rendering;
+pub mod server;
 pub mod services;

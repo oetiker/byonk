@@ -1,19 +1,15 @@
-use axum::{
-    routing::{get, post},
-    Router,
-};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tower_http::{services::ServeDir, trace::TraceLayer};
+use tower_http::services::ServeDir;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use byonk::api;
-use byonk::error;
 use byonk::models::AppConfig;
-use byonk::services::{ContentCache, ContentPipeline, InMemoryRegistry, RenderService};
+use byonk::server;
+use byonk::services::{ContentPipeline, RenderService};
 
 #[derive(Parser)]
 #[command(name = "byonk")]
@@ -109,15 +105,6 @@ enum Commands {
     )
 )]
 struct ApiDoc;
-
-/// Application state shared across all handlers
-#[derive(Clone)]
-struct AppState {
-    registry: Arc<InMemoryRegistry>,
-    renderer: Arc<RenderService>,
-    content_pipeline: Arc<ContentPipeline>,
-    content_cache: Arc<ContentCache>,
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -484,88 +471,20 @@ async fn run_server() -> anyhow::Result<()> {
         _ => {}
     }
 
-    // Load application config
-    let config = Arc::new(AppConfig::load_from_assets(&asset_loader));
+    // Create application state using shared server module
+    let state = server::create_app_state(asset_loader)?;
 
-    // Initialize services
-    let registry = Arc::new(InMemoryRegistry::new());
-    let renderer = Arc::new(RenderService::new(&asset_loader)?);
-
-    // Content pipeline for scripted content
-    let content_pipeline = Arc::new(
-        ContentPipeline::new(config.clone(), asset_loader, renderer.clone())
-            .expect("Failed to initialize content pipeline"),
-    );
-
-    let content_cache = Arc::new(ContentCache::new());
-
-    let state = AppState {
-        registry: registry.clone(),
-        renderer: renderer.clone(),
-        content_pipeline: content_pipeline.clone(),
-        content_cache: content_cache.clone(),
-    };
-
-    // Build router
-    let app = Router::new()
-        // TRMNL API endpoints
-        .route("/api/setup", get(handle_setup))
-        .route("/api/display", get(handle_display))
-        .route("/api/image/:hash", get(handle_image))
-        .route("/api/log", post(api::handle_log))
-        // OpenAPI documentation
+    // Build router: start with shared API routes, add production-only routes
+    let app = server::build_router(state)
+        // OpenAPI documentation (production only)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        // Static file serving
-        .nest_service("/static", ServeDir::new("./static"))
-        // Health check
-        .route("/health", get(|| async { "OK" }))
-        // Add state and tracing
-        .with_state(state)
-        .layer(TraceLayer::new_for_http());
+        // Static file serving (production only)
+        .nest_service("/static", ServeDir::new("./static"));
 
-    // Bind server
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!(addr = %bind_addr, "Byonk server listening");
 
     axum::serve(listener, app).await?;
 
     Ok(())
-}
-
-/// Wrapper for setup handler with correct state extraction
-async fn handle_setup(
-    axum::extract::State(state): axum::extract::State<AppState>,
-    headers: axum::http::HeaderMap,
-) -> Result<impl axum::response::IntoResponse, error::ApiError> {
-    api::handle_setup(axum::extract::State(state.registry), headers).await
-}
-
-/// Wrapper for display handler with correct state extraction
-async fn handle_display(
-    axum::extract::State(state): axum::extract::State<AppState>,
-    headers: axum::http::HeaderMap,
-) -> Result<axum::response::Response, error::ApiError> {
-    api::handle_display(
-        axum::extract::State(state.registry),
-        axum::extract::State(state.renderer),
-        axum::extract::State(state.content_pipeline),
-        axum::extract::State(state.content_cache),
-        headers,
-    )
-    .await
-}
-
-/// Wrapper for image handler with correct state extraction
-async fn handle_image(
-    axum::extract::State(state): axum::extract::State<AppState>,
-    path: axum::extract::Path<String>,
-) -> Result<axum::response::Response, error::ApiError> {
-    api::handle_image(
-        axum::extract::State(state.registry),
-        axum::extract::State(state.renderer),
-        axum::extract::State(state.content_cache),
-        axum::extract::State(state.content_pipeline),
-        path,
-    )
-    .await
 }

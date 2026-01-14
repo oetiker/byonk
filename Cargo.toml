@@ -10,7 +10,7 @@ license = "MIT"
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["fs", "trace"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "set-header"] }
 
 # Rendering
 resvg = "0.46"

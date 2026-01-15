@@ -547,6 +547,52 @@ local image_data = read_asset("icon.png")
 local data_uri = "data:image/png;base64," .. base64_encode(image_data)
 ```
 
+## URL Encoding Functions
+
+### url_encode(str)
+
+URL-encodes a string for safe use in URLs (query parameters, path segments).
+
+```lua
+local encoded = url_encode("hello world")  -- "hello%20world"
+local station = url_encode("Zürich, HB")   -- "Z%C3%BCrich%2C%20HB"
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `str` | string | String to URL-encode |
+
+**Returns:** `string` - URL-encoded string
+
+**Example: Building a URL with special characters:**
+
+```lua
+local station = params.station  -- "Zürich, HB"
+local url = "https://api.example.com/departures?station=" .. url_encode(station)
+-- Result: https://api.example.com/departures?station=Z%C3%BCrich%2C%20HB
+```
+
+**Note:** When using the `params` option in `http_get`/`http_request`, parameters are automatically URL-encoded. Use `url_encode` only when building URLs manually.
+
+### url_decode(str)
+
+Decodes a URL-encoded string.
+
+```lua
+local decoded = url_decode("hello%20world")  -- "hello world"
+local station = url_decode("Z%C3%BCrich%2C%20HB")  -- "Zürich, HB"
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `str` | string | URL-encoded string to decode |
+
+**Returns:** `string` - Decoded string
+
+**Throws:** Error if the string contains invalid UTF-8 after decoding
+
 ## QR Code Functions
 
 ### qr_svg(data, options)

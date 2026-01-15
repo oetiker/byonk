@@ -5,6 +5,10 @@ use tera::{Context, Tera};
 
 use crate::assets::AssetLoader;
 
+/// Directories to scan for reusable templates
+const LAYOUT_DIR: &str = "layouts";
+const COMPONENT_DIR: &str = "components";
+
 /// Compiled regex for matching image href attributes in SVG.
 /// Uses OnceLock to compile once and reuse across all render calls.
 fn image_href_regex() -> &'static Regex {
@@ -89,6 +93,30 @@ impl TemplateService {
         );
     }
 
+    /// Load all templates from a subdirectory (layouts or components).
+    ///
+    /// Templates are named as "layouts/name.svg" or "components/name.svg" for use
+    /// in `{% extends %}` and `{% include %}` directives.
+    fn load_templates_from_dir(&self, tera: &mut Tera, subdir: &str) {
+        // List all screen files and filter by subdirectory
+        for file in self.asset_loader.list_screens() {
+            if file.starts_with(subdir) && file.ends_with(".svg") {
+                // Try to load the template
+                if let Ok(content) = self.asset_loader.read_screen_string(Path::new(&file)) {
+                    if let Err(e) = tera.add_raw_template(&file, &content) {
+                        tracing::warn!(
+                            template = %file,
+                            error = %e,
+                            "Failed to load template"
+                        );
+                    } else {
+                        tracing::trace!(template = %file, "Loaded reusable template");
+                    }
+                }
+            }
+        }
+    }
+
     /// Render a template with the given data
     /// Templates are always loaded fresh to support live editing
     pub fn render(
@@ -106,6 +134,12 @@ impl TemplateService {
             .map_err(|e| TemplateError::NotFound(e.to_string()))?;
 
         let mut tera = Tera::default();
+
+        // Load reusable templates (layouts for extends, components for include)
+        self.load_templates_from_dir(&mut tera, LAYOUT_DIR);
+        self.load_templates_from_dir(&mut tera, COMPONENT_DIR);
+
+        // Add the main template
         tera.add_raw_template(template_name, &template_content)?;
         Self::register_filters(&mut tera);
 

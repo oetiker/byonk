@@ -514,6 +514,144 @@ To use a full-screen background image:
 - Consider e-ink limitations: high-contrast images work best
 - Keep file sizes reasonable for fast rendering
 
+## Template Reusability
+
+Byonk supports Tera's template inheritance and includes for reusable components.
+
+### Directory Structure
+
+Place reusable templates in special directories:
+
+```
+screens/
+├── layouts/              # Base templates for {% extends %}
+│   └── base.svg
+├── components/           # Reusable snippets for {% include %}
+│   ├── header.svg
+│   ├── footer.svg
+│   └── status_bar.svg
+├── myscreen.lua
+└── myscreen.svg
+```
+
+### Template Inheritance (extends)
+
+Create base layouts that define the overall structure with replaceable blocks:
+
+**screens/layouts/base.svg:**
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
+  <rect width="100%" height="100%" fill="white"/>
+
+  <!-- Header -->
+  <rect x="0" y="0" width="100%" height="60" fill="black"/>
+  <text x="20" y="40" fill="white" font-size="24" font-weight="bold">
+    {% block title %}BYONK{% endblock %}
+  </text>
+  {% block header_extra %}{% endblock %}
+
+  <!-- Content area -->
+  <g transform="translate(0, 60)">
+    {% block content %}{% endblock %}
+  </g>
+
+  {% block footer %}{% endblock %}
+</svg>
+```
+
+**screens/myscreen.svg:**
+```svg
+{% extends "layouts/base.svg" %}
+
+{% block title %}My Screen{% endblock %}
+
+{% block content %}
+<text x="400" y="200" text-anchor="middle" font-size="32">
+  {{ data.message }}
+</text>
+{% endblock %}
+
+{% block footer %}
+<text x="400" y="460" text-anchor="middle" fill="#999" font-size="12">
+  Updated: {{ data.updated_at }}
+</text>
+{% endblock %}
+```
+
+**Key points:**
+- Use `{% extends "layouts/filename.svg" %}` at the start of your template
+- Define blocks with `{% block name %}...{% endblock %}`
+- Child templates override parent blocks
+- Unoverridden blocks use the parent's default content
+
+### Template Includes
+
+Include reusable components in your templates:
+
+**screens/components/header.svg:**
+```svg
+<rect x="0" y="0" width="100%" height="60" fill="black"/>
+<text x="20" y="40" fill="white" font-size="24" font-weight="bold">
+  {{ title | default(value="BYONK") }}
+</text>
+{% if updated_at %}
+<text x="780" y="40" text-anchor="end" fill="#aaa" font-size="16">
+  {{ updated_at }}
+</text>
+{% endif %}
+```
+
+**screens/myscreen.svg:**
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
+  <rect width="800" height="480" fill="white"/>
+
+  <!-- Include the header component -->
+  {% include "components/header.svg" %}
+
+  <!-- Main content -->
+  <g transform="translate(0, 60)">
+    <text x="400" y="200" text-anchor="middle">{{ data.message }}</text>
+  </g>
+
+  <!-- Include the footer component -->
+  {% include "components/footer.svg" %}
+</svg>
+```
+
+**Key points:**
+- Use `{% include "components/filename.svg" %}` to insert a component
+- Included templates have access to all variables in the current context
+- Components work well for headers, footers, status bars, and other repeated elements
+
+### Built-in Components
+
+Byonk includes several ready-to-use components:
+
+| Component | Description |
+|-----------|-------------|
+| `components/header.svg` | Header bar with title and optional timestamp |
+| `components/footer.svg` | Footer with timestamp and optional text |
+| `components/status_bar.svg` | WiFi and battery indicators |
+
+### Combining Extends and Includes
+
+You can use both in the same template:
+
+```svg
+{% extends "layouts/base.svg" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block header_extra %}
+{% include "components/status_bar.svg" %}
+{% endblock %}
+
+{% block content %}
+<text x="400" y="200" text-anchor="middle">{{ data.message }}</text>
+{% endblock %}
+```
+
 ## Next Steps
 
 - [Advanced Topics](advanced.md) - HTML scraping, error handling

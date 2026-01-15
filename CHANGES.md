@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- Template inheritance: Use `{% extends "layouts/base.svg" %}` to create reusable base layouts with overridable blocks
+- Template includes: Use `{% include "components/header.svg" %}` to embed reusable SVG components
+- Built-in layout and components: `layouts/base.svg`, `components/header.svg`, `components/footer.svg`, `components/status_bar.svg`
 - Lua `url_encode(string)` function: URL-encode strings for safe use in URLs
 - Lua `url_decode(string)` function: Decode URL-encoded strings
 - HTTP response caching: New `cache_ttl` option for `http_request`/`http_get` to cache responses (LRU cache with max 100 entries)

@@ -137,24 +137,42 @@ impl AssetLoader {
     }
 
     /// List all available screens (merged view of embedded + external)
+    ///
+    /// Returns paths relative to screens dir, including subdirectories like
+    /// "layouts/base.svg" and "components/header.svg".
     pub fn list_screens(&self) -> Vec<String> {
         let mut files: HashSet<String> = EmbeddedScreens::iter().map(|s| s.to_string()).collect();
 
         if let Some(ref dir) = self.screens_dir {
-            if let Ok(entries) = fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    if let Some(name) = entry.file_name().to_str() {
-                        if name.ends_with(".lua") || name.ends_with(".svg") {
-                            files.insert(name.to_string());
-                        }
-                    }
-                }
-            }
+            Self::collect_screen_files(dir, dir, &mut files);
         }
 
         let mut result: Vec<_> = files.into_iter().collect();
         result.sort();
         result
+    }
+
+    /// Recursively collect screen files from a directory
+    fn collect_screen_files(base_dir: &Path, current_dir: &Path, files: &mut HashSet<String>) {
+        if let Ok(entries) = fs::read_dir(current_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    // Recurse into subdirectories
+                    Self::collect_screen_files(base_dir, &path, files);
+                } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.ends_with(".lua") || name.ends_with(".svg") {
+                        // Get relative path from base_dir
+                        if let Ok(relative) = path.strip_prefix(base_dir) {
+                            if let Some(relative_str) = relative.to_str() {
+                                // Normalize path separators to forward slashes
+                                files.insert(relative_str.replace('\\', "/"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Get all font data (for loading into fontdb)

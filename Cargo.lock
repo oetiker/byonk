@@ -280,6 +280,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "mlua",
+ "percent-encoding",
  "png 0.17.16",
  "pretty_assertions",
  "rand 0.8.5",

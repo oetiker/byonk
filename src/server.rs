@@ -4,18 +4,41 @@
 //! the production server and integration tests.
 
 use axum::{
-    http::header::CONNECTION,
+    http::{header::CONNECTION, Request},
     routing::{get, post},
     Router,
 };
 use std::sync::Arc;
-use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
+use tower_http::{
+    set_header::SetResponseHeaderLayer,
+    trace::{MakeSpan, TraceLayer},
+};
+use tracing::{Level, Span};
 
 use crate::api;
 use crate::assets::AssetLoader;
 use crate::error::ApiError;
 use crate::models::AppConfig;
 use crate::services::{ContentCache, ContentPipeline, InMemoryRegistry, RenderService};
+
+/// Custom span maker that adds a unique request ID to each request's tracing span.
+#[derive(Clone, Copy)]
+struct RequestIdSpan;
+
+impl<B> MakeSpan<B> for RequestIdSpan {
+    fn make_span(&mut self, request: &Request<B>) -> Span {
+        // Generate a short unique request ID (first 8 chars of a random hex string)
+        let request_id = format!("{:08x}", rand::random::<u32>());
+
+        tracing::span!(
+            Level::INFO,
+            "request",
+            request_id = %request_id,
+            method = %request.method(),
+            uri = %request.uri(),
+        )
+    }
+}
 
 /// Application state shared across all handlers.
 #[derive(Clone)]
@@ -59,9 +82,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/log", post(api::handle_log))
         // Health check
         .route("/health", get(|| async { "OK" }))
-        // Add state and tracing
+        // Add state and tracing with request IDs
         .with_state(state)
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http().make_span_with(RequestIdSpan))
         // Disable keep-alive: ESP32 HTTPClient defaults to keep-alive but never
         // reuses connections, causing orphaned connections to accumulate.
         // See: https://github.com/usetrmnl/trmnl-firmware/pull/274

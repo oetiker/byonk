@@ -58,6 +58,7 @@ rust-embed = { version = "8", features = ["include-exclude"] }
 base64 = "0.22"
 regex = "1"
 fast_qr = { version = "0.13", features = ["svg"] }
+percent-encoding = "2"
 
 [dev-dependencies]
 # HTTP testing

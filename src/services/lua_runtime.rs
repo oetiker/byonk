@@ -128,6 +128,25 @@ impl LuaRuntime {
         })?;
         globals.set("base64_encode", base64_encode)?;
 
+        // url_encode(string) -> string
+        // URL-encodes a string for use in URLs (query parameters, path segments)
+        let url_encode = lua.create_function(|_, s: String| {
+            use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+            Ok(utf8_percent_encode(&s, NON_ALPHANUMERIC).to_string())
+        })?;
+        globals.set("url_encode", url_encode)?;
+
+        // url_decode(string) -> string
+        // Decodes a URL-encoded string
+        let url_decode = lua.create_function(|_, s: String| {
+            use percent_encoding::percent_decode_str;
+            percent_decode_str(&s)
+                .decode_utf8()
+                .map(|cow| cow.into_owned())
+                .map_err(|e| mlua::Error::external(format!("URL decode error: {e}")))
+        })?;
+        globals.set("url_decode", url_decode)?;
+
         // read_asset(path) -> string (binary data)
         // Reads from screens/<screen_name>/<path>
         let asset_loader = self.asset_loader.clone();

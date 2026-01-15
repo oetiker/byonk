@@ -7,6 +7,7 @@ use serde::Serialize;
 use std::sync::Arc;
 use utoipa::ToSchema;
 
+use super::headers::HeaderMapExt;
 use crate::error::ApiError;
 use crate::models::{Device, DeviceId, DeviceModel};
 use crate::services::DeviceRegistry;
@@ -52,20 +53,9 @@ pub async fn handle_setup<R: DeviceRegistry>(
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
     // Extract headers
-    let device_id_str = headers
-        .get("ID")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(ApiError::MissingHeader("ID"))?;
-
-    let fw_version = headers
-        .get("FW-Version")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("unknown");
-
-    let model_str = headers
-        .get("Model")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("og");
+    let device_id_str = headers.require_str("ID")?;
+    let fw_version = headers.get_str("FW-Version").unwrap_or("unknown");
+    let model_str = headers.get_str("Model").unwrap_or("og");
 
     let model = DeviceModel::parse(model_str);
     let device_id = DeviceId::new(device_id_str);

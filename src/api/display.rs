@@ -172,8 +172,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                                     height,
                                 );
                                 let hash = cached.content_hash.clone();
-                                let rt = tokio::runtime::Handle::current();
-                                rt.block_on(cache.store(cached));
+                                cache.store(cached);
                                 (result.refresh_rate, false, Some(hash), None)
                             }
                             Err(e) => {
@@ -187,8 +186,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                                     height,
                                 );
                                 let hash = cached.content_hash.clone();
-                                let rt = tokio::runtime::Handle::current();
-                                rt.block_on(cache.store(cached));
+                                cache.store(cached);
                                 (60, false, Some(hash), Some(error_msg))
                             }
                         }
@@ -200,8 +198,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                     let error_svg = pipeline.render_error_svg(&error_msg);
                     let cached = CachedContent::new(error_svg, "_error".to_string(), width, height);
                     let hash = cached.content_hash.clone();
-                    let rt = tokio::runtime::Handle::current();
-                    rt.block_on(cache.store(cached));
+                    cache.store(cached);
                     (60, false, Some(hash), Some(error_msg))
                 }
             }
@@ -288,7 +285,7 @@ pub async fn handle_image<R: DeviceRegistry>(
     let content_hash = hash_with_ext.strip_suffix(".png").unwrap_or(&hash_with_ext);
 
     // Get cached SVG by content hash and render to PNG
-    let cached = content_cache.get(content_hash).await.ok_or_else(|| {
+    let cached = content_cache.get(content_hash).ok_or_else(|| {
         tracing::warn!(content_hash = %content_hash, "Content not found in cache");
         ApiError::NotFound
     })?;

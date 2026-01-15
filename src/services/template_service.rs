@@ -1,8 +1,19 @@
+use regex::Regex;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tera::{Context, Tera};
 
 use crate::assets::AssetLoader;
+
+/// Compiled regex for matching image href attributes in SVG.
+/// Uses OnceLock to compile once and reuse across all render calls.
+fn image_href_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r#"<image\s+([^>]*?)(?:xlink:)?href\s*=\s*"([^"]+)"([^>]*)>"#)
+            .expect("Failed to compile image href regex")
+    })
+}
 
 /// Error type for template rendering
 #[derive(Debug, thiserror::Error)]
@@ -114,12 +125,9 @@ impl TemplateService {
     /// `screens/<screen_name>/logo.png`.
     fn resolve_image_refs(&self, svg: &str, screen_name: &str) -> Result<String, TemplateError> {
         use base64::Engine;
-        use regex::Regex;
 
-        // Match <image ... href="..." or xlink:href="..." ...>
-        // We need to handle both href and xlink:href attributes
-        let re = Regex::new(r#"<image\s+([^>]*?)(?:xlink:)?href\s*=\s*"([^"]+)"([^>]*)>"#)
-            .map_err(|e| TemplateError::ImageResolution(format!("Regex error: {e}")))?;
+        // Use pre-compiled regex for matching image href attributes
+        let re = image_href_regex();
 
         let mut result = svg.to_string();
 

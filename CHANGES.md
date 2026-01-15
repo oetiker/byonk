@@ -11,7 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Content cache now uses synchronous `std::sync::RwLock` instead of `tokio::sync::RwLock` to avoid nested runtime blocking when called from `spawn_blocking` contexts
+
 ### Fixed
+
+- Fixed unbounded cache growth: content cache now uses LRU eviction with max 100 entries to prevent memory leaks in long-running deployments
+- Fixed nested runtime blocking in display handler: removed `block_on()` calls inside `spawn_blocking()` which could cause deadlocks under load
+- Fixed regex recompilation: image href regex in template service is now compiled once using `OnceLock` instead of on every render call
 
 ## 0.7.1 - 2026-01-14
 

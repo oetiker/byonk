@@ -108,6 +108,7 @@ local response = http_request("https://api.example.com/users/123", {
 | `ca_cert` | string | none | Path to CA certificate PEM file for server verification |
 | `client_cert` | string | none | Path to client certificate PEM file for mTLS |
 | `client_key` | string | none | Path to client private key PEM file for mTLS |
+| `cache_ttl` | number | none | Cache response for N seconds (LRU cache, max 100 entries) |
 
 **Returns:** `string` - The response body
 
@@ -178,6 +179,28 @@ local response = http_get("https://secure-api.example.com/data", {
   client_cert = "/path/to/client.pem",
   client_key = "/path/to/client-key.pem"
 })
+
+-- Cache response for 5 minutes (300 seconds)
+-- Useful for APIs with rate limits or data that doesn't change frequently
+local response = http_get("https://api.weather.com/current", {
+  params = { city = "Zurich" },
+  cache_ttl = 300  -- Cache for 5 minutes
+})
+```
+
+**Response Caching:**
+
+The `cache_ttl` option enables response caching with LRU (Least Recently Used) eviction:
+
+- Responses are cached in memory for the specified number of seconds
+- Cache key is based on URL, method, params, headers, and body
+- Maximum 100 cached entries; oldest entries are evicted when full
+- Cache is shared across all script executions
+- Useful for reducing API calls to rate-limited services or slow APIs
+
+```lua
+-- First call fetches from API, subsequent calls within 60s use cache
+local data = http_get("https://api.example.com/data", { cache_ttl = 60 })
 ```
 
 ### http_post(url, options?)

@@ -181,8 +181,11 @@ impl LuaRuntime {
         //   ca_cert: path to CA certificate PEM file for server verification
         //   client_cert: path to client certificate PEM file for mTLS
         //   client_key: path to client private key PEM file for mTLS
+        //   cache_ttl: number of seconds to cache the response (default: no caching)
         let http_request =
             lua.create_function(|lua, (url, options): (String, Option<Table>)| {
+                use super::http_cache;
+
                 let method = options
                     .as_ref()
                     .and_then(|opts| opts.get::<String>("method").ok())
@@ -195,11 +198,17 @@ impl LuaRuntime {
                 let mut follow_redirects = true;
                 let mut max_redirects = 10usize;
                 let mut danger_accept_invalid_certs = false;
+                let mut cache_ttl: Option<u64> = None;
 
                 // Certificate paths (will be parsed from options)
                 let mut ca_cert_path: Option<String> = None;
                 let mut client_cert_path: Option<String> = None;
                 let mut client_key_path: Option<String> = None;
+
+                // For cache key computation
+                let mut params_for_cache: Option<Vec<(String, String)>> = None;
+                let mut headers_for_cache: Option<Vec<(String, String)>> = None;
+                let mut body_for_cache: Option<String> = None;
 
                 // Parse options if provided
                 if let Some(ref opts) = options {
@@ -223,6 +232,9 @@ impl LuaRuntime {
                     }
                     if let Ok(key) = opts.get::<String>("client_key") {
                         client_key_path = Some(key);
+                    }
+                    if let Ok(ttl) = opts.get::<u64>("cache_ttl") {
+                        cache_ttl = Some(ttl);
                     }
                 }
 
@@ -315,6 +327,7 @@ impl LuaRuntime {
                         "ca_cert",
                         "client_cert",
                         "client_key",
+                        "cache_ttl",
                     ];
                     for key in opts.clone().pairs::<String, Value>().flatten() {
                         if !KNOWN_OPTIONS.contains(&key.0.as_str()) {
@@ -344,14 +357,18 @@ impl LuaRuntime {
                                 (k, v_str)
                             })
                             .collect();
+                        params_for_cache = Some(params.clone());
                         request = request.query(&params);
                     }
 
                     // Add custom headers
                     if let Ok(headers_table) = opts.get::<Table>("headers") {
+                        let mut headers_vec = Vec::new();
                         for (name, value) in headers_table.pairs::<String, String>().flatten() {
+                            headers_vec.push((name.clone(), value.clone()));
                             request = request.header(&name, &value);
                         }
+                        headers_for_cache = Some(headers_vec);
                     }
 
                     // Add basic auth
@@ -369,23 +386,53 @@ impl LuaRuntime {
                         let json_str = serde_json::to_string(&json_value).map_err(|e| {
                             mlua::Error::external(format!("JSON encode error: {e}"))
                         })?;
+                        body_for_cache = Some(json_str.clone());
                         request = request
                             .header("Content-Type", "application/json")
                             .body(json_str);
                     } else if let Ok(body) = opts.get::<String>("body") {
+                        body_for_cache = Some(body.clone());
                         request = request.body(body);
                     }
                 }
 
-                match request.send() {
-                    Ok(response) => match response.text() {
-                        Ok(text) => Ok(text),
-                        Err(e) => Err(mlua::Error::external(format!(
-                            "Failed to read response: {e}"
-                        ))),
-                    },
-                    Err(e) => Err(mlua::Error::external(format!("HTTP request failed: {e}"))),
+                // Compute cache key and check cache if caching is enabled
+                let cache_key = cache_ttl.map(|_| {
+                    http_cache::compute_cache_key(
+                        &url,
+                        &method,
+                        params_for_cache.as_deref(),
+                        headers_for_cache.as_deref(),
+                        body_for_cache.as_deref(),
+                    )
+                });
+
+                // Check cache first if caching is enabled
+                if let Some(ref key) = cache_key {
+                    if let Some(cached_response) = http_cache::get_cached(key) {
+                        return Ok(cached_response);
+                    }
                 }
+
+                // Make the actual request
+                let response_text = match request.send() {
+                    Ok(response) => match response.text() {
+                        Ok(text) => text,
+                        Err(e) => {
+                            return Err(mlua::Error::external(format!(
+                                "Failed to read response: {e}"
+                            )))
+                        }
+                    },
+                    Err(e) => return Err(mlua::Error::external(format!("HTTP request failed: {e}"))),
+                };
+
+                // Store in cache if caching is enabled
+                if let (Some(key), Some(ttl)) = (cache_key, cache_ttl) {
+                    http_cache::store_cached(key, response_text.clone(), ttl);
+                }
+
+                Ok(response_text)
             })?;
         globals.set("http_request", http_request.clone())?;
 

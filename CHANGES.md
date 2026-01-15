@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Lua `url_encode(string)` function: URL-encode strings for safe use in URLs
 - Lua `url_decode(string)` function: Decode URL-encoded strings
+- HTTP response caching: New `cache_ttl` option for `http_request`/`http_get` to cache responses (LRU cache with max 100 entries)
 - Request tracing: Each HTTP request now gets a unique request ID for log correlation
 - Header parsing utilities: Internal `HeaderMapExt` trait for cleaner API handler code
 

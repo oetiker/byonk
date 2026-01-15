@@ -608,4 +608,121 @@ mod tests {
         assert!(screens.iter().any(|s| s == "components/footer.svg"));
         assert!(screens.iter().any(|s| s == "components/status_bar.svg"));
     }
+
+    #[test]
+    fn test_invalid_layout_syntax_warns_but_continues() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create a layout with invalid Tera syntax
+        let layouts_dir = temp_dir.path().join("layouts");
+        std::fs::create_dir(&layouts_dir).unwrap();
+        std::fs::write(
+            layouts_dir.join("broken.svg"),
+            r#"<svg>{% invalid_tag %}</svg>"#,
+        )
+        .unwrap();
+
+        // Create a valid layout
+        std::fs::write(
+            layouts_dir.join("valid.svg"),
+            r#"<svg>{% block content %}{% endblock %}</svg>"#,
+        )
+        .unwrap();
+
+        // Create main template using the valid layout
+        std::fs::write(
+            temp_dir.path().join("test.svg"),
+            r#"{% extends "layouts/valid.svg" %}
+{% block content %}<text>Works</text>{% endblock %}"#,
+        )
+        .unwrap();
+
+        let loader = Arc::new(crate::assets::AssetLoader::new(
+            Some(temp_dir.path().to_path_buf()),
+            None,
+            None,
+        ));
+        let service = TemplateService::new(loader).unwrap();
+
+        // Should still work with valid layout despite broken one existing
+        let data = serde_json::json!({});
+        let result = service.render(Path::new("test.svg"), &data, "test");
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("Works"));
+    }
+
+    #[test]
+    fn test_missing_layout_fails() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create template that extends a non-existent layout
+        std::fs::write(
+            temp_dir.path().join("test.svg"),
+            r#"{% extends "layouts/nonexistent.svg" %}
+{% block content %}<text>Hello</text>{% endblock %}"#,
+        )
+        .unwrap();
+
+        let loader = Arc::new(crate::assets::AssetLoader::new(
+            Some(temp_dir.path().to_path_buf()),
+            None,
+            None,
+        ));
+        let service = TemplateService::new(loader).unwrap();
+
+        let data = serde_json::json!({});
+        let result = service.render(Path::new("test.svg"), &data, "test");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_missing_include_fails() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create template that includes a non-existent component
+        std::fs::write(
+            temp_dir.path().join("test.svg"),
+            r#"<svg>{% include "components/nonexistent.svg" %}</svg>"#,
+        )
+        .unwrap();
+
+        let loader = Arc::new(crate::assets::AssetLoader::new(
+            Some(temp_dir.path().to_path_buf()),
+            None,
+            None,
+        ));
+        let service = TemplateService::new(loader).unwrap();
+
+        let data = serde_json::json!({});
+        let result = service.render(Path::new("test.svg"), &data, "test");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_empty_layouts_dir_works() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create empty layouts directory
+        let layouts_dir = temp_dir.path().join("layouts");
+        std::fs::create_dir(&layouts_dir).unwrap();
+
+        // Create a simple template (no extends)
+        std::fs::write(
+            temp_dir.path().join("test.svg"),
+            r#"<svg><text>Simple</text></svg>"#,
+        )
+        .unwrap();
+
+        let loader = Arc::new(crate::assets::AssetLoader::new(
+            Some(temp_dir.path().to_path_buf()),
+            None,
+            None,
+        ));
+        let service = TemplateService::new(loader).unwrap();
+
+        let data = serde_json::json!({});
+        let result = service.render(Path::new("test.svg"), &data, "test");
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("Simple"));
+    }
 }

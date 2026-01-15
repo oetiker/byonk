@@ -162,7 +162,8 @@ pub fn compute_cache_key(
     }
 
     let result = hasher.finalize();
-    hex::encode(&result[..16]) // Use first 16 bytes (32 hex chars)
+    // Use first 16 bytes of hash, encoded as 32 hex characters
+    hex::encode(&result[..16])
 }
 
 /// Try to get a cached response for the given request.

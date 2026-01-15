@@ -130,9 +130,41 @@ impl LuaRuntime {
 
         // url_encode(string) -> string
         // URL-encodes a string for use in URLs (query parameters, path segments)
+        // Per RFC 3986, unreserved characters (A-Z, a-z, 0-9, -, ., _, ~) are NOT encoded
         let url_encode = lua.create_function(|_, s: String| {
-            use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
-            Ok(utf8_percent_encode(&s, NON_ALPHANUMERIC).to_string())
+            use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+            // Encode everything except unreserved characters per RFC 3986
+            const ENCODE_SET: &AsciiSet = &CONTROLS
+                .add(b' ')
+                .add(b'!')
+                .add(b'"')
+                .add(b'#')
+                .add(b'$')
+                .add(b'%')
+                .add(b'&')
+                .add(b'\'')
+                .add(b'(')
+                .add(b')')
+                .add(b'*')
+                .add(b'+')
+                .add(b',')
+                .add(b'/')
+                .add(b':')
+                .add(b';')
+                .add(b'<')
+                .add(b'=')
+                .add(b'>')
+                .add(b'?')
+                .add(b'@')
+                .add(b'[')
+                .add(b'\\')
+                .add(b']')
+                .add(b'^')
+                .add(b'`')
+                .add(b'{')
+                .add(b'|')
+                .add(b'}');
+            Ok(utf8_percent_encode(&s, ENCODE_SET).to_string())
         })?;
         globals.set("url_encode", url_encode)?;
 

@@ -152,7 +152,11 @@ impl AssetLoader {
         result
     }
 
-    /// Recursively collect screen files from a directory
+    /// Recursively collect screen files from a directory.
+    ///
+    /// Paths are normalized to use forward slashes regardless of platform,
+    /// matching the embedded asset paths from rust-embed and Tera template
+    /// references (e.g., `{% extends "layouts/base.svg" %}`).
     fn collect_screen_files(base_dir: &Path, current_dir: &Path, files: &mut HashSet<String>) {
         if let Ok(entries) = fs::read_dir(current_dir) {
             for entry in entries.flatten() {
@@ -165,7 +169,7 @@ impl AssetLoader {
                         // Get relative path from base_dir
                         if let Ok(relative) = path.strip_prefix(base_dir) {
                             if let Some(relative_str) = relative.to_str() {
-                                // Normalize path separators to forward slashes
+                                // Normalize to forward slashes for cross-platform consistency
                                 files.insert(relative_str.replace('\\', "/"));
                             }
                         }

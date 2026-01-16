@@ -9,11 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.8.2 - 2026-01-16
+
+### New
+
 - Versioned documentation: Documentation now tracks releases with version selector dropdown
 - Documentation shows latest stable release by default, with option to switch to dev or older versions
 - Dev documentation includes warning banner indicating unreleased content
 - Backfill support: Run docs workflow with "backfill" option to rebuild docs for past releases
-
 ### Changed
 
 ### Fixed

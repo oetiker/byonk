@@ -9,9 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- Template inheritance: Use `{% extends "layouts/base.svg" %}` to create reusable base layouts with overridable blocks
+- Template includes: Use `{% include "components/header.svg" %}` to embed reusable SVG components
+- Built-in layout and components: `layouts/base.svg`, `components/header.svg`, `components/footer.svg`, `components/status_bar.svg`
+- Lua `url_encode(string)` function: URL-encode strings for safe use in URLs
+- Lua `url_decode(string)` function: Decode URL-encoded strings
+- HTTP response caching: New `cache_ttl` option for `http_request`/`http_get` to cache responses (LRU cache with max 100 entries)
+- Request tracing: Each HTTP request now gets a unique request ID for log correlation
+- Header parsing utilities: Internal `HeaderMapExt` trait for cleaner API handler code
+
 ### Changed
 
+- Content cache now uses synchronous `std::sync::RwLock` instead of `tokio::sync::RwLock` to avoid nested runtime blocking when called from `spawn_blocking` contexts
+- Simplified header parsing in API handlers using new `HeaderMapExt` utilities
+
 ### Fixed
+
+- Fixed unbounded cache growth: content cache now uses LRU eviction with max 100 entries to prevent memory leaks in long-running deployments
+- Fixed nested runtime blocking in display handler: removed `block_on()` calls inside `spawn_blocking()` which could cause deadlocks under load
+- Fixed regex recompilation: image href regex in template service is now compiled once using `OnceLock` instead of on every render call
+- Fixed trailing slash compatibility: API endpoints now accept URLs with or without trailing slashes (e.g., `/api/setup/`) for TRMNL firmware 1.6.9+ compatibility
+- Removed unused `handle_display_json` function (dead code cleanup)
 
 ## 0.7.1 - 2026-01-14
 

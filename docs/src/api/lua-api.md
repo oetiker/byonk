@@ -108,6 +108,7 @@ local response = http_request("https://api.example.com/users/123", {
 | `ca_cert` | string | none | Path to CA certificate PEM file for server verification |
 | `client_cert` | string | none | Path to client certificate PEM file for mTLS |
 | `client_key` | string | none | Path to client private key PEM file for mTLS |
+| `cache_ttl` | number | none | Cache response for N seconds (LRU cache, max 100 entries) |
 
 **Returns:** `string` - The response body
 
@@ -178,6 +179,28 @@ local response = http_get("https://secure-api.example.com/data", {
   client_cert = "/path/to/client.pem",
   client_key = "/path/to/client-key.pem"
 })
+
+-- Cache response for 5 minutes (300 seconds)
+-- Useful for APIs with rate limits or data that doesn't change frequently
+local response = http_get("https://api.weather.com/current", {
+  params = { city = "Zurich" },
+  cache_ttl = 300  -- Cache for 5 minutes
+})
+```
+
+**Response Caching:**
+
+The `cache_ttl` option enables response caching with LRU (Least Recently Used) eviction:
+
+- Responses are cached in memory for the specified number of seconds
+- Cache key is based on URL, method, params, headers, and body
+- Maximum 100 cached entries; oldest entries are evicted when full
+- Cache is shared across all script executions
+- Useful for reducing API calls to rate-limited services or slow APIs
+
+```lua
+-- First call fetches from API, subsequent calls within 60s use cache
+local data = http_get("https://api.example.com/data", { cache_ttl = 60 })
 ```
 
 ### http_post(url, options?)
@@ -546,6 +569,52 @@ local encoded = base64_encode(raw_bytes)
 local image_data = read_asset("icon.png")
 local data_uri = "data:image/png;base64," .. base64_encode(image_data)
 ```
+
+## URL Encoding Functions
+
+### url_encode(str)
+
+URL-encodes a string for safe use in URLs (query parameters, path segments).
+
+```lua
+local encoded = url_encode("hello world")  -- "hello%20world"
+local station = url_encode("Zürich, HB")   -- "Z%C3%BCrich%2C%20HB"
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `str` | string | String to URL-encode |
+
+**Returns:** `string` - URL-encoded string
+
+**Example: Building a URL with special characters:**
+
+```lua
+local station = params.station  -- "Zürich, HB"
+local url = "https://api.example.com/departures?station=" .. url_encode(station)
+-- Result: https://api.example.com/departures?station=Z%C3%BCrich%2C%20HB
+```
+
+**Note:** When using the `params` option in `http_get`/`http_request`, parameters are automatically URL-encoded. Use `url_encode` only when building URLs manually.
+
+### url_decode(str)
+
+Decodes a URL-encoded string.
+
+```lua
+local decoded = url_decode("hello%20world")  -- "hello world"
+local station = url_decode("Z%C3%BCrich%2C%20HB")  -- "Zürich, HB"
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `str` | string | URL-encoded string to decode |
+
+**Returns:** `string` - Decoded string
+
+**Throws:** Error if the string contains invalid UTF-8 after decoding
 
 ## QR Code Functions
 

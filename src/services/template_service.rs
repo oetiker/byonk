@@ -1,8 +1,23 @@
+use regex::Regex;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tera::{Context, Tera};
 
 use crate::assets::AssetLoader;
+
+/// Directories to scan for reusable templates
+const LAYOUT_DIR: &str = "layouts";
+const COMPONENT_DIR: &str = "components";
+
+/// Compiled regex for matching image href attributes in SVG.
+/// Uses OnceLock to compile once and reuse across all render calls.
+fn image_href_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r#"<image\s+([^>]*?)(?:xlink:)?href\s*=\s*"([^"]+)"([^>]*)>"#)
+            .expect("Failed to compile image href regex")
+    })
+}
 
 /// Error type for template rendering
 #[derive(Debug, thiserror::Error)]
@@ -78,6 +93,30 @@ impl TemplateService {
         );
     }
 
+    /// Load all templates from a subdirectory (layouts or components).
+    ///
+    /// Templates are named as "layouts/name.svg" or "components/name.svg" for use
+    /// in `{% extends %}` and `{% include %}` directives.
+    fn load_templates_from_dir(&self, tera: &mut Tera, subdir: &str) {
+        // List all screen files and filter by subdirectory
+        for file in self.asset_loader.list_screens() {
+            if file.starts_with(subdir) && file.ends_with(".svg") {
+                // Try to load the template
+                if let Ok(content) = self.asset_loader.read_screen_string(Path::new(&file)) {
+                    if let Err(e) = tera.add_raw_template(&file, &content) {
+                        tracing::warn!(
+                            template = %file,
+                            error = %e,
+                            "Failed to load template"
+                        );
+                    } else {
+                        tracing::trace!(template = %file, "Loaded reusable template");
+                    }
+                }
+            }
+        }
+    }
+
     /// Render a template with the given data
     /// Templates are always loaded fresh to support live editing
     pub fn render(
@@ -95,6 +134,12 @@ impl TemplateService {
             .map_err(|e| TemplateError::NotFound(e.to_string()))?;
 
         let mut tera = Tera::default();
+
+        // Load reusable templates (layouts for extends, components for include)
+        self.load_templates_from_dir(&mut tera, LAYOUT_DIR);
+        self.load_templates_from_dir(&mut tera, COMPONENT_DIR);
+
+        // Add the main template
         tera.add_raw_template(template_name, &template_content)?;
         Self::register_filters(&mut tera);
 
@@ -114,12 +159,9 @@ impl TemplateService {
     /// `screens/<screen_name>/logo.png`.
     fn resolve_image_refs(&self, svg: &str, screen_name: &str) -> Result<String, TemplateError> {
         use base64::Engine;
-        use regex::Regex;
 
-        // Match <image ... href="..." or xlink:href="..." ...>
-        // We need to handle both href and xlink:href attributes
-        let re = Regex::new(r#"<image\s+([^>]*?)(?:xlink:)?href\s*=\s*"([^"]+)"([^>]*)>"#)
-            .map_err(|e| TemplateError::ImageResolution(format!("Regex error: {e}")))?;
+        // Use pre-compiled regex for matching image href attributes
+        let re = image_href_regex();
 
         let mut result = svg.to_string();
 
@@ -284,5 +326,403 @@ mod tests {
         // Should be escaped
         assert!(error_svg.contains("&lt;script&gt;"));
         assert!(!error_svg.contains("<script>alert"));
+    }
+
+    #[test]
+    fn test_template_extends() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create layouts directory and base template
+        let layouts_dir = temp_dir.path().join("layouts");
+        std::fs::create_dir(&layouts_dir).unwrap();
+        std::fs::write(
+            layouts_dir.join("base.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg">
+<text>{% block title %}Default{% endblock %}</text>
+<g>{% block content %}{% endblock %}</g>
+</svg>"#,
+        )
+        .unwrap();
+
+        // Create main template that extends base
+        std::fs::write(
+            temp_dir.path().join("myscreen.svg"),
+            r#"{% extends "layouts/base.svg" %}
+{% block title %}My Title{% endblock %}
+{% block content %}<rect width="100"/>{% endblock %}"#,
+        )
+        .unwrap();
+
+        let loader = Arc::new(crate::assets::AssetLoader::new(
+            Some(temp_dir.path().to_path_buf()),
+            None,
+            None,
+        ));
+        let service = TemplateService::new(loader).unwrap();
+
+        let data = serde_json::json!({});
+        let result = service
+            .render(Path::new("myscreen.svg"), &data, "myscreen")
+            .unwrap();
+
+        assert!(result.contains("My Title"));
+        assert!(result.contains("<rect width=\"100\"/>"));
+        assert!(!result.contains("Default"));
+    }
+
+    #[test]
+    fn test_template_include() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create components directory and component template
+        let components_dir = temp_dir.path().join("components");
+        std::fs::create_dir(&components_dir).unwrap();
+        std::fs::write(
+            components_dir.join("header.svg"),
+            r#"<rect fill="black" height="60"/><text>{{ title }}</text>"#,
+        )
+        .unwrap();
+
+        // Create main template that includes the component
+        std::fs::write(
+            temp_dir.path().join("myscreen.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg">
+{% include "components/header.svg" %}
+<text>Body content</text>
+</svg>"#,
+        )
+        .unwrap();
+
+        let loader = Arc::new(crate::assets::AssetLoader::new(
+            Some(temp_dir.path().to_path_buf()),
+            None,
+            None,
+        ));
+        let service = TemplateService::new(loader).unwrap();
+
+        let data = serde_json::json!({"title": "Dashboard"});
+        let result = service
+            .render(Path::new("myscreen.svg"), &data, "myscreen")
+            .unwrap();
+
+        assert!(result.contains("<rect fill=\"black\" height=\"60\"/>"));
+        assert!(result.contains("Dashboard"));
+        assert!(result.contains("Body content"));
+    }
+
+    #[test]
+    fn test_template_extends_with_variables() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create layouts directory and base template with variable
+        let layouts_dir = temp_dir.path().join("layouts");
+        std::fs::create_dir(&layouts_dir).unwrap();
+        std::fs::write(
+            layouts_dir.join("base.svg"),
+            r#"<svg width="{{ width | default(value=800) }}">
+{% block content %}{% endblock %}
+</svg>"#,
+        )
+        .unwrap();
+
+        // Create main template
+        std::fs::write(
+            temp_dir.path().join("test.svg"),
+            r#"{% extends "layouts/base.svg" %}
+{% block content %}<text>{{ message }}</text>{% endblock %}"#,
+        )
+        .unwrap();
+
+        let loader = Arc::new(crate::assets::AssetLoader::new(
+            Some(temp_dir.path().to_path_buf()),
+            None,
+            None,
+        ));
+        let service = TemplateService::new(loader).unwrap();
+
+        let data = serde_json::json!({"width": 1024, "message": "Hello"});
+        let result = service
+            .render(Path::new("test.svg"), &data, "test")
+            .unwrap();
+
+        assert!(result.contains("width=\"1024\""));
+        assert!(result.contains("<text>Hello</text>"));
+    }
+
+    #[test]
+    fn test_template_include_with_context() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create component that uses variables from parent context
+        let components_dir = temp_dir.path().join("components");
+        std::fs::create_dir(&components_dir).unwrap();
+        std::fs::write(
+            components_dir.join("item.svg"),
+            r#"<text>{{ item.name }}: {{ item.value }}</text>"#,
+        )
+        .unwrap();
+
+        // Create main template
+        std::fs::write(
+            temp_dir.path().join("test.svg"),
+            r#"<svg>
+{% for item in items %}
+{% include "components/item.svg" %}
+{% endfor %}
+</svg>"#,
+        )
+        .unwrap();
+
+        let loader = Arc::new(crate::assets::AssetLoader::new(
+            Some(temp_dir.path().to_path_buf()),
+            None,
+            None,
+        ));
+        let service = TemplateService::new(loader).unwrap();
+
+        let data = serde_json::json!({
+            "items": [
+                {"name": "CPU", "value": "80%"},
+                {"name": "RAM", "value": "4GB"}
+            ]
+        });
+        let result = service
+            .render(Path::new("test.svg"), &data, "test")
+            .unwrap();
+
+        assert!(result.contains("CPU: 80%"));
+        assert!(result.contains("RAM: 4GB"));
+    }
+
+    #[test]
+    fn test_template_extends_and_include_combined() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create layouts directory
+        let layouts_dir = temp_dir.path().join("layouts");
+        std::fs::create_dir(&layouts_dir).unwrap();
+        std::fs::write(
+            layouts_dir.join("base.svg"),
+            r#"<svg>
+<g id="header">{% block header %}{% endblock %}</g>
+<g id="content">{% block content %}{% endblock %}</g>
+</svg>"#,
+        )
+        .unwrap();
+
+        // Create components directory
+        let components_dir = temp_dir.path().join("components");
+        std::fs::create_dir(&components_dir).unwrap();
+        std::fs::write(
+            components_dir.join("nav.svg"),
+            r#"<rect class="nav"/><text>{{ nav_title }}</text>"#,
+        )
+        .unwrap();
+
+        // Create main template using both extends and include
+        std::fs::write(
+            temp_dir.path().join("dashboard.svg"),
+            r#"{% extends "layouts/base.svg" %}
+{% block header %}
+{% include "components/nav.svg" %}
+{% endblock %}
+{% block content %}
+<text>Dashboard Content</text>
+{% endblock %}"#,
+        )
+        .unwrap();
+
+        let loader = Arc::new(crate::assets::AssetLoader::new(
+            Some(temp_dir.path().to_path_buf()),
+            None,
+            None,
+        ));
+        let service = TemplateService::new(loader).unwrap();
+
+        let data = serde_json::json!({"nav_title": "Navigation"});
+        let result = service
+            .render(Path::new("dashboard.svg"), &data, "dashboard")
+            .unwrap();
+
+        assert!(result.contains("<rect class=\"nav\"/>"));
+        assert!(result.contains("Navigation"));
+        assert!(result.contains("Dashboard Content"));
+    }
+
+    #[test]
+    fn test_template_extends_block_default() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create base template with default block content
+        let layouts_dir = temp_dir.path().join("layouts");
+        std::fs::create_dir(&layouts_dir).unwrap();
+        std::fs::write(
+            layouts_dir.join("base.svg"),
+            r#"<svg>
+<text>{% block title %}Default Title{% endblock %}</text>
+<text>{% block subtitle %}Default Subtitle{% endblock %}</text>
+</svg>"#,
+        )
+        .unwrap();
+
+        // Override only title, keep default subtitle
+        std::fs::write(
+            temp_dir.path().join("test.svg"),
+            r#"{% extends "layouts/base.svg" %}
+{% block title %}Custom Title{% endblock %}"#,
+        )
+        .unwrap();
+
+        let loader = Arc::new(crate::assets::AssetLoader::new(
+            Some(temp_dir.path().to_path_buf()),
+            None,
+            None,
+        ));
+        let service = TemplateService::new(loader).unwrap();
+
+        let data = serde_json::json!({});
+        let result = service
+            .render(Path::new("test.svg"), &data, "test")
+            .unwrap();
+
+        assert!(result.contains("Custom Title"));
+        assert!(result.contains("Default Subtitle"));
+    }
+
+    #[test]
+    fn test_builtin_layouts_loaded() {
+        // Test that embedded layouts are accessible
+        let loader = Arc::new(crate::assets::AssetLoader::new(None, None, None));
+        let screens = loader.list_screens();
+
+        assert!(screens.iter().any(|s| s == "layouts/base.svg"));
+    }
+
+    #[test]
+    fn test_builtin_components_loaded() {
+        // Test that embedded components are accessible
+        let loader = Arc::new(crate::assets::AssetLoader::new(None, None, None));
+        let screens = loader.list_screens();
+
+        assert!(screens.iter().any(|s| s == "components/header.svg"));
+        assert!(screens.iter().any(|s| s == "components/footer.svg"));
+        assert!(screens.iter().any(|s| s == "components/status_bar.svg"));
+    }
+
+    #[test]
+    fn test_invalid_layout_syntax_warns_but_continues() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create a layout with invalid Tera syntax
+        let layouts_dir = temp_dir.path().join("layouts");
+        std::fs::create_dir(&layouts_dir).unwrap();
+        std::fs::write(
+            layouts_dir.join("broken.svg"),
+            r#"<svg>{% invalid_tag %}</svg>"#,
+        )
+        .unwrap();
+
+        // Create a valid layout
+        std::fs::write(
+            layouts_dir.join("valid.svg"),
+            r#"<svg>{% block content %}{% endblock %}</svg>"#,
+        )
+        .unwrap();
+
+        // Create main template using the valid layout
+        std::fs::write(
+            temp_dir.path().join("test.svg"),
+            r#"{% extends "layouts/valid.svg" %}
+{% block content %}<text>Works</text>{% endblock %}"#,
+        )
+        .unwrap();
+
+        let loader = Arc::new(crate::assets::AssetLoader::new(
+            Some(temp_dir.path().to_path_buf()),
+            None,
+            None,
+        ));
+        let service = TemplateService::new(loader).unwrap();
+
+        // Should still work with valid layout despite broken one existing
+        let data = serde_json::json!({});
+        let result = service.render(Path::new("test.svg"), &data, "test");
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("Works"));
+    }
+
+    #[test]
+    fn test_missing_layout_fails() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create template that extends a non-existent layout
+        std::fs::write(
+            temp_dir.path().join("test.svg"),
+            r#"{% extends "layouts/nonexistent.svg" %}
+{% block content %}<text>Hello</text>{% endblock %}"#,
+        )
+        .unwrap();
+
+        let loader = Arc::new(crate::assets::AssetLoader::new(
+            Some(temp_dir.path().to_path_buf()),
+            None,
+            None,
+        ));
+        let service = TemplateService::new(loader).unwrap();
+
+        let data = serde_json::json!({});
+        let result = service.render(Path::new("test.svg"), &data, "test");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_missing_include_fails() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create template that includes a non-existent component
+        std::fs::write(
+            temp_dir.path().join("test.svg"),
+            r#"<svg>{% include "components/nonexistent.svg" %}</svg>"#,
+        )
+        .unwrap();
+
+        let loader = Arc::new(crate::assets::AssetLoader::new(
+            Some(temp_dir.path().to_path_buf()),
+            None,
+            None,
+        ));
+        let service = TemplateService::new(loader).unwrap();
+
+        let data = serde_json::json!({});
+        let result = service.render(Path::new("test.svg"), &data, "test");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_empty_layouts_dir_works() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create empty layouts directory
+        let layouts_dir = temp_dir.path().join("layouts");
+        std::fs::create_dir(&layouts_dir).unwrap();
+
+        // Create a simple template (no extends)
+        std::fs::write(
+            temp_dir.path().join("test.svg"),
+            r#"<svg><text>Simple</text></svg>"#,
+        )
+        .unwrap();
+
+        let loader = Arc::new(crate::assets::AssetLoader::new(
+            Some(temp_dir.path().to_path_buf()),
+            None,
+            None,
+        ));
+        let service = TemplateService::new(loader).unwrap();
+
+        let data = serde_json::json!({});
+        let result = service.render(Path::new("test.svg"), &data, "test");
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("Simple"));
     }
 }

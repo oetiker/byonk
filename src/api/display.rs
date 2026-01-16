@@ -8,6 +8,7 @@ use serde::Serialize;
 use std::sync::Arc;
 use utoipa::ToSchema;
 
+use super::headers::HeaderMapExt;
 use crate::error::ApiError;
 use crate::models::{ApiKey, Device, DeviceId, DeviceModel, DisplaySpec};
 use crate::services::{
@@ -51,30 +52,15 @@ pub async fn handle_display<R: DeviceRegistry>(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     // Extract required headers
-    let api_key_str = headers
-        .get("Access-Token")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(ApiError::MissingHeader("Access-Token"))?;
-
-    // Extract device ID (MAC address) for auto-registration
-    let device_id_str = headers
-        .get("ID")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(ApiError::MissingHeader("ID"))?;
+    let api_key_str = headers.require_str("Access-Token")?;
+    let device_id_str = headers.require_str("ID")?;
 
     // Parse and validate dimensions with bounds checking
     let width: u32 = headers
-        .get("Width")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse().ok())
-        .filter(|&w| w > 0 && w <= MAX_DISPLAY_WIDTH)
+        .get_parsed_filtered("Width", |&w| w > 0 && w <= MAX_DISPLAY_WIDTH)
         .unwrap_or(800);
-
     let height: u32 = headers
-        .get("Height")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse().ok())
-        .filter(|&h| h > 0 && h <= MAX_DISPLAY_HEIGHT)
+        .get_parsed_filtered("Height", |&h| h > 0 && h <= MAX_DISPLAY_HEIGHT)
         .unwrap_or(480);
 
     let api_key = ApiKey::new(api_key_str);
@@ -85,13 +71,9 @@ pub async fn handle_display<R: DeviceRegistry>(
         None => {
             // Auto-register the device using the MAC address from ID header
             let device_id = DeviceId::new(device_id_str);
-            let model_str = headers
-                .get("Model")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("og");
+            let model_str = headers.get_str("Model").unwrap_or("og");
             let fw_version = headers
-                .get("FW-Version")
-                .and_then(|v| v.to_str().ok())
+                .get_str("FW-Version")
                 .unwrap_or("unknown")
                 .to_string();
 
@@ -116,19 +98,10 @@ pub async fn handle_display<R: DeviceRegistry>(
     );
 
     // Update device metadata
-    if let Some(battery) = headers
-        .get("Battery-Voltage")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse().ok())
-    {
+    if let Some(battery) = headers.get_parsed::<f32>("Battery-Voltage") {
         device.battery_voltage = Some(battery);
     }
-
-    if let Some(rssi) = headers
-        .get("RSSI")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse().ok())
-    {
+    if let Some(rssi) = headers.get_parsed::<i32>("RSSI") {
         device.rssi = Some(rssi);
     }
 
@@ -172,8 +145,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                                     height,
                                 );
                                 let hash = cached.content_hash.clone();
-                                let rt = tokio::runtime::Handle::current();
-                                rt.block_on(cache.store(cached));
+                                cache.store(cached);
                                 (result.refresh_rate, false, Some(hash), None)
                             }
                             Err(e) => {
@@ -187,8 +159,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                                     height,
                                 );
                                 let hash = cached.content_hash.clone();
-                                let rt = tokio::runtime::Handle::current();
-                                rt.block_on(cache.store(cached));
+                                cache.store(cached);
                                 (60, false, Some(hash), Some(error_msg))
                             }
                         }
@@ -200,8 +171,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                     let error_svg = pipeline.render_error_svg(&error_msg);
                     let cached = CachedContent::new(error_svg, "_error".to_string(), width, height);
                     let hash = cached.content_hash.clone();
-                    let rt = tokio::runtime::Handle::current();
-                    rt.block_on(cache.store(cached));
+                    cache.store(cached);
                     (60, false, Some(hash), Some(error_msg))
                 }
             }
@@ -226,10 +196,7 @@ pub async fn handle_display<R: DeviceRegistry>(
         None
     } else if let Some(ref hash) = content_hash {
         // Build full image URL using content hash (no signature needed - hash is unpredictable)
-        let host = headers
-            .get("Host")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("localhost:3000");
+        let host = headers.get_str("Host").unwrap_or("localhost:3000");
 
         let url = format!("http://{host}/api/image/{hash}.png");
 
@@ -288,7 +255,7 @@ pub async fn handle_image<R: DeviceRegistry>(
     let content_hash = hash_with_ext.strip_suffix(".png").unwrap_or(&hash_with_ext);
 
     // Get cached SVG by content hash and render to PNG
-    let cached = content_cache.get(content_hash).await.ok_or_else(|| {
+    let cached = content_cache.get(content_hash).ok_or_else(|| {
         tracing::warn!(content_hash = %content_hash, "Content not found in cache");
         ApiError::NotFound
     })?;
@@ -345,42 +312,4 @@ pub struct DisplayJsonResponse {
     /// Special function to execute ('identify', 'sleep', etc.)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub special_function: Option<String>,
-}
-
-#[allow(dead_code)]
-pub async fn handle_display_json<R: DeviceRegistry>(
-    State(registry): State<Arc<R>>,
-    headers: HeaderMap,
-) -> Result<impl IntoResponse, ApiError> {
-    // Extract required headers
-    let api_key_str = headers
-        .get("Access-Token")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(ApiError::MissingHeader("Access-Token"))?;
-
-    let api_key = ApiKey::new(api_key_str);
-
-    // Find device by API key
-    let device = registry
-        .find_by_api_key(&api_key)
-        .await?
-        .ok_or(ApiError::DeviceNotFound)?;
-
-    tracing::info!(
-        device_id = %device.device_id,
-        "Display JSON request received"
-    );
-
-    // Return JSON with image_url pointing to static endpoint
-    Ok(Json(DisplayJsonResponse {
-        status: 200,
-        image_url: Some("/static/images/default.png".to_string()),
-        filename: "default".to_string(),
-        update_firmware: false,
-        firmware_url: None,
-        refresh_rate: 900, // 15 minutes
-        reset_firmware: false,
-        temperature_profile: Some("default".to_string()),
-        special_function: None,
-    }))
 }

@@ -1,6 +1,7 @@
 pub mod content_cache;
 pub mod content_pipeline;
 pub mod device_registry;
+pub mod http_cache;
 pub mod lua_runtime;
 pub mod renderer;
 pub mod template_service;

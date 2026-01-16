@@ -7,7 +7,7 @@ local limit = params.limit or 8
 log_info("Fetching departures for: " .. station)
 
 -- URL encode the station name
-local encoded_station = station:gsub(" ", "%%20"):gsub(",", "%%2C")
+local encoded_station = url_encode(station)
 
 local url = "https://transport.opendata.ch/v1/stationboard?station=" .. encoded_station .. "&limit=" .. limit
 

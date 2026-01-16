@@ -137,24 +137,46 @@ impl AssetLoader {
     }
 
     /// List all available screens (merged view of embedded + external)
+    ///
+    /// Returns paths relative to screens dir, including subdirectories like
+    /// "layouts/base.svg" and "components/header.svg".
     pub fn list_screens(&self) -> Vec<String> {
         let mut files: HashSet<String> = EmbeddedScreens::iter().map(|s| s.to_string()).collect();
 
         if let Some(ref dir) = self.screens_dir {
-            if let Ok(entries) = fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    if let Some(name) = entry.file_name().to_str() {
-                        if name.ends_with(".lua") || name.ends_with(".svg") {
-                            files.insert(name.to_string());
-                        }
-                    }
-                }
-            }
+            Self::collect_screen_files(dir, dir, &mut files);
         }
 
         let mut result: Vec<_> = files.into_iter().collect();
         result.sort();
         result
+    }
+
+    /// Recursively collect screen files from a directory.
+    ///
+    /// Paths are normalized to use forward slashes regardless of platform,
+    /// matching the embedded asset paths from rust-embed and Tera template
+    /// references (e.g., `{% extends "layouts/base.svg" %}`).
+    fn collect_screen_files(base_dir: &Path, current_dir: &Path, files: &mut HashSet<String>) {
+        if let Ok(entries) = fs::read_dir(current_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    // Recurse into subdirectories
+                    Self::collect_screen_files(base_dir, &path, files);
+                } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.ends_with(".lua") || name.ends_with(".svg") {
+                        // Get relative path from base_dir
+                        if let Ok(relative) = path.strip_prefix(base_dir) {
+                            if let Some(relative_str) = relative.to_str() {
+                                // Normalize to forward slashes for cross-platform consistency
+                                files.insert(relative_str.replace('\\', "/"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Get all font data (for loading into fontdb)
@@ -836,5 +858,96 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn test_list_screens_recursive() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create nested directory structure
+        let layouts_dir = temp_dir.path().join("layouts");
+        let components_dir = temp_dir.path().join("components");
+        std::fs::create_dir(&layouts_dir).unwrap();
+        std::fs::create_dir(&components_dir).unwrap();
+
+        // Create files at various levels
+        std::fs::write(temp_dir.path().join("top.svg"), "<svg/>").unwrap();
+        std::fs::write(layouts_dir.join("base.svg"), "<svg/>").unwrap();
+        std::fs::write(components_dir.join("header.svg"), "<svg/>").unwrap();
+        std::fs::write(components_dir.join("footer.svg"), "<svg/>").unwrap();
+
+        let loader = AssetLoader::new(Some(temp_dir.path().to_path_buf()), None, None);
+        let screens = loader.list_screens();
+
+        // Should find all files including nested ones
+        assert!(screens.contains(&"top.svg".to_string()));
+        assert!(screens.contains(&"layouts/base.svg".to_string()));
+        assert!(screens.contains(&"components/header.svg".to_string()));
+        assert!(screens.contains(&"components/footer.svg".to_string()));
+    }
+
+    #[test]
+    fn test_list_screens_recursive_deeply_nested() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create deeply nested structure
+        let deep_dir = temp_dir.path().join("a").join("b").join("c");
+        std::fs::create_dir_all(&deep_dir).unwrap();
+        std::fs::write(deep_dir.join("deep.svg"), "<svg/>").unwrap();
+
+        let loader = AssetLoader::new(Some(temp_dir.path().to_path_buf()), None, None);
+        let screens = loader.list_screens();
+
+        assert!(screens.contains(&"a/b/c/deep.svg".to_string()));
+    }
+
+    #[test]
+    fn test_list_screens_recursive_ignores_non_svg_lua() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let subdir = temp_dir.path().join("subdir");
+        std::fs::create_dir(&subdir).unwrap();
+
+        // Create various file types
+        std::fs::write(subdir.join("valid.svg"), "<svg/>").unwrap();
+        std::fs::write(subdir.join("valid.lua"), "return {}").unwrap();
+        std::fs::write(subdir.join("invalid.txt"), "text").unwrap();
+        std::fs::write(subdir.join("invalid.png"), "image").unwrap();
+
+        let loader = AssetLoader::new(Some(temp_dir.path().to_path_buf()), None, None);
+        let screens = loader.list_screens();
+
+        assert!(screens.contains(&"subdir/valid.svg".to_string()));
+        assert!(screens.contains(&"subdir/valid.lua".to_string()));
+        assert!(!screens.contains(&"subdir/invalid.txt".to_string()));
+        // Note: png files are handled differently - they're for images, not templates
+    }
+
+    #[test]
+    fn test_read_screen_from_subdirectory() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let layouts_dir = temp_dir.path().join("layouts");
+        std::fs::create_dir(&layouts_dir).unwrap();
+        std::fs::write(layouts_dir.join("base.svg"), "<svg>test</svg>").unwrap();
+
+        let loader = AssetLoader::new(Some(temp_dir.path().to_path_buf()), None, None);
+        let result = loader.read_screen_string(Path::new("layouts/base.svg"));
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "<svg>test</svg>");
+    }
+
+    #[test]
+    fn test_collect_screen_files_empty_dir() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let empty_dir = temp_dir.path().join("empty");
+        std::fs::create_dir(&empty_dir).unwrap();
+
+        let loader = AssetLoader::new(Some(temp_dir.path().to_path_buf()), None, None);
+        let screens = loader.list_screens();
+
+        // Should not contain any files from empty subdirectory
+        assert!(!screens.iter().any(|s| s.starts_with("empty/")));
     }
 }

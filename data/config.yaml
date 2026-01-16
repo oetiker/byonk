@@ -1,0 +1,76 @@
+# Byonk Configuration
+# Maps devices to screens and provides screen definitions
+
+screens:
+  # Default screen - shows time and a message
+  default:
+    script: default.lua
+    template: default.svg
+    default_refresh: 300
+
+  # Floerli room booking display
+  floerli:
+    script: floerli.lua
+    template: floerli.svg
+    default_refresh: 900
+
+  # Public transport departures
+  transit:
+    script: transit.lua
+    template: transit.svg
+    default_refresh: 60
+
+  # Gray level test
+  graytest:
+    script: graytest.lua
+    template: graytest.svg
+    default_refresh: 3600
+
+  # Hello world tutorial screen
+  hello:
+    script: hello.lua
+    template: hello.svg
+    default_refresh: 60
+
+# Map device MAC addresses to screens
+# MAC addresses should be uppercase with colons (e.g., "94:A9:90:8C:6D:18")
+devices:
+  # Tobi's device - bus stop departures
+  "A4:A9:90:8C:6D:18":
+    screen: transit
+    params:
+      station: "Trans, Dorf"
+      limit: 8
+
+  # Test device for transit (docs sample)
+  "TR:AN:SI:T0:00:00":
+    screen: transit
+    params:
+      station: "Trans, Dorf"
+      limit: 8
+
+  # Test device for gray levels
+  "TE:ST:GR:AY:00:00":
+    screen: graytest
+    params: {}
+
+  # Test device for hello tutorial
+  "TE:ST:HE:LL:00:00":
+    screen: hello
+    params: {}
+
+  # Example: Device showing Floerli room "Rosa"
+  # "AA:BB:CC:DD:EE:FF":
+  #   screen: floerli
+  #   params:
+  #     room: "Rosa"
+
+  # Example: Device showing transit departures
+  # "BB:CC:DD:EE:FF:00":
+  #   screen: transit
+  #   params:
+  #     station: "Olten, Südwest"
+  #     limit: 8
+
+# Default screen for devices not in the devices list
+default_screen: default

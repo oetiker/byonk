@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
+  <style>
+    /* Using font-variation-settings for variable font support */
+    .title { font-family: Outfit; font-size: 32px; font-variation-settings: "wght" 700; fill: white; }
+    .time { font-family: Outfit; font-size: 14px; font-variation-settings: "wght" 400; fill: white; }
+    .label { font-family: Outfit; font-size: 16px; font-variation-settings: "wght" 500; fill: white; }
+    .current-name { font-family: Outfit; font-size: 26px; font-variation-settings: "wght" 700; fill: white; }
+    .current-time { font-family: Outfit; font-size: 18px; font-variation-settings: "wght" 400; fill: white; }
+    .available { font-family: Outfit; font-size: 36px; font-variation-settings: "wght" 700; fill: rgb(30,100,30); }
+    .available-time { font-family: Outfit; font-size: 18px; font-variation-settings: "wght" 400; fill: rgb(80,120,80); }
+    .section-title { font-family: Outfit; font-size: 20px; font-variation-settings: "wght" 600; fill: black; }
+    .booking-time { font-family: Outfit; font-size: 18px; font-variation-settings: "wght" 600; fill: black; }
+    .booking-name { font-family: Outfit; font-size: 18px; font-variation-settings: "wght" 400; fill: rgb(80,80,80); }
+    .muted { font-family: Outfit; font-size: 18px; font-variation-settings: "wght" 400; fill: rgb(150,150,150); }
+    .footer { font-family: Outfit; font-size: 11px; font-variation-settings: "wght" 400; fill: rgb(150,150,150); }
+  </style>
+
+  <rect width="800" height="480" fill="white"/>
+
+  <!-- Header -->
+  <rect x="0" y="0" width="800" height="70" fill="black"/>
+  <text class="title" x="30" y="48">{{ data.room }}</text>
+  <text class="time" x="780" y="48" text-anchor="end">{{ data.updated_at }}</text>
+
+  <!-- Current Status -->
+  {% if data.current and not data.current.is_free %}
+  <rect x="20" y="90" width="760" height="130" fill="rgb(50,50,50)" rx="10"/>
+  <text class="label" x="40" y="125">JETZT BELEGT</text>
+  <text class="current-name" x="40" y="165">
+    {% if data.current.title | length > 35 %}{{ data.current.title | truncate(length=35) }}{% else %}{{ data.current.title }}{% endif %}
+  </text>
+  <text class="current-time" x="40" y="200">bis {{ data.current.end_hour }}:00 Uhr</text>
+  {% else %}
+  <rect x="20" y="90" width="760" height="130" fill="rgb(220,240,220)" rx="10"/>
+  <text class="available" x="400" y="155" text-anchor="middle">Verfügbar</text>
+  {% if data.upcoming | length > 0 %}
+  <text class="available-time" x="400" y="195" text-anchor="middle">bis {{ data.upcoming[0].start_hour }}:00 Uhr</text>
+  {% else %}
+  <text class="available-time" x="400" y="195" text-anchor="middle">für den Rest des Tages</text>
+  {% endif %}
+  {% endif %}
+
+  <!-- Upcoming section -->
+  <text class="section-title" x="40" y="265">Nächste Buchungen</text>
+  <line x1="40" y1="275" x2="760" y2="275" stroke="rgb(200,200,200)" stroke-width="1"/>
+
+  {% if data.upcoming | length > 0 %}
+  {% for booking in data.upcoming %}
+  <text class="booking-time" x="40" y="{{ 310 + loop.index0 * 38 }}">{{ booking.time_range }}</text>
+  <text class="booking-name" x="150" y="{{ 310 + loop.index0 * 38 }}">
+    {% if booking.title | length > 45 %}{{ booking.title | truncate(length=45) }}{% else %}{{ booking.title }}{% endif %}
+  </text>
+  {% endfor %}
+  {% else %}
+  <text class="muted" x="400" y="340" text-anchor="middle">Keine weiteren Buchungen heute</text>
+  {% endif %}
+
+  <!-- Footer -->
+  <line x1="40" y1="450" x2="760" y2="450" stroke="rgb(200,200,200)" stroke-width="1"/>
+  <text class="footer" x="400" y="470" text-anchor="middle">Flörli Olten</text>
+</svg>

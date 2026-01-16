@@ -6,6 +6,7 @@
 
 - [Installation](guide/installation.md)
 - [Configuration](guide/configuration.md)
+- [Dev Mode](guide/dev-mode.md)
 
 # Concepts
 

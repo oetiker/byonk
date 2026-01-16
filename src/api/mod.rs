@@ -1,8 +1,10 @@
+pub mod dev;
 pub mod display;
 mod headers;
 pub mod log;
 pub mod setup;
 
+pub use dev::DevState;
 pub use display::{__path_handle_display, __path_handle_image};
 pub use display::{handle_display, handle_image, DisplayJsonResponse};
 pub use headers::HeaderMapExt;

@@ -238,4 +238,51 @@ impl ContentPipeline {
     pub fn render_error_svg(&self, error: &str) -> String {
         self.template_service.render_error(error)
     }
+
+    /// Run script directly with explicit paths (for dev mode)
+    pub fn run_script_direct(
+        &self,
+        script_path: &std::path::Path,
+        template_path: &std::path::Path,
+        default_refresh: u32,
+        params: HashMap<String, serde_json::Value>,
+        device_ctx: Option<DeviceContext>,
+    ) -> Result<ScriptResult, String> {
+        // Convert JSON params to YAML params for consistency
+        let yaml_params: HashMap<String, serde_yaml::Value> = params
+            .into_iter()
+            .filter_map(|(k, v)| {
+                serde_json::to_string(&v)
+                    .ok()
+                    .and_then(|s| serde_yaml::from_str(&s).ok())
+                    .map(|yv| (k, yv))
+            })
+            .collect();
+
+        // Run the Lua script
+        let lua_result = self
+            .lua_runtime
+            .run_script(script_path, &yaml_params, device_ctx.as_ref())
+            .map_err(|e| e.to_string())?;
+
+        // Use script's refresh rate, or fall back to default
+        let refresh_rate = if lua_result.refresh_rate > 0 {
+            lua_result.refresh_rate
+        } else {
+            default_refresh
+        };
+
+        Ok(ScriptResult {
+            data: lua_result.data,
+            refresh_rate,
+            skip_update: lua_result.skip_update,
+            screen_name: script_path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
+            template_path: template_path.to_path_buf(),
+            params: yaml_params,
+        })
+    }
 }

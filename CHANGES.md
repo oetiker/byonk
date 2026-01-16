@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- Dev mode: Run `byonk dev` to start server with live reload and device simulator
+  - Web-based device simulator at `/dev` showing rendered screens
+  - Select any screen from config dropdown
+  - Switch between device models (OG 800x480, X 1872x1404) or set custom dimensions
+  - Custom parameters JSON editor for testing Lua scripts
+  - Live reload: screens automatically re-render when Lua/SVG files change (requires SCREENS_DIR)
+  - Error display: Lua and template errors shown in UI
+
 ### Changed
 
 ### Fixed

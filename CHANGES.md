@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed unbounded cache growth: content cache now uses LRU eviction with max 100 entries to prevent memory leaks in long-running deployments
 - Fixed nested runtime blocking in display handler: removed `block_on()` calls inside `spawn_blocking()` which could cause deadlocks under load
 - Fixed regex recompilation: image href regex in template service is now compiled once using `OnceLock` instead of on every render call
+- Fixed trailing slash compatibility: API endpoints now accept URLs with or without trailing slashes (e.g., `/api/setup/`) for TRMNL firmware 1.6.9+ compatibility
 - Removed unused `handle_display_json` function (dead code cleanup)
 
 ## 0.7.1 - 2026-01-14

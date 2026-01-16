@@ -106,3 +106,21 @@ async fn test_setup_device_x_model() {
 
     assert_eq!(device.model, byonk::models::DeviceModel::X);
 }
+
+#[tokio::test]
+async fn test_setup_with_trailing_slash() {
+    // TRMNL firmware 1.6.9+ sends requests with trailing slashes
+    let app = TestApp::new();
+
+    let headers = [
+        ("ID", macs::TEST_DEVICE),
+        ("FW-Version", "1.6.9"),
+        ("Model", "og"),
+    ];
+
+    // Request WITH trailing slash should work
+    let response = app.get_with_headers("/api/setup/", &headers).await;
+
+    common::assert_ok(&response);
+    common::assert_valid_setup_response(&response);
+}

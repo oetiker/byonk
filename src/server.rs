@@ -75,11 +75,15 @@ pub fn create_app_state(asset_loader: Arc<AssetLoader>) -> anyhow::Result<AppSta
 /// accumulation from ESP32 clients.
 pub fn build_router(state: AppState) -> Router {
     Router::new()
-        // TRMNL API endpoints
+        // TRMNL API endpoints (with and without trailing slashes for firmware compatibility)
+        // TRMNL firmware 1.6.9+ sends requests with trailing slashes
         .route("/api/setup", get(handle_setup))
+        .route("/api/setup/", get(handle_setup))
         .route("/api/display", get(handle_display))
+        .route("/api/display/", get(handle_display))
         .route("/api/image/:hash", get(handle_image))
         .route("/api/log", post(api::handle_log))
+        .route("/api/log/", post(api::handle_log))
         // Health check
         .route("/health", get(|| async { "OK" }))
         // Add state and tracing with request IDs

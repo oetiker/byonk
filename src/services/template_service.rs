@@ -107,6 +107,7 @@ impl TemplateService {
                         tracing::warn!(
                             template = %file,
                             error = %e,
+                            error_debug = ?e,
                             "Failed to load template"
                         );
                     } else {

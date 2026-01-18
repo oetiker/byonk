@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
+{#
   Base layout template for TRMNL screens.
 
   Usage in screen templates:
@@ -14,7 +14,7 @@
     - header_extra: Additional header content (optional)
     - content: Main content area (required)
     - footer: Footer area (optional)
--->
+#}
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ width | default(value=800) }} {{ height | default(value=480) }}" width="{{ width | default(value=800) }}" height="{{ height | default(value=480) }}">
   <!-- Background -->
   <rect width="100%" height="100%" fill="white"/>

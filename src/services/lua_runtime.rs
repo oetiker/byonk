@@ -46,6 +46,7 @@ impl LuaRuntime {
         script_path: &std::path::Path,
         params: &HashMap<String, serde_yaml::Value>,
         device_ctx: Option<&DeviceContext>,
+        timestamp_override: Option<i64>,
     ) -> Result<ScriptResult, ScriptError> {
         let script_content = self
             .asset_loader
@@ -62,7 +63,7 @@ impl LuaRuntime {
             .to_string();
 
         // Set up the Lua environment
-        self.setup_globals(&lua, params, device_ctx, &screen_name)?;
+        self.setup_globals(&lua, params, device_ctx, &screen_name, timestamp_override)?;
 
         // Execute the script
         let result: Table = lua.load(&script_content).eval()?;
@@ -86,6 +87,7 @@ impl LuaRuntime {
         params: &HashMap<String, serde_yaml::Value>,
         device_ctx: Option<&DeviceContext>,
         screen_name: &str,
+        timestamp_override: Option<i64>,
     ) -> LuaResult<()> {
         let globals = lua.globals();
 
@@ -118,8 +120,74 @@ impl LuaRuntime {
             if let Some(height) = ctx.height {
                 device_table.set("height", height)?;
             }
+            if let Some(grey_levels) = ctx.grey_levels {
+                device_table.set("grey_levels", grey_levels)?;
+            }
         }
         globals.set("device", device_table)?;
+
+        // Add layout table with pre-computed responsive values
+        let layout_table = lua.create_table()?;
+        let width = device_ctx.and_then(|ctx| ctx.width).unwrap_or(800) as f64;
+        let height = device_ctx.and_then(|ctx| ctx.height).unwrap_or(480) as f64;
+        let grey_levels = device_ctx.and_then(|ctx| ctx.grey_levels).unwrap_or(4);
+        let scale = f64::min(width / 800.0, height / 480.0);
+
+        layout_table.set("width", width as i64)?;
+        layout_table.set("height", height as i64)?;
+        layout_table.set("scale", scale)?;
+        layout_table.set("center_x", (width / 2.0).floor() as i64)?;
+        layout_table.set("center_y", (height / 2.0).floor() as i64)?;
+        layout_table.set("grey_levels", grey_levels)?;
+        // Pre-floored margins for pixel-aligned positioning
+        layout_table.set("margin", (20.0 * scale).floor() as i64)?;
+        layout_table.set("margin_sm", (10.0 * scale).floor() as i64)?;
+        layout_table.set("margin_lg", (40.0 * scale).floor() as i64)?;
+        globals.set("layout", layout_table)?;
+
+        // Store scale in Lua registry for helper functions
+        lua.set_named_registry_value("__layout_scale", scale)?;
+
+        // scale_font(value) -> number
+        // Returns value * scale (preserves precision for font sizes)
+        let scale_font = lua.create_function(|lua, value: f64| {
+            let scale: f64 = lua.named_registry_value("__layout_scale")?;
+            Ok(value * scale)
+        })?;
+        globals.set("scale_font", scale_font)?;
+
+        // scale_pixel(value) -> integer
+        // Returns floor(value * scale) for pixel-aligned positions/dimensions
+        let scale_pixel = lua.create_function(|lua, value: f64| {
+            let scale: f64 = lua.named_registry_value("__layout_scale")?;
+            Ok((value * scale).floor() as i64)
+        })?;
+        globals.set("scale_pixel", scale_pixel)?;
+
+        // greys(levels) -> array of {value, color, text_color}
+        // Generates a grey palette with the specified number of levels
+        let greys = lua.create_function(|lua, levels: u32| {
+            let table = lua.create_table()?;
+            for i in 0..levels {
+                let entry = lua.create_table()?;
+                // Calculate grey value (0 = black, 255 = white)
+                let value = if levels == 1 {
+                    255
+                } else {
+                    (255 * i / (levels - 1)) as u8
+                };
+                let hex = format!("#{:02x}{:02x}{:02x}", value, value, value);
+                // Text color is white for dark backgrounds, black for light
+                let text_color = if value < 128 { "#ffffff" } else { "#000000" };
+
+                entry.set("value", value)?;
+                entry.set("color", hex)?;
+                entry.set("text_color", text_color)?;
+                table.set(i + 1, entry)?;
+            }
+            Ok(table)
+        })?;
+        globals.set("greys", greys)?;
 
         // base64_encode(data) -> string
         let base64_encode = lua.create_function(|_, data: mlua::String| {
@@ -494,7 +562,10 @@ impl LuaRuntime {
         globals.set("html_parse", html_parse)?;
 
         // time_now() -> number (Unix timestamp)
-        let time_now = lua.create_function(|_, ()| Ok(chrono::Utc::now().timestamp()))?;
+        // Uses override timestamp if provided (for dev mode time simulation)
+        let time_now = lua.create_function(move |_, ()| {
+            Ok(timestamp_override.unwrap_or_else(|| chrono::Utc::now().timestamp()))
+        })?;
         globals.set("time_now", time_now)?;
 
         // time_format(timestamp, format) -> string (uses local time)

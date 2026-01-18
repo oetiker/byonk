@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- Layout helpers for responsive screen development:
+  - Added `layout` global table with pre-computed responsive values (`width`, `height`, `scale`, `center_x`, `center_y`, `grey_levels`, `margin`, `margin_sm`, `margin_lg`)
+  - Added `scale_font(value)` helper for scaling font sizes (returns float to preserve precision)
+  - Added `scale_pixel(value)` helper for scaling pixel values (returns floored integer for pixel alignment)
+  - Added `greys(levels)` helper for generating grey palettes matching device capabilities
 - Dev mode: Run `byonk dev` to start server with live reload and device simulator
   - Web-based device simulator at `/dev` showing rendered screens
   - Select any screen from config dropdown
@@ -16,8 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Custom parameters JSON editor for testing Lua scripts
   - Live reload: screens automatically re-render when Lua/SVG files change (requires SCREENS_DIR)
   - Error display: Lua and template errors shown in UI
+  - MAC address resolution: enter a device MAC to auto-load its configured screen and params
+  - Device simulation: battery voltage, RSSI, and timestamp override for testing
+  - Grey level selector: test screens with 4-level (OG) or 16-level (X) dithering
+  - Pixel inspector lens: hover over rendered image to see magnified view
+- TRMNL X 16-grey-level support:
+  - Configurable grey levels per device (4 for OG, 16 for X)
+  - 4-bit PNG output for 16-level displays
+  - Device context includes `grey_levels` field
 
 ### Changed
+
+- Updated all example screens (default, hello, transit, floerli, graytest) to use new layout helpers
+- Dithering now preserves pixels at exact grey levels (solid colors not dithered), improving UI element quality
 
 ### Fixed
 

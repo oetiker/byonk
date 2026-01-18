@@ -195,6 +195,7 @@ fn run_render_command(
         firmware_version: firmware,
         width: Some(display_spec.width),
         height: Some(display_spec.height),
+        grey_levels: None, // Use default based on device model
     };
 
     // Run the Lua script
@@ -498,7 +499,7 @@ async fn run_dev_server() -> anyhow::Result<()> {
     use axum::{routing::get, Router};
     use byonk::api::dev::{
         handle_dev_css, handle_dev_js, handle_dev_page, handle_events, handle_render,
-        handle_screens, DevState,
+        handle_resolve_mac, handle_screens, DevState,
     };
     use byonk::assets::AssetLoader;
     use byonk::services::FileWatcher;
@@ -577,6 +578,7 @@ async fn run_dev_server() -> anyhow::Result<()> {
         .route("/screens", get(handle_screens))
         .route("/events", get(handle_events))
         .route("/render", get(handle_render))
+        .route("/resolve-mac", get(handle_resolve_mac))
         .with_state(dev_state);
 
     // Build router: start with shared API routes, add dev routes

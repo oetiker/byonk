@@ -109,7 +109,7 @@ main {
     flex: 1;
 }
 
-select, input[type="number"], textarea {
+select, input[type="number"], input[type="text"], input[type="datetime-local"], textarea {
     width: 100%;
     padding: 0.5rem 0.75rem;
     background: var(--input-bg);
@@ -119,9 +119,27 @@ select, input[type="number"], textarea {
     font-size: 0.875rem;
 }
 
+input[type="datetime-local"] {
+    color-scheme: dark;
+}
+
 select:focus, input:focus, textarea:focus {
     outline: none;
     border-color: var(--accent-color);
+}
+
+.mac-resolved {
+    margin-top: 0.25rem;
+    font-size: 0.75rem;
+    color: var(--success-color);
+}
+
+.mac-resolved.error {
+    color: var(--text-muted);
+}
+
+.mac-resolved.hidden {
+    display: none;
 }
 
 textarea {
@@ -204,15 +222,18 @@ textarea {
     max-width: 100%;
     height: auto;
     background: #fff;
+}
+
+/* OG model: pixelated scaling for crisp low-res display */
+.device-frame.og .device-bezel img {
+    max-height: 60vh;
     image-rendering: pixelated;
 }
 
-.device-frame.og .device-bezel img {
-    max-height: 60vh;
-}
-
+/* X model: smooth scaling for high-res display */
 .device-frame.x .device-bezel img {
     max-height: 70vh;
+    image-rendering: auto;
 }
 
 .loading-overlay {
@@ -281,4 +302,27 @@ footer {
     text-align: center;
     font-size: 0.75rem;
     color: var(--text-muted);
+}
+
+/* Lens for 1:1 pixel viewing (X model only) */
+.lens {
+    position: fixed;
+    width: 200px;
+    height: 200px;
+    border-radius: 50%;
+    border: 3px solid var(--accent-color);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+    z-index: 1000;
+    overflow: hidden;
+    background: #fff;
+}
+
+.lens.hidden {
+    display: none;
+}
+
+.lens canvas {
+    display: block;
+    border-radius: 50%;
 }

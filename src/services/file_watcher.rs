@@ -3,7 +3,7 @@
 //! Monitors the screens directory for changes to Lua scripts and SVG templates,
 //! broadcasting events to connected SSE clients.
 
-use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -98,6 +98,16 @@ impl FileWatcher {
         let mut watcher = RecommendedWatcher::new(
             move |res: Result<notify::Event, notify::Error>| {
                 if let Ok(event) = res {
+                    // Only process actual file modifications, not access/metadata events
+                    // This prevents infinite loops from file reads triggering new events
+                    let dominated = matches!(
+                        event.kind,
+                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                    );
+                    if !dominated {
+                        return;
+                    }
+
                     for path in event.paths {
                         // Only watch .lua and .svg files
                         if path

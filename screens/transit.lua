@@ -2,9 +2,35 @@
 -- Fetches real-time departures from Swiss OpenData Transport API
 
 local station = params.station or "Olten, Südwest"
-local limit = params.limit or 8
 
-log_info("Fetching departures for: " .. station)
+-- Use layout helpers for responsive design
+local width = layout.width
+local height = layout.height
+
+-- Calculate layout dimensions using scale_pixel for pixel alignment
+local header_height = scale_pixel(70)
+local col_header_height = scale_pixel(35)
+local footer_height = scale_pixel(30)
+local row_height = scale_pixel(45)
+local available_height = height - header_height - col_header_height - footer_height
+local rows_per_column = math.floor(available_height / row_height)
+
+-- Use 2 columns for wider screens (X device has aspect ratio ~1.33, OG has ~1.67)
+local use_two_columns = (width / height) < 1.5
+local num_columns = use_two_columns and 2 or 1
+local max_rows = rows_per_column * num_columns
+local limit = params.limit or math.min(max_rows, 30)  -- Cap at 30 max
+
+-- Truncate destination names based on layout
+local dest_max_chars = use_two_columns and 16 or 30
+local function truncate_dest(dest)
+  if #dest > dest_max_chars then
+    return dest:sub(1, dest_max_chars - 1) .. "…"
+  end
+  return dest
+end
+
+log_info("Fetching departures for: " .. station .. " (limit: " .. limit .. ")")
 
 -- URL encode the station name
 local encoded_station = url_encode(station)
@@ -82,7 +108,7 @@ for i, dep in ipairs(json.stationboard) do
     time = time_str,
     delay = delay_str,
     line = line_display,
-    destination = dep.to or "Unknown",
+    destination = truncate_dest(dep.to or "Unknown"),
     category = category
   })
 end
@@ -124,12 +150,78 @@ else
   log_info(string.format("Found %d departures, refresh in %d sec", #departures, refresh_rate))
 end
 
+-- Split departures into columns for two-column layout
+local left_departures = {}
+local right_departures = {}
+if use_two_columns then
+  for i, dep in ipairs(departures) do
+    if i <= rows_per_column then
+      table.insert(left_departures, dep)
+    else
+      table.insert(right_departures, dep)
+    end
+  end
+else
+  left_departures = departures
+end
+
+-- Column width for two-column layout
+local column_width = use_two_columns and math.floor(width / 2) or width
+local column_gap = layout.margin
+
 return {
   data = {
     station = station_name,
     departures = departures,
+    left_departures = left_departures,
+    right_departures = right_departures,
     updated_at = time_format(now, "%H:%M"),
-    total_count = #departures
+    total_count = #departures,
+    -- Layout
+    width = width,
+    height = height,
+    scale = layout.scale,
+    use_two_columns = use_two_columns,
+    column_width = column_width,
+    rows_per_column = rows_per_column,
+    -- Dimensions (scaled)
+    header_height = header_height,
+    header_text_y = scale_pixel(48),
+    col_header_height = col_header_height,
+    col_header_y = header_height + scale_pixel(25),
+    row_start_y = header_height + col_header_height,
+    row_height = row_height,
+    badge_y_offset = scale_pixel(7),
+    badge_height = scale_pixel(30),
+    badge_width = scale_pixel(70),
+    text_y_offset = scale_pixel(29),
+    margin = layout.margin,
+    -- Left column positions
+    left_badge_x = layout.margin,
+    left_badge_center_x = scale_pixel(55),
+    left_dest_x = scale_pixel(120),
+    left_time_x = column_width - scale_pixel(30),
+    left_delay_x = column_width - layout.margin_sm,
+    -- Right column positions (offset by column_width)
+    right_badge_x = column_width + layout.margin,
+    right_badge_center_x = column_width + scale_pixel(55),
+    right_dest_x = column_width + scale_pixel(120),
+    right_time_x = width - scale_pixel(30),
+    -- General positions
+    right_margin = width - layout.margin,
+    center_x = layout.center_x,
+    muted_y = scale_pixel(280),
+    footer_y = height - scale_pixel(7),
+    -- Font sizes (scaled) - use scale_font for precision
+    font_title = scale_font(28),
+    font_time = scale_font(14),
+    font_col_header = scale_font(14),
+    font_line = scale_font(16),
+    font_dest = scale_font(18),
+    font_dep_time = scale_font(22),
+    font_delay = scale_font(14),
+    font_muted = scale_font(24),
+    font_footer = scale_font(11),
   },
   refresh_rate = refresh_rate
 }

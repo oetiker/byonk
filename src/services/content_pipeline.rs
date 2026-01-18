@@ -39,6 +39,8 @@ pub struct DeviceContext {
     pub width: Option<u32>,
     /// Display height in pixels
     pub height: Option<u32>,
+    /// Grey levels for dithering (4 for OG, 16 for X)
+    pub grey_levels: Option<u8>,
 }
 
 /// Error from the content pipeline
@@ -116,10 +118,10 @@ impl ContentPipeline {
         params: &HashMap<String, serde_yaml::Value>,
         device_ctx: Option<DeviceContext>,
     ) -> Result<ScriptResult, ContentError> {
-        // Run the Lua script
+        // Run the Lua script (no timestamp override for normal operation)
         let lua_result =
             self.lua_runtime
-                .run_script(&screen.script, params, device_ctx.as_ref())?;
+                .run_script(&screen.script, params, device_ctx.as_ref(), None)?;
 
         // Use script's refresh rate, or fall back to screen's default
         let refresh_rate = if lua_result.refresh_rate > 0 {
@@ -195,6 +197,9 @@ impl ContentPipeline {
             if let Some(height) = ctx.height {
                 device_obj.insert("height".to_string(), serde_json::json!(height));
             }
+            if let Some(grey_levels) = ctx.grey_levels {
+                device_obj.insert("grey_levels".to_string(), serde_json::json!(grey_levels));
+            }
         }
         template_context.insert("device".to_string(), serde_json::Value::Object(device_obj));
 
@@ -230,7 +235,21 @@ impl ContentPipeline {
         let png_bytes = self
             .renderer
             .svg_renderer
-            .render_to_png(svg.as_bytes(), spec)?;
+            .render_to_png(svg.as_bytes(), spec, 4)?;
+        Ok(png_bytes)
+    }
+
+    /// Render PNG from cached SVG content with custom grey levels
+    pub fn render_png_from_svg_with_levels(
+        &self,
+        svg: &str,
+        spec: DisplaySpec,
+        grey_levels: u8,
+    ) -> Result<Vec<u8>, ContentError> {
+        let png_bytes =
+            self.renderer
+                .svg_renderer
+                .render_to_png(svg.as_bytes(), spec, grey_levels)?;
         Ok(png_bytes)
     }
 
@@ -247,6 +266,7 @@ impl ContentPipeline {
         default_refresh: u32,
         params: HashMap<String, serde_json::Value>,
         device_ctx: Option<DeviceContext>,
+        timestamp_override: Option<i64>,
     ) -> Result<ScriptResult, String> {
         // Convert JSON params to YAML params for consistency
         let yaml_params: HashMap<String, serde_yaml::Value> = params
@@ -259,10 +279,15 @@ impl ContentPipeline {
             })
             .collect();
 
-        // Run the Lua script
+        // Run the Lua script with optional timestamp override
         let lua_result = self
             .lua_runtime
-            .run_script(script_path, &yaml_params, device_ctx.as_ref())
+            .run_script(
+                script_path,
+                &yaml_params,
+                device_ctx.as_ref(),
+                timestamp_override,
+            )
             .map_err(|e| e.to_string())?;
 
         // Use script's refresh rate, or fall back to default

@@ -15,6 +15,7 @@ const DEFAULT_NOISE_STRENGTH: i16 = 14;
 /// 1. Using serpentine (boustrophedon) scanning to reduce directional artifacts
 /// 2. Modulating the quantization threshold with blue noise to break up patterns
 /// 3. Computing error from the un-noised value to preserve energy balance
+/// 4. Preserving pixels already at exact grey levels (no dithering for solid colors)
 ///
 /// For 2-bit (4 grayscale levels), the output values are:
 /// - Level 0: 0 (black)
@@ -41,8 +42,18 @@ pub fn blue_noise_dither(
     let noise_strength = noise_strength.unwrap_or(DEFAULT_NOISE_STRENGTH);
     let step = 255 / (levels - 1) as i16;
 
+    // Build set of exact grey levels for fast lookup
+    let exact_levels: Vec<u8> = (0..levels)
+        .map(|i| (i as u16 * 255 / (levels - 1) as u16) as u8)
+        .collect();
+
     // Working buffer with i16 to handle negative error values
     let mut buffer: Vec<i16> = gray_data.iter().map(|&v| v as i16).collect();
+    // Track which pixels are at exact grey levels (should not receive error diffusion)
+    let exact_pixel: Vec<bool> = gray_data
+        .iter()
+        .map(|&v| exact_levels.contains(&v))
+        .collect();
     let w = width as usize;
     let h = height as usize;
 
@@ -51,11 +62,33 @@ pub fn blue_noise_dither(
 
         if going_right {
             for x in 0..w {
-                process_pixel(x, y, &mut buffer, w, h, levels, step, noise_strength, true);
+                process_pixel(
+                    x,
+                    y,
+                    &mut buffer,
+                    &exact_pixel,
+                    w,
+                    h,
+                    levels,
+                    step,
+                    noise_strength,
+                    true,
+                );
             }
         } else {
             for x in (0..w).rev() {
-                process_pixel(x, y, &mut buffer, w, h, levels, step, noise_strength, false);
+                process_pixel(
+                    x,
+                    y,
+                    &mut buffer,
+                    &exact_pixel,
+                    w,
+                    h,
+                    levels,
+                    step,
+                    noise_strength,
+                    false,
+                );
             }
         }
     }
@@ -65,12 +98,14 @@ pub fn blue_noise_dither(
 }
 
 /// Process a single pixel with blue-noise-modulated error diffusion.
+/// Pixels at exact grey levels are preserved without dithering.
 #[inline]
 #[allow(clippy::too_many_arguments)]
 fn process_pixel(
     x: usize,
     y: usize,
     buffer: &mut [i16],
+    exact_pixel: &[bool],
     w: usize,
     h: usize,
     levels: u8,
@@ -79,6 +114,16 @@ fn process_pixel(
     going_right: bool,
 ) {
     let idx = y * w + x;
+
+    // If this pixel was originally at an exact grey level, preserve it
+    // Don't apply noise, don't accumulate errors into it
+    if exact_pixel[idx] {
+        // Snap to nearest level (should already be exact, but ensure it)
+        let val = buffer[idx].clamp(0, 255) as u8;
+        buffer[idx] = find_closest_level(val, levels, step as u8) as i16;
+        return; // No error diffusion for exact grey level pixels
+    }
+
     let old_val = buffer[idx];
 
     // Blue noise modulation of threshold
@@ -103,32 +148,38 @@ fn process_pixel(
     // Left-to-right:      Right-to-left:
     //     X   7/16        7/16   X
     // 3/16 5/16 1/16      1/16 5/16 3/16
+    //
+    // Don't distribute error into pixels at exact grey levels
 
     if going_right {
         // Forward direction
-        if x + 1 < w {
+        if x + 1 < w && !exact_pixel[idx + 1] {
             buffer[idx + 1] += error * 7 / 16;
         }
         if y + 1 < h {
-            if x > 0 {
+            if x > 0 && !exact_pixel[idx + w - 1] {
                 buffer[idx + w - 1] += error * 3 / 16;
             }
-            buffer[idx + w] += error * 5 / 16;
-            if x + 1 < w {
+            if !exact_pixel[idx + w] {
+                buffer[idx + w] += error * 5 / 16;
+            }
+            if x + 1 < w && !exact_pixel[idx + w + 1] {
                 buffer[idx + w + 1] += error / 16;
             }
         }
     } else {
         // Reverse direction - mirror the pattern
-        if x > 0 {
+        if x > 0 && !exact_pixel[idx - 1] {
             buffer[idx - 1] += error * 7 / 16;
         }
         if y + 1 < h {
-            if x + 1 < w {
+            if x + 1 < w && !exact_pixel[idx + w + 1] {
                 buffer[idx + w + 1] += error * 3 / 16;
             }
-            buffer[idx + w] += error * 5 / 16;
-            if x > 0 {
+            if !exact_pixel[idx + w] {
+                buffer[idx + w] += error * 5 / 16;
+            }
+            if x > 0 && !exact_pixel[idx + w - 1] {
                 buffer[idx + w - 1] += error / 16;
             }
         }

@@ -1,61 +1,48 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
   <style>
-    /* Using font-variation-settings for variable font support */
-    .title { font-family: Outfit; font-size: 32px; font-variation-settings: "wght" 700; fill: white; }
-    .time { font-family: Outfit; font-size: 14px; font-variation-settings: "wght" 400; fill: white; }
-    .label { font-family: Outfit; font-size: 16px; font-variation-settings: "wght" 500; fill: white; }
-    .current-name { font-family: Outfit; font-size: 26px; font-variation-settings: "wght" 700; fill: white; }
-    .current-time { font-family: Outfit; font-size: 18px; font-variation-settings: "wght" 400; fill: white; }
-    .available { font-family: Outfit; font-size: 36px; font-variation-settings: "wght" 700; fill: rgb(30,100,30); }
-    .available-time { font-family: Outfit; font-size: 18px; font-variation-settings: "wght" 400; fill: rgb(80,120,80); }
-    .section-title { font-family: Outfit; font-size: 20px; font-variation-settings: "wght" 600; fill: black; }
-    .booking-time { font-family: Outfit; font-size: 18px; font-variation-settings: "wght" 600; fill: black; }
-    .booking-name { font-family: Outfit; font-size: 18px; font-variation-settings: "wght" 400; fill: rgb(80,80,80); }
-    .muted { font-family: Outfit; font-size: 18px; font-variation-settings: "wght" 400; fill: rgb(150,150,150); }
-    .footer { font-family: Outfit; font-size: 11px; font-variation-settings: "wght" 400; fill: rgb(150,150,150); }
+    text { font-family: Outfit; }
   </style>
 
-  <rect width="800" height="480" fill="white"/>
+  <rect width="{{ data.width }}" height="{{ data.height }}" fill="#ffffff"/>
 
   <!-- Header -->
-  <rect x="0" y="0" width="800" height="70" fill="black"/>
-  <text class="title" x="30" y="48">{{ data.room }}</text>
-  <text class="time" x="780" y="48" text-anchor="end">{{ data.updated_at }}</text>
+  <rect x="0" y="0" width="{{ data.width }}" height="{{ data.header_height }}" fill="#000000"/>
+  <text x="{{ data.text_margin }}" y="{{ data.header_text_y }}" font-size="{{ data.font_title }}" font-weight="700" fill="#ffffff">{{ data.room }}</text>
+  <text x="{{ data.right_margin }}" y="{{ data.header_text_y }}" font-size="{{ data.font_time }}" font-weight="400" fill="#ffffff" text-anchor="end">{{ data.updated_at }}</text>
 
   <!-- Current Status -->
   {% if data.current and not data.current.is_free %}
-  <rect x="20" y="90" width="760" height="130" fill="rgb(50,50,50)" rx="10"/>
-  <text class="label" x="40" y="125">JETZT BELEGT</text>
-  <text class="current-name" x="40" y="165">
+  <rect x="{{ data.margin }}" y="{{ data.status_y }}" width="{{ data.status_width }}" height="{{ data.status_height }}" fill="rgb(50,50,50)" rx="10"/>
+  <text x="{{ data.text_margin }}" y="{{ data.status_label_y }}" font-size="{{ data.font_label }}" font-weight="500" fill="#ffffff">JETZT BELEGT</text>
+  <text x="{{ data.text_margin }}" y="{{ data.status_name_y }}" font-size="{{ data.font_current_name }}" font-weight="700" fill="#ffffff">
     {% if data.current.title | length > 35 %}{{ data.current.title | truncate(length=35) }}{% else %}{{ data.current.title }}{% endif %}
   </text>
-  <text class="current-time" x="40" y="200">bis {{ data.current.end_hour }}:00 Uhr</text>
+  <text x="{{ data.text_margin }}" y="{{ data.status_time_y }}" font-size="{{ data.font_current_time }}" font-weight="400" fill="#ffffff">bis {{ data.current.end_hour }}:00 Uhr</text>
   {% else %}
-  <rect x="20" y="90" width="760" height="130" fill="rgb(220,240,220)" rx="10"/>
-  <text class="available" x="400" y="155" text-anchor="middle">Verfügbar</text>
+  <rect x="{{ data.margin }}" y="{{ data.status_y }}" width="{{ data.status_width }}" height="{{ data.status_height }}" fill="rgb(220,240,220)" rx="10"/>
+  <text x="{{ data.center_x }}" y="{{ data.status_center_y }}" font-size="{{ data.font_available }}" font-weight="700" fill="rgb(30,100,30)" text-anchor="middle">Verfügbar</text>
   {% if data.upcoming | length > 0 %}
-  <text class="available-time" x="400" y="195" text-anchor="middle">bis {{ data.upcoming[0].start_hour }}:00 Uhr</text>
+  <text x="{{ data.center_x }}" y="{{ data.status_center_time_y }}" font-size="{{ data.font_available_time }}" font-weight="400" fill="rgb(80,120,80)" text-anchor="middle">bis {{ data.upcoming[0].start_hour }}:00 Uhr</text>
   {% else %}
-  <text class="available-time" x="400" y="195" text-anchor="middle">für den Rest des Tages</text>
+  <text x="{{ data.center_x }}" y="{{ data.status_center_time_y }}" font-size="{{ data.font_available_time }}" font-weight="400" fill="rgb(80,120,80)" text-anchor="middle">für den Rest des Tages</text>
   {% endif %}
   {% endif %}
 
   <!-- Upcoming section -->
-  <text class="section-title" x="40" y="265">Nächste Buchungen</text>
-  <line x1="40" y1="275" x2="760" y2="275" stroke="rgb(200,200,200)" stroke-width="1"/>
+  <text x="{{ data.text_margin }}" y="{{ data.section_y }}" font-size="{{ data.font_section }}" font-weight="600" fill="#000000">Nächste Buchungen</text>
+  <line x1="{{ data.text_margin }}" y1="{{ data.line_y }}" x2="{{ data.line_end_x }}" y2="{{ data.line_y }}" stroke="rgb(200,200,200)" stroke-width="1"/>
 
   {% if data.upcoming | length > 0 %}
   {% for booking in data.upcoming %}
-  <text class="booking-time" x="40" y="{{ 310 + loop.index0 * 38 }}">{{ booking.time_range }}</text>
-  <text class="booking-name" x="150" y="{{ 310 + loop.index0 * 38 }}">
+  <text x="{{ data.text_margin }}" y="{{ data.booking_start_y + loop.index0 * data.booking_spacing }}" font-size="{{ data.font_booking_time }}" font-weight="600" fill="#000000">{{ booking.time_range }}</text>
+  <text x="{{ data.booking_name_x }}" y="{{ data.booking_start_y + loop.index0 * data.booking_spacing }}" font-size="{{ data.font_booking_name }}" font-weight="400" fill="rgb(80,80,80)">
     {% if booking.title | length > 45 %}{{ booking.title | truncate(length=45) }}{% else %}{{ booking.title }}{% endif %}
   </text>
   {% endfor %}
   {% else %}
-  <text class="muted" x="400" y="340" text-anchor="middle">Keine weiteren Buchungen heute</text>
+  <text x="{{ data.center_x }}" y="{{ data.muted_y }}" font-size="{{ data.font_muted }}" font-weight="400" fill="rgb(150,150,150)" text-anchor="middle">Keine weiteren Buchungen heute</text>
   {% endif %}
 
   <!-- Footer -->
-  <line x1="40" y1="450" x2="760" y2="450" stroke="rgb(200,200,200)" stroke-width="1"/>
-  <text class="footer" x="400" y="470" text-anchor="middle">Flörli Olten</text>
+  <text x="{{ data.center_x }}" y="{{ data.footer_y }}" font-size="{{ data.font_footer }}" font-weight="400" fill="rgb(150,150,150)" text-anchor="middle">Flörli Olten</text>
 </svg>

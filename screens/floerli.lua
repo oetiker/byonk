@@ -221,6 +221,10 @@ log_info(string.format("Current: %s, upcoming: %d, refresh in %d sec",
   current_booking and (current_booking.is_free and "free" or current_booking.title) or "none",
   #upcoming, refresh_rate))
 
+-- Use layout helpers for responsive design
+local width = layout.width
+local height = layout.height
+
 return {
   data = {
     room = room_name,
@@ -228,7 +232,47 @@ return {
     upcoming = upcoming,
     updated_at = time_format(now, "%H:%M"),
     date_str = time_format(now, "%A, %d. %B %Y"),
-    total_bookings = #bookings
+    total_bookings = #bookings,
+    -- Layout
+    width = width,
+    height = height,
+    scale = layout.scale,
+    -- Dimensions (scaled) - use scale_pixel for pixel alignment
+    header_height = scale_pixel(70),
+    header_text_y = scale_pixel(48),
+    status_y = scale_pixel(90),
+    status_height = scale_pixel(130),
+    status_width = width - layout.margin_lg,
+    status_label_y = scale_pixel(90 + 35),
+    status_name_y = scale_pixel(90 + 75),
+    status_time_y = scale_pixel(90 + 110),
+    status_center_y = scale_pixel(90 + 65),
+    status_center_time_y = scale_pixel(90 + 105),
+    section_y = scale_pixel(265),
+    line_y = scale_pixel(275),
+    booking_start_y = scale_pixel(310),
+    booking_spacing = scale_pixel(38),
+    booking_name_x = scale_pixel(150),
+    footer_y = height - layout.margin_sm,
+    margin = layout.margin,
+    text_margin = layout.margin_lg,
+    right_margin = width - layout.margin,
+    line_end_x = width - layout.margin_lg,
+    center_x = layout.center_x,
+    muted_y = scale_pixel(340),
+    -- Font sizes (scaled) - use scale_font for precision
+    font_title = scale_font(32),
+    font_time = scale_font(14),
+    font_label = scale_font(16),
+    font_current_name = scale_font(26),
+    font_current_time = scale_font(18),
+    font_available = scale_font(36),
+    font_available_time = scale_font(18),
+    font_section = scale_font(20),
+    font_booking_time = scale_font(18),
+    font_booking_name = scale_font(18),
+    font_muted = scale_font(18),
+    font_footer = scale_font(11),
   },
   refresh_rate = refresh_rate
 }

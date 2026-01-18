@@ -27,11 +27,26 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="model-select">Device Model</label>
-                    <select id="model-select">
-                        <option value="og">OG (800x480)</option>
-                        <option value="x">X (1872x1404)</option>
-                    </select>
+                    <label for="mac-input">MAC Address (optional)</label>
+                    <input type="text" id="mac-input" placeholder="AA:BB:CC:DD:EE:FF" pattern="[0-9A-Fa-f:]+">
+                    <div id="mac-resolved" class="mac-resolved hidden"></div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="model-select">Device Model</label>
+                        <select id="model-select">
+                            <option value="og">OG (800x480)</option>
+                            <option value="x">X (1872x1404)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="grey-levels-select">Grey Levels</label>
+                        <select id="grey-levels-select">
+                            <option value="4">4 (OG)</option>
+                            <option value="16">16 (X)</option>
+                        </select>
+                    </div>
                 </div>
 
                 <div class="form-row">
@@ -43,6 +58,22 @@
                         <label for="height-input">Height</label>
                         <input type="number" id="height-input" value="480" min="100" max="2000">
                     </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="battery-input">Battery (V)</label>
+                        <input type="number" id="battery-input" value="4.2" min="3.0" max="4.2" step="0.1">
+                    </div>
+                    <div class="form-group">
+                        <label for="rssi-input">WiFi (dBm)</label>
+                        <input type="number" id="rssi-input" value="-50" min="-100" max="0">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="time-input">Current Time</label>
+                    <input type="datetime-local" id="time-input">
                 </div>
 
                 <div class="form-group">

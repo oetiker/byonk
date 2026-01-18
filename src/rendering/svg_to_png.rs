@@ -60,6 +60,7 @@ impl SvgRenderer {
         &self,
         svg_data: &[u8],
         spec: DisplaySpec,
+        grey_levels: u8,
     ) -> Result<Vec<u8>, RenderError> {
         // Parse SVG with font database for text support
         let options = usvg::Options {
@@ -93,11 +94,16 @@ impl SvgRenderer {
         // Convert RGBA to grayscale
         let gray_data = self.to_grayscale(pixmap.data());
 
-        // Apply blue-noise-modulated error diffusion for 2-bit output
-        let dithered = blue_noise_dither(&gray_data, spec.width, spec.height, self.levels, None);
+        // Apply blue-noise-modulated error diffusion with specified grey levels
+        let levels = grey_levels.clamp(2, 16);
+        let dithered = blue_noise_dither(&gray_data, spec.width, spec.height, levels, None);
 
-        // Encode to PNG
-        self.encode_png(&dithered, spec)
+        // Encode to PNG based on grey levels
+        if levels > 4 {
+            self.encode_png_4bit(&dithered, spec, levels)
+        } else {
+            self.encode_png_2bit(&dithered, spec)
+        }
     }
 
     /// Convert RGBA to grayscale using ITU-R BT.709 luma coefficients
@@ -135,7 +141,7 @@ impl SvgRenderer {
     /// - PNG 1 → dark gray
     /// - PNG 2 → light gray
     /// - PNG 3 → white
-    fn encode_png(&self, gray_data: &[u8], spec: DisplaySpec) -> Result<Vec<u8>, RenderError> {
+    fn encode_png_2bit(&self, gray_data: &[u8], spec: DisplaySpec) -> Result<Vec<u8>, RenderError> {
         let mut buf = Cursor::new(Vec::new());
 
         {
@@ -155,6 +161,48 @@ impl SvgRenderer {
 
             // Convert 8-bit grayscale to 2-bit, packing 4 pixels per byte
             let packed_data = self.pack_2bit(gray_data, spec.width);
+
+            writer
+                .write_image_data(&packed_data)
+                .map_err(|e| RenderError::PngEncode(e.to_string()))?;
+        }
+
+        let png_bytes = buf.into_inner();
+
+        // Validate size
+        spec.validate_size(png_bytes.len())?;
+
+        Ok(png_bytes)
+    }
+
+    /// Encode grayscale data to 4-bit native grayscale PNG for 16-level e-ink displays.
+    ///
+    /// Uses PNG color type 0 (Grayscale) with 4-bit depth for X model:
+    /// - PNG 0 → black
+    /// - PNG 15 → white
+    fn encode_png_4bit(
+        &self,
+        gray_data: &[u8],
+        spec: DisplaySpec,
+        levels: u8,
+    ) -> Result<Vec<u8>, RenderError> {
+        let mut buf = Cursor::new(Vec::new());
+
+        {
+            // Create PNG encoder with 4-bit native grayscale
+            let mut encoder = png::Encoder::new(&mut buf, spec.width, spec.height);
+            encoder.set_color(png::ColorType::Grayscale);
+            encoder.set_depth(png::BitDepth::Four);
+            // Use maximum compression to reduce file size for memory-constrained devices
+            encoder.set_compression(png::Compression::Best);
+            encoder.set_filter(png::FilterType::Paeth);
+
+            let mut writer = encoder
+                .write_header()
+                .map_err(|e| RenderError::PngEncode(e.to_string()))?;
+
+            // Convert 8-bit grayscale to 4-bit, packing 2 pixels per byte
+            let packed_data = self.pack_4bit(gray_data, spec.width, levels);
 
             writer
                 .write_image_data(&packed_data)
@@ -206,6 +254,57 @@ impl SvgRenderer {
                 } else {
                     bit_pos -= 2;
                 }
+            }
+        }
+
+        packed
+    }
+
+    /// Pack 8-bit grayscale pixels into 4-bit grayscale format (2 pixels per byte)
+    ///
+    /// Maps grayscale values to 4-bit values based on the number of levels:
+    /// - For 16 levels: directly maps to 0-15
+    fn pack_4bit(&self, gray_data: &[u8], width: u32, levels: u8) -> Vec<u8> {
+        // Each row needs to be byte-aligned
+        let bytes_per_row = (width as usize).div_ceil(2);
+        let height = gray_data.len() / width as usize;
+
+        let mut packed = Vec::with_capacity(bytes_per_row * height);
+
+        // Calculate the step size for mapping to the target levels
+        let max_level = (levels - 1) as u32;
+
+        for row in gray_data.chunks(width as usize) {
+            let mut byte = 0u8;
+            let mut high_nibble = true;
+
+            for (i, &pixel) in row.iter().enumerate() {
+                // Map 8-bit grayscale to 4-bit value (0-15)
+                // Scale from 0-255 to 0-max_level, then scale to 0-15 for PNG
+                let level = ((pixel as u32) * max_level / 255).min(max_level);
+                // Map the level to 0-15 range for 4-bit PNG
+                let value = ((level * 15) / max_level) as u8;
+
+                if high_nibble {
+                    byte = value << 4;
+                    high_nibble = false;
+                } else {
+                    byte |= value;
+                    packed.push(byte);
+                    byte = 0;
+                    high_nibble = true;
+                }
+
+                // Handle row end
+                if i == row.len() - 1 && !high_nibble {
+                    // Odd number of pixels, need to push the last byte
+                    // (already done by the else branch above if even)
+                }
+            }
+
+            // Push remaining byte if row has odd width
+            if !high_nibble {
+                packed.push(byte);
             }
         }
 

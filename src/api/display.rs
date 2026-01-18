@@ -117,6 +117,7 @@ pub async fn handle_display<R: DeviceRegistry>(
         firmware_version: Some(device.firmware_version.clone()),
         width: Some(width),
         height: Some(height),
+        grey_levels: None, // Determined by device model in render phase
     };
 
     // Run script, render SVG, and cache the result (PNG rendering happens in /api/image)

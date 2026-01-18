@@ -238,7 +238,12 @@ mod lua_unit_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(std::path::Path::new("test_json.lua"), &HashMap::new(), None)
+            .run_script(
+                std::path::Path::new("test_json.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
             .expect("Script should run");
 
         assert!(result.data["matches"].as_bool().unwrap());
@@ -267,6 +272,7 @@ mod lua_unit_tests {
             .run_script(
                 std::path::Path::new("test_array.lua"),
                 &HashMap::new(),
+                None,
                 None,
             )
             .expect("Script should run");
@@ -299,6 +305,7 @@ mod lua_unit_tests {
                 std::path::Path::new("test_base64.lua"),
                 &HashMap::new(),
                 None,
+                None,
             )
             .expect("Script should run");
 
@@ -324,7 +331,12 @@ mod lua_unit_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(std::path::Path::new("test_time.lua"), &HashMap::new(), None)
+            .run_script(
+                std::path::Path::new("test_time.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
             .expect("Script should run");
 
         assert!(result.data["is_number"].as_bool().unwrap());
@@ -355,6 +367,7 @@ mod lua_unit_tests {
                 std::path::Path::new("test_format.lua"),
                 &HashMap::new(),
                 None,
+                None,
             )
             .expect("Script should run");
 
@@ -382,6 +395,7 @@ mod lua_unit_tests {
             .run_script(
                 std::path::Path::new("test_parse.lua"),
                 &HashMap::new(),
+                None,
                 None,
             )
             .expect("Script should run");
@@ -422,6 +436,7 @@ mod lua_unit_tests {
                 std::path::Path::new("test_qr.lua"),
                 &HashMap::new(),
                 Some(&ctx),
+                None,
             )
             .expect("Script should run");
 
@@ -467,6 +482,7 @@ mod lua_unit_tests {
                 std::path::Path::new("test_anchor.lua"),
                 &HashMap::new(),
                 Some(&ctx),
+                None,
             );
 
             assert!(result.is_ok(), "Anchor '{}' should work", anchor);
@@ -501,6 +517,7 @@ mod lua_unit_tests {
             firmware_version: Some("2.0.0".to_string()),
             width: Some(1872),
             height: Some(1404),
+            grey_levels: None,
         };
 
         let result = runtime
@@ -508,6 +525,7 @@ mod lua_unit_tests {
                 std::path::Path::new("test_device.lua"),
                 &HashMap::new(),
                 Some(&ctx),
+                None,
             )
             .expect("Script should run");
 
@@ -554,7 +572,7 @@ mod lua_unit_tests {
         params.insert("enabled".to_string(), serde_yaml::Value::Bool(true));
 
         let result = runtime
-            .run_script(std::path::Path::new("test_params.lua"), &params, None)
+            .run_script(std::path::Path::new("test_params.lua"), &params, None, None)
             .expect("Script should run");
 
         assert_eq!(result.data["station"], "Central Station");
@@ -598,7 +616,12 @@ mod lua_unit_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(std::path::Path::new("test_html.lua"), &HashMap::new(), None)
+            .run_script(
+                std::path::Path::new("test_html.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
             .expect("Script should run");
 
         assert_eq!(result.data["title_text"], "Title");
@@ -640,6 +663,7 @@ mod lua_unit_tests {
                 std::path::Path::new("test_chain.lua"),
                 &HashMap::new(),
                 None,
+                None,
             )
             .expect("Script should run");
 
@@ -664,7 +688,12 @@ mod lua_unit_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(std::path::Path::new("test_skip.lua"), &HashMap::new(), None)
+            .run_script(
+                std::path::Path::new("test_skip.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
             .expect("Script should run");
 
         assert!(result.skip_update);
@@ -688,6 +717,7 @@ mod lua_unit_tests {
                 std::path::Path::new("test_refresh.lua"),
                 &HashMap::new(),
                 None,
+                None,
             )
             .expect("Script should run");
 
@@ -709,7 +739,12 @@ mod lua_error_tests {
         let asset_loader = Arc::new(AssetLoader::new(None, None, None));
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("nonexistent_script.lua"), &HashMap::new(), None);
+        let result = runtime.run_script(
+            Path::new("nonexistent_script.lua"),
+            &HashMap::new(),
+            None,
+            None,
+        );
 
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -729,7 +764,7 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("bad_syntax.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("bad_syntax.lua"), &HashMap::new(), None);
+        let result = runtime.run_script(Path::new("bad_syntax.lua"), &HashMap::new(), None, None);
 
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -748,7 +783,8 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("runtime_error.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("runtime_error.lua"), &HashMap::new(), None);
+        let result =
+            runtime.run_script(Path::new("runtime_error.lua"), &HashMap::new(), None, None);
 
         assert!(result.is_err());
     }
@@ -765,7 +801,7 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("no_data.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("no_data.lua"), &HashMap::new(), None);
+        let result = runtime.run_script(Path::new("no_data.lua"), &HashMap::new(), None, None);
 
         assert!(result.is_err());
     }
@@ -779,7 +815,7 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("bad_return.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("bad_return.lua"), &HashMap::new(), None);
+        let result = runtime.run_script(Path::new("bad_return.lua"), &HashMap::new(), None, None);
 
         assert!(result.is_err());
     }
@@ -797,7 +833,7 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("bad_json.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("bad_json.lua"), &HashMap::new(), None);
+        let result = runtime.run_script(Path::new("bad_json.lua"), &HashMap::new(), None, None);
 
         // json_decode raises an error for invalid JSON
         assert!(result.is_err());
@@ -817,7 +853,7 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("bad_selector.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("bad_selector.lua"), &HashMap::new(), None);
+        let result = runtime.run_script(Path::new("bad_selector.lua"), &HashMap::new(), None, None);
 
         // Should handle gracefully (returns nil or error)
         // Either outcome is acceptable for error handling test
@@ -837,7 +873,7 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("bad_time.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("bad_time.lua"), &HashMap::new(), None);
+        let result = runtime.run_script(Path::new("bad_time.lua"), &HashMap::new(), None, None);
 
         // time_parse raises an error for invalid input
         assert!(result.is_err());
@@ -856,7 +892,7 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("bad_b64.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("bad_b64.lua"), &HashMap::new(), None);
+        let result = runtime.run_script(Path::new("bad_b64.lua"), &HashMap::new(), None, None);
 
         // base64_decode raises an error for invalid input
         assert!(result.is_err());
@@ -875,7 +911,7 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("empty.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("empty.lua"), &HashMap::new(), None);
+        let result = runtime.run_script(Path::new("empty.lua"), &HashMap::new(), None, None);
 
         // Empty script returns nil, which is an error
         assert!(result.is_err());
@@ -913,7 +949,7 @@ mod lua_error_tests {
         );
         params.insert("config".to_string(), serde_yaml::Value::Mapping(nested));
 
-        let result = runtime.run_script(Path::new("params_test.lua"), &params, None);
+        let result = runtime.run_script(Path::new("params_test.lua"), &params, None, None);
 
         assert!(result.is_ok());
         let data = result.unwrap();
@@ -949,7 +985,7 @@ mod lua_additional_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("test_asset.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("test_asset.lua"), &HashMap::new(), None);
+        let result = runtime.run_script(Path::new("test_asset.lua"), &HashMap::new(), None, None);
 
         // This might fail if hello.svg isn't accessible from the test context
         // Either outcome is fine for coverage
@@ -972,7 +1008,7 @@ mod lua_additional_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("test_log.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("test_log.lua"), &HashMap::new(), None);
+        let result = runtime.run_script(Path::new("test_log.lua"), &HashMap::new(), None, None);
 
         assert!(result.is_ok());
     }
@@ -995,7 +1031,7 @@ mod lua_additional_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("test_table.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("test_table.lua"), &HashMap::new(), None);
+        let result = runtime.run_script(Path::new("test_table.lua"), &HashMap::new(), None, None);
 
         assert!(result.is_ok());
         let data = result.unwrap();
@@ -1025,7 +1061,7 @@ mod lua_additional_tests {
         ]);
         params.insert("items".to_string(), items);
 
-        let result = runtime.run_script(Path::new("test_seq.lua"), &params, None);
+        let result = runtime.run_script(Path::new("test_seq.lua"), &params, None, None);
 
         assert!(result.is_ok());
     }
@@ -1047,7 +1083,7 @@ mod lua_additional_tests {
         let mut params = HashMap::new();
         params.insert("nothing".to_string(), serde_yaml::Value::Null);
 
-        let result = runtime.run_script(Path::new("test_nil.lua"), &params, None);
+        let result = runtime.run_script(Path::new("test_nil.lua"), &params, None, None);
 
         assert!(result.is_ok());
     }
@@ -1081,9 +1117,11 @@ mod lua_additional_tests {
             rssi: None,
             model: None,
             firmware_version: None,
+            grey_levels: None,
         };
 
-        let result = runtime.run_script(Path::new("test_qr.lua"), &HashMap::new(), Some(&ctx));
+        let result =
+            runtime.run_script(Path::new("test_qr.lua"), &HashMap::new(), Some(&ctx), None);
 
         assert!(result.is_ok());
         let data = result.unwrap();
@@ -1118,7 +1156,7 @@ mod lua_additional_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("test_html.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("test_html.lua"), &HashMap::new(), None);
+        let result = runtime.run_script(Path::new("test_html.lua"), &HashMap::new(), None, None);
 
         assert!(result.is_ok());
         let data = result.unwrap();
@@ -1145,7 +1183,7 @@ mod lua_http_tests {
         tokio::task::spawn_blocking(move || {
             let runtime = LuaRuntime::new(asset_loader);
             runtime
-                .run_script(&script_path, &HashMap::new(), None)
+                .run_script(&script_path, &HashMap::new(), None, None)
                 .expect("Script should run")
         })
         .await
@@ -1590,6 +1628,396 @@ mod lua_http_tests {
 }
 
 // ============================================================================
+// Layout helper function tests
+// ============================================================================
+
+mod lua_layout_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn test_layout_table_defaults() {
+        // Test default values when no device context is provided
+        let script = r#"
+            return {
+                data = {
+                    width = layout.width,
+                    height = layout.height,
+                    scale = layout.scale,
+                    center_x = layout.center_x,
+                    center_y = layout.center_y,
+                    grey_levels = layout.grey_levels,
+                    margin = layout.margin,
+                    margin_sm = layout.margin_sm,
+                    margin_lg = layout.margin_lg
+                },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_layout.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script(Path::new("test_layout.lua"), &HashMap::new(), None, None)
+            .expect("Script should run");
+
+        assert_eq!(result.data["width"], 800);
+        assert_eq!(result.data["height"], 480);
+        assert_eq!(result.data["scale"], 1.0);
+        assert_eq!(result.data["center_x"], 400);
+        assert_eq!(result.data["center_y"], 240);
+        assert_eq!(result.data["grey_levels"], 4);
+        assert_eq!(result.data["margin"], 20);
+        assert_eq!(result.data["margin_sm"], 10);
+        assert_eq!(result.data["margin_lg"], 40);
+    }
+
+    #[test]
+    fn test_layout_table_with_x_device() {
+        // Test with TRMNL X device (1872x1404)
+        let script = r#"
+            return {
+                data = {
+                    width = layout.width,
+                    height = layout.height,
+                    scale = layout.scale,
+                    center_x = layout.center_x,
+                    center_y = layout.center_y,
+                    grey_levels = layout.grey_levels,
+                    margin = layout.margin,
+                    margin_sm = layout.margin_sm,
+                    margin_lg = layout.margin_lg
+                },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_layout_x.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let ctx = DeviceContext {
+            mac: "AA:BB:CC:DD:EE:FF".to_string(),
+            width: Some(1872),
+            height: Some(1404),
+            grey_levels: Some(16),
+            ..Default::default()
+        };
+
+        let result = runtime
+            .run_script(
+                Path::new("test_layout_x.lua"),
+                &HashMap::new(),
+                Some(&ctx),
+                None,
+            )
+            .expect("Script should run");
+
+        assert_eq!(result.data["width"], 1872);
+        assert_eq!(result.data["height"], 1404);
+        // Scale is min(1872/800, 1404/480) = min(2.34, 2.925) = 2.34
+        let scale = result.data["scale"].as_f64().unwrap();
+        assert!(
+            (scale - 2.34).abs() < 0.001,
+            "Scale should be 2.34, got {}",
+            scale
+        );
+        assert_eq!(result.data["center_x"], 936);
+        assert_eq!(result.data["center_y"], 702);
+        assert_eq!(result.data["grey_levels"], 16);
+        // margin = floor(20 * 2.34) = floor(46.8) = 46
+        assert_eq!(result.data["margin"], 46);
+        // margin_sm = floor(10 * 2.34) = floor(23.4) = 23
+        assert_eq!(result.data["margin_sm"], 23);
+        // margin_lg = floor(40 * 2.34) = floor(93.6) = 93
+        assert_eq!(result.data["margin_lg"], 93);
+    }
+
+    #[test]
+    fn test_scale_font() {
+        // Test scale_font returns float at scale=1.0
+        let script = r#"
+            local result = scale_font(48)
+            return {
+                data = {
+                    result = result,
+                    is_number = type(result) == "number"
+                },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_scale_font.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script(
+                Path::new("test_scale_font.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("Script should run");
+
+        let scaled = result.data["result"].as_f64().unwrap();
+        assert!(
+            (scaled - 48.0).abs() < 0.001,
+            "Expected 48.0, got {}",
+            scaled
+        );
+        assert!(result.data["is_number"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn test_scale_font_with_x_device() {
+        // Test scale_font with TRMNL X device (scale = 2.34)
+        let script = r#"
+            local result = scale_font(48)
+            return {
+                data = { result = result },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_scale_font_x.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let ctx = DeviceContext {
+            mac: "AA:BB:CC:DD:EE:FF".to_string(),
+            width: Some(1872),
+            height: Some(1404),
+            ..Default::default()
+        };
+
+        let result = runtime
+            .run_script(
+                Path::new("test_scale_font_x.lua"),
+                &HashMap::new(),
+                Some(&ctx),
+                None,
+            )
+            .expect("Script should run");
+
+        // scale_font(48) at scale=2.34 = 48 * 2.34 = 112.32
+        let scaled = result.data["result"].as_f64().unwrap();
+        assert!(
+            (scaled - 112.32).abs() < 0.1,
+            "Expected ~112.32, got {}",
+            scaled
+        );
+    }
+
+    #[test]
+    fn test_scale_pixel() {
+        // Test scale_pixel returns integer at scale=1.0
+        let script = r#"
+            local result = scale_pixel(70)
+            return {
+                data = {
+                    result = result,
+                    is_integer = math.floor(result) == result
+                },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_scale_pixel.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script(
+                Path::new("test_scale_pixel.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("Script should run");
+
+        assert_eq!(result.data["result"], 70);
+        assert!(result.data["is_integer"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn test_scale_pixel_with_x_device() {
+        // Test scale_pixel with TRMNL X device (scale = 2.34)
+        let script = r#"
+            local result = scale_pixel(70)
+            return {
+                data = { result = result },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_scale_pixel_x.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let ctx = DeviceContext {
+            mac: "AA:BB:CC:DD:EE:FF".to_string(),
+            width: Some(1872),
+            height: Some(1404),
+            ..Default::default()
+        };
+
+        let result = runtime
+            .run_script(
+                Path::new("test_scale_pixel_x.lua"),
+                &HashMap::new(),
+                Some(&ctx),
+                None,
+            )
+            .expect("Script should run");
+
+        // scale_pixel(70) at scale=2.34 = floor(70 * 2.34) = floor(163.8) = 163
+        assert_eq!(result.data["result"], 163);
+    }
+
+    #[test]
+    fn test_greys_4_levels() {
+        // Test greys(4) generates 4-level palette
+        let script = r#"
+            local palette = greys(4)
+            return {
+                data = {
+                    count = #palette,
+                    first_value = palette[1].value,
+                    first_color = palette[1].color,
+                    first_text = palette[1].text_color,
+                    second_value = palette[2].value,
+                    third_value = palette[3].value,
+                    fourth_value = palette[4].value,
+                    fourth_color = palette[4].color,
+                    fourth_text = palette[4].text_color
+                },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_greys_4.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script(Path::new("test_greys_4.lua"), &HashMap::new(), None, None)
+            .expect("Script should run");
+
+        assert_eq!(result.data["count"], 4);
+        // First entry: value=0 (black)
+        assert_eq!(result.data["first_value"], 0);
+        assert_eq!(result.data["first_color"], "#000000");
+        assert_eq!(result.data["first_text"], "#ffffff");
+        // Second: value = 255 * 1 / 3 = 85
+        assert_eq!(result.data["second_value"], 85);
+        // Third: value = 255 * 2 / 3 = 170
+        assert_eq!(result.data["third_value"], 170);
+        // Fourth: value = 255 (white)
+        assert_eq!(result.data["fourth_value"], 255);
+        assert_eq!(result.data["fourth_color"], "#ffffff");
+        assert_eq!(result.data["fourth_text"], "#000000");
+    }
+
+    #[test]
+    fn test_greys_16_levels() {
+        // Test greys(16) generates 16-level palette
+        let script = r#"
+            local palette = greys(16)
+            local values = {}
+            for i = 1, #palette do
+                values[i] = palette[i].value
+            end
+            return {
+                data = {
+                    count = #palette,
+                    first_value = palette[1].value,
+                    last_value = palette[16].value,
+                    mid_value = palette[8].value
+                },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_greys_16.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script(Path::new("test_greys_16.lua"), &HashMap::new(), None, None)
+            .expect("Script should run");
+
+        assert_eq!(result.data["count"], 16);
+        assert_eq!(result.data["first_value"], 0);
+        assert_eq!(result.data["last_value"], 255);
+        // Mid value (8th): 255 * 7 / 15 = 119
+        assert_eq!(result.data["mid_value"], 119);
+    }
+
+    #[test]
+    fn test_greys_2_levels() {
+        // Test greys(2) generates black and white only
+        let script = r#"
+            local palette = greys(2)
+            return {
+                data = {
+                    count = #palette,
+                    first_value = palette[1].value,
+                    second_value = palette[2].value
+                },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_greys_2.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script(Path::new("test_greys_2.lua"), &HashMap::new(), None, None)
+            .expect("Script should run");
+
+        assert_eq!(result.data["count"], 2);
+        assert_eq!(result.data["first_value"], 0);
+        assert_eq!(result.data["second_value"], 255);
+    }
+
+    #[test]
+    fn test_layout_integration() {
+        // Test using layout helpers together as they would be in a real script
+        let script = r#"
+            local font_size = scale_font(48)
+            local header_y = scale_pixel(70)
+            local margin = layout.margin
+            local palette = greys(layout.grey_levels)
+
+            return {
+                data = {
+                    font_size = font_size,
+                    header_y = header_y,
+                    margin = margin,
+                    palette_count = #palette,
+                    bg_color = palette[1].color
+                },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_layout_integration.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script(
+                Path::new("test_layout_integration.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("Script should run");
+
+        let font_size = result.data["font_size"].as_f64().unwrap();
+        assert!((font_size - 48.0).abs() < 0.001);
+        assert_eq!(result.data["header_y"], 70);
+        assert_eq!(result.data["margin"], 20);
+        assert_eq!(result.data["palette_count"], 4);
+        assert_eq!(result.data["bg_color"], "#000000");
+    }
+}
+
+// ============================================================================
 // HTTPS/TLS certificate tests
 // ============================================================================
 
@@ -1608,7 +2036,7 @@ mod lua_https_tests {
         tokio::task::spawn_blocking(move || {
             let runtime = LuaRuntime::new(asset_loader);
             runtime
-                .run_script(Path::new(&script_path), &HashMap::new(), None)
+                .run_script(Path::new(&script_path), &HashMap::new(), None, None)
                 .expect("Script execution failed")
         })
         .await
@@ -1623,7 +2051,7 @@ mod lua_https_tests {
         let script_path = script_name.to_string();
         tokio::task::spawn_blocking(move || {
             let runtime = LuaRuntime::new(asset_loader);
-            match runtime.run_script(Path::new(&script_path), &HashMap::new(), None) {
+            match runtime.run_script(Path::new(&script_path), &HashMap::new(), None, None) {
                 Ok(_) => panic!("Expected script to fail"),
                 Err(e) => e.to_string(),
             }

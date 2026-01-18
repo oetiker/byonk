@@ -1,54 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
   <defs>
     <style>
-      /* Colors */
-      .black { fill: #000 }
-      .white { fill: #fff }
-      .gray { fill: #555 }
-      .gray-light { fill: #aaa }
-      .gray-dark { fill: #555 }
-
-      /* Strokes */
-      .stroke-white { stroke: #fff }
-      .stroke-black { stroke: #000 }
-      .stroke-gray { stroke: #555 }
-      .stroke-w1 { stroke-width: 1 }
-      .stroke-w2 { stroke-width: 2 }
-      .no-fill { fill: none }
-
       /* Text base */
       text { text-anchor: middle; font-family: Outfit; font-weight: 500; }
-
-      /* Text sizes */
-      .text-sm { font-size: 15px }
-      .text-md { font-size: 17px }
-      .text-lg { font-size: 18px }
-      .text-xl { font-size: 20px }
-      .text-2xl { font-size: 24px }
-      .text-3xl { font-size: 30px }
-      .text-hero { font-size: 96px }
-      .text-tagline { font-size: 36px }
-
-      /* Text colors */
-      .text-white { fill: #fff }
-      .text-black { fill: #000 }
-      .text-gray { fill: #aaa }
 
       /* Text weights */
       .font-bold { font-weight: 700 }
       .font-black { font-weight: 900 }
       .font-semibold { font-weight: 600 }
-
-      /* Special */
-      .mono { font-family: monospace }
     </style>
-    <linearGradient id="hGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#000"/>
-      <stop offset="100%" stop-color="#fff"/>
-    </linearGradient>
     <linearGradient id="vGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#fff"/>
-      <stop offset="100%" stop-color="#000"/>
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#000000"/>
     </linearGradient>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
       <feGaussianBlur in="SourceAlpha" stdDeviation="8"/>
@@ -61,45 +24,30 @@
         <feMergeNode in="SourceGraphic"/>
       </feMerge>
     </filter>
-    <filter id="shadow-light" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur in="SourceAlpha" stdDeviation="5"/>
-      <feOffset dx="0" dy="0"/>
-      <feComponentTransfer>
-        <feFuncA type="linear" slope="0.6"/>
-      </feComponentTransfer>
-      <feMerge>
-        <feMergeNode/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
   </defs>
 
   <!-- Full background image -->
-  <image x="0" y="0" width="800" height="480" href="background.jpg" preserveAspectRatio="xMidYMid slice"/>
+  <image x="0" y="0" width="{{ data.width }}" height="{{ data.height }}" href="background.jpg" preserveAspectRatio="xMidYMid slice"/>
 
   <!-- Hero title - semi-transparent white text with shadow -->
-  <text x="400" y="130" class="text-hero text-white font-black" opacity="0.8" filter="url(#shadow)">BYONK</text>
-  <text x="400" y="165" class="text-tagline text-white font-semibold"  opacity="0.8" filter="url(#shadow)" textLength="335" lengthAdjust="spacing">Bring Your Own Ink</text>
+  <text x="{{ data.center_x }}" y="{{ data.title_y }}" font-size="{{ data.font_hero }}" class="font-black" fill="#ffffff" opacity="0.8" filter="url(#shadow)">BYONK</text>
+  <text x="{{ data.center_x }}" y="{{ data.tagline_y }}" font-size="{{ data.font_tagline }}" class="font-semibold" fill="#ffffff" opacity="0.8" filter="url(#shadow)">Bring Your Own Ink</text>
 
-  <!-- 4 Grayscale swatches - vertical left edge (50% height) -->
-  <g filter="url(#shadow-light)">
-    <rect x="20" y="180" width="40" height="60" class="white"/>
-    <rect x="20" y="240" width="40" height="60" class="gray-light"/>
-    <rect x="20" y="300" width="40" height="60" class="gray-dark"/>
-    <rect x="20" y="360" width="40" height="60" class="black"/>
-  </g>
-  <text x="40" y="216" class="text-sm text-black">255</text>
-  <text x="40" y="276" class="text-sm text-black">170</text>
-  <text x="40" y="336" class="text-sm text-white">85</text>
-  <text x="40" y="396" class="text-sm text-white">0</text>
+  <!-- Dynamic grayscale swatches - pure colors, no filter -->
+  {% for grey in data.greys %}
+  <rect x="{{ data.swatch_x }}" y="{{ grey.y }}" width="{{ data.swatch_width }}" height="{{ grey.height }}" fill="{{ grey.color }}"/>
+  {% endfor %}
+  {% for grey in data.greys %}
+  <text x="{{ data.swatch_center_x }}" y="{{ grey.text_y }}" font-size="{{ data.font_swatch }}" fill="{{ grey.text_color }}">{{ grey.value }}</text>
+  {% endfor %}
 
-  <!-- Vertical gradient bar - right edge (50% height) -->
-  <rect x="740" y="180" width="40" height="240" fill="url(#vGradient)" filter="url(#shadow-light)"/>
+  <!-- Vertical smooth gradient bar - demonstrates dithering -->
+  <rect x="{{ data.gradient_x }}" y="{{ data.gradient_y }}" width="{{ data.gradient_width }}" height="{{ data.gradient_height }}" fill="url(#vGradient)"/>
 
   <!-- Info bar - bottom -->
-  <rect x="0" y="448" width="800" height="32" class="white"/>
-  <text x="100" y="469" class="text-lg text-gray">{% if device.battery_voltage %}{{ device.battery_voltage | round(precision=2) }}V{% else %}--{% endif %}</text>
-  <text x="350" y="469" class="text-lg text-gray">{{ device.mac | default(value="00:00:00:00:00:00") }}</text>
-  <text x="560" y="469" class="text-lg text-gray">{{ data.time }} {{ data.date }}</text>
-  <text x="720" y="469" class="text-lg text-gray">{% if device.rssi %}{{ device.rssi }}dBm{% else %}--{% endif %}</text>
+  <rect x="0" y="{{ data.info_bar_y }}" width="{{ data.width }}" height="{{ data.info_bar_height }}" fill="#ffffff"/>
+  <text x="{{ data.info_battery_x }}" y="{{ data.info_text_y }}" font-size="{{ data.font_lg }}" fill="#000000">{% if device.battery_voltage %}{{ device.battery_voltage | round(precision=2) }}V{% else %}--{% endif %}</text>
+  <text x="{{ data.info_mac_x }}" y="{{ data.info_text_y }}" font-size="{{ data.font_lg }}" fill="#000000">{{ device.mac | default(value="00:00:00:00:00:00") }}</text>
+  <text x="{{ data.info_time_x }}" y="{{ data.info_text_y }}" font-size="{{ data.font_lg }}" fill="#000000">{{ data.time }}   {{ data.date }}</text>
+  <text x="{{ data.info_rssi_x }}" y="{{ data.info_text_y }}" font-size="{{ data.font_lg }}" fill="#000000">{% if device.rssi %}{{ device.rssi }}dBm{% else %}--{% endif %}</text>
 </svg>

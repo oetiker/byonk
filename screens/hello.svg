@@ -1,51 +1,35 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
   <style>
-    .greeting {
+    text {
       font-family: Outfit, sans-serif;
-      font-size: 48px;
-      font-weight: 700;
       fill: black;
     }
-    .time {
-      font-family: Outfit, sans-serif;
-      font-size: 72px;
-      font-weight: 700;
-      fill: black;
-    }
-    .date {
-      font-family: Outfit, sans-serif;
-      font-size: 24px;
-      font-weight: 400;
-      fill: #555;
-    }
-    .footer {
-      font-family: Outfit, sans-serif;
-      font-size: 14px;
-      font-weight: 400;
-      fill: #999;
-    }
+    .greeting { font-weight: 700; }
+    .time { font-weight: 700; }
+    .date { font-weight: 400; fill: #555555; }
+    .footer { font-weight: 400; fill: #999999; }
   </style>
 
   <!-- White background -->
-  <rect width="800" height="480" fill="white"/>
+  <rect width="{{ data.width }}" height="{{ data.height }}" fill="#ffffff"/>
 
   <!-- Greeting -->
-  <text class="greeting" x="400" y="120" text-anchor="middle">
+  <text class="greeting" x="{{ data.center_x }}" y="{{ data.greeting_y }}" font-size="{{ data.font_greeting }}" text-anchor="middle">
     {{ data.greeting }}
   </text>
 
   <!-- Large time display -->
-  <text class="time" x="400" y="260" text-anchor="middle">
+  <text class="time" x="{{ data.center_x }}" y="{{ data.time_y }}" font-size="{{ data.font_time }}" text-anchor="middle">
     {{ data.time }}
   </text>
 
   <!-- Date below -->
-  <text class="date" x="400" y="320" text-anchor="middle">
+  <text class="date" x="{{ data.center_x }}" y="{{ data.date_y }}" font-size="{{ data.font_date }}" text-anchor="middle">
     {{ data.date }}
   </text>
 
   <!-- Footer -->
-  <text class="footer" x="400" y="450" text-anchor="middle">
+  <text class="footer" x="{{ data.center_x }}" y="{{ data.footer_y }}" font-size="{{ data.font_footer }}" text-anchor="middle">
     My first Byonk screen!
   </text>
 

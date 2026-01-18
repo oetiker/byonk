@@ -54,6 +54,137 @@ end
 
 > **Note:** Device fields may be `nil` if the device doesn't report them. Always check before using.
 
+### layout
+
+A table containing pre-computed responsive layout values. These values are automatically calculated based on the device dimensions, making it easy to create screens that work on both TRMNL OG (800×480) and TRMNL X (1872×1404).
+
+```lua
+-- Use pre-computed values directly
+local margin = layout.margin        -- pixel-aligned margin
+local center = layout.center_x      -- screen center X
+
+-- Access device info
+if layout.grey_levels == 16 then
+  -- Use more detailed gradients on TRMNL X
+end
+```
+
+**Fields:**
+
+| Field | Type | Description | Default (OG) | Example (X) |
+|-------|------|-------------|--------------|-------------|
+| `width` | integer | Device width in pixels | 800 | 1872 |
+| `height` | integer | Device height in pixels | 480 | 1404 |
+| `scale` | number | Scale factor: `min(width/800, height/480)` | 1.0 | 2.34 |
+| `center_x` | integer | Horizontal center: `floor(width/2)` | 400 | 936 |
+| `center_y` | integer | Vertical center: `floor(height/2)` | 240 | 702 |
+| `grey_levels` | integer | Device grey levels | 4 | 16 |
+| `margin` | integer | Standard margin: `floor(20 * scale)` | 20 | 46 |
+| `margin_sm` | integer | Small margin: `floor(10 * scale)` | 10 | 23 |
+| `margin_lg` | integer | Large margin: `floor(40 * scale)` | 40 | 93 |
+
+**Type:** `table`
+
+> **Note:** All margin values are pre-floored for pixel-aligned positioning.
+
+## Layout Helper Functions
+
+These functions help scale values appropriately for different device resolutions.
+
+### scale_font(value)
+
+Scales a font size value by the layout scale factor. Returns a float to preserve precision for font rendering.
+
+```lua
+local title_size = scale_font(48)    -- 48.0 on OG, 112.32 on X
+local body_size = scale_font(24)     -- 24.0 on OG, 56.16 on X
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `value` | number | Base font size (designed for 800×480) |
+
+**Returns:** `number` - Scaled font size (float)
+
+### scale_pixel(value)
+
+Scales a pixel value by the layout scale factor and floors the result for pixel-aligned positioning.
+
+```lua
+local header_y = scale_pixel(70)     -- 70 on OG, 163 on X
+local icon_size = scale_pixel(32)    -- 32 on OG, 74 on X
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `value` | number | Base pixel value (designed for 800×480) |
+
+**Returns:** `integer` - Scaled and floored pixel value
+
+### greys(levels)
+
+Generates a grey palette with the specified number of levels. Useful for creating gradients or color swatches that match the device's grey level capability.
+
+```lua
+-- Generate palette matching device capability
+local palette = greys(layout.grey_levels)
+
+for i, entry in ipairs(palette) do
+  print(entry.value)       -- 0-255 grey value
+  print(entry.color)       -- "#000000" to "#ffffff"
+  print(entry.text_color)  -- "#ffffff" for dark, "#000000" for light
+end
+```
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `levels` | integer | Number of grey levels (typically 4 or 16) |
+
+**Returns:** `table` - Array of palette entries
+
+**Palette entry fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `value` | integer | Grey value from 0 (black) to 255 (white) |
+| `color` | string | Hex color string (e.g., "#808080") |
+| `text_color` | string | Contrasting text color ("#ffffff" or "#000000") |
+
+**Example with 4 levels:**
+
+```lua
+local palette = greys(4)
+-- palette[1] = {value=0,   color="#000000", text_color="#ffffff"}
+-- palette[2] = {value=85,  color="#555555", text_color="#ffffff"}
+-- palette[3] = {value=170, color="#aaaaaa", text_color="#000000"}
+-- palette[4] = {value=255, color="#ffffff", text_color="#000000"}
+```
+
+## Example: Responsive Screen
+
+Here's how to create a screen that works on both TRMNL OG and TRMNL X:
+
+```lua
+-- Before (manual boilerplate):
+local width = device and device.width or 800
+local height = device and device.height or 480
+local scale = math.min(width / 800, height / 480)
+local font_size = math.floor(48 * scale)  -- Wrong: shouldn't floor fonts
+local header_y = math.floor(70 * scale)   -- Correct: pixel-aligned
+
+-- After (using helpers):
+local font_size = scale_font(48)     -- Preserves precision for fonts
+local header_y = scale_pixel(70)     -- Pixel-aligned position
+local margin = layout.margin         -- Pre-computed pixel margin
+local palette = greys(layout.grey_levels)  -- Device-appropriate palette
+```
+
 ## HTTP Functions
 
 Byonk provides three HTTP functions: `http_request` (full control), `http_get` (GET shorthand), and `http_post` (POST shorthand).

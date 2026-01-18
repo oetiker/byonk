@@ -553,9 +553,7 @@ async fn run_dev_server() -> anyhow::Result<()> {
     if file_watcher.is_active() {
         tracing::info!("File watcher active for live reload");
     } else {
-        tracing::warn!(
-            "File watcher not active - set SCREENS_DIR to enable live reload"
-        );
+        tracing::warn!("File watcher not active - set SCREENS_DIR to enable live reload");
     }
 
     // Create application state using shared server module

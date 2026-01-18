@@ -167,14 +167,8 @@ pub async fn handle_render(
 
     // Determine dimensions from model or explicit values
     let (width, height) = match query.model.as_str() {
-        "x" => (
-            query.width.unwrap_or(1872),
-            query.height.unwrap_or(1404),
-        ),
-        _ => (
-            query.width.unwrap_or(800),
-            query.height.unwrap_or(480),
-        ),
+        "x" => (query.width.unwrap_or(1872), query.height.unwrap_or(1404)),
+        _ => (query.width.unwrap_or(800), query.height.unwrap_or(480)),
     };
 
     // Parse custom params
@@ -248,7 +242,10 @@ pub async fn handle_render(
     // Convert SVG to PNG
     let display_spec = DisplaySpec::from_dimensions(width, height).unwrap_or(DisplaySpec::OG);
 
-    match state.content_pipeline.render_png_from_svg(&svg, display_spec) {
+    match state
+        .content_pipeline
+        .render_png_from_svg(&svg, display_spec)
+    {
         Ok(png_bytes) => (
             StatusCode::OK,
             [

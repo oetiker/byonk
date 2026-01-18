@@ -5,7 +5,7 @@
 
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, Mutex};
@@ -61,7 +61,7 @@ impl FileWatcher {
     }
 
     fn start_watcher(
-        path: &PathBuf,
+        path: &Path,
         sender: broadcast::Sender<FileChangeEvent>,
     ) -> Result<RecommendedWatcher, notify::Error> {
         // Create a channel for raw events

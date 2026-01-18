@@ -23,6 +23,8 @@ struct Cli {
 enum Commands {
     /// Start the HTTP server
     Serve,
+    /// Start the HTTP server with dev mode (live reload, device simulator)
+    Dev,
     /// Render a screen directly to a PNG file
     Render {
         /// Device MAC address (determines which screen to render)
@@ -128,6 +130,7 @@ async fn main() -> anyhow::Result<()> {
             list,
         }) => run_init_command(screens, fonts, config, all, force, list),
         Some(Commands::Serve) => run_server().await,
+        Some(Commands::Dev) => run_dev_server().await,
         None => {
             run_status_command();
             Ok(())
@@ -417,6 +420,7 @@ fn run_status_command() {
     // Commands section
     println!("\nCommands:");
     println!("  byonk serve    Start the HTTP server");
+    println!("  byonk dev      Start server with dev mode (live reload)");
     println!("  byonk render   Render a screen to PNG file");
     println!("  byonk init     Extract embedded assets");
     println!("\nRun 'byonk --help' for more details.");
@@ -483,6 +487,110 @@ async fn run_server() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!(addr = %bind_addr, "Byonk server listening");
+
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+/// Run the HTTP server with dev mode (file watching, live reload)
+async fn run_dev_server() -> anyhow::Result<()> {
+    use axum::{routing::get, Router};
+    use byonk::api::dev::{
+        handle_dev_css, handle_dev_js, handle_dev_page, handle_events, handle_render,
+        handle_screens, DevState,
+    };
+    use byonk::assets::AssetLoader;
+    use byonk::services::FileWatcher;
+
+    // Initialize tracing
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "byonk=debug,tower_http=debug".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    // Create asset loader with optional external paths from env vars
+    let screens_dir = std::env::var("SCREENS_DIR").ok().map(PathBuf::from);
+    let fonts_dir = std::env::var("FONTS_DIR").ok().map(PathBuf::from);
+    let config_file = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
+    let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
+
+    let asset_loader = Arc::new(AssetLoader::new(
+        screens_dir.clone(),
+        fonts_dir.clone(),
+        config_file.clone(),
+    ));
+
+    // Log asset sources
+    tracing::info!(
+        screens = ?screens_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
+        fonts = ?fonts_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
+        config = ?config_file.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
+        "Asset sources configured"
+    );
+
+    // Seed if configured paths are empty
+    match asset_loader.seed_if_configured() {
+        Ok(report) if !report.is_empty() => {
+            tracing::info!(
+                screens = report.screens_seeded.len(),
+                fonts = report.fonts_seeded.len(),
+                config = report.config_seeded,
+                "Seeded empty directories with embedded assets"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(%e, "Failed to seed assets");
+        }
+        _ => {}
+    }
+
+    // Create file watcher for screens directory
+    let file_watcher = Arc::new(FileWatcher::new(screens_dir.clone()));
+    if file_watcher.is_active() {
+        tracing::info!("File watcher active for live reload");
+    } else {
+        tracing::warn!("File watcher not active - set SCREENS_DIR to enable live reload");
+    }
+
+    // Create application state using shared server module
+    let state = server::create_app_state(asset_loader.clone())?;
+
+    // Create dev state
+    let config = Arc::new(AppConfig::load_from_assets(&asset_loader));
+    let dev_state = DevState {
+        config,
+        content_pipeline: state.content_pipeline.clone(),
+        content_cache: state.content_cache.clone(),
+        renderer: state.renderer.clone(),
+        file_watcher,
+    };
+
+    // Build dev routes as a nested router with DevState
+    let dev_router = Router::new()
+        .route("/", get(handle_dev_page))
+        .route("/dev.css", get(handle_dev_css))
+        .route("/dev.js", get(handle_dev_js))
+        .route("/screens", get(handle_screens))
+        .route("/events", get(handle_events))
+        .route("/render", get(handle_render))
+        .with_state(dev_state);
+
+    // Build router: start with shared API routes, add dev routes
+    let app = server::build_router(state)
+        // OpenAPI documentation
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        // Static file serving
+        .nest_service("/static", ServeDir::new("./static"))
+        // Dev mode routes (nested with their own state)
+        .nest("/dev", dev_router);
+
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+    tracing::info!(addr = %bind_addr, "Byonk dev server listening");
+    tracing::info!("Dev mode UI available at http://{}/dev", bind_addr);
 
     axum::serve(listener, app).await?;
 

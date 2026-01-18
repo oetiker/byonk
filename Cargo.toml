@@ -53,6 +53,11 @@ hex = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# Dev mode (file watching, SSE)
+notify = "8"
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures-util = "0.3"
+
 # Asset embedding
 rust-embed = { version = "8", features = ["include-exclude"] }
 base64 = "0.22"

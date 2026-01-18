@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Byonk Dev Mode</title>
+    <link rel="stylesheet" href="/dev/dev.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Byonk Dev Mode</h1>
+            <div class="status">
+                <span id="watch-status" class="status-badge disconnected">File Watch: Connecting...</span>
+            </div>
+        </header>
+
+        <main>
+            <div class="panel config-panel">
+                <h2>Configuration</h2>
+
+                <div class="form-group">
+                    <label for="screen-select">Screen</label>
+                    <select id="screen-select">
+                        <option value="">Loading...</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="model-select">Device Model</label>
+                    <select id="model-select">
+                        <option value="og">OG (800x480)</option>
+                        <option value="x">X (1872x1404)</option>
+                    </select>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="width-input">Width</label>
+                        <input type="number" id="width-input" value="800" min="100" max="2000">
+                    </div>
+                    <div class="form-group">
+                        <label for="height-input">Height</label>
+                        <input type="number" id="height-input" value="480" min="100" max="2000">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="params-input">Custom Parameters (JSON)</label>
+                    <textarea id="params-input" placeholder='{"key": "value"}'>{}</textarea>
+                </div>
+
+                <div class="form-actions">
+                    <button id="render-btn" class="btn primary">Render</button>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="auto-refresh" checked>
+                        Auto-refresh on file change
+                    </label>
+                </div>
+            </div>
+
+            <div class="panel display-panel">
+                <h2>Device Preview</h2>
+                <div id="device-frame" class="device-frame og">
+                    <div class="device-bezel">
+                        <img id="display-image" alt="Screen preview">
+                        <div id="loading-overlay" class="loading-overlay hidden">
+                            <div class="spinner"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="display-info">
+                    <span id="display-size">800 x 480</span>
+                    <span id="render-time"></span>
+                </div>
+            </div>
+        </main>
+
+        <div id="error-panel" class="panel error-panel hidden">
+            <h2>Errors</h2>
+            <pre id="error-content"></pre>
+            <button id="dismiss-error" class="btn">Dismiss</button>
+        </div>
+
+        <footer>
+            <p>Byonk Dev Mode - Edit your Lua scripts and SVG templates, see changes instantly</p>
+        </footer>
+    </div>
+
+    <script src="/dev/dev.js"></script>
+</body>
+</html>

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.9.0 - 2026-01-19
+
+### New
+
 - Layout helpers for responsive screen development:
   - Added `layout` global table with pre-computed responsive values (`width`, `height`, `scale`, `center_x`, `center_y`, `grey_levels`, `margin`, `margin_sm`, `margin_lg`)
   - Added `scale_font(value)` helper for scaling font sizes (returns float to preserve precision)
@@ -29,7 +37,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Configurable grey levels per device (4 for OG, 16 for X)
   - 4-bit PNG output for 16-level displays
   - Device context includes `grey_levels` field
-
 ### Changed
 
 - Updated all example screens (default, hello, transit, floerli, graytest) to use new layout helpers

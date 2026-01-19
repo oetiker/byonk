@@ -11,7 +11,7 @@ Byonk lets you create custom screens for your TRMNL device using Lua scripts and
 ## Quick Start
 
 ```bash
-docker run -d -p 3000:3000 ghcr.io/oetiker/byonk:latest
+docker run -d --pull always -p 3000:3000 ghcr.io/oetiker/byonk:latest
 ```
 
 Point your TRMNL device to `http://your-server:3000` and it will start displaying content.
@@ -21,7 +21,7 @@ Point your TRMNL device to `http://your-server:3000` and it will start displayin
 Byonk includes a development mode with a web-based device simulator for creating and testing screens:
 
 ```bash
-docker run -p 3000:3000 ghcr.io/oetiker/byonk:latest dev
+docker run --pull always -p 3000:3000 ghcr.io/oetiker/byonk:latest dev
 ```
 
 Then open `http://localhost:3000/dev` in your browser:

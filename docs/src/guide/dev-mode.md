@@ -14,6 +14,8 @@ SCREENS_DIR=./screens byonk dev
 
 Once started, open your browser to `http://localhost:3000/dev` to access the device simulator.
 
+![Dev Mode Screenshot](images/dev-mode-screenshot.png)
+
 ## Features
 
 ### Device Simulator
@@ -21,9 +23,13 @@ Once started, open your browser to `http://localhost:3000/dev` to access the dev
 The simulator displays your rendered screens in a visual frame resembling a TRMNL device. You can:
 
 - **Select a screen** from the dropdown (populated from your config.yaml)
+- **Enter a MAC address** to auto-load the configured screen and parameters for that device
 - **Choose device model**: OG (800x480) or X (1872x1404)
 - **Set custom dimensions** for testing different screen sizes
+- **Select grey levels**: 4 (OG) or 16 (X) for testing dithering behavior
+- **Simulate device context**: battery voltage, WiFi RSSI, and current time
 - **View the rendered PNG** exactly as it would appear on the device
+- **Pixel inspector**: hover over the image to see a magnified view
 
 ### Live Reload
 

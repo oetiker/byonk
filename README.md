@@ -8,141 +8,34 @@
 
 Byonk lets you create custom screens for your TRMNL device using Lua scripts and SVG templates. Fetch data from any source, render it beautifully, and display it on your e-ink screen.
 
-## Features
-
-- **Lua Scripting** - Fetch data from APIs, scrape websites, process JSON
-- **SVG Templates** - Design screens with Tera templating (Jinja2-style)
-- **Variable Fonts** - Full support for variable font weight/width via CSS
-- **4-Level Grayscale** - Blue-noise dithering optimized for e-paper
-- **Dynamic Refresh** - Scripts control when the device should refresh
-- **Device Mapping** - Assign different screens to different devices
-
 ## Quick Start
-
-### Docker (Recommended)
 
 ```bash
 docker run -d -p 3000:3000 ghcr.io/oetiker/byonk:latest
 ```
 
-### Pre-built Binaries
-
-Download from [GitHub Releases](https://github.com/oetiker/byonk/releases) and run:
-
-```bash
-tar -xzf byonk-*.tar.gz
-cd byonk
-./byonk
-```
-
 Point your TRMNL device to `http://your-server:3000` and it will start displaying content.
 
-## Configuration
+## Dev Mode
 
-Edit `config.yaml` to define screens and map devices:
+Byonk includes a development mode with a web-based device simulator for creating and testing screens:
 
-```yaml
-screens:
-  transit:
-    script: transit.lua      # Lua script for data
-    template: transit.svg    # SVG template
-    default_refresh: 60      # Fallback refresh rate (seconds)
-
-devices:
-  "94:A9:90:8C:6D:18":       # Device MAC address
-    screen: transit
-    params:
-      station: "Olten, Bahnhof"
-      limit: 8
-
-default_screen: default
+```bash
+docker run -p 3000:3000 ghcr.io/oetiker/byonk:latest dev
 ```
 
-## Creating Screens
+Then open `http://localhost:3000/dev` in your browser:
 
-### Lua Script (`screens/example.lua`)
+![Dev Mode](docs/src/guide/images/dev-mode-screenshot.png)
 
-Scripts fetch data and return it along with a refresh rate:
+## Documentation
 
-```lua
--- Fetch JSON from an API
-local response = http_get("https://api.example.com/data")
-local data = json_decode(response)
+Full documentation is available at **[oetiker.github.io/byonk](https://oetiker.github.io/byonk)**:
 
--- Return data for the template
-return {
-  data = {
-    title = data.title,
-    items = data.items,
-    updated = time_format(time_now(), "%H:%M")
-  },
-  refresh_rate = 300  -- Refresh in 5 minutes
-}
-```
-
-### SVG Template (`screens/example.svg`)
-
-Templates use Tera syntax (similar to Jinja2):
-
-```svg
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480">
-  <text x="20" y="40" font-size="24">{{ title }}</text>
-
-  {% for item in items %}
-  <text x="20" y="{{ 80 + loop.index0 * 30 }}">{{ item.name }}</text>
-  {% endfor %}
-
-  <text x="780" y="470" text-anchor="end" fill="gray">{{ updated }}</text>
-</svg>
-```
-
-## Lua API
-
-### HTTP
-- `http_get(url)` - Fetch URL, returns body as string
-
-### JSON
-- `json_decode(str)` - Parse JSON string to Lua table
-- `json_encode(table)` - Encode Lua table to JSON string
-
-### HTML Parsing
-- `html_parse(html)` - Parse HTML, returns document
-- `doc:select(selector)` - CSS selector query, returns elements
-- `elements:each(fn)` - Iterate over elements
-- `element:text()` - Get inner text
-- `element:attr(name)` - Get attribute value
-
-### Time
-- `time_now()` - Current Unix timestamp
-- `time_parse(str, format)` - Parse date string
-- `time_format(ts, format)` - Format timestamp
-
-### Logging
-- `log_info(msg)`, `log_warn(msg)`, `log_error(msg)`
-
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BIND_ADDR` | `0.0.0.0:3000` | Server bind address |
-| `SCREENS_DIR` | (embedded) | Lua scripts and SVG templates |
-| `FONTS_DIR` | (embedded) | Custom fonts directory |
-| `CONFIG_FILE` | (embedded) | Configuration file path |
-
-## API Endpoints
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/setup` | Device registration |
-| `GET /api/display` | Get display content (JSON with image URL) |
-| `GET /api/image/{hash}.png` | Get rendered PNG image by content hash |
-| `POST /api/log` | Device log submission |
-| `GET /swagger-ui` | OpenAPI documentation |
-| `GET /health` | Health check |
-
-## Dependencies
-
-Byonk uses a [patched version of resvg](https://github.com/oetiker/resvg/tree/varfont-support) for variable font support via CSS `font-variation-settings`.
+- [Installation Guide](https://oetiker.github.io/byonk/guide/installation.html)
+- [Creating Your First Screen](https://oetiker.github.io/byonk/tutorial/first-screen.html)
+- [Lua API Reference](https://oetiker.github.io/byonk/api/lua-api.html)
+- [Dev Mode](https://oetiker.github.io/byonk/guide/dev-mode.html)
 
 ## License
 

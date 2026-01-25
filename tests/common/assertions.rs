@@ -72,9 +72,10 @@ pub fn assert_valid_setup_response(response: &TestResponse) {
         "Expected friendly_id to be a string"
     );
 
-    // API key should be 24 characters
+    // API key should be 13 characters (BNK + 10 letter code)
     let api_key = json["api_key"].as_str().unwrap();
-    assert_eq!(api_key.len(), 24, "API key should be 24 characters");
+    assert_eq!(api_key.len(), 13, "API key should be 13 characters");
+    assert!(api_key.starts_with("BNK"), "API key should start with BNK prefix");
 }
 
 /// Assert display response is valid and has an image URL

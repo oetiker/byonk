@@ -17,6 +17,10 @@ pub struct AppConfig {
     /// Default screen for unknown devices
     #[serde(default = "default_screen")]
     pub default_screen: Option<String>,
+
+    /// Device registration settings
+    #[serde(default)]
+    pub registration: RegistrationConfig,
 }
 
 fn default_screen() -> Option<String> {
@@ -52,6 +56,17 @@ pub struct DeviceConfig {
     pub params: HashMap<String, serde_yaml::Value>,
 }
 
+/// Device registration settings
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct RegistrationConfig {
+    /// Whether device registration is required
+    ///
+    /// When enabled, devices not found in config.devices (by MAC or code)
+    /// will display the default screen with their registration code shown.
+    #[serde(default)]
+    pub enabled: bool,
+}
+
 impl AppConfig {
     /// Load configuration from AssetLoader (embedded or external)
     pub fn load_from_assets(loader: &AssetLoader) -> Self {
@@ -78,7 +93,7 @@ impl AppConfig {
         }
     }
 
-    /// Get screen config for a device
+    /// Get screen config for a device by MAC address
     pub fn get_screen_for_device(
         &self,
         device_mac: &str,
@@ -93,6 +108,50 @@ impl AppConfig {
         }
 
         None
+    }
+
+    /// Get screen config for a device by registration code
+    ///
+    /// Registration codes are 10-letter uppercase strings that can be used
+    /// in config.devices as an alternative to MAC addresses.
+    /// Accepts both formats: `ABCDEFGHJK` or `ABCDE-FGHJK` (hyphenated)
+    pub fn get_screen_for_code(&self, code: &str) -> Option<(&ScreenConfig, &DeviceConfig)> {
+        // Normalize code: uppercase and remove hyphens
+        let normalized = code.to_uppercase().replace('-', "");
+
+        // Try hyphenated format first (ABCDE-FGHJK) - this is the preferred config format
+        if normalized.len() == 10 {
+            let hyphenated = format!("{}-{}", &normalized[..5], &normalized[5..]);
+            if let Some(device_config) = self.devices.get(&hyphenated) {
+                if let Some(screen_config) = self.screens.get(&device_config.screen) {
+                    return Some((screen_config, device_config));
+                }
+            }
+        }
+
+        // Try without hyphen
+        if let Some(device_config) = self.devices.get(&normalized) {
+            if let Some(screen_config) = self.screens.get(&device_config.screen) {
+                return Some((screen_config, device_config));
+            }
+        }
+
+        None
+    }
+
+    /// Check if a device is registered (by MAC or by registration code)
+    pub fn is_device_registered(&self, mac: &str, code: Option<&str>) -> bool {
+        // Check by MAC first
+        if self.get_screen_for_device(mac).is_some() {
+            return true;
+        }
+        // Check by registration code
+        if let Some(code) = code {
+            if self.get_screen_for_code(code).is_some() {
+                return true;
+            }
+        }
+        false
     }
 
     /// Get the default screen config
@@ -119,6 +178,7 @@ impl Default for AppConfig {
             screens,
             devices: HashMap::new(),
             default_screen: Some("default".to_string()),
+            registration: RegistrationConfig::default(),
         }
     }
 }
@@ -293,5 +353,100 @@ default_screen: hello
 
         let device = config.devices.get("AA:BB:CC:DD:EE:FF").unwrap();
         assert_eq!(device.screen, "hello");
+    }
+
+    #[test]
+    fn test_registration_config_default() {
+        let reg = RegistrationConfig::default();
+        assert!(!reg.enabled);
+    }
+
+    #[test]
+    fn test_deserialize_config_with_registration() {
+        let yaml = r#"
+screens:
+  hello:
+    script: hello.lua
+    template: hello.svg
+registration:
+  enabled: true
+"#;
+
+        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.registration.enabled);
+    }
+
+    #[test]
+    fn test_get_screen_for_code() {
+        let mut config = AppConfig::default();
+
+        config.screens.insert(
+            "custom".to_string(),
+            ScreenConfig {
+                script: PathBuf::from("custom.lua"),
+                template: PathBuf::from("custom.svg"),
+                default_refresh: 300,
+            },
+        );
+
+        // Map a registration code to that screen (hyphenated format)
+        config.devices.insert(
+            "ABCDE-FGHJK".to_string(),
+            DeviceConfig {
+                screen: "custom".to_string(),
+                params: HashMap::new(),
+            },
+        );
+
+        // Should find with hyphenated format
+        let result = config.get_screen_for_code("ABCDE-FGHJK");
+        assert!(result.is_some());
+
+        // Should find with non-hyphenated format
+        let result = config.get_screen_for_code("ABCDEFGHJK");
+        assert!(result.is_some());
+
+        // Should also work case-insensitively
+        let result = config.get_screen_for_code("abcde-fghjk");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_is_device_registered() {
+        let mut config = AppConfig::default();
+
+        config.screens.insert(
+            "test".to_string(),
+            ScreenConfig {
+                script: PathBuf::from("test.lua"),
+                template: PathBuf::from("test.svg"),
+                default_refresh: 600,
+            },
+        );
+
+        // Register by MAC
+        config.devices.insert(
+            "AA:BB:CC:DD:EE:FF".to_string(),
+            DeviceConfig {
+                screen: "test".to_string(),
+                params: HashMap::new(),
+            },
+        );
+
+        // Register by code
+        config.devices.insert(
+            "XYZABCDEFG".to_string(),
+            DeviceConfig {
+                screen: "test".to_string(),
+                params: HashMap::new(),
+            },
+        );
+
+        // Should find by MAC
+        assert!(config.is_device_registered("AA:BB:CC:DD:EE:FF", None));
+        // Should find by code
+        assert!(config.is_device_registered("00:00:00:00:00:00", Some("XYZABCDEFG")));
+        // Should not find unknown
+        assert!(!config.is_device_registered("00:00:00:00:00:00", Some("UNKNOWNCODE")));
     }
 }

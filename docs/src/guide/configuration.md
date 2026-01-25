@@ -101,6 +101,52 @@ default_screen: default
 
 If omitted, unknown devices receive an error response.
 
+## Device Registration
+
+Byonk supports optional device registration for enhanced security. When enabled, new devices must be explicitly approved before they can display content.
+
+```yaml
+registration:
+  enabled: true
+  codes:
+    - ABCDEF    # Add codes shown on device screens
+    - GHIJKL
+```
+
+### How It Works
+
+1. **New device connects** - Shows a registration screen with a 6-letter code
+2. **Admin reads code** - The code is displayed prominently on the e-ink screen
+3. **Admin adds code to config** - Add the code to the `codes` list
+4. **Device refreshes** - Now shows normal content
+
+### Registration Settings
+
+| Property | Required | Description |
+|----------|----------|-------------|
+| `enabled` | No | Enable device registration (default: false) |
+| `codes` | No | List of registered device codes (6 uppercase letters) |
+
+### Example
+
+```yaml
+registration:
+  enabled: true
+  codes:
+    - ABCDEF    # Living room device
+    - XYZWVU    # Office device
+```
+
+When a new device connects, it will show:
+
+```
+DEVICE REGISTRATION
+Add this code to config.yaml to activate:
+A B C D E F
+```
+
+See [Device Mapping](../concepts/device-mapping.md#device-registration-security-feature) for more details.
+
 ## Hot Reloading
 
 Byonk loads Lua scripts and SVG templates fresh on every request. You can edit these files without restarting the server.

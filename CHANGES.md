@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- **Device Registration System**: Optional security feature to require explicit approval of new devices before they can display content
+  - Enable with `registration.enabled: true` in config.yaml
+  - New devices show a 10-character registration code in 2x5 format on screen
+  - Add the code to `config.devices` section using hyphenated format (e.g., `"ABCDE-FGHJK"`)
+  - Registration codes can be used interchangeably with MAC addresses for device identification
+  - Byonk API keys use `BNK` prefix with embedded 10-character code (e.g., `BNKABCDEFGHJK`)
+  - Non-Byonk keys (from other servers) trigger automatic device reset when registration is enabled
+
 ### Changed
 
 ### Fixed

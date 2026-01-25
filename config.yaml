@@ -1,6 +1,14 @@
 # Byonk Configuration
 # Maps devices to screens and provides screen definitions
 
+# Device Registration (optional)
+# When enabled, new devices show a registration code on screen.
+# Add the code to the 'codes' list to activate the device.
+# registration:
+#   enabled: true
+#   codes:
+#     - ABCDEF    # Example: add codes shown on device screens here
+
 screens:
   # Default screen - shows time and a message
   default:

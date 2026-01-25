@@ -78,6 +78,20 @@ impl DeviceRegistry for InMemoryRegistry {
 
     async fn update(&self, device: Device) -> Result<(), ApiError> {
         let mut by_id = self.devices_by_id.write().await;
+        let mut by_key = self.devices_by_key.write().await;
+
+        // If device exists and API key changed, update the key index
+        if let Some(existing) = by_id.get(&device.device_id) {
+            let old_key = existing.api_key.as_str();
+            let new_key = device.api_key.as_str();
+
+            if old_key != new_key {
+                // Remove old key mapping and add new one
+                by_key.remove(old_key);
+                by_key.insert(new_key.to_string(), device.device_id.clone());
+            }
+        }
+
         by_id.insert(device.device_id.clone(), device);
         Ok(())
     }

@@ -41,6 +41,8 @@ pub struct DeviceContext {
     pub height: Option<u32>,
     /// Grey levels for dithering (4 for OG, 16 for X)
     pub grey_levels: Option<u8>,
+    /// Registration code (if device has a Byonk key)
+    pub registration_code: Option<String>,
 }
 
 /// Error from the content pipeline
@@ -109,6 +111,25 @@ impl ContentPipeline {
             .ok_or_else(|| ContentError::ScreenNotFound(device_mac.to_string()))?;
 
         self.run_script_for_screen(screen_config, &device_config.params, device_ctx)
+    }
+
+    /// Run script for a screen by name with custom params (without rendering)
+    ///
+    /// This is used for running custom registration screens where params.code
+    /// contains the registration code.
+    pub fn run_screen_by_name(
+        &self,
+        screen_name: &str,
+        params: HashMap<String, serde_yaml::Value>,
+        device_ctx: Option<DeviceContext>,
+    ) -> Result<ScriptResult, ContentError> {
+        let screen = self
+            .config
+            .screens
+            .get(screen_name)
+            .ok_or_else(|| ContentError::ScreenNotFound(screen_name.to_string()))?;
+
+        self.run_script_for_screen(screen, &params, device_ctx)
     }
 
     /// Run script for a specific screen (without rendering)
@@ -200,6 +221,17 @@ impl ContentPipeline {
             if let Some(grey_levels) = ctx.grey_levels {
                 device_obj.insert("grey_levels".to_string(), serde_json::json!(grey_levels));
             }
+            if let Some(ref code) = ctx.registration_code {
+                device_obj.insert("registration_code".to_string(), serde_json::json!(code));
+                // Also provide hyphenated version for convenience
+                if code.len() == 10 {
+                    let hyphenated = format!("{}-{}", &code[..5], &code[5..]);
+                    device_obj.insert(
+                        "registration_code_hyphenated".to_string(),
+                        serde_json::json!(hyphenated),
+                    );
+                }
+            }
         }
         template_context.insert("device".to_string(), serde_json::Value::Object(device_obj));
 
@@ -256,6 +288,96 @@ impl ContentPipeline {
     /// Render error SVG (without PNG conversion)
     pub fn render_error_svg(&self, error: &str) -> String {
         self.template_service.render_error(error)
+    }
+
+    /// Render registration screen showing the device's 10-character registration code
+    ///
+    /// The code is displayed in 2x5 format (two rows of 5 characters) for easy reading
+    /// from an e-ink display. Instructions show how to add the code to config.yaml.
+    pub fn render_registration_screen(&self, code: &str, width: u32, height: u32) -> String {
+        // Calculate responsive sizing based on display dimensions
+        let scale = (width as f32 / 800.0).min(height as f32 / 480.0);
+        let code_font_size = (72.0 * scale).round() as u32;
+        let title_font_size = (32.0 * scale).round() as u32;
+        let subtitle_font_size = (18.0 * scale).round() as u32;
+        let center_x = width / 2;
+        let center_y = height / 2;
+
+        // Split 10-char code into two rows of 5, spaced for readability
+        let chars: Vec<char> = code.chars().collect();
+        let row1: String = chars
+            .iter()
+            .take(5)
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let row2: String = chars
+            .iter()
+            .skip(5)
+            .take(5)
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let code_line_height = (code_font_size as f32 * 1.2).round() as u32;
+
+        // Format code with hyphen for config instructions (ABCDE-FGHJK)
+        let hyphenated_code = if code.len() == 10 {
+            format!("{}-{}", &code[..5], &code[5..])
+        } else {
+            code.to_string()
+        };
+
+        format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="{width}" height="{height}">
+  <defs>
+    <style>
+      text {{ text-anchor: middle; font-family: Outfit, sans-serif; }}
+      .title {{ font-weight: 700; }}
+      .code {{ font-weight: 900; letter-spacing: 0.3em; }}
+      .subtitle {{ font-weight: 400; }}
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="{width}" height="{height}" fill="#ffffff"/>
+
+  <!-- Border -->
+  <rect x="10" y="10" width="{border_width}" height="{border_height}" fill="none" stroke="#000000" stroke-width="4" rx="8"/>
+
+  <!-- Title -->
+  <text x="{center_x}" y="{title_y}" font-size="{title_font_size}" class="title" fill="#000000">DEVICE REGISTRATION</text>
+
+  <!-- Subtitle -->
+  <text x="{center_x}" y="{subtitle_y}" font-size="{subtitle_font_size}" class="subtitle" fill="#666666">Add this code to config.yaml devices section:</text>
+
+  <!-- Registration Code (2 rows of 5 chars) -->
+  <text x="{center_x}" y="{code_row1_y}" font-size="{code_font_size}" class="code" fill="#000000">{row1}</text>
+  <text x="{center_x}" y="{code_row2_y}" font-size="{code_font_size}" class="code" fill="#000000">{row2}</text>
+
+  <!-- Instructions -->
+  <text x="{center_x}" y="{inst1_y}" font-size="{subtitle_font_size}" class="subtitle" fill="#666666">devices:</text>
+  <text x="{center_x}" y="{inst2_y}" font-size="{subtitle_font_size}" class="subtitle" fill="#666666">  "{hyphenated_code}":</text>
+  <text x="{center_x}" y="{inst3_y}" font-size="{subtitle_font_size}" class="subtitle" fill="#666666">    screen: your_screen_name</text>
+</svg>"##,
+            width = width,
+            height = height,
+            border_width = width - 20,
+            border_height = height - 20,
+            center_x = center_x,
+            title_y = (center_y as f32 * 0.30).round() as u32,
+            subtitle_y = (center_y as f32 * 0.45).round() as u32,
+            code_row1_y = (center_y as f32 * 0.65).round() as u32,
+            code_row2_y = (center_y as f32 * 0.65).round() as u32 + code_line_height,
+            inst1_y = (center_y as f32 * 1.20).round() as u32,
+            inst2_y = (center_y as f32 * 1.35).round() as u32,
+            inst3_y = (center_y as f32 * 1.50).round() as u32,
+            title_font_size = title_font_size,
+            subtitle_font_size = subtitle_font_size,
+            code_font_size = code_font_size,
+            row1 = row1,
+            row2 = row2,
+            hyphenated_code = hyphenated_code,
+        )
     }
 
     /// Run script directly with explicit paths (for dev mode)

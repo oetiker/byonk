@@ -10,7 +10,7 @@ use utoipa::ToSchema;
 
 use super::headers::HeaderMapExt;
 use crate::error::ApiError;
-use crate::models::{ApiKey, Device, DeviceId, DeviceModel, DisplaySpec};
+use crate::models::{ApiKey, AppConfig, Device, DeviceId, DeviceModel, DisplaySpec};
 use crate::services::{
     CachedContent, ContentCache, ContentPipeline, DeviceContext, DeviceRegistry, RenderService,
 };
@@ -23,6 +23,9 @@ const MAX_DISPLAY_HEIGHT: u32 = 2000;
 ///
 /// Returns JSON with an image_url that the device should fetch separately.
 /// The firmware expects status=0 for success (not HTTP 200).
+///
+/// If device registration is enabled and the device is not registered,
+/// returns a registration screen showing the device's registration code.
 #[utoipa::path(
     get,
     path = "/api/display",
@@ -45,6 +48,7 @@ const MAX_DISPLAY_HEIGHT: u32 = 2000;
     tag = "Display"
 )]
 pub async fn handle_display<R: DeviceRegistry>(
+    State(config): State<Arc<AppConfig>>,
     State(registry): State<Arc<R>>,
     State(_renderer): State<Arc<RenderService>>,
     State(content_pipeline): State<Arc<ContentPipeline>>,
@@ -64,6 +68,137 @@ pub async fn handle_display<R: DeviceRegistry>(
         .unwrap_or(480);
 
     let api_key = ApiKey::new(api_key_str);
+
+    // Check device registration when enabled
+    // Registration uses the API key's embedded code OR MAC address to identify devices
+    if config.registration.enabled {
+        let registration_code = api_key.registration_code();
+
+        if !api_key.is_byonk_key() {
+            // Non-Byonk key - tell device to reset and call /api/setup
+            tracing::info!(
+                api_key_prefix = &api_key_str[..api_key_str.len().min(8)],
+                "Non-Byonk API key detected, requesting device reset"
+            );
+
+            return Ok(Json(DisplayJsonResponse {
+                status: 0,
+                image_url: None,
+                filename: "reset".to_string(),
+                update_firmware: false,
+                firmware_url: None,
+                refresh_rate: 60,
+                reset_firmware: true, // Force device to call /api/setup again
+                temperature_profile: Some("default".to_string()),
+                special_function: None,
+            })
+            .into_response());
+        }
+
+        // Check if device is registered (by MAC address OR by registration code)
+        if !config.is_device_registered(device_id_str, registration_code) {
+            let code = registration_code.unwrap_or("UNKNOWN");
+            tracing::info!(
+                device_id = device_id_str,
+                registration_code = code,
+                custom_screen = config.registration.screen.as_deref(),
+                "Device not registered, showing registration screen"
+            );
+
+            // Build device context with registration code
+            let model_str = headers.get_str("Model").unwrap_or("og");
+            let device_ctx = DeviceContext {
+                mac: device_id_str.to_string(),
+                battery_voltage: headers.get_parsed::<f32>("Battery-Voltage"),
+                rssi: headers.get_parsed::<i32>("RSSI"),
+                model: Some(model_str.to_string()),
+                firmware_version: headers.get_str("FW-Version").map(|s| s.to_string()),
+                width: Some(width),
+                height: Some(height),
+                grey_levels: None,
+                registration_code: Some(code.to_string()),
+            };
+
+            // Use registration screen if configured, otherwise use default screen
+            // Both have device.registration_code available for display
+            let screen_to_use = config
+                .registration
+                .screen
+                .as_deref()
+                .or(config.default_screen.as_deref());
+
+            let (registration_svg, screen_name, refresh_rate) = if let Some(screen_name) =
+                screen_to_use
+            {
+                // Run the registration/default screen (code available via device.registration_code)
+                match content_pipeline.run_screen_by_name(
+                    screen_name,
+                    std::collections::HashMap::new(),
+                    Some(device_ctx.clone()),
+                ) {
+                    Ok(result) => {
+                        match content_pipeline.render_svg_from_script(&result, Some(&device_ctx)) {
+                            Ok(svg) => (svg, screen_name.to_string(), result.refresh_rate),
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    screen = screen_name,
+                                    "Registration screen template failed, using built-in"
+                                );
+                                (
+                                    content_pipeline
+                                        .render_registration_screen(code, width, height),
+                                    "_registration".to_string(),
+                                    300,
+                                )
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            screen = screen_name,
+                            "Registration screen failed, using built-in"
+                        );
+                        (
+                            content_pipeline.render_registration_screen(code, width, height),
+                            "_registration".to_string(),
+                            300,
+                        )
+                    }
+                }
+            } else {
+                // No default screen configured, use built-in registration screen
+                (
+                    content_pipeline.render_registration_screen(code, width, height),
+                    "_registration".to_string(),
+                    300,
+                )
+            };
+
+            let cached = CachedContent::new(registration_svg, screen_name, width, height);
+            let hash = cached.content_hash.clone();
+            content_cache.store(cached);
+
+            // Build image URL
+            let host = headers.get_str("Host").unwrap_or("localhost:3000");
+            let image_url = format!("http://{host}/api/image/{hash}.png");
+
+            return Ok(Json(DisplayJsonResponse {
+                status: 0,
+                image_url: Some(image_url),
+                filename: hash,
+                update_firmware: false,
+                firmware_url: None,
+                refresh_rate,
+                reset_firmware: false,
+                temperature_profile: Some("default".to_string()),
+                special_function: None,
+            })
+            .into_response());
+        }
+        // Device is registered - continue with normal flow
+    }
 
     // Find device by API key, or auto-register if not found
     let mut device = match registry.find_by_api_key(&api_key).await? {
@@ -118,6 +253,7 @@ pub async fn handle_display<R: DeviceRegistry>(
         width: Some(width),
         height: Some(height),
         grey_levels: None, // Determined by device model in render phase
+        registration_code: device.api_key.registration_code().map(|s| s.to_string()),
     };
 
     // Run script, render SVG, and cache the result (PNG rendering happens in /api/image)

@@ -43,6 +43,7 @@ impl<B> MakeSpan<B> for RequestIdSpan {
 /// Application state shared across all handlers.
 #[derive(Clone)]
 pub struct AppState {
+    pub config: Arc<AppConfig>,
     pub registry: Arc<InMemoryRegistry>,
     pub renderer: Arc<RenderService>,
     pub content_pipeline: Arc<ContentPipeline>,
@@ -52,15 +53,24 @@ pub struct AppState {
 /// Create application state from an asset loader.
 pub fn create_app_state(asset_loader: Arc<AssetLoader>) -> anyhow::Result<AppState> {
     let config = Arc::new(AppConfig::load_from_assets(&asset_loader));
+    create_app_state_with_config(asset_loader, config)
+}
+
+/// Create application state with a custom config.
+pub fn create_app_state_with_config(
+    asset_loader: Arc<AssetLoader>,
+    config: Arc<AppConfig>,
+) -> anyhow::Result<AppState> {
     let registry = Arc::new(InMemoryRegistry::new());
     let renderer = Arc::new(RenderService::new(&asset_loader)?);
     let content_pipeline = Arc::new(
-        ContentPipeline::new(config, asset_loader, renderer.clone())
+        ContentPipeline::new(config.clone(), asset_loader, renderer.clone())
             .map_err(|e| anyhow::anyhow!("Failed to create content pipeline: {e}"))?,
     );
     let content_cache = Arc::new(ContentCache::new());
 
     Ok(AppState {
+        config,
         registry,
         renderer,
         content_pipeline,
@@ -104,7 +114,12 @@ async fn handle_setup(
     axum::extract::State(state): axum::extract::State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> Result<impl axum::response::IntoResponse, ApiError> {
-    api::handle_setup(axum::extract::State(state.registry), headers).await
+    api::handle_setup(
+        axum::extract::State(state.config),
+        axum::extract::State(state.registry),
+        headers,
+    )
+    .await
 }
 
 async fn handle_display(
@@ -112,6 +127,7 @@ async fn handle_display(
     headers: axum::http::HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
     api::handle_display(
+        axum::extract::State(state.config),
         axum::extract::State(state.registry),
         axum::extract::State(state.renderer),
         axum::extract::State(state.content_pipeline),

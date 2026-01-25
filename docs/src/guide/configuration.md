@@ -101,6 +101,73 @@ default_screen: default
 
 If omitted, unknown devices receive an error response.
 
+## Device Registration
+
+Byonk supports optional device registration for enhanced security. When enabled, new devices must be explicitly approved before they can display content.
+
+```yaml
+registration:
+  enabled: true
+
+devices:
+  # Register using the code shown on the device screen
+  "ABCDE-FGHJK":
+    screen: transit
+    params:
+      station: "Olten"
+```
+
+### How It Works
+
+1. **New device connects** - Shows the default screen with a 10-character registration code
+2. **Admin reads code** - The code is displayed in 2x5 format on the e-ink screen
+3. **Admin adds code to devices** - Add the code (hyphenated format) to the `devices` section
+4. **Device refreshes** - Now shows the configured screen
+
+### Registration Settings
+
+| Property | Required | Description |
+|----------|----------|-------------|
+| `enabled` | No | Enable device registration (default: true) |
+| `screen` | No | Custom screen for registration (default: uses default_screen) |
+
+### Registration Code Format
+
+- 10 uppercase letters displayed in 2 rows of 5: `A B C D E` / `F G H J K`
+- Written in config as hyphenated: `"ABCDE-FGHJK"`
+- Uses unambiguous letters only (excludes I, L, O)
+- Can be used interchangeably with MAC addresses in the `devices` section
+
+### Example
+
+```yaml
+registration:
+  enabled: true
+
+devices:
+  # By registration code (read from device screen)
+  "ABCDE-FGHJK":
+    screen: transit
+    params:
+      station: "Olten"
+
+  # By MAC address (found in logs)
+  "AA:BB:CC:DD:EE:FF":
+    screen: weather
+```
+
+### Custom Registration Screen
+
+The registration code is available to your default screen as `device.registration_code` and `device.registration_code_hyphenated`. Your default.svg can conditionally show it:
+
+```svg
+{% if device.registration_code %}
+<text>Register: {{ device.registration_code_hyphenated }}</text>
+{% endif %}
+```
+
+See [Device Mapping](../concepts/device-mapping.md#device-registration-security-feature) for more details.
+
 ## Hot Reloading
 
 Byonk loads Lua scripts and SVG templates fresh on every request. You can edit these files without restarting the server.

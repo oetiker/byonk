@@ -306,6 +306,7 @@ pub async fn handle_render(
         width: Some(width),
         height: Some(height),
         grey_levels: Some(grey_levels),
+        registration_code: None,
     };
 
     // Run script directly with the screen config

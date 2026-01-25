@@ -1,6 +1,14 @@
 # Byonk Configuration
 # Maps devices to screens and provides screen definitions
 
+# Device Registration (enabled by default)
+# New devices show a 10-character registration code on screen.
+# Add the code (hyphenated format) to the 'devices' section below.
+# Set enabled: false to allow any device to connect.
+registration:
+  enabled: true
+  # screen: default  # Optional: custom screen for registration (default: uses default_screen)
+
 screens:
   # Default screen - shows time and a message
   default:
@@ -32,9 +40,15 @@ screens:
     template: hello.svg
     default_refresh: 60
 
-# Map device MAC addresses to screens
-# MAC addresses should be uppercase with colons (e.g., "94:A9:90:8C:6D:18")
+# Map devices to screens
+# Use MAC address (e.g., "94:A9:90:8C:6D:18") or registration code (e.g., "ABCDE-FGHJK")
 devices:
+  # Example using registration code (read from device screen):
+  # "ABCDE-FGHJK":
+  #   screen: transit
+  #   params:
+  #     station: "Olten"
+  #
   # Tobi's device - bus stop departures
   "A4:A9:90:8C:6D:18":
     screen: transit

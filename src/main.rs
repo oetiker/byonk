@@ -196,6 +196,7 @@ fn run_render_command(
         width: Some(display_spec.width),
         height: Some(display_spec.height),
         grey_levels: None, // Use default based on device model
+        registration_code: None,
     };
 
     // Run the Lua script

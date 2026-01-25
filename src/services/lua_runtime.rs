@@ -123,6 +123,14 @@ impl LuaRuntime {
             if let Some(grey_levels) = ctx.grey_levels {
                 device_table.set("grey_levels", grey_levels)?;
             }
+            if let Some(ref code) = ctx.registration_code {
+                device_table.set("registration_code", code.as_str())?;
+                // Also provide hyphenated version for convenience
+                if code.len() == 10 {
+                    let hyphenated = format!("{}-{}", &code[..5], &code[5..]);
+                    device_table.set("registration_code_hyphenated", hyphenated)?;
+                }
+            }
         }
         globals.set("device", device_table)?;
 

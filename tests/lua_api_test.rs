@@ -518,6 +518,7 @@ mod lua_unit_tests {
             width: Some(1872),
             height: Some(1404),
             grey_levels: None,
+            registration_code: None,
         };
 
         let result = runtime
@@ -1118,6 +1119,7 @@ mod lua_additional_tests {
             model: None,
             firmware_version: None,
             grey_levels: None,
+            registration_code: None,
         };
 
         let result =

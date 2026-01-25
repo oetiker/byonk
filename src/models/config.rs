@@ -57,13 +57,14 @@ pub struct DeviceConfig {
 }
 
 /// Device registration settings
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct RegistrationConfig {
     /// Whether device registration is required
     ///
     /// When enabled, devices not found in config.devices (by MAC or code)
     /// will display the registration screen with their registration code shown.
-    #[serde(default)]
+    /// Default: true
+    #[serde(default = "default_registration_enabled")]
     pub enabled: bool,
 
     /// Custom screen to use for registration (optional)
@@ -72,6 +73,19 @@ pub struct RegistrationConfig {
     /// The screen's Lua script receives `params.code` with the registration code.
     #[serde(default)]
     pub screen: Option<String>,
+}
+
+fn default_registration_enabled() -> bool {
+    true
+}
+
+impl Default for RegistrationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            screen: None,
+        }
+    }
 }
 
 impl AppConfig {
@@ -365,7 +379,7 @@ default_screen: hello
     #[test]
     fn test_registration_config_default() {
         let reg = RegistrationConfig::default();
-        assert!(!reg.enabled);
+        assert!(reg.enabled); // Registration is enabled by default
         assert!(reg.screen.is_none());
     }
 

@@ -8,7 +8,8 @@ use common::{fixtures, fixtures::macs, TestApp};
 
 #[tokio::test]
 async fn test_display_auto_registers_device() {
-    let app = TestApp::new();
+    // Use app without registration to test auto-registration behavior
+    let app = TestApp::new_without_registration();
 
     // Use display endpoint with a new device (auto-registration)
     let headers = fixtures::display_headers(macs::UNKNOWN_DEVICE, "any-api-key");
@@ -121,7 +122,8 @@ async fn test_display_clamps_excessive_dimensions() {
 
 #[tokio::test]
 async fn test_display_updates_device_metadata() {
-    let app = TestApp::new();
+    // TEST_DEVICE is not in config.devices, so use app without registration
+    let app = TestApp::new_without_registration();
 
     let (api_key, _) = app.register_device(macs::TEST_DEVICE).await;
 

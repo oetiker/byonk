@@ -53,6 +53,14 @@ pub struct AppState {
 /// Create application state from an asset loader.
 pub fn create_app_state(asset_loader: Arc<AssetLoader>) -> anyhow::Result<AppState> {
     let config = Arc::new(AppConfig::load_from_assets(&asset_loader));
+    create_app_state_with_config(asset_loader, config)
+}
+
+/// Create application state with a custom config.
+pub fn create_app_state_with_config(
+    asset_loader: Arc<AssetLoader>,
+    config: Arc<AppConfig>,
+) -> anyhow::Result<AppState> {
     let registry = Arc::new(InMemoryRegistry::new());
     let renderer = Arc::new(RenderService::new(&asset_loader)?);
     let content_pipeline = Arc::new(

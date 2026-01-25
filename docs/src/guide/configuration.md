@@ -128,7 +128,7 @@ devices:
 
 | Property | Required | Description |
 |----------|----------|-------------|
-| `enabled` | No | Enable device registration (default: false) |
+| `enabled` | No | Enable device registration (default: true) |
 | `screen` | No | Custom screen for registration (default: uses default_screen) |
 
 ### Registration Code Format

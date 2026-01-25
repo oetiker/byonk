@@ -1,13 +1,14 @@
 # Byonk Configuration
 # Maps devices to screens and provides screen definitions
 
-# Device Registration (optional)
-# When enabled, new devices show a 10-character registration code on screen.
+# Device Registration (enabled by default)
+# New devices show a 10-character registration code on screen.
 # Add the code (hyphenated format) to the 'devices' section below.
-# registration:
-#   enabled: true
-#   screen: default    # Optional: custom screen for registration (default: uses default_screen)
-#
+# Set enabled: false to allow any device to connect.
+registration:
+  enabled: true
+  # screen: default  # Optional: custom screen for registration (default: uses default_screen)
+
 # Example device entry using registration code:
 #   "ABCDE-FGHJK":     # Code shown on device (2 rows of 5 letters)
 #     screen: transit

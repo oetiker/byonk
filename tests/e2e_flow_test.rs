@@ -79,7 +79,8 @@ async fn test_multiple_devices_different_screens() {
 
 #[tokio::test]
 async fn test_device_metadata_persists() {
-    let app = TestApp::new();
+    // TEST_DEVICE is not in config.devices, so use app without registration
+    let app = TestApp::new_without_registration();
 
     // Register device
     let (api_key, _) = app.register_device(macs::TEST_DEVICE).await;

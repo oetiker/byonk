@@ -336,12 +336,13 @@ When registration is **disabled** (or not configured), devices not in config see
 
 **Note:** When registration is enabled, the default screen is effectively bypassed for unknown devices.
 
-### Registration Not Required?
+### Disabling Registration
 
-If you don't need the security of device registration, simply omit the `registration` section or set `enabled: false`:
+Registration is enabled by default. To allow any device to connect without registration, set `enabled: false`:
 
 ```yaml
-# No registration section = all devices can connect and see default screen
+registration:
+  enabled: false
 ```
 
 ## Multiple Screens per Device?

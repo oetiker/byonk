@@ -9,12 +9,6 @@ registration:
   enabled: true
   # screen: default  # Optional: custom screen for registration (default: uses default_screen)
 
-# Example device entry using registration code:
-#   "ABCDE-FGHJK":     # Code shown on device (2 rows of 5 letters)
-#     screen: transit
-#     params:
-#       station: "Olten"
-
 screens:
   # Default screen - shows time and a message
   default:
@@ -46,9 +40,15 @@ screens:
     template: hello.svg
     default_refresh: 60
 
-# Map device MAC addresses to screens
-# MAC addresses should be uppercase with colons (e.g., "94:A9:90:8C:6D:18")
+# Map devices to screens
+# Use MAC address (e.g., "94:A9:90:8C:6D:18") or registration code (e.g., "ABCDE-FGHJK")
 devices:
+  # Example using registration code (read from device screen):
+  # "ABCDE-FGHJK":
+  #   screen: transit
+  #   params:
+  #     station: "Olten"
+  #
   # Tobi's device - bus stop departures
   "A4:A9:90:8C:6D:18":
     screen: transit

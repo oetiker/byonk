@@ -225,7 +225,11 @@ pub async fn handle_render(
     // Resolve screen config: MAC takes precedence, then explicit screen
     let (screen_config, resolved_params) = if let Some(ref mac) = query.mac {
         // Try MAC lookup first, then registration code lookup
-        match state.config.get_screen_for_device(mac).or_else(|| state.config.get_screen_for_code(mac)) {
+        match state
+            .config
+            .get_screen_for_device(mac)
+            .or_else(|| state.config.get_screen_for_code(mac))
+        {
             Some((sc, dc)) => {
                 // Convert device params to JSON
                 let params: HashMap<String, serde_json::Value> = dc
@@ -298,7 +302,12 @@ pub async fn handle_render(
     let default_palette: Vec<(u8, u8, u8)> = if let Some(ref colors_str) = query.colors {
         crate::api::display::parse_colors_header(colors_str)
     } else if query.model == "x" {
-        (0..16).map(|i| { let v = (i * 255 / 15) as u8; (v, v, v) }).collect()
+        (0..16)
+            .map(|i| {
+                let v = (i * 255 / 15) as u8;
+                (v, v, v)
+            })
+            .collect()
     } else {
         vec![(0, 0, 0), (85, 85, 85), (170, 170, 170), (255, 255, 255)]
     };

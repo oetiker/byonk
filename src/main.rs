@@ -202,7 +202,12 @@ fn run_render_command(
 
     // Build default palette based on device type
     let palette: Vec<(u8, u8, u8)> = if device_type == "x" {
-        (0..16).map(|i| { let v = (i * 255 / 15) as u8; (v, v, v) }).collect()
+        (0..16)
+            .map(|i| {
+                let v = (i * 255 / 15) as u8;
+                (v, v, v)
+            })
+            .collect()
     } else {
         vec![(0, 0, 0), (85, 85, 85), (170, 170, 170), (255, 255, 255)]
     };

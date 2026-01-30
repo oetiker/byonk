@@ -93,7 +93,12 @@ fn color_dither(
     let mut exact_pixel: Vec<Option<u8>> = Vec::with_capacity(w * h);
 
     for pixel in rgba_data.chunks(4) {
-        let (r, g, b, a) = (pixel[0] as i16, pixel[1] as i16, pixel[2] as i16, pixel[3] as i16);
+        let (r, g, b, a) = (
+            pixel[0] as i16,
+            pixel[1] as i16,
+            pixel[2] as i16,
+            pixel[3] as i16,
+        );
         let (cr, cg, cb) = if a == 0 {
             (255i16, 255, 255)
         } else if a == 255 {
@@ -163,12 +168,15 @@ fn color_dither(
 
             // Floyd-Steinberg error distribution
             // Don't distribute into pixels at exact palette colors.
-            let diffuse =
-                |buf_r: &mut [i16], buf_g: &mut [i16], buf_b: &mut [i16], bi: usize, weight: i32| {
-                    buf_r[bi] = (buf_r[bi] as i32 + err_r * weight / 16).clamp(-512, 767) as i16;
-                    buf_g[bi] = (buf_g[bi] as i32 + err_g * weight / 16).clamp(-512, 767) as i16;
-                    buf_b[bi] = (buf_b[bi] as i32 + err_b * weight / 16).clamp(-512, 767) as i16;
-                };
+            let diffuse = |buf_r: &mut [i16],
+                           buf_g: &mut [i16],
+                           buf_b: &mut [i16],
+                           bi: usize,
+                           weight: i32| {
+                buf_r[bi] = (buf_r[bi] as i32 + err_r * weight / 16).clamp(-512, 767) as i16;
+                buf_g[bi] = (buf_g[bi] as i32 + err_g * weight / 16).clamp(-512, 767) as i16;
+                buf_b[bi] = (buf_b[bi] as i32 + err_b * weight / 16).clamp(-512, 767) as i16;
+            };
 
             if going_right {
                 if x + 1 < w && exact_pixel[idx + 1].is_none() {
@@ -290,12 +298,7 @@ mod tests {
     #[test]
     fn test_color_palette() {
         // 4-color e-ink: black, white, red, yellow
-        let palette = [
-            (0, 0, 0),
-            (255, 255, 255),
-            (255, 0, 0),
-            (255, 255, 0),
-        ];
+        let palette = [(0, 0, 0), (255, 255, 255), (255, 0, 0), (255, 255, 0)];
         // Pure red pixel
         let data = vec![255, 0, 0, 255];
         let result = palette_dither(&data, 1, 1, &palette, None);
@@ -335,10 +338,16 @@ mod tests {
         assert!(red_lum >= 50 && red_lum <= 58, "Red luminance: {red_lum}");
         // Pure green: BT.709 → ~182
         let green_lum = luminance(0, 255, 0);
-        assert!(green_lum >= 178 && green_lum <= 186, "Green luminance: {green_lum}");
+        assert!(
+            green_lum >= 178 && green_lum <= 186,
+            "Green luminance: {green_lum}"
+        );
         // Pure blue: BT.709 → ~18
         let blue_lum = luminance(0, 0, 255);
-        assert!(blue_lum >= 15 && blue_lum <= 22, "Blue luminance: {blue_lum}");
+        assert!(
+            blue_lum >= 15 && blue_lum <= 22,
+            "Blue luminance: {blue_lum}"
+        );
     }
 
     #[test]
@@ -348,17 +357,26 @@ mod tests {
         // With no noise, 54 is closer to 85 than to 0, so expect index 1 (dark grey).
         let data = vec![255, 0, 0, 255];
         let result = palette_dither(&data, 1, 1, &GREY4, Some(0));
-        assert_eq!(result[0], 1, "Red on grey palette should be dark grey (luminance ~54 → 85)");
+        assert_eq!(
+            result[0], 1,
+            "Red on grey palette should be dark grey (luminance ~54 → 85)"
+        );
 
         // Green pixel: luminance ~182, nearest to 170 (light grey, index 2)
         let data = vec![0, 255, 0, 255];
         let result = palette_dither(&data, 1, 1, &GREY4, Some(0));
-        assert_eq!(result[0], 2, "Green on grey palette should be light grey (luminance ~182 → 170)");
+        assert_eq!(
+            result[0], 2,
+            "Green on grey palette should be light grey (luminance ~182 → 170)"
+        );
 
         // Blue pixel: luminance ~18, nearest to 0 (black, index 0)
         let data = vec![0, 0, 255, 255];
         let result = palette_dither(&data, 1, 1, &GREY4, Some(0));
-        assert_eq!(result[0], 0, "Blue on grey palette should be black (luminance ~18 → 0)");
+        assert_eq!(
+            result[0], 0,
+            "Blue on grey palette should be black (luminance ~18 → 0)"
+        );
     }
 
     #[test]

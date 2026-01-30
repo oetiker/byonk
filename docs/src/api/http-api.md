@@ -38,6 +38,8 @@ The firmware expects status=0 for success (not HTTP 200).
 | `RSSI` | header | No | WiFi signal strength |
 | `FW-Version` | header | No | Firmware version |
 | `Model` | header | No | Device model ('og' or 'x') |
+| `Board` | header | No | Board identifier (e.g., 'trmnl_og_4clr') |
+| `Colors` | header | No | Display palette as comma-separated hex RGB (e.g., '#000000,#FFFFFF,#FF0000,#FFFF00'). Defaults to 4-grey palette if absent. |
 
 #### Responses
 

@@ -172,8 +172,8 @@ If no `default_screen` is set and a device isn't in the config, it receives an e
 
 Byonk automatically registers new devices on their first `/api/setup` call:
 
-1. Generates a random API key (with Byonk prefix `BNK`)
-2. Generates a friendly ID
+1. Generates a random API key (32-character hex string)
+2. Derives a registration code from the key
 3. Stores device in registry
 
 No pre-configuration is needed - just add the device to `config.yaml` to assign a custom screen.
@@ -268,11 +268,12 @@ sequenceDiagram
     participant Admin
 
     Device->>Byonk: GET /api/setup
-    Byonk-->>Device: {api_key: "BNKABCDEFGHJK"}
-    Note right of Byonk: Generates Byonk key<br/>with 10-char code
+    Byonk-->>Device: {api_key: "..."}
+    Note right of Byonk: Returns existing key<br/>or generates new one
 
     Device->>Byonk: GET /api/display
-    Byonk-->>Device: Registration screen<br/>showing code in 2x5 format
+    Byonk-->>Device: Registration screen<br/>showing derived code
+    Note right of Byonk: Code derived from<br/>API key hash
     Note right of Device: Shows A B C D E<br/>F G H J K
 
     Admin->>Admin: Reads code from device
@@ -283,17 +284,15 @@ sequenceDiagram
     Note right of Device: Device is now registered
 ```
 
-### API Key Format
+### Registration Code Format
 
-Byonk API keys have a special format: `BNK` + 10-letter code.
+The 10-letter registration code is derived from the API key using a SHA256 hash:
 
-Example: `BNKABCDEFGHJK` (13 chars total)
-
-The 10-letter code:
 - Uses only unambiguous uppercase letters (excludes I, L, O)
 - Displays in 2x5 format for easy reading from e-ink
 - Written as `ABCDE-FGHJK` in config (hyphenated for readability)
-- Provides ~41 trillion combinations (23^10)
+- **Deterministic**: same API key always produces the same code
+- Works with any API key format (TRMNL, Byonk, custom)
 
 ### Code vs MAC Address
 
@@ -314,12 +313,14 @@ The registration code is often more convenient since it's displayed on the devic
 
 ### Migrating from Other Servers
 
-If a device was previously connected to a different server (e.g., TRMNL cloud), it may have a non-Byonk API key. When registration is enabled:
+Devices previously connected to a different server (e.g., TRMNL cloud) work seamlessly with Byonk:
 
-1. Byonk detects the foreign API key
-2. Returns `reset_firmware: true` to force device re-setup
-3. Device calls `/api/setup` and gets a new Byonk key
-4. Device shows the registration screen with its code
+1. Device connects with its existing TRMNL-issued API key
+2. Byonk derives a registration code from that key
+3. Device shows the registration screen with its code
+4. No WiFi reset or device reconfiguration needed!
+
+This is possible because the registration code is derived from any API key format, not embedded in a Byonk-specific key format.
 
 ### Registration vs Default Screen
 

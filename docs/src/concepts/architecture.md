@@ -86,8 +86,8 @@ Converts SVG to PNG optimized for e-ink:
 
 - Uses [resvg](https://github.com/RazrFalcon/resvg) for rendering
 - Loads custom fonts from `fonts/` directory
-- Blue-noise dithering to 4 gray levels
-- Outputs 2-bit indexed PNG
+- Palette-aware blue-noise dithering (greyscale and color)
+- Outputs optimized PNG (greyscale or indexed, depending on palette)
 
 ## Request Flow
 

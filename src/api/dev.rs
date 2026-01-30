@@ -52,10 +52,10 @@ pub struct RenderQuery {
     pub rssi: Option<i32>,
     /// Unix timestamp override for time_now() in Lua
     pub timestamp: Option<i64>,
-    /// Grey levels for dithering (4 for OG, 16 for X)
-    pub grey_levels: Option<u8>,
     /// Custom parameters as JSON string
     pub params: Option<String>,
+    /// Display colors as comma-separated hex RGB (e.g. "#000000,#FFFFFF,#FF0000,#FFFF00")
+    pub colors: Option<String>,
 }
 
 fn default_model() -> String {
@@ -173,7 +173,13 @@ pub async fn handle_resolve_mac(
     State(state): State<DevState>,
     Query(query): Query<ResolveMacQuery>,
 ) -> Response {
-    match state.config.get_screen_for_device(&query.mac) {
+    // Try MAC lookup first, then registration code lookup
+    let lookup = state
+        .config
+        .get_screen_for_device(&query.mac)
+        .or_else(|| state.config.get_screen_for_code(&query.mac));
+
+    match lookup {
         Some((screen_config, device_config)) => {
             // Convert YAML params to JSON for response
             let params: HashMap<String, serde_json::Value> = device_config
@@ -203,7 +209,7 @@ pub async fn handle_resolve_mac(
         None => (
             StatusCode::NOT_FOUND,
             Json(RenderErrorResponse {
-                error: format!("MAC '{}' not configured", query.mac),
+                error: format!("Device '{}' not configured", query.mac),
                 details: None,
             }),
         )
@@ -218,8 +224,8 @@ pub async fn handle_render(
 ) -> Response {
     // Resolve screen config: MAC takes precedence, then explicit screen
     let (screen_config, resolved_params) = if let Some(ref mac) = query.mac {
-        // Try to resolve from MAC
-        match state.config.get_screen_for_device(mac) {
+        // Try MAC lookup first, then registration code lookup
+        match state.config.get_screen_for_device(mac).or_else(|| state.config.get_screen_for_code(mac)) {
             Some((sc, dc)) => {
                 // Convert device params to JSON
                 let params: HashMap<String, serde_json::Value> = dc
@@ -238,7 +244,7 @@ pub async fn handle_render(
                 return (
                     StatusCode::NOT_FOUND,
                     Json(RenderErrorResponse {
-                        error: format!("MAC '{}' not configured", mac),
+                        error: format!("Device '{}' not configured", mac),
                         details: None,
                     }),
                 )
@@ -288,10 +294,14 @@ pub async fn handle_render(
         }
     }
 
-    // Get grey levels (default based on model)
-    let grey_levels = query
-        .grey_levels
-        .unwrap_or(if query.model == "x" { 16 } else { 4 });
+    // Build palette from colors param, or default based on model
+    let default_palette: Vec<(u8, u8, u8)> = if let Some(ref colors_str) = query.colors {
+        crate::api::display::parse_colors_header(colors_str)
+    } else if query.model == "x" {
+        (0..16).map(|i| { let v = (i * 255 / 15) as u8; (v, v, v) }).collect()
+    } else {
+        vec![(0, 0, 0), (85, 85, 85), (170, 170, 170), (255, 255, 255)]
+    };
 
     // Create device context
     let device_ctx = DeviceContext {
@@ -305,8 +315,9 @@ pub async fn handle_render(
         firmware_version: Some("dev".to_string()),
         width: Some(width),
         height: Some(height),
-        grey_levels: Some(grey_levels),
         registration_code: None,
+        colors: Some(crate::api::display::colors_to_hex_strings(&default_palette)),
+        ..Default::default()
     };
 
     // Run script directly with the screen config
@@ -361,12 +372,12 @@ pub async fn handle_render(
         }
     };
 
-    // Convert SVG to PNG with appropriate grey levels
+    // Convert SVG to PNG with palette-aware dithering
     let display_spec = DisplaySpec::from_dimensions(width, height).unwrap_or(DisplaySpec::OG);
 
     match state
         .content_pipeline
-        .render_png_from_svg_with_levels(&svg, display_spec, grey_levels)
+        .render_png_from_svg(&svg, display_spec, &default_palette)
     {
         Ok(png_bytes) => (
             StatusCode::OK,

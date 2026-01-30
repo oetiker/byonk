@@ -50,6 +50,10 @@ enum Commands {
         /// Firmware version string
         #[arg(short, long)]
         firmware: Option<String>,
+
+        /// Registration code to display (for testing registration screen)
+        #[arg(long)]
+        registration_code: Option<String>,
     },
     /// Extract embedded assets to filesystem for customization
     Init {
@@ -120,7 +124,16 @@ async fn main() -> anyhow::Result<()> {
             battery,
             rssi,
             firmware,
-        }) => run_render_command(&mac, &output, &device, battery, rssi, firmware),
+            registration_code,
+        }) => run_render_command(
+            &mac,
+            &output,
+            &device,
+            battery,
+            rssi,
+            firmware,
+            registration_code,
+        ),
         Some(Commands::Init {
             screens,
             fonts,
@@ -146,6 +159,7 @@ fn run_render_command(
     battery: Option<f32>,
     rssi: Option<i32>,
     firmware: Option<String>,
+    registration_code: Option<String>,
 ) -> anyhow::Result<()> {
     use byonk::assets::AssetLoader;
     use byonk::models::DisplaySpec;
@@ -186,6 +200,13 @@ fn run_render_command(
         _ => DisplaySpec::OG,
     };
 
+    // Build default palette based on device type
+    let palette: Vec<(u8, u8, u8)> = if device_type == "x" {
+        (0..16).map(|i| { let v = (i * 255 / 15) as u8; (v, v, v) }).collect()
+    } else {
+        vec![(0, 0, 0), (85, 85, 85), (170, 170, 170), (255, 255, 255)]
+    };
+
     // Create device context with all provided fields
     let device_context = DeviceContext {
         mac: mac.to_string(),
@@ -195,8 +216,9 @@ fn run_render_command(
         firmware_version: firmware,
         width: Some(display_spec.width),
         height: Some(display_spec.height),
-        grey_levels: None, // Use default based on device model
-        registration_code: None,
+        registration_code,
+        colors: Some(byonk::api::display::colors_to_hex_strings(&palette)),
+        ..Default::default()
     };
 
     // Run the Lua script
@@ -211,7 +233,7 @@ fn run_render_command(
 
     // Render to PNG
     let png_bytes = content_pipeline
-        .render_png_from_svg(&svg_content, display_spec)
+        .render_png_from_svg(&svg_content, display_spec, &palette)
         .map_err(|e| anyhow::anyhow!("Render error: {e}"))?;
 
     // Write to file

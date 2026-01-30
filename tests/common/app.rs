@@ -127,16 +127,14 @@ impl TestApp {
         }
     }
 
-    /// Register a device and return (api_key, friendly_id)
-    pub async fn register_device(&self, mac: &str) -> (String, String) {
+    /// Register a device and return the api_key
+    pub async fn register_device(&self, mac: &str) -> String {
         let headers = [("ID", mac), ("FW-Version", "1.0.0"), ("Model", "og")];
         let response = self.get_with_headers("/api/setup", &headers).await;
         assert_eq!(response.status, StatusCode::OK);
 
         let json: serde_json::Value = response.json();
-        let api_key = json["api_key"].as_str().unwrap().to_string();
-        let friendly_id = json["friendly_id"].as_str().unwrap().to_string();
-        (api_key, friendly_id)
+        json["api_key"].as_str().unwrap().to_string()
     }
 }
 

@@ -94,6 +94,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/image/:hash", get(handle_image))
         .route("/api/log", post(api::handle_log))
         .route("/api/log/", post(api::handle_log))
+        .route("/api/time", get(api::handle_time))
+        .route("/api/time/", get(api::handle_time))
         // Health check
         .route("/health", get(|| async { "OK" }))
         // Add state and tracing with request IDs

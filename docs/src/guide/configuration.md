@@ -124,6 +124,11 @@ devices:
 3. **Admin adds code to devices** - Add the code (hyphenated format) to the `devices` section
 4. **Device refreshes** - Now shows the configured screen
 
+**Note:** The registration code is derived from the device's API key via a hash function. This means:
+- Devices keep their existing API key (including TRMNL-issued keys) - no WiFi reset required
+- The same API key always produces the same registration code
+- The config shows only the derived code, not the actual API key
+
 ### Registration Settings
 
 | Property | Required | Description |
@@ -137,6 +142,7 @@ devices:
 - Written in config as hyphenated: `"ABCDE-FGHJK"`
 - Uses unambiguous letters only (excludes I, L, O)
 - Can be used interchangeably with MAC addresses in the `devices` section
+- Deterministic: same API key always produces the same code
 
 ### Example
 
@@ -167,6 +173,29 @@ The registration code is available to your default screen as `device.registratio
 ```
 
 See [Device Mapping](../concepts/device-mapping.md#device-registration-security-feature) for more details.
+
+## Authentication Mode
+
+Byonk supports optional Ed25519 cryptographic authentication for devices. When enabled, devices use Ed25519 signatures instead of plain API keys.
+
+```yaml
+auth_mode: ed25519  # or "api_key" (default)
+```
+
+The `auth_mode` setting controls what `/api/setup` tells devices. The `/api/display` endpoint always accepts both authentication methods, so existing devices continue to work during migration.
+
+### Ed25519 Flow
+
+1. Device calls `GET /api/time` to get the server timestamp
+2. Device signs `timestamp_ms (8 bytes BE) || public_key (32 bytes)` with its Ed25519 private key
+3. Device sends `X-Public-Key`, `X-Signature`, `X-Timestamp` headers along with the normal `Access-Token` and `ID` headers
+4. Server verifies the signature and checks the timestamp is within ±60 seconds
+
+### Settings
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `auth_mode` | `api_key` | Authentication mode advertised to devices (`api_key` or `ed25519`) |
 
 ## Hot Reloading
 

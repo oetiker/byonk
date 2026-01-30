@@ -10,7 +10,9 @@ use utoipa::ToSchema;
 
 use super::headers::HeaderMapExt;
 use crate::error::ApiError;
-use crate::models::{ApiKey, AppConfig, Device, DeviceId, DeviceModel, DisplaySpec};
+use crate::models::{
+    verify_ed25519_signature, ApiKey, AppConfig, Device, DeviceId, DeviceModel, DisplaySpec,
+};
 use crate::services::{
     CachedContent, ContentCache, ContentPipeline, DeviceContext, DeviceRegistry, RenderService,
 };
@@ -18,6 +20,34 @@ use crate::services::{
 // Maximum allowed display dimensions to prevent DoS
 const MAX_DISPLAY_WIDTH: u32 = 2000;
 const MAX_DISPLAY_HEIGHT: u32 = 2000;
+
+/// Default 4-grey palette for devices that don't send a Colors header
+const DEFAULT_COLORS: &str = "#000000,#555555,#AAAAAA,#FFFFFF";
+
+/// Parse a comma-separated list of hex RGB color strings into RGB tuples
+pub fn parse_colors_header(s: &str) -> Vec<(u8, u8, u8)> {
+    s.split(',')
+        .filter_map(|c| {
+            let c = c.trim().trim_start_matches('#');
+            if c.len() == 6 {
+                let r = u8::from_str_radix(&c[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&c[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&c[4..6], 16).ok()?;
+                Some((r, g, b))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Convert RGB tuples back to hex strings for Lua/template exposure
+pub fn colors_to_hex_strings(colors: &[(u8, u8, u8)]) -> Vec<String> {
+    colors
+        .iter()
+        .map(|(r, g, b)| format!("#{:02X}{:02X}{:02X}", r, g, b))
+        .collect()
+}
 
 /// Get display content for a device
 ///
@@ -56,8 +86,49 @@ pub async fn handle_display<R: DeviceRegistry>(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     // Extract required headers
-    let api_key_str = headers.require_str("Access-Token")?;
     let device_id_str = headers.require_str("ID")?;
+
+    // Check for Ed25519 authentication headers
+    let has_ed25519 = headers.get_str("X-Public-Key").is_some()
+        && headers.get_str("X-Signature").is_some()
+        && headers.get_str("X-Timestamp").is_some();
+
+    if has_ed25519 {
+        let public_key_hex = headers.require_str("X-Public-Key")?;
+        let signature_hex = headers.require_str("X-Signature")?;
+        let timestamp_str = headers.require_str("X-Timestamp")?;
+
+        tracing::debug!(
+            device_id = device_id_str,
+            public_key = public_key_hex,
+            signature = signature_hex,
+            timestamp = timestamp_str,
+            public_key_len = public_key_hex.len(),
+            signature_len = signature_hex.len(),
+            "Ed25519 auth attempt"
+        );
+
+        let timestamp_ms: u64 = timestamp_str
+            .parse()
+            .map_err(|_| ApiError::MissingHeader("X-Timestamp"))?;
+
+        verify_ed25519_signature(public_key_hex, signature_hex, timestamp_ms).map_err(|e| {
+            tracing::warn!(
+                device_id = device_id_str,
+                error = %e,
+                "Ed25519 authentication failed"
+            );
+            ApiError::Internal(format!("Authentication failed: {e}"))
+        })?;
+
+        tracing::info!(
+            device_id = device_id_str,
+            "Ed25519 authentication successful"
+        );
+    }
+
+    // Access-Token is still required (used for registration code derivation)
+    let api_key_str = headers.require_str("Access-Token")?;
 
     // Parse and validate dimensions with bounds checking
     let width: u32 = headers
@@ -70,43 +141,25 @@ pub async fn handle_display<R: DeviceRegistry>(
     let api_key = ApiKey::new(api_key_str);
 
     // Check device registration when enabled
-    // Registration uses the API key's embedded code OR MAC address to identify devices
+    // Registration uses the API key's derived code OR MAC address to identify devices
     if config.registration.enabled {
         let registration_code = api_key.registration_code();
 
-        if !api_key.is_byonk_key() {
-            // Non-Byonk key - tell device to reset and call /api/setup
-            tracing::info!(
-                api_key_prefix = &api_key_str[..api_key_str.len().min(8)],
-                "Non-Byonk API key detected, requesting device reset"
-            );
-
-            return Ok(Json(DisplayJsonResponse {
-                status: 0,
-                image_url: None,
-                filename: "reset".to_string(),
-                update_firmware: false,
-                firmware_url: None,
-                refresh_rate: 60,
-                reset_firmware: true, // Force device to call /api/setup again
-                temperature_profile: Some("default".to_string()),
-                special_function: None,
-            })
-            .into_response());
-        }
-
         // Check if device is registered (by MAC address OR by registration code)
-        if !config.is_device_registered(device_id_str, registration_code) {
-            let code = registration_code.unwrap_or("UNKNOWN");
+        if !config.is_device_registered(device_id_str, Some(&registration_code)) {
             tracing::info!(
                 device_id = device_id_str,
-                registration_code = code,
+                registration_code = %registration_code,
                 custom_screen = config.registration.screen.as_deref(),
                 "Device not registered, showing registration screen"
             );
+            let code = registration_code.as_str();
 
             // Build device context with registration code
             let model_str = headers.get_str("Model").unwrap_or("og");
+            let colors_str = headers.get_str("Colors").unwrap_or(DEFAULT_COLORS);
+            let palette = parse_colors_header(colors_str);
+            let color_hex = colors_to_hex_strings(&palette);
             let device_ctx = DeviceContext {
                 mac: device_id_str.to_string(),
                 battery_voltage: headers.get_parsed::<f32>("Battery-Voltage"),
@@ -115,8 +168,10 @@ pub async fn handle_display<R: DeviceRegistry>(
                 firmware_version: headers.get_str("FW-Version").map(|s| s.to_string()),
                 width: Some(width),
                 height: Some(height),
-                grey_levels: None,
+
                 registration_code: Some(code.to_string()),
+                board: headers.get_str("Board").map(|s| s.to_string()),
+                colors: Some(color_hex.clone()),
             };
 
             // Use registration screen if configured, otherwise use default screen
@@ -176,7 +231,8 @@ pub async fn handle_display<R: DeviceRegistry>(
                 )
             };
 
-            let cached = CachedContent::new(registration_svg, screen_name, width, height);
+            let cached = CachedContent::new(registration_svg, screen_name, width, height)
+                .with_colors(Some(palette));
             let hash = cached.content_hash.clone();
             content_cache.store(cached);
 
@@ -200,48 +256,43 @@ pub async fn handle_display<R: DeviceRegistry>(
         // Device is registered - continue with normal flow
     }
 
-    // Find device by API key, or auto-register if not found
-    let mut device = match registry.find_by_api_key(&api_key).await? {
-        Some(d) => d,
-        None => {
-            // Auto-register the device using the MAC address from ID header
-            let device_id = DeviceId::new(device_id_str);
-            let model_str = headers.get_str("Model").unwrap_or("og");
-            let fw_version = headers
-                .get_str("FW-Version")
-                .unwrap_or("unknown")
-                .to_string();
+    // Get or create device metadata
+    let device_id = DeviceId::new(device_id_str);
+    let model_str = headers.get_str("Model").unwrap_or("og");
+    let model = DeviceModel::parse(model_str);
+    let fw_version = headers
+        .get_str("FW-Version")
+        .unwrap_or("unknown")
+        .to_string();
 
-            let model = DeviceModel::parse(model_str);
-            let new_device = Device::new(device_id.clone(), model, fw_version);
-
-            tracing::info!(
-                device_id = %device_id,
-                model = ?model,
-                "Auto-registering new device from /api/display"
-            );
-
-            registry.register(device_id, new_device).await?
-        }
-    };
+    let mut device = registry
+        .find_by_id(&device_id)
+        .await?
+        .unwrap_or_else(|| Device::new(device_id.clone(), model, fw_version.clone()));
 
     tracing::info!(
-        device_id = %device.device_id,
+        device_id = %device_id,
         width = width,
         height = height,
         "Display request received"
     );
 
     // Update device metadata
+    device.model = model;
+    device.firmware_version = fw_version;
     if let Some(battery) = headers.get_parsed::<f32>("Battery-Voltage") {
         device.battery_voltage = Some(battery);
     }
     if let Some(rssi) = headers.get_parsed::<i32>("RSSI") {
         device.rssi = Some(rssi);
     }
-
     device.last_seen = chrono::Utc::now();
-    registry.update(device.clone()).await?;
+    registry.upsert(device.clone()).await?;
+
+    // Parse color palette from headers
+    let colors_str = headers.get_str("Colors").unwrap_or(DEFAULT_COLORS);
+    let palette = parse_colors_header(colors_str);
+    let color_hex = colors_to_hex_strings(&palette);
 
     // Build device context for script
     let device_ctx = DeviceContext {
@@ -252,8 +303,10 @@ pub async fn handle_display<R: DeviceRegistry>(
         firmware_version: Some(device.firmware_version.clone()),
         width: Some(width),
         height: Some(height),
-        grey_levels: None, // Determined by device model in render phase
-        registration_code: device.api_key.registration_code().map(|s| s.to_string()),
+
+        registration_code: Some(api_key.registration_code()),
+        board: headers.get_str("Board").map(|s| s.to_string()),
+        colors: Some(color_hex),
     };
 
     // Run script, render SVG, and cache the result (PNG rendering happens in /api/image)
@@ -262,6 +315,7 @@ pub async fn handle_display<R: DeviceRegistry>(
     let mac = device_mac.clone();
     let cache = content_cache.clone();
     let ctx = device_ctx.clone();
+    let palette_for_cache = palette;
 
     // Run in spawn_blocking because Lua scripts use blocking HTTP requests
     let (refresh_rate, skip_update, content_hash, error_msg) =
@@ -280,7 +334,8 @@ pub async fn handle_display<R: DeviceRegistry>(
                                     result.screen_name.clone(),
                                     width,
                                     height,
-                                );
+                                )
+                                .with_colors(Some(palette_for_cache.clone()));
                                 let hash = cached.content_hash.clone();
                                 cache.store(cached);
                                 (result.refresh_rate, false, Some(hash), None)
@@ -294,7 +349,8 @@ pub async fn handle_display<R: DeviceRegistry>(
                                     "_error".to_string(),
                                     width,
                                     height,
-                                );
+                                )
+                                .with_colors(Some(palette_for_cache.clone()));
                                 let hash = cached.content_hash.clone();
                                 cache.store(cached);
                                 (60, false, Some(hash), Some(error_msg))
@@ -306,7 +362,8 @@ pub async fn handle_display<R: DeviceRegistry>(
                     // Script error - cache error SVG
                     let error_msg = e.to_string();
                     let error_svg = pipeline.render_error_svg(&error_msg);
-                    let cached = CachedContent::new(error_svg, "_error".to_string(), width, height);
+                    let cached = CachedContent::new(error_svg, "_error".to_string(), width, height)
+                        .with_colors(Some(palette_for_cache.clone()));
                     let hash = cached.content_hash.clone();
                     cache.store(cached);
                     (60, false, Some(hash), Some(error_msg))
@@ -408,7 +465,10 @@ pub async fn handle_image<R: DeviceRegistry>(
         "Rendering PNG from cached SVG"
     );
 
-    let png_bytes = content_pipeline.render_png_from_svg(&cached.rendered_svg, spec)?;
+    // Default to 4-grey palette if colors not stored (shouldn't happen, but be safe)
+    let default_palette = vec![(0, 0, 0), (85, 85, 85), (170, 170, 170), (255, 255, 255)];
+    let palette = cached.colors.as_deref().unwrap_or(&default_palette);
+    let png_bytes = content_pipeline.render_png_from_svg(&cached.rendered_svg, spec, palette)?;
 
     tracing::info!(size_bytes = png_bytes.len(), "Image rendered and served");
 

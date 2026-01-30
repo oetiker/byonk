@@ -18,7 +18,7 @@ const elements = {
     batteryInput: document.getElementById('battery-input'),
     rssiInput: document.getElementById('rssi-input'),
     timeInput: document.getElementById('time-input'),
-    greyLevelsSelect: document.getElementById('grey-levels-select'),
+    colorsInput: document.getElementById('colors-input'),
     paramsInput: document.getElementById('params-input'),
     renderBtn: document.getElementById('render-btn'),
     autoRefresh: document.getElementById('auto-refresh'),
@@ -40,9 +40,18 @@ async function init() {
     setupEventListeners();
     connectSSE();
     initializeTimeInput();
+    initializeColorsFromModel();
     loadSavedState();
     setupLens();
     render();
+}
+
+// Initialize colors input from currently selected model option
+function initializeColorsFromModel() {
+    const option = elements.modelSelect.selectedOptions[0];
+    if (option && option.dataset.colors) {
+        elements.colorsInput.value = option.dataset.colors;
+    }
 }
 
 // Initialize time input with current local datetime
@@ -89,18 +98,15 @@ async function loadScreens() {
 
 // Setup event listeners
 function setupEventListeners() {
-    // Model select changes dimensions and grey levels
+    // Model select changes dimensions and colors
     elements.modelSelect.addEventListener('change', (e) => {
-        const model = e.target.value;
-        if (model === 'x') {
-            elements.widthInput.value = 1872;
-            elements.heightInput.value = 1404;
-            elements.greyLevelsSelect.value = '16';
-        } else {
-            elements.widthInput.value = 800;
-            elements.heightInput.value = 480;
-            elements.greyLevelsSelect.value = '4';
-        }
+        const option = e.target.selectedOptions[0];
+        const w = option.dataset.width;
+        const h = option.dataset.height;
+        const colors = option.dataset.colors;
+        if (w) elements.widthInput.value = w;
+        if (h) elements.heightInput.value = h;
+        if (colors) elements.colorsInput.value = colors;
         updateDeviceFrame();
         saveState();
         if (elements.autoRefresh.checked) {
@@ -158,7 +164,7 @@ function setupEventListeners() {
             render();
         }
     });
-    elements.greyLevelsSelect.addEventListener('change', () => {
+    elements.colorsInput.addEventListener('change', () => {
         saveState();
         if (elements.autoRefresh.checked) {
             render();
@@ -263,6 +269,14 @@ function updateDeviceFrame() {
     const width = elements.widthInput.value;
     const height = elements.heightInput.value;
     elements.displaySize.textContent = `${width} x ${height}`;
+
+    // Update bezel label with device name
+    const option = elements.modelSelect.selectedOptions[0];
+    const deviceName = option.textContent.trim();
+    const bezelLabel = document.getElementById('bezel-label');
+    if (bezelLabel) {
+        bezelLabel.textContent = `BYONK  \u2014  ${deviceName}`;
+    }
 }
 
 // Render the current screen
@@ -306,7 +320,7 @@ async function render() {
             height: elements.heightInput.value,
             battery_voltage: elements.batteryInput.value,
             rssi: elements.rssiInput.value,
-            grey_levels: elements.greyLevelsSelect.value,
+            colors: elements.colorsInput.value,
             params,
         });
 
@@ -376,7 +390,7 @@ function saveState() {
         battery: elements.batteryInput.value,
         rssi: elements.rssiInput.value,
         time: elements.timeInput.value,
-        greyLevels: elements.greyLevelsSelect.value,
+        colors: elements.colorsInput.value,
         params: elements.paramsInput.value,
         autoRefresh: elements.autoRefresh.checked,
     };
@@ -414,8 +428,8 @@ function loadSavedState() {
             if (data.time) {
                 elements.timeInput.value = data.time;
             }
-            if (data.greyLevels) {
-                elements.greyLevelsSelect.value = data.greyLevels;
+            if (data.colors) {
+                elements.colorsInput.value = data.colors;
             }
             if (data.params) {
                 elements.paramsInput.value = data.params;
@@ -466,8 +480,6 @@ function updateLensImage(url) {
 }
 
 function showLens(e) {
-    // Only show lens for X model (high-res)
-    if (elements.modelSelect.value !== 'x') return;
     if (!fullResImage.complete || !fullResImage.naturalWidth) return;
 
     lensElement.classList.remove('hidden');
@@ -479,10 +491,6 @@ function hideLens() {
 }
 
 function moveLens(e) {
-    if (elements.modelSelect.value !== 'x') {
-        hideLens();
-        return;
-    }
     if (!fullResImage.complete || !fullResImage.naturalWidth) return;
 
     const rect = elements.displayImage.getBoundingClientRect();
@@ -506,9 +514,13 @@ function moveLens(e) {
     const scaleX = fullResImage.naturalWidth / rect.width;
     const scaleY = fullResImage.naturalHeight / rect.height;
 
+    // Source region size in full-res image pixels
+    const srcW = sourceSize * scaleX;
+    const srcH = sourceSize * scaleY;
+
     // Source coordinates in the full-res image (centered on cursor position)
-    const srcX = (imgX * scaleX) - (sourceSize / 2);
-    const srcY = (imgY * scaleY) - (sourceSize / 2);
+    const srcX = (imgX * scaleX) - (srcW / 2);
+    const srcY = (imgY * scaleY) - (srcH / 2);
 
     // Clear and draw the magnified region
     lensCtx.clearRect(0, 0, lensSize, lensSize);
@@ -529,8 +541,8 @@ function moveLens(e) {
     // Draw the source region scaled up by magnification factor
     lensCtx.drawImage(
         fullResImage,
-        srcX, srcY, sourceSize, sourceSize,  // Source rectangle (100x100)
-        0, 0, lensSize, lensSize              // Destination rectangle (200x200 = 2x magnification)
+        srcX, srcY, srcW, srcH,              // Source rectangle in image pixels
+        0, 0, lensSize, lensSize              // Destination rectangle (200x200)
     );
 
     lensCtx.restore();

@@ -26,7 +26,7 @@ The simulator displays your rendered screens in a visual frame resembling a TRMN
 - **Enter a MAC address** to auto-load the configured screen and parameters for that device
 - **Choose device model**: OG (800x480) or X (1872x1404)
 - **Set custom dimensions** for testing different screen sizes
-- **Select grey levels**: 4 (OG) or 16 (X) for testing dithering behavior
+- **Set display colors**: customize the palette (e.g., `#000000,#FFFFFF,#FF0000,#FFFF00`) for testing color dithering
 - **Simulate device context**: battery voltage, WiFi RSSI, and current time
 - **View the rendered PNG** exactly as it would appear on the device
 - **Pixel inspector**: hover over the image to see a magnified view

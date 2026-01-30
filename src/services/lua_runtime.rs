@@ -120,9 +120,6 @@ impl LuaRuntime {
             if let Some(height) = ctx.height {
                 device_table.set("height", height)?;
             }
-            if let Some(grey_levels) = ctx.grey_levels {
-                device_table.set("grey_levels", grey_levels)?;
-            }
             if let Some(ref code) = ctx.registration_code {
                 device_table.set("registration_code", code.as_str())?;
                 // Also provide hyphenated version for convenience
@@ -131,6 +128,16 @@ impl LuaRuntime {
                     device_table.set("registration_code_hyphenated", hyphenated)?;
                 }
             }
+            if let Some(ref board) = ctx.board {
+                device_table.set("board", board.as_str())?;
+            }
+            if let Some(ref colors) = ctx.colors {
+                let colors_table = lua.create_table()?;
+                for (i, color) in colors.iter().enumerate() {
+                    colors_table.set(i + 1, color.as_str())?;
+                }
+                device_table.set("colors", colors_table)?;
+            }
         }
         globals.set("device", device_table)?;
 
@@ -138,7 +145,6 @@ impl LuaRuntime {
         let layout_table = lua.create_table()?;
         let width = device_ctx.and_then(|ctx| ctx.width).unwrap_or(800) as f64;
         let height = device_ctx.and_then(|ctx| ctx.height).unwrap_or(480) as f64;
-        let grey_levels = device_ctx.and_then(|ctx| ctx.grey_levels).unwrap_or(4);
         let scale = f64::min(width / 800.0, height / 480.0);
 
         layout_table.set("width", width as i64)?;
@@ -146,7 +152,18 @@ impl LuaRuntime {
         layout_table.set("scale", scale)?;
         layout_table.set("center_x", (width / 2.0).floor() as i64)?;
         layout_table.set("center_y", (height / 2.0).floor() as i64)?;
-        layout_table.set("grey_levels", grey_levels)?;
+        // Expose color palette on layout table
+        if let Some(colors) = device_ctx.and_then(|ctx| ctx.colors.as_ref()) {
+            let colors_table = lua.create_table()?;
+            for (i, color) in colors.iter().enumerate() {
+                colors_table.set(i + 1, color.as_str())?;
+            }
+            layout_table.set("colors", colors_table)?;
+            layout_table.set("color_count", colors.len() as i64)?;
+        } else {
+            // Default 4-grey when no colors provided
+            layout_table.set("color_count", 4i64)?;
+        }
         // Pre-floored margins for pixel-aligned positioning
         layout_table.set("margin", (20.0 * scale).floor() as i64)?;
         layout_table.set("margin_sm", (10.0 * scale).floor() as i64)?;

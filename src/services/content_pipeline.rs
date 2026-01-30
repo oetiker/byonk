@@ -39,10 +39,12 @@ pub struct DeviceContext {
     pub width: Option<u32>,
     /// Display height in pixels
     pub height: Option<u32>,
-    /// Grey levels for dithering (4 for OG, 16 for X)
-    pub grey_levels: Option<u8>,
     /// Registration code (if device has a Byonk key)
     pub registration_code: Option<String>,
+    /// Board identifier (e.g. "trmnl_og_4clr")
+    pub board: Option<String>,
+    /// Available display colors as hex RGB strings (e.g. ["#000000", "#FFFFFF", "#FF0000"])
+    pub colors: Option<Vec<String>>,
 }
 
 /// Error from the content pipeline
@@ -92,10 +94,12 @@ impl ContentPipeline {
         device_mac: &str,
         device_ctx: Option<DeviceContext>,
     ) -> Result<ScriptResult, ContentError> {
-        // Look up device config
-        let (screen_config, device_config) = self
-            .config
-            .get_screen_for_device(device_mac)
+        // Look up device config - try registration code first, then MAC address
+        let (screen_config, device_config) = device_ctx
+            .as_ref()
+            .and_then(|ctx| ctx.registration_code.as_deref())
+            .and_then(|code| self.config.get_screen_for_code(code))
+            .or_else(|| self.config.get_screen_for_device(device_mac))
             .or_else(|| {
                 // Fall back to default screen with empty params
                 self.config.get_default_screen().map(|sc| {
@@ -218,9 +222,6 @@ impl ContentPipeline {
             if let Some(height) = ctx.height {
                 device_obj.insert("height".to_string(), serde_json::json!(height));
             }
-            if let Some(grey_levels) = ctx.grey_levels {
-                device_obj.insert("grey_levels".to_string(), serde_json::json!(grey_levels));
-            }
             if let Some(ref code) = ctx.registration_code {
                 device_obj.insert("registration_code".to_string(), serde_json::json!(code));
                 // Also provide hyphenated version for convenience
@@ -231,6 +232,12 @@ impl ContentPipeline {
                         serde_json::json!(hyphenated),
                     );
                 }
+            }
+            if let Some(ref board) = ctx.board {
+                device_obj.insert("board".to_string(), serde_json::json!(board));
+            }
+            if let Some(ref colors) = ctx.colors {
+                device_obj.insert("colors".to_string(), serde_json::json!(colors));
             }
         }
         template_context.insert("device".to_string(), serde_json::Value::Object(device_obj));
@@ -258,30 +265,20 @@ impl ContentPipeline {
         Ok(svg_content)
     }
 
-    /// Render PNG from cached SVG content
+    /// Render PNG from cached SVG content using the given color palette.
+    ///
+    /// The palette determines both dithering targets and PNG output format
+    /// (native grayscale for grey palettes, indexed PNG for color palettes).
     pub fn render_png_from_svg(
         &self,
         svg: &str,
         spec: DisplaySpec,
-    ) -> Result<Vec<u8>, ContentError> {
-        let png_bytes = self
-            .renderer
-            .svg_renderer
-            .render_to_png(svg.as_bytes(), spec, 4)?;
-        Ok(png_bytes)
-    }
-
-    /// Render PNG from cached SVG content with custom grey levels
-    pub fn render_png_from_svg_with_levels(
-        &self,
-        svg: &str,
-        spec: DisplaySpec,
-        grey_levels: u8,
+        palette: &[(u8, u8, u8)],
     ) -> Result<Vec<u8>, ContentError> {
         let png_bytes =
             self.renderer
                 .svg_renderer
-                .render_to_png(svg.as_bytes(), spec, grey_levels)?;
+                .render_to_palette_png(svg.as_bytes(), spec, palette)?;
         Ok(png_bytes)
     }
 

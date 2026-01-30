@@ -20,6 +20,8 @@ pub struct CachedContent {
     pub width: u32,
     /// Target display height for PNG rendering
     pub height: u32,
+    /// Display color palette as RGB tuples (if provided by firmware)
+    pub colors: Option<Vec<(u8, u8, u8)>>,
 }
 
 impl CachedContent {
@@ -33,7 +35,14 @@ impl CachedContent {
             generated_at: chrono::Utc::now(),
             width,
             height,
+            colors: None,
         }
+    }
+
+    /// Set the display color palette
+    pub fn with_colors(mut self, colors: Option<Vec<(u8, u8, u8)>>) -> Self {
+        self.colors = colors;
+        self
     }
 }
 

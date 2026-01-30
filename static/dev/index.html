@@ -27,26 +27,29 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="mac-input">MAC Address (optional)</label>
-                    <input type="text" id="mac-input" placeholder="AA:BB:CC:DD:EE:FF" pattern="[0-9A-Fa-f:]+">
+                    <label for="mac-input">Device ID (MAC or token)</label>
+                    <input type="text" id="mac-input" placeholder="AA:BB:CC:DD:EE:FF or token">
                     <div id="mac-resolved" class="mac-resolved hidden"></div>
                 </div>
 
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="model-select">Device Model</label>
-                        <select id="model-select">
-                            <option value="og">OG (800x480)</option>
-                            <option value="x">X (1872x1404)</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="grey-levels-select">Grey Levels</label>
-                        <select id="grey-levels-select">
-                            <option value="4">4 (OG)</option>
-                            <option value="16">16 (X)</option>
-                        </select>
-                    </div>
+                <div class="form-group">
+                    <label for="model-select">Device Model</label>
+                    <select id="model-select">
+                        <option value="og" data-width="800" data-height="480" data-colors="#000000,#555555,#AAAAAA,#FFFFFF">TRMNL OG (800x480, 4 grey)</option>
+                        <option value="og" data-width="800" data-height="480" data-colors="#000000,#FFFFFF,#FF0000,#FFFF00">TRMNL OG 4-Color (800x480)</option>
+                        <option value="x" data-width="1872" data-height="1404" data-colors="#000000,#111111,#222222,#333333,#444444,#555555,#666666,#777777,#888888,#999999,#AAAAAA,#BBBBBB,#CCCCCC,#DDDDDD,#EEEEEE,#FFFFFF">TRMNL X (1872x1404, 16 grey)</option>
+                        <option value="og" data-width="800" data-height="480" data-colors="#000000,#555555,#AAAAAA,#FFFFFF">XTEink X4 (800x480, 4 grey)</option>
+                        <option value="og" data-width="800" data-height="480" data-colors="#000000,#555555,#AAAAAA,#FFFFFF">Waveshare (800x480, 4 grey)</option>
+                        <option value="og" data-width="296" data-height="128" data-colors="#000000,#555555,#AAAAAA,#FFFFFF">Seeed Xiao (296x128, 4 grey)</option>
+                        <option value="og" data-width="296" data-height="128" data-colors="#000000,#FFFFFF,#FF0000">Seeed Xiao 3-Color (296x128)</option>
+                        <option value="og" data-width="800" data-height="480" data-colors="#000000,#555555,#AAAAAA,#FFFFFF">reTerminal E1001 (800x480, 4 grey)</option>
+                        <option value="og" data-width="800" data-height="480" data-colors="#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00">reTerminal E1002 (800x480, 6 color)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="colors-input">Colors</label>
+                    <input type="text" id="colors-input" placeholder="#000000,#555555,#AAAAAA,#FFFFFF">
                 </div>
 
                 <div class="form-row">
@@ -94,10 +97,13 @@
                 <h2>Device Preview</h2>
                 <div id="device-frame" class="device-frame og">
                     <div class="device-bezel">
-                        <img id="display-image" alt="Screen preview">
-                        <div id="loading-overlay" class="loading-overlay hidden">
-                            <div class="spinner"></div>
+                        <div class="screen-well">
+                            <img id="display-image" alt="Screen preview">
+                            <div id="loading-overlay" class="loading-overlay hidden">
+                                <div class="spinner"></div>
+                            </div>
                         </div>
+                        <div id="bezel-label" class="bezel-label">BYONK</div>
                     </div>
                 </div>
                 <div class="display-info">

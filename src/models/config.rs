@@ -21,6 +21,12 @@ pub struct AppConfig {
     /// Device registration settings
     #[serde(default)]
     pub registration: RegistrationConfig,
+
+    /// Authentication mode advertised to devices via /api/setup
+    /// Values: "api_key" (default), "ed25519"
+    /// Note: /api/display always accepts both methods regardless of this setting
+    #[serde(default = "default_auth_mode")]
+    pub auth_mode: String,
 }
 
 fn default_screen() -> Option<String> {
@@ -77,6 +83,10 @@ pub struct RegistrationConfig {
 
 fn default_registration_enabled() -> bool {
     true
+}
+
+fn default_auth_mode() -> String {
+    "api_key".to_string()
 }
 
 impl Default for RegistrationConfig {
@@ -200,6 +210,7 @@ impl Default for AppConfig {
             devices: HashMap::new(),
             default_screen: Some("default".to_string()),
             registration: RegistrationConfig::default(),
+            auth_mode: default_auth_mode(),
         }
     }
 }

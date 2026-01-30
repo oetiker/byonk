@@ -9,7 +9,7 @@ use utoipa::ToSchema;
 
 use super::headers::HeaderMapExt;
 use crate::error::ApiError;
-use crate::models::{ApiKey, AppConfig, Device, DeviceId, DeviceModel};
+use crate::models::{AppConfig, Device, DeviceId, DeviceModel};
 use crate::services::DeviceRegistry;
 
 /// Response from the /api/setup endpoint
@@ -20,22 +20,22 @@ pub struct SetupResponse {
     /// API key for authenticating future requests
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
-    /// Human-readable device identifier
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub friendly_id: Option<String>,
     /// Optional URL to an initial image to display
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_url: Option<String>,
     /// Optional status message
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Authentication mode the device should use ("api_key" or "ed25519")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_mode: Option<String>,
 }
 
 /// Register a new device or retrieve existing registration
 ///
 /// The device sends its MAC address and receives an API key for future requests.
-/// When device registration is enabled, Byonk generates keys with a special prefix
-/// that can be validated. Non-Byonk keys (from other servers) will be replaced.
+/// If the device already has a stored key, it is returned. Otherwise, a new
+/// random key is generated.
 #[utoipa::path(
     get,
     path = "/api/setup",
@@ -67,77 +67,42 @@ pub async fn handle_setup<R: DeviceRegistry>(
         device_id = %device_id,
         fw_version = fw_version,
         model = ?model,
-        registration_enabled = config.registration.enabled,
         "Setup request received"
     );
 
     // Check if already registered in our registry
-    if let Some(mut existing) = registry.find_by_id(&device_id).await? {
-        // If registration is enabled and device has a non-Byonk key, replace it
-        if config.registration.enabled && !existing.api_key.is_byonk_key() {
-            let old_key = existing.api_key.as_str().to_string();
-            let new_key = ApiKey::generate();
-
-            tracing::info!(
-                device_id = %device_id,
-                old_key_prefix = &old_key[..old_key.len().min(8)],
-                new_registration_code = new_key.registration_code().unwrap_or(""),
-                "Replacing non-Byonk API key with Byonk key"
-            );
-
-            existing.api_key = new_key;
-            registry.update(existing.clone()).await?;
-
-            return Ok(Json(SetupResponse {
-                status: 200,
-                api_key: Some(existing.api_key.as_str().to_string()),
-                friendly_id: Some(existing.friendly_id.clone()),
-                image_url: None,
-                message: Some("Device key upgraded to Byonk format".to_string()),
-            }));
-        }
-
+    if let Some(existing) = registry.find_by_id(&device_id).await? {
         tracing::info!(
             device_id = %device_id,
-            friendly_id = %existing.friendly_id,
-            is_byonk_key = existing.api_key.is_byonk_key(),
+            registration_code = %existing.api_key.registration_code(),
             "Device already registered"
         );
 
         return Ok(Json(SetupResponse {
             status: 200,
             api_key: Some(existing.api_key.as_str().to_string()),
-            friendly_id: Some(existing.friendly_id.clone()),
             image_url: None,
             message: Some("Device already registered".to_string()),
+            auth_mode: Some(config.auth_mode.clone()),
         }));
     }
 
-    // Register new device (always uses Byonk key format now)
+    // Register new device with a random API key
     let device = Device::new(device_id.clone(), model, fw_version.to_string());
 
-    if config.registration.enabled {
-        if let Some(code) = device.api_key.registration_code() {
-            tracing::info!(
-                device_id = %device_id,
-                registration_code = code,
-                "New device registered with registration code"
-            );
-        }
-    }
-
-    let registered = registry.register(device_id, device).await?;
-
     tracing::info!(
-        friendly_id = %registered.friendly_id,
+        device_id = %device_id,
+        registration_code = %device.api_key.registration_code(),
         "New device registered"
     );
 
+    registry.upsert(device.clone()).await?;
+
     Ok(Json(SetupResponse {
         status: 200,
-        api_key: Some(registered.api_key.as_str().to_string()),
-        friendly_id: Some(registered.friendly_id),
+        api_key: Some(device.api_key.as_str().to_string()),
         image_url: None,
         message: Some("Device registered successfully".to_string()),
+        auth_mode: Some(config.auth_mode.clone()),
     }))
 }

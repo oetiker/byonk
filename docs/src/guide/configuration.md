@@ -124,6 +124,8 @@ devices:
 3. **Admin adds code to devices** - Add the code (hyphenated format) to the `devices` section
 4. **Device refreshes** - Now shows the configured screen
 
+![Registration screen showing device code](../images/registration.png)
+
 **Note:** The registration code is derived from the device's API key via a hash function. This means:
 - Devices keep their existing API key (including TRMNL-issued keys) - no WiFi reset required
 - The same API key always produces the same registration code

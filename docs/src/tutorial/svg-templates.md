@@ -275,9 +275,17 @@ local colors = layout.colors  -- e.g., {"#000000", "#555555", "#AAAAAA", "#FFFFF
 
 The included `graytest` screen adapts to the device palette and shows all available colors as swatches with gradient and dithering tests.
 
-**Rendered output:**
+**4-grey palette (TRMNL OG default):**
 
-![Display color test](../images/graytest.png)
+![Display color test — 4 grey](../images/graytest.png)
+
+**6-color palette (color e-ink display):**
+
+![Display color test — 6 color](../images/graytest-6color.png)
+
+The default screen also adapts to the palette:
+
+![Default screen — 6 color](../images/default-6color.png)
 
 ### Avoid
 

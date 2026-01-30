@@ -54,6 +54,10 @@ enum Commands {
         /// Registration code to display (for testing registration screen)
         #[arg(long)]
         registration_code: Option<String>,
+
+        /// Display colors as comma-separated hex RGB (e.g. "#000000,#FFFFFF,#FF0000")
+        #[arg(long)]
+        colors: Option<String>,
     },
     /// Extract embedded assets to filesystem for customization
     Init {
@@ -125,6 +129,7 @@ async fn main() -> anyhow::Result<()> {
             rssi,
             firmware,
             registration_code,
+            colors,
         }) => run_render_command(
             &mac,
             &output,
@@ -133,6 +138,7 @@ async fn main() -> anyhow::Result<()> {
             rssi,
             firmware,
             registration_code,
+            colors,
         ),
         Some(Commands::Init {
             screens,
@@ -152,6 +158,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Render a screen directly to a PNG file (no server needed)
+#[allow(clippy::too_many_arguments)]
 fn run_render_command(
     mac: &str,
     output: &PathBuf,
@@ -160,6 +167,7 @@ fn run_render_command(
     rssi: Option<i32>,
     firmware: Option<String>,
     registration_code: Option<String>,
+    colors: Option<String>,
 ) -> anyhow::Result<()> {
     use byonk::assets::AssetLoader;
     use byonk::models::DisplaySpec;
@@ -200,8 +208,10 @@ fn run_render_command(
         _ => DisplaySpec::OG,
     };
 
-    // Build default palette based on device type
-    let palette: Vec<(u8, u8, u8)> = if device_type == "x" {
+    // Build initial palette from --colors flag or device type default
+    let cli_palette: Vec<(u8, u8, u8)> = if let Some(ref colors_str) = colors {
+        byonk::api::display::parse_colors_header(colors_str)
+    } else if device_type == "x" {
         (0..16)
             .map(|i| {
                 let v = (i * 255 / 15) as u8;
@@ -222,23 +232,80 @@ fn run_render_command(
         width: Some(display_spec.width),
         height: Some(display_spec.height),
         registration_code,
-        colors: Some(byonk::api::display::colors_to_hex_strings(&palette)),
+        colors: Some(byonk::api::display::colors_to_hex_strings(&cli_palette)),
         ..Default::default()
     };
 
-    // Run the Lua script
-    let script_result = content_pipeline
-        .run_script_for_device(mac, Some(device_context.clone()))
-        .map_err(|e| anyhow::anyhow!("Script error: {e}"))?;
+    // Check if we should show registration screen
+    // If a registration code is provided and the device is not registered, simulate enrollment
+    let is_unregistered = device_context.registration_code.is_some()
+        && !config.is_device_registered(mac, device_context.registration_code.as_deref());
 
-    // Render SVG from script result
-    let svg_content = content_pipeline
-        .render_svg_from_script(&script_result, Some(&device_context))
-        .map_err(|e| anyhow::anyhow!("Template error: {e}"))?;
+    let (svg_content, final_palette) = if is_unregistered {
+        let code = device_context.registration_code.as_deref().unwrap();
+
+        // Use registration screen if configured, otherwise default screen, otherwise built-in
+        let screen_to_use = config
+            .registration
+            .screen
+            .as_deref()
+            .or(config.default_screen.as_deref());
+
+        let svg = if let Some(screen_name) = screen_to_use {
+            match content_pipeline.run_screen_by_name(
+                screen_name,
+                std::collections::HashMap::new(),
+                Some(device_context.clone()),
+            ) {
+                Ok(result) => content_pipeline
+                    .render_svg_from_script(&result, Some(&device_context))
+                    .unwrap_or_else(|_| {
+                        content_pipeline.render_registration_screen(
+                            code,
+                            display_spec.width,
+                            display_spec.height,
+                        )
+                    }),
+                Err(_) => content_pipeline.render_registration_screen(
+                    code,
+                    display_spec.width,
+                    display_spec.height,
+                ),
+            }
+        } else {
+            content_pipeline.render_registration_screen(
+                code,
+                display_spec.width,
+                display_spec.height,
+            )
+        };
+
+        (svg, cli_palette)
+    } else {
+        // Normal render path
+        let script_result = content_pipeline
+            .run_script_for_device(mac, Some(device_context.clone()))
+            .map_err(|e| anyhow::anyhow!("Script error: {e}"))?;
+
+        // Apply color priority chain: script > device config > CLI flag
+        let palette = if let Some(ref script_colors) = script_result.script_colors {
+            byonk::api::display::parse_colors_header(&script_colors.join(","))
+        } else if let Some(ref config_colors) = script_result.device_config_colors {
+            byonk::api::display::parse_colors_header(config_colors)
+        } else {
+            cli_palette
+        };
+
+        let svg = content_pipeline
+            .render_svg_from_script(&script_result, Some(&device_context))
+            .map_err(|e| anyhow::anyhow!("Template error: {e}"))?;
+
+        (svg, palette)
+    };
 
     // Render to PNG
     let png_bytes = content_pipeline
-        .render_png_from_svg(&svg_content, display_spec, &palette)
+        .render_png_from_svg(&svg_content, display_spec, &final_palette)
         .map_err(|e| anyhow::anyhow!("Render error: {e}"))?;
 
     // Write to file

@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Registration codes can be used interchangeably with MAC addresses for device identification
   - Registration code available as `device.registration_code` and `device.registration_code_hyphenated` in Lua and templates
   - Optionally set `registration.screen` to use a dedicated screen instead of the default
-- **CLI render command**: Added `--registration-code` option to test registration screen rendering
+- **CLI render command**: Added `--colors` option to override display palette and `--registration-code` now simulates enrollment (shows registration screen for unregistered devices)
 - **Ed25519 Authentication**: Optional cryptographic device authentication using Ed25519 signatures
   - New `/api/time` endpoint returns server timestamp for signature generation
   - Devices sign `timestamp_ms || public_key` and send `X-Public-Key`, `X-Signature`, `X-Timestamp` headers

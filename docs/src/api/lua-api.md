@@ -902,7 +902,8 @@ return {
     items = { ... }
   },
   refresh_rate = 300,  -- Seconds until next refresh
-  skip_update = false  -- Optional: skip rendering, just check back later
+  skip_update = false, -- Optional: skip rendering, just check back later
+  colors = { "#000000", "#FFFFFF", "#FF0000" }  -- Optional: override display palette
 }
 ```
 
@@ -935,6 +936,28 @@ In templates, access this data with the `data.` prefix:
 - **3600+**: Static or slow-changing content
 
 If `refresh_rate` is 0 or omitted, the screen's `default_refresh` from config is used.
+
+### colors
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `colors` | table or nil | Optional array of hex RGB color strings to override the display palette |
+
+When `colors` is returned by a script, it takes the **highest priority** in the color palette chain:
+
+1. **Script `colors`** (strongest) — returned in the script result table
+2. **Device config `colors`** — set per-device in `config.yaml`
+3. **Firmware `Colors` header** — sent by device hardware
+4. **System default** — `#000000,#555555,#AAAAAA,#FFFFFF`
+
+```lua
+-- Force a 3-color palette for this screen
+return {
+  data = { ... },
+  refresh_rate = 300,
+  colors = { "#000000", "#FFFFFF", "#FF0000" }
+}
+```
 
 ### skip_update
 

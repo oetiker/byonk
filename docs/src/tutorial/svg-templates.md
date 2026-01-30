@@ -244,6 +244,17 @@ Byonk supports variable fonts via CSS `font-variation-settings`:
 
 E-ink displays support a limited color palette. The default 4-grey OG palette is `#000000, #555555, #AAAAAA, #FFFFFF`, but color displays may have palettes like `#000000, #FFFFFF, #FF0000, #FFFF00`. The display palette is available in Lua via `layout.colors`.
 
+The palette follows a priority chain: **Lua script `colors` return** > **device config `colors`** > **firmware `Colors` header** > **system default**. You can override the palette per-device in `config.yaml`:
+
+```yaml
+devices:
+  "ABCDE-FGHJK":
+    screen: transit
+    colors: "#000000,#FFFFFF,#FF0000"
+```
+
+Or per-script by returning `colors` in the Lua result table (see [Lua API: colors](../api/lua-api.md#colors)).
+
 ### Using Palette Colors
 
 For the cleanest output, use colors from the display palette directly. Byonk will dither any color to the nearest palette color, but exact palette matches are preserved without dithering.

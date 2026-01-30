@@ -60,6 +60,9 @@ pub struct DeviceConfig {
     /// Parameters passed to the Lua script
     #[serde(default)]
     pub params: HashMap<String, serde_yaml::Value>,
+
+    /// Optional display color override (comma-separated hex, e.g. "#000000,#FFFFFF,#FF0000")
+    pub colors: Option<String>,
 }
 
 /// Device registration settings
@@ -253,6 +256,7 @@ mod tests {
             DeviceConfig {
                 screen: "custom".to_string(),
                 params: HashMap::new(),
+                colors: None,
             },
         );
 
@@ -282,6 +286,7 @@ mod tests {
             DeviceConfig {
                 screen: "test".to_string(),
                 params: HashMap::new(),
+                colors: None,
             },
         );
 
@@ -308,6 +313,7 @@ mod tests {
             DeviceConfig {
                 screen: "nonexistent".to_string(),
                 params: HashMap::new(),
+                colors: None,
             },
         );
 
@@ -453,6 +459,7 @@ registration:
             DeviceConfig {
                 screen: "custom".to_string(),
                 params: HashMap::new(),
+                colors: None,
             },
         );
 
@@ -488,6 +495,7 @@ registration:
             DeviceConfig {
                 screen: "test".to_string(),
                 params: HashMap::new(),
+                colors: None,
             },
         );
 
@@ -497,6 +505,7 @@ registration:
             DeviceConfig {
                 screen: "test".to_string(),
                 params: HashMap::new(),
+                colors: None,
             },
         );
 

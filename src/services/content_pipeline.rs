@@ -20,6 +20,10 @@ pub struct ScriptResult {
     pub template_path: std::path::PathBuf,
     /// Config params
     pub params: HashMap<String, serde_yaml::Value>,
+    /// Optional color palette override from Lua script (hex RGB strings)
+    pub script_colors: Option<Vec<String>>,
+    /// Optional color palette from device config (comma-separated hex string)
+    pub device_config_colors: Option<String>,
 }
 
 /// Device context passed to templates and Lua scripts
@@ -108,13 +112,19 @@ impl ContentPipeline {
                     let dc = EMPTY_DEVICE.get_or_init(|| crate::models::DeviceConfig {
                         screen: "default".to_string(),
                         params: HashMap::new(),
+                        colors: None,
                     });
                     (sc, dc)
                 })
             })
             .ok_or_else(|| ContentError::ScreenNotFound(device_mac.to_string()))?;
 
-        self.run_script_for_screen(screen_config, &device_config.params, device_ctx)
+        self.run_script_for_screen(
+            screen_config,
+            &device_config.params,
+            device_ctx,
+            device_config.colors.clone(),
+        )
     }
 
     /// Run script for a screen by name with custom params (without rendering)
@@ -133,7 +143,7 @@ impl ContentPipeline {
             .get(screen_name)
             .ok_or_else(|| ContentError::ScreenNotFound(screen_name.to_string()))?;
 
-        self.run_script_for_screen(screen, &params, device_ctx)
+        self.run_script_for_screen(screen, &params, device_ctx, None)
     }
 
     /// Run script for a specific screen (without rendering)
@@ -142,6 +152,7 @@ impl ContentPipeline {
         screen: &ScreenConfig,
         params: &HashMap<String, serde_yaml::Value>,
         device_ctx: Option<DeviceContext>,
+        device_config_colors: Option<String>,
     ) -> Result<ScriptResult, ContentError> {
         // Run the Lua script (no timestamp override for normal operation)
         let lua_result =
@@ -181,6 +192,8 @@ impl ContentPipeline {
                 .to_string(),
             template_path: screen.template.clone(),
             params: params.clone(),
+            script_colors: lua_result.colors,
+            device_config_colors,
         })
     }
 
@@ -427,6 +440,8 @@ impl ContentPipeline {
                 .to_string(),
             template_path: template_path.to_path_buf(),
             params: yaml_params,
+            script_colors: lua_result.colors,
+            device_config_colors: None,
         })
     }
 }

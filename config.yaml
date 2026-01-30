@@ -52,6 +52,7 @@ devices:
   # Example using registration code (read from device screen):
   # "ABCDE-FGHJK":
   #   screen: transit
+  #   colors: "#000000,#FFFFFF,#FF0000"  # Optional: override display palette
   #   params:
   #     station: "Olten"
   #

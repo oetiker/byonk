@@ -223,7 +223,7 @@ pub async fn handle_render(
     Query(query): Query<RenderQuery>,
 ) -> Response {
     // Resolve screen config: MAC takes precedence, then explicit screen
-    let (screen_config, resolved_params) = if let Some(ref mac) = query.mac {
+    let (screen_config, resolved_params, device_config_colors) = if let Some(ref mac) = query.mac {
         // Try MAC lookup first, then registration code lookup
         match state
             .config
@@ -242,7 +242,7 @@ pub async fn handle_render(
                             .map(|jv| (k.clone(), jv))
                     })
                     .collect();
-                (sc.clone(), Some(params))
+                (sc.clone(), Some(params), dc.colors.clone())
             }
             None => {
                 return (
@@ -257,7 +257,7 @@ pub async fn handle_render(
         }
     } else if let Some(ref screen_name) = query.screen {
         match state.config.screens.get(screen_name) {
-            Some(config) => (config.clone(), None),
+            Some(config) => (config.clone(), None, None),
             None => {
                 return (
                     StatusCode::NOT_FOUND,
@@ -298,8 +298,9 @@ pub async fn handle_render(
         }
     }
 
-    // Build palette from colors param, or default based on model
-    let default_palette: Vec<(u8, u8, u8)> = if let Some(ref colors_str) = query.colors {
+    // Build initial palette from colors param or model default (acts as "firmware header")
+    // Priority chain: script_colors > device_config_colors > query.colors > model default
+    let query_palette: Vec<(u8, u8, u8)> = if let Some(ref colors_str) = query.colors {
         crate::api::display::parse_colors_header(colors_str)
     } else if query.model == "x" {
         (0..16)
@@ -309,7 +310,14 @@ pub async fn handle_render(
             })
             .collect()
     } else {
-        vec![(0, 0, 0), (85, 85, 85), (170, 170, 170), (255, 255, 255)]
+        crate::api::display::parse_colors_header("#000000,#555555,#AAAAAA,#FFFFFF")
+    };
+
+    // Apply device config colors override (stronger than query/model default)
+    let default_palette: Vec<(u8, u8, u8)> = if let Some(ref config_colors) = device_config_colors {
+        crate::api::display::parse_colors_header(config_colors)
+    } else {
+        query_palette.clone()
     };
 
     // Create device context
@@ -353,12 +361,12 @@ pub async fn handle_render(
             .render_svg_from_script(&script_result, Some(&ctx))
             .map_err(|e| e.to_string())?;
 
-        Ok::<String, String>(svg)
+        Ok::<(String, Option<Vec<String>>), String>((svg, script_result.script_colors))
     })
     .await;
 
-    let svg = match result {
-        Ok(Ok(svg)) => svg,
+    let (svg, script_colors) = match result {
+        Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -381,12 +389,19 @@ pub async fn handle_render(
         }
     };
 
+    // Apply script colors override (strongest in priority chain)
+    let final_palette = if let Some(ref sc) = script_colors {
+        crate::api::display::parse_colors_header(&sc.join(","))
+    } else {
+        default_palette
+    };
+
     // Convert SVG to PNG with palette-aware dithering
     let display_spec = DisplaySpec::from_dimensions(width, height).unwrap_or(DisplaySpec::OG);
 
     match state
         .content_pipeline
-        .render_png_from_svg(&svg, display_spec, &default_palette)
+        .render_png_from_svg(&svg, display_spec, &final_palette)
     {
         Ok(png_bytes) => (
             StatusCode::OK,

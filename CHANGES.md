@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- **Color Palette Override**: Display colors can now be set per-device in `config.yaml` or per-script via Lua return value
+  - Priority chain: Lua script `colors` > device config `colors` > firmware `Colors` header > system default (`#000000,#555555,#AAAAAA,#FFFFFF`)
+  - Device config: add `colors: "#000000,#FFFFFF,#FF0000"` to any device entry in `config.yaml`
+  - Script return: add `colors = { "#000000", "#FFFFFF", "#FF0000" }` to the Lua return table
 - **Device Registration System**: Optional security feature to require explicit approval of new devices before they can display content
   - Enable with `registration.enabled: true` in config.yaml (enabled by default)
   - New devices show a 10-character registration code on screen

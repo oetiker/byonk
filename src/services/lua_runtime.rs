@@ -18,6 +18,8 @@ pub struct ScriptResult {
     pub refresh_rate: u32,
     /// If true, skip rendering and just tell device to check back later
     pub skip_update: bool,
+    /// Optional color palette override from script (hex RGB strings)
+    pub colors: Option<Vec<String>>,
 }
 
 /// Error type for Lua script execution
@@ -68,15 +70,27 @@ impl LuaRuntime {
         // Execute the script
         let result: Table = lua.load(&script_content).eval()?;
 
-        // Extract data, refresh_rate, and skip_update
+        // Extract data, refresh_rate, skip_update, and colors
         let data = self.table_to_json(&lua, result.get::<Table>("data")?)?;
         let refresh_rate: u32 = result.get("refresh_rate").unwrap_or(900);
         let skip_update: bool = result.get("skip_update").unwrap_or(false);
+
+        // Parse optional colors array from script return
+        let colors = result
+            .get::<Table>("colors")
+            .ok()
+            .map(|t| {
+                (1..=t.raw_len())
+                    .filter_map(|i| t.raw_get::<String>(i).ok())
+                    .collect::<Vec<String>>()
+            })
+            .filter(|v| !v.is_empty());
 
         Ok(ScriptResult {
             data,
             refresh_rate,
             skip_update,
+            colors,
         })
     }
 

@@ -289,12 +289,14 @@ pub async fn handle_display<R: DeviceRegistry>(
     device.last_seen = chrono::Utc::now();
     registry.upsert(device.clone()).await?;
 
-    // Parse color palette from headers
-    let colors_str = headers.get_str("Colors").unwrap_or(DEFAULT_COLORS);
-    let palette = parse_colors_header(colors_str);
-    let color_hex = colors_to_hex_strings(&palette);
+    // Parse color palette from headers (firmware Colors header)
+    let header_colors_str = headers.get_str("Colors");
+    // Initial palette: firmware header → system default
+    let initial_colors_str = header_colors_str.unwrap_or(DEFAULT_COLORS);
+    let initial_palette = parse_colors_header(initial_colors_str);
+    let initial_color_hex = colors_to_hex_strings(&initial_palette);
 
-    // Build device context for script
+    // Build device context for script (using initial palette before config/script overrides)
     let device_ctx = DeviceContext {
         mac: device.device_id.to_string(),
         battery_voltage: device.battery_voltage,
@@ -306,7 +308,7 @@ pub async fn handle_display<R: DeviceRegistry>(
 
         registration_code: Some(api_key.registration_code()),
         board: headers.get_str("Board").map(|s| s.to_string()),
-        colors: Some(color_hex),
+        colors: Some(initial_color_hex),
     };
 
     // Run script, render SVG, and cache the result (PNG rendering happens in /api/image)
@@ -315,13 +317,34 @@ pub async fn handle_display<R: DeviceRegistry>(
     let mac = device_mac.clone();
     let cache = content_cache.clone();
     let ctx = device_ctx.clone();
-    let palette_for_cache = palette;
+    let header_colors_for_chain = header_colors_str.map(|s| s.to_string());
 
     // Run in spawn_blocking because Lua scripts use blocking HTTP requests
     let (refresh_rate, skip_update, content_hash, error_msg) =
         tokio::task::spawn_blocking(move || {
+            // Helper to resolve the final palette using the priority chain:
+            // script_colors > device_config_colors > firmware header > system default
+            let resolve_palette =
+                |result: &crate::services::content_pipeline::ScriptResult| -> Vec<(u8, u8, u8)> {
+                    if let Some(ref script_colors) = result.script_colors {
+                        // Strongest: Lua script returned colors
+                        let hex = script_colors.join(",");
+                        parse_colors_header(&hex)
+                    } else if let Some(ref config_colors) = result.device_config_colors {
+                        // Next: device config colors
+                        parse_colors_header(config_colors)
+                    } else if let Some(ref hdr) = header_colors_for_chain {
+                        // Next: firmware Colors header
+                        parse_colors_header(hdr)
+                    } else {
+                        // System default
+                        parse_colors_header(DEFAULT_COLORS)
+                    }
+                };
+
             match pipeline.run_script_for_device(&mac, Some(ctx.clone())) {
                 Ok(result) => {
+                    let palette = resolve_palette(&result);
                     if result.skip_update {
                         (result.refresh_rate, true, None, None)
                     } else {
@@ -335,7 +358,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                                     width,
                                     height,
                                 )
-                                .with_colors(Some(palette_for_cache.clone()));
+                                .with_colors(Some(palette));
                                 let hash = cached.content_hash.clone();
                                 cache.store(cached);
                                 (result.refresh_rate, false, Some(hash), None)
@@ -350,7 +373,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                                     width,
                                     height,
                                 )
-                                .with_colors(Some(palette_for_cache.clone()));
+                                .with_colors(Some(palette));
                                 let hash = cached.content_hash.clone();
                                 cache.store(cached);
                                 (60, false, Some(hash), Some(error_msg))
@@ -359,11 +382,15 @@ pub async fn handle_display<R: DeviceRegistry>(
                     }
                 }
                 Err(e) => {
-                    // Script error - cache error SVG
+                    // Script error - cache error SVG (use header or default palette)
+                    let fallback_palette = header_colors_for_chain
+                        .as_deref()
+                        .map(parse_colors_header)
+                        .unwrap_or_else(|| parse_colors_header(DEFAULT_COLORS));
                     let error_msg = e.to_string();
                     let error_svg = pipeline.render_error_svg(&error_msg);
                     let cached = CachedContent::new(error_svg, "_error".to_string(), width, height)
-                        .with_colors(Some(palette_for_cache.clone()));
+                        .with_colors(Some(fallback_palette));
                     let hash = cached.content_hash.clone();
                     cache.store(cached);
                     (60, false, Some(hash), Some(error_msg))
@@ -465,9 +492,9 @@ pub async fn handle_image<R: DeviceRegistry>(
         "Rendering PNG from cached SVG"
     );
 
-    // Default to 4-grey palette if colors not stored (shouldn't happen, but be safe)
-    let default_palette = vec![(0, 0, 0), (85, 85, 85), (170, 170, 170), (255, 255, 255)];
-    let palette = cached.colors.as_deref().unwrap_or(&default_palette);
+    // Colors are always stored in cache by the display handler
+    let fallback_palette = parse_colors_header(DEFAULT_COLORS);
+    let palette = cached.colors.as_deref().unwrap_or(&fallback_palette);
     let png_bytes = content_pipeline.render_png_from_svg(&cached.rendered_svg, spec, palette)?;
 
     tracing::info!(size_bytes = png_bytes.len(), "Image rendered and served");

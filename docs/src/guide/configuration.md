@@ -101,6 +101,104 @@ default_screen: default
 
 If omitted, unknown devices receive an error response.
 
+## Device Registration
+
+Byonk supports optional device registration for enhanced security. When enabled, new devices must be explicitly approved before they can display content.
+
+```yaml
+registration:
+  enabled: true
+
+devices:
+  # Register using the code shown on the device screen
+  "ABCDE-FGHJK":
+    screen: transit
+    params:
+      station: "Olten"
+```
+
+### How It Works
+
+1. **New device connects** - Shows the default screen with a 10-character registration code
+2. **Admin reads code** - The code is displayed in 2x5 format on the e-ink screen
+3. **Admin adds code to devices** - Add the code (hyphenated format) to the `devices` section
+4. **Device refreshes** - Now shows the configured screen
+
+![Registration screen showing device code](../images/registration.png)
+
+**Note:** The registration code is derived from the device's API key via a hash function. This means:
+- Devices keep their existing API key (including TRMNL-issued keys) - no WiFi reset required
+- The same API key always produces the same registration code
+- The config shows only the derived code, not the actual API key
+
+### Registration Settings
+
+| Property | Required | Description |
+|----------|----------|-------------|
+| `enabled` | No | Enable device registration (default: true) |
+| `screen` | No | Custom screen for registration (default: uses default_screen) |
+
+### Registration Code Format
+
+- 10 uppercase letters displayed in 2 rows of 5: `A B C D E` / `F G H J K`
+- Written in config as hyphenated: `"ABCDE-FGHJK"`
+- Uses unambiguous letters only (excludes I, L, O)
+- Can be used interchangeably with MAC addresses in the `devices` section
+- Deterministic: same API key always produces the same code
+
+### Example
+
+```yaml
+registration:
+  enabled: true
+
+devices:
+  # By registration code (read from device screen)
+  "ABCDE-FGHJK":
+    screen: transit
+    params:
+      station: "Olten"
+
+  # By MAC address (found in logs)
+  "AA:BB:CC:DD:EE:FF":
+    screen: weather
+```
+
+### Custom Registration Screen
+
+The registration code is available to your default screen as `device.registration_code` and `device.registration_code_hyphenated`. Your default.svg can conditionally show it:
+
+```svg
+{% if device.registration_code %}
+<text>Register: {{ device.registration_code_hyphenated }}</text>
+{% endif %}
+```
+
+See [Device Mapping](../concepts/device-mapping.md#device-registration-security-feature) for more details.
+
+## Authentication Mode
+
+Byonk supports optional Ed25519 cryptographic authentication for devices. When enabled, devices use Ed25519 signatures instead of plain API keys.
+
+```yaml
+auth_mode: ed25519  # or "api_key" (default)
+```
+
+The `auth_mode` setting controls what `/api/setup` tells devices. The `/api/display` endpoint always accepts both authentication methods, so existing devices continue to work during migration.
+
+### Ed25519 Flow
+
+1. Device calls `GET /api/time` to get the server timestamp
+2. Device signs `timestamp_ms (8 bytes BE) || public_key (32 bytes)` with its Ed25519 private key
+3. Device sends `X-Public-Key`, `X-Signature`, `X-Timestamp` headers along with the normal `Access-Token` and `ID` headers
+4. Server verifies the signature and checks the timestamp is within ±60 seconds
+
+### Settings
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `auth_mode` | `api_key` | Authentication mode advertised to devices (`api_key` or `ed25519`) |
+
 ## Hot Reloading
 
 Byonk loads Lua scripts and SVG templates fresh on every request. You can edit these files without restarting the server.

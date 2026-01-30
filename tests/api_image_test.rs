@@ -10,7 +10,7 @@ async fn test_image_retrieval() {
     let app = TestApp::new();
 
     // First get display to generate content
-    let (api_key, _) = app.register_device(macs::GRAY_DEVICE).await;
+    let api_key = app.register_device(macs::GRAY_DEVICE).await;
     let headers = fixtures::display_headers(macs::GRAY_DEVICE, &api_key);
     let display_response = app
         .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
@@ -47,7 +47,7 @@ async fn test_image_without_png_extension() {
     let app = TestApp::new();
 
     // Generate content first
-    let (api_key, _) = app.register_device(macs::GRAY_DEVICE).await;
+    let api_key = app.register_device(macs::GRAY_DEVICE).await;
     let headers = fixtures::display_headers(macs::GRAY_DEVICE, &api_key);
     let display_response = app
         .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
@@ -65,7 +65,7 @@ async fn test_image_without_png_extension() {
 async fn test_image_content_type_header() {
     let app = TestApp::new();
 
-    let (api_key, _) = app.register_device(macs::GRAY_DEVICE).await;
+    let api_key = app.register_device(macs::GRAY_DEVICE).await;
     let headers = fixtures::display_headers(macs::GRAY_DEVICE, &api_key);
     let display_response = app
         .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
@@ -93,7 +93,7 @@ async fn test_image_content_type_header() {
 async fn test_image_different_screen_sizes() {
     let app = TestApp::new();
 
-    let (api_key, _) = app.register_device(macs::GRAY_DEVICE).await;
+    let api_key = app.register_device(macs::GRAY_DEVICE).await;
 
     // Request with different sizes and verify both work
     for (width, height) in [(800, 480), (1872, 1404)] {

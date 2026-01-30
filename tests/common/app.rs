@@ -9,7 +9,8 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 use byonk::assets::AssetLoader;
-use byonk::server::{build_router, create_app_state, AppState};
+use byonk::models::AppConfig;
+use byonk::server::{build_router, create_app_state, create_app_state_with_config, AppState};
 use byonk::services::{ContentCache, DeviceRegistry, InMemoryRegistry};
 
 /// Test application with router and direct access to services
@@ -33,6 +34,28 @@ impl TestApp {
         let content_cache = state.content_cache.clone();
 
         // Build router using shared server module (same as production)
+        let router = build_router(state);
+
+        Self {
+            router,
+            registry,
+            content_cache,
+        }
+    }
+
+    /// Create a new test application with registration disabled
+    pub fn new_without_registration() -> Self {
+        let asset_loader = Arc::new(AssetLoader::new(None, None, None));
+
+        // Load config and disable registration
+        let mut config = AppConfig::load_from_assets(&asset_loader);
+        config.registration.enabled = false;
+
+        let state = create_app_state_with_config(asset_loader, Arc::new(config))
+            .expect("Failed to create app state");
+
+        let registry = state.registry.clone();
+        let content_cache = state.content_cache.clone();
         let router = build_router(state);
 
         Self {
@@ -104,16 +127,14 @@ impl TestApp {
         }
     }
 
-    /// Register a device and return (api_key, friendly_id)
-    pub async fn register_device(&self, mac: &str) -> (String, String) {
+    /// Register a device and return the api_key
+    pub async fn register_device(&self, mac: &str) -> String {
         let headers = [("ID", mac), ("FW-Version", "1.0.0"), ("Model", "og")];
         let response = self.get_with_headers("/api/setup", &headers).await;
         assert_eq!(response.status, StatusCode::OK);
 
         let json: serde_json::Value = response.json();
-        let api_key = json["api_key"].as_str().unwrap().to_string();
-        let friendly_id = json["friendly_id"].as_str().unwrap().to_string();
-        (api_key, friendly_id)
+        json["api_key"].as_str().unwrap().to_string()
     }
 }
 

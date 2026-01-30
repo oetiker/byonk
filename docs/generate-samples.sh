@@ -71,6 +71,14 @@ render_screen "TE:ST:GR:AY:00:00" "graytest"
 render_screen "00:00:00:00:00:00" "default" --battery=4.12 --rssi=-65
 render_screen "TE:ST:HE:LL:00:00" "hello"
 
+# 6-color palette samples (simulating a color e-ink display)
+PALETTE_6CLR="#000000,#FFFFFF,#00FF00,#0000FF,#FF0000,#FFFF00"
+render_screen "TE:ST:GR:AY:00:00" "graytest-6color" --colors="$PALETTE_6CLR"
+render_screen "00:00:00:00:00:00" "default-6color" --battery=4.12 --rssi=-65 --colors="$PALETTE_6CLR"
+
+# Registration/enrollment screen (unregistered device with a fake code)
+render_screen "UN:RE:GI:ST:ER:ED" "registration" --registration-code=ABCDEFGHJK --battery=4.12 --rssi=-65
+
 echo ""
 echo "Generated images:"
 ls -la "$OUTPUT_DIR/"

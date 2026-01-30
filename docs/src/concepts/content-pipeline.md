@@ -17,8 +17,8 @@ flowchart TD
 | **Lua Script** | API endpoints, params | Fetch data, parse JSON/HTML | Structured data |
 | **SVG Template** | Data + device context | Tera templating, layout | SVG document |
 | **Cache** | SVG document | Hash content, store | Cached SVG + content hash |
-| **Renderer** | Cached SVG | Rasterize, grayscale, dither | Pixel buffer |
-| **E-ink PNG** | Pixel buffer | Quantize to 4 levels, encode | 2-bit PNG |
+| **Renderer** | Cached SVG | Rasterize, dither to palette | Pixel buffer |
+| **E-ink PNG** | Pixel buffer | Encode as greyscale or indexed PNG | Palette PNG |
 
 ### Content Change Detection
 
@@ -207,21 +207,11 @@ SVGs are scaled to fit the display while maintaining aspect ratio:
 
 The image is centered if the aspect ratio doesn't match exactly.
 
-### Grayscale Conversion
+### Palette-Aware Dithering
 
-Colors are converted to grayscale using the ITU-R BT.709 formula:
+E-ink displays support a limited color palette (typically 4 grey levels, but also color palettes like black/white/red/yellow). Dithering creates the illusion of more shades by distributing quantization error to neighboring pixels.
 
-```
-Y = 0.2126 × R + 0.7152 × G + 0.0722 × B
-```
-
-This matches human perception of brightness.
-
-## Stage 4: Blue-Noise Dithering
-
-E-ink displays only support 4 gray levels. Dithering creates the illusion of more shades.
-
-Byonk uses **blue-noise-modulated error diffusion** dithering, an improved algorithm that reduces visible "worm" artifacts while preserving sharp edges for UI content.
+Byonk uses **blue-noise-modulated error diffusion** dithering in RGB color space, an improved algorithm that reduces visible "worm" artifacts while preserving sharp edges for UI content. Pixels that exactly match a palette color are preserved without dithering.
 
 ### How It Works
 
@@ -232,12 +222,13 @@ The algorithm improves upon standard Floyd-Steinberg in three ways:
 3. **Energy-preserving error**: Error is computed from the un-noised value to maintain correct brightness
 
 ```
-For each pixel:
-  1. Get blue noise value for this position (64×64 tiled pattern)
-  2. Add noise offset to pixel value (modulates threshold)
-  3. Quantize to nearest level: [0, 85, 170, 255]
-  4. Calculate error from ORIGINAL value (not noised)
-  5. Distribute error to neighbors (direction depends on row):
+For each pixel (in RGB):
+  1. Skip if pixel exactly matches a palette color
+  2. Get blue noise value for this position (64×64 tiled pattern)
+  3. Add noise offset to RGB channels (modulates threshold)
+  4. Find nearest palette color by Euclidean distance in RGB
+  5. Calculate error from ORIGINAL value (not noised) — preserves energy
+  6. Distribute error to neighbors (direction depends on row):
 
      Left-to-right:      Right-to-left:
          X   7/16        7/16   X
@@ -248,21 +239,13 @@ For each pixel:
 
 Standard Floyd-Steinberg can produce visible "worm" patterns in mid-gray areas. Blue noise has a frequency distribution that appears random to the eye but lacks low-frequency components, producing more pleasing results on e-ink displays.
 
-### Gray Levels
-
-| Level | RGB Value | Appearance |
-|-------|-----------|------------|
-| 0 | (0, 0, 0) | Black |
-| 1 | (85, 85, 85) | Dark gray |
-| 2 | (170, 170, 170) | Light gray |
-| 3 | (255, 255, 255) | White |
-
 ### Output Format
 
-The final PNG is:
+The final PNG format is chosen automatically based on the palette:
 
-- **2-bit indexed color** (4 colors in palette)
-- **4 pixels per byte** for compact size
+- **Grey palette (≤4 colors)**: Native 2-bit greyscale PNG (4 pixels per byte)
+- **Grey palette (5-16 colors)**: Native 4-bit greyscale PNG (2 pixels per byte)
+- **Color palette**: Indexed PNG with PLTE chunk (bit depth chosen by palette size)
 - **Size validated** against device limits (90KB for OG, 750KB for X)
 
 ## Error Handling

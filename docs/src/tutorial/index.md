@@ -43,12 +43,12 @@ screens/floerli.lua   - HTML scraping example
 screens/floerli.svg   - Shows current/upcoming bookings
 ```
 
-### Gray Level Test
-Demonstrates the 4 gray levels available on e-ink.
+### Display Color Test
+Demonstrates the display palette colors available on e-ink.
 
 ```
-screens/graytest.lua  - Minimal script
-screens/graytest.svg  - Four gray rectangles
+screens/graytest.lua  - Adapts to device palette
+screens/graytest.svg  - Shows palette color swatches and dithering test
 ```
 
 ## Quick Reference

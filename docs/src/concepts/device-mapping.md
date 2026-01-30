@@ -172,11 +172,179 @@ If no `default_screen` is set and a device isn't in the config, it receives an e
 
 Byonk automatically registers new devices on their first `/api/setup` call:
 
-1. Generates a random API key
-2. Generates a friendly ID
+1. Generates a random API key (32-character hex string)
+2. Derives a registration code from the key
 3. Stores device in registry
 
 No pre-configuration is needed - just add the device to `config.yaml` to assign a custom screen.
+
+## Device Registration (Security Feature)
+
+For enhanced security, Byonk supports **device registration** - requiring new devices to be explicitly approved before showing content.
+
+### How It Works
+
+1. When registration is enabled, unrecognized devices display a **10-character registration code** (in 2x5 format) instead of actual content
+2. The admin adds this code to the `devices` section in `config.yaml`
+3. On the next refresh, the device shows its configured content
+
+### Enabling Registration
+
+Add the `registration` section to your `config.yaml`:
+
+```yaml
+registration:
+  enabled: true
+
+devices:
+  # Register devices by their 10-character code (shown on screen)
+  # Use hyphenated format: XXXXX-XXXXX
+  "ABCDE-FGHJK":
+    screen: transit
+    params:
+      station: "Olten"
+
+  # You can still use MAC addresses too
+  "AA:BB:CC:DD:EE:FF":
+    screen: weather
+```
+
+### Registration Screen
+
+When registration is enabled, unregistered devices show the **default screen** with the registration code available. This lets you customize the registration experience using your existing default screen.
+
+The registration code is available via:
+- **Lua**: `device.registration_code` and `device.registration_code_hyphenated`
+- **SVG template**: `{{ device.registration_code }}` and `{{ device.registration_code_hyphenated }}`
+
+Example `default.lua` that shows the code when present:
+```lua
+return {
+  data = {
+    registration_code = device.registration_code_hyphenated,
+    show_registration = device.registration_code ~= nil
+  },
+  refresh_rate = device.registration_code and 300 or 900
+}
+```
+
+Example in `default.svg`:
+```svg
+{% if device.registration_code %}
+<text x="400" y="200" text-anchor="middle" font-size="24">
+  Register this device:
+</text>
+<text x="400" y="260" text-anchor="middle" font-size="48" font-weight="bold">
+  {{ device.registration_code_hyphenated }}
+</text>
+{% else %}
+<!-- Normal default screen content -->
+{% endif %}
+```
+
+### Custom Registration Screen
+
+Optionally, you can specify a dedicated registration screen instead of using the default:
+
+```yaml
+registration:
+  enabled: true
+  screen: my_registration  # Optional: use a specific screen instead of default
+
+screens:
+  my_registration:
+    script: registration.lua
+    template: registration.svg
+```
+
+If neither `registration.screen` nor `default_screen` is configured, a built-in registration screen is shown as a fallback.
+
+### Registration Flow
+
+```mermaid
+sequenceDiagram
+    participant Device
+    participant Byonk
+    participant Admin
+
+    Device->>Byonk: GET /api/setup
+    Byonk-->>Device: {api_key: "..."}
+    Note right of Byonk: Returns existing key<br/>or generates new one
+
+    Device->>Byonk: GET /api/display
+    Byonk-->>Device: Registration screen<br/>showing derived code
+    Note right of Byonk: Code derived from<br/>API key hash
+    Note right of Device: Shows A B C D E<br/>F G H J K
+
+    Admin->>Admin: Reads code from device
+    Admin->>Admin: Adds ABCDE-FGHJK to devices
+
+    Device->>Byonk: GET /api/display
+    Byonk-->>Device: Normal content
+    Note right of Device: Device is now registered
+```
+
+### Registration Code Format
+
+The 10-letter registration code is derived from the API key using a SHA256 hash:
+
+- Uses only unambiguous uppercase letters (excludes I, L, O)
+- Displays in 2x5 format for easy reading from e-ink
+- Written as `ABCDE-FGHJK` in config (hyphenated for readability)
+- **Deterministic**: same API key always produces the same code
+- Works with any API key format (TRMNL, Byonk, custom)
+
+### Code vs MAC Address
+
+You can use either the registration code or MAC address to identify devices:
+
+```yaml
+devices:
+  # By registration code (read from device screen)
+  "ABCDE-FGHJK":
+    screen: transit
+
+  # By MAC address (found in logs or router)
+  "94:A9:90:8C:6D:18":
+    screen: weather
+```
+
+The registration code is often more convenient since it's displayed on the device screen.
+
+### Migrating from Other Servers
+
+Devices previously connected to a different server (e.g., TRMNL cloud) work seamlessly with Byonk:
+
+1. Device connects with its existing TRMNL-issued API key
+2. Byonk derives a registration code from that key
+3. Device shows the registration screen with its code
+4. No WiFi reset or device reconfiguration needed!
+
+This is possible because the registration code is derived from any API key format, not embedded in a Byonk-specific key format.
+
+### Registration vs Default Screen
+
+When registration is **enabled**, devices not in config see the registration screen instead of the default screen. Once you add a device's code to `config.devices`, it becomes registered and shows its configured screen.
+
+When registration is **disabled** (or not configured), devices not in config see the default screen as usual.
+
+| Registration | Device in config | Screen shown |
+|--------------|------------------|--------------|
+| Enabled | No | Registration screen |
+| Enabled | Yes | Configured screen |
+| Disabled | No | Default screen |
+| Disabled | Yes | Configured screen |
+
+**Note:** When registration is enabled, the default screen is effectively bypassed for unknown devices.
+
+### Disabling Registration
+
+Registration is enabled by default. To allow any device to connect without registration, set `enabled: false`:
+
+```yaml
+registration:
+  enabled: false
+```
 
 ## Multiple Screens per Device?
 

@@ -33,12 +33,18 @@
   <text x="{{ data.center_x }}" y="{{ data.title_y }}" font-size="{{ data.font_hero }}" class="font-black" fill="#ffffff" opacity="0.8" filter="url(#shadow)">BYONK</text>
   <text x="{{ data.center_x }}" y="{{ data.tagline_y }}" font-size="{{ data.font_tagline }}" class="font-semibold" fill="#ffffff" opacity="0.8" filter="url(#shadow)">Bring Your Own Ink</text>
 
-  <!-- Dynamic grayscale swatches - pure colors, no filter -->
-  {% for grey in data.greys %}
-  <rect x="{{ data.swatch_x }}" y="{{ grey.y }}" width="{{ data.swatch_width }}" height="{{ grey.height }}" fill="{{ grey.color }}"/>
+  <!-- Registration code box (only shown when device needs registration) -->
+  {% if device.registration_code %}
+  <rect x="{{ data.reg_box_x }}" y="{{ data.reg_box_y }}" width="{{ data.reg_box_width }}" height="{{ data.reg_box_height }}" fill="#000000" opacity="0.75"/>
+  <text x="{{ data.center_x }}" y="{{ data.reg_text_y }}" font-size="{{ data.font_reg_code }}" class="font-bold" fill="#ffffff">{{ device.registration_code_hyphenated }}</text>
+  {% endif %}
+
+  <!-- Display palette color swatches -->
+  {% for swatch in data.swatches %}
+  <rect x="{{ data.swatch_x }}" y="{{ swatch.y }}" width="{{ data.swatch_width }}" height="{{ swatch.height }}" fill="{{ swatch.color }}"/>
   {% endfor %}
-  {% for grey in data.greys %}
-  <text x="{{ data.swatch_center_x }}" y="{{ grey.text_y }}" font-size="{{ data.font_swatch }}" fill="{{ grey.text_color }}">{{ grey.value }}</text>
+  {% for swatch in data.swatches %}
+  <text x="{{ data.swatch_center_x }}" y="{{ swatch.text_y }}" font-size="{{ data.font_swatch }}" fill="{{ swatch.text_color }}">{{ swatch.label }}</text>
   {% endfor %}
 
   <!-- Vertical smooth gradient bar - demonstrates dithering -->

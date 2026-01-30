@@ -20,8 +20,6 @@ async fn test_complete_device_flow() {
 
     let setup_json: serde_json::Value = setup_response.json();
     let api_key = setup_json["api_key"].as_str().unwrap();
-    let friendly_id = setup_json["friendly_id"].as_str().unwrap();
-    assert!(!friendly_id.is_empty());
 
     // Step 2: Request display content
     let display_headers = fixtures::display_headers(macs::HELLO_DEVICE, api_key);
@@ -57,7 +55,7 @@ async fn test_multiple_devices_different_screens() {
     let mut image_hashes = Vec::new();
 
     for (mac, _screen_name) in devices {
-        let (api_key, _) = app.register_device(mac).await;
+        let api_key = app.register_device(mac).await;
 
         let headers = fixtures::display_headers(mac, &api_key);
         let response = app
@@ -79,10 +77,11 @@ async fn test_multiple_devices_different_screens() {
 
 #[tokio::test]
 async fn test_device_metadata_persists() {
-    let app = TestApp::new();
+    // TEST_DEVICE is not in config.devices, so use app without registration
+    let app = TestApp::new_without_registration();
 
     // Register device
-    let (api_key, _) = app.register_device(macs::TEST_DEVICE).await;
+    let api_key = app.register_device(macs::TEST_DEVICE).await;
 
     // Make multiple requests updating metadata
     let voltages = [4.20, 4.10, 3.95, 3.80];
@@ -117,7 +116,7 @@ async fn test_device_metadata_persists() {
 async fn test_content_cache_reuse() {
     let app = TestApp::new();
 
-    let (api_key, _) = app.register_device(macs::GRAY_DEVICE).await;
+    let api_key = app.register_device(macs::GRAY_DEVICE).await;
     let headers = fixtures::display_headers(macs::GRAY_DEVICE, &api_key);
     let headers_ref = fixtures::as_str_pairs(&headers);
 
@@ -204,7 +203,7 @@ async fn test_connection_close_header() {
     );
 
     // Test display endpoint
-    let (api_key, _) = app.register_device(macs::GRAY_DEVICE).await;
+    let api_key = app.register_device(macs::GRAY_DEVICE).await;
     let display_headers = fixtures::display_headers(macs::GRAY_DEVICE, &api_key);
     let response = app
         .get_with_headers("/api/display", &fixtures::as_str_pairs(&display_headers))

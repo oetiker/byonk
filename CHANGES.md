@@ -9,9 +9,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- **Color Palette Override**: Display colors can now be set per-device in `config.yaml` or per-script via Lua return value
+  - Priority chain: Lua script `colors` > device config `colors` > firmware `Colors` header > system default (`#000000,#555555,#AAAAAA,#FFFFFF`)
+  - Device config: add `colors: "#000000,#FFFFFF,#FF0000"` to any device entry in `config.yaml`
+  - Script return: add `colors = { "#000000", "#FFFFFF", "#FF0000" }` to the Lua return table
+- **Device Registration System**: Optional security feature to require explicit approval of new devices before they can display content
+  - Enable with `registration.enabled: true` in config.yaml (enabled by default)
+  - New devices show a 10-character registration code on screen
+  - Registration codes are derived from a SHA256 hash of the device's API key (deterministic)
+  - Works with any API key format (TRMNL-issued, custom, etc.) - no WiFi reset required
+  - Add the code to `config.devices` section using hyphenated format (e.g., `"ABCDE-FGHJK"`)
+  - Registration codes can be used interchangeably with MAC addresses for device identification
+  - Registration code available as `device.registration_code` and `device.registration_code_hyphenated` in Lua and templates
+  - Optionally set `registration.screen` to use a dedicated screen instead of the default
+- **CLI render command**: Added `--colors` option to override display palette and `--registration-code` now simulates enrollment (shows registration screen for unregistered devices)
+- **Ed25519 Authentication**: Optional cryptographic device authentication using Ed25519 signatures
+  - New `/api/time` endpoint returns server timestamp for signature generation
+  - Devices sign `timestamp_ms || public_key` and send `X-Public-Key`, `X-Signature`, `X-Timestamp` headers
+  - Server verifies signature and checks timestamp is within ±60 seconds
+  - `/api/display` accepts both Ed25519 and API key authentication (dual-accept)
+  - Set `auth_mode: ed25519` in config.yaml to advertise Ed25519 mode to devices via `/api/setup`
+- **Palette-Aware Color Support**: Full support for color and multi-grey e-ink displays
+  - Parse `Colors` and `Board` HTTP headers from firmware for display palette detection
+  - Palette-aware blue-noise-modulated Floyd-Steinberg dithering in RGB space
+  - BT.709 luminance pre-conversion for greyscale palettes (perceptually correct grey mapping)
+  - Smart PNG format: greyscale palettes produce native greyscale PNG; color palettes produce indexed PNG with PLTE
+  - Palette exposed to Lua as `layout.colors`, `layout.color_count`, `device.colors`, `device.board`
+  - Supports arbitrary palettes: 2-color, 3-color, 4-grey, 6-color, 16-grey, etc.
+- **Dev UI Improvements**:
+  - Device model dropdown with all known boards and their color palettes
+  - Colors input field replaces grey levels selector
+  - Device ID field accepts both MAC addresses and registration codes
+  - 3D device bezel frame with embossed "BYONK — {device name}" label
+  - Magnification lens on hover for all screen models (was X-only)
+  - Sunken display effect with inset shadow
+
 ### Changed
 
+- `DisplaySpec::from_dimensions` now uses exact requested dimensions instead of snapping to OG/X presets
+- `layout.grey_levels` replaced by `layout.colors` and `layout.color_count` in Lua API
+- OG display max PNG size increased from 90KB to 200KB to accommodate color indexed PNGs
+- Default and graytest screens use luminance-based text contrast for palette swatches
+- Small screen (< 400px width) adaptations: doubled title/tagline/footer sizes
+
 ### Fixed
+
+- i16 overflow in dither error diffusion (now uses i32 with clamping)
+- graytest.svg missing `value` field in bar data
 
 ## 0.9.0 - 2026-01-19
 

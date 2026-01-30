@@ -240,41 +240,58 @@ Byonk supports variable fonts via CSS `font-variation-settings`:
 
 > **Note:** Place custom font files (e.g., `Outfit-Variable.ttf`) in the `fonts/` directory.
 
-## Colors and Grayscale
+## Colors and Palettes
 
-E-ink displays only show 4 gray levels. Design with this in mind:
+E-ink displays support a limited color palette. The default 4-grey OG palette is `#000000, #555555, #AAAAAA, #FFFFFF`, but color displays may have palettes like `#000000, #FFFFFF, #FF0000, #FFFF00`. The display palette is available in Lua via `layout.colors`.
 
-### Recommended Colors
+The palette follows a priority chain: **Lua script `colors` return** > **device config `colors`** > **firmware `Colors` header** > **system default**. You can override the palette per-device in `config.yaml`:
 
-```svg
-<style>
-  .black { fill: rgb(0, 0, 0); }       /* Level 0 - Black */
-  .dark { fill: rgb(85, 85, 85); }     /* Level 1 - Dark gray */
-  .light { fill: rgb(170, 170, 170); } /* Level 2 - Light gray */
-  .white { fill: rgb(255, 255, 255); } /* Level 3 - White */
-</style>
+```yaml
+devices:
+  "ABCDE-FGHJK":
+    screen: transit
+    colors: "#000000,#FFFFFF,#FF0000"
 ```
 
-### Testing Grayscale
+Or per-script by returning `colors` in the Lua result table (see [Lua API: colors](../api/lua-api.md#colors)).
 
-The included `graytest.svg` demonstrates all 4 levels:
+### Using Palette Colors
 
-```svg
-<rect x="0" y="0" width="200" height="480" fill="rgb(0,0,0)"/>
-<rect x="200" y="0" width="200" height="480" fill="rgb(85,85,85)"/>
-<rect x="400" y="0" width="200" height="480" fill="rgb(170,170,170)"/>
-<rect x="600" y="0" width="200" height="480" fill="rgb(255,255,255)"/>
+For the cleanest output, use colors from the display palette directly. Byonk will dither any color to the nearest palette color, but exact palette matches are preserved without dithering.
+
+```lua
+-- In your Lua script
+local colors = layout.colors  -- e.g., {"#000000", "#555555", "#AAAAAA", "#FFFFFF"}
 ```
 
-**Rendered output:**
+```svg
+<!-- Use palette colors for crisp rendering -->
+{% for swatch in data.swatches %}
+<rect x="{{ swatch.x }}" width="{{ swatch.width }}" height="100" fill="{{ swatch.color }}"/>
+{% endfor %}
+```
 
-![Grayscale test showing 4 levels](../images/graytest.png)
+### Testing Display Colors
+
+The included `graytest` screen adapts to the device palette and shows all available colors as swatches with gradient and dithering tests.
+
+**4-grey palette (TRMNL OG default):**
+
+![Display color test — 4 grey](../images/graytest.png)
+
+**6-color palette (color e-ink display):**
+
+![Display color test — 6 color](../images/graytest-6color.png)
+
+The default screen also adapts to the palette:
+
+![Default screen — 6 color](../images/default-6color.png)
 
 ### Avoid
 
 - **Gradients** - Convert to dithered patterns (may look noisy)
-- **Subtle color differences** - May become indistinguishable
-- **Many gray levels** - Only 4 will render
+- **Subtle color differences** - May become indistinguishable on limited palettes
+- **Colors not in palette** - Will be dithered to nearest match
 
 ## Layout Patterns
 

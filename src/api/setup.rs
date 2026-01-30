@@ -9,7 +9,7 @@ use utoipa::ToSchema;
 
 use super::headers::HeaderMapExt;
 use crate::error::ApiError;
-use crate::models::{Device, DeviceId, DeviceModel};
+use crate::models::{AppConfig, Device, DeviceId, DeviceModel};
 use crate::services::DeviceRegistry;
 
 /// Response from the /api/setup endpoint
@@ -20,20 +20,22 @@ pub struct SetupResponse {
     /// API key for authenticating future requests
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
-    /// Human-readable device identifier
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub friendly_id: Option<String>,
     /// Optional URL to an initial image to display
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_url: Option<String>,
     /// Optional status message
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Authentication mode the device should use ("api_key" or "ed25519")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_mode: Option<String>,
 }
 
 /// Register a new device or retrieve existing registration
 ///
 /// The device sends its MAC address and receives an API key for future requests.
+/// If the device already has a stored key, it is returned. Otherwise, a new
+/// random key is generated.
 #[utoipa::path(
     get,
     path = "/api/setup",
@@ -49,6 +51,7 @@ pub struct SetupResponse {
     tag = "Device"
 )]
 pub async fn handle_setup<R: DeviceRegistry>(
+    State(config): State<Arc<AppConfig>>,
     State(registry): State<Arc<R>>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -67,37 +70,39 @@ pub async fn handle_setup<R: DeviceRegistry>(
         "Setup request received"
     );
 
-    // Check if already registered
+    // Check if already registered in our registry
     if let Some(existing) = registry.find_by_id(&device_id).await? {
         tracing::info!(
             device_id = %device_id,
-            friendly_id = %existing.friendly_id,
+            registration_code = %existing.api_key.registration_code(),
             "Device already registered"
         );
 
         return Ok(Json(SetupResponse {
             status: 200,
             api_key: Some(existing.api_key.as_str().to_string()),
-            friendly_id: Some(existing.friendly_id.clone()),
-            image_url: None, // Device will call /api/display
+            image_url: None,
             message: Some("Device already registered".to_string()),
+            auth_mode: Some(config.auth_mode.clone()),
         }));
     }
 
-    // Register new device
+    // Register new device with a random API key
     let device = Device::new(device_id.clone(), model, fw_version.to_string());
-    let registered = registry.register(device_id, device).await?;
 
     tracing::info!(
-        friendly_id = %registered.friendly_id,
+        device_id = %device_id,
+        registration_code = %device.api_key.registration_code(),
         "New device registered"
     );
 
+    registry.upsert(device.clone()).await?;
+
     Ok(Json(SetupResponse {
         status: 200,
-        api_key: Some(registered.api_key.as_str().to_string()),
-        friendly_id: Some(registered.friendly_id),
+        api_key: Some(device.api_key.as_str().to_string()),
         image_url: None,
         message: Some("Device registered successfully".to_string()),
+        auth_mode: Some(config.auth_mode.clone()),
     }))
 }

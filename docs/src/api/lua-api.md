@@ -49,6 +49,8 @@ end
 | `firmware_version` | string or nil | Firmware version string |
 | `width` | number or nil | Display width in pixels (800 or 1872) |
 | `height` | number or nil | Display height in pixels (480 or 1404) |
+| `board` | string or nil | Board identifier (e.g., "trmnl_og_4clr") |
+| `colors` | table or nil | Display palette as hex RGB strings (e.g., {"#000000", "#FFFFFF"}) |
 
 **Type:** `table`
 
@@ -63,10 +65,9 @@ A table containing pre-computed responsive layout values. These values are autom
 local margin = layout.margin        -- pixel-aligned margin
 local center = layout.center_x      -- screen center X
 
--- Access device info
-if layout.grey_levels == 16 then
-  -- Use more detailed gradients on TRMNL X
-end
+-- Access display palette
+local colors = layout.colors         -- {"#000000", "#555555", "#AAAAAA", "#FFFFFF"}
+local count = layout.color_count     -- 4
 ```
 
 **Fields:**
@@ -78,7 +79,8 @@ end
 | `scale` | number | Scale factor: `min(width/800, height/480)` | 1.0 | 2.34 |
 | `center_x` | integer | Horizontal center: `floor(width/2)` | 400 | 936 |
 | `center_y` | integer | Vertical center: `floor(height/2)` | 240 | 702 |
-| `grey_levels` | integer | Device grey levels | 4 | 16 |
+| `colors` | table | Display palette as hex RGB strings | {"#000000","#555555","#AAAAAA","#FFFFFF"} | 16 grey values |
+| `color_count` | integer | Number of palette colors | 4 | 16 |
 | `margin` | integer | Standard margin: `floor(20 * scale)` | 20 | 46 |
 | `margin_sm` | integer | Small margin: `floor(10 * scale)` | 10 | 23 |
 | `margin_lg` | integer | Large margin: `floor(40 * scale)` | 40 | 93 |
@@ -182,7 +184,7 @@ local header_y = math.floor(70 * scale)   -- Correct: pixel-aligned
 local font_size = scale_font(48)     -- Preserves precision for fonts
 local header_y = scale_pixel(70)     -- Pixel-aligned position
 local margin = layout.margin         -- Pre-computed pixel margin
-local palette = greys(layout.grey_levels)  -- Device-appropriate palette
+local colors = layout.colors                 -- Display palette colors
 ```
 
 ## HTTP Functions
@@ -900,7 +902,8 @@ return {
     items = { ... }
   },
   refresh_rate = 300,  -- Seconds until next refresh
-  skip_update = false  -- Optional: skip rendering, just check back later
+  skip_update = false, -- Optional: skip rendering, just check back later
+  colors = { "#000000", "#FFFFFF", "#FF0000" }  -- Optional: override display palette
 }
 ```
 
@@ -933,6 +936,28 @@ In templates, access this data with the `data.` prefix:
 - **3600+**: Static or slow-changing content
 
 If `refresh_rate` is 0 or omitted, the screen's `default_refresh` from config is used.
+
+### colors
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `colors` | table or nil | Optional array of hex RGB color strings to override the display palette |
+
+When `colors` is returned by a script, it takes the **highest priority** in the color palette chain:
+
+1. **Script `colors`** (strongest) — returned in the script result table
+2. **Device config `colors`** — set per-device in `config.yaml`
+3. **Firmware `Colors` header** — sent by device hardware
+4. **System default** — `#000000,#555555,#AAAAAA,#FFFFFF`
+
+```lua
+-- Force a 3-color palette for this screen
+return {
+  data = { ... },
+  refresh_rate = 300,
+  colors = { "#000000", "#FFFFFF", "#FF0000" }
+}
+```
 
 ### skip_update
 

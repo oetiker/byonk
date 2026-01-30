@@ -37,7 +37,7 @@ async fn test_lua_params_and_device_globals() {
     // by running the hello screen which uses these
     let app = common::TestApp::new();
 
-    let (api_key, _) = app
+    let api_key = app
         .register_device(common::fixtures::macs::HELLO_DEVICE)
         .await;
     let headers = common::fixtures::display_headers(common::fixtures::macs::HELLO_DEVICE, &api_key);
@@ -55,7 +55,7 @@ async fn test_lua_time_functions() {
     // hello.lua uses time_now() and time_format()
     let app = common::TestApp::new();
 
-    let (api_key, _) = app
+    let api_key = app
         .register_device(common::fixtures::macs::HELLO_DEVICE)
         .await;
     let headers = common::fixtures::display_headers(common::fixtures::macs::HELLO_DEVICE, &api_key);
@@ -74,7 +74,7 @@ async fn test_lua_qr_svg_function() {
     // hello.lua uses qr_svg() with anchor positioning
     let app = common::TestApp::new();
 
-    let (api_key, _) = app
+    let api_key = app
         .register_device(common::fixtures::macs::HELLO_DEVICE)
         .await;
     let headers = common::fixtures::display_headers(common::fixtures::macs::HELLO_DEVICE, &api_key);
@@ -517,7 +517,8 @@ mod lua_unit_tests {
             firmware_version: Some("2.0.0".to_string()),
             width: Some(1872),
             height: Some(1404),
-            grey_levels: None,
+            registration_code: None,
+            ..Default::default()
         };
 
         let result = runtime
@@ -1113,11 +1114,7 @@ mod lua_additional_tests {
             mac: "AA:BB:CC:DD:EE:FF".to_string(),
             width: Some(800),
             height: Some(480),
-            battery_voltage: None,
-            rssi: None,
-            model: None,
-            firmware_version: None,
-            grey_levels: None,
+            ..Default::default()
         };
 
         let result =
@@ -1646,7 +1643,7 @@ mod lua_layout_tests {
                     scale = layout.scale,
                     center_x = layout.center_x,
                     center_y = layout.center_y,
-                    grey_levels = layout.grey_levels,
+                    color_count = layout.color_count,
                     margin = layout.margin,
                     margin_sm = layout.margin_sm,
                     margin_lg = layout.margin_lg
@@ -1667,7 +1664,7 @@ mod lua_layout_tests {
         assert_eq!(result.data["scale"], 1.0);
         assert_eq!(result.data["center_x"], 400);
         assert_eq!(result.data["center_y"], 240);
-        assert_eq!(result.data["grey_levels"], 4);
+        assert_eq!(result.data["color_count"], 4);
         assert_eq!(result.data["margin"], 20);
         assert_eq!(result.data["margin_sm"], 10);
         assert_eq!(result.data["margin_lg"], 40);
@@ -1675,7 +1672,7 @@ mod lua_layout_tests {
 
     #[test]
     fn test_layout_table_with_x_device() {
-        // Test with TRMNL X device (1872x1404)
+        // Test with TRMNL X device (1872x1404) with 16-color palette
         let script = r#"
             return {
                 data = {
@@ -1684,7 +1681,7 @@ mod lua_layout_tests {
                     scale = layout.scale,
                     center_x = layout.center_x,
                     center_y = layout.center_y,
-                    grey_levels = layout.grey_levels,
+                    color_count = layout.color_count,
                     margin = layout.margin,
                     margin_sm = layout.margin_sm,
                     margin_lg = layout.margin_lg
@@ -1696,11 +1693,14 @@ mod lua_layout_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("test_layout_x.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
+        let x_colors: Vec<String> = (0..16)
+            .map(|i| format!("#{:02X}{:02X}{:02X}", i * 17, i * 17, i * 17))
+            .collect();
         let ctx = DeviceContext {
             mac: "AA:BB:CC:DD:EE:FF".to_string(),
             width: Some(1872),
             height: Some(1404),
-            grey_levels: Some(16),
+            colors: Some(x_colors),
             ..Default::default()
         };
 
@@ -1724,7 +1724,7 @@ mod lua_layout_tests {
         );
         assert_eq!(result.data["center_x"], 936);
         assert_eq!(result.data["center_y"], 702);
-        assert_eq!(result.data["grey_levels"], 16);
+        assert_eq!(result.data["color_count"], 16);
         // margin = floor(20 * 2.34) = floor(46.8) = 46
         assert_eq!(result.data["margin"], 46);
         // margin_sm = floor(10 * 2.34) = floor(23.4) = 23
@@ -1982,7 +1982,7 @@ mod lua_layout_tests {
             local font_size = scale_font(48)
             local header_y = scale_pixel(70)
             local margin = layout.margin
-            local palette = greys(layout.grey_levels)
+            local palette = greys(layout.color_count)
 
             return {
                 data = {

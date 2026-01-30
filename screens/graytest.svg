@@ -58,7 +58,7 @@
 
   <!-- Byonk branding -->
   <text x="{{ data.center_x }}" y="{{ data.title_y }}" text-anchor="middle" fill="white" font-family="Outfit" font-size="{{ data.font_title }}" font-weight="700">BYONK E-INK TEST PATTERN</text>
-  <text x="{{ data.center_x }}" y="{{ data.subtitle_y }}" text-anchor="middle" fill="rgb(170,170,170)" font-family="Outfit" font-size="{{ data.font_subtitle }}">{{ data.width }} x {{ data.height }} | {{ data.grey_levels }} Gray Levels | Blue-Noise Dithering</text>
+  <text x="{{ data.center_x }}" y="{{ data.subtitle_y }}" text-anchor="middle" fill="rgb(170,170,170)" font-family="Outfit" font-size="{{ data.font_subtitle }}">{{ data.width }} x {{ data.height }} | {{ data.color_count }} Colors | Blue-Noise Dithering</text>
 
   <!-- Corner markers -->
   <rect x="0" y="{{ data.info_bar_y }}" width="{{ data.corner_size }}" height="{{ data.corner_size }}" fill="white"/>

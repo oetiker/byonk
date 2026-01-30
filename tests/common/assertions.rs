@@ -67,14 +67,14 @@ pub fn assert_valid_setup_response(response: &TestResponse) {
         json["api_key"].is_string(),
         "Expected api_key to be a string"
     );
-    assert!(
-        json["friendly_id"].is_string(),
-        "Expected friendly_id to be a string"
-    );
 
-    // API key should be 24 characters
+    // API key should be a 32-character hex string
     let api_key = json["api_key"].as_str().unwrap();
-    assert_eq!(api_key.len(), 24, "API key should be 24 characters");
+    assert_eq!(api_key.len(), 32, "API key should be 32 characters");
+    assert!(
+        api_key.chars().all(|c| c.is_ascii_hexdigit()),
+        "API key should be hex characters"
+    );
 }
 
 /// Assert display response is valid and has an image URL

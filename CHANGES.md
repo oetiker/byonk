@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.10.0 - 2026-01-30
+
+### New
+
 - **Color Palette Override**: Display colors can now be set per-device in `config.yaml` or per-script via Lua return value
   - Priority chain: Lua script `colors` > device config `colors` > firmware `Colors` header > system default (`#000000,#555555,#AAAAAA,#FFFFFF`)
   - Device config: add `colors: "#000000,#FFFFFF,#FF0000"` to any device entry in `config.yaml`
@@ -43,7 +51,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 3D device bezel frame with embossed "BYONK — {device name}" label
   - Magnification lens on hover for all screen models (was X-only)
   - Sunken display effect with inset shadow
-
 ### Changed
 
 - `DisplaySpec::from_dimensions` now uses exact requested dimensions instead of snapping to OG/X presets

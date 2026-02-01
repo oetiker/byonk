@@ -1,6 +1,6 @@
 [package]
 name = "byonk"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2021"
 description = "Byonk (Bring Your Own Ink) - SVG-based content server for TRMNL e-ink devices"
 license = "MIT"

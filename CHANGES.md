@@ -9,13 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.11.0 - 2026-02-01
+
+### New
+
 - Added `layout.*` namespace to SVG template context — provides `layout.width`, `layout.height`, `layout.scale`, `layout.grey_count`, and other pre-computed layout values directly in templates without needing Lua to pass them through
 - Reusable `components/hinting.svg` include — adaptive font hinting that switches between mono and smooth based on `layout.grey_count`. All built-in screens use it via `{% include "components/hinting.svg" %}`
 - Added `layout.grey_count` to Lua API — counts palette colors where R=G=B, useful for conditional font hinting in SVG templates
 - X11 bitmap fonts: 26 TTF files with embedded bitmap strikes and autotraced scalable outlines. Proportional families (X11Helv, X11LuSans, X11LuType, X11Term) and fixed-width families grouped by cell width (X11Misc5x–X11Misc12x). Use `font-family="X11Helv" font-size="14"` — the renderer selects the matching bitmap strike automatically.
 - Hinting demo screen (`hintdemo`): 9-cell grid comparing hinting engines (auto, native, none) × targets (mono, normal, light)
 - Dev mode screen selector now shows configured device IDs under their screens
-
 ### Changed
 
 - Dev mode: removed separate Device ID input field, merged into screen selector dropdown

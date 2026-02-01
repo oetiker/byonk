@@ -132,12 +132,20 @@ impl AppConfig {
         &self,
         device_mac: &str,
     ) -> Option<(&ScreenConfig, &DeviceConfig)> {
-        // Normalize MAC address (uppercase, colon-separated)
-        let normalized = device_mac.to_uppercase();
-
-        if let Some(device_config) = self.devices.get(&normalized) {
+        // Try exact match first (for named devices like "X11Helv")
+        if let Some(device_config) = self.devices.get(device_mac) {
             if let Some(screen_config) = self.screens.get(&device_config.screen) {
                 return Some((screen_config, device_config));
+            }
+        }
+
+        // Normalize MAC address (uppercase, colon-separated) and retry
+        let normalized = device_mac.to_uppercase();
+        if normalized != device_mac {
+            if let Some(device_config) = self.devices.get(&normalized) {
+                if let Some(screen_config) = self.screens.get(&device_config.screen) {
+                    return Some((screen_config, device_config));
+                }
             }
         }
 

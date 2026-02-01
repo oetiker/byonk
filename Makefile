@@ -1,6 +1,8 @@
 # Byonk Makefile
 # Build software and documentation
 
+export PATH := $(HOME)/.cargo/bin:$(PATH)
+
 .PHONY: all build release debug run clean docs docs-dev check fmt lint test help
 
 # Default target

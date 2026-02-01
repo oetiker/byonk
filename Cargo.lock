@@ -270,7 +270,7 @@ checksum = "5dd9dc738b7a8311c7ade152424974d8115f2cdad61e8dab8dac9f2362298510"
 
 [[package]]
 name = "byonk"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -874,7 +874,7 @@ dependencies = [
 [[package]]
 name = "fontdb"
 version = "0.23.0"
-source = "git+https://github.com/oetiker/resvg.git?branch=skrifa#2dd8a32a486af783bb98f10c2a229a1422dfc772"
+source = "git+https://github.com/oetiker/resvg.git?branch=skrifa#de1b9e155c1a77ca8c127f8ab844ebfcca527d4d"
 dependencies = [
  "fontconfig-parser",
  "log",
@@ -2351,7 +2351,7 @@ dependencies = [
 [[package]]
 name = "resvg"
 version = "0.46.0"
-source = "git+https://github.com/oetiker/resvg.git?branch=skrifa#2dd8a32a486af783bb98f10c2a229a1422dfc772"
+source = "git+https://github.com/oetiker/resvg.git?branch=skrifa#de1b9e155c1a77ca8c127f8ab844ebfcca527d4d"
 dependencies = [
  "gif",
  "image-webp",
@@ -3301,7 +3301,7 @@ dependencies = [
 [[package]]
 name = "usvg"
 version = "0.46.0"
-source = "git+https://github.com/oetiker/resvg.git?branch=skrifa#2dd8a32a486af783bb98f10c2a229a1422dfc772"
+source = "git+https://github.com/oetiker/resvg.git?branch=skrifa#de1b9e155c1a77ca8c127f8ab844ebfcca527d4d"
 dependencies = [
  "base64",
  "data-url",

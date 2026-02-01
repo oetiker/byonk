@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
+  <defs>
+    <style>
+    text { font-family: Outfit; font-weight: 500; fill: #000000; }
+    .header { font-size: 11px; font-weight: 700; fill: #ffffff; }
+    .col-header { font-size: 14px; font-weight: 700; text-anchor: middle; }
+    .row-header { font-size: 13px; font-weight: 700; text-anchor: middle; }
+    {% for cell in data.cells %}
+    .c{{ cell.idx }} {
+      {% if cell.hinted %}-resvg-hinting-target: {{ cell.target }};
+      -resvg-hinting-mode: {{ cell.mode }};
+      -resvg-hinting-engine: {{ cell.engine }};{% if cell.is_mono %}
+      -resvg-hinting-symmetric: false;
+      -resvg-hinting-preserve-linear-metrics: true;
+      shape-rendering: crispEdges;{% endif %}
+      {% else %}text-rendering: geometricPrecision;
+      {% endif %}
+    }
+    {% endfor %}
+    </style>
+  </defs>
+
+  <rect width="{{ data.width }}" height="{{ data.height }}" fill="#ffffff"/>
+
+  <!-- Header -->
+  <rect width="{{ data.width }}" height="16" fill="#000000"/>
+  <text class="header" x="4" y="12">Hinting Demo — engine × target</text>
+
+  <!-- Column headers -->
+  {% for ch in data.col_headers %}
+  <text class="col-header" x="{{ ch.x }}" y="{{ data.top + 14 }}">{{ ch.label }}</text>
+  {% endfor %}
+
+  <!-- Row headers (vertical) and grid lines -->
+  {% for rh in data.row_headers %}
+  <text class="row-header" x="{{ rh.x }}" y="{{ rh.y }}" transform="rotate(-90, {{ rh.x }}, {{ rh.y }})">{{ rh.label }}</text>
+  {% if rh.show_line %}
+  <line x1="{{ data.grid_x1 }}" y1="{{ rh.line_y }}" x2="{{ data.grid_x2 }}" y2="{{ rh.line_y }}" stroke="#000000" stroke-width="0.5"/>
+  {% endif %}
+  {% endfor %}
+
+  <!-- Column grid lines -->
+  {% for cl in data.col_lines %}
+  <line x1="{{ cl.x }}" y1="{{ data.grid_y1 }}" x2="{{ cl.x }}" y2="{{ data.grid_y2 }}" stroke="#000000" stroke-width="0.5"/>
+  {% endfor %}
+
+  <!-- Outer grid border -->
+  <rect x="{{ data.grid_x1 }}" y="{{ data.grid_y1 }}" width="{{ data.grid_x2 - data.grid_x1 }}" height="{{ data.grid_y2 - data.grid_y1 }}" fill="none" stroke="#000000" stroke-width="0.5"/>
+
+  <!-- Cell contents -->
+  {% for cell in data.cells %}
+  {% for line in cell.lines %}
+  <text class="c{{ cell.idx }}" x="{{ line.x }}" y="{{ line.y }}" font-size="{{ line.size }}">{{ line.text }}</text>
+  {% endfor %}
+  {% endfor %}
+</svg>

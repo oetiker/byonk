@@ -663,6 +663,7 @@ async fn run_dev_server() -> anyhow::Result<()> {
         content_cache: state.content_cache.clone(),
         renderer: state.renderer.clone(),
         file_watcher,
+        asset_loader,
     };
 
     // Build dev routes as a nested router with DevState

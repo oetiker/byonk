@@ -14,7 +14,7 @@ const DEFAULT_MAX_ENTRIES: usize = 100;
 /// Cached HTTP response
 struct CachedResponse {
     /// The response body
-    body: String,
+    body: Vec<u8>,
     /// When this entry was cached
     cached_at: Instant,
     /// How long this entry is valid (TTL)
@@ -22,7 +22,7 @@ struct CachedResponse {
 }
 
 impl CachedResponse {
-    fn new(body: String, ttl_secs: u64) -> Self {
+    fn new(body: Vec<u8>, ttl_secs: u64) -> Self {
         Self {
             body,
             cached_at: Instant::now(),
@@ -56,7 +56,7 @@ impl HttpCache {
     }
 
     /// Get a cached response if it exists and hasn't expired
-    fn get(&mut self, key: &str) -> Option<String> {
+    fn get(&mut self, key: &str) -> Option<Vec<u8>> {
         // First check if entry exists
         let entry = self.cache.get(key)?;
 
@@ -76,7 +76,7 @@ impl HttpCache {
     }
 
     /// Store a response in the cache
-    fn store(&mut self, key: String, body: String, ttl_secs: u64) {
+    fn store(&mut self, key: String, body: Vec<u8>, ttl_secs: u64) {
         // Remove existing entry if present
         if self.cache.contains_key(&key) {
             self.insertion_order.retain(|k| k != &key);
@@ -169,7 +169,7 @@ pub fn compute_cache_key(
 /// Try to get a cached response for the given request.
 ///
 /// Returns `Some(body)` if a valid cached response exists, `None` otherwise.
-pub fn get_cached(cache_key: &str) -> Option<String> {
+pub fn get_cached(cache_key: &str) -> Option<Vec<u8>> {
     let mut cache = get_cache().lock().unwrap();
     let result = cache.get(cache_key);
     if result.is_some() {
@@ -179,7 +179,7 @@ pub fn get_cached(cache_key: &str) -> Option<String> {
 }
 
 /// Store a response in the cache.
-pub fn store_cached(cache_key: String, body: String, ttl_secs: u64) {
+pub fn store_cached(cache_key: String, body: Vec<u8>, ttl_secs: u64) {
     tracing::debug!(
         cache_key = %cache_key,
         ttl_secs = ttl_secs,
@@ -248,10 +248,10 @@ mod tests {
     #[test]
     fn test_http_cache_store_and_get() {
         let mut cache = HttpCache::new(10);
-        cache.store("key1".to_string(), "response1".to_string(), 60);
+        cache.store("key1".to_string(), b"response1".to_vec(), 60);
 
         let result = cache.get("key1");
-        assert_eq!(result, Some("response1".to_string()));
+        assert_eq!(result, Some(b"response1".to_vec()));
     }
 
     #[test]
@@ -265,15 +265,15 @@ mod tests {
     fn test_http_cache_lru_eviction() {
         let mut cache = HttpCache::new(3);
 
-        cache.store("key1".to_string(), "response1".to_string(), 60);
-        cache.store("key2".to_string(), "response2".to_string(), 60);
-        cache.store("key3".to_string(), "response3".to_string(), 60);
+        cache.store("key1".to_string(), b"response1".to_vec(), 60);
+        cache.store("key2".to_string(), b"response2".to_vec(), 60);
+        cache.store("key3".to_string(), b"response3".to_vec(), 60);
 
         // Access key1 to make it recently used
         cache.get("key1");
 
         // Adding key4 should evict key2 (oldest unused)
-        cache.store("key4".to_string(), "response4".to_string(), 60);
+        cache.store("key4".to_string(), b"response4".to_vec(), 60);
 
         assert!(cache.get("key1").is_some());
         assert!(cache.get("key2").is_none()); // Evicted
@@ -286,7 +286,7 @@ mod tests {
         let mut cache = HttpCache::new(10);
 
         // Store with 0 second TTL (immediately expired)
-        cache.store("key1".to_string(), "response1".to_string(), 0);
+        cache.store("key1".to_string(), b"response1".to_vec(), 0);
 
         // Should be expired immediately
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -298,11 +298,11 @@ mod tests {
     fn test_http_cache_update_existing() {
         let mut cache = HttpCache::new(10);
 
-        cache.store("key1".to_string(), "response1".to_string(), 60);
-        cache.store("key1".to_string(), "response2".to_string(), 60);
+        cache.store("key1".to_string(), b"response1".to_vec(), 60);
+        cache.store("key1".to_string(), b"response2".to_vec(), 60);
 
         let result = cache.get("key1");
-        assert_eq!(result, Some("response2".to_string()));
+        assert_eq!(result, Some(b"response2".to_vec()));
 
         // Should not have duplicate keys
         assert_eq!(

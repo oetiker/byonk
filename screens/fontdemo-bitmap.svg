@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
+  <defs>
+    <style>
+    text {
+    {% include "components/hinting.svg" %}
+    }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="{{ data.width }}" height="{{ data.height }}" fill="#ffffff"/>
+
+  <!-- Header bar -->
+  <rect width="{{ data.width }}" height="{{ data.header_height }}" fill="#000000"/>
+  <text x="{{ data.margin }}" y="14" fill="#ffffff" font-family="X11Helv" font-size="14" font-weight="700">Bitmap Fonts · {{ data.title }}</text>
+
+  {% for line in data.lines %}
+  <text x="{{ line.x }}" y="{{ line.y }}" fill="#000000" font-family="{{ line.family }}" font-size="{{ line.size }}"{% if line.bold %} font-weight="700"{% endif %}{% if line.italic %} font-style="oblique"{% endif %}>{{ line.label }}</text>
+  {% endfor %}
+</svg>

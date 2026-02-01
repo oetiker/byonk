@@ -40,6 +40,18 @@ screens:
     template: graytest.svg
     default_refresh: 3600
 
+  # Bitmap font demo (parameterized by font_prefix)
+  fontdemo-bitmap:
+    script: fontdemo-bitmap.lua
+    template: fontdemo-bitmap.svg
+    default_refresh: 3600
+
+  # Hinting demo - comparing engines and targets
+  hintdemo:
+    script: hintdemo.lua
+    template: hintdemo.svg
+    default_refresh: 3600
+
   # Hello world tutorial screen
   hello:
     script: hello.lua
@@ -74,6 +86,33 @@ devices:
   # Test device for gray levels
   "TE:ST:GR:AY:00:00":
     screen: graytest
+    params: {}
+
+  # Test devices for bitmap font demos
+  "X11Helv":
+    screen: fontdemo-bitmap
+    params:
+      font_prefix: "X11Helv"
+  "X11LuSans":
+    screen: fontdemo-bitmap
+    params:
+      font_prefix: "X11LuSans"
+  "X11LuType":
+    screen: fontdemo-bitmap
+    params:
+      font_prefix: "X11LuType"
+  "X11Term":
+    screen: fontdemo-bitmap
+    params:
+      font_prefix: "X11Term"
+  "X11Misc":
+    screen: fontdemo-bitmap
+    params:
+      font_prefix: "X11Misc"
+
+  # Test device for hinting demo
+  "HI:NT:DE:MO:00:00":
+    screen: hintdemo
     params: {}
 
   # Test device for hello tutorial

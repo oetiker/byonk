@@ -2,6 +2,7 @@
 
 const state = {
     screens: [],
+    devices: [],
     defaultScreen: null,
     eventSource: null,
     isRendering: false,
@@ -10,8 +11,6 @@ const state = {
 // DOM elements
 const elements = {
     screenSelect: document.getElementById('screen-select'),
-    macInput: document.getElementById('mac-input'),
-    macResolved: document.getElementById('mac-resolved'),
     modelSelect: document.getElementById('model-select'),
     widthInput: document.getElementById('width-input'),
     heightInput: document.getElementById('height-input'),
@@ -72,23 +71,42 @@ async function loadScreens() {
         const response = await fetch('/dev/screens');
         const data = await response.json();
         state.screens = data.screens;
+        state.devices = data.devices || [];
         state.defaultScreen = data.default_screen;
 
-        // Populate screen select
+        // Group devices by screen name
+        const devicesByScreen = {};
+        state.devices.forEach(dev => {
+            if (!devicesByScreen[dev.screen]) {
+                devicesByScreen[dev.screen] = [];
+            }
+            devicesByScreen[dev.screen].push(dev.id);
+        });
+
+        // Populate screen select with screens and their devices
         elements.screenSelect.innerHTML = '';
         state.screens.forEach(screen => {
             const option = document.createElement('option');
-            option.value = screen.name;
+            option.value = `screen:${screen.name}`;
             option.textContent = screen.name;
             if (screen.name === state.defaultScreen) {
                 option.textContent += ' (default)';
             }
             elements.screenSelect.appendChild(option);
+
+            // Add device entries under this screen
+            const devices = devicesByScreen[screen.name] || [];
+            devices.forEach(id => {
+                const devOption = document.createElement('option');
+                devOption.value = `device:${id}`;
+                devOption.textContent = `  \u21b3 ${id}`;
+                elements.screenSelect.appendChild(devOption);
+            });
         });
 
         // Select default screen
         if (state.defaultScreen) {
-            elements.screenSelect.value = state.defaultScreen;
+            elements.screenSelect.value = `screen:${state.defaultScreen}`;
         }
     } catch (error) {
         console.error('Failed to load screens:', error);
@@ -130,19 +148,6 @@ function setupEventListeners() {
         if (elements.autoRefresh.checked) {
             render();
         }
-    });
-
-    // MAC address input (debounced resolution)
-    let macTimeout;
-    elements.macInput.addEventListener('input', () => {
-        clearTimeout(macTimeout);
-        macTimeout = setTimeout(async () => {
-            await resolveMac();
-            saveState();
-            if (elements.autoRefresh.checked && elements.macInput.value.trim()) {
-                render();
-            }
-        }, 500);
     });
 
     // Battery, RSSI, Time, Grey levels changes
@@ -188,37 +193,6 @@ function setupEventListeners() {
             saveState();
         }, 500);
     });
-}
-
-// Resolve MAC address to screen and params
-async function resolveMac() {
-    const mac = elements.macInput.value.trim();
-    if (!mac) {
-        elements.macResolved.classList.add('hidden');
-        elements.macResolved.textContent = '';
-        return;
-    }
-
-    try {
-        const response = await fetch(`/dev/resolve-mac?mac=${encodeURIComponent(mac)}`);
-        if (response.ok) {
-            const data = await response.json();
-            elements.macResolved.classList.remove('hidden');
-            elements.macResolved.classList.remove('error');
-            elements.macResolved.textContent = `→ ${data.screen}`;
-            if (data.params && Object.keys(data.params).length > 0) {
-                elements.macResolved.textContent += ` (${Object.keys(data.params).length} params)`;
-            }
-        } else {
-            elements.macResolved.classList.remove('hidden');
-            elements.macResolved.classList.add('error');
-            elements.macResolved.textContent = 'MAC not configured';
-        }
-    } catch (e) {
-        elements.macResolved.classList.remove('hidden');
-        elements.macResolved.classList.add('error');
-        elements.macResolved.textContent = 'Resolution failed';
-    }
 }
 
 // Connect to Server-Sent Events for file changes
@@ -283,11 +257,12 @@ function updateDeviceFrame() {
 async function render() {
     if (state.isRendering) return;
 
-    const mac = elements.macInput.value.trim();
-    const screen = elements.screenSelect.value;
+    const selected = elements.screenSelect.value;
+    if (!selected) return;
 
-    // Need either a screen selected or a MAC address
-    if (!screen && !mac) return;
+    const isDevice = selected.startsWith('device:');
+    const mac = isDevice ? selected.slice('device:'.length) : '';
+    const screen = isDevice ? '' : selected.slice('screen:'.length);
 
     state.isRendering = true;
     elements.loadingOverlay.classList.remove('hidden');
@@ -383,7 +358,6 @@ function hideError() {
 function saveState() {
     const savedState = {
         screen: elements.screenSelect.value,
-        mac: elements.macInput.value,
         model: elements.modelSelect.value,
         width: elements.widthInput.value,
         height: elements.heightInput.value,
@@ -403,12 +377,15 @@ function loadSavedState() {
         const saved = localStorage.getItem('byonk-dev-state');
         if (saved) {
             const data = JSON.parse(saved);
-            if (data.screen && state.screens.find(s => s.name === data.screen)) {
-                elements.screenSelect.value = data.screen;
-            }
-            if (data.mac) {
-                elements.macInput.value = data.mac;
-                resolveMac(); // Resolve the MAC to show feedback
+            if (data.screen) {
+                // Try exact match first (new format with prefix)
+                const options = Array.from(elements.screenSelect.options);
+                if (options.find(o => o.value === data.screen)) {
+                    elements.screenSelect.value = data.screen;
+                } else if (state.screens.find(s => s.name === data.screen)) {
+                    // Migrate old format without prefix
+                    elements.screenSelect.value = `screen:${data.screen}`;
+                }
             }
             if (data.model) {
                 elements.modelSelect.value = data.model;

@@ -2,9 +2,11 @@
   <defs>
     <style>
       /* Text base */
-      text { text-anchor: middle; font-family: Outfit; font-weight: 500; }
-
-      /* Text weights */
+    text { text-anchor: middle; font-family: Outfit; font-weight: 500; }
+    text {
+    {% include "components/hinting.svg" %}
+    }
+       /* Text weights */
       .font-bold { font-weight: 700 }
       .font-black { font-weight: 900 }
       .font-semibold { font-weight: 600 }
@@ -30,7 +32,8 @@
   <image x="0" y="0" width="{{ data.width }}" height="{{ data.height }}" href="background.jpg" preserveAspectRatio="xMidYMid slice"/>
 
   <!-- Hero title - semi-transparent white text with shadow -->
-  <text x="{{ data.center_x }}" y="{{ data.title_y }}" font-size="{{ data.font_hero }}" class="font-black" fill="#ffffff" opacity="0.8" filter="url(#shadow)">BYONK</text>
+  <text x="{{ data.center_x }}" y="{{ data.title_y }}" font-size="{{ data.font_hero }}" class="font-black" fill="#ffffff" opacity="0.8"
+filter="url(#shadow)">BYONK</text>
   <text x="{{ data.center_x }}" y="{{ data.tagline_y }}" font-size="{{ data.font_tagline }}" class="font-semibold" fill="#ffffff" opacity="0.8" filter="url(#shadow)">Bring Your Own Ink</text>
 
   <!-- Registration code box (only shown when device needs registration) -->

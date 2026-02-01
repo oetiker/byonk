@@ -3,6 +3,7 @@
     text {
       font-family: Outfit, sans-serif;
       fill: black;
+      {% include "components/hinting.svg" %}
     }
     .greeting { font-weight: 700; }
     .time { font-weight: 700; }

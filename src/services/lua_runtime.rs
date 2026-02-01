@@ -174,9 +174,19 @@ impl LuaRuntime {
             }
             layout_table.set("colors", colors_table)?;
             layout_table.set("color_count", colors.len() as i64)?;
+            // Count grey levels (colors where R=G=B)
+            let grey_count = colors
+                .iter()
+                .filter(|c| {
+                    let hex = c.trim_start_matches('#');
+                    hex.len() == 6 && hex[0..2] == hex[2..4] && hex[2..4] == hex[4..6]
+                })
+                .count();
+            layout_table.set("grey_count", grey_count as i64)?;
         } else {
             // Default 4-grey when no colors provided
             layout_table.set("color_count", 4i64)?;
+            layout_table.set("grey_count", 4i64)?;
         }
         // Pre-floored margins for pixel-aligned positioning
         layout_table.set("margin", (20.0 * scale).floor() as i64)?;
@@ -549,14 +559,14 @@ impl LuaRuntime {
                 // Check cache first if caching is enabled
                 if let Some(ref key) = cache_key {
                     if let Some(cached_response) = http_cache::get_cached(key) {
-                        return Ok(cached_response);
+                        return lua.create_string(&cached_response);
                     }
                 }
 
                 // Make the actual request
-                let response_text = match request.send() {
-                    Ok(response) => match response.text() {
-                        Ok(text) => text,
+                let response_bytes = match request.send() {
+                    Ok(response) => match response.bytes() {
+                        Ok(bytes) => bytes.to_vec(),
                         Err(e) => {
                             return Err(mlua::Error::external(format!(
                                 "Failed to read response: {e}"
@@ -568,10 +578,10 @@ impl LuaRuntime {
 
                 // Store in cache if caching is enabled
                 if let (Some(key), Some(ttl)) = (cache_key, cache_ttl) {
-                    http_cache::store_cached(key, response_text.clone(), ttl);
+                    http_cache::store_cached(key, response_bytes.clone(), ttl);
                 }
 
-                Ok(response_text)
+                lua.create_string(&response_bytes)
             })?;
         globals.set("http_request", http_request.clone())?;
 

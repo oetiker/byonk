@@ -128,20 +128,6 @@ select:focus, input:focus, textarea:focus {
     border-color: var(--accent-color);
 }
 
-.mac-resolved {
-    margin-top: 0.25rem;
-    font-size: 0.75rem;
-    color: var(--success-color);
-}
-
-.mac-resolved.error {
-    color: var(--text-muted);
-}
-
-.mac-resolved.hidden {
-    display: none;
-}
-
 textarea {
     min-height: 80px;
     font-family: 'Monaco', 'Menlo', monospace;

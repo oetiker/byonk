@@ -68,6 +68,7 @@ local center = layout.center_x      -- screen center X
 -- Access display palette
 local colors = layout.colors         -- {"#000000", "#555555", "#AAAAAA", "#FFFFFF"}
 local count = layout.color_count     -- 4
+local greys = layout.grey_count      -- 4 (colors where R=G=B)
 ```
 
 **Fields:**
@@ -81,6 +82,7 @@ local count = layout.color_count     -- 4
 | `center_y` | integer | Vertical center: `floor(height/2)` | 240 | 702 |
 | `colors` | table | Display palette as hex RGB strings | {"#000000","#555555","#AAAAAA","#FFFFFF"} | 16 grey values |
 | `color_count` | integer | Number of palette colors | 4 | 16 |
+| `grey_count` | integer | Number of grey levels (colors where R=G=B) | 4 | 16 |
 | `margin` | integer | Standard margin: `floor(20 * scale)` | 20 | 46 |
 | `margin_sm` | integer | Small margin: `floor(10 * scale)` | 10 | 23 |
 | `margin_lg` | integer | Large margin: `floor(40 * scale)` | 40 | 93 |
@@ -696,12 +698,21 @@ local encoded = base64_encode(raw_bytes)
 
 **Returns:** `string` - Base64-encoded string
 
-**Example: Creating a data URI:**
+**Example: Creating a data URI from a local asset:**
 
 ```lua
 local image_data = read_asset("icon.png")
 local data_uri = "data:image/png;base64," .. base64_encode(image_data)
 ```
+
+**Example: Embedding a remote image:**
+
+```lua
+local image_bytes = http_get("https://example.com/photo.png", { cache_ttl = 3600 })
+local image_src = "data:image/png;base64," .. base64_encode(image_bytes)
+```
+
+See [Embedding Remote Images](../tutorial/advanced.md#embedding-remote-images) for a complete example with error handling.
 
 ## URL Encoding Functions
 

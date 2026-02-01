@@ -260,6 +260,9 @@ impl ContentPipeline {
             .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
         template_context.insert("params".to_string(), params_json);
 
+        // Add layout under "layout" namespace (mirrors lua_runtime layout_table)
+        template_context.insert("layout".to_string(), Self::build_layout_context(device_ctx));
+
         let template_data = serde_json::Value::Object(template_context);
 
         // Render the template to SVG (with image reference resolution)
@@ -276,6 +279,58 @@ impl ContentPipeline {
         );
 
         Ok(svg_content)
+    }
+
+    /// Build layout context for SVG templates (mirrors lua_runtime layout_table).
+    fn build_layout_context(device_ctx: Option<&DeviceContext>) -> serde_json::Value {
+        let width = device_ctx.and_then(|ctx| ctx.width).unwrap_or(800) as f64;
+        let height = device_ctx.and_then(|ctx| ctx.height).unwrap_or(480) as f64;
+        let scale = f64::min(width / 800.0, height / 480.0);
+        let mut obj = serde_json::Map::new();
+        obj.insert("width".to_string(), serde_json::json!(width as i64));
+        obj.insert("height".to_string(), serde_json::json!(height as i64));
+        obj.insert("scale".to_string(), serde_json::json!(scale));
+        obj.insert(
+            "center_x".to_string(),
+            serde_json::json!((width / 2.0).floor() as i64),
+        );
+        obj.insert(
+            "center_y".to_string(),
+            serde_json::json!((height / 2.0).floor() as i64),
+        );
+        obj.insert(
+            "margin".to_string(),
+            serde_json::json!((20.0 * scale).floor() as i64),
+        );
+        obj.insert(
+            "margin_sm".to_string(),
+            serde_json::json!((10.0 * scale).floor() as i64),
+        );
+        obj.insert(
+            "margin_lg".to_string(),
+            serde_json::json!((40.0 * scale).floor() as i64),
+        );
+        if let Some(ctx) = device_ctx {
+            if let Some(ref colors) = ctx.colors {
+                obj.insert("colors".to_string(), serde_json::json!(colors));
+                obj.insert("color_count".to_string(), serde_json::json!(colors.len()));
+                let grey_count = colors
+                    .iter()
+                    .filter(|c| {
+                        let hex = c.trim_start_matches('#');
+                        hex.len() == 6 && hex[0..2] == hex[2..4] && hex[2..4] == hex[4..6]
+                    })
+                    .count();
+                obj.insert("grey_count".to_string(), serde_json::json!(grey_count));
+            } else {
+                obj.insert("color_count".to_string(), serde_json::json!(4));
+                obj.insert("grey_count".to_string(), serde_json::json!(4));
+            }
+        } else {
+            obj.insert("color_count".to_string(), serde_json::json!(4));
+            obj.insert("grey_count".to_string(), serde_json::json!(4));
+        }
+        serde_json::Value::Object(obj)
     }
 
     /// Render PNG from cached SVG content using the given color palette.

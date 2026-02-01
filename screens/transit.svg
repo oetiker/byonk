@@ -1,6 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
   <style>
-    text { font-family: Outfit; }
+    text {
+      font-family: Outfit;
+      {% include "components/hinting.svg" %}
+    }
   </style>
 
   <rect width="{{ data.width }}" height="{{ data.height }}" fill="#ffffff"/>

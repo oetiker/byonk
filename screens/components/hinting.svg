@@ -1,0 +1,11 @@
+{# Adaptive font hinting for e-ink displays.
+   Applies mono hinting on BW displays, smooth on greyscale.
+
+   Usage: {% include "components/hinting.svg" %} inside a CSS text rule.
+   Requires: layout.grey_count (available automatically in template context). #}
+{% if layout.grey_count <= 2 %}-resvg-hinting-target: mono;
+-resvg-hinting-symmetric: false;
+-resvg-hinting-preserve-linear-metrics: true;
+{% endif %}shape-rendering: crispEdges;
+-resvg-hinting-mode: normal;
+-resvg-hinting-engine: auto;

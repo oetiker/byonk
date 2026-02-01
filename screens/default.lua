@@ -10,6 +10,7 @@ local width = layout.width
 local height = layout.height
 local colors = layout.colors or {"#000000", "#555555", "#AAAAAA", "#FFFFFF"}
 local color_count = #colors
+local grey_count = layout.grey_count or 4
 
 -- Layout calculations (scaled)
 local small_screen = (width < 400)
@@ -30,10 +31,9 @@ local font_sm = scale_font(15)
 local font_md = scale_font(17)
 local font_lg = scale_font(small_screen and 36 or 18)
 local font_hero = small_screen and scale_font(192) or scale_font(96)
-local font_tagline = small_screen and scale_font(80) or scale_font(39.8)
+local font_tagline = small_screen and scale_font(80) or scale_font(40)
 local font_reg_code = scale_font(62)
--- Swatch font: proportional to swatch height, capped for readability
-local font_swatch = math.min(math.floor(swatch_height * 0.6), scale_pixel(small_screen and 20 or 11))
+local font_swatch = scale_font(small_screen and 20 or 14)
 
 -- Registration box dimensions (centered in lower portion of screen)
 local reg_box_width = scale_pixel(520)
@@ -74,6 +74,7 @@ return {
     date = date_str,
     swatches = swatches,
     color_count = color_count,
+    grey_count = grey_count,
     -- Layout
     width = width,
     height = height,

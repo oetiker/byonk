@@ -19,10 +19,17 @@ fn image_href_regex() -> &'static Regex {
     })
 }
 
+/// Format a tera::Error including its full cause chain
+fn format_tera_error(e: &tera::Error) -> String {
+    // The Debug representation of tera::Error includes line/column info
+    // that Display omits, so use Debug format
+    format!("{:?}", e)
+}
+
 /// Error type for template rendering
 #[derive(Debug, thiserror::Error)]
 pub enum TemplateError {
-    #[error("Template error: {0}")]
+    #[error("{}", format_tera_error(.0))]
     Tera(#[from] tera::Error),
 
     #[error("Template not found: {0}")]

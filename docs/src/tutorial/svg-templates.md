@@ -34,13 +34,14 @@ Byonk automatically scales your SVG to fit the display, but matching the aspect 
 
 ### Template Namespaces
 
-Variables in templates are organized into three namespaces:
+Variables in templates are organized into four namespaces:
 
 | Namespace | Source | Example |
 |-----------|--------|---------|
 | `data.*` | Lua script return value | `data.title`, `data.items` |
 | `device.*` | Device info (battery, signal) | `device.battery_voltage`, `device.rssi` |
 | `params.*` | Config params from config.yaml | `params.station`, `params.limit` |
+| `layout.*` | Pre-computed layout values | `layout.width`, `layout.grey_count` |
 
 ### Device Variables
 
@@ -72,6 +73,26 @@ These are automatically available under `device.*`:
 ```
 
 > **Note:** Some device variables may be `nil` if the device doesn't report them. Always use `{% if device.variable %}` to check before using.
+
+### Layout Variables
+
+Pre-computed layout values are available under `layout.*`. These mirror the `layout` table available in Lua scripts:
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `layout.width` | integer | Display width in pixels (default 800) |
+| `layout.height` | integer | Display height in pixels (default 480) |
+| `layout.scale` | float | Scale factor relative to 800×480 base |
+| `layout.center_x` | integer | Horizontal center (`width / 2`) |
+| `layout.center_y` | integer | Vertical center (`height / 2`) |
+| `layout.margin` | integer | Standard margin (20px × scale) |
+| `layout.margin_sm` | integer | Small margin (10px × scale) |
+| `layout.margin_lg` | integer | Large margin (40px × scale) |
+| `layout.colors` | array | Display color palette (hex strings) |
+| `layout.color_count` | integer | Number of colors in palette (default 4) |
+| `layout.grey_count` | integer | Number of grey levels in palette (default 4) |
+
+This is useful for conditional logic in SVG templates without needing Lua to pass the values through — for example, the `components/hinting.svg` include uses `layout.grey_count` to switch between mono and smooth font hinting.
 
 ### Basic Interpolation
 
@@ -292,6 +313,147 @@ The default screen also adapts to the palette:
 - **Gradients** - Convert to dithered patterns (may look noisy)
 - **Subtle color differences** - May become indistinguishable on limited palettes
 - **Colors not in palette** - Will be dithered to nearest match
+
+## Font Rendering for E-ink
+
+Byonk uses a [patched version of resvg](https://github.com/oetiker/resvg/tree/skrifa) for SVG rendering, which adds font hinting support with custom CSS properties for fine-tuning. Getting these right makes a big difference on e-ink displays, where there are few (or no) gray levels to smooth out font edges.
+
+### Available Properties
+
+| Property | Values | Default | Description |
+|----------|--------|---------|-------------|
+| `-resvg-hinting-target` | `smooth`, `mono` | `smooth` | `mono` for 1-bit displays, `smooth` for displays with gray levels |
+| `-resvg-hinting-mode` | `normal`, `light`, `lcd`, `vertical-lcd` | `normal` | Hinting strength. `normal` = strongest grid-fitting, `light` = softer |
+| `-resvg-hinting-engine` | `auto-fallback`, `auto`, `native` | `auto-fallback` | `auto` uses FreeType's auto-hinter (more consistent), `native` uses the font's built-in hints |
+| `-resvg-hinting-symmetric` | `true`, `false` | `true` | Symmetric rasterization. `false` can improve consistency at small sizes |
+| `-resvg-hinting-preserve-linear-metrics` | `true`, `false` | `false` | `true` forces uniform glyph spacing |
+| `shape-rendering` | `auto`, `crispEdges`, `geometricPrecision` | `auto` | `crispEdges` disables anti-aliasing on shapes and lines |
+| `text-rendering` | `auto`, `optimizeSpeed`, `optimizeLegibility`, `geometricPrecision` | `auto` | Hint for text rendering quality |
+
+### Recommended Presets
+
+**1-bit display (black & white only):**
+
+```css
+text {
+  -resvg-hinting-target: mono;
+  -resvg-hinting-mode: normal;
+  -resvg-hinting-engine: auto;
+  -resvg-hinting-symmetric: false;
+  -resvg-hinting-preserve-linear-metrics: true;
+  shape-rendering: crispEdges;
+}
+```
+
+**4 gray levels:**
+
+```css
+text {
+  -resvg-hinting-target: smooth;
+  -resvg-hinting-mode: normal;
+  -resvg-hinting-engine: auto;
+  shape-rendering: crispEdges;
+}
+```
+
+**16 gray levels:**
+
+```css
+text {
+  -resvg-hinting-target: smooth;
+  -resvg-hinting-mode: light;
+  -resvg-hinting-engine: auto;
+}
+```
+
+### Adaptive Hinting
+
+The `components/hinting.svg` include automatically applies the right hinting settings based on the display's grey levels:
+
+```svg
+<style>
+  text {
+    {% include "components/hinting.svg" %}
+  }
+</style>
+```
+
+On black-and-white displays (`grey_count <= 2`) it enables mono hinting with `crispEdges`; on displays with more grey levels it uses smooth hinting. All built-in screens use this component.
+
+### Hinting Demo Screen
+
+The built-in `hintdemo` screen provides a visual comparison of all hinting engine and target combinations in a 3×3 grid:
+
+- **Columns:** mono, normal (smooth), light (smooth)
+- **Rows:** auto engine, native engine, no hinting
+
+Enable it in your `config.yaml` to see how different settings affect text rendering at various font sizes on your actual display.
+
+![Hinting demo screen](../images/hintdemo.png)
+
+### Tips
+
+- **Use the `auto` engine.** The FreeType auto-hinter applies a consistent algorithm to all glyphs. Native font hints vary in quality and can produce inconsistent letterforms (e.g., the same letter rendering differently at the same size).
+- **Choose font sizes that land on whole pixel boundaries.** Fractional pixel heights cause glyphs to snap to the grid differently, producing inconsistent shapes.
+- **`shape-rendering: crispEdges`** eliminates anti-aliased edges on lines and rectangles — important when there are few gray levels to work with.
+- **Test on your actual display.** Optimal settings depend on the font, font size, and display capabilities. The presets above are starting points.
+
+## Bitmap Fonts
+
+Byonk ships with X11 bitmap fonts converted to TTF files. These contain embedded bitmap strikes — pre-rendered glyphs at specific pixel sizes — which produce perfectly crisp text on e-ink displays without any hinting artifacts.
+
+### Available Families
+
+**Proportional fonts:**
+
+| Family | Styles | Pixel Sizes |
+|--------|--------|-------------|
+| X11Helv | Regular, Bold, Oblique, BoldOblique | 8, 10, 11, 12, 14, 17, 18, 20, 24, 25, 34 |
+| X11LuSans | Regular, Bold, Oblique, BoldOblique | 8–34 (13 sizes) |
+| X11LuType | Regular, Bold | 8–34 (13 sizes) |
+| X11Term | Regular, Bold | 14, 18 |
+
+**Fixed-width fonts** (grouped by cell width):
+
+| Family | Styles | Pixel Sizes |
+|--------|--------|-------------|
+| X11Misc5x | Regular | 6, 7, 8 |
+| X11Misc6x | Regular, Bold, Oblique | 9, 10, 12, 13 |
+| X11Misc7x | Regular, Bold, Oblique | 13, 14 |
+| X11Misc8x | Regular, Bold, Oblique | 13, 16 |
+| X11Misc9x | Regular, Bold | 15, 18 |
+| X11Misc10x | Regular | 20 |
+| X11Misc12x | Regular | 24 |
+
+### Usage
+
+Set `font-family` to the family name and `font-size` to a pixel size that matches a bitmap strike. The renderer automatically selects the closest strike:
+
+```svg
+<text font-family="X11Helv" font-size="14">Proportional text</text>
+<text font-family="X11Helv" font-size="14" font-weight="700">Bold</text>
+<text font-family="X11Misc7x" font-size="13">Fixed width</text>
+<text font-family="X11Misc7x" font-size="13" font-style="oblique">Fixed oblique</text>
+```
+
+For sizes without an exact bitmap strike, autotraced scalable outlines are used as fallback — but these won't look as clean as the native bitmap sizes.
+
+### Bitmap Font Demo Screen
+
+The built-in `fontdemo-bitmap` screen showcases all sizes and styles for a given font family. Configure it with the `font_prefix` parameter:
+
+```yaml
+screens:
+  fontdemo-bitmap:
+    params:
+      font_prefix: X11Helv   # or X11LuSans, X11LuType, X11Term, X11Misc
+```
+
+This renders each available size and style combination as a labeled line, useful for picking the right font and size for your screen.
+
+![Bitmap font demo - X11Helv](../images/fontdemo-bitmap-helv.png)
+
+![Bitmap font demo - X11Misc](../images/fontdemo-bitmap-misc.png)
 
 ## Layout Patterns
 
@@ -546,6 +708,7 @@ screens/
 ├── components/           # Reusable snippets for {% include %}
 │   ├── header.svg
 │   ├── footer.svg
+│   ├── hinting.svg
 │   └── status_bar.svg
 ├── myscreen.lua
 └── myscreen.svg
@@ -649,6 +812,7 @@ Byonk includes several ready-to-use components:
 |-----------|-------------|
 | `components/header.svg` | Header bar with title and optional timestamp |
 | `components/footer.svg` | Footer with timestamp and optional text |
+| `components/hinting.svg` | Adaptive font hinting (mono for BW, smooth for greyscale) |
 | `components/status_bar.svg` | WiFi and battery indicators |
 
 ### Combining Extends and Includes

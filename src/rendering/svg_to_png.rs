@@ -344,3 +344,66 @@ fn pack_nbits(indices: &[u8], width: u32, bits: u8) -> Vec<u8> {
 
     packed
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bitmap_font_families() {
+        let loader = crate::assets::AssetLoader::new(None, None, None);
+        let fonts = loader.get_fonts();
+        let renderer = SvgRenderer::with_fonts(fonts);
+
+        let mut x11_families: Vec<_> = renderer
+            .fontdb
+            .faces()
+            .filter_map(|f| f.families.first().map(|(name, _)| name.clone()))
+            .filter(|name| name.starts_with("X11"))
+            .collect();
+        x11_families.sort();
+        x11_families.dedup();
+        for fam in &x11_families {
+            println!("fontdb family: {}", fam);
+        }
+        assert!(!x11_families.is_empty(), "No X11 font families found");
+    }
+
+    #[test]
+    fn test_bitmap_font_render() {
+        let loader = crate::assets::AssetLoader::new(None, None, None);
+        let fonts = loader.get_fonts();
+        let renderer = SvgRenderer::with_fonts(fonts);
+
+        // Check what fontdb knows about X11Helv
+        for face in renderer.fontdb.faces() {
+            if let Some((name, _)) = face.families.first() {
+                if name == "X11Helv" {
+                    println!(
+                        "Face: {} | style={:?} weight={:?} | source={:?}",
+                        name, face.style, face.weight, face.source
+                    );
+                }
+            }
+        }
+
+        // Render with bitmap fonts — font-size selects the bitmap strike
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200" width="800" height="200">
+          <rect width="800" height="200" fill="white"/>
+          <text x="20" y="30" font-family="X11Helv" font-size="8" fill="black">X11Helv 8px: Hello World</text>
+          <text x="20" y="60" font-family="NONEXISTENT_FONT" font-size="14" fill="black">NONEXISTENT: Hello World</text>
+          <text x="20" y="90" font-family="X11Helv" font-size="14" fill="black">X11Helv 14px: Hello World</text>
+        </svg>"#;
+
+        let spec = DisplaySpec::from_dimensions(800, 200).unwrap();
+        let palette = vec![(0, 0, 0), (255, 255, 255)];
+        let png = renderer
+            .render_to_palette_png(svg.as_bytes(), spec, &palette)
+            .unwrap();
+        std::fs::write("/tmp/byonk-bitmap-font-test2.png", &png).unwrap();
+        println!(
+            "Wrote /tmp/byonk-bitmap-font-test2.png ({} bytes)",
+            png.len()
+        );
+    }
+}

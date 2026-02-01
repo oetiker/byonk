@@ -15,11 +15,13 @@ use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
-use crate::models::{AppConfig, DisplaySpec};
+use crate::assets::AssetLoader;
+use crate::models::{AppConfig, DisplaySpec, ScreenConfig};
 use crate::services::{ContentCache, ContentPipeline, DeviceContext, FileWatcher, RenderService};
 
 /// Dev mode application state
@@ -30,6 +32,7 @@ pub struct DevState {
     pub content_cache: Arc<ContentCache>,
     pub renderer: Arc<RenderService>,
     pub file_watcher: Arc<FileWatcher>,
+    pub asset_loader: Arc<AssetLoader>,
 }
 
 /// Query parameters for /dev/render
@@ -58,6 +61,16 @@ pub struct RenderQuery {
     pub colors: Option<String>,
 }
 
+/// Convert serde_yaml params to serde_json values
+fn yaml_params_to_json(
+    params: &HashMap<String, serde_yaml::Value>,
+) -> HashMap<String, serde_json::Value> {
+    params
+        .iter()
+        .filter_map(|(k, v)| serde_json::to_value(v).ok().map(|jv| (k.clone(), jv)))
+        .collect()
+}
+
 fn default_model() -> String {
     "og".to_string()
 }
@@ -84,10 +97,18 @@ pub struct ScreenInfo {
     pub default_refresh: u32,
 }
 
+/// Device info for the screens list
+#[derive(Debug, Serialize)]
+pub struct DeviceInfo {
+    pub id: String,
+    pub screen: String,
+}
+
 /// Response from /dev/screens
 #[derive(Debug, Serialize)]
 pub struct ScreensResponse {
     pub screens: Vec<ScreenInfo>,
+    pub devices: Vec<DeviceInfo>,
     pub default_screen: Option<String>,
 }
 
@@ -119,22 +140,66 @@ pub async fn handle_dev_js() -> impl IntoResponse {
     )
 }
 
-/// List available screens from config
+/// List available screens by discovering them from the filesystem.
+///
+/// Screens are discovered by scanning for `.lua` files with matching `.svg` templates.
+/// Config-defined screens are included first, then any filesystem screens not in config
+/// are auto-discovered. This allows new screens to appear without restarting the server.
 pub async fn handle_screens(State(state): State<DevState>) -> Json<ScreensResponse> {
-    let screens: Vec<ScreenInfo> = state
+    let mut seen = std::collections::HashSet::new();
+
+    // Start with config-defined screens (they may have custom settings)
+    let mut screens: Vec<ScreenInfo> = state
         .config
         .screens
         .iter()
-        .map(|(name, config)| ScreenInfo {
-            name: name.clone(),
-            script: config.script.display().to_string(),
-            template: config.template.display().to_string(),
-            default_refresh: config.default_refresh,
+        .map(|(name, config)| {
+            seen.insert(name.clone());
+            ScreenInfo {
+                name: name.clone(),
+                script: config.script.display().to_string(),
+                template: config.template.display().to_string(),
+                default_refresh: config.default_refresh,
+            }
+        })
+        .collect();
+
+    // Auto-discover screens from filesystem that aren't in config
+    let all_files = state.asset_loader.list_screens();
+    for file in &all_files {
+        if let Some(name) = file.strip_suffix(".lua") {
+            // Skip subdirectories (layouts/, components/, etc.) and already-seen screens
+            if name.contains('/') || seen.contains(name) {
+                continue;
+            }
+            // Check that a matching .svg template exists
+            let svg_file = format!("{}.svg", name);
+            if all_files.iter().any(|f| f == &svg_file) {
+                seen.insert(name.to_string());
+                screens.push(ScreenInfo {
+                    name: name.to_string(),
+                    script: format!("{}.lua", name),
+                    template: svg_file,
+                    default_refresh: 900,
+                });
+            }
+        }
+    }
+
+    // Collect configured devices
+    let devices: Vec<DeviceInfo> = state
+        .config
+        .devices
+        .iter()
+        .map(|(id, dev)| DeviceInfo {
+            id: id.clone(),
+            screen: dev.screen.clone(),
         })
         .collect();
 
     Json(ScreensResponse {
         screens,
+        devices,
         default_screen: state.config.default_screen.clone(),
     })
 }
@@ -182,16 +247,8 @@ pub async fn handle_resolve_mac(
     match lookup {
         Some((screen_config, device_config)) => {
             // Convert YAML params to JSON for response
-            let params: HashMap<String, serde_json::Value> = device_config
-                .params
-                .iter()
-                .filter_map(|(k, v)| {
-                    serde_yaml::to_string(v)
-                        .ok()
-                        .and_then(|s| serde_json::from_str(&s).ok())
-                        .map(|jv| (k.clone(), jv))
-                })
-                .collect();
+            let params: HashMap<String, serde_json::Value> =
+                yaml_params_to_json(&device_config.params);
 
             // Get screen name from the script path
             let screen_name = screen_config
@@ -232,16 +289,7 @@ pub async fn handle_render(
         {
             Some((sc, dc)) => {
                 // Convert device params to JSON
-                let params: HashMap<String, serde_json::Value> = dc
-                    .params
-                    .iter()
-                    .filter_map(|(k, v)| {
-                        serde_yaml::to_string(v)
-                            .ok()
-                            .and_then(|s| serde_json::from_str(&s).ok())
-                            .map(|jv| (k.clone(), jv))
-                    })
-                    .collect();
+                let params: HashMap<String, serde_json::Value> = yaml_params_to_json(&dc.params);
                 (sc.clone(), Some(params), dc.colors.clone())
             }
             None => {
@@ -256,9 +304,24 @@ pub async fn handle_render(
             }
         }
     } else if let Some(ref screen_name) = query.screen {
-        match state.config.screens.get(screen_name) {
-            Some(config) => (config.clone(), None, None),
-            None => {
+        if let Some(config) = state.config.screens.get(screen_name) {
+            (config.clone(), None, None)
+        } else {
+            // Try auto-discovering screen from filesystem
+            let script = format!("{}.lua", screen_name);
+            let template = format!("{}.svg", screen_name);
+            let files = state.asset_loader.list_screens();
+            if files.iter().any(|f| f == &script) && files.iter().any(|f| f == &template) {
+                (
+                    ScreenConfig {
+                        script: PathBuf::from(&script),
+                        template: PathBuf::from(&template),
+                        default_refresh: 900,
+                    },
+                    None,
+                    None,
+                )
+            } else {
                 return (
                     StatusCode::NOT_FOUND,
                     Json(RenderErrorResponse {

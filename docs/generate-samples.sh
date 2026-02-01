@@ -70,6 +70,9 @@ render_screen "TR:AN:SI:T0:00:00" "transit"
 render_screen "TE:ST:GR:AY:00:00" "graytest"
 render_screen "00:00:00:00:00:00" "default" --battery=4.12 --rssi=-65
 render_screen "TE:ST:HE:LL:00:00" "hello"
+render_screen "HI:NT:DE:MO:00:00" "hintdemo"
+render_screen "X11Helv" "fontdemo-bitmap-helv"
+render_screen "X11Misc" "fontdemo-bitmap-misc"
 
 # 6-color palette samples (simulating a color e-ink display)
 PALETTE_6CLR="#000000,#FFFFFF,#00FF00,#0000FF,#FF0000,#FFFF00"

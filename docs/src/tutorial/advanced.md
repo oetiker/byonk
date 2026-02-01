@@ -353,6 +353,47 @@ for i, item in ipairs(json.items) do
 end
 ```
 
+## Embedding Remote Images
+
+You can fetch images via HTTP and embed them in SVG templates using `http_get()` and `base64_encode()`. The pattern is: fetch the image, base64-encode it, construct a data URI, and pass it to the template.
+
+### Lua Script
+
+```lua
+-- Fetch a remote image and embed it as a data URI
+local ok, image_bytes = pcall(function()
+  return http_get("https://example.com/photo.png", {
+    cache_ttl = 3600  -- Cache for 1 hour to avoid re-fetching
+  })
+end)
+
+if not ok then
+  log_error("Failed to fetch image: " .. tostring(image_bytes))
+  return {
+    data = { error = "Could not load image" },
+    refresh_rate = 60
+  }
+end
+
+local image_src = "data:image/png;base64," .. base64_encode(image_bytes)
+
+return {
+  data = {
+    image_src = image_src,
+    title = "My Screen"
+  },
+  refresh_rate = 900
+}
+```
+
+### SVG Template
+
+```svg
+<image x="100" y="50" width="200" height="200" href="{{ data.image_src }}"/>
+```
+
+> **Tip:** Use `cache_ttl` on the `http_get` call to avoid re-fetching the image on every device refresh. This is especially important for large images or rate-limited servers.
+
 ## Testing Strategies
 
 ### Test with Swagger UI

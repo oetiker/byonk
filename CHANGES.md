@@ -9,9 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- Terminus TTF font demo screen (`fontdemo-terminus`): showcases all 9 embedded bitmap sizes (12–32px) in regular, bold, italic, and bold-italic styles
+- `fonts` global in Lua API: discover all available font families, styles, weights, and bitmap strike sizes at runtime
+
 ### Changed
 
+- Consolidated three PNG encoder methods into a single `encode_png` helper, removing duplicate boilerplate
+
 ### Fixed
+
+- PNG output ~27% smaller: added oxipng post-processing with zopfli compression and adaptive filter selection
 
 ## 0.11.0 - 2026-02-01
 

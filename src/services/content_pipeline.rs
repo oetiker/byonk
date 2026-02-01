@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::assets::AssetLoader;
 use crate::error::RenderError;
 use crate::models::{AppConfig, DisplaySpec, ScreenConfig};
-use crate::services::{LuaRuntime, RenderService, TemplateService};
+use crate::services::{FontFaceInfo, LuaRuntime, RenderService, TemplateService};
 
 /// Result from running a Lua script (before rendering)
 pub struct ScriptResult {
@@ -81,7 +81,26 @@ impl ContentPipeline {
         asset_loader: Arc<AssetLoader>,
         renderer: Arc<RenderService>,
     ) -> Result<Self, ContentError> {
-        let lua_runtime = LuaRuntime::new(asset_loader.clone());
+        // Build font info from the renderer's fontdb
+        let mut font_families: HashMap<String, Vec<FontFaceInfo>> = HashMap::new();
+        for face in renderer.svg_renderer.font_faces() {
+            if let Some((family_name, _)) = face.families.first() {
+                let info = FontFaceInfo {
+                    style: format!("{:?}", face.style),
+                    weight: face.weight.0,
+                    stretch: format!("{:?}", face.stretch),
+                    monospaced: face.monospaced,
+                    post_script_name: face.post_script_name.clone(),
+                    bitmap_strikes: face.bitmap_strikes.clone(),
+                };
+                font_families
+                    .entry(family_name.clone())
+                    .or_default()
+                    .push(info);
+            }
+        }
+
+        let lua_runtime = LuaRuntime::with_fonts(asset_loader.clone(), font_families);
         let template_service = TemplateService::new(asset_loader)?;
 
         Ok(Self {

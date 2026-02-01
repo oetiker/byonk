@@ -32,14 +32,40 @@ pub enum ScriptError {
     NotFound(String),
 }
 
+/// Information about a single font face, for exposing to Lua
+#[derive(Debug, Clone)]
+pub struct FontFaceInfo {
+    pub style: String,
+    pub weight: u16,
+    pub stretch: String,
+    pub monospaced: bool,
+    pub post_script_name: String,
+    pub bitmap_strikes: Vec<u16>,
+}
+
 /// Lua runtime for executing screen scripts
 pub struct LuaRuntime {
     asset_loader: Arc<AssetLoader>,
+    /// Font info keyed by family name
+    font_families: HashMap<String, Vec<FontFaceInfo>>,
 }
 
 impl LuaRuntime {
     pub fn new(asset_loader: Arc<AssetLoader>) -> Self {
-        Self { asset_loader }
+        Self {
+            asset_loader,
+            font_families: HashMap::new(),
+        }
+    }
+
+    pub fn with_fonts(
+        asset_loader: Arc<AssetLoader>,
+        font_families: HashMap<String, Vec<FontFaceInfo>>,
+    ) -> Self {
+        Self {
+            asset_loader,
+            font_families,
+        }
     }
 
     /// Run a Lua script with the given parameters
@@ -767,6 +793,28 @@ impl LuaRuntime {
             Ok(svg)
         })?;
         globals.set("qr_svg", qr_svg)?;
+
+        // Build fonts table from font face info
+        let fonts_table = lua.create_table()?;
+        for (family, faces) in &self.font_families {
+            let family_table = lua.create_table()?;
+            for (i, face) in faces.iter().enumerate() {
+                let face_table = lua.create_table()?;
+                face_table.set("style", face.style.as_str())?;
+                face_table.set("weight", face.weight)?;
+                face_table.set("stretch", face.stretch.as_str())?;
+                face_table.set("monospaced", face.monospaced)?;
+                face_table.set("post_script_name", face.post_script_name.as_str())?;
+                let strikes_table = lua.create_table()?;
+                for (j, &ppem) in face.bitmap_strikes.iter().enumerate() {
+                    strikes_table.set(j + 1, ppem)?;
+                }
+                face_table.set("bitmap_strikes", strikes_table)?;
+                family_table.set(i + 1, face_table)?;
+            }
+            fonts_table.set(family.as_str(), family_table)?;
+        }
+        globals.set("fonts", fonts_table)?;
 
         Ok(())
     }

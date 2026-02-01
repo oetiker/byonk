@@ -47,6 +47,11 @@ impl SvgRenderer {
         }
     }
 
+    /// Access the font database faces
+    pub fn font_faces(&self) -> impl Iterator<Item = &fontdb::FaceInfo> {
+        self.fontdb.faces()
+    }
+
     /// Create a new SVG renderer with no custom fonts (system fonts only)
     pub fn new() -> Self {
         Self::with_fonts(Vec::new())
@@ -66,17 +71,56 @@ impl SvgRenderer {
         // Dither RGBA data to palette indices
         let indices = palette_dither(pixmap.data(), spec.width, spec.height, palette, None);
 
-        // Choose optimal PNG encoding based on palette
-        if is_grey_palette(palette) {
-            let levels = palette.len() as u8;
-            if levels <= 4 {
-                self.encode_grey_2bit(&indices, spec, palette)
+        // Choose PNG format and pack pixel data
+        let (color_type, bit_depth, plte, packed) = if is_grey_palette(palette) {
+            if palette.len() <= 4 {
+                let mapped = map_grey_indices(&indices, palette, 3);
+                (
+                    png::ColorType::Grayscale,
+                    png::BitDepth::Two,
+                    None,
+                    pack_nbits(&mapped, spec.width, 2),
+                )
             } else {
-                self.encode_grey_4bit(&indices, spec, palette)
+                let mapped = map_grey_indices(&indices, palette, 15);
+                (
+                    png::ColorType::Grayscale,
+                    png::BitDepth::Four,
+                    None,
+                    pack_nbits(&mapped, spec.width, 4),
+                )
             }
         } else {
-            self.encode_indexed_png(&indices, spec, palette)
-        }
+            let (depth, bits) = match palette.len() {
+                0..=2 => (png::BitDepth::One, 1),
+                3..=4 => (png::BitDepth::Two, 2),
+                5..=16 => (png::BitDepth::Four, 4),
+                _ => (png::BitDepth::Eight, 8),
+            };
+            let plte: Vec<u8> = palette.iter().flat_map(|&(r, g, b)| [r, g, b]).collect();
+            let packed = if bits == 8 {
+                indices
+            } else {
+                pack_nbits(&indices, spec.width, bits)
+            };
+            (png::ColorType::Indexed, depth, Some(plte), packed)
+        };
+
+        // Encode PNG (fast settings — oxipng will re-compress optimally)
+        let png_bytes = encode_png(spec, color_type, bit_depth, plte.as_deref(), &packed)?;
+
+        // Re-compress with oxipng (zopfli + adaptive filter selection)
+        let optimized = oxipng::optimize_from_memory(
+            &png_bytes,
+            &oxipng::Options {
+                strip: oxipng::StripChunks::Safe,
+                optimize_alpha: false,
+                ..Default::default()
+            },
+        )
+        .unwrap_or(png_bytes);
+        spec.validate_size(optimized.len())?;
+        Ok(optimized)
     }
 
     /// Parse and rasterize SVG to an RGBA pixmap
@@ -107,123 +151,6 @@ impl SvgRenderer {
 
         Ok(pixmap)
     }
-
-    /// Encode as 2-bit native grayscale PNG (color type 0).
-    ///
-    /// Palette indices are mapped to grey values for the PNG data.
-    fn encode_grey_2bit(
-        &self,
-        indices: &[u8],
-        spec: DisplaySpec,
-        palette: &[(u8, u8, u8)],
-    ) -> Result<Vec<u8>, RenderError> {
-        let mut buf = Cursor::new(Vec::new());
-
-        {
-            let mut encoder = png::Encoder::new(&mut buf, spec.width, spec.height);
-            encoder.set_color(png::ColorType::Grayscale);
-            encoder.set_depth(png::BitDepth::Two);
-            encoder.set_compression(png::Compression::Best);
-            encoder.set_filter(png::FilterType::Paeth);
-
-            let mut writer = encoder
-                .write_header()
-                .map_err(|e| RenderError::PngEncode(e.to_string()))?;
-
-            // Map palette indices to 2-bit grey values (0-3)
-            let packed = pack_2bit_grey(indices, spec.width, palette);
-
-            writer
-                .write_image_data(&packed)
-                .map_err(|e| RenderError::PngEncode(e.to_string()))?;
-        }
-
-        let png_bytes = buf.into_inner();
-        spec.validate_size(png_bytes.len())?;
-        Ok(png_bytes)
-    }
-
-    /// Encode as 4-bit native grayscale PNG (color type 0).
-    fn encode_grey_4bit(
-        &self,
-        indices: &[u8],
-        spec: DisplaySpec,
-        palette: &[(u8, u8, u8)],
-    ) -> Result<Vec<u8>, RenderError> {
-        let mut buf = Cursor::new(Vec::new());
-
-        {
-            let mut encoder = png::Encoder::new(&mut buf, spec.width, spec.height);
-            encoder.set_color(png::ColorType::Grayscale);
-            encoder.set_depth(png::BitDepth::Four);
-            encoder.set_compression(png::Compression::Best);
-            encoder.set_filter(png::FilterType::Paeth);
-
-            let mut writer = encoder
-                .write_header()
-                .map_err(|e| RenderError::PngEncode(e.to_string()))?;
-
-            let packed = pack_4bit_grey(indices, spec.width, palette);
-
-            writer
-                .write_image_data(&packed)
-                .map_err(|e| RenderError::PngEncode(e.to_string()))?;
-        }
-
-        let png_bytes = buf.into_inner();
-        spec.validate_size(png_bytes.len())?;
-        Ok(png_bytes)
-    }
-
-    /// Encode as indexed PNG (color type 3) with PLTE chunk.
-    fn encode_indexed_png(
-        &self,
-        indices: &[u8],
-        spec: DisplaySpec,
-        palette: &[(u8, u8, u8)],
-    ) -> Result<Vec<u8>, RenderError> {
-        let mut buf = Cursor::new(Vec::new());
-
-        {
-            let mut encoder = png::Encoder::new(&mut buf, spec.width, spec.height);
-            encoder.set_color(png::ColorType::Indexed);
-
-            let bit_depth = if palette.len() <= 2 {
-                png::BitDepth::One
-            } else if palette.len() <= 4 {
-                png::BitDepth::Two
-            } else if palette.len() <= 16 {
-                png::BitDepth::Four
-            } else {
-                png::BitDepth::Eight
-            };
-            encoder.set_depth(bit_depth);
-            encoder.set_compression(png::Compression::Best);
-            encoder.set_filter(png::FilterType::Paeth);
-
-            let plte: Vec<u8> = palette.iter().flat_map(|&(r, g, b)| [r, g, b]).collect();
-            encoder.set_palette(plte);
-
-            let mut writer = encoder
-                .write_header()
-                .map_err(|e| RenderError::PngEncode(e.to_string()))?;
-
-            let packed = match bit_depth {
-                png::BitDepth::One => pack_nbits(indices, spec.width, 1),
-                png::BitDepth::Two => pack_nbits(indices, spec.width, 2),
-                png::BitDepth::Four => pack_nbits(indices, spec.width, 4),
-                _ => indices.to_vec(),
-            };
-
-            writer
-                .write_image_data(&packed)
-                .map_err(|e| RenderError::PngEncode(e.to_string()))?;
-        }
-
-        let png_bytes = buf.into_inner();
-        spec.validate_size(png_bytes.len())?;
-        Ok(png_bytes)
-    }
 }
 
 impl Default for SvgRenderer {
@@ -236,92 +163,49 @@ impl Default for SvgRenderer {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Check if a palette consists entirely of grey values (R == G == B),
-/// sorted from dark to light.
+/// Check if a palette consists entirely of grey values (R == G == B).
 fn is_grey_palette(palette: &[(u8, u8, u8)]) -> bool {
     palette.iter().all(|&(r, g, b)| r == g && g == b)
 }
 
-/// Pack palette indices into 2-bit grayscale PNG data.
-///
-/// Each palette index is mapped to a 2-bit grey value (0-3) derived from
-/// the palette entry's red channel (palette must be grey).
-fn pack_2bit_grey(indices: &[u8], width: u32, palette: &[(u8, u8, u8)]) -> Vec<u8> {
-    // Build index → 2-bit grey value lookup
+/// Map palette indices to native grayscale values (0..max_val).
+fn map_grey_indices(indices: &[u8], palette: &[(u8, u8, u8)], max_val: u32) -> Vec<u8> {
     let max_level = (palette.len() - 1) as u32;
-    let grey_lut: Vec<u8> = palette
-        .iter()
-        .enumerate()
-        .map(|(i, _)| {
-            // Map palette index to 0-3 range
-            ((i as u32 * 3 + max_level / 2) / max_level).min(3) as u8
-        })
+    let lut: Vec<u8> = (0..palette.len())
+        .map(|i| ((i as u32 * max_val + max_level / 2) / max_level).min(max_val) as u8)
         .collect();
-
-    let bytes_per_row = (width as usize).div_ceil(4);
-    let height = indices.len() / width as usize;
-    let mut packed = Vec::with_capacity(bytes_per_row * height);
-
-    for row in indices.chunks(width as usize) {
-        let mut byte = 0u8;
-        let mut bit_pos = 6;
-
-        for (i, &idx) in row.iter().enumerate() {
-            let value = grey_lut[idx as usize];
-            byte |= value << bit_pos;
-
-            if bit_pos == 0 || i == row.len() - 1 {
-                packed.push(byte);
-                byte = 0;
-                bit_pos = 6;
-            } else {
-                bit_pos -= 2;
-            }
-        }
-    }
-
-    packed
+    indices.iter().map(|&idx| lut[idx as usize]).collect()
 }
 
-/// Pack palette indices into 4-bit grayscale PNG data.
-fn pack_4bit_grey(indices: &[u8], width: u32, palette: &[(u8, u8, u8)]) -> Vec<u8> {
-    let max_level = (palette.len() - 1) as u32;
-    let grey_lut: Vec<u8> = palette
-        .iter()
-        .enumerate()
-        .map(|(i, _)| ((i as u32 * 15 + max_level / 2) / max_level).min(15) as u8)
-        .collect();
-
-    let bytes_per_row = (width as usize).div_ceil(2);
-    let height = indices.len() / width as usize;
-    let mut packed = Vec::with_capacity(bytes_per_row * height);
-
-    for row in indices.chunks(width as usize) {
-        let mut high = true;
-        let mut byte = 0u8;
-
-        for (i, &idx) in row.iter().enumerate() {
-            let value = grey_lut[idx as usize];
-            if high {
-                byte = value << 4;
-                high = false;
-            } else {
-                byte |= value;
-                packed.push(byte);
-                byte = 0;
-                high = true;
-            }
-
-            if i == row.len() - 1 && !high {
-                packed.push(byte);
-            }
+/// Encode packed pixel data as a PNG.
+fn encode_png(
+    spec: DisplaySpec,
+    color_type: png::ColorType,
+    bit_depth: png::BitDepth,
+    plte: Option<&[u8]>,
+    packed: &[u8],
+) -> Result<Vec<u8>, RenderError> {
+    let mut buf = Cursor::new(Vec::new());
+    {
+        let mut encoder = png::Encoder::new(&mut buf, spec.width, spec.height);
+        encoder.set_color(color_type);
+        encoder.set_depth(bit_depth);
+        encoder.set_compression(png::Compression::Fast);
+        encoder.set_filter(png::FilterType::NoFilter);
+        if let Some(plte) = plte {
+            encoder.set_palette(plte);
         }
+        let mut writer = encoder
+            .write_header()
+            .map_err(|e| RenderError::PngEncode(e.to_string()))?;
+        writer
+            .write_image_data(packed)
+            .map_err(|e| RenderError::PngEncode(e.to_string()))?;
     }
-
-    packed
+    Ok(buf.into_inner())
 }
 
-/// Pack palette indices into N-bit indexed PNG data (1, 2, or 4 bits per pixel).
+/// Pack pixel values into N-bit PNG row data (1, 2, or 4 bits per pixel).
 fn pack_nbits(indices: &[u8], width: u32, bits: u8) -> Vec<u8> {
     let pixels_per_byte = 8 / bits as usize;
     let bytes_per_row = (width as usize).div_ceil(pixels_per_byte);
@@ -367,6 +251,29 @@ mod tests {
             println!("fontdb family: {}", fam);
         }
         assert!(!x11_families.is_empty(), "No X11 font families found");
+    }
+
+    #[test]
+    fn test_bitmap_strikes_exposed() {
+        let loader = crate::assets::AssetLoader::new(None, None, None);
+        let fonts = loader.get_fonts();
+        let renderer = SvgRenderer::with_fonts(fonts);
+
+        // X11Helv should have bitmap strikes
+        let x11_face = renderer
+            .font_faces()
+            .find(|f| f.families.first().map(|(n, _)| n.as_str()) == Some("X11Helv"))
+            .expect("X11Helv face not found");
+
+        assert!(
+            !x11_face.bitmap_strikes.is_empty(),
+            "X11Helv should have bitmap strikes"
+        );
+        // Strikes should be sorted
+        for w in x11_face.bitmap_strikes.windows(2) {
+            assert!(w[0] <= w[1], "bitmap_strikes should be sorted");
+        }
+        println!("X11Helv bitmap strikes: {:?}", x11_face.bitmap_strikes);
     }
 
     #[test]

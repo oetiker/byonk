@@ -724,6 +724,70 @@ mod lua_unit_tests {
 
         assert_eq!(result.refresh_rate, 900);
     }
+
+    #[test]
+    fn test_fonts_global() {
+        use byonk::services::FontFaceInfo;
+
+        let script = r#"
+            -- fonts global should be a table
+            local count = 0
+            local found_test = false
+            local test_face = nil
+            for family, faces in pairs(fonts) do
+                count = count + 1
+                if family == "TestFamily" then
+                    found_test = true
+                    test_face = faces[1]
+                end
+            end
+            return {
+                data = {
+                    family_count = count,
+                    found_test = found_test,
+                    style = test_face and test_face.style or "missing",
+                    weight = test_face and test_face.weight or 0,
+                    monospaced = test_face and test_face.monospaced or false,
+                    strikes_count = test_face and #test_face.bitmap_strikes or 0,
+                    first_strike = test_face and test_face.bitmap_strikes[1] or 0,
+                },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("fonts_test.lua", script)]);
+
+        let mut font_families = HashMap::new();
+        font_families.insert(
+            "TestFamily".to_string(),
+            vec![FontFaceInfo {
+                style: "Normal".to_string(),
+                weight: 400,
+                stretch: "Normal".to_string(),
+                monospaced: true,
+                post_script_name: "TestFamily-Regular".to_string(),
+                bitmap_strikes: vec![8, 12, 16],
+            }],
+        );
+
+        let runtime = LuaRuntime::with_fonts(asset_loader, font_families);
+        let result = runtime
+            .run_script(
+                std::path::Path::new("fonts_test.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("Script should run");
+
+        assert_eq!(result.data["family_count"], 1);
+        assert_eq!(result.data["found_test"], true);
+        assert_eq!(result.data["style"], "Normal");
+        assert_eq!(result.data["weight"], 400);
+        assert_eq!(result.data["monospaced"], true);
+        assert_eq!(result.data["strikes_count"], 3);
+        assert_eq!(result.data["first_strike"], 8);
+    }
 }
 
 // ============================================================================

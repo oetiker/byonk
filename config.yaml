@@ -69,15 +69,14 @@ devices:
   #     station: "Olten"
   #
   # Tobi's device - bus stop departures
-  "A4:A9:90:8C:6D:18":
+  "B4:A9:90:8C:6D:18":
     screen: transit
     params:
       station: "Trans, Dorf"
       limit: 8
 
   # Test device for transit (docs sample)
-  KYQWE-KVPBC:
-#  "TR:AN:SI:T0:00:00":
+  "TR:AN:SI:T0:00:00":
     screen: transit
     params:
       station: "Trans, Dorf"

@@ -91,6 +91,43 @@ local greys = layout.grey_count      -- 4 (colors where R=G=B)
 
 > **Note:** All margin values are pre-floored for pixel-aligned positioning.
 
+### fonts
+
+A table of all available font families and their faces. Keyed by family name, each value is an array of face records.
+
+```lua
+-- List all font families
+for family, faces in pairs(fonts) do
+  print(family)  -- "X11Helv", "TerminusTTF", "Outfit", ...
+end
+
+-- Query a specific family
+for _, face in ipairs(fonts["X11Helv"]) do
+  print(face.style)           -- "Normal", "Italic", "Oblique"
+  print(face.weight)          -- 400 (number)
+  print(face.stretch)         -- "Normal", "Condensed", ...
+  print(face.monospaced)      -- true/false
+  print(face.post_script_name)-- "X11Helv"
+  -- Bitmap strike sizes (sorted ppem values), empty for outline-only fonts
+  for _, ppem in ipairs(face.bitmap_strikes) do
+    print(ppem)               -- 8, 10, 11, 12, ...
+  end
+end
+```
+
+**Face fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `style` | string | `"Normal"`, `"Italic"`, or `"Oblique"` |
+| `weight` | number | CSS-style weight (100–900, 400 = normal, 700 = bold) |
+| `stretch` | string | `"Normal"`, `"Condensed"`, `"Expanded"`, etc. |
+| `monospaced` | boolean | Whether the face is monospaced |
+| `post_script_name` | string | PostScript name of the face |
+| `bitmap_strikes` | table | Sorted array of available bitmap ppem sizes (empty if none) |
+
+**Type:** `table`
+
 ## Layout Helper Functions
 
 These functions help scale values appropriately for different device resolutions.

@@ -394,6 +394,40 @@ return {
 
 > **Tip:** Use `cache_ttl` on the `http_get` call to avoid re-fetching the image on every device refresh. This is especially important for large images or rate-limited servers.
 
+## Google Photos Album Display
+
+The built-in `gphoto` screen demonstrates fetching images from a shared Google Photos album using HTML scraping (no OAuth required).
+
+### Setup
+
+1. Open Google Photos and create or select an album
+2. Click **Share** → **Get link** to create a shared link
+3. Copy the URL (e.g., `https://photos.app.goo.gl/ABC123...`)
+
+### Configuration
+
+```yaml
+# config.yaml
+devices:
+  "XX:XX:XX:XX:XX:XX":
+    screen: gphoto
+    params:
+      album_url: "https://photos.app.goo.gl/YOUR_ALBUM_ID"
+      show_status: true      # Show battery/signal overlay
+      refresh_rate: 1800     # 30 minutes (default: 3600)
+```
+
+### How It Works
+
+The script scrapes the shared album HTML page to extract `lh3.googleusercontent.com` image URLs, then:
+
+1. Selects a random image from the album
+2. Appends size parameters (`=w{width}-h{height}-no`) to request device-sized images
+3. Fetches and base64-encodes the image for embedding in SVG
+4. Caches album HTML for 1 hour and images for 24 hours
+
+This approach works because Google's shared album pages embed image URLs directly in the HTML, even though the Photos API sharing features were deprecated in March 2025.
+
 ## Testing Strategies
 
 ### Test with Swagger UI

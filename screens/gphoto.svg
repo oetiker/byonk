@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
+  <style>
+    text { font-family: Outfit; {% include "components/hinting.svg" %} }
+  </style>
+
+  {% if data.error %}
+  <!-- Error state -->
+  <rect width="{{ data.width }}" height="{{ data.height }}" fill="#ffffff"/>
+  <text x="{{ data.width / 2 }}" y="{{ data.height / 2 }}" font-size="24" text-anchor="middle" fill="#000000">{{ data.error }}</text>
+  {% else %}
+  <!-- Full-screen photo -->
+  <image x="0" y="0" width="{{ data.width }}" height="{{ data.height }}" href="{{ data.image_src }}" preserveAspectRatio="xMidYMid slice"/>
+
+  {% if data.show_status %}
+  <!-- Status bar overlay -->
+  <rect x="0" y="{{ data.info_bar_y }}" width="{{ data.width }}" height="{{ data.info_bar_height }}" fill="#000000" opacity="0.6"/>
+  <text x="10" y="{{ data.info_bar_y + 22 }}" font-size="{{ data.font_sm }}" fill="#ffffff">
+    {% if device.battery_voltage %}{{ device.battery_voltage | round(precision=2) }}V{% endif %}
+    {% if device.rssi %} {{ device.rssi }}dBm{% endif %}
+  </text>
+  {% endif %}
+  {% endif %}
+</svg>

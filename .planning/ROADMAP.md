@@ -54,10 +54,10 @@ Plans:
   1. Crate-level documentation explains the HyAB + chroma coupling distance metric choice with color science rationale
   2. A pipeline diagram shows which color space is used at each stage (sRGB input, Linear RGB error diffusion, OKLab matching)
   3. Every color space conversion in the code has an inline comment explaining why that particular space is used at that point
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 03-01: TBD
+- [ ] 03-01-PLAN.md -- Add color science rationale, pipeline diagram, and inline WHY comments
 
 ## Progress
 
@@ -68,4 +68,4 @@ Phases execute in numeric order: 1 -> 2 -> 3
 |-------|---------------|--------|-----------|
 | 1. Core Distance Metric Fix | 1/1 | ✓ Complete | 2026-02-05 |
 | 2. Auto-Detection and Edge Cases | 1/1 | ✓ Complete | 2026-02-05 |
-| 3. Color Science Documentation | 0/? | Not started | - |
+| 3. Color Science Documentation | 0/1 | Planned | - |

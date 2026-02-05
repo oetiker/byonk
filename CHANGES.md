@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `fonts` global in Lua API: discover all available font families, styles, weights, and bitmap strike sizes at runtime
 
 - Auto-detect distance metric based on palette content -- chromatic palettes automatically use HyAB+chroma, achromatic palettes use Euclidean
+- Added color science documentation to eink-dither crate (distance metric rationale, pipeline diagram, inline WHY comments at every conversion site)
 
 ### Changed
 

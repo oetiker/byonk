@@ -133,6 +133,10 @@ impl From<LinearRgb> for Oklab {
     /// assert!(oklab.b.abs() < 0.001);
     /// ```
     fn from(rgb: LinearRgb) -> Self {
+        // WHY OKLab: Perceptually uniform distances needed for palette matching.
+        // The M1 matrix maps from linear sRGB primaries to LMS cone responses
+        // that OKLab is built on; cube root provides perceptual nonlinearity.
+
         // Step 1: Linear sRGB to LMS (M1 matrix)
         let l = 0.4122214708 * rgb.r + 0.5363325363 * rgb.g + 0.0514459929 * rgb.b;
         let m = 0.2119034982 * rgb.r + 0.6806995451 * rgb.g + 0.1073969566 * rgb.b;
@@ -174,6 +178,11 @@ impl From<Oklab> for LinearRgb {
     /// assert!((linear.g - linear.b).abs() < 0.001);
     /// ```
     fn from(lab: Oklab) -> Self {
+        // WHY inverse transform to LinearRgb: Needed for error diffusion (error
+        // must be in linear space) and for final pixel output. Result is
+        // intentionally unclamped -- out-of-gamut values are valid intermediate
+        // results during error diffusion.
+
         // Step 1: Lab to LMS (inverse M2)
         let l_ = lab.l + 0.3963377774 * lab.a + 0.2158037573 * lab.b;
         let m_ = lab.l - 0.1055613458 * lab.a - 0.0638541728 * lab.b;

@@ -103,6 +103,8 @@ impl From<LinearRgb> for Srgb {
     /// This conversion is necessary after performing color calculations,
     /// to encode the result for display or storage.
     fn from(linear: LinearRgb) -> Self {
+        // WHY LUT-based gamma encode: Linear values must be re-encoded to sRGB
+        // for correct display on devices and for byte-exact palette matching.
         Self {
             r: linear_to_srgb(linear.r),
             g: linear_to_srgb(linear.g),

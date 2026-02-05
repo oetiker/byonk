@@ -132,8 +132,13 @@ impl Dither for BlueNoiseDither {
                     }
                 }
 
-                // Convert to Oklab for perceptual matching
+                // WHY OKLab for matching: Same rationale as error diffusion path --
+                // perceptually uniform distances produce visually correct matches.
                 let oklab = Oklab::from(pixel);
+                // WHY chroma here: find_second_nearest needs pixel chroma for the
+                // HyAB chroma coupling penalty. In the error diffusion path,
+                // find_nearest computes chroma internally, but blue noise needs it
+                // for both find_nearest and find_second_nearest.
                 let pixel_chroma = (oklab.a * oklab.a + oklab.b * oklab.b).sqrt();
 
                 // Find the two closest palette colors

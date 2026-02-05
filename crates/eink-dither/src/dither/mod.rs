@@ -198,7 +198,9 @@ pub(crate) fn find_exact_match(pixel: LinearRgb, palette: &Palette) -> Option<u8
         return None;
     }
 
-    // Convert to sRGB bytes for exact comparison
+    // WHY sRGB for exact match: Device palette entries are defined in sRGB.
+    // Byte-exact comparison avoids floating-point rounding issues that would
+    // cause false negatives with LinearRgb or OKLab comparisons.
     let srgb = Srgb::from(pixel);
     let pixel_bytes = srgb.to_bytes();
 
@@ -288,12 +290,17 @@ pub(crate) fn dither_with_kernel(
                 clamp_channel(image[idx].b + accumulated[2], options.error_clamp),
             );
 
-            // Find nearest palette color (using Oklab perceptual distance)
+            // WHY OKLab for matching: Perceptual uniformity ensures the palette
+            // match minimizes visible color difference. Using sRGB or LinearRgb
+            // for distance would produce matches that look wrong to human eyes.
             let oklab = Oklab::from(pixel);
             let (nearest_idx, _dist) = palette.find_nearest(oklab);
             output[idx] = nearest_idx as u8;
 
-            // Compute error in linear RGB
+            // WHY LinearRgb for error: Quantization error represents a physical
+            // light intensity difference. Light adds linearly, so error must
+            // accumulate in LinearRgb. sRGB would distort error magnitudes due
+            // to its gamma curve; OKLab does not represent light addition correctly.
             let nearest_linear = palette.actual_linear(nearest_idx);
             let error = [
                 pixel.r - nearest_linear.r,

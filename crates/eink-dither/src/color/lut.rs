@@ -6,6 +6,11 @@
 // Include the generated LUT from build.rs
 include!(concat!(env!("OUT_DIR"), "/gamma_lut.rs"));
 
+// WHY LUT over per-call formula: The IEC 61966-2-1 transfer function involves
+// a branch + power function that is expensive per-pixel. A 4096-entry LUT with
+// linear interpolation achieves < 0.01% error at a fraction of the cost,
+// critical for per-pixel conversions in tight dither loops.
+
 /// Convert an sRGB value (0.0..=1.0) to linear RGB using LUT with linear interpolation.
 ///
 /// # Panics (debug only)
@@ -35,6 +40,9 @@ pub fn srgb_to_linear(srgb: f32) -> f32 {
     let b = SRGB_TO_LINEAR[index + 1];
     a + (b - a) * frac
 }
+
+// WHY LUT: Same rationale as srgb_to_linear above -- the inverse transfer
+// function is equally expensive per-pixel.
 
 /// Convert a linear RGB value (0.0..=1.0) to sRGB using LUT with linear interpolation.
 ///

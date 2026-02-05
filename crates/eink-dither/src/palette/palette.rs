@@ -182,19 +182,23 @@ impl Palette {
             }
         }
 
-        // Precompute all representations for official colors
+        // WHY three representations per palette entry: Each color space serves a
+        // different pipeline stage. sRGB for output (device communication and
+        // byte-exact matching), LinearRgb for error diffusion (physically correct
+        // light arithmetic), OKLab for perceptual distance (find_nearest). Chroma
+        // magnitudes are precomputed for the HyAB chroma coupling penalty, avoiding
+        // per-pixel sqrt. Precomputing all four avoids per-pixel conversion overhead
+        // since palette colors never change after construction.
         let official_srgb: Vec<Srgb> = official.to_vec();
         let official_linear: Vec<LinearRgb> =
             official_srgb.iter().map(|&s| LinearRgb::from(s)).collect();
         let official_oklab: Vec<Oklab> = official_linear.iter().map(|&l| Oklab::from(l)).collect();
 
-        // Precompute all representations for actual colors
         let actual_srgb: Vec<Srgb> = actual_colors;
         let actual_linear: Vec<LinearRgb> =
             actual_srgb.iter().map(|&s| LinearRgb::from(s)).collect();
         let actual_oklab: Vec<Oklab> = actual_linear.iter().map(|&l| Oklab::from(l)).collect();
 
-        // Precompute chroma magnitudes for actual palette entries
         let actual_chroma: Vec<f32> = actual_oklab
             .iter()
             .map(|c| (c.a * c.a + c.b * c.b).sqrt())

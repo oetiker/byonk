@@ -44,6 +44,9 @@ impl From<Srgb> for LinearRgb {
     /// as sRGB encodes perceptual uniformity while linear RGB represents
     /// physical light intensity.
     fn from(srgb: Srgb) -> Self {
+        // WHY LUT-based gamma decode (IEC 61966-2-1): sRGB's nonlinear gamma
+        // curve makes arithmetic incorrect. Linear space is required for
+        // physically accurate color math (error diffusion, contrast, blending).
         Self {
             r: srgb_to_linear(srgb.r),
             g: srgb_to_linear(srgb.g),

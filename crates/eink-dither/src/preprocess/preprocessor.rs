@@ -265,7 +265,9 @@ impl<'a> Preprocessor<'a> {
             .iter()
             .zip(exact_matches.iter())
             .map(|(&pixel, &exact_match)| {
-                // Convert sRGB to LinearRgb
+                // WHY LinearRgb as working space: All arithmetic (contrast scaling,
+                // saturation adjustment) must operate on physically linear light
+                // values. sRGB's gamma curve would distort midpoints and ratios.
                 let mut linear = LinearRgb::from(pixel);
 
                 // Skip enhancement for exact matches
@@ -304,14 +306,18 @@ impl<'a> Preprocessor<'a> {
     /// * `factor` - Chroma multiplier (>1.0 increases saturation)
     #[inline]
     fn boost_saturation(&self, pixel: LinearRgb, factor: f32) -> LinearRgb {
-        // LinearRgb -> Oklab -> Oklch
+        // WHY Oklch for saturation: Oklch is the polar form of OKLab where
+        // chroma (saturation) is an independent axis. Scaling chroma in Oklch
+        // preserves hue and lightness exactly. HSL/HSV saturation shifts hue
+        // for non-primary colors and is not perceptually uniform.
         let oklab = Oklab::from(pixel);
         let oklch = Oklch::from(oklab);
 
-        // Scale chroma
         let boosted = oklch.scale_chroma(factor);
 
-        // Oklch -> Oklab -> LinearRgb
+        // WHY convert back to LinearRgb: Return to the working color space
+        // after perceptual adjustment. The rest of the pipeline (contrast,
+        // error diffusion) operates in LinearRgb.
         let boosted_oklab = Oklab::from(boosted);
         LinearRgb::from(boosted_oklab)
     }

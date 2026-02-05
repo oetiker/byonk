@@ -7,10 +7,10 @@
 
 ### Distance Metric
 
-- [ ] **DIST-01**: HyAB distance metric includes chroma coupling penalty (`kchroma * |C_pixel - C_palette|`)
-- [ ] **DIST-02**: Palette precomputes chroma values (`sqrt(a^2 + b^2)`) for each actual OKLab entry at construction
-- [ ] **DIST-03**: Default kl=2.0, kc=1.0, kchroma=2.0 produces correct grey-to-achromatic mapping on BWRGBY
-- [ ] **DIST-04**: Chromatic-to-chromatic matching unaffected (orange maps to nearest chromatic, not forced to B/W)
+- [x] **DIST-01**: HyAB distance metric includes chroma coupling penalty (`kchroma * |C_pixel - C_palette|`)
+- [x] **DIST-02**: Palette precomputes chroma values (`sqrt(a^2 + b^2)`) for each actual OKLab entry at construction
+- [x] **DIST-03**: Default kl=2.0, kc=1.0, kchroma=10.0 produces correct grey-to-achromatic mapping on BWRGBY
+- [x] **DIST-04**: Chromatic-to-chromatic matching unaffected (orange maps to nearest chromatic, not forced to B/W)
 
 ### Auto-Detection
 
@@ -20,11 +20,11 @@
 
 ### Testing
 
-- [ ] **TEST-01**: Grey gradient (0-255) on BWRGBY palette produces only B/W indices
-- [ ] **TEST-02**: Pure chromatic colors (red, green, blue, yellow) match their palette entries exactly
+- [x] **TEST-01**: Grey gradient (0-255) on BWRGBY palette produces only B/W indices
+- [x] **TEST-02**: Pure chromatic colors (red, green, blue, yellow) match their palette entries exactly
 - [ ] **TEST-03**: Pastel/desaturated colors map to correct chromatic entries (not forced achromatic)
 - [ ] **TEST-04**: Edge cases tested: brown, skin tones, dark chromatic colors
-- [ ] **TEST-05**: Existing domain tests continue to pass
+- [x] **TEST-05**: Existing domain tests continue to pass
 
 ### Documentation
 
@@ -55,18 +55,18 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DIST-01 | Phase 1: Core Distance Metric Fix | Pending |
-| DIST-02 | Phase 1: Core Distance Metric Fix | Pending |
-| DIST-03 | Phase 1: Core Distance Metric Fix | Pending |
-| DIST-04 | Phase 1: Core Distance Metric Fix | Pending |
+| DIST-01 | Phase 1: Core Distance Metric Fix | Complete |
+| DIST-02 | Phase 1: Core Distance Metric Fix | Complete |
+| DIST-03 | Phase 1: Core Distance Metric Fix | Complete |
+| DIST-04 | Phase 1: Core Distance Metric Fix | Complete |
 | AUTO-01 | Phase 2: Auto-Detection and Edge Cases | Pending |
 | AUTO-02 | Phase 2: Auto-Detection and Edge Cases | Pending |
 | AUTO-03 | Phase 2: Auto-Detection and Edge Cases | Pending |
-| TEST-01 | Phase 1: Core Distance Metric Fix | Pending |
-| TEST-02 | Phase 1: Core Distance Metric Fix | Pending |
+| TEST-01 | Phase 1: Core Distance Metric Fix | Complete |
+| TEST-02 | Phase 1: Core Distance Metric Fix | Complete |
 | TEST-03 | Phase 2: Auto-Detection and Edge Cases | Pending |
 | TEST-04 | Phase 2: Auto-Detection and Edge Cases | Pending |
-| TEST-05 | Phase 1: Core Distance Metric Fix | Pending |
+| TEST-05 | Phase 1: Core Distance Metric Fix | Complete |
 | DOCS-01 | Phase 3: Color Science Documentation | Pending |
 | DOCS-02 | Phase 3: Color Science Documentation | Pending |
 | DOCS-03 | Phase 3: Color Science Documentation | Pending |
@@ -78,4 +78,4 @@
 
 ---
 *Requirements defined: 2026-02-05*
-*Last updated: 2026-02-05 after roadmap creation*
+*Last updated: 2026-02-05 after Phase 1 completion*

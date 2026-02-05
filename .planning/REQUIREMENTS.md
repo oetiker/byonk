@@ -55,21 +55,21 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DIST-01 | Phase 1 | Pending |
-| DIST-02 | Phase 1 | Pending |
-| DIST-03 | Phase 1 | Pending |
-| DIST-04 | Phase 1 | Pending |
-| AUTO-01 | Phase 2 | Pending |
-| AUTO-02 | Phase 2 | Pending |
-| AUTO-03 | Phase 2 | Pending |
-| TEST-01 | Phase 1 | Pending |
-| TEST-02 | Phase 1 | Pending |
-| TEST-03 | Phase 2 | Pending |
-| TEST-04 | Phase 2 | Pending |
-| TEST-05 | Phase 1 | Pending |
-| DOCS-01 | Phase 3 | Pending |
-| DOCS-02 | Phase 3 | Pending |
-| DOCS-03 | Phase 3 | Pending |
+| DIST-01 | Phase 1: Core Distance Metric Fix | Pending |
+| DIST-02 | Phase 1: Core Distance Metric Fix | Pending |
+| DIST-03 | Phase 1: Core Distance Metric Fix | Pending |
+| DIST-04 | Phase 1: Core Distance Metric Fix | Pending |
+| AUTO-01 | Phase 2: Auto-Detection and Edge Cases | Pending |
+| AUTO-02 | Phase 2: Auto-Detection and Edge Cases | Pending |
+| AUTO-03 | Phase 2: Auto-Detection and Edge Cases | Pending |
+| TEST-01 | Phase 1: Core Distance Metric Fix | Pending |
+| TEST-02 | Phase 1: Core Distance Metric Fix | Pending |
+| TEST-03 | Phase 2: Auto-Detection and Edge Cases | Pending |
+| TEST-04 | Phase 2: Auto-Detection and Edge Cases | Pending |
+| TEST-05 | Phase 1: Core Distance Metric Fix | Pending |
+| DOCS-01 | Phase 3: Color Science Documentation | Pending |
+| DOCS-02 | Phase 3: Color Science Documentation | Pending |
+| DOCS-03 | Phase 3: Color Science Documentation | Pending |
 
 **Coverage:**
 - v1 requirements: 15 total
@@ -78,4 +78,4 @@
 
 ---
 *Requirements defined: 2026-02-05*
-*Last updated: 2026-02-05 after initial definition*
+*Last updated: 2026-02-05 after roadmap creation*

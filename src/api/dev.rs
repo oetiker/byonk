@@ -464,7 +464,7 @@ pub async fn handle_render(
 
     match state
         .content_pipeline
-        .render_png_from_svg(&svg, display_spec, &final_palette)
+        .render_png_from_svg(&svg, display_spec, &final_palette, None)
     {
         Ok(png_bytes) => (
             StatusCode::OK,

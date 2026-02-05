@@ -1,0 +1,436 @@
+//! Error diffusion dithering algorithms.
+//!
+//! This module provides error diffusion dithering algorithms optimized for
+//! e-ink displays with small color palettes (typically 7-16 colors).
+//!
+//! # Algorithms
+//!
+//! Multiple diffusion kernels are available:
+//!
+//! - **Atkinson**: 75% error propagation, ideal for small palettes (default)
+//! - **Floyd-Steinberg**: Classic algorithm, 100% propagation
+//! - **Jarvis-Judice-Ninke**: Large kernel, smoother gradients
+//! - **Sierra family**: Various speed/quality tradeoffs
+//!
+//! # Architecture
+//!
+//! All algorithms implement the [`Dither`] trait, allowing easy algorithm
+//! swapping. Configuration is done via [`DitherOptions`].
+//!
+//! # Example
+//!
+//! ```ignore
+//! use eink_dither::{Atkinson, Dither, DitherOptions, Palette, LinearRgb};
+//!
+//! let palette = Palette::new(&colors, None).unwrap();
+//! let options = DitherOptions::new();
+//!
+//! let indices: Vec<u8> = Atkinson.dither(&pixels, width, height, &palette, &options);
+//! ```
+
+mod atkinson;
+mod blue_noise;
+mod blue_noise_matrix;
+mod floyd_steinberg;
+mod jjn;
+mod kernel;
+mod options;
+mod sierra;
+
+pub use atkinson::Atkinson;
+pub use blue_noise::BlueNoiseDither;
+pub use floyd_steinberg::FloydSteinberg;
+pub use jjn::JarvisJudiceNinke;
+pub use kernel::*;
+pub use options::DitherOptions;
+pub use sierra::{Sierra, SierraLite, SierraTwoRow};
+
+use crate::color::{LinearRgb, Oklab, Srgb};
+use crate::palette::Palette;
+
+/// Trait for error diffusion dithering algorithms.
+///
+/// Implementors provide a specific diffusion kernel and algorithm for
+/// converting continuous-tone images to indexed palette images.
+///
+/// # Error Diffusion
+///
+/// Error diffusion works by:
+/// 1. For each pixel, find the nearest palette color
+/// 2. Compute the quantization error (desired - actual)
+/// 3. Distribute that error to neighboring unprocessed pixels
+/// 4. Repeat, with accumulated error influencing future decisions
+///
+/// This produces smooth gradients and natural-looking dithering.
+pub trait Dither {
+    /// Dither an image to palette indices.
+    ///
+    /// # Arguments
+    ///
+    /// * `image` - Input pixels in linear RGB space (row-major order)
+    /// * `width` - Image width in pixels
+    /// * `height` - Image height in pixels
+    /// * `palette` - Color palette for quantization
+    /// * `options` - Dithering configuration
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<u8>` of palette indices, one per pixel, in row-major order.
+    /// Each index is in the range `0..palette.len()`.
+    fn dither(
+        &self,
+        image: &[LinearRgb],
+        width: usize,
+        height: usize,
+        palette: &Palette,
+        options: &DitherOptions,
+    ) -> Vec<u8>;
+}
+
+/// Error buffer for efficient error diffusion.
+///
+/// Manages a sliding window of error rows, storing only the rows that
+/// the diffusion kernel can reach (determined by `max_dy`). This avoids
+/// allocating a full-image error buffer.
+///
+/// # Usage Pattern
+///
+/// 1. Create buffer with `new(width, row_depth)`
+/// 2. For each row:
+///    a. Read accumulated error with `get_accumulated(x)`
+///    b. After processing pixel, distribute error with `add_error(x, dy, error)`
+///    c. After row complete, call `advance_row()`
+#[derive(Debug)]
+pub struct ErrorBuffer {
+    /// Error rows: rows[0] is current row, rows[1] is next, etc.
+    rows: Vec<Vec<[f32; 3]>>,
+    /// Image width
+    width: usize,
+}
+
+impl ErrorBuffer {
+    /// Create a new error buffer.
+    ///
+    /// # Arguments
+    ///
+    /// * `width` - Image width in pixels
+    /// * `row_depth` - Number of rows to track (kernel's `max_dy + 1`)
+    pub fn new(width: usize, row_depth: usize) -> Self {
+        Self {
+            rows: (0..row_depth).map(|_| vec![[0.0; 3]; width]).collect(),
+            width,
+        }
+    }
+
+    /// Get accumulated error for a pixel in the current row.
+    ///
+    /// # Arguments
+    ///
+    /// * `x` - Pixel x-coordinate
+    ///
+    /// # Returns
+    ///
+    /// RGB error values accumulated from previous pixels' diffusion.
+    #[inline]
+    pub fn get_accumulated(&self, x: usize) -> [f32; 3] {
+        self.rows[0][x]
+    }
+
+    /// Add error to a future pixel.
+    ///
+    /// # Arguments
+    ///
+    /// * `x` - Target pixel x-coordinate
+    /// * `row_offset` - Row offset (0 = current row, 1 = next row, etc.)
+    /// * `error` - RGB error values to add
+    ///
+    /// Silently ignores out-of-bounds coordinates.
+    #[inline]
+    pub fn add_error(&mut self, x: usize, row_offset: usize, error: [f32; 3]) {
+        if x < self.width && row_offset < self.rows.len() {
+            for c in 0..3 {
+                self.rows[row_offset][x][c] += error[c];
+            }
+        }
+    }
+
+    /// Advance to the next row.
+    ///
+    /// Rotates the row buffer: the first row is discarded, subsequent rows
+    /// shift forward, and a new zeroed row is added at the end.
+    pub fn advance_row(&mut self) {
+        // Rotate left: [0,1,2] -> [1,2,0]
+        self.rows.rotate_left(1);
+        // Clear the last row (which was row[0])
+        if let Some(last) = self.rows.last_mut() {
+            last.fill([0.0; 3]);
+        }
+    }
+}
+
+// ============================================================================
+// Shared dithering infrastructure
+// ============================================================================
+
+/// Find exact byte-level match against actual palette colors.
+///
+/// Converts the input LinearRgb back to sRGB bytes and compares
+/// against each palette entry's actual color bytes.
+///
+/// # Arguments
+///
+/// * `pixel` - Input pixel in linear RGB space
+/// * `palette` - Palette to match against
+///
+/// # Returns
+///
+/// `Some(index)` if an exact match is found, `None` otherwise.
+pub(crate) fn find_exact_match(pixel: LinearRgb, palette: &Palette) -> Option<u8> {
+    // Out-of-gamut pixels (from saturation/contrast boost) can never
+    // be exact matches -- palette colors are always in gamut.
+    if pixel.r < 0.0
+        || pixel.r > 1.0
+        || pixel.g < 0.0
+        || pixel.g > 1.0
+        || pixel.b < 0.0
+        || pixel.b > 1.0
+    {
+        return None;
+    }
+
+    // Convert to sRGB bytes for exact comparison
+    let srgb = Srgb::from(pixel);
+    let pixel_bytes = srgb.to_bytes();
+
+    for i in 0..palette.len() {
+        if palette.actual(i).to_bytes() == pixel_bytes {
+            return Some(i as u8);
+        }
+    }
+    None
+}
+
+/// Clamp a channel value with error to the valid range.
+///
+/// The valid range is `[-max_error, 1.0 + max_error]` to allow for
+/// accumulated error while preventing extreme values.
+#[inline]
+pub(crate) fn clamp_channel(value: f32, max_error: f32) -> f32 {
+    value.clamp(-max_error, 1.0 + max_error)
+}
+
+/// Core error diffusion algorithm parameterized by kernel.
+///
+/// This function contains the complete error diffusion loop shared by all
+/// algorithms. Each algorithm simply calls this with its specific kernel.
+///
+/// # Arguments
+///
+/// * `image` - Input pixels in linear RGB space (row-major order)
+/// * `width` - Image width in pixels
+/// * `height` - Image height in pixels
+/// * `palette` - Color palette for quantization
+/// * `kernel` - Error diffusion kernel to use
+/// * `options` - Dithering configuration
+///
+/// # Returns
+///
+/// A `Vec<u8>` of palette indices, one per pixel.
+pub(crate) fn dither_with_kernel(
+    image: &[LinearRgb],
+    width: usize,
+    height: usize,
+    palette: &Palette,
+    kernel: &Kernel,
+    options: &DitherOptions,
+) -> Vec<u8> {
+    let mut output = vec![0u8; width * height];
+
+    // Pre-detect exact matches for entire image (against actual palette colors)
+    let exact_matches: Vec<Option<u8>> = if options.preserve_exact_matches {
+        image
+            .iter()
+            .map(|&pixel| find_exact_match(pixel, palette))
+            .collect()
+    } else {
+        vec![None; width * height]
+    };
+
+    // Create error buffer with depth = max_dy + 1
+    let mut error_buf = ErrorBuffer::new(width, kernel.max_dy + 1);
+
+    for y in 0..height {
+        // Determine scan direction
+        let reverse = options.serpentine && y % 2 == 1;
+
+        // Process pixels in correct order
+        let x_range: Box<dyn Iterator<Item = usize>> = if reverse {
+            Box::new((0..width).rev())
+        } else {
+            Box::new(0..width)
+        };
+
+        for x in x_range {
+            let idx = y * width + x;
+
+            // Check for exact palette match - skip dithering entirely
+            if let Some(palette_idx) = exact_matches[idx] {
+                output[idx] = palette_idx;
+                // Don't diffuse any error from this pixel
+                continue;
+            }
+
+            // Add accumulated error to input pixel
+            let accumulated = error_buf.get_accumulated(x);
+            let pixel = LinearRgb::new(
+                clamp_channel(image[idx].r + accumulated[0], options.error_clamp),
+                clamp_channel(image[idx].g + accumulated[1], options.error_clamp),
+                clamp_channel(image[idx].b + accumulated[2], options.error_clamp),
+            );
+
+            // Find nearest palette color (using Oklab perceptual distance)
+            let oklab = Oklab::from(pixel);
+            let (nearest_idx, _dist) = palette.find_nearest(oklab);
+            output[idx] = nearest_idx as u8;
+
+            // Compute error in linear RGB
+            let nearest_linear = palette.actual_linear(nearest_idx);
+            let error = [
+                pixel.r - nearest_linear.r,
+                pixel.g - nearest_linear.g,
+                pixel.b - nearest_linear.b,
+            ];
+
+            // Diffuse error to neighbors using kernel
+            let divisor = kernel.divisor as f32;
+            for &(dx, dy, weight) in kernel.entries {
+                // Flip dx for serpentine reverse rows
+                let effective_dx = if reverse { -dx } else { dx };
+                let nx = x as i32 + effective_dx;
+
+                // Bounds check
+                if nx >= 0 && (nx as usize) < width {
+                    let ny = y + dy as usize;
+                    if ny < height {
+                        // Check if neighbor is an exact match (don't diffuse into it)
+                        let neighbor_idx = ny * width + nx as usize;
+                        if exact_matches[neighbor_idx].is_none() {
+                            let scaled_error = [
+                                error[0] * weight as f32 / divisor,
+                                error[1] * weight as f32 / divisor,
+                                error[2] * weight as f32 / divisor,
+                            ];
+                            error_buf.add_error(nx as usize, dy as usize, scaled_error);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Advance error buffer after processing row
+        error_buf.advance_row();
+    }
+
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_buffer_creation() {
+        let buf = ErrorBuffer::new(100, 3);
+        assert_eq!(buf.rows.len(), 3, "Should have 3 rows");
+        assert_eq!(buf.width, 100, "Width should be 100");
+
+        // All values should be zero
+        for row in &buf.rows {
+            for pixel in row {
+                assert_eq!(*pixel, [0.0, 0.0, 0.0]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_error_buffer_add_and_get() {
+        let mut buf = ErrorBuffer::new(10, 2);
+
+        // Add error to current row
+        buf.add_error(5, 0, [0.1, 0.2, 0.3]);
+        let accumulated = buf.get_accumulated(5);
+        assert!((accumulated[0] - 0.1).abs() < f32::EPSILON);
+        assert!((accumulated[1] - 0.2).abs() < f32::EPSILON);
+        assert!((accumulated[2] - 0.3).abs() < f32::EPSILON);
+
+        // Add more error to same pixel (should accumulate)
+        buf.add_error(5, 0, [0.1, 0.1, 0.1]);
+        let accumulated = buf.get_accumulated(5);
+        assert!((accumulated[0] - 0.2).abs() < f32::EPSILON);
+        assert!((accumulated[1] - 0.3).abs() < f32::EPSILON);
+        assert!((accumulated[2] - 0.4).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_error_buffer_advance_row() {
+        let mut buf = ErrorBuffer::new(10, 3);
+
+        // Add error to rows 0, 1, and 2
+        buf.add_error(0, 0, [1.0, 0.0, 0.0]); // row 0
+        buf.add_error(0, 1, [2.0, 0.0, 0.0]); // row 1
+        buf.add_error(0, 2, [3.0, 0.0, 0.0]); // row 2
+
+        // Verify initial state
+        assert!((buf.rows[0][0][0] - 1.0).abs() < f32::EPSILON);
+        assert!((buf.rows[1][0][0] - 2.0).abs() < f32::EPSILON);
+        assert!((buf.rows[2][0][0] - 3.0).abs() < f32::EPSILON);
+
+        // Advance row
+        buf.advance_row();
+
+        // Row 1 should now be row 0, row 2 should be row 1, row 0 should be cleared
+        assert!(
+            (buf.rows[0][0][0] - 2.0).abs() < f32::EPSILON,
+            "Old row 1 should now be row 0"
+        );
+        assert!(
+            (buf.rows[1][0][0] - 3.0).abs() < f32::EPSILON,
+            "Old row 2 should now be row 1"
+        );
+        assert!(
+            buf.rows[2][0][0].abs() < f32::EPSILON,
+            "New last row should be cleared"
+        );
+    }
+
+    #[test]
+    fn test_error_buffer_bounds_checking() {
+        let mut buf = ErrorBuffer::new(10, 2);
+
+        // Out of bounds x - should be silently ignored
+        buf.add_error(100, 0, [1.0, 1.0, 1.0]);
+
+        // Out of bounds row_offset - should be silently ignored
+        buf.add_error(0, 10, [1.0, 1.0, 1.0]);
+
+        // Verify nothing crashed and in-bounds still works
+        buf.add_error(5, 0, [0.5, 0.5, 0.5]);
+        let accumulated = buf.get_accumulated(5);
+        assert!((accumulated[0] - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_error_buffer_sized_for_kernels() {
+        // Atkinson needs max_dy=2, so 3 rows
+        let atkinson_buf = ErrorBuffer::new(100, ATKINSON.max_dy + 1);
+        assert_eq!(atkinson_buf.rows.len(), 3);
+
+        // Floyd-Steinberg needs max_dy=1, so 2 rows
+        let fs_buf = ErrorBuffer::new(100, FLOYD_STEINBERG.max_dy + 1);
+        assert_eq!(fs_buf.rows.len(), 2);
+
+        // JJN needs max_dy=2, so 3 rows
+        let jjn_buf = ErrorBuffer::new(100, JARVIS_JUDICE_NINKE.max_dy + 1);
+        assert_eq!(jjn_buf.rows.len(), 3);
+    }
+}

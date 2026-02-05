@@ -50,6 +50,9 @@ pub enum RenderError {
     #[error("PNG encode error: {0}")]
     PngEncode(String),
 
+    #[error("Dither error: {0}")]
+    Dither(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }

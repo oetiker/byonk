@@ -305,7 +305,7 @@ fn run_render_command(
 
     // Render to PNG
     let png_bytes = content_pipeline
-        .render_png_from_svg(&svg_content, display_spec, &final_palette)
+        .render_png_from_svg(&svg_content, display_spec, &final_palette, None)
         .map_err(|e| anyhow::anyhow!("Render error: {e}"))?;
 
     // Write to file

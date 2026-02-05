@@ -1,0 +1,9 @@
+[package]
+name = "eink-dither"
+version = "0.1.0"
+edition = "2021"
+description = "High-quality dithering for e-ink displays"
+license = "MIT"
+
+[dev-dependencies]
+palette = "0.7"

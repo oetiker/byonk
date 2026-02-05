@@ -342,9 +342,19 @@ pub async fn handle_display<R: DeviceRegistry>(
                     }
                 };
 
+            // Helper to resolve dither mode: script > device config > None (default graphics)
+            let resolve_dither =
+                |result: &crate::services::content_pipeline::ScriptResult| -> Option<String> {
+                    result
+                        .script_dither
+                        .clone()
+                        .or_else(|| result.device_config_dither.clone())
+                };
+
             match pipeline.run_script_for_device(&mac, Some(ctx.clone())) {
                 Ok(result) => {
                     let palette = resolve_palette(&result);
+                    let dither = resolve_dither(&result);
                     if result.skip_update {
                         (result.refresh_rate, true, None, None)
                     } else {
@@ -358,7 +368,8 @@ pub async fn handle_display<R: DeviceRegistry>(
                                     width,
                                     height,
                                 )
-                                .with_colors(Some(palette));
+                                .with_colors(Some(palette))
+                                .with_dither(dither);
                                 let hash = cached.content_hash.clone();
                                 cache.store(cached);
                                 (result.refresh_rate, false, Some(hash), None)
@@ -495,7 +506,12 @@ pub async fn handle_image<R: DeviceRegistry>(
     // Colors are always stored in cache by the display handler
     let fallback_palette = parse_colors_header(DEFAULT_COLORS);
     let palette = cached.colors.as_deref().unwrap_or(&fallback_palette);
-    let png_bytes = content_pipeline.render_png_from_svg(&cached.rendered_svg, spec, palette)?;
+    let png_bytes = content_pipeline.render_png_from_svg(
+        &cached.rendered_svg,
+        spec,
+        palette,
+        cached.dither.as_deref(),
+    )?;
 
     tracing::info!(size_bytes = png_bytes.len(), "Image rendered and served");
 

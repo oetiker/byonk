@@ -63,6 +63,9 @@ pub struct DeviceConfig {
 
     /// Optional display color override (comma-separated hex, e.g. "#000000,#FFFFFF,#FF0000")
     pub colors: Option<String>,
+
+    /// Optional dither mode override ("photo" or "graphics")
+    pub dither: Option<String>,
 }
 
 /// Device registration settings
@@ -265,6 +268,7 @@ mod tests {
                 screen: "custom".to_string(),
                 params: HashMap::new(),
                 colors: None,
+                dither: None,
             },
         );
 
@@ -295,6 +299,7 @@ mod tests {
                 screen: "test".to_string(),
                 params: HashMap::new(),
                 colors: None,
+                dither: None,
             },
         );
 
@@ -322,6 +327,7 @@ mod tests {
                 screen: "nonexistent".to_string(),
                 params: HashMap::new(),
                 colors: None,
+                dither: None,
             },
         );
 
@@ -468,6 +474,7 @@ registration:
                 screen: "custom".to_string(),
                 params: HashMap::new(),
                 colors: None,
+                dither: None,
             },
         );
 
@@ -504,6 +511,7 @@ registration:
                 screen: "test".to_string(),
                 params: HashMap::new(),
                 colors: None,
+                dither: None,
             },
         );
 
@@ -514,6 +522,7 @@ registration:
                 screen: "test".to_string(),
                 params: HashMap::new(),
                 colors: None,
+                dither: None,
             },
         );
 

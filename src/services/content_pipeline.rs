@@ -24,6 +24,10 @@ pub struct ScriptResult {
     pub script_colors: Option<Vec<String>>,
     /// Optional color palette from device config (comma-separated hex string)
     pub device_config_colors: Option<String>,
+    /// Optional dither mode from Lua script ("photo" or "graphics")
+    pub script_dither: Option<String>,
+    /// Optional dither mode from device config ("photo" or "graphics")
+    pub device_config_dither: Option<String>,
 }
 
 /// Device context passed to templates and Lua scripts
@@ -132,6 +136,7 @@ impl ContentPipeline {
                         screen: "default".to_string(),
                         params: HashMap::new(),
                         colors: None,
+                        dither: None,
                     });
                     (sc, dc)
                 })
@@ -143,6 +148,7 @@ impl ContentPipeline {
             &device_config.params,
             device_ctx,
             device_config.colors.clone(),
+            device_config.dither.clone(),
         )
     }
 
@@ -162,7 +168,7 @@ impl ContentPipeline {
             .get(screen_name)
             .ok_or_else(|| ContentError::ScreenNotFound(screen_name.to_string()))?;
 
-        self.run_script_for_screen(screen, &params, device_ctx, None)
+        self.run_script_for_screen(screen, &params, device_ctx, None, None)
     }
 
     /// Run script for a specific screen (without rendering)
@@ -172,6 +178,7 @@ impl ContentPipeline {
         params: &HashMap<String, serde_yaml::Value>,
         device_ctx: Option<DeviceContext>,
         device_config_colors: Option<String>,
+        device_config_dither: Option<String>,
     ) -> Result<ScriptResult, ContentError> {
         // Run the Lua script (no timestamp override for normal operation)
         let lua_result =
@@ -213,6 +220,8 @@ impl ContentPipeline {
             params: params.clone(),
             script_colors: lua_result.colors,
             device_config_colors,
+            script_dither: lua_result.dither,
+            device_config_dither,
         })
     }
 
@@ -361,11 +370,14 @@ impl ContentPipeline {
         svg: &str,
         spec: DisplaySpec,
         palette: &[(u8, u8, u8)],
+        dither: Option<&str>,
     ) -> Result<Vec<u8>, ContentError> {
-        let png_bytes =
-            self.renderer
-                .svg_renderer
-                .render_to_palette_png(svg.as_bytes(), spec, palette)?;
+        let png_bytes = self.renderer.svg_renderer.render_to_palette_png(
+            svg.as_bytes(),
+            spec,
+            palette,
+            dither,
+        )?;
         Ok(png_bytes)
     }
 
@@ -516,6 +528,8 @@ impl ContentPipeline {
             params: yaml_params,
             script_colors: lua_result.colors,
             device_config_colors: None,
+            script_dither: lua_result.dither,
+            device_config_dither: None,
         })
     }
 }

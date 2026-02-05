@@ -1,6 +1,8 @@
 use crate::error::RenderError;
 use crate::models::DisplaySpec;
-use crate::rendering::dither::palette_dither;
+use eink_dither::{
+    DistanceMetric, EinkDitherer, Palette as EinkPalette, RenderingIntent, Srgb as EinkSrgb,
+};
 use resvg::usvg::{self, Transform};
 use std::io::Cursor;
 use std::sync::Arc;
@@ -60,16 +62,40 @@ impl SvgRenderer {
     /// Render SVG to PNG using the given color palette.
     ///
     /// The output format is chosen automatically based on the palette content.
+    /// The `dither` parameter selects the rendering intent: "photo" for Atkinson
+    /// error diffusion with saturation/contrast boost, or "graphics" (default)
+    /// for blue noise ordered dithering.
     pub fn render_to_palette_png(
         &self,
         svg_data: &[u8],
         spec: DisplaySpec,
         palette: &[(u8, u8, u8)],
+        dither: Option<&str>,
     ) -> Result<Vec<u8>, RenderError> {
         let pixmap = self.rasterize_svg(svg_data, spec)?;
 
-        // Dither RGBA data to palette indices
-        let indices = palette_dither(pixmap.data(), spec.width, spec.height, palette, None);
+        // Build eink-dither palette with dedup (eink-dither rejects duplicates)
+        let (eink_palette, index_map) = build_eink_palette(palette)?;
+
+        // Determine rendering intent
+        let intent = match dither {
+            Some(s) if s.eq_ignore_ascii_case("photo") => RenderingIntent::Photo,
+            _ => RenderingIntent::Graphics,
+        };
+
+        // Convert RGBA pixmap to eink-dither Srgb pixels
+        let pixels = rgba_to_eink_srgb(pixmap.data());
+
+        // Dither using eink-dither
+        let ditherer = EinkDitherer::new(eink_palette, intent);
+        let result = ditherer.dither(&pixels, spec.width as usize, spec.height as usize);
+
+        // Remap eink-dither indices back to the original palette indices
+        let indices: Vec<u8> = result
+            .indices()
+            .iter()
+            .map(|&idx| index_map[idx as usize])
+            .collect();
 
         // Choose PNG format and pack pixel data
         let (color_type, bit_depth, plte, packed) = if is_grey_palette(palette) {
@@ -162,6 +188,59 @@ impl Default for SvgRenderer {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Convert RGBA pixel data to eink-dither Srgb, alpha-compositing against white.
+fn rgba_to_eink_srgb(rgba_data: &[u8]) -> Vec<EinkSrgb> {
+    rgba_data
+        .chunks_exact(4)
+        .map(|pixel| {
+            let (r, g, b, a) = (pixel[0], pixel[1], pixel[2], pixel[3]);
+            if a == 255 {
+                EinkSrgb::from_u8(r, g, b)
+            } else if a == 0 {
+                EinkSrgb::from_u8(255, 255, 255)
+            } else {
+                // Alpha composite against white
+                let af = a as u16;
+                let cr = ((r as u16 * af + 255 * (255 - af)) / 255) as u8;
+                let cg = ((g as u16 * af + 255 * (255 - af)) / 255) as u8;
+                let cb = ((b as u16 * af + 255 * (255 - af)) / 255) as u8;
+                EinkSrgb::from_u8(cr, cg, cb)
+            }
+        })
+        .collect()
+}
+
+/// Build an eink-dither palette from byonk's (u8,u8,u8) palette, deduplicating
+/// colors since eink-dither rejects palettes with duplicate entries.
+///
+/// Returns the deduped eink palette plus a mapping from deduped index back
+/// to the original palette index (first occurrence wins).
+fn build_eink_palette(palette: &[(u8, u8, u8)]) -> Result<(EinkPalette, Vec<u8>), RenderError> {
+    let mut unique_colors: Vec<EinkSrgb> = Vec::new();
+    let mut index_map: Vec<u8> = Vec::new(); // deduped idx -> original idx
+
+    for (orig_idx, &(r, g, b)) in palette.iter().enumerate() {
+        let color = EinkSrgb::from_u8(r, g, b);
+        let bytes = color.to_bytes();
+        if !unique_colors.iter().any(|c| c.to_bytes() == bytes) {
+            index_map.push(orig_idx as u8);
+            unique_colors.push(color);
+        }
+    }
+
+    let mut eink_palette = EinkPalette::new(&unique_colors, None)
+        .map_err(|e| RenderError::Dither(format!("palette error: {e}")))?;
+
+    // Enable HyAB distance for chromatic palettes to prevent grey pixels
+    // from incorrectly mapping to chromatic colors with similar lightness.
+    let has_chromatic = palette.iter().any(|&(r, g, b)| r != g || g != b);
+    if has_chromatic {
+        eink_palette = eink_palette.with_distance_metric(DistanceMetric::HyAB { kl: 2.0, kc: 1.0, kchroma: 2.0 });
+    }
+
+    Ok((eink_palette, index_map))
+}
 
 /// Check if a palette consists entirely of grey values (R == G == B).
 fn is_grey_palette(palette: &[(u8, u8, u8)]) -> bool {
@@ -305,7 +384,7 @@ mod tests {
         let spec = DisplaySpec::from_dimensions(800, 200).unwrap();
         let palette = vec![(0, 0, 0), (255, 255, 255)];
         let png = renderer
-            .render_to_palette_png(svg.as_bytes(), spec, &palette)
+            .render_to_palette_png(svg.as_bytes(), spec, &palette, None)
             .unwrap();
         std::fs::write("/tmp/byonk-bitmap-font-test2.png", &png).unwrap();
         println!(

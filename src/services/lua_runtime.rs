@@ -20,6 +20,8 @@ pub struct ScriptResult {
     pub skip_update: bool,
     /// Optional color palette override from script (hex RGB strings)
     pub colors: Option<Vec<String>>,
+    /// Optional dither mode from script ("photo" or "graphics")
+    pub dither: Option<String>,
 }
 
 /// Error type for Lua script execution
@@ -112,11 +114,15 @@ impl LuaRuntime {
             })
             .filter(|v| !v.is_empty());
 
+        // Parse optional dither mode from script return
+        let dither = result.get::<String>("dither").ok();
+
         Ok(ScriptResult {
             data,
             refresh_rate,
             skip_update,
             colors,
+            dither,
         })
     }
 

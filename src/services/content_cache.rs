@@ -22,6 +22,8 @@ pub struct CachedContent {
     pub height: u32,
     /// Display color palette as RGB tuples (if provided by firmware)
     pub colors: Option<Vec<(u8, u8, u8)>>,
+    /// Dither mode ("photo" or "graphics"), None = default (graphics)
+    pub dither: Option<String>,
 }
 
 impl CachedContent {
@@ -36,12 +38,19 @@ impl CachedContent {
             width,
             height,
             colors: None,
+            dither: None,
         }
     }
 
     /// Set the display color palette
     pub fn with_colors(mut self, colors: Option<Vec<(u8, u8, u8)>>) -> Self {
         self.colors = colors;
+        self
+    }
+
+    /// Set the dither mode
+    pub fn with_dither(mut self, dither: Option<String>) -> Self {
+        self.dither = dither;
         self
     }
 }

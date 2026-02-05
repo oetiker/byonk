@@ -33,8 +33,9 @@ pub enum DistanceMetric {
     ///
     /// Formula: `kl * |dL| + kc * sqrt(da² + db²) + kchroma * |C_pixel - C_palette|`
     ///
-    /// Recommended: `kl: 2.0, kc: 1.0, kchroma: 2.0` (standard HyAB with
-    /// chroma coupling).
+    /// Recommended: `kl: 2.0, kc: 1.0, kchroma: 10.0` (standard HyAB with
+    /// chroma coupling). The high `kchroma` ensures grey pixels never bleed
+    /// into chromatic palette entries even during multi-color dithering.
     HyAB {
         /// Lightness weight. Higher values make lightness differences more
         /// significant relative to chrominance differences.
@@ -281,7 +282,7 @@ impl Palette {
     ///     Srgb::from_u8(255, 0, 0),
     /// ];
     /// let palette = Palette::new(&colors, None).unwrap()
-    ///     .with_distance_metric(DistanceMetric::HyAB { kl: 2.0, kc: 1.0, kchroma: 2.0 });
+    ///     .with_distance_metric(DistanceMetric::HyAB { kl: 2.0, kc: 1.0, kchroma: 10.0 });
     /// ```
     pub fn with_distance_metric(mut self, metric: DistanceMetric) -> Self {
         self.distance_metric = metric;
@@ -641,7 +642,11 @@ mod tests {
         ];
         Palette::new(&colors, None)
             .unwrap()
-            .with_distance_metric(DistanceMetric::HyAB { kl: 2.0, kc: 1.0, kchroma: 2.0 })
+            .with_distance_metric(DistanceMetric::HyAB {
+                kl: 2.0,
+                kc: 1.0,
+                kchroma: 10.0,
+            })
     }
 
     #[test]
@@ -675,9 +680,14 @@ mod tests {
             Srgb::from_u8(0, 0, 255),
             Srgb::from_u8(255, 255, 0),
         ];
-        let palette = Palette::new(&colors, None)
-            .unwrap()
-            .with_distance_metric(DistanceMetric::HyAB { kl: 2.0, kc: 10.0, kchroma: 2.0 });
+        let palette =
+            Palette::new(&colors, None)
+                .unwrap()
+                .with_distance_metric(DistanceMetric::HyAB {
+                    kl: 2.0,
+                    kc: 10.0,
+                    kchroma: 10.0,
+                });
 
         let mid_grey = Oklab::from(LinearRgb::from(Srgb::from_u8(128, 128, 128)));
         let (idx, _) = palette.find_nearest(mid_grey);
@@ -736,10 +746,9 @@ mod tests {
     fn test_hyab_all_greys_map_to_valid_color() {
         let palette = make_6_color_palette();
 
-        // With standard HyAB (kc=1), mid-greys near a chromatic color's
-        // lightness may map to that chromatic color. This is acceptable —
-        // sparse 6-color palettes inherently lack grey entries, so the
-        // perceptually nearest color at similar lightness wins.
+        // With chroma coupling, all greys must map to black (0) or white (1).
+        // The chroma penalty prevents any achromatic pixel from matching
+        // a chromatic palette entry.
         for grey_val in (0..=255).step_by(16) {
             let grey = Oklab::from(LinearRgb::from(Srgb::from_u8(
                 grey_val as u8,
@@ -748,11 +757,61 @@ mod tests {
             )));
             let (idx, dist) = palette.find_nearest(grey);
             assert!(
-                idx < 6,
-                "Grey {} should map to a valid palette index",
-                grey_val
+                idx == 0 || idx == 1,
+                "Grey {} should map to black or white, got index {} ({:?})",
+                grey_val,
+                idx,
+                palette.official(idx).to_bytes()
             );
             assert!(dist >= 0.0, "Distance should be non-negative");
         }
+    }
+
+    #[test]
+    fn test_chroma_coupling_grey_gradient_bw_only() {
+        let palette = make_6_color_palette();
+        for grey_val in 0..=255u8 {
+            let grey = Oklab::from(LinearRgb::from(Srgb::from_u8(grey_val, grey_val, grey_val)));
+            let (idx, _) = palette.find_nearest(grey);
+            assert!(
+                idx == 0 || idx == 1,
+                "Grey {} mapped to index {} ({:?}), expected black or white",
+                grey_val,
+                idx,
+                palette.official(idx).to_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn test_chroma_coupling_chromatic_exact_match() {
+        let palette = make_6_color_palette();
+        let test_cases = [
+            (Srgb::from_u8(255, 0, 0), 2, "red"),
+            (Srgb::from_u8(0, 255, 0), 3, "green"),
+            (Srgb::from_u8(0, 0, 255), 4, "blue"),
+            (Srgb::from_u8(255, 255, 0), 5, "yellow"),
+        ];
+        for (color, expected_idx, name) in test_cases {
+            let oklab = Oklab::from(LinearRgb::from(color));
+            let (idx, _) = palette.find_nearest(oklab);
+            assert_eq!(
+                idx, expected_idx,
+                "Pure {} should map to index {}, got {}",
+                name, expected_idx, idx
+            );
+        }
+    }
+
+    #[test]
+    fn test_chroma_coupling_orange_maps_to_chromatic() {
+        let palette = make_6_color_palette();
+        let orange = Oklab::from(LinearRgb::from(Srgb::from_u8(255, 165, 0)));
+        let (idx, _) = palette.find_nearest(orange);
+        assert!(
+            idx >= 2,
+            "Orange should map to a chromatic entry (idx >= 2), got {}",
+            idx
+        );
     }
 }

@@ -236,7 +236,11 @@ fn build_eink_palette(palette: &[(u8, u8, u8)]) -> Result<(EinkPalette, Vec<u8>)
     // from incorrectly mapping to chromatic colors with similar lightness.
     let has_chromatic = palette.iter().any(|&(r, g, b)| r != g || g != b);
     if has_chromatic {
-        eink_palette = eink_palette.with_distance_metric(DistanceMetric::HyAB { kl: 2.0, kc: 1.0, kchroma: 2.0 });
+        eink_palette = eink_palette.with_distance_metric(DistanceMetric::HyAB {
+            kl: 2.0,
+            kc: 1.0,
+            kchroma: 10.0,
+        });
     }
 
     Ok((eink_palette, index_map))

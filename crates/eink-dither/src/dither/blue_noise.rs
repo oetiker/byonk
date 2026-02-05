@@ -434,13 +434,14 @@ mod tests {
             Srgb::from_u8(0, 0, 255),     // 4: blue
             Srgb::from_u8(255, 255, 0),   // 5: yellow
         ];
-        let palette = Palette::new(&colors, None)
-            .unwrap()
-            .with_distance_metric(DistanceMetric::HyAB {
-                kl: 2.0,
-                kc: 1.0,
-                kchroma: 2.0,
-            });
+        let palette =
+            Palette::new(&colors, None)
+                .unwrap()
+                .with_distance_metric(DistanceMetric::HyAB {
+                    kl: 2.0,
+                    kc: 1.0,
+                    kchroma: 10.0,
+                });
         let options = DitherOptions::new();
 
         // Create a grey gradient (64x64)
@@ -460,7 +461,8 @@ mod tests {
             assert!(
                 idx <= 1,
                 "Grey pixel at position {} mapped to chromatic index {} (expected 0 or 1)",
-                i, idx
+                i,
+                idx
             );
         }
     }

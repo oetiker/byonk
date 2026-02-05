@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Core Distance Metric Fix** - Add chroma coupling penalty to HyAB and verify correct palette matching
 - [x] **Phase 2: Auto-Detection and Edge Cases** - Move metric selection into crate API and validate edge-case colors
-- [ ] **Phase 3: Color Science Documentation** - Document rationale for every conversion and distance calculation
+- [x] **Phase 3: Color Science Documentation** - Document rationale for every conversion and distance calculation
 
 ## Phase Details
 
@@ -57,7 +57,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 03-01-PLAN.md -- Add color science rationale, pipeline diagram, and inline WHY comments
+- [x] 03-01-PLAN.md -- Add color science rationale, pipeline diagram, and inline WHY comments
 
 ## Progress
 
@@ -68,4 +68,4 @@ Phases execute in numeric order: 1 -> 2 -> 3
 |-------|---------------|--------|-----------|
 | 1. Core Distance Metric Fix | 1/1 | ✓ Complete | 2026-02-05 |
 | 2. Auto-Detection and Edge Cases | 1/1 | ✓ Complete | 2026-02-05 |
-| 3. Color Science Documentation | 0/1 | Planned | - |
+| 3. Color Science Documentation | 1/1 | ✓ Complete | 2026-02-05 |

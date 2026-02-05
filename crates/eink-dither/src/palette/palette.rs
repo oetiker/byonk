@@ -50,6 +50,13 @@ pub enum DistanceMetric {
     },
 }
 
+/// Chroma threshold for auto-detecting chromatic palettes.
+/// Any palette entry with OKLab chroma above this is considered chromatic.
+/// Pure greys have chroma=0.0 exactly. Intentional chromatic colors have
+/// chroma > 0.05. Threshold 0.03 provides a clean separation with no
+/// ambiguity even for near-grey device calibration noise.
+const CHROMA_DETECTION_THRESHOLD: f32 = 0.03;
+
 /// A color palette with dual color storage and perceptual matching.
 ///
 /// `Palette` stores both the official colors (what the device specification says)
@@ -193,6 +200,18 @@ impl Palette {
             .map(|c| (c.a * c.a + c.b * c.b).sqrt())
             .collect();
 
+        // Auto-detect distance metric based on palette content
+        let distance_metric =
+            if actual_chroma.iter().any(|&c| c > CHROMA_DETECTION_THRESHOLD) {
+                DistanceMetric::HyAB {
+                    kl: 2.0,
+                    kc: 1.0,
+                    kchroma: 10.0,
+                }
+            } else {
+                DistanceMetric::Euclidean
+            };
+
         Ok(Self {
             official_srgb,
             official_linear,
@@ -201,7 +220,7 @@ impl Palette {
             actual_linear,
             actual_oklab,
             actual_chroma,
-            distance_metric: DistanceMetric::default(),
+            distance_metric,
         })
     }
 
@@ -265,11 +284,13 @@ impl Palette {
         self.actual_oklab[idx]
     }
 
-    /// Set the distance metric used for color matching.
+    /// Override the auto-detected distance metric for color matching.
     ///
-    /// By default, `Euclidean` distance is used. For palettes containing
-    /// chromatic colors (not just black/white/grey), `HyAB` produces better
-    /// results by preventing grey pixels from mapping to chromatic colors.
+    /// By default, `Palette::new()` automatically selects the distance metric:
+    /// - Chromatic palettes (any entry with chroma > 0.03): HyAB+chroma
+    /// - Achromatic palettes (all greys): Euclidean
+    ///
+    /// Use this method to override the automatic selection.
     ///
     /// # Example
     ///
@@ -287,6 +308,18 @@ impl Palette {
     pub fn with_distance_metric(mut self, metric: DistanceMetric) -> Self {
         self.distance_metric = metric;
         self
+    }
+
+    /// Returns true if the palette was auto-detected as chromatic.
+    ///
+    /// A palette is chromatic if any entry has OKLab chroma above the
+    /// detection threshold (0.03). Chromatic palettes default to
+    /// HyAB+chroma distance; achromatic palettes default to Euclidean.
+    /// Use [`with_distance_metric()`] to override the automatic selection.
+    pub fn is_chromatic(&self) -> bool {
+        self.actual_chroma
+            .iter()
+            .any(|&c| c > CHROMA_DETECTION_THRESHOLD)
     }
 
     /// Returns true if the palette uses Euclidean (squared) distance.
@@ -640,13 +673,7 @@ mod tests {
             Srgb::from_u8(0, 0, 255),     // blue
             Srgb::from_u8(255, 255, 0),   // yellow
         ];
-        Palette::new(&colors, None)
-            .unwrap()
-            .with_distance_metric(DistanceMetric::HyAB {
-                kl: 2.0,
-                kc: 1.0,
-                kchroma: 10.0,
-            })
+        Palette::new(&colors, None).unwrap()
     }
 
     #[test]
@@ -812,6 +839,86 @@ mod tests {
             idx >= 2,
             "Orange should map to a chromatic entry (idx >= 2), got {}",
             idx
+        );
+    }
+
+    // Auto-detection tests
+
+    #[test]
+    fn test_auto_detect_bw_uses_euclidean() {
+        let bw = Palette::new(
+            &[Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)],
+            None,
+        )
+        .unwrap();
+        assert!(bw.is_euclidean(), "BW palette should auto-select Euclidean");
+        assert!(!bw.is_chromatic(), "BW palette should not be chromatic");
+    }
+
+    #[test]
+    fn test_auto_detect_4grey_uses_euclidean() {
+        let greys = Palette::new(
+            &[
+                Srgb::from_u8(0, 0, 0),
+                Srgb::from_u8(85, 85, 85),
+                Srgb::from_u8(170, 170, 170),
+                Srgb::from_u8(255, 255, 255),
+            ],
+            None,
+        )
+        .unwrap();
+        assert!(
+            greys.is_euclidean(),
+            "4-grey palette should auto-select Euclidean"
+        );
+        assert!(
+            !greys.is_chromatic(),
+            "4-grey palette should not be chromatic"
+        );
+    }
+
+    #[test]
+    fn test_auto_detect_bwrgby_uses_hyab() {
+        let palette = make_6_color_palette();
+        assert!(
+            !palette.is_euclidean(),
+            "BWRGBY should auto-select HyAB+chroma"
+        );
+        assert!(palette.is_chromatic(), "BWRGBY should be chromatic");
+    }
+
+    #[test]
+    fn test_auto_detect_override_still_works() {
+        let palette = Palette::new(
+            &[
+                Srgb::from_u8(0, 0, 0),
+                Srgb::from_u8(255, 255, 255),
+                Srgb::from_u8(255, 0, 0),
+            ],
+            None,
+        )
+        .unwrap()
+        .with_distance_metric(DistanceMetric::Euclidean);
+        assert!(
+            palette.is_euclidean(),
+            "Manual override should take precedence over auto-detection"
+        );
+    }
+
+    #[test]
+    fn test_auto_detect_near_grey_not_chromatic() {
+        let palette = Palette::new(
+            &[
+                Srgb::from_u8(0, 0, 0),
+                Srgb::from_u8(130, 128, 126),
+                Srgb::from_u8(255, 255, 255),
+            ],
+            None,
+        )
+        .unwrap();
+        assert!(
+            palette.is_euclidean(),
+            "Near-grey palette should auto-select Euclidean"
         );
     }
 }

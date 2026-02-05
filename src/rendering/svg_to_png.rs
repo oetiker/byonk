@@ -1,7 +1,7 @@
 use crate::error::RenderError;
 use crate::models::DisplaySpec;
 use eink_dither::{
-    DistanceMetric, EinkDitherer, Palette as EinkPalette, RenderingIntent, Srgb as EinkSrgb,
+    EinkDitherer, Palette as EinkPalette, RenderingIntent, Srgb as EinkSrgb,
 };
 use resvg::usvg::{self, Transform};
 use std::io::Cursor;
@@ -229,19 +229,11 @@ fn build_eink_palette(palette: &[(u8, u8, u8)]) -> Result<(EinkPalette, Vec<u8>)
         }
     }
 
-    let mut eink_palette = EinkPalette::new(&unique_colors, None)
+    let eink_palette = EinkPalette::new(&unique_colors, None)
         .map_err(|e| RenderError::Dither(format!("palette error: {e}")))?;
 
-    // Enable HyAB distance for chromatic palettes to prevent grey pixels
-    // from incorrectly mapping to chromatic colors with similar lightness.
-    let has_chromatic = palette.iter().any(|&(r, g, b)| r != g || g != b);
-    if has_chromatic {
-        eink_palette = eink_palette.with_distance_metric(DistanceMetric::HyAB {
-            kl: 2.0,
-            kc: 1.0,
-            kchroma: 10.0,
-        });
-    }
+    // Distance metric is auto-detected by eink-dither based on palette content.
+    // Chromatic palettes get HyAB+chroma; achromatic palettes get Euclidean.
 
     Ok((eink_palette, index_map))
 }

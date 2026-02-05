@@ -55,6 +55,33 @@ pub struct DitherOptions {
     ///
     /// Default: `0.5`
     pub error_clamp: f32,
+
+    /// Chromatic error damping threshold (OKLab chroma units).
+    ///
+    /// Controls how much chromatic (color) error is diffused from each pixel.
+    /// The original pixel's OKLab chroma (`sqrt(a² + b²)`) is compared against
+    /// this threshold:
+    ///
+    /// - Pixels with chroma >= threshold: full error diffusion (alpha=1.0)
+    /// - Pixels with chroma < threshold: chromatic error scaled by `(chroma/threshold)²`
+    ///
+    /// Muted pixels (low chroma) diffuse mostly achromatic (mean) error,
+    /// preventing chromatic buildup that causes color blowout. Vivid pixels
+    /// diffuse full error for accurate color reproduction.
+    ///
+    /// OKLab chroma reference values:
+    /// - Pure grey: 0.00
+    /// - Overcast sky: ~0.05
+    /// - Skin tones: ~0.03–0.05
+    /// - Palette primaries (R/G/B/Y): ~0.25–0.35
+    ///
+    /// - `0.08` = aggressive damping (B&W except vivid colors)
+    /// - `0.12` = moderate damping (recommended for photos)
+    /// - `0.20` = gentle damping (more color in muted areas)
+    /// - `f32::INFINITY` = no damping (legacy behavior)
+    ///
+    /// Default: `f32::INFINITY` (no damping — legacy behavior)
+    pub chroma_clamp: f32,
 }
 
 impl Default for DitherOptions {
@@ -63,6 +90,7 @@ impl Default for DitherOptions {
             serpentine: true,
             preserve_exact_matches: true,
             error_clamp: 0.5,
+            chroma_clamp: f32::INFINITY,
         }
     }
 }
@@ -103,6 +131,19 @@ impl DitherOptions {
     #[inline]
     pub fn error_clamp(mut self, clamp: f32) -> Self {
         self.error_clamp = clamp;
+        self
+    }
+
+    /// Set chromatic error clamping threshold.
+    ///
+    /// Controls how much per-channel error can deviate from the mean
+    /// (achromatic) error. Lower values prevent color blowout in photos.
+    ///
+    /// # Arguments
+    /// * `clamp` - Maximum chromatic deviation per channel (0.0 to disable color error, f32::INFINITY for no limit)
+    #[inline]
+    pub fn chroma_clamp(mut self, clamp: f32) -> Self {
+        self.chroma_clamp = clamp;
         self
     }
 }

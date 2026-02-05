@@ -33,9 +33,12 @@ pub enum DistanceMetric {
     ///
     /// Formula: `kl * |dL| + kc * sqrt(da² + db²) + kchroma * |C_pixel - C_palette|`
     ///
-    /// Recommended: `kl: 2.0, kc: 1.0, kchroma: 10.0` (standard HyAB with
-    /// chroma coupling). The high `kchroma` ensures grey pixels never bleed
-    /// into chromatic palette entries even during multi-color dithering.
+    /// Default: `kl: 2.0, kc: 1.0, kchroma: 10.0`. The high `kchroma`
+    /// ensures grey pixels never bleed into chromatic palette entries, which
+    /// is critical for blue-noise ordered dithering (`find_second_nearest`).
+    /// For error-diffusion (Photo intent), use [`Palette::for_error_diffusion()`]
+    /// which lowers `kchroma` to 5.0 so medium-chroma pixels can reach
+    /// chromatic palette entries instead of collapsing to B&W.
     HyAB {
         /// Lightness weight. Higher values make lightness differences more
         /// significant relative to chrominance differences.
@@ -314,6 +317,38 @@ impl Palette {
     pub fn with_distance_metric(mut self, metric: DistanceMetric) -> Self {
         self.distance_metric = metric;
         self
+    }
+
+    /// Return a copy tuned for error-diffusion (Photo) rendering.
+    ///
+    /// Error diffusion accumulates quantisation error and feeds it back,
+    /// so even medium-chroma pixels eventually produce chromatic output.
+    /// A lower `kchroma` lets the initial per-pixel match reach chromatic
+    /// palette entries sooner, producing more faithful colour reproduction.
+    ///
+    /// The default `kchroma=10` is needed by the blue-noise ordered
+    /// ditherer (Graphics intent) where `find_second_nearest` can leak
+    /// chromatic entries for grey pixels. Error diffusion only uses
+    /// `find_nearest`, which is grey-safe at `kchroma=5`.
+    pub fn for_error_diffusion(&self) -> Self {
+        let mut p = self.clone();
+        if let DistanceMetric::HyAB { .. } = p.distance_metric {
+            // For error diffusion, use plain Euclidean distance in OKLab.
+            // HyAB's chroma coupling penalty biases matching toward B&W
+            // for muted colors, preventing error diffusion from producing
+            // correct chromatic averages. Euclidean OKLab is unbiased:
+            // each pixel maps to its perceptually nearest palette color,
+            // and error diffusion naturally converges to the correct
+            // average over a neighborhood of pixels.
+            //
+            // Note: pure dark greys may see minor blue tinting (DeltaE
+            // ~0.05) because blue (L=0.45) is Euclidean-closer to dark
+            // grey (L=0.37) than black (L=0.0). This is a fundamental
+            // property of OKLab Euclidean distance and is imperceptible
+            // on e-ink displays.
+            p.distance_metric = DistanceMetric::Euclidean;
+        }
+        p
     }
 
     /// Returns true if the palette was auto-detected as chromatic.

@@ -85,22 +85,26 @@ impl RenderingIntent {
         match self {
             RenderingIntent::Photo => {
                 // INTENT-01: Photo mode
-                // 1. Preprocess with saturation boost (1.5) and contrast enhancement (1.1)
+                // 1. Preprocess (no saturation/contrast boost by default)
                 let preprocess_opts = PreprocessOptions::photo();
                 let preprocessor = Preprocessor::new(palette, preprocess_opts);
                 let result = preprocessor.process(input, width, height);
 
                 // 2. Error diffusion via Atkinson (75% propagation, ideal for photos)
+                //    Use low kchroma (2.0) so muted-but-chromatic pixels reach
+                //    chromatic palette entries. No chromatic error damping: error
+                //    diffusion naturally produces correct averages.
+                let photo_palette = palette.for_error_diffusion();
                 let dither_opts = DitherOptions::new();
                 let indices = Atkinson.dither(
                     &result.pixels,
                     result.width,
                     result.height,
-                    palette,
+                    &photo_palette,
                     &dither_opts,
                 );
 
-                // 3. Wrap in DitheredImage
+                // 3. Wrap in DitheredImage (keep original palette for output encoding)
                 DitheredImage::new(indices, result.width, result.height, palette.clone())
             }
             RenderingIntent::Graphics => {

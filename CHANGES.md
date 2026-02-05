@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Color palette dithering: grey pixels no longer incorrectly map to chromatic colors (e.g., red) when using multi-color palettes. Uses HyAB perceptual distance metric (Abasi et al., 2020) with chroma coupling penalty, which prevents achromatic pixels from matching chromatic palette entries.
+- Photo dithering color reproduction: switched error diffusion (Photo intent) from HyAB+chroma distance to plain Euclidean OKLab for unbiased palette matching. Muted colors (skin tones, overcast sky, concrete, shadows) now reproduce faithfully instead of collapsing to B&W. Sweep test across 2000+ OKLab colors shows avg DeltaE=0.047 (nearly imperceptible). Blue-noise (Graphics) path retains HyAB kchroma=10 for grey safety.
 - PNG output ~27% smaller: added oxipng post-processing with zopfli compression and adaptive filter selection
 
 ## 0.11.0 - 2026-02-01

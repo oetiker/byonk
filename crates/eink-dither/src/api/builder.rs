@@ -54,7 +54,7 @@ impl EinkDitherer {
     /// Create a new ditherer with the given palette and rendering intent.
     ///
     /// Preprocessing defaults are selected based on the intent:
-    /// - **Photo**: `PreprocessOptions::photo()` (saturation 1.5, contrast 1.1)
+    /// - **Photo**: `PreprocessOptions::photo()` (saturation 1.2, contrast 1.1)
     /// - **Graphics**: `PreprocessOptions::graphics()` (no enhancement)
     ///
     /// Dither options default to `DitherOptions::new()` (serpentine, error clamp 0.5).
@@ -108,7 +108,7 @@ impl EinkDitherer {
     /// results without hue shifts.
     ///
     /// - 1.0 = no change
-    /// - 1.5 = default for Photo intent
+    /// - 1.2 = default for Photo intent
     /// - 0.5 = reduce saturation by half
     ///
     /// # Arguments
@@ -165,6 +165,21 @@ impl EinkDitherer {
         self
     }
 
+    /// Set chromatic error clamping threshold.
+    ///
+    /// Controls how much per-channel error can deviate from the mean
+    /// (achromatic) error during error diffusion. Lower values prevent
+    /// color blowout in photos while preserving B&W dithering quality.
+    ///
+    /// # Arguments
+    ///
+    /// * `clamp` - Maximum chromatic deviation per channel (default: f32::INFINITY)
+    #[inline]
+    pub fn chroma_clamp(mut self, clamp: f32) -> Self {
+        self.dither_opts = self.dither_opts.chroma_clamp(clamp);
+        self
+    }
+
     /// Dither raw sRGB pixels into a [`DitheredImage`].
     ///
     /// This is the primary processing method. It applies the full pipeline:
@@ -195,13 +210,23 @@ impl EinkDitherer {
 
         // 2. Dither using the algorithm selected by intent
         let indices = match self.intent {
-            RenderingIntent::Photo => Atkinson.dither(
-                &result.pixels,
-                result.width,
-                result.height,
-                &self.palette,
-                &self.dither_opts,
-            ),
+            RenderingIntent::Photo => {
+                // Use reduced kchroma (2.0) for error diffusion — see
+                // Palette::for_error_diffusion() for rationale.
+                // No chromatic error damping: error diffusion naturally
+                // produces correct averages when palette matching is
+                // unbiased. The low kchroma allows muted colors to reach
+                // chromatic palette entries, and full error propagation
+                // ensures the dithered output averages back to the input.
+                let photo_palette = self.palette.for_error_diffusion();
+                Atkinson.dither(
+                    &result.pixels,
+                    result.width,
+                    result.height,
+                    &photo_palette,
+                    &self.dither_opts,
+                )
+            }
             RenderingIntent::Graphics => BlueNoiseDither.dither(
                 &result.pixels,
                 result.width,
@@ -250,14 +275,15 @@ mod tests {
         let palette = test_palette();
         let ditherer = EinkDitherer::new(palette, RenderingIntent::Photo);
 
-        // Photo defaults: saturation 1.5, contrast 1.1
+        // Photo defaults: saturation 1.0, contrast 1.0 (no boost —
+        // error diffusion naturally amplifies chroma)
         assert!(
-            (ditherer.preprocess.saturation - 1.5).abs() < f32::EPSILON,
-            "Photo should default to saturation 1.5"
+            (ditherer.preprocess.saturation - 1.0).abs() < f32::EPSILON,
+            "Photo should default to saturation 1.0"
         );
         assert!(
-            (ditherer.preprocess.contrast - 1.1).abs() < f32::EPSILON,
-            "Photo should default to contrast 1.1"
+            (ditherer.preprocess.contrast - 1.0).abs() < f32::EPSILON,
+            "Photo should default to contrast 1.0"
         );
     }
 

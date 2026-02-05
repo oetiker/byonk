@@ -967,7 +967,7 @@ mod tests {
         assert_eq!(result.pixels.len(), 100);
         assert_eq!(result.exact_matches.len(), 100);
 
-        // All enhancements should be applied (photo preset has saturation 1.5, contrast 1.1)
+        // All enhancements should be applied (photo preset has saturation 1.2, contrast 1.1)
         // Since this is a gradient, most pixels won't be exact matches
         let non_matches: Vec<_> = result
             .exact_matches

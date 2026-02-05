@@ -71,8 +71,8 @@ impl Default for PreprocessOptions {
         Self {
             target_width: None,
             target_height: None,
-            saturation: 1.5,
-            contrast: 1.1,
+            saturation: 1.0,
+            contrast: 1.0,
             preserve_exact_matches: true,
         }
     }
@@ -140,10 +140,10 @@ impl PreprocessOptions {
 
     /// Preset for photo rendering intent.
     ///
-    /// Optimized for photographs with:
-    /// - Saturation boost (1.5) to compensate for e-ink's muted colors
-    /// - Contrast boost (1.1) to improve dynamic range
-    /// - Exact match preservation enabled
+    /// No saturation or contrast boost — error diffusion naturally amplifies
+    /// chroma ~1.5-2x for muted colors through error propagation, so
+    /// preprocessing boosts cause visible oversaturation. Users can override
+    /// via [`EinkDitherer::saturation()`] / [`EinkDitherer::contrast()`].
     ///
     /// # Example
     ///
@@ -155,19 +155,13 @@ impl PreprocessOptions {
     /// ```
     #[inline]
     pub fn photo() -> Self {
-        Self {
-            saturation: 1.5,
-            contrast: 1.1,
-            ..Self::default()
-        }
+        Self::default()
     }
 
     /// Preset for graphics rendering intent.
     ///
-    /// Optimized for logos, text, and UI elements with:
-    /// - No saturation change (1.0) to preserve original colors
-    /// - No contrast change (1.0) to preserve original values
-    /// - Exact match preservation enabled
+    /// No saturation or contrast changes — preserves original colors
+    /// for logos, text, and UI elements.
     ///
     /// # Example
     ///
@@ -178,12 +172,7 @@ impl PreprocessOptions {
     /// ```
     #[inline]
     pub fn graphics() -> Self {
-        Self {
-            saturation: 1.0,
-            contrast: 1.0,
-            preserve_exact_matches: true,
-            ..Self::default()
-        }
+        Self::default()
     }
 }
 
@@ -203,11 +192,11 @@ mod tests {
             "target_height should default to None"
         );
         assert!(
-            (opts.saturation - 1.5).abs() < f32::EPSILON,
-            "saturation should default to 1.5"
+            (opts.saturation - 1.0).abs() < f32::EPSILON,
+            "saturation should default to 1.0"
         );
         assert!(
-            (opts.contrast - 1.1).abs() < f32::EPSILON,
+            (opts.contrast - 1.0).abs() < f32::EPSILON,
             "contrast should default to 1.1"
         );
         assert!(
@@ -237,8 +226,8 @@ mod tests {
         assert_eq!(opts.target_width, Some(800));
         assert_eq!(opts.target_height, Some(600));
         // Other values unchanged
-        assert!((opts.saturation - 1.5).abs() < f32::EPSILON);
-        assert!((opts.contrast - 1.1).abs() < f32::EPSILON);
+        assert!((opts.saturation - 1.0).abs() < f32::EPSILON);
+        assert!((opts.contrast - 1.0).abs() < f32::EPSILON);
         assert!(opts.preserve_exact_matches);
     }
 
@@ -249,7 +238,7 @@ mod tests {
         // Other values unchanged
         assert!(opts.target_width.is_none());
         assert!(opts.target_height.is_none());
-        assert!((opts.contrast - 1.1).abs() < f32::EPSILON);
+        assert!((opts.contrast - 1.0).abs() < f32::EPSILON);
         assert!(opts.preserve_exact_matches);
     }
 
@@ -260,7 +249,7 @@ mod tests {
         // Other values unchanged
         assert!(opts.target_width.is_none());
         assert!(opts.target_height.is_none());
-        assert!((opts.saturation - 1.5).abs() < f32::EPSILON);
+        assert!((opts.saturation - 1.0).abs() < f32::EPSILON);
         assert!(opts.preserve_exact_matches);
     }
 
@@ -271,8 +260,8 @@ mod tests {
         // Other values unchanged
         assert!(opts.target_width.is_none());
         assert!(opts.target_height.is_none());
-        assert!((opts.saturation - 1.5).abs() < f32::EPSILON);
-        assert!((opts.contrast - 1.1).abs() < f32::EPSILON);
+        assert!((opts.saturation - 1.0).abs() < f32::EPSILON);
+        assert!((opts.contrast - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -296,11 +285,11 @@ mod tests {
         assert!(opts.target_width.is_none());
         assert!(opts.target_height.is_none());
         assert!(
-            (opts.saturation - 1.5).abs() < f32::EPSILON,
-            "photo preset should have saturation 1.5"
+            (opts.saturation - 1.0).abs() < f32::EPSILON,
+            "photo preset should have saturation 1.0"
         );
         assert!(
-            (opts.contrast - 1.1).abs() < f32::EPSILON,
+            (opts.contrast - 1.0).abs() < f32::EPSILON,
             "photo preset should have contrast 1.1"
         );
         assert!(opts.preserve_exact_matches);
@@ -331,6 +320,6 @@ mod tests {
         assert_eq!(opts.target_height, Some(600));
         assert!((opts.saturation - 1.3).abs() < f32::EPSILON);
         // Contrast from photo preset unchanged
-        assert!((opts.contrast - 1.1).abs() < f32::EPSILON);
+        assert!((opts.contrast - 1.0).abs() < f32::EPSILON);
     }
 }

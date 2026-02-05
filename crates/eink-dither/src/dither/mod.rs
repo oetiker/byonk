@@ -258,6 +258,8 @@ pub(crate) fn dither_with_kernel(
         vec![None; width * height]
     };
 
+    let threshold_sq = options.chroma_clamp * options.chroma_clamp;
+
     // Create error buffer with depth = max_dy + 1
     let mut error_buf = ErrorBuffer::new(width, kernel.max_dy + 1);
 
@@ -290,6 +292,16 @@ pub(crate) fn dither_with_kernel(
                 clamp_channel(image[idx].b + accumulated[2], options.error_clamp),
             );
 
+            // Compute OKLab chroma of the ORIGINAL pixel (before accumulated
+            // error) for chromatic damping. OKLab chroma is a perceptually
+            // uniform measure of colorfulness — unlike linear RGB spread which
+            // is distorted by gamma and channel sensitivity differences.
+            // Example: an overcast sky (175,198,230) has linear spread 0.37
+            // but OKLab chroma only 0.055 — perceptually muted, not vivid.
+            let original_oklab = Oklab::from(image[idx]);
+            let original_chroma_sq =
+                original_oklab.a * original_oklab.a + original_oklab.b * original_oklab.b;
+
             // WHY OKLab for matching: Perceptual uniformity ensures the palette
             // match minimizes visible color difference. Using sRGB or LinearRgb
             // for distance would produce matches that look wrong to human eyes.
@@ -308,6 +320,29 @@ pub(crate) fn dither_with_kernel(
                 pixel.b - nearest_linear.b,
             ];
 
+            // Damp chromatic error before diffusion.
+            // Decompose error into achromatic (mean) + chromatic (deviation).
+            // Scale the chromatic part by the ORIGINAL pixel's OKLab chroma:
+            //   alpha = (chroma / chroma_clamp)⁴ capped at 1.0
+            // Quartic ramp ensures muted pixels (chroma ≪ threshold) leak
+            // virtually zero chromatic error, preventing accumulation across
+            // hundreds of pixels in uniform regions. Quadratic was too gentle —
+            // 14% leakage at chroma=0.045 accumulated to 69% chromatic output.
+            // Muted pixels (alpha≈0): only achromatic error diffuses → B&W dither.
+            // Vivid pixels (alpha=1): full error diffuses → accurate color.
+            let damped_error = if options.chroma_clamp < f32::INFINITY {
+                let ratio_sq = (original_chroma_sq / threshold_sq).min(1.0);
+                let alpha = ratio_sq * ratio_sq; // quartic in chroma/threshold
+                let err_mean = (error[0] + error[1] + error[2]) * (1.0 / 3.0);
+                [
+                    err_mean + alpha * (error[0] - err_mean),
+                    err_mean + alpha * (error[1] - err_mean),
+                    err_mean + alpha * (error[2] - err_mean),
+                ]
+            } else {
+                error
+            };
+
             // Diffuse error to neighbors using kernel
             let divisor = kernel.divisor as f32;
             for &(dx, dy, weight) in kernel.entries {
@@ -323,9 +358,9 @@ pub(crate) fn dither_with_kernel(
                         let neighbor_idx = ny * width + nx as usize;
                         if exact_matches[neighbor_idx].is_none() {
                             let scaled_error = [
-                                error[0] * weight as f32 / divisor,
-                                error[1] * weight as f32 / divisor,
-                                error[2] * weight as f32 / divisor,
+                                damped_error[0] * weight as f32 / divisor,
+                                damped_error[1] * weight as f32 / divisor,
+                                damped_error[2] * weight as f32 / divisor,
                             ];
                             error_buf.add_error(nx as usize, dy as usize, scaled_error);
                         }

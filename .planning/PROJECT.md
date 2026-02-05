@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Byonk is a self-hosted content server for TRMNL e-ink devices, using Lua scripts for data fetching and SVG templates for rendering. The `eink-dither` crate handles converting full-color rendered images to the limited palette of e-ink displays. This project focuses on fixing the color perception pipeline in `eink-dither` so that multi-color e-ink devices (e.g., 6-color BWRGBY) produce visually correct renders.
+Byonk is a self-hosted content server for TRMNL e-ink devices, using Lua scripts for data fetching and SVG templates for rendering. The `eink-dither` crate handles converting full-color rendered images to the limited palette of e-ink displays using perceptually correct color matching (HyAB + chroma coupling in OKLab space) with automatic distance metric selection.
 
 ## Core Value
 
@@ -19,14 +19,16 @@ Photos and graphics dithered to a limited e-ink palette must map pixels to the p
 - ✓ Dither mode selectable per-screen (photo vs graphics) — existing
 - ✓ OKLab color space implementation exists in eink-dither — existing
 - ✓ Linear RGB ↔ sRGB conversion exists in eink-dither — existing
+- ✓ Perceptually correct nearest-palette-color matching (HyAB + chroma coupling) — v1.0
+- ✓ Correct color space usage throughout the dithering pipeline — v1.0
+- ✓ Documented color science rationale for every conversion and distance calculation — v1.0
+- ✓ Generic palette support maintained with auto-detection — v1.0
 
 ### Active
 
-- [ ] Perceptually correct nearest-palette-color matching (colors map to the right palette entry)
-- [ ] Correct color space usage throughout the dithering pipeline (distance calculations, error diffusion)
-- [ ] Documented color science rationale for every conversion and distance calculation
-- [ ] Visual correctness verified against reference images on a BWRGBY palette
-- [ ] Generic palette support maintained (not hardcoded to any specific device palette)
+- [ ] Optimal kchroma value validated on real e-ink hardware
+- [ ] Preprocessing defaults re-tuned for corrected metric
+- [ ] Visual regression test suite with reference images
 
 ### Out of Scope
 
@@ -38,10 +40,10 @@ Photos and graphics dithered to a limited e-ink palette must map pixels to the p
 ## Context
 
 - The `eink-dither` crate at `crates/eink-dither/` contains color space conversions (OKLab, linear RGB, sRGB), dithering algorithms (Atkinson, Floyd-Steinberg, JJN, Sierra, blue noise), and palette matching logic.
-- The code was written with confidence that the color science is correct — comments affirm this — but the rendered output shows colors mapped to obviously wrong palette entries.
-- The likely root causes are: wrong color space for distance calculations, incorrect gamma handling in conversions, or error diffusion accumulating in a non-perceptual space.
-- This is a domain where subtle implementation bugs (e.g., computing Euclidean distance in sRGB instead of OKLab, or applying gamma correction twice) produce dramatically wrong visual results.
+- v1.0 shipped: HyAB + chroma coupling distance metric, auto-detection of chromatic palettes, comprehensive color science documentation with pipeline diagram and inline WHY comments.
+- 8,908 lines of Rust, 210 tests passing, all color science decisions documented in crate-level docs.
 - E-ink color palettes are extremely limited (6-7 colors) which amplifies any error in color matching — there's no room for "close enough."
+- kchroma=10.0 may need validation on physical e-ink hardware (v2 scope).
 
 ## Constraints
 
@@ -54,9 +56,14 @@ Photos and graphics dithered to a limited e-ink palette must map pixels to the p
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Focus on eink-dither crate only | The SVG→RGBA rendering is correct; the problem is in palette mapping and dithering | — Pending |
-| Research color science first | The code was written with wrong assumptions; we need to understand the correct approach before fixing | — Pending |
-| Document all color science decisions | Prevent future regressions from well-intentioned but incorrect "fixes" | — Pending |
+| Focus on eink-dither crate only | The SVG→RGBA rendering is correct; the problem is in palette mapping and dithering | ✓ Good |
+| HyAB + chroma coupling fix | Single formula change fixes root cause | ✓ Good |
+| kchroma=10.0 (was 2.0) | 2.0 insufficient for blue noise dithering — yellow (L=0.97) too close to white (L=1.0), needed kchroma>8.2 | ✓ Good — needs hardware validation |
+| Research color science first | The code was written with wrong assumptions; we need to understand the correct approach before fixing | ✓ Good |
+| Document all color science decisions | Prevent future regressions from well-intentioned but incorrect "fixes" | ✓ Good |
+| Auto-detection in Palette::new() | Callers shouldn't need to know about distance metrics | ✓ Good |
+| CHROMA_DETECTION_THRESHOLD=0.03 | Cleanly separates achromatic (chroma=0.0) from chromatic (chroma>0.05) | ✓ Good |
+| WHY comment convention at conversions | Inline rationale prevents incorrect "optimizations" | ✓ Good |
 
 ---
-*Last updated: 2026-02-05 after initialization*
+*Last updated: 2026-02-05 after v1.0 milestone*

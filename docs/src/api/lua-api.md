@@ -951,7 +951,8 @@ return {
   },
   refresh_rate = 300,  -- Seconds until next refresh
   skip_update = false, -- Optional: skip rendering, just check back later
-  colors = { "#000000", "#FFFFFF", "#FF0000" }  -- Optional: override display palette
+  colors = { "#000000", "#FFFFFF", "#FF0000" },  -- Optional: override display palette
+  dither = "photo"     -- Optional: "photo" or "graphics" (default)
 }
 ```
 
@@ -1004,6 +1005,32 @@ return {
   data = { ... },
   refresh_rate = 300,
   colors = { "#000000", "#FFFFFF", "#FF0000" }
+}
+```
+
+### dither
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `dither` | string or nil | Optional dithering mode: `"photo"` or `"graphics"` |
+
+Controls the rendering intent used when converting SVG to the e-ink PNG:
+
+- **`"graphics"`** (default) — Blue noise ordered dithering, optimized for UI content (text, icons, charts)
+- **`"photo"`** — Atkinson error diffusion with saturation/contrast boost, optimized for photographs
+
+The dither mode follows a priority chain:
+
+1. **Script `dither`** (strongest) — returned in the script result table
+2. **Device config `dither`** — set per-device in `config.yaml`
+3. **Default** — `"graphics"`
+
+```lua
+-- Use photo dithering for a screen that displays images
+return {
+  data = { image_url = "..." },
+  refresh_rate = 3600,
+  dither = "photo"
 }
 ```
 

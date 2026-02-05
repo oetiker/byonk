@@ -32,18 +32,86 @@ mod atkinson;
 mod blue_noise;
 mod blue_noise_matrix;
 mod floyd_steinberg;
+mod floyd_steinberg_noise;
 mod jjn;
 mod kernel;
 mod options;
 mod sierra;
+mod simplex;
 
 pub use atkinson::Atkinson;
 pub use blue_noise::BlueNoiseDither;
 pub use floyd_steinberg::FloydSteinberg;
+pub use floyd_steinberg_noise::FloydSteinbergNoise;
 pub use jjn::JarvisJudiceNinke;
 pub use kernel::*;
 pub use options::DitherOptions;
 pub use sierra::{Sierra, SierraLite, SierraTwoRow};
+pub use simplex::SimplexDither;
+
+/// Dither algorithm selection for builder API.
+///
+/// This enum allows selecting the dithering algorithm via the
+/// [`EinkDitherer`](crate::EinkDitherer) builder, overriding the
+/// default algorithm for the rendering intent.
+///
+/// # Default Algorithms by Intent
+///
+/// - **Photo**: [`Atkinson`] (error diffusion)
+/// - **Graphics**: [`BlueNoiseDither`] (ordered dithering)
+///
+/// # Example
+///
+/// ```
+/// use eink_dither::{EinkDitherer, Palette, RenderingIntent, DitherAlgorithm, Srgb};
+///
+/// let colors = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)];
+/// let palette = Palette::new(&colors, None).unwrap();
+///
+/// // Use SimplexDither instead of the default BlueNoiseDither for Graphics
+/// let ditherer = EinkDitherer::new(palette, RenderingIntent::Graphics)
+///     .algorithm(DitherAlgorithm::Simplex);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DitherAlgorithm {
+    /// Use the default algorithm for the rendering intent.
+    ///
+    /// - Photo: Atkinson error diffusion
+    /// - Graphics: Blue noise ordered dithering
+    #[default]
+    Auto,
+
+    /// Atkinson error diffusion (75% propagation).
+    ///
+    /// Best for photographs. Produces smooth gradients but can have
+    /// directional artifacts.
+    Atkinson,
+
+    /// Floyd-Steinberg error diffusion (100% propagation).
+    ///
+    /// Classic algorithm with full error propagation.
+    FloydSteinberg,
+
+    /// Blue noise ordered dithering.
+    ///
+    /// Best for graphics. No error bleeding across edges, deterministic.
+    /// Uses 2-color interpolation per pixel.
+    BlueNoise,
+
+    /// Simplex (barycentric) ordered dithering.
+    ///
+    /// Uses Delaunay triangulation in OKLab space for up to 4-color
+    /// blending per pixel. 27% better color accuracy than blue noise
+    /// while maintaining ordered dithering benefits.
+    Simplex,
+
+    /// Floyd-Steinberg with blue noise kernel weight jitter.
+    ///
+    /// Varies the error diffusion direction per pixel using blue noise
+    /// to break "worm" artifacts while maintaining 100% error propagation.
+    /// Best for photographs with smooth gradients.
+    FloydSteinbergNoise,
+}
 
 use crate::color::{LinearRgb, Oklab, Srgb};
 use crate::palette::Palette;
@@ -277,10 +345,38 @@ pub(crate) fn dither_with_kernel(
         for x in x_range {
             let idx = y * width + x;
 
-            // Check for exact palette match - skip dithering entirely
+            // Exact palette match: output exact color but let error flow through.
+            // This keeps text/UI crisp while preventing "wall" artifacts where
+            // exact-match bands block error diffusion in smooth gradients.
             if let Some(palette_idx) = exact_matches[idx] {
                 output[idx] = palette_idx;
-                // Don't diffuse any error from this pixel
+                let accumulated = error_buf.get_accumulated(x);
+                let nearest_linear = palette.actual_linear(palette_idx as usize);
+                let error = [
+                    clamp_channel(image[idx].r + accumulated[0], options.error_clamp)
+                        - nearest_linear.r,
+                    clamp_channel(image[idx].g + accumulated[1], options.error_clamp)
+                        - nearest_linear.g,
+                    clamp_channel(image[idx].b + accumulated[2], options.error_clamp)
+                        - nearest_linear.b,
+                ];
+
+                let divisor = kernel.divisor as f32;
+                for &(dx, dy, weight) in kernel.entries {
+                    let effective_dx = if reverse { -dx } else { dx };
+                    let nx = x as i32 + effective_dx;
+                    if nx >= 0 && (nx as usize) < width {
+                        let ny = y + dy as usize;
+                        if ny < height {
+                            let scaled_error = [
+                                error[0] * weight as f32 / divisor,
+                                error[1] * weight as f32 / divisor,
+                                error[2] * weight as f32 / divisor,
+                            ];
+                            error_buf.add_error(nx as usize, dy as usize, scaled_error);
+                        }
+                    }
+                }
                 continue;
             }
 
@@ -354,16 +450,12 @@ pub(crate) fn dither_with_kernel(
                 if nx >= 0 && (nx as usize) < width {
                     let ny = y + dy as usize;
                     if ny < height {
-                        // Check if neighbor is an exact match (don't diffuse into it)
-                        let neighbor_idx = ny * width + nx as usize;
-                        if exact_matches[neighbor_idx].is_none() {
-                            let scaled_error = [
-                                damped_error[0] * weight as f32 / divisor,
-                                damped_error[1] * weight as f32 / divisor,
-                                damped_error[2] * weight as f32 / divisor,
-                            ];
-                            error_buf.add_error(nx as usize, dy as usize, scaled_error);
-                        }
+                        let scaled_error = [
+                            damped_error[0] * weight as f32 / divisor,
+                            damped_error[1] * weight as f32 / divisor,
+                            damped_error[2] * weight as f32 / divisor,
+                        ];
+                        error_buf.add_error(nx as usize, dy as usize, scaled_error);
                     }
                 }
             }

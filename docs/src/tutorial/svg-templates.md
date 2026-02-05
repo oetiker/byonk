@@ -276,6 +276,15 @@ devices:
 
 Or per-script by returning `colors` in the Lua result table (see [Lua API: colors](../api/lua-api.md#colors)).
 
+### Dithering Mode
+
+Byonk supports two dithering modes via the `dither` option:
+
+- **`graphics`** (default) — Blue noise ordered dithering, best for UI content
+- **`photo`** — Atkinson error diffusion, best for photographs
+
+Set per-device in `config.yaml` or per-script in the Lua return table (see [Lua API: dither](../api/lua-api.md#dither) and [Content Pipeline: Rendering Intents](../concepts/content-pipeline.md#rendering-intents)).
+
 ### Using Palette Colors
 
 For the cleanest output, use colors from the display palette directly. Byonk will dither any color to the nearest palette color, but exact palette matches are preserved without dithering.

@@ -8,7 +8,7 @@
 - **SVG Templates** - Design pixel-perfect screens using SVG with Tera templating (Jinja2-style syntax).
 - **Variable Fonts** - Full support for variable font weights via CSS font-variation-settings.
 - **Smart Refresh** - Scripts control when devices refresh - optimize for fresh data and battery life.
-- **Palette-Aware Dithering** - Blue-noise error diffusion optimized for e-paper, supporting greyscale and color palettes.
+- **Palette-Aware Dithering** - Perceptually correct Oklab dithering with two rendering intents (Graphics and Photo), supporting greyscale and color palettes.
 - **Device Mapping** - Assign different screens to different devices via simple YAML configuration.
 
 ## Quick Start

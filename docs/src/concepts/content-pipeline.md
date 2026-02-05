@@ -211,33 +211,35 @@ The image is centered if the aspect ratio doesn't match exactly.
 
 E-ink displays support a limited color palette (typically 4 grey levels, but also color palettes like black/white/red/yellow). Dithering creates the illusion of more shades by distributing quantization error to neighboring pixels.
 
-Byonk uses **blue-noise-modulated error diffusion** dithering in RGB color space, an improved algorithm that reduces visible "worm" artifacts while preserving sharp edges for UI content. Pixels that exactly match a palette color are preserved without dithering.
+Byonk uses the [eink-dither](https://github.com/oetiker/byonk/tree/main/crates/eink-dither) engine which performs color matching in the perceptually uniform **Oklab** color space and processes pixels in **gamma-correct linear RGB**. This produces more accurate color reproduction than naive RGB-space dithering.
 
-### How It Works
+### Rendering Intents
 
-The algorithm improves upon standard Floyd-Steinberg in three ways:
+Byonk supports two dithering modes, selectable per-device or per-script via the `dither` option:
 
-1. **Serpentine scanning**: Alternates row direction (left-to-right, then right-to-left) to reduce directional artifacts
-2. **Blue noise modulation**: Adds subtle randomness to the quantization threshold, breaking up repetitive patterns
-3. **Energy-preserving error**: Error is computed from the un-noised value to maintain correct brightness
+- **`graphics`** (default) — Blue noise ordered dithering. Optimized for UI content: text, icons, charts, and flat-color designs. Produces clean, artifact-free output with sharp edges.
+- **`photo`** — Atkinson error diffusion with saturation and contrast boost. Optimized for photographic content: produces smooth gradients and preserves detail in images.
 
-```
-For each pixel (in RGB):
-  1. Skip if pixel exactly matches a palette color
-  2. Get blue noise value for this position (64×64 tiled pattern)
-  3. Add noise offset to RGB channels (modulates threshold)
-  4. Find nearest palette color by Euclidean distance in RGB
-  5. Calculate error from ORIGINAL value (not noised) — preserves energy
-  6. Distribute error to neighbors (direction depends on row):
+Set the dither mode per-device in `config.yaml`:
 
-     Left-to-right:      Right-to-left:
-         X   7/16        7/16   X
-     3/16 5/16 1/16      1/16 5/16 3/16
+```yaml
+devices:
+  "ABCDE-FGHJK":
+    screen: gphoto
+    dither: photo
 ```
 
-### Why Blue Noise?
+Or per-script by returning `dither` in the Lua result table:
 
-Standard Floyd-Steinberg can produce visible "worm" patterns in mid-gray areas. Blue noise has a frequency distribution that appears random to the eye but lacks low-frequency components, producing more pleasing results on e-ink displays.
+```lua
+return {
+  data = { ... },
+  refresh_rate = 300,
+  dither = "photo"
+}
+```
+
+The priority chain is: **script `dither`** > **device config `dither`** > **default (`graphics`)**.
 
 ### Output Format
 

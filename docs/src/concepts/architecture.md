@@ -86,7 +86,7 @@ Converts SVG to PNG optimized for e-ink:
 
 - Uses [resvg](https://github.com/RazrFalcon/resvg) for rendering
 - Loads custom fonts from `fonts/` directory
-- Palette-aware blue-noise dithering (greyscale and color)
+- Palette-aware dithering via [eink-dither](https://github.com/oetiker/byonk/tree/main/crates/eink-dither) engine (Oklab color matching, two rendering intents)
 - Outputs optimized PNG (greyscale or indexed, depending on palette)
 
 ## Request Flow
@@ -168,7 +168,7 @@ The `filename` field contains a hash of the rendered SVG content. This allows TR
 
 **Phase 3** (image rendering):
 1. Look up cached SVG by content hash
-2. Convert SVG to PNG with blue-noise dithering
+2. Convert SVG to PNG with palette-aware dithering
 3. Return PNG to device
 
 ## Technology Stack

@@ -424,11 +424,15 @@ pub async fn handle_render(
             .render_svg_from_script(&script_result, Some(&ctx))
             .map_err(|e| e.to_string())?;
 
-        Ok::<(String, Option<Vec<String>>), String>((svg, script_result.script_colors))
+        Ok::<(String, Option<Vec<String>>, Option<String>), String>((
+            svg,
+            script_result.script_colors,
+            script_result.script_dither,
+        ))
     })
     .await;
 
-    let (svg, script_colors) = match result {
+    let (svg, script_colors, script_dither) = match result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             return (
@@ -462,10 +466,12 @@ pub async fn handle_render(
     // Convert SVG to PNG with palette-aware dithering
     let display_spec = DisplaySpec::from_dimensions(width, height).unwrap_or(DisplaySpec::OG);
 
-    match state
-        .content_pipeline
-        .render_png_from_svg(&svg, display_spec, &final_palette, None)
-    {
+    match state.content_pipeline.render_png_from_svg(
+        &svg,
+        display_spec,
+        &final_palette,
+        script_dither.as_deref(),
+    ) {
         Ok(png_bytes) => (
             StatusCode::OK,
             [

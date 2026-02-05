@@ -56,6 +56,8 @@ Each device entry maps a MAC address to a screen:
 |----------|----------|-------------|
 | `screen` | Yes | Name of the screen definition to use |
 | `params` | No | Key-value pairs passed to the Lua script |
+| `colors` | No | Override display palette (comma-separated hex RGB, e.g. `"#000000,#FFFFFF,#FF0000"`) |
+| `dither` | No | Dithering mode: `"photo"` or `"graphics"` (default) |
 
 ### MAC Address Format
 

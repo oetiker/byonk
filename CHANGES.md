@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- Floyd-Steinberg dithering with blue noise kernel jitter (`dither="floyd-steinberg"`): breaks "worm" artifacts on smooth gradients while maintaining 100% error propagation. Also accepts `"atkinson"` as alias for `"photo"`.
 - Google Photos screen (`gphoto`): displays random photos from a shared Google Photos album using HTML scraping (no OAuth required)
 - Terminus TTF font demo screen (`fontdemo-terminus`): showcases all 9 embedded bitmap sizes (12–32px) in regular, bold, italic, and bold-italic styles
 - `fonts` global in Lua API: discover all available font families, styles, weights, and bitmap strike sizes at runtime

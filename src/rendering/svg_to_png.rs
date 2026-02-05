@@ -1,7 +1,7 @@
 use crate::error::RenderError;
 use crate::models::DisplaySpec;
 use eink_dither::{
-    EinkDitherer, Palette as EinkPalette, RenderingIntent, Srgb as EinkSrgb,
+    DitherAlgorithm, EinkDitherer, Palette as EinkPalette, RenderingIntent, Srgb as EinkSrgb,
 };
 use resvg::usvg::{self, Transform};
 use std::io::Cursor;
@@ -62,9 +62,11 @@ impl SvgRenderer {
     /// Render SVG to PNG using the given color palette.
     ///
     /// The output format is chosen automatically based on the palette content.
-    /// The `dither` parameter selects the rendering intent: "photo" for Atkinson
-    /// error diffusion with saturation/contrast boost, or "graphics" (default)
-    /// for blue noise ordered dithering.
+    /// The `dither` parameter selects the dithering algorithm:
+    /// - `"photo"` / `"atkinson"` - Atkinson error diffusion (best color accuracy)
+    /// - `"floyd-steinberg"` - Floyd-Steinberg with blue noise jitter (smooth gradients)
+    /// - `"graphics"` (default) - Blue noise ordered dithering
+    /// - `"simplex"` - Barycentric ordered dithering (up to 4-color blending)
     pub fn render_to_palette_png(
         &self,
         svg_data: &[u8],
@@ -77,17 +79,25 @@ impl SvgRenderer {
         // Build eink-dither palette with dedup (eink-dither rejects duplicates)
         let (eink_palette, index_map) = build_eink_palette(palette)?;
 
-        // Determine rendering intent
-        let intent = match dither {
-            Some(s) if s.eq_ignore_ascii_case("photo") => RenderingIntent::Photo,
-            _ => RenderingIntent::Graphics,
+        // Determine rendering intent and algorithm
+        let (intent, algorithm) = match dither {
+            Some(s) if s.eq_ignore_ascii_case("photo") || s.eq_ignore_ascii_case("atkinson") => {
+                (RenderingIntent::Photo, DitherAlgorithm::Auto)
+            }
+            Some(s) if s.eq_ignore_ascii_case("floyd-steinberg") => {
+                (RenderingIntent::Photo, DitherAlgorithm::FloydSteinbergNoise)
+            }
+            Some(s) if s.eq_ignore_ascii_case("simplex") => {
+                (RenderingIntent::Graphics, DitherAlgorithm::Simplex)
+            }
+            _ => (RenderingIntent::Graphics, DitherAlgorithm::Auto),
         };
 
         // Convert RGBA pixmap to eink-dither Srgb pixels
         let pixels = rgba_to_eink_srgb(pixmap.data());
 
         // Dither using eink-dither
-        let ditherer = EinkDitherer::new(eink_palette, intent);
+        let ditherer = EinkDitherer::new(eink_palette, intent).algorithm(algorithm);
         let result = ditherer.dither(&pixels, spec.width as usize, spec.height as usize);
 
         // Remap eink-dither indices back to the original palette indices

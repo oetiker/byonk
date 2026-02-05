@@ -7,3 +7,5 @@ license = "MIT"
 
 [dev-dependencies]
 palette = "0.7"
+epd-dither = { path = "../../../epd-dither", default-features = false }
+nalgebra = "0.34"

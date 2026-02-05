@@ -9,7 +9,7 @@ mod domain_tests {
     use crate::color::{LinearRgb, Oklab, Srgb};
     use crate::dither::{
         Atkinson, BlueNoiseDither, Dither, DitherOptions, FloydSteinberg, JarvisJudiceNinke,
-        Sierra, SierraLite, SierraTwoRow,
+        Sierra, SierraLite, SierraTwoRow, SimplexDither,
     };
     use crate::output::RenderingIntent;
     use crate::palette::Palette;
@@ -128,7 +128,7 @@ mod domain_tests {
                 }
             };
 
-            // Test all 7 algorithms
+            // Test all 8 algorithms
             let algorithms: Vec<(&str, Box<dyn Dither>)> = vec![
                 ("Atkinson", Box::new(Atkinson)),
                 ("FloydSteinberg", Box::new(FloydSteinberg)),
@@ -137,6 +137,7 @@ mod domain_tests {
                 ("SierraTwoRow", Box::new(SierraTwoRow)),
                 ("SierraLite", Box::new(SierraLite)),
                 ("BlueNoiseDither", Box::new(BlueNoiseDither)),
+                ("SimplexDither", Box::new(SimplexDither::new(&palette))),
             ];
 
             for (name, algorithm) in &algorithms {
@@ -1275,6 +1276,467 @@ mod domain_tests {
 
         let avg_de = total_de / grid.len() as f64;
         eprintln!("{}", "-".repeat(110));
+        eprintln!("Summary: avg DeltaE={avg_de:.4}, max DeltaE={max_de:.4} ({max_de_label})");
+    }
+
+    // ========================================================================
+    // SimplexDither-specific tests
+    // ========================================================================
+
+    /// SimplexDither grey safety: dithering a grey gradient with the simplex
+    /// algorithm on a chromatic palette must produce ONLY black and white output.
+    /// The achromatic bypass prevents grey→chromatic contamination.
+    #[test]
+    fn test_simplex_grey_gradient_chromatic_palette() {
+        let palette_colors = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(0, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(255, 255, 0),
+        ];
+        let palette = Palette::new(&palette_colors, None).unwrap();
+        let dither = SimplexDither::new(&palette);
+        let options = DitherOptions::new();
+
+        // Grey gradient (64x64)
+        let image: Vec<LinearRgb> = (0..64 * 64)
+            .map(|i| {
+                let v = (i % 64) as f32 / 63.0;
+                LinearRgb::from(Srgb::new(v, v, v))
+            })
+            .collect();
+
+        let result = dither.dither(&image, 64, 64, &palette, &options);
+
+        for (i, &idx) in result.iter().enumerate() {
+            assert!(
+                idx == 0 || idx == 1,
+                "Grey pixel at position {} mapped to chromatic index {} via SimplexDither. \
+                 Achromatic bypass is not working correctly.",
+                i,
+                idx
+            );
+        }
+    }
+
+    /// SimplexDither must be at least as accurate as BlueNoiseDither.
+    ///
+    /// For achromatic colors, both use the same 2-nearest fallback path so
+    /// DeltaE should be identical. For chromatic colors inside the convex
+    /// hull, SimplexDither's barycentric decomposition should be equal or
+    /// better than BlueNoiseDither's 2-nearest interpolation.
+    ///
+    /// This test is the honest comparison: no hand-picked thresholds, just
+    /// "simplex must be <= blue_noise" for every test color.
+    #[test]
+    fn test_simplex_at_least_as_good_as_blue_noise() {
+        let palette_colors = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(0, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(255, 255, 0),
+        ];
+        let palette = Palette::new(&palette_colors, None).unwrap();
+        let simplex = SimplexDither::new(&palette);
+        let options = DitherOptions::new();
+        let size = 255;
+
+        // Mix of achromatic (fallback), chromatic inside hull, and outside hull.
+        let test_colors: &[(&str, Srgb)] = &[
+            // Achromatic — both algorithms use same fallback
+            ("mid grey", Srgb::from_u8(128, 128, 128)),
+            ("dark grey", Srgb::from_u8(64, 64, 64)),
+            ("light grey", Srgb::from_u8(192, 192, 192)),
+            // Chromatic — simplex should shine here
+            ("orange", Srgb::from_u8(255, 165, 0)),
+            ("skin tone", Srgb::from_u8(210, 161, 109)),
+            ("teal", Srgb::from_u8(60, 130, 120)),
+            ("dusty rose", Srgb::from_u8(160, 120, 130)),
+            ("pure red", Srgb::from_u8(255, 0, 0)),
+            ("cyan", Srgb::from_u8(0, 255, 255)),
+            ("sky blue", Srgb::from_u8(50, 130, 230)),
+        ];
+
+        let mut failures = Vec::new();
+        let mut simplex_wins = 0;
+        let mut ties = 0;
+
+        for &(name, color) in test_colors {
+            let image: Vec<LinearRgb> = vec![LinearRgb::from(color); size * size];
+
+            let result_s = simplex.dither(&image, size, size, &palette, &options);
+            let result_b = BlueNoiseDither.dither(&image, size, size, &palette, &options);
+
+            let delta_e = |result: &[u8]| -> f32 {
+                let n = result.len() as f32;
+                let (mut sr, mut sg, mut sb) = (0.0f32, 0.0f32, 0.0f32);
+                for &idx in result {
+                    let lin = palette.actual_linear(idx as usize);
+                    sr += lin.r;
+                    sg += lin.g;
+                    sb += lin.b;
+                }
+                let avg = Oklab::from(LinearRgb::new(sr / n, sg / n, sb / n));
+                let inp = Oklab::from(LinearRgb::from(color));
+                let dl = inp.l - avg.l;
+                let da = inp.a - avg.a;
+                let db = inp.b - avg.b;
+                (dl * dl + da * da + db * db).sqrt()
+            };
+
+            let de_s = delta_e(&result_s);
+            let de_b = delta_e(&result_b);
+
+            // Allow tiny tolerance (1e-4) for float rounding
+            if de_s > de_b + 1e-4 {
+                failures.push(format!(
+                    "  {name}: simplex DeltaE={de_s:.4} > blue_noise DeltaE={de_b:.4}"
+                ));
+            }
+
+            if de_s + 1e-4 < de_b {
+                simplex_wins += 1;
+            } else {
+                ties += 1;
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "SimplexDither worse than BlueNoiseDither:\n{}\n\
+             (simplex wins: {simplex_wins}, ties: {ties})",
+            failures.join("\n")
+        );
+    }
+
+    /// Comprehensive color accuracy sweep for SimplexDither.
+    ///
+    /// Run: `cargo test -p eink-dither color_accuracy_sweep_simplex -- --nocapture --ignored`
+    #[test]
+    #[ignore] // expensive diagnostic — run manually
+    fn test_color_accuracy_sweep_simplex() {
+        let palette_colors = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(0, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(255, 255, 0),
+        ];
+        let palette = Palette::new(&palette_colors, None).unwrap();
+        let dither = SimplexDither::new(&palette);
+        let options = DitherOptions::new();
+        let grid = generate_oklch_grid();
+
+        eprintln!();
+        eprintln!("SimplexDither — {} in-gamut colors", grid.len());
+        eprintln!(
+            "{:>22} | In_L  In_C  In_H° | Avg_L Avg_C  |  dE   | Chr%",
+            "Label"
+        );
+        eprintln!("{}", "-".repeat(80));
+
+        let mut total_de = 0.0f64;
+        let mut max_de = 0.0f32;
+        let mut max_de_label = String::new();
+        let size = 255;
+
+        for (label, color) in &grid {
+            let image: Vec<LinearRgb> = vec![LinearRgb::from(*color); size * size];
+            let result = dither.dither(&image, size, size, &palette, &options);
+
+            let n = result.len() as f32;
+            let mut sr = 0.0f32;
+            let mut sg = 0.0f32;
+            let mut sb = 0.0f32;
+            let mut chromatic = 0u32;
+            for &idx in &result {
+                let lin = palette.actual_linear(idx as usize);
+                sr += lin.r;
+                sg += lin.g;
+                sb += lin.b;
+                if idx > 1 {
+                    chromatic += 1;
+                }
+            }
+            let avg = Oklab::from(LinearRgb::new(sr / n, sg / n, sb / n));
+            let inp = Oklab::from(LinearRgb::from(*color));
+
+            let dl = inp.l - avg.l;
+            let da = inp.a - avg.a;
+            let db = inp.b - avg.b;
+            let delta_e = (dl * dl + da * da + db * db).sqrt();
+
+            let in_lch = Oklch::from(inp);
+            let avg_lch = Oklch::from(avg);
+            let chr_pct = chromatic as f32 / n * 100.0;
+
+            total_de += delta_e as f64;
+            if delta_e > max_de {
+                max_de = delta_e;
+                max_de_label = label.clone();
+            }
+
+            eprintln!(
+                "{label:>22} | {:.2} {:.3} {:>5.0} | {:.2} {:.3}  | {:.3} | {:>4.1}",
+                in_lch.l,
+                in_lch.c,
+                in_lch.h.to_degrees(),
+                avg_lch.l,
+                avg_lch.c,
+                delta_e,
+                chr_pct,
+            );
+        }
+
+        let avg_de = total_de / grid.len() as f64;
+        eprintln!("{}", "-".repeat(80));
+        eprintln!("Summary: avg DeltaE={avg_de:.4}, max DeltaE={max_de:.4} ({max_de_label})");
+    }
+
+    // ========================================================================
+    // epd-dither comparison: evaluate their barycentric + error diffusion approach
+    // ========================================================================
+
+    /// Compare epd-dither's approach (barycentric decomposition + error diffusion
+    /// in weight space) against our algorithms.
+    ///
+    /// Run: `cargo test -p eink-dither color_accuracy_sweep_epd_dither -- --nocapture --ignored`
+    #[test]
+    #[ignore] // expensive diagnostic — run manually
+    fn test_color_accuracy_sweep_epd_dither() {
+        use epd_dither::decompose::naive::{NaiveDecomposer, NaiveDecomposerStrategy};
+        use epd_dither::dither::diffuse::{
+            diffuse_dither, ImageReader, ImageSize, ImageWriter, PixelStrategy,
+        };
+        use epd_dither::dither::diffusion_matrix::FloydSteinberg as EpdFloydSteinberg;
+        use nalgebra::{DVector, Point3};
+
+        // BWRGBY palette in linear RGB (0-1 range)
+        let palette_colors = [
+            Srgb::from_u8(0, 0, 0),       // Black
+            Srgb::from_u8(255, 255, 255), // White
+            Srgb::from_u8(255, 0, 0),     // Red
+            Srgb::from_u8(0, 255, 0),     // Green
+            Srgb::from_u8(0, 0, 255),     // Blue
+            Srgb::from_u8(255, 255, 0),   // Yellow
+        ];
+        let our_palette = Palette::new(&palette_colors, None).unwrap();
+
+        // epd-dither uses sRGB 0-1 space (not linear!)
+        let epd_palette: Vec<Point3<f32>> = palette_colors
+            .iter()
+            .map(|c| {
+                let [r, g, b] = c.to_bytes();
+                Point3::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0)
+            })
+            .collect();
+
+        let decomposer = NaiveDecomposer::new(&epd_palette).expect("decomposer");
+
+        let grid = generate_oklch_grid();
+        let size = 64usize; // Smaller for faster testing (64x64 vs 255x255)
+
+        eprintln!();
+        eprintln!(
+            "epd-dither (Naive + Floyd-Steinberg in weight space) — {} in-gamut colors",
+            grid.len()
+        );
+        eprintln!(
+            "{:>22} | In_L  In_C  In_H° | Avg_L Avg_C  |  dE   | Chr%",
+            "Label"
+        );
+        eprintln!("{}", "-".repeat(80));
+
+        let mut total_de = 0.0f64;
+        let mut max_de = 0.0f32;
+        let mut max_de_label = String::new();
+
+        for (label, color) in &grid {
+            // color is Srgb from generate_oklch_grid
+            let linear = LinearRgb::from(*color);
+            let input_lab = Oklab::from(linear);
+
+            // epd-dither works in sRGB 0-1 space
+            let srgb = *color;
+            let [r, g, b] = srgb.to_bytes();
+            let srgb_f32 = (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
+
+            // Create uniform image
+            struct EpdImage {
+                pixels: Vec<(f32, f32, f32)>,
+                width: usize,
+                height: usize,
+            }
+
+            impl ImageSize for EpdImage {
+                fn width(&self) -> usize {
+                    self.width
+                }
+                fn height(&self) -> usize {
+                    self.height
+                }
+            }
+
+            impl ImageReader<(f32, f32, f32)> for EpdImage {
+                fn get_pixel(&self, x: usize, y: usize) -> (f32, f32, f32) {
+                    self.pixels[y * self.width + x]
+                }
+            }
+
+            impl ImageWriter<usize> for EpdImage {
+                fn put_pixel(&mut self, x: usize, y: usize, pixel: usize) {
+                    // Store index as color index in a separate field
+                    // For simplicity, we'll encode as (idx, 0, 0)
+                    self.pixels[y * self.width + x] = (pixel as f32, 0.0, 0.0);
+                }
+            }
+
+            // Strategy that uses epd-dither's decomposition
+            struct EpdStrategy<'a> {
+                decomposer: &'a NaiveDecomposer<f32>,
+                palette_linear: Vec<LinearRgb>,
+            }
+
+            #[derive(Clone, Default)]
+            struct WeightError(Option<DVector<f32>>);
+
+            impl core::ops::Mul<usize> for WeightError {
+                type Output = Self;
+                fn mul(self, rhs: usize) -> Self {
+                    Self(self.0.map(|v| v * rhs as f32))
+                }
+            }
+
+            impl core::ops::Div<usize> for WeightError {
+                type Output = Self;
+                fn div(self, rhs: usize) -> Self {
+                    Self(self.0.map(|v| v / rhs as f32))
+                }
+            }
+
+            impl core::ops::AddAssign for WeightError {
+                fn add_assign(&mut self, rhs: Self) {
+                    self.0 = match (core::mem::take(&mut self.0), rhs.0) {
+                        (a, None) => a,
+                        (None, b) => b,
+                        (Some(a), Some(b)) => Some(a + b),
+                    };
+                }
+            }
+
+            impl<'a> PixelStrategy for EpdStrategy<'a> {
+                type Source = (f32, f32, f32);
+                type Target = usize;
+                type QuantizationError = WeightError;
+
+                fn quantize(
+                    &self,
+                    source: Self::Source,
+                    error: Self::QuantizationError,
+                ) -> (Self::Target, Self::QuantizationError) {
+                    let pt = Point3::new(source.0, source.1, source.2);
+                    let mut weights = self
+                        .decomposer
+                        .decompose(&pt, NaiveDecomposerStrategy::FavorMix);
+
+                    // Add accumulated error
+                    if let Some(err) = error.0 {
+                        weights += err;
+                    }
+
+                    // Clip negative weights
+                    for i in 0..weights.len() {
+                        if weights[i] < 0.0 {
+                            weights[i] = 0.0;
+                        }
+                    }
+
+                    // Find dominant (argmax) — no noise for deterministic test
+                    let idx = weights.argmax().0;
+
+                    // Compute error in weight space
+                    let mut new_error = weights;
+                    new_error[idx] -= 1.0;
+
+                    (idx, WeightError(Some(new_error)))
+                }
+            }
+
+            let mut image = EpdImage {
+                pixels: vec![srgb_f32; size * size],
+                width: size,
+                height: size,
+            };
+
+            let palette_linear: Vec<LinearRgb> =
+                palette_colors.iter().map(|&c| LinearRgb::from(c)).collect();
+
+            let strategy = EpdStrategy {
+                decomposer: &decomposer,
+                palette_linear: palette_linear.clone(),
+            };
+
+            diffuse_dither(strategy, EpdFloydSteinberg, &mut image, true);
+
+            // Compute average color from indices
+            let mut counts = [0u32; 6];
+            let mut sum_r = 0.0f32;
+            let mut sum_g = 0.0f32;
+            let mut sum_b = 0.0f32;
+            let n = (size * size) as f32;
+
+            for y in 0..size {
+                for x in 0..size {
+                    let idx = image.pixels[y * size + x].0 as usize;
+                    if idx < 6 {
+                        counts[idx] += 1;
+                        let lin = palette_linear[idx];
+                        sum_r += lin.r;
+                        sum_g += lin.g;
+                        sum_b += lin.b;
+                    }
+                }
+            }
+
+            let avg_linear = LinearRgb::new(sum_r / n, sum_g / n, sum_b / n);
+            let avg_lab = Oklab::from(avg_linear);
+
+            let dl = input_lab.l - avg_lab.l;
+            let da = input_lab.a - avg_lab.a;
+            let db = input_lab.b - avg_lab.b;
+            let delta_e = (dl * dl + da * da + db * db).sqrt();
+
+            let chromatic_count = counts[2] + counts[3] + counts[4] + counts[5];
+            let chr_pct = chromatic_count as f32 / n * 100.0;
+
+            total_de += delta_e as f64;
+            if delta_e > max_de {
+                max_de = delta_e;
+                max_de_label = label.clone();
+            }
+
+            let in_lch = Oklch::from(input_lab);
+            let avg_lch = Oklch::from(avg_lab);
+
+            eprintln!(
+                "{label:>22} | {:.2} {:.3} {:>5.0} | {:.2} {:.3}  | {:.3} | {:>4.1}",
+                in_lch.l,
+                in_lch.c,
+                in_lch.h.to_degrees(),
+                avg_lch.l,
+                avg_lch.c,
+                delta_e,
+                chr_pct,
+            );
+        }
+
+        let avg_de = total_de / grid.len() as f64;
+        eprintln!("{}", "-".repeat(80));
         eprintln!("Summary: avg DeltaE={avg_de:.4}, max DeltaE={max_de:.4} ({max_de_label})");
     }
 }

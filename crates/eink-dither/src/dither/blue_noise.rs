@@ -79,7 +79,7 @@ pub struct BlueNoiseDither;
 ///
 /// `(index, distance)` of the second nearest color.
 /// If the palette has only one color, returns `(0, f32::MAX)`.
-fn find_second_nearest(
+pub(crate) fn find_second_nearest(
     color: Oklab,
     palette: &Palette,
     exclude: usize,

@@ -241,7 +241,7 @@ fn run_render_command(
     let is_unregistered = device_context.registration_code.is_some()
         && !config.is_device_registered(mac, device_context.registration_code.as_deref());
 
-    let (svg_content, final_palette) = if is_unregistered {
+    let (svg_content, final_palette, dither) = if is_unregistered {
         let code = device_context.registration_code.as_deref().unwrap();
 
         // Use registration screen if configured, otherwise default screen, otherwise built-in
@@ -280,7 +280,7 @@ fn run_render_command(
             )
         };
 
-        (svg, cli_palette)
+        (svg, cli_palette, None)
     } else {
         // Normal render path
         let script_result = content_pipeline
@@ -296,16 +296,23 @@ fn run_render_command(
             cli_palette
         };
 
+        let dither = script_result.script_dither.clone();
+
         let svg = content_pipeline
             .render_svg_from_script(&script_result, Some(&device_context))
             .map_err(|e| anyhow::anyhow!("Template error: {e}"))?;
 
-        (svg, palette)
+        (svg, palette, dither)
     };
 
     // Render to PNG
     let png_bytes = content_pipeline
-        .render_png_from_svg(&svg_content, display_spec, &final_palette, None)
+        .render_png_from_svg(
+            &svg_content,
+            display_spec,
+            &final_palette,
+            dither.as_deref(),
+        )
         .map_err(|e| anyhow::anyhow!("Render error: {e}"))?;
 
     // Write to file

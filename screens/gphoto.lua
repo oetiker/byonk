@@ -17,7 +17,30 @@ end
 
 local album_url = params.album_url
 if not album_url then
-  return error_return("Missing album_url parameter", 60)
+  -- No album configured - show registration code (useful as default screen)
+  local reg_box_width = scale_pixel(520)
+  local reg_box_height = scale_pixel(104)
+  local font_reg_code = scale_font(62)
+  local font_title = scale_font(48)
+
+  return {
+    data = {
+      show_registration = true,
+      width = width,
+      height = height,
+      center_x = math.floor(width / 2),
+      center_y = math.floor(height / 2),
+      reg_box_x = math.floor(width / 2) - math.floor(reg_box_width / 2),
+      reg_box_y = math.floor(height / 2) - math.floor(reg_box_height / 2),
+      reg_box_width = reg_box_width,
+      reg_box_height = reg_box_height,
+      reg_text_y = math.floor(height / 2) + math.floor(reg_box_height * 0.18),
+      font_reg_code = font_reg_code,
+      title_y = math.floor(height / 2) - math.floor(reg_box_height / 2) - scale_pixel(40),
+      font_title = font_title,
+    },
+    refresh_rate = 60
+  }
 end
 
 -- Fetch album page (no caching - Google responses are inconsistent with caching enabled)
@@ -58,9 +81,12 @@ if #image_urls == 0 then
   return error_return("No images found in album")
 end
 
--- Select random image
-math.randomseed(time_now())
-local selected_url = image_urls[math.random(#image_urls)]
+-- Select random image using real system time (not overrideable time_now)
+local seed = os.time()
+math.randomseed(seed)
+local idx = math.random(#image_urls)
+local selected_url = image_urls[idx]
+log_info("Random: seed=" .. seed .. " idx=" .. idx .. "/" .. #image_urls)
 
 -- Append size parameters for device dimensions
 local sized_url = selected_url .. "=w" .. width .. "-h" .. height .. "-no"
@@ -89,5 +115,6 @@ return {
     info_bar_y = height - scale_pixel(32),
     font_sm = scale_font(14),
   },
+  dither = "floyd-steinberg",
   refresh_rate = refresh_rate
 }

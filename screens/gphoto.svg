@@ -7,10 +7,20 @@
     </style>
   </defs>
 
-  {% if data.error %}
+  {% if data.show_registration %}
+  <!-- Registration code display (no album configured) -->
+  <rect width="{{ data.width }}" height="{{ data.height }}" fill="#ffffff"/>
+  {% if device.registration_code %}
+  <text x="{{ data.center_x }}" y="{{ data.title_y }}" font-family="X11Helv" font-size="{{ data.font_title }}" font-weight="700" text-anchor="middle" fill="#000000">Register Device</text>
+  <rect x="{{ data.reg_box_x }}" y="{{ data.reg_box_y }}" width="{{ data.reg_box_width }}" height="{{ data.reg_box_height }}" fill="#000000"/>
+  <text x="{{ data.center_x }}" y="{{ data.reg_text_y }}" font-family="X11Helv" font-size="{{ data.font_reg_code }}" font-weight="700" text-anchor="middle" fill="#ffffff">{{ device.registration_code_hyphenated }}</text>
+  {% else %}
+  <text x="{{ data.center_x }}" y="{{ data.center_y }}" font-family="X11Helv" font-size="24" font-weight="700" text-anchor="middle" fill="#000000">Device Registered</text>
+  {% endif %}
+  {% elif data.error %}
   <!-- Error state -->
   <rect width="{{ data.width }}" height="{{ data.height }}" fill="#ffffff"/>
-  <text x="{{ data.width / 2 }}" y="{{ data.height / 2 }}" font-family="X11Helv" font-size="24" font-weight="700" text-anchor="middle" fill="#000000">{{ data.error }}</text>
+  <text x="{{ data.width / 2 }}" y="{{ data.height / 2 }}" font-family="Outfit" font-size="24" font-weight="700" text-anchor="middle" fill="#000000">{{ data.error }}</text>
   {% else %}
   <!-- Full-screen photo -->
   <image x="0" y="0" width="{{ data.width }}" height="{{ data.height }}" href="{{ data.image_src }}" preserveAspectRatio="xMidYMid slice"/>

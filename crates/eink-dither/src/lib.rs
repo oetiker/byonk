@@ -225,8 +225,8 @@ mod domain_tests;
 pub use api::{DitherError, EinkDitherer};
 pub use color::{LinearRgb, Oklab, Srgb};
 pub use dither::{
-    Atkinson, BlueNoiseDither, Dither, DitherOptions, FloydSteinberg, JarvisJudiceNinke, Sierra,
-    SierraLite, SierraTwoRow,
+    Atkinson, BlueNoiseDither, Dither, DitherAlgorithm, DitherOptions, FloydSteinberg,
+    FloydSteinbergNoise, JarvisJudiceNinke, Sierra, SierraLite, SierraTwoRow, SimplexDither,
 };
 pub use output::{DitheredImage, RenderingIntent};
 pub use palette::{DistanceMetric, Palette, PaletteError, ParseColorError};

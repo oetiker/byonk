@@ -27,10 +27,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. Pure red, green, blue, and yellow pixels each match their exact palette entry
   3. Orange or other off-palette chromatic colors map to the nearest chromatic palette entry, not to black or white
   4. All existing crate tests continue to pass without modification
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 01-01: TBD
+- [ ] 01-01-PLAN.md -- Add chroma coupling penalty to HyAB distance metric with tests
 
 ### Phase 2: Auto-Detection and Edge Cases
 **Goal**: The crate automatically selects the correct distance metric and handles edge-case colors correctly
@@ -66,6 +66,6 @@ Phases execute in numeric order: 1 -> 2 -> 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|---------------|--------|-----------|
-| 1. Core Distance Metric Fix | 0/? | Not started | - |
+| 1. Core Distance Metric Fix | 0/1 | Planned | - |
 | 2. Auto-Detection and Edge Cases | 0/? | Not started | - |
 | 3. Color Science Documentation | 0/? | Not started | - |

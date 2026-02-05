@@ -41,10 +41,10 @@ Plans:
   2. Edge-case colors (brown, skin tones, dark chromatic) map to the visually closest palette entry
   3. An achromatic-only palette (B/W/grey) automatically uses Euclidean distance without caller configuration
   4. A chromatic palette (BWRGBY) automatically uses HyAB+chroma without caller configuration
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 02-01: TBD
+- [ ] 02-01-PLAN.md -- Add auto-detection to Palette::new(), simplify svg_to_png.rs, add edge-case tests
 
 ### Phase 3: Color Science Documentation
 **Goal**: A developer reading the crate can understand why each color space conversion and distance calculation exists
@@ -67,5 +67,5 @@ Phases execute in numeric order: 1 -> 2 -> 3
 | Phase | Plans Complete | Status | Completed |
 |-------|---------------|--------|-----------|
 | 1. Core Distance Metric Fix | 1/1 | ✓ Complete | 2026-02-05 |
-| 2. Auto-Detection and Edge Cases | 0/? | Not started | - |
+| 2. Auto-Detection and Edge Cases | 0/1 | In progress | - |
 | 3. Color Science Documentation | 0/? | Not started | - |

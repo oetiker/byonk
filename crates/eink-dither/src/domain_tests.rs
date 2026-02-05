@@ -6,7 +6,7 @@
 #[cfg(test)]
 mod domain_tests {
     use crate::api::EinkDitherer;
-    use crate::color::{LinearRgb, Srgb};
+    use crate::color::{LinearRgb, Oklab, Srgb};
     use crate::dither::{
         Atkinson, BlueNoiseDither, Dither, DitherOptions, FloydSteinberg, JarvisJudiceNinke,
         Sierra, SierraLite, SierraTwoRow,
@@ -521,5 +521,239 @@ mod domain_tests {
                 ratio
             );
         }
+    }
+
+    // ========================================================================
+    // GAP 7: Edge-case color mapping (TEST-03, TEST-04)
+    // ========================================================================
+
+    /// TEST-03: Pastel colors must not lose chroma information during dithering.
+    ///
+    /// On a BWRGBY palette, pastels like light pink correctly map to WHITE in
+    /// per-pixel find_nearest (white is genuinely the closest palette color).
+    /// However, the error diffusion must propagate the chroma error to neighbors,
+    /// producing SOME chromatic pixels in the output. If the output is 100%
+    /// achromatic, chroma information is being lost.
+    ///
+    /// If this breaks, it means: the chroma coupling penalty is too aggressive
+    /// and suppressing all chromatic signal even through error diffusion, OR
+    /// the preprocessing is desaturating pastels to pure grey.
+    #[test]
+    fn test_pastel_produces_chromatic_pixels_in_dither() {
+        let palette_colors = [
+            Srgb::from_u8(0, 0, 0),       // 0: black
+            Srgb::from_u8(255, 255, 255), // 1: white
+            Srgb::from_u8(255, 0, 0),     // 2: red
+            Srgb::from_u8(0, 255, 0),     // 3: green
+            Srgb::from_u8(0, 0, 255),     // 4: blue
+            Srgb::from_u8(255, 255, 0),   // 5: yellow
+        ];
+        let palette = Palette::new(&palette_colors, None).unwrap();
+
+        // Light pink (255,182,193) has chroma=0.086 -- clearly chromatic but
+        // closer to white (L=1.0) than to red (L=0.628) in lightness.
+        let light_pink = Srgb::from_u8(255, 182, 193);
+        let image = vec![light_pink; 32 * 32];
+
+        // Use Photo intent with neutral preprocessing to isolate dithering behavior
+        let ditherer = EinkDitherer::new(palette, RenderingIntent::Photo)
+            .saturation(1.0)
+            .contrast(1.0);
+        let result = ditherer.dither(&image, 32, 32);
+        let indices = result.indices();
+
+        // Must have SOME chromatic pixels from error diffusion
+        let chromatic_count = indices.iter().filter(|&&idx| idx >= 2).count();
+        assert!(
+            chromatic_count > 0,
+            "REGRESSION (TEST-03): Light pink (255,182,193) dithered to 100% achromatic. \
+             Error diffusion should propagate chroma error to produce some chromatic pixels. \
+             Chroma information is being lost."
+        );
+
+        // Must also contain some white or black pixels -- a pure uniform image
+        // should produce a dithered MIX, not map entirely to one color.
+        let achromatic_count = indices.iter().filter(|&&idx| idx <= 1).count();
+        assert!(
+            achromatic_count > 0,
+            "REGRESSION (TEST-03): Light pink dithered to 100% chromatic ({} chromatic, 0 achromatic). \
+             Error diffusion should produce a mix of white and chromatic pixels.",
+            chromatic_count
+        );
+    }
+
+    /// TEST-03 extended: Pale blue also preserves chroma through dithering.
+    #[test]
+    fn test_pale_blue_produces_chromatic_pixels_in_dither() {
+        let palette_colors = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(0, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(255, 255, 0),
+        ];
+        let palette = Palette::new(&palette_colors, None).unwrap();
+
+        let pale_blue = Srgb::from_u8(173, 216, 230);
+        let image = vec![pale_blue; 32 * 32];
+
+        let ditherer = EinkDitherer::new(palette, RenderingIntent::Photo)
+            .saturation(1.0)
+            .contrast(1.0);
+        let result = ditherer.dither(&image, 32, 32);
+        let indices = result.indices();
+
+        let chromatic_count = indices.iter().filter(|&&idx| idx >= 2).count();
+        assert!(
+            chromatic_count > 0,
+            "REGRESSION (TEST-03): Pale blue (173,216,230) dithered to 100% achromatic. \
+             Error diffusion should propagate chroma error to produce some blue pixels."
+        );
+    }
+
+    /// TEST-04: Brown maps to red (nearest warm chromatic) on BWRGBY.
+    ///
+    /// If this breaks, it means: the HyAB distance metric is not correctly
+    /// balancing lightness vs chrominance for dark warm colors.
+    #[test]
+    fn test_brown_maps_to_red() {
+        let palette_colors = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(0, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(255, 255, 0),
+        ];
+        let palette = Palette::new(&palette_colors, None).unwrap();
+
+        let brown = Oklab::from(LinearRgb::from(Srgb::from_u8(139, 69, 19)));
+        let (idx, _) = palette.find_nearest(brown);
+        assert_eq!(
+            idx, 2,
+            "REGRESSION (TEST-04): Brown (139,69,19) should map to red (index 2), got index {}",
+            idx
+        );
+    }
+
+    /// TEST-04: Dark chromatic colors map to their chromatic palette entry, not black.
+    ///
+    /// If this breaks, it means: the lightness weight (kl) is dominating the
+    /// distance metric, causing dark chromatic colors to collapse to black
+    /// instead of their correct chromatic match.
+    #[test]
+    fn test_dark_chromatic_maps_correctly() {
+        let palette_colors = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(0, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(255, 255, 0),
+        ];
+        let palette = Palette::new(&palette_colors, None).unwrap();
+
+        // Dark red should map to red, not black
+        let dark_red = Oklab::from(LinearRgb::from(Srgb::from_u8(139, 0, 0)));
+        let (idx, _) = palette.find_nearest(dark_red);
+        assert_eq!(
+            idx, 2,
+            "REGRESSION (TEST-04): Dark red (139,0,0) should map to red (idx 2), got {}",
+            idx
+        );
+
+        // Dark blue should map to blue, not black
+        let dark_blue = Oklab::from(LinearRgb::from(Srgb::from_u8(0, 0, 139)));
+        let (idx, _) = palette.find_nearest(dark_blue);
+        assert_eq!(
+            idx, 4,
+            "REGRESSION (TEST-04): Dark blue (0,0,139) should map to blue (idx 4), got {}",
+            idx
+        );
+
+        // Navy should map to blue, not black
+        let navy = Oklab::from(LinearRgb::from(Srgb::from_u8(0, 0, 128)));
+        let (idx, _) = palette.find_nearest(navy);
+        assert_eq!(
+            idx, 4,
+            "REGRESSION (TEST-04): Navy (0,0,128) should map to blue (idx 4), got {}",
+            idx
+        );
+    }
+
+    /// TEST-04: Skin tone dithering produces warm chromatic pixels.
+    ///
+    /// Medium skin tone (210,161,109) maps to white in find_nearest (similar
+    /// to pastels), but error diffusion should produce warm-toned output.
+    #[test]
+    fn test_skin_tone_dithering_produces_warm_pixels() {
+        let palette_colors = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(0, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(255, 255, 0),
+        ];
+        let palette = Palette::new(&palette_colors, None).unwrap();
+
+        let skin = Srgb::from_u8(210, 161, 109);
+        let image = vec![skin; 32 * 32];
+
+        let ditherer = EinkDitherer::new(palette, RenderingIntent::Photo)
+            .saturation(1.0)
+            .contrast(1.0);
+        let result = ditherer.dither(&image, 32, 32);
+        let indices = result.indices();
+
+        // Should contain warm chromatic pixels (red=2 or yellow=5)
+        let warm_count = indices.iter().filter(|&&idx| idx == 2 || idx == 5).count();
+        assert!(
+            warm_count > 0,
+            "REGRESSION (TEST-04): Skin tone (210,161,109) dithered with no warm chromatic pixels. \
+             Error diffusion should produce some red/yellow pixels."
+        );
+
+        // Warm pixels should outnumber cold pixels (green=3, blue=4)
+        let cold_count = indices.iter().filter(|&&idx| idx == 3 || idx == 4).count();
+        assert!(
+            warm_count > cold_count,
+            "REGRESSION (TEST-04): Skin tone produced {} warm vs {} cold chromatic pixels. \
+             Warm input should produce more warm than cold output.",
+            warm_count,
+            cold_count
+        );
+    }
+
+    /// TEST-04: Dark green mapping (flagged for investigation).
+    ///
+    /// Dark green (0,100,0) has chroma=0.148. Research found it might map to
+    /// yellow due to combined lightness and chroma distances. This test
+    /// documents the actual behavior.
+    #[test]
+    fn test_dark_green_maps_to_green_or_yellow() {
+        let palette_colors = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(0, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(255, 255, 0),
+        ];
+        let palette = Palette::new(&palette_colors, None).unwrap();
+
+        let dark_green = Oklab::from(LinearRgb::from(Srgb::from_u8(0, 100, 0)));
+        let (idx, _) = palette.find_nearest(dark_green);
+
+        // Dark green should map to green (3) or possibly yellow (5) -- both are
+        // acceptable chromatic mappings. It must NOT map to black (0) or white (1).
+        assert!(
+            idx == 3 || idx == 5,
+            "REGRESSION (TEST-04): Dark green (0,100,0) should map to green (3) or yellow (5), \
+             got index {} ({:?})",
+            idx,
+            palette_colors[idx].to_bytes()
+        );
     }
 }

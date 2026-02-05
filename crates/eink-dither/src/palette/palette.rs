@@ -201,16 +201,18 @@ impl Palette {
             .collect();
 
         // Auto-detect distance metric based on palette content
-        let distance_metric =
-            if actual_chroma.iter().any(|&c| c > CHROMA_DETECTION_THRESHOLD) {
-                DistanceMetric::HyAB {
-                    kl: 2.0,
-                    kc: 1.0,
-                    kchroma: 10.0,
-                }
-            } else {
-                DistanceMetric::Euclidean
-            };
+        let distance_metric = if actual_chroma
+            .iter()
+            .any(|&c| c > CHROMA_DETECTION_THRESHOLD)
+        {
+            DistanceMetric::HyAB {
+                kl: 2.0,
+                kc: 1.0,
+                kchroma: 10.0,
+            }
+        } else {
+            DistanceMetric::Euclidean
+        };
 
         Ok(Self {
             official_srgb,

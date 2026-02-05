@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Terminus TTF font demo screen (`fontdemo-terminus`): showcases all 9 embedded bitmap sizes (12–32px) in regular, bold, italic, and bold-italic styles
 - `fonts` global in Lua API: discover all available font families, styles, weights, and bitmap strike sizes at runtime
 
+- Auto-detect distance metric based on palette content -- chromatic palettes automatically use HyAB+chroma, achromatic palettes use Euclidean
+
 ### Changed
 
 - Replaced hand-rolled dithering with vendored [eink-dither](crates/eink-dither/) crate — perceptually correct Oklab color matching, gamma-correct linear RGB processing, and two rendering intents (Photo and Graphics)

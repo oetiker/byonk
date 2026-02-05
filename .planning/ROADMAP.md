@@ -13,7 +13,7 @@ Fix the color perception pipeline in the `eink-dither` crate so that multi-color
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Core Distance Metric Fix** - Add chroma coupling penalty to HyAB and verify correct palette matching
-- [ ] **Phase 2: Auto-Detection and Edge Cases** - Move metric selection into crate API and validate edge-case colors
+- [x] **Phase 2: Auto-Detection and Edge Cases** - Move metric selection into crate API and validate edge-case colors
 - [ ] **Phase 3: Color Science Documentation** - Document rationale for every conversion and distance calculation
 
 ## Phase Details
@@ -44,7 +44,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 02-01-PLAN.md -- Add auto-detection to Palette::new(), simplify svg_to_png.rs, add edge-case tests
+- [x] 02-01-PLAN.md -- Add auto-detection to Palette::new(), simplify svg_to_png.rs, add edge-case tests
 
 ### Phase 3: Color Science Documentation
 **Goal**: A developer reading the crate can understand why each color space conversion and distance calculation exists
@@ -67,5 +67,5 @@ Phases execute in numeric order: 1 -> 2 -> 3
 | Phase | Plans Complete | Status | Completed |
 |-------|---------------|--------|-----------|
 | 1. Core Distance Metric Fix | 1/1 | ✓ Complete | 2026-02-05 |
-| 2. Auto-Detection and Edge Cases | 0/1 | In progress | - |
+| 2. Auto-Detection and Edge Cases | 1/1 | ✓ Complete | 2026-02-05 |
 | 3. Color Science Documentation | 0/? | Not started | - |

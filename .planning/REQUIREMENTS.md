@@ -14,16 +14,16 @@
 
 ### Auto-Detection
 
-- [ ] **AUTO-01**: Crate auto-detects chromatic palettes (any entry with chroma > threshold)
-- [ ] **AUTO-02**: Achromatic palettes default to Euclidean; chromatic palettes default to HyAB+chroma
-- [ ] **AUTO-03**: Auto-detection logic moved from `svg_to_png.rs` into eink-dither crate API
+- [x] **AUTO-01**: Crate auto-detects chromatic palettes (any entry with chroma > threshold)
+- [x] **AUTO-02**: Achromatic palettes default to Euclidean; chromatic palettes default to HyAB+chroma
+- [x] **AUTO-03**: Auto-detection logic moved from `svg_to_png.rs` into eink-dither crate API
 
 ### Testing
 
 - [x] **TEST-01**: Grey gradient (0-255) on BWRGBY palette produces only B/W indices
 - [x] **TEST-02**: Pure chromatic colors (red, green, blue, yellow) match their palette entries exactly
-- [ ] **TEST-03**: Pastel/desaturated colors map to correct chromatic entries (not forced achromatic)
-- [ ] **TEST-04**: Edge cases tested: brown, skin tones, dark chromatic colors
+- [x] **TEST-03**: Pastel/desaturated colors map to correct chromatic entries (not forced achromatic)
+- [x] **TEST-04**: Edge cases tested: brown, skin tones, dark chromatic colors
 - [x] **TEST-05**: Existing domain tests continue to pass
 
 ### Documentation
@@ -59,13 +59,13 @@
 | DIST-02 | Phase 1: Core Distance Metric Fix | Complete |
 | DIST-03 | Phase 1: Core Distance Metric Fix | Complete |
 | DIST-04 | Phase 1: Core Distance Metric Fix | Complete |
-| AUTO-01 | Phase 2: Auto-Detection and Edge Cases | Pending |
-| AUTO-02 | Phase 2: Auto-Detection and Edge Cases | Pending |
-| AUTO-03 | Phase 2: Auto-Detection and Edge Cases | Pending |
+| AUTO-01 | Phase 2: Auto-Detection and Edge Cases | Complete |
+| AUTO-02 | Phase 2: Auto-Detection and Edge Cases | Complete |
+| AUTO-03 | Phase 2: Auto-Detection and Edge Cases | Complete |
 | TEST-01 | Phase 1: Core Distance Metric Fix | Complete |
 | TEST-02 | Phase 1: Core Distance Metric Fix | Complete |
-| TEST-03 | Phase 2: Auto-Detection and Edge Cases | Pending |
-| TEST-04 | Phase 2: Auto-Detection and Edge Cases | Pending |
+| TEST-03 | Phase 2: Auto-Detection and Edge Cases | Complete |
+| TEST-04 | Phase 2: Auto-Detection and Edge Cases | Complete |
 | TEST-05 | Phase 1: Core Distance Metric Fix | Complete |
 | DOCS-01 | Phase 3: Color Science Documentation | Pending |
 | DOCS-02 | Phase 3: Color Science Documentation | Pending |
@@ -78,4 +78,4 @@
 
 ---
 *Requirements defined: 2026-02-05*
-*Last updated: 2026-02-05 after Phase 1 completion*
+*Last updated: 2026-02-05 after Phase 2 completion*

@@ -42,8 +42,20 @@
                 </div>
 
                 <div class="form-group">
+                    <label for="panel-select">Panel Profile</label>
+                    <select id="panel-select">
+                        <option value="">None (use colors below)</option>
+                    </select>
+                    <label class="checkbox-label" id="use-actual-label" style="display:none">
+                        <input type="checkbox" id="use-actual" checked>
+                        Show actual panel colors
+                    </label>
+                </div>
+
+                <div class="form-group">
                     <label for="colors-input">Colors</label>
                     <input type="text" id="colors-input" placeholder="#000000,#555555,#AAAAAA,#FFFFFF">
+                    <div id="color-swatches" class="color-swatches"></div>
                 </div>
 
                 <div class="form-row">
@@ -83,6 +95,10 @@
                     <label class="checkbox-label">
                         <input type="checkbox" id="auto-refresh" checked>
                         Auto-refresh on file change
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="preserve-exact" checked>
+                        Preserve exact matches
                     </label>
                 </div>
             </div>

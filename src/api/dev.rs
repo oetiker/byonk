@@ -59,6 +59,12 @@ pub struct RenderQuery {
     pub params: Option<String>,
     /// Display colors as comma-separated hex RGB (e.g. "#000000,#FFFFFF,#FF0000,#FFFF00")
     pub colors: Option<String>,
+    /// Panel profile name (references panels section in config)
+    pub panel: Option<String>,
+    /// Show actual measured panel colors in preview (default: true when panel has measured colors)
+    pub use_actual: Option<bool>,
+    /// Whether to preserve exact palette matches (default: true)
+    pub preserve_exact: Option<bool>,
 }
 
 /// Convert serde_yaml params to serde_json values
@@ -104,11 +110,23 @@ pub struct DeviceInfo {
     pub screen: String,
 }
 
+/// Panel info for the panels list
+#[derive(Debug, Serialize)]
+pub struct PanelInfo {
+    pub id: String,
+    pub name: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub colors: String,
+    pub colors_actual: Option<String>,
+}
+
 /// Response from /dev/screens
 #[derive(Debug, Serialize)]
 pub struct ScreensResponse {
     pub screens: Vec<ScreenInfo>,
     pub devices: Vec<DeviceInfo>,
+    pub panels: Vec<PanelInfo>,
     pub default_screen: Option<String>,
 }
 
@@ -197,9 +215,25 @@ pub async fn handle_screens(State(state): State<DevState>) -> Json<ScreensRespon
         })
         .collect();
 
+    // Collect panel profiles
+    let panels: Vec<PanelInfo> = state
+        .config
+        .panels
+        .iter()
+        .map(|(id, panel)| PanelInfo {
+            id: id.clone(),
+            name: panel.name.clone(),
+            width: panel.width,
+            height: panel.height,
+            colors: panel.colors.clone(),
+            colors_actual: panel.colors_actual.clone(),
+        })
+        .collect();
+
     Json(ScreensResponse {
         screens,
         devices,
+        panels,
         default_screen: state.config.default_screen.clone(),
     })
 }
@@ -239,26 +273,19 @@ pub async fn handle_resolve_mac(
     Query(query): Query<ResolveMacQuery>,
 ) -> Response {
     // Try MAC lookup first, then registration code lookup
-    let lookup = state
+    let device_config = state
         .config
-        .get_screen_for_device(&query.mac)
-        .or_else(|| state.config.get_screen_for_code(&query.mac));
+        .get_device_config(&query.mac)
+        .or_else(|| state.config.get_device_config_for_code(&query.mac));
 
-    match lookup {
-        Some((screen_config, device_config)) => {
+    match device_config {
+        Some(device_config) => {
             // Convert YAML params to JSON for response
             let params: HashMap<String, serde_json::Value> =
                 yaml_params_to_json(&device_config.params);
 
-            // Get screen name from the script path
-            let screen_name = screen_config
-                .script
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| device_config.screen.clone());
-
             Json(ResolveMacResponse {
-                screen: screen_name,
+                screen: device_config.screen.clone(),
                 params,
             })
             .into_response()
@@ -284,13 +311,40 @@ pub async fn handle_render(
         // Try MAC lookup first, then registration code lookup
         match state
             .config
-            .get_screen_for_device(mac)
-            .or_else(|| state.config.get_screen_for_code(mac))
+            .get_device_config(mac)
+            .or_else(|| state.config.get_device_config_for_code(mac))
         {
-            Some((sc, dc)) => {
+            Some(dc) => {
+                // Resolve screen from config or auto-discovery
+                let sc = if let Some(sc) = state.config.screens.get(&dc.screen) {
+                    sc.clone()
+                } else {
+                    let script = format!("{}.lua", dc.screen);
+                    let template = format!("{}.svg", dc.screen);
+                    let files = state.asset_loader.list_screens();
+                    if files.iter().any(|f| f == &script) && files.iter().any(|f| f == &template) {
+                        ScreenConfig {
+                            script: PathBuf::from(&script),
+                            template: PathBuf::from(&template),
+                            default_refresh: 900,
+                        }
+                    } else {
+                        return (
+                            StatusCode::NOT_FOUND,
+                            Json(RenderErrorResponse {
+                                error: format!(
+                                    "Screen '{}' not found for device '{}'",
+                                    dc.screen, mac
+                                ),
+                                details: None,
+                            }),
+                        )
+                            .into_response();
+                    }
+                };
                 // Convert device params to JSON
                 let params: HashMap<String, serde_json::Value> = yaml_params_to_json(&dc.params);
-                (sc.clone(), Some(params), dc.colors.clone())
+                (sc, Some(params), dc.colors.clone())
             }
             None => {
                 return (
@@ -424,15 +478,16 @@ pub async fn handle_render(
             .render_svg_from_script(&script_result, Some(&ctx))
             .map_err(|e| e.to_string())?;
 
-        Ok::<(String, Option<Vec<String>>, Option<String>), String>((
+        Ok::<(String, Option<Vec<String>>, Option<String>, Option<bool>), String>((
             svg,
             script_result.script_colors,
             script_result.script_dither,
+            script_result.script_preserve_exact,
         ))
     })
     .await;
 
-    let (svg, script_colors, script_dither) = match result {
+    let (svg, script_colors, script_dither, script_preserve_exact) = match result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             return (
@@ -463,14 +518,39 @@ pub async fn handle_render(
         default_palette
     };
 
+    // Resolve panel for measured colors (dev mode preview)
+    let panel = query
+        .panel
+        .as_deref()
+        .and_then(|name| state.config.get_panel(name));
+
+    let measured_colors: Option<Vec<(u8, u8, u8)>> = panel
+        .and_then(|p| p.colors_actual.as_deref())
+        .map(crate::api::display::parse_colors_header);
+
     // Convert SVG to PNG with palette-aware dithering
     let display_spec = DisplaySpec::from_dimensions(width, height).unwrap_or(DisplaySpec::OG);
+
+    // Dev mode uses measured colors for preview.
+    // Respect explicit query param; default to true when panel has measured colors.
+    let use_actual = query
+        .use_actual
+        .unwrap_or_else(|| measured_colors.is_some())
+        && measured_colors.is_some();
+
+    // Resolve preserve_exact: script > query param > default (true)
+    let preserve_exact = script_preserve_exact
+        .or(query.preserve_exact)
+        .unwrap_or(true);
 
     match state.content_pipeline.render_png_from_svg(
         &svg,
         display_spec,
         &final_palette,
+        measured_colors.as_deref(),
+        use_actual,
         script_dither.as_deref(),
+        preserve_exact,
     ) {
         Ok(png_bytes) => (
             StatusCode::OK,

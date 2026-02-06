@@ -22,8 +22,12 @@ pub struct CachedContent {
     pub height: u32,
     /// Display color palette as RGB tuples (if provided by firmware)
     pub colors: Option<Vec<(u8, u8, u8)>>,
+    /// Measured/actual display colors (what the panel really shows)
+    pub colors_actual: Option<Vec<(u8, u8, u8)>>,
     /// Dither mode ("photo" or "graphics"), None = default (graphics)
     pub dither: Option<String>,
+    /// Whether to preserve exact palette matches (None = default true)
+    pub preserve_exact: Option<bool>,
 }
 
 impl CachedContent {
@@ -38,7 +42,9 @@ impl CachedContent {
             width,
             height,
             colors: None,
+            colors_actual: None,
             dither: None,
+            preserve_exact: None,
         }
     }
 
@@ -48,9 +54,21 @@ impl CachedContent {
         self
     }
 
+    /// Set the measured/actual display colors
+    pub fn with_colors_actual(mut self, colors_actual: Option<Vec<(u8, u8, u8)>>) -> Self {
+        self.colors_actual = colors_actual;
+        self
+    }
+
     /// Set the dither mode
     pub fn with_dither(mut self, dither: Option<String>) -> Self {
         self.dither = dither;
+        self
+    }
+
+    /// Set the preserve_exact flag
+    pub fn with_preserve_exact(mut self, preserve_exact: Option<bool>) -> Self {
+        self.preserve_exact = preserve_exact;
         self
     }
 }

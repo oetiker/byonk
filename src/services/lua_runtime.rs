@@ -22,6 +22,8 @@ pub struct ScriptResult {
     pub colors: Option<Vec<String>>,
     /// Optional dither mode from script ("photo" or "graphics")
     pub dither: Option<String>,
+    /// Optional preserve_exact override from script
+    pub preserve_exact: Option<bool>,
 }
 
 /// Error type for Lua script execution
@@ -117,12 +119,20 @@ impl LuaRuntime {
         // Parse optional dither mode from script return
         let dither = result.get::<String>("dither").ok();
 
+        // Parse optional preserve_exact from script return
+        // Note: can't use get::<bool>().ok() because mlua converts nil to false
+        let preserve_exact = match result.get::<Value>("preserve_exact") {
+            Ok(Value::Boolean(b)) => Some(b),
+            _ => None,
+        };
+
         Ok(ScriptResult {
             data,
             refresh_rate,
             skip_update,
             colors,
             dither,
+            preserve_exact,
         })
     }
 

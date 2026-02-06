@@ -3,6 +3,7 @@
 const state = {
     screens: [],
     devices: [],
+    panels: [],
     defaultScreen: null,
     eventSource: null,
     isRendering: false,
@@ -11,6 +12,7 @@ const state = {
 // DOM elements
 const elements = {
     screenSelect: document.getElementById('screen-select'),
+    panelSelect: document.getElementById('panel-select'),
     modelSelect: document.getElementById('model-select'),
     widthInput: document.getElementById('width-input'),
     heightInput: document.getElementById('height-input'),
@@ -31,6 +33,9 @@ const elements = {
     errorPanel: document.getElementById('error-panel'),
     errorContent: document.getElementById('error-content'),
     dismissError: document.getElementById('dismiss-error'),
+    useActual: document.getElementById('use-actual'),
+    useActualLabel: document.getElementById('use-actual-label'),
+    preserveExact: document.getElementById('preserve-exact'),
 };
 
 // Initialize
@@ -41,6 +46,7 @@ async function init() {
     initializeTimeInput();
     initializeColorsFromModel();
     loadSavedState();
+    updateUseActualVisibility();
     setupLens();
     render();
 }
@@ -72,7 +78,21 @@ async function loadScreens() {
         const data = await response.json();
         state.screens = data.screens;
         state.devices = data.devices || [];
+        state.panels = data.panels || [];
         state.defaultScreen = data.default_screen;
+
+        // Populate panel select
+        elements.panelSelect.innerHTML = '<option value="">None (use colors below)</option>';
+        state.panels.forEach(panel => {
+            const option = document.createElement('option');
+            option.value = panel.id;
+            option.textContent = panel.name;
+            option.dataset.colors = panel.colors;
+            if (panel.colors_actual) option.dataset.colorsActual = panel.colors_actual;
+            if (panel.width) option.dataset.width = panel.width;
+            if (panel.height) option.dataset.height = panel.height;
+            elements.panelSelect.appendChild(option);
+        });
 
         // Group devices by screen name
         const devicesByScreen = {};
@@ -116,6 +136,32 @@ async function loadScreens() {
 
 // Setup event listeners
 function setupEventListeners() {
+    // Panel select auto-fills colors and dimensions
+    elements.panelSelect.addEventListener('change', (e) => {
+        const option = e.target.selectedOptions[0];
+        if (option.value) {
+            // Panel selected — fill in colors and optionally dimensions
+            if (option.dataset.colors) elements.colorsInput.value = option.dataset.colors;
+            if (option.dataset.width) elements.widthInput.value = option.dataset.width;
+            if (option.dataset.height) elements.heightInput.value = option.dataset.height;
+            updateDeviceFrame();
+            updateColorSwatches();
+        }
+        updateUseActualVisibility();
+        saveState();
+        if (elements.autoRefresh.checked) {
+            render();
+        }
+    });
+
+    // "Show actual panel colors" toggle
+    elements.useActual.addEventListener('change', () => {
+        saveState();
+        if (elements.autoRefresh.checked) {
+            render();
+        }
+    });
+
     // Model select changes dimensions and colors
     elements.modelSelect.addEventListener('change', (e) => {
         const option = e.target.selectedOptions[0];
@@ -170,6 +216,7 @@ function setupEventListeners() {
         }
     });
     elements.colorsInput.addEventListener('change', () => {
+        updateColorSwatches();
         saveState();
         if (elements.autoRefresh.checked) {
             render();
@@ -184,6 +231,14 @@ function setupEventListeners() {
 
     // Auto-refresh toggle
     elements.autoRefresh.addEventListener('change', saveState);
+
+    // Preserve exact matches toggle
+    elements.preserveExact.addEventListener('change', () => {
+        saveState();
+        if (elements.autoRefresh.checked) {
+            render();
+        }
+    });
 
     // Params input (debounced)
     let paramsTimeout;
@@ -253,6 +308,44 @@ function updateDeviceFrame() {
     }
 }
 
+// Update color swatches display
+function updateColorSwatches() {
+    const container = document.getElementById('color-swatches');
+    if (!container) return;
+
+    const colorsStr = elements.colorsInput.value;
+    const colors = colorsStr.split(',').map(c => c.trim()).filter(c => c);
+
+    // Get measured colors from selected panel
+    const panelOption = elements.panelSelect.selectedOptions[0];
+    const actualStr = panelOption && panelOption.dataset.colorsActual;
+    const actualColors = actualStr ? actualStr.split(',').map(c => c.trim()).filter(c => c) : [];
+
+    let html = '<div class="swatch-row">';
+    colors.forEach((color, i) => {
+        const actual = actualColors[i] || '';
+        html += `<span class="swatch" style="background:${color}" title="Official: ${color}${actual ? '\nActual: ' + actual : ''}"></span>`;
+    });
+    html += '</div>';
+
+    if (actualColors.length > 0) {
+        html += '<div class="swatch-row actual">';
+        actualColors.forEach((color) => {
+            html += `<span class="swatch" style="background:${color}" title="Measured: ${color}"></span>`;
+        });
+        html += '</div>';
+    }
+
+    container.innerHTML = html;
+}
+
+// Show/hide the "Show actual panel colors" checkbox based on panel selection
+function updateUseActualVisibility() {
+    const option = elements.panelSelect.selectedOptions[0];
+    const hasActual = option && option.dataset.colorsActual;
+    elements.useActualLabel.style.display = hasActual ? '' : 'none';
+}
+
 // Render the current screen
 async function render() {
     if (state.isRendering) return;
@@ -298,6 +391,17 @@ async function render() {
             colors: elements.colorsInput.value,
             params,
         });
+
+        // Add preserve_exact param
+        if (!elements.preserveExact.checked) {
+            queryParams.set('preserve_exact', 'false');
+        }
+
+        // Add panel if selected (for measured color preview)
+        if (elements.panelSelect.value) {
+            queryParams.set('panel', elements.panelSelect.value);
+            queryParams.set('use_actual', elements.useActual.checked ? 'true' : 'false');
+        }
 
         // Add screen or mac (mac takes precedence)
         if (mac) {
@@ -358,6 +462,7 @@ function hideError() {
 function saveState() {
     const savedState = {
         screen: elements.screenSelect.value,
+        panel: elements.panelSelect.value,
         model: elements.modelSelect.value,
         width: elements.widthInput.value,
         height: elements.heightInput.value,
@@ -367,6 +472,8 @@ function saveState() {
         colors: elements.colorsInput.value,
         params: elements.paramsInput.value,
         autoRefresh: elements.autoRefresh.checked,
+        useActual: elements.useActual.checked,
+        preserveExact: elements.preserveExact.checked,
     };
     localStorage.setItem('byonk-dev-state', JSON.stringify(savedState));
 }
@@ -386,6 +493,9 @@ function loadSavedState() {
                     // Migrate old format without prefix
                     elements.screenSelect.value = `screen:${data.screen}`;
                 }
+            }
+            if (data.panel) {
+                elements.panelSelect.value = data.panel;
             }
             if (data.model) {
                 elements.modelSelect.value = data.model;
@@ -414,7 +524,15 @@ function loadSavedState() {
             if (typeof data.autoRefresh === 'boolean') {
                 elements.autoRefresh.checked = data.autoRefresh;
             }
+            if (typeof data.useActual === 'boolean') {
+                elements.useActual.checked = data.useActual;
+            }
+            if (typeof data.preserveExact === 'boolean') {
+                elements.preserveExact.checked = data.preserveExact;
+            }
             updateDeviceFrame();
+            updateColorSwatches();
+            updateUseActualVisibility();
         }
     } catch (e) {
         console.warn('Failed to load saved state:', e);

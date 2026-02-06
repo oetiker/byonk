@@ -240,10 +240,12 @@ impl ErrorBuffer {
 // Shared dithering infrastructure
 // ============================================================================
 
-/// Find exact byte-level match against actual palette colors.
+/// Find exact byte-level match against official palette colors.
 ///
 /// Converts the input LinearRgb back to sRGB bytes and compares
-/// against each palette entry's actual color bytes.
+/// against each palette entry's official color bytes. We match official
+/// (not actual/measured) because input content is authored with official
+/// palette colors in mind.
 ///
 /// # Arguments
 ///
@@ -273,7 +275,7 @@ pub(crate) fn find_exact_match(pixel: LinearRgb, palette: &Palette) -> Option<u8
     let pixel_bytes = srgb.to_bytes();
 
     for i in 0..palette.len() {
-        if palette.actual(i).to_bytes() == pixel_bytes {
+        if palette.official(i).to_bytes() == pixel_bytes {
             return Some(i as u8);
         }
     }

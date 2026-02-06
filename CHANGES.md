@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- **Panel profiles with measured colors**: Define display panels in `config.yaml` with official and measured (actual) display colors. Dithering uses measured colors to model what the panel really shows, producing more accurate output. Panels auto-detect from firmware `Board` header or can be assigned per-device.
+- **Dev mode panel preview**: Select a panel profile in dev mode to preview with measured colors — see what the physical display actually shows instead of ideal colors. Color swatches show both official and measured palettes.
+- **Measured-Colors header**: Firmware can send `Measured-Colors` header with actual display colors, overriding panel profile measured colors.
+- **`preserve_exact` option**: Disable "preserve exact color matches" via Lua script (`preserve_exact = false` in return table) or dev mode UI checkbox. When disabled, ALL pixels go through enhancement + dithering — no shortcuts for palette-matching pixels.
 - Floyd-Steinberg dithering with blue noise kernel jitter (`dither="floyd-steinberg"`): breaks "worm" artifacts on smooth gradients while maintaining 100% error propagation. Also accepts `"atkinson"` as alias for `"photo"`.
 - Google Photos screen (`gphoto`): displays random photos from a shared Google Photos album using HTML scraping (no OAuth required)
 - Terminus TTF font demo screen (`fontdemo-terminus`): showcases all 9 embedded bitmap sizes (12–32px) in regular, bold, italic, and bold-italic styles
@@ -25,8 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Device config entries now work with auto-discovered screens (screens that exist as `.lua`+`.svg` files but aren't listed in the `screens:` section of `config.yaml`). Previously, devices referencing unlisted screens were treated as unregistered.
+- Dev mode panel preview: greyscale palettes now correctly show measured colors (e.g., `#383838..#B8B8B0`) instead of evenly-spaced grey values. When "Show actual panel colors" is enabled, output uses indexed PNG with PLTE to preserve measured colors. B&W forcing is now limited to the dithering distance calculation only — the preview shows raw measured values.
+- Dev mode: added "Show actual panel colors" toggle checkbox. Only visible when a panel with measured colors is selected. State persists in localStorage.
 - Color palette dithering: grey pixels no longer incorrectly map to chromatic colors (e.g., red) when using multi-color palettes. Uses HyAB perceptual distance metric (Abasi et al., 2020) with chroma coupling penalty, which prevents achromatic pixels from matching chromatic palette entries.
 - Photo dithering color reproduction: switched error diffusion (Photo intent) from HyAB+chroma distance to plain Euclidean OKLab for unbiased palette matching. Muted colors (skin tones, overcast sky, concrete, shadows) now reproduce faithfully instead of collapsing to B&W. Sweep test across 2000+ OKLab colors shows avg DeltaE=0.047 (nearly imperceptible). Blue-noise (Graphics) path retains HyAB kchroma=10 for grey safety.
+- Preprocessor exact match detection: match against official palette colors (what input content uses) instead of actual measured colors. Input SVGs reference official values, so matching must target those.
 - PNG output ~27% smaller: added oxipng post-processing with zopfli compression and adaptive filter selection
 
 ## 0.11.0 - 2026-02-01

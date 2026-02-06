@@ -106,9 +106,9 @@ pub struct PreprocessResult {
 ///
 /// # Two-Phase Detection Strategy
 ///
-/// Exact match detection uses **actual colors** (what the display shows),
-/// not official colors. This is critical when displays have color calibration
-/// differences from their specifications.
+/// Exact match detection uses **official colors** (what the input content
+/// references), not actual measured colors. Input SVG/images use official
+/// palette values, so matching must target those same values.
 ///
 /// Matching pixels are flagged but NOT enhanced - they pass through unchanged
 /// to preserve crisp edges in text, logos, and UI elements.
@@ -161,8 +161,8 @@ impl<'a> Preprocessor<'a> {
 
     /// Check if a pixel exactly matches any palette color (by Srgb bytes).
     ///
-    /// Matches against the ACTUAL colors (what display shows), not official colors.
-    /// This ensures we detect pixels that will appear identical on the display.
+    /// Matches against the OFFICIAL colors (what the input content uses), not actual
+    /// measured colors. Input SVG/images reference official palette values.
     ///
     /// # Arguments
     /// * `pixel` - The pixel to check
@@ -173,7 +173,7 @@ impl<'a> Preprocessor<'a> {
     pub fn find_exact_match_srgb(&self, pixel: Srgb) -> Option<u8> {
         let pixel_bytes = pixel.to_bytes();
         for i in 0..self.palette.len() {
-            let palette_bytes = self.palette.actual(i).to_bytes();
+            let palette_bytes = self.palette.official(i).to_bytes();
             if pixel_bytes == palette_bytes {
                 return Some(i as u8);
             }
@@ -414,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn test_exact_match_uses_actual_colors() {
+    fn test_exact_match_uses_official_colors() {
         // Create palette where official != actual
         let official = [Srgb::from_u8(255, 0, 0)]; // Official red
         let actual = [Srgb::from_u8(200, 50, 50)]; // Actual muddy red
@@ -422,20 +422,20 @@ mod tests {
 
         let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
 
-        // Input matches ACTUAL color (muddy red)
-        let muddy_red = Srgb::from_u8(200, 50, 50);
-        assert_eq!(
-            preprocessor.find_exact_match_srgb(muddy_red),
-            Some(0),
-            "Should match actual color, not official"
-        );
-
-        // Input matches OFFICIAL color (bright red) - should NOT match
+        // Input matches OFFICIAL color (bright red) - should match
         let bright_red = Srgb::from_u8(255, 0, 0);
         assert_eq!(
             preprocessor.find_exact_match_srgb(bright_red),
+            Some(0),
+            "Should match official color, not actual"
+        );
+
+        // Input matches ACTUAL color (muddy red) - should NOT match
+        let muddy_red = Srgb::from_u8(200, 50, 50);
+        assert_eq!(
+            preprocessor.find_exact_match_srgb(muddy_red),
             None,
-            "Should not match official color when actual differs"
+            "Should not match actual color when official differs"
         );
     }
 

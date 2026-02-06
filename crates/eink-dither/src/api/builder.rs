@@ -185,6 +185,25 @@ impl EinkDitherer {
         self
     }
 
+    /// Set whether to preserve exact palette matches.
+    ///
+    /// When enabled (default), pixels that exactly match a palette color bypass
+    /// both preprocessing (saturation/contrast) and dithering, preserving crisp
+    /// edges in text and UI elements.
+    ///
+    /// When disabled, ALL pixels go through the full pipeline (enhancement +
+    /// dithering), which can be useful for artistic effects or testing.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to preserve exact palette matches
+    #[inline]
+    pub fn preserve_exact_matches(mut self, enabled: bool) -> Self {
+        self.dither_opts = self.dither_opts.preserve_exact_matches(enabled);
+        self.preprocess = self.preprocess.preserve_exact_matches(enabled);
+        self
+    }
+
     /// Set the dithering algorithm.
     ///
     /// Overrides the default algorithm for the rendering intent:

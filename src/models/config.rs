@@ -14,6 +14,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub devices: HashMap<String, DeviceConfig>,
 
+    /// Panel profiles with measured display colors
+    #[serde(default)]
+    pub panels: HashMap<String, PanelConfig>,
+
     /// Default screen for unknown devices
     #[serde(default = "default_screen")]
     pub default_screen: Option<String>,
@@ -27,6 +31,22 @@ pub struct AppConfig {
     /// Note: /api/display always accepts both methods regardless of this setting
     #[serde(default = "default_auth_mode")]
     pub auth_mode: String,
+}
+
+/// Panel profile with official and measured display colors
+#[derive(Debug, Deserialize, Clone)]
+pub struct PanelConfig {
+    /// Human-readable display name (e.g. "TRMNL OG (4-grey)")
+    pub name: String,
+    /// Exact string match against firmware Board header
+    #[serde(rename = "match")]
+    pub match_pattern: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    /// Official colors (comma-separated hex)
+    pub colors: String,
+    /// Measured/actual colors (comma-separated hex)
+    pub colors_actual: Option<String>,
 }
 
 fn default_screen() -> Option<String> {
@@ -66,6 +86,9 @@ pub struct DeviceConfig {
 
     /// Optional dither mode override ("photo" or "graphics")
     pub dither: Option<String>,
+
+    /// Optional panel profile name (references panels section)
+    pub panel: Option<String>,
 }
 
 /// Device registration settings
@@ -185,18 +208,67 @@ impl AppConfig {
     }
 
     /// Check if a device is registered (by MAC or by registration code)
+    ///
+    /// Unlike `get_screen_for_device`/`get_screen_for_code`, this only checks
+    /// whether a device config entry exists — it does NOT require the referenced
+    /// screen to be defined in the `screens` section. Screens can be auto-discovered
+    /// from the filesystem at runtime.
     pub fn is_device_registered(&self, mac: &str, code: Option<&str>) -> bool {
         // Check by MAC first
-        if self.get_screen_for_device(mac).is_some() {
+        if self.get_device_config(mac).is_some() {
             return true;
         }
         // Check by registration code
         if let Some(code) = code {
-            if self.get_screen_for_code(code).is_some() {
+            if self.get_device_config_for_code(code).is_some() {
                 return true;
             }
         }
         false
+    }
+
+    /// Get device config by MAC address (without requiring screen to exist in config)
+    pub fn get_device_config(&self, device_mac: &str) -> Option<&DeviceConfig> {
+        self.devices.get(device_mac).or_else(|| {
+            let normalized = device_mac.to_uppercase();
+            if normalized != device_mac {
+                self.devices.get(&normalized)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Get device config by registration code (without requiring screen to exist in config)
+    ///
+    /// Accepts both formats: `ABCDEFGHJK` or `ABCDE-FGHJK` (hyphenated)
+    pub fn get_device_config_for_code(&self, code: &str) -> Option<&DeviceConfig> {
+        let normalized = code.to_uppercase().replace('-', "");
+        if normalized.len() == 10 {
+            let hyphenated = format!("{}-{}", &normalized[..5], &normalized[5..]);
+            if let Some(dc) = self.devices.get(&hyphenated) {
+                return Some(dc);
+            }
+        }
+        self.devices.get(&normalized)
+    }
+
+    /// Get a panel config by name
+    pub fn get_panel(&self, name: &str) -> Option<&PanelConfig> {
+        self.panels.get(name)
+    }
+
+    /// Find a panel by matching its match_pattern against a board string
+    pub fn find_panel_for_board(&self, board: &str) -> Option<(&str, &PanelConfig)> {
+        self.panels
+            .iter()
+            .find(|(_, panel)| {
+                panel
+                    .match_pattern
+                    .as_deref()
+                    .is_some_and(|pat| pat == board)
+            })
+            .map(|(name, panel)| (name.as_str(), panel))
     }
 
     /// Get the default screen config
@@ -222,6 +294,7 @@ impl Default for AppConfig {
         Self {
             screens,
             devices: HashMap::new(),
+            panels: HashMap::new(),
             default_screen: Some("default".to_string()),
             registration: RegistrationConfig::default(),
             auth_mode: default_auth_mode(),
@@ -269,6 +342,7 @@ mod tests {
                 params: HashMap::new(),
                 colors: None,
                 dither: None,
+                panel: None,
             },
         );
 
@@ -300,6 +374,7 @@ mod tests {
                 params: HashMap::new(),
                 colors: None,
                 dither: None,
+                panel: None,
             },
         );
 
@@ -328,6 +403,7 @@ mod tests {
                 params: HashMap::new(),
                 colors: None,
                 dither: None,
+                panel: None,
             },
         );
 
@@ -475,6 +551,7 @@ registration:
                 params: HashMap::new(),
                 colors: None,
                 dither: None,
+                panel: None,
             },
         );
 
@@ -512,6 +589,7 @@ registration:
                 params: HashMap::new(),
                 colors: None,
                 dither: None,
+                panel: None,
             },
         );
 
@@ -523,6 +601,7 @@ registration:
                 params: HashMap::new(),
                 colors: None,
                 dither: None,
+                panel: None,
             },
         );
 

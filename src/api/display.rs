@@ -311,6 +311,36 @@ pub async fn handle_display<R: DeviceRegistry>(
         colors: Some(initial_color_hex),
     };
 
+    // Resolve panel for this device:
+    // 1. Explicit panel from device config
+    // 2. Auto-detect from Board header
+    let board_header = headers.get_str("Board").map(|s| s.to_string());
+    let device_config_panel = config
+        .get_device_config(device_id_str)
+        .or_else(|| config.get_device_config_for_code(&api_key.registration_code()))
+        .and_then(|dc| dc.panel.clone());
+
+    let panel = device_config_panel
+        .as_deref()
+        .and_then(|name| config.get_panel(name))
+        .or_else(|| {
+            board_header
+                .as_deref()
+                .and_then(|b| config.find_panel_for_board(b))
+                .map(|(_, p)| p)
+        });
+
+    // Resolve measured colors: Measured-Colors header > panel.colors_actual > None
+    let measured_colors_header = headers.get_str("Measured-Colors").map(|s| s.to_string());
+    let measured_colors: Option<Vec<(u8, u8, u8)>> = measured_colors_header
+        .as_deref()
+        .map(parse_colors_header)
+        .or_else(|| {
+            panel
+                .and_then(|p| p.colors_actual.as_deref())
+                .map(parse_colors_header)
+        });
+
     // Run script, render SVG, and cache the result (PNG rendering happens in /api/image)
     let device_mac = device.device_id.to_string();
     let pipeline = content_pipeline.clone();
@@ -351,10 +381,17 @@ pub async fn handle_display<R: DeviceRegistry>(
                         .or_else(|| result.device_config_dither.clone())
                 };
 
+            // Helper to resolve preserve_exact: script > None (default true)
+            let resolve_preserve_exact =
+                |result: &crate::services::content_pipeline::ScriptResult| -> Option<bool> {
+                    result.script_preserve_exact
+                };
+
             match pipeline.run_script_for_device(&mac, Some(ctx.clone())) {
                 Ok(result) => {
                     let palette = resolve_palette(&result);
                     let dither = resolve_dither(&result);
+                    let preserve_exact = resolve_preserve_exact(&result);
                     if result.skip_update {
                         (result.refresh_rate, true, None, None)
                     } else {
@@ -369,7 +406,9 @@ pub async fn handle_display<R: DeviceRegistry>(
                                     height,
                                 )
                                 .with_colors(Some(palette))
-                                .with_dither(dither);
+                                .with_colors_actual(measured_colors.clone())
+                                .with_dither(dither)
+                                .with_preserve_exact(preserve_exact);
                                 let hash = cached.content_hash.clone();
                                 cache.store(cached);
                                 (result.refresh_rate, false, Some(hash), None)
@@ -510,7 +549,10 @@ pub async fn handle_image<R: DeviceRegistry>(
         &cached.rendered_svg,
         spec,
         palette,
+        cached.colors_actual.as_deref(),
+        false, // production always uses official colors
         cached.dither.as_deref(),
+        cached.preserve_exact.unwrap_or(true),
     )?;
 
     tracing::info!(size_bytes = png_bytes.len(), "Image rendered and served");

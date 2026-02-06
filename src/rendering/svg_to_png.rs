@@ -67,17 +67,25 @@ impl SvgRenderer {
     /// - `"floyd-steinberg"` - Floyd-Steinberg with blue noise jitter (smooth gradients)
     /// - `"graphics"` (default) - Blue noise ordered dithering
     /// - `"simplex"` - Barycentric ordered dithering (up to 4-color blending)
+    ///
+    /// When `actual` measured colors are provided, the ditherer uses them to model
+    /// what the panel really displays. When `use_actual` is true, the PNG output
+    /// uses measured colors (for dev mode preview); otherwise official colors are used.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_to_palette_png(
         &self,
         svg_data: &[u8],
         spec: DisplaySpec,
         palette: &[(u8, u8, u8)],
+        actual: Option<&[(u8, u8, u8)]>,
+        use_actual: bool,
         dither: Option<&str>,
+        preserve_exact: bool,
     ) -> Result<Vec<u8>, RenderError> {
         let pixmap = self.rasterize_svg(svg_data, spec)?;
 
         // Build eink-dither palette with dedup (eink-dither rejects duplicates)
-        let (eink_palette, index_map) = build_eink_palette(palette)?;
+        let (eink_palette, output_palette) = build_eink_palette(palette, actual, use_actual)?;
 
         // Determine rendering intent and algorithm
         let (intent, algorithm) = match dither {
@@ -97,20 +105,22 @@ impl SvgRenderer {
         let pixels = rgba_to_eink_srgb(pixmap.data());
 
         // Dither using eink-dither
-        let ditherer = EinkDitherer::new(eink_palette, intent).algorithm(algorithm);
+        let ditherer = EinkDitherer::new(eink_palette, intent)
+            .algorithm(algorithm)
+            .preserve_exact_matches(preserve_exact);
         let result = ditherer.dither(&pixels, spec.width as usize, spec.height as usize);
 
-        // Remap eink-dither indices back to the original palette indices
-        let indices: Vec<u8> = result
-            .indices()
-            .iter()
-            .map(|&idx| index_map[idx as usize])
-            .collect();
+        // eink-dither indices are into the deduped palette, which matches output_palette
+        let indices: Vec<u8> = result.indices().to_vec();
 
-        // Choose PNG format and pack pixel data
-        let (color_type, bit_depth, plte, packed) = if is_grey_palette(palette) {
-            if palette.len() <= 4 {
-                let mapped = map_grey_indices(&indices, palette, 3);
+        // Use output_palette for PNG encoding (measured colors in dev mode, official otherwise)
+        let out = &output_palette;
+
+        // Choose PNG format and pack pixel data.
+        // When use_actual=true, always use indexed PNG so measured colors appear in PLTE.
+        let (color_type, bit_depth, plte, packed) = if is_grey_palette(out) && !use_actual {
+            if out.len() <= 4 {
+                let mapped = map_grey_indices(&indices, out, 3);
                 (
                     png::ColorType::Grayscale,
                     png::BitDepth::Two,
@@ -118,7 +128,7 @@ impl SvgRenderer {
                     pack_nbits(&mapped, spec.width, 2),
                 )
             } else {
-                let mapped = map_grey_indices(&indices, palette, 15);
+                let mapped = map_grey_indices(&indices, out, 15);
                 (
                     png::ColorType::Grayscale,
                     png::BitDepth::Four,
@@ -127,13 +137,13 @@ impl SvgRenderer {
                 )
             }
         } else {
-            let (depth, bits) = match palette.len() {
+            let (depth, bits) = match out.len() {
                 0..=2 => (png::BitDepth::One, 1),
                 3..=4 => (png::BitDepth::Two, 2),
                 5..=16 => (png::BitDepth::Four, 4),
                 _ => (png::BitDepth::Eight, 8),
             };
-            let plte: Vec<u8> = palette.iter().flat_map(|&(r, g, b)| [r, g, b]).collect();
+            let plte: Vec<u8> = out.iter().flat_map(|&(r, g, b)| [r, g, b]).collect();
             let packed = if bits == 8 {
                 indices
             } else {
@@ -224,28 +234,87 @@ fn rgba_to_eink_srgb(rgba_data: &[u8]) -> Vec<EinkSrgb> {
 /// Build an eink-dither palette from byonk's (u8,u8,u8) palette, deduplicating
 /// colors since eink-dither rejects palettes with duplicate entries.
 ///
-/// Returns the deduped eink palette plus a mapping from deduped index back
-/// to the original palette index (first occurrence wins).
-fn build_eink_palette(palette: &[(u8, u8, u8)]) -> Result<(EinkPalette, Vec<u8>), RenderError> {
-    let mut unique_colors: Vec<EinkSrgb> = Vec::new();
-    let mut index_map: Vec<u8> = Vec::new(); // deduped idx -> original idx
+/// When `actual` measured colors are provided, they're passed to eink-dither so
+/// dithering targets what the panel really displays. B&W forcing: if an official
+/// color is exactly black or white, the measured value is forced to match.
+///
+/// Returns (eink_palette, output_palette) where output_palette uses
+/// measured colors when `use_actual` is true, otherwise official colors.
+type RgbTuple = (u8, u8, u8);
+
+fn build_eink_palette(
+    palette: &[RgbTuple],
+    actual: Option<&[RgbTuple]>,
+    use_actual: bool,
+) -> Result<(EinkPalette, Vec<RgbTuple>), RenderError> {
+    // Build actual colors with B&W forcing
+    let actual_with_bw: Option<Vec<(u8, u8, u8)>> = actual.map(|a| {
+        a.iter()
+            .enumerate()
+            .map(|(i, &(ar, ag, ab))| {
+                if i < palette.len() {
+                    let (or, og, ob) = palette[i];
+                    // Force measured to match if official is pure black or white
+                    if or == 0 && og == 0 && ob == 0 {
+                        (0, 0, 0)
+                    } else if or == 255 && og == 255 && ob == 255 {
+                        (255, 255, 255)
+                    } else {
+                        (ar, ag, ab)
+                    }
+                } else {
+                    (ar, ag, ab)
+                }
+            })
+            .collect()
+    });
+
+    let mut unique_official: Vec<EinkSrgb> = Vec::new();
+    let mut unique_actual: Vec<EinkSrgb> = Vec::new();
+    // Track which original indices survived dedup, for building output_palette
+    let mut kept_indices: Vec<usize> = Vec::new();
 
     for (orig_idx, &(r, g, b)) in palette.iter().enumerate() {
         let color = EinkSrgb::from_u8(r, g, b);
         let bytes = color.to_bytes();
-        if !unique_colors.iter().any(|c| c.to_bytes() == bytes) {
-            index_map.push(orig_idx as u8);
-            unique_colors.push(color);
+        if !unique_official.iter().any(|c| c.to_bytes() == bytes) {
+            kept_indices.push(orig_idx);
+            unique_official.push(color);
+            // Track corresponding actual color
+            if let Some(ref abw) = actual_with_bw {
+                if orig_idx < abw.len() {
+                    let (ar, ag, ab) = abw[orig_idx];
+                    unique_actual.push(EinkSrgb::from_u8(ar, ag, ab));
+                }
+            }
         }
     }
 
-    let eink_palette = EinkPalette::new(&unique_colors, None)
+    let eink_actual = if !unique_actual.is_empty() && unique_actual.len() == unique_official.len() {
+        Some(unique_actual.as_slice())
+    } else {
+        None
+    };
+
+    let eink_palette = EinkPalette::new(&unique_official, eink_actual)
         .map_err(|e| RenderError::Dither(format!("palette error: {e}")))?;
 
-    // Distance metric is auto-detected by eink-dither based on palette content.
-    // Chromatic palettes get HyAB+chroma; achromatic palettes get Euclidean.
+    // Build output palette: raw measured colors for dev preview, official for production.
+    // Note: we use `actual` (without B&W forcing) for output so users see real panel colors.
+    let output_palette: Vec<(u8, u8, u8)> = if use_actual {
+        if let Some(a) = actual {
+            kept_indices
+                .iter()
+                .map(|&i| if i < a.len() { a[i] } else { palette[i] })
+                .collect()
+        } else {
+            kept_indices.iter().map(|&i| palette[i]).collect()
+        }
+    } else {
+        kept_indices.iter().map(|&i| palette[i]).collect()
+    };
 
-    Ok((eink_palette, index_map))
+    Ok((eink_palette, output_palette))
 }
 
 /// Check if a palette consists entirely of grey values (R == G == B).
@@ -390,7 +459,7 @@ mod tests {
         let spec = DisplaySpec::from_dimensions(800, 200).unwrap();
         let palette = vec![(0, 0, 0), (255, 255, 255)];
         let png = renderer
-            .render_to_palette_png(svg.as_bytes(), spec, &palette, None)
+            .render_to_palette_png(svg.as_bytes(), spec, &palette, None, false, None, true)
             .unwrap();
         std::fs::write("/tmp/byonk-bitmap-font-test2.png", &png).unwrap();
         println!(

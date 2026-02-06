@@ -311,7 +311,10 @@ fn run_render_command(
             &svg_content,
             display_spec,
             &final_palette,
+            None,
+            false,
             dither.as_deref(),
+            true,
         )
         .map_err(|e| anyhow::anyhow!("Render error: {e}"))?;
 

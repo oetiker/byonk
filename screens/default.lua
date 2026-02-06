@@ -114,7 +114,7 @@ return {
     font_tagline = font_tagline,
     font_swatch = font_swatch,
   },
-  -- dither = "photo",
+  -- dither = "atkinson",
   dither = "floyd-steinberg",
   refresh_rate = 300  -- 5 minutes
 }

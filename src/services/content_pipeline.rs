@@ -28,6 +28,8 @@ pub struct ScriptResult {
     pub script_dither: Option<String>,
     /// Optional dither mode from device config ("photo" or "graphics")
     pub device_config_dither: Option<String>,
+    /// Optional preserve_exact override from Lua script
+    pub script_preserve_exact: Option<bool>,
 }
 
 /// Device context passed to templates and Lua scripts
@@ -74,6 +76,7 @@ pub enum ContentError {
 /// Content pipeline that orchestrates script → template → render
 pub struct ContentPipeline {
     config: Arc<AppConfig>,
+    asset_loader: Arc<AssetLoader>,
     lua_runtime: LuaRuntime,
     template_service: TemplateService,
     renderer: Arc<RenderService>,
@@ -105,13 +108,33 @@ impl ContentPipeline {
         }
 
         let lua_runtime = LuaRuntime::with_fonts(asset_loader.clone(), font_families);
-        let template_service = TemplateService::new(asset_loader)?;
+        let template_service = TemplateService::new(asset_loader.clone())?;
 
         Ok(Self {
             config,
+            asset_loader,
             lua_runtime,
             template_service,
             renderer,
+        })
+    }
+
+    /// Resolve a screen by name from config or filesystem auto-discovery
+    fn resolve_screen(&self, screen_name: &str) -> Option<ScreenConfig> {
+        self.config.screens.get(screen_name).cloned().or_else(|| {
+            let all_files = self.asset_loader.list_screens();
+            let lua_file = format!("{}.lua", screen_name);
+            let svg_file = format!("{}.svg", screen_name);
+            if all_files.iter().any(|f| f == &lua_file) && all_files.iter().any(|f| f == &svg_file)
+            {
+                Some(ScreenConfig {
+                    script: std::path::PathBuf::from(lua_file),
+                    template: std::path::PathBuf::from(svg_file),
+                    default_refresh: 900,
+                })
+            } else {
+                None
+            }
         })
     }
 
@@ -122,34 +145,42 @@ impl ContentPipeline {
         device_ctx: Option<DeviceContext>,
     ) -> Result<ScriptResult, ContentError> {
         // Look up device config - try registration code first, then MAC address
-        let (screen_config, device_config) = device_ctx
+        let device_config = device_ctx
             .as_ref()
             .and_then(|ctx| ctx.registration_code.as_deref())
-            .and_then(|code| self.config.get_screen_for_code(code))
-            .or_else(|| self.config.get_screen_for_device(device_mac))
-            .or_else(|| {
-                // Fall back to default screen with empty params
-                self.config.get_default_screen().map(|sc| {
-                    static EMPTY_DEVICE: std::sync::OnceLock<crate::models::DeviceConfig> =
-                        std::sync::OnceLock::new();
-                    let dc = EMPTY_DEVICE.get_or_init(|| crate::models::DeviceConfig {
-                        screen: "default".to_string(),
-                        params: HashMap::new(),
-                        colors: None,
-                        dither: None,
-                    });
-                    (sc, dc)
-                })
-            })
+            .and_then(|code| self.config.get_device_config_for_code(code))
+            .or_else(|| self.config.get_device_config(device_mac));
+
+        if let Some(device_config) = device_config {
+            // Found device config — resolve screen from config or filesystem
+            if let Some(screen_config) = self.resolve_screen(&device_config.screen) {
+                return self.run_script_for_screen(
+                    &screen_config,
+                    &device_config.params,
+                    device_ctx,
+                    device_config.colors.clone(),
+                    device_config.dither.clone(),
+                );
+            }
+            // Device config exists but screen not found — fall through to default
+        }
+
+        // Fall back to default screen with empty params
+        let screen_config = self
+            .resolve_screen(self.config.default_screen.as_deref().unwrap_or("default"))
             .ok_or_else(|| ContentError::ScreenNotFound(device_mac.to_string()))?;
 
-        self.run_script_for_screen(
-            screen_config,
-            &device_config.params,
-            device_ctx,
-            device_config.colors.clone(),
-            device_config.dither.clone(),
-        )
+        static EMPTY_DEVICE: std::sync::OnceLock<crate::models::DeviceConfig> =
+            std::sync::OnceLock::new();
+        let dc = EMPTY_DEVICE.get_or_init(|| crate::models::DeviceConfig {
+            screen: "default".to_string(),
+            params: HashMap::new(),
+            colors: None,
+            dither: None,
+            panel: None,
+        });
+
+        self.run_script_for_screen(&screen_config, &dc.params, device_ctx, None, None)
     }
 
     /// Run script for a screen by name with custom params (without rendering)
@@ -163,12 +194,10 @@ impl ContentPipeline {
         device_ctx: Option<DeviceContext>,
     ) -> Result<ScriptResult, ContentError> {
         let screen = self
-            .config
-            .screens
-            .get(screen_name)
+            .resolve_screen(screen_name)
             .ok_or_else(|| ContentError::ScreenNotFound(screen_name.to_string()))?;
 
-        self.run_script_for_screen(screen, &params, device_ctx, None, None)
+        self.run_script_for_screen(&screen, &params, device_ctx, None, None)
     }
 
     /// Run script for a specific screen (without rendering)
@@ -222,6 +251,7 @@ impl ContentPipeline {
             device_config_colors,
             script_dither: lua_result.dither,
             device_config_dither,
+            script_preserve_exact: lua_result.preserve_exact,
         })
     }
 
@@ -365,18 +395,28 @@ impl ContentPipeline {
     ///
     /// The palette determines both dithering targets and PNG output format
     /// (native grayscale for grey palettes, indexed PNG for color palettes).
+    /// When `actual` measured colors are provided, the ditherer models what
+    /// the panel really displays. When `use_actual` is true, the PNG output
+    /// uses measured colors (for dev mode preview).
+    #[allow(clippy::too_many_arguments)]
     pub fn render_png_from_svg(
         &self,
         svg: &str,
         spec: DisplaySpec,
         palette: &[(u8, u8, u8)],
+        actual: Option<&[(u8, u8, u8)]>,
+        use_actual: bool,
         dither: Option<&str>,
+        preserve_exact: bool,
     ) -> Result<Vec<u8>, ContentError> {
         let png_bytes = self.renderer.svg_renderer.render_to_palette_png(
             svg.as_bytes(),
             spec,
             palette,
+            actual,
+            use_actual,
             dither,
+            preserve_exact,
         )?;
         Ok(png_bytes)
     }
@@ -530,6 +570,7 @@ impl ContentPipeline {
             device_config_colors: None,
             script_dither: lua_result.dither,
             device_config_dither: None,
+            script_preserve_exact: lua_result.preserve_exact,
         })
     }
 }

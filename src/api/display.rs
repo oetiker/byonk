@@ -70,7 +70,7 @@ pub fn resolve_tuning(
     config_error_clamp: Option<f32>,
     config_noise_scale: Option<f32>,
     config_chroma_clamp: Option<f32>,
-) -> (Option<f32>, Option<f32>, Option<f32>) {
+) -> crate::server::TuningOverride {
     (
         script_error_clamp.or(config_error_clamp),
         script_noise_scale.or(config_noise_scale),
@@ -110,7 +110,7 @@ pub fn resolve_render_params(
     fallback_palette: &[(u8, u8, u8)],
     measured_colors: Option<Vec<(u8, u8, u8)>>,
     preserve_exact_override: Option<bool>,
-    tuning: (Option<f32>, Option<f32>, Option<f32>),
+    tuning: crate::server::TuningOverride,
 ) -> RenderParams {
     let palette = if let Some(sc) = script_colors {
         parse_colors_header(&sc.join(","))

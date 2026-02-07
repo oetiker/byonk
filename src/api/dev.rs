@@ -563,7 +563,18 @@ pub async fn handle_render(
             .render_svg_from_script(&script_result, Some(&ctx))
             .map_err(|e| e.to_string())?;
 
-        Ok::<(String, Option<Vec<String>>, Option<String>, Option<bool>, Option<f32>, Option<f32>, Option<f32>), String>((
+        Ok::<
+            (
+                String,
+                Option<Vec<String>>,
+                Option<String>,
+                Option<bool>,
+                Option<f32>,
+                Option<f32>,
+                Option<f32>,
+            ),
+            String,
+        >((
             svg,
             script_result.script_colors,
             script_result.script_dither,
@@ -575,7 +586,15 @@ pub async fn handle_render(
     })
     .await;
 
-    let (svg, script_colors, script_dither, script_preserve_exact, script_error_clamp, script_noise_scale, script_chroma_clamp) = match result {
+    let (
+        svg,
+        script_colors,
+        script_dither,
+        script_preserve_exact,
+        script_error_clamp,
+        script_noise_scale,
+        script_chroma_clamp,
+    ) = match result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             return (

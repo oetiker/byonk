@@ -23,6 +23,9 @@ use crate::error::ApiError;
 use crate::models::AppConfig;
 use crate::services::{ContentCache, ContentPipeline, InMemoryRegistry, RenderService};
 
+/// Dither tuning override: (error_clamp, noise_scale, chroma_clamp).
+pub type TuningOverride = (Option<f32>, Option<f32>, Option<f32>);
+
 /// Runtime overrides set by the dev GUI and consumed by production handlers.
 ///
 /// Both maps are keyed by **device config key** (the key from `config.devices`)
@@ -35,7 +38,7 @@ pub struct DevOverrides {
     /// device_config_key → dither algorithm string (from dither dropdown).
     pub dither: Arc<RwLock<HashMap<String, String>>>,
     /// device_config_key → dither tuning (error_clamp, noise_scale, chroma_clamp).
-    pub tuning: Arc<RwLock<HashMap<String, (Option<f32>, Option<f32>, Option<f32>)>>>,
+    pub tuning: Arc<RwLock<HashMap<String, TuningOverride>>>,
 }
 
 /// Custom span maker that adds a unique request ID to each request's tracing span.

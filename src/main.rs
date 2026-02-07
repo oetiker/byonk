@@ -241,7 +241,15 @@ fn run_render_command(
     let is_unregistered = device_context.registration_code.is_some()
         && !config.is_device_registered(mac, device_context.registration_code.as_deref());
 
-    let (svg_content, final_palette, dither, preserve_exact, cli_error_clamp, cli_noise_scale, cli_chroma_clamp) = if is_unregistered {
+    let (
+        svg_content,
+        final_palette,
+        dither,
+        preserve_exact,
+        cli_error_clamp,
+        cli_noise_scale,
+        cli_chroma_clamp,
+    ) = if is_unregistered {
         let code = device_context.registration_code.as_deref().unwrap();
 
         // Use registration screen if configured, otherwise default screen, otherwise built-in
@@ -365,7 +373,11 @@ fn run_render_command(
             false,
             dither.as_deref(),
             preserve_exact,
-            if has_cli_tuning { Some(&cli_tuning) } else { None },
+            if has_cli_tuning {
+                Some(&cli_tuning)
+            } else {
+                None
+            },
         )
         .map_err(|e| anyhow::anyhow!("Render error: {e}"))?;
 

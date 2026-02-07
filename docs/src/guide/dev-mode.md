@@ -22,12 +22,9 @@ Once started, open your browser to `http://localhost:3000/dev` to access the dev
 
 The simulator displays your rendered screens in a visual frame resembling a TRMNL device. You can:
 
-- **Select a screen** from the dropdown (populated from your config.yaml)
-- **Enter a MAC address** to auto-load the configured screen and parameters for that device
-- **Choose device model**: OG (800x480) or X (1872x1404)
-- **Set custom dimensions** for testing different screen sizes
-- **Set display colors**: customize the palette (e.g., `#000000,#FFFFFF,#FF0000,#FFFF00`) for testing color dithering
-- **Simulate device context**: battery voltage, WiFi RSSI, and current time
+- **Select a screen** from the dropdown (populated from config.yaml and auto-discovered screens)
+- **Select a device** to auto-load its configured screen, parameters, panel, and dither settings
+- **Simulate device context**: battery voltage, WiFi RSSI, and time override
 - **View the rendered PNG** exactly as it would appear on the device
 - **Pixel inspector**: hover over the image to see a magnified view
 
@@ -39,29 +36,71 @@ When `SCREENS_DIR` is set to an external directory, the dev mode watches for cha
 2. An event is sent to connected browsers via Server-Sent Events (SSE)
 3. The screen automatically re-renders with the latest code
 
-This allows for rapid iteration without manual refreshing.
-
 ### Custom Parameters
 
-The dev UI includes a JSON editor for passing custom parameters to your Lua scripts. This lets you test different configurations without modifying `config.yaml`:
-
-```json
-{
-  "api_key": "test-key",
-  "location": "San Francisco"
-}
-```
-
-These parameters are available in your Lua script via the `params` table.
+The dev UI includes a JSON editor for passing custom parameters to your Lua scripts. These are available in your script via the `params` table.
 
 ### Error Display
 
-When your Lua script or SVG template has errors, they're displayed in a collapsible error panel below the device simulator. Errors include:
+Errors are displayed in a console below the device preview, including Lua syntax/runtime errors, template errors, and render failures.
 
-- **Lua syntax errors**: Parse errors in your script
-- **Lua runtime errors**: Errors during script execution
-- **Template errors**: Tera templating issues
-- **Render errors**: SVG to PNG conversion failures
+## Display Calibration
+
+Dev mode provides tools for calibrating dithering to match your physical display. Changes made in the dev UI are synced live to the actual device — what you tune is what the device shows.
+
+### Dither Algorithm Selection
+
+The dither dropdown lets you try all 7 algorithms on your content:
+- `graphics` (default) — blue noise ordered dithering
+- `photo` / `atkinson` — Atkinson error diffusion
+- `floyd-steinberg` — Floyd-Steinberg with blue noise jitter
+- `jarvis-judice-ninke` — wide 12-neighbor kernel
+- `sierra`, `sierra-two-row`, `sierra-lite` — Sierra family
+
+### Dither Tuning Controls
+
+The Render Options panel exposes three tuning parameters:
+
+| Control | Effect |
+|---------|--------|
+| **Error clamp** | Limits how much error is diffused. Lower values (0.05–0.1) reduce oscillation in smooth gradients. |
+| **Noise scale** | Controls blue noise jitter strength. Higher values break "worm" artifacts more aggressively. |
+| **Chroma clamp** | Limits chromatic error propagation. Prevents color bleeding on chromatic palettes. |
+
+### Color Calibration
+
+Click any actual-color swatch to open the HSL adjustment popup. Adjust hue, saturation, and lightness with live preview to match what your panel really displays. The adjusted `colors_actual` string can be copied to `config.yaml`.
+
+### Live Device Sync
+
+When you select a device entry and adjust dither algorithm, tuning parameters, or measured colors, changes are synced to the production `/api/display` handler. The physical device picks up the new settings on its next refresh.
+
+### Calibration Workflow
+
+1. **Select your device** from the dropdown — this loads its screen, panel, and dither settings
+2. **Choose a dither algorithm** that works well for your content type
+3. **Adjust tuning parameters** (error_clamp, noise_scale, chroma_clamp) until the preview looks good
+4. **Calibrate measured colors** by clicking actual-color swatches and adjusting HSL
+5. **Verify on device** — changes sync automatically; wait for the next device refresh
+6. **Commit to config** — copy the values to `config.yaml` for permanent use:
+
+```yaml
+panels:
+  my_panel:
+    name: "My Panel"
+    colors: "#000000,#FFFFFF,#FF0000,#FFFF00"
+    colors_actual: "#303030,#D0D0C8,#C04040,#D0D020"  # from dev mode calibration
+
+devices:
+  "ABCDE-FGHJK":
+    screen: gphoto
+    panel: my_panel
+    dither: floyd-steinberg
+    error_clamp: 0.08   # from dev mode tuning
+    noise_scale: 0.5    # from dev mode tuning
+```
+
+Tuning values can also be set per-script in the Lua return table — see [Lua API](../api/lua-api.md#error_clamp-noise_scale-chroma_clamp).
 
 ## Configuration
 
@@ -90,11 +129,11 @@ Dev mode uses the same environment variables as the normal server:
 
 4. Select the screen you want to work on
 
-5. Edit your Lua script or SVG template - changes appear automatically
+5. Edit your Lua script or SVG template — changes appear automatically
 
-6. Use the custom parameters field to test different configurations
+6. Use the calibration tools to tune dithering for your panel
 
-7. Check the error panel if something goes wrong
+7. Check the console below the preview if something goes wrong
 
 ## Differences from Production
 
@@ -102,5 +141,6 @@ Dev mode includes a few differences from the production `byonk serve` command:
 
 - Additional `/dev/*` routes for the simulator UI
 - File watching enabled (when using external SCREENS_DIR)
-- No content caching - always renders fresh content
+- No content caching — always renders fresh content
 - More verbose logging by default
+- Tuning and color overrides are session-only (reset on server restart)

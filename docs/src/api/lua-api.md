@@ -949,10 +949,14 @@ return {
     title = "My Title",
     items = { ... }
   },
-  refresh_rate = 300,  -- Seconds until next refresh
-  skip_update = false, -- Optional: skip rendering, just check back later
+  refresh_rate = 300,       -- Seconds until next refresh
+  skip_update = false,      -- Optional: skip rendering, just check back later
   colors = { "#000000", "#FFFFFF", "#FF0000" },  -- Optional: override display palette
-  dither = "photo"     -- Optional: "photo" or "graphics" (default)
+  dither = "photo",         -- Optional: dither algorithm
+  preserve_exact = true,    -- Optional: preserve exact palette matches (default: true)
+  error_clamp = 0.08,       -- Optional: error diffusion clamp
+  noise_scale = 0.6,        -- Optional: blue noise jitter scale
+  chroma_clamp = 2.0,       -- Optional: chromatic error clamp
 }
 ```
 
@@ -1012,18 +1016,26 @@ return {
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `dither` | string or nil | Optional dithering mode: `"photo"` or `"graphics"` |
+| `dither` | string or nil | Optional dithering algorithm |
 
-Controls the rendering intent used when converting SVG to the e-ink PNG:
+Controls the dithering algorithm used when converting SVG to e-ink PNG. Available values:
 
-- **`"graphics"`** (default) — Blue noise ordered dithering, optimized for UI content (text, icons, charts)
-- **`"photo"`** — Atkinson error diffusion with saturation/contrast boost, optimized for photographs
+| Value | Algorithm | Description |
+|-------|-----------|-------------|
+| `"graphics"` | Blue noise (default) | Ordered dithering for UI content |
+| `"photo"` or `"atkinson"` | Atkinson | Error diffusion for photographs |
+| `"floyd-steinberg"` | Floyd-Steinberg | General-purpose error diffusion |
+| `"jarvis-judice-ninke"` | JJN | Wide kernel, least oscillation |
+| `"sierra"` | Sierra | 10-neighbor error diffusion |
+| `"sierra-two-row"` | Sierra Two-Row | 7-neighbor error diffusion |
+| `"sierra-lite"` | Sierra Lite | Fastest error diffusion |
 
 The dither mode follows a priority chain:
 
-1. **Script `dither`** (strongest) — returned in the script result table
-2. **Device config `dither`** — set per-device in `config.yaml`
-3. **Default** — `"graphics"`
+1. **Dev UI override** (strongest) — set in dev mode
+2. **Script `dither`** — returned in the script result table
+3. **Device config `dither`** — set per-device in `config.yaml`
+4. **Default** — `"graphics"`
 
 ```lua
 -- Use photo dithering for a screen that displays images
@@ -1031,6 +1043,45 @@ return {
   data = { image_url = "..." },
   refresh_rate = 3600,
   dither = "photo"
+}
+```
+
+### preserve_exact
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `preserve_exact` | boolean or nil | Whether to preserve exact palette color matches (default: true) |
+
+When `true` (default), pixels that exactly match a palette color are kept as-is without dithering. This preserves sharp edges for text, lines, and borders. Set to `false` to force all pixels through the dithering pipeline.
+
+```lua
+return {
+  data = { ... },
+  refresh_rate = 300,
+  preserve_exact = false  -- force all pixels through dithering
+}
+```
+
+### error_clamp, noise_scale, chroma_clamp
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `error_clamp` | number or nil | Limits error diffusion amplitude (e.g. 0.08) |
+| `noise_scale` | number or nil | Blue noise jitter scale (e.g. 0.6) |
+| `chroma_clamp` | number or nil | Limits chromatic error propagation (e.g. 2.0) |
+
+Fine-tune dithering behavior per-script. These override device config values but are overridden by dev UI settings.
+
+Use [dev mode](../guide/dev-mode.md) to interactively find good values, then set them here for production use.
+
+```lua
+-- Tuned values for a photo screen on a 4-color panel
+return {
+  data = { ... },
+  refresh_rate = 3600,
+  dither = "floyd-steinberg",
+  error_clamp = 0.08,
+  noise_scale = 0.5
 }
 ```
 

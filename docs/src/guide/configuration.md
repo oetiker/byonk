@@ -57,7 +57,11 @@ Each device entry maps a MAC address to a screen:
 | `screen` | Yes | Name of the screen definition to use |
 | `params` | No | Key-value pairs passed to the Lua script |
 | `colors` | No | Override display palette (comma-separated hex RGB, e.g. `"#000000,#FFFFFF,#FF0000"`) |
-| `dither` | No | Dithering mode: `"photo"` or `"graphics"` (default) |
+| `dither` | No | Dithering algorithm (see [Dither Algorithms](#dither-algorithms) below) |
+| `panel` | No | Panel profile name (references `panels` section) |
+| `error_clamp` | No | Error clamp for dithering (e.g. `0.08`). Limits error diffusion amplitude. |
+| `noise_scale` | No | Blue noise jitter scale (e.g. `0.6`). Controls noise modulation strength. |
+| `chroma_clamp` | No | Chroma clamp for dithering. Limits chromatic error propagation. |
 
 ### MAC Address Format
 
@@ -92,6 +96,22 @@ These are available in Lua as the global `params` table:
 local station = params.station or "Default Station"
 local limit = params.limit or 10
 ```
+
+### Dither Algorithms
+
+The `dither` option selects which dithering algorithm to use. All algorithms perform color matching in perceptually uniform Oklab space and process pixels in gamma-correct linear RGB.
+
+| Algorithm | Value | Description |
+|-----------|-------|-------------|
+| Blue noise (default) | `"graphics"` | Ordered dithering with blue noise. Best for UI content: text, icons, charts. |
+| Atkinson | `"photo"` or `"atkinson"` | Error diffusion (6/8 distribution). Good for photographs with moderate detail. |
+| Floyd-Steinberg | `"floyd-steinberg"` | Error diffusion with blue noise jitter. Smooth gradients, good general-purpose. |
+| Jarvis-Judice-Ninke | `"jarvis-judice-ninke"` | Wide 12-neighbor kernel. Least oscillation on sparse chromatic palettes. |
+| Sierra | `"sierra"` | 10-neighbor kernel. Good balance of quality and speed. |
+| Sierra Two-Row | `"sierra-two-row"` | 7-neighbor kernel. Lighter weight than full Sierra. |
+| Sierra Lite | `"sierra-lite"` | 3-neighbor kernel. Fastest error diffusion. |
+
+For most screens, the default `"graphics"` works well. Use `"photo"` or `"floyd-steinberg"` for photographic content. For sparse chromatic palettes (e.g. black/white/red/yellow), try `"jarvis-judice-ninke"` or `"sierra"` to reduce oscillation artifacts.
 
 ## Default Screen
 
@@ -255,134 +275,61 @@ devices:
 default_screen: default
 ```
 
-## Embedded Assets
+## Panels Section
 
-Byonk includes default screens, fonts, and configuration embedded in the binary. This enables zero-config operation:
-
-```bash
-# Just run it - embedded defaults work immediately
-byonk serve
-```
-
-To see what's embedded:
-
-```bash
-byonk init --list
-```
-
-### Customization Modes
-
-**1. Zero-config (embedded only):**
-```bash
-byonk serve
-# Uses embedded screens, fonts, and config
-```
-
-**2. Full customization (env vars + volume mounts):**
-```bash
-export SCREENS_DIR=/data/screens
-export FONTS_DIR=/data/fonts
-export CONFIG_FILE=/data/config.yaml
-byonk serve
-# Empty paths are auto-seeded with embedded defaults
-# Then uses external files (with embedded fallback)
-```
-
-**3. Extract for editing:**
-```bash
-byonk init --all
-# Extracts embedded assets to ./screens/, ./fonts/, ./config.yaml
-```
-
-### Init Command
-
-The `byonk init` command extracts embedded assets to the filesystem:
-
-```bash
-# List embedded assets
-byonk init --list
-
-# Extract everything
-byonk init --all
-
-# Extract specific categories
-byonk init --screens
-byonk init --fonts
-byonk init --config
-
-# Force overwrite existing files
-byonk init --all --force
-
-# Extract to custom locations (via env vars)
-SCREENS_DIR=/my/screens byonk init --screens
-```
-
-### Auto-Seeding
-
-When you set an environment variable pointing to an empty or missing directory, Byonk automatically seeds it with embedded assets on startup:
-
-```bash
-# This creates /data/screens with embedded screens on first run
-SCREENS_DIR=/data/screens byonk serve
-```
-
-### Merge Behavior
-
-External files take precedence over embedded assets:
-
-1. If external file exists → use it
-2. If external file is missing → fall back to embedded
-
-This lets you customize individual screens while keeping embedded defaults for others.
-
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SCREENS_DIR` | *(embedded)* | Directory for Lua scripts and SVG templates |
-| `FONTS_DIR` | *(embedded)* | Directory for font files |
-| `CONFIG_FILE` | *(embedded)* | Path to config.yaml |
-| `BIND_ADDR` | `0.0.0.0:3000` | Server listen address |
-
-When a path env var is not set, embedded assets are used exclusively (no filesystem access).
-
-## File Locations
-
-| File | Location | Hot Reload |
-|------|----------|------------|
-| Configuration | `$CONFIG_FILE` or embedded | No (restart required) |
-| Lua scripts | `$SCREENS_DIR/*.lua` or embedded | Yes |
-| SVG templates | `$SCREENS_DIR/*.svg` or embedded | Yes |
-| Fonts | `$FONTS_DIR/` or embedded | No (restart required) |
-
-## Docker Usage
-
-For Docker, mount volumes and set env vars to enable customization:
+Panel profiles define the physical characteristics and measured colors of your e-ink displays. They are used for accurate dithering — the ditherer models what the panel *really* displays, producing better output.
 
 ```yaml
-services:
-  byonk:
-    image: ghcr.io/oetiker/byonk
-    ports:
-      - "3000:3000"
-    environment:
-      - SCREENS_DIR=/data/screens
-      - FONTS_DIR=/data/fonts
-      - CONFIG_FILE=/data/config.yaml
-    volumes:
-      - ./data:/data  # Empty on first run = auto-seeded
+panels:
+  trmnl_og_4grey:
+    name: "TRMNL OG (4-grey)"
+    match: "trmnl_og_4grey"
+    width: 800
+    height: 480
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#787878,#B8B8B0,#D8D8C8"
+
+  trmnl_og_4clr:
+    name: "TRMNL OG (4-color)"
+    match: "trmnl_og_4clr"
+    width: 800
+    height: 480
+    colors: "#000000,#FFFFFF,#FF0000,#FFFF00"
+    colors_actual: "#303030,#D0D0C8,#C04040,#D0D020"
 ```
 
-Or run without volumes for pure embedded mode:
+### Panel Properties
+
+| Property | Required | Description |
+|----------|----------|-------------|
+| `name` | Yes | Human-readable display name |
+| `match` | No | Exact string match against firmware `Board` header for auto-detection |
+| `width` | No | Display width in pixels |
+| `height` | No | Display height in pixels |
+| `colors` | Yes | Official palette colors (comma-separated hex) |
+| `colors_actual` | No | Measured/actual colors the panel really displays |
+
+### Panel Assignment
+
+Panels are assigned to devices in three ways (highest priority first):
+
+1. **Device config `panel`** — explicit assignment in the `devices` section
+2. **Board header auto-detection** — firmware sends a `Board` header, matched against panel `match` patterns
+3. **None** — firmware palette header or system defaults
 
 ```yaml
-services:
-  byonk:
-    image: ghcr.io/oetiker/byonk
-    ports:
-      - "3000:3000"
-    # No volumes = uses embedded assets only
+devices:
+  "ABCDE-FGHJK":
+    screen: transit
+    panel: trmnl_og_4grey  # explicit panel assignment
 ```
+
+When a panel has `colors_actual`, the ditherer uses these measured values to model what the display really shows. Use [dev mode](dev-mode.md) to calibrate and find the right measured colors for your panel.
+
+## Customization & File Locations
+
+See [Installation](installation.md) for embedded assets, environment variables,
+the `byonk init` command, Docker volume mounts, and file locations.
 
 ## Next Steps
 

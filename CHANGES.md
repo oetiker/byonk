@@ -7,12 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### New
+
+- **Dither tuning in config and Lua**: `error_clamp`, `noise_scale`, and `chroma_clamp` can now be set per-device in `config.yaml` or returned from Lua scripts. Values found during dev mode calibration can be committed to config for production use. Priority chain: dev UI > script > device config > algorithm defaults.
+
 ### Fixed
 
 - **Dither color bleed through exact-match pixels**: Pixels that exactly match a palette color (text, lines, borders) now always absorb accumulated error, preventing dithering artifacts from bleeding across hard boundaries.
 
 ### Changed
 
+- **Documentation cleanup**: Removed duplicated sections across configuration, device-mapping, and dev-mode docs. Added panels section, dither algorithms reference, dither tuning documentation, and display calibration guide.
 - **Photo error clamp lowered to 0.08**: Reduced from 0.3 to 0.08 to suppress self-reinforcing oscillation in blue gradients on sparse chromatic palettes.
 - **Dev mode UI cleanup**: Removed redundant controls (device model selector, width/height inputs, colors text input, render button, auto-refresh toggle). Dimensions and colors now derive from panel profile or defaults. All changes auto-refresh immediately. Added always-visible console below preview for render time and errors. Added dither algorithm dropdown with all available algorithms. Selecting a device entry shows an info banner and auto-selects the device's panel profile and dither setting. Time input defaults to empty (uses live current time). Render options group moved directly after color swatches.
 

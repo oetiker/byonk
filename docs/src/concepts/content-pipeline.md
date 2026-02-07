@@ -213,12 +213,21 @@ E-ink displays support a limited color palette (typically 4 grey levels, but als
 
 Byonk uses the [eink-dither](https://github.com/oetiker/byonk/tree/main/crates/eink-dither) engine which performs color matching in the perceptually uniform **Oklab** color space and processes pixels in **gamma-correct linear RGB**. This produces more accurate color reproduction than naive RGB-space dithering.
 
-### Rendering Intents
+### Dither Algorithms
 
-Byonk supports two dithering modes, selectable per-device or per-script via the `dither` option:
+Byonk supports 7 dithering algorithms, selectable per-device or per-script via the `dither` option:
 
-- **`graphics`** (default) — Blue noise ordered dithering. Optimized for UI content: text, icons, charts, and flat-color designs. Produces clean, artifact-free output with sharp edges.
-- **`photo`** — Atkinson error diffusion with saturation and contrast boost. Optimized for photographic content: produces smooth gradients and preserves detail in images.
+| Algorithm | Value | Best for |
+|-----------|-------|----------|
+| Blue noise (default) | `"graphics"` | UI content: text, icons, charts |
+| Atkinson | `"photo"` or `"atkinson"` | Photographs with moderate detail |
+| Floyd-Steinberg | `"floyd-steinberg"` | General-purpose, smooth gradients |
+| Jarvis-Judice-Ninke | `"jarvis-judice-ninke"` | Sparse chromatic palettes (least oscillation) |
+| Sierra | `"sierra"` | Good quality/speed balance |
+| Sierra Two-Row | `"sierra-two-row"` | Lighter weight error diffusion |
+| Sierra Lite | `"sierra-lite"` | Fastest error diffusion |
+
+All error diffusion algorithms use blue noise jitter to break "worm" artifacts. Color matching is performed in perceptually uniform **Oklab** space with gamma-correct linear RGB processing.
 
 Set the dither mode per-device in `config.yaml`:
 
@@ -239,7 +248,21 @@ return {
 }
 ```
 
-The priority chain is: **script `dither`** > **device config `dither`** > **default (`graphics`)**.
+The priority chain is: **dev UI override** > **script `dither`** > **device config `dither`** > **default (`graphics`)**.
+
+### Dither Tuning
+
+Fine-tune dithering behavior with three parameters, settable per-device in `config.yaml` or per-script in the Lua return table:
+
+| Parameter | Description | Typical range |
+|-----------|-------------|---------------|
+| `error_clamp` | Limits error diffusion amplitude. Lower values reduce oscillation. | 0.05 – 0.5 |
+| `noise_scale` | Blue noise jitter scale. Higher values break worm artifacts more aggressively. | 0.3 – 1.0 |
+| `chroma_clamp` | Limits chromatic error propagation. Prevents color bleeding. | 0.5 – 5.0 |
+
+Use [dev mode](../guide/dev-mode.md) to find optimal values interactively, then commit them to `config.yaml` or your Lua script for production use.
+
+Priority chain: **dev UI override** > **script return** > **device config** > **algorithm defaults**.
 
 ### Output Format
 

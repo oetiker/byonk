@@ -8,7 +8,8 @@
 use crate::color::Srgb;
 use crate::dither::{
     Atkinson, BlueNoiseDither, Dither, DitherAlgorithm, DitherOptions, FloydSteinberg,
-    FloydSteinbergNoise, JarvisJudiceNinke, Sierra, SierraLite, SierraTwoRow, SimplexDither,
+    FloydSteinbergNoise, JarvisJudiceNinke, JarvisJudiceNinkeNoise, Sierra, SierraLite,
+    SierraLiteNoise, SierraNoise, SierraTwoRow, SierraTwoRowNoise, SimplexDither,
 };
 use crate::output::{DitheredImage, RenderingIntent};
 use crate::palette::Palette;
@@ -85,13 +86,13 @@ impl EinkDitherer {
             RenderingIntent::Photo => PreprocessOptions::photo(),
             RenderingIntent::Graphics => PreprocessOptions::graphics(),
         };
-        // Photo intent: lower error_clamp from default 0.5 to 0.3 to reduce
-        // oscillation artifacts on sparse chromatic palettes. With clamp=0.5,
-        // pixel+error can range [-0.5, 1.5]; at 0.3 it's [-0.3, 1.3], which
-        // prevents high-amplitude overshoot in Floyd-Steinberg and other
-        // concentrated kernels.
+        // Photo intent: lower error_clamp from default 0.5 to 0.08 to reduce
+        // oscillation artifacts on sparse chromatic palettes. At 0.08 the
+        // pixel+error range is [-0.08, 1.08] — tight enough to suppress
+        // self-reinforcing oscillation in blue gradients while still allowing
+        // smooth dithering.
         let dither_opts = match intent {
-            RenderingIntent::Photo => DitherOptions::new().error_clamp(0.3),
+            RenderingIntent::Photo => DitherOptions::new().error_clamp(0.08),
             RenderingIntent::Graphics => DitherOptions::new(),
         };
         Self {
@@ -212,6 +213,28 @@ impl EinkDitherer {
     pub fn preserve_exact_matches(mut self, enabled: bool) -> Self {
         self.dither_opts = self.dither_opts.preserve_exact_matches(enabled);
         self.preprocess = self.preprocess.preserve_exact_matches(enabled);
+        self
+    }
+
+    /// Set blue noise jitter scale for Floyd-Steinberg Noise algorithm.
+    ///
+    /// # Arguments
+    ///
+    /// * `scale` - Jitter scale (0.0 = no jitter, 2.0 = default, 4.0 = aggressive)
+    #[inline]
+    pub fn noise_scale(mut self, scale: f32) -> Self {
+        self.dither_opts = self.dither_opts.noise_scale(scale);
+        self
+    }
+
+    /// Set whether exact-match pixels absorb accumulated error.
+    ///
+    /// # Arguments
+    ///
+    /// * `absorb` - When true, exact matches discard error; when false, error passes through
+    #[inline]
+    pub fn exact_absorb_error(mut self, absorb: bool) -> Self {
+        self.dither_opts = self.dither_opts.exact_absorb_error(absorb);
         self
     }
 
@@ -368,6 +391,46 @@ impl EinkDitherer {
             DitherAlgorithm::SierraLite => {
                 let photo_palette = self.palette.for_error_diffusion();
                 SierraLite.dither(
+                    &result.pixels,
+                    result.width,
+                    result.height,
+                    &photo_palette,
+                    &self.dither_opts,
+                )
+            }
+            DitherAlgorithm::JarvisJudiceNinkeNoise => {
+                let photo_palette = self.palette.for_error_diffusion();
+                JarvisJudiceNinkeNoise.dither(
+                    &result.pixels,
+                    result.width,
+                    result.height,
+                    &photo_palette,
+                    &self.dither_opts,
+                )
+            }
+            DitherAlgorithm::SierraNoise => {
+                let photo_palette = self.palette.for_error_diffusion();
+                SierraNoise.dither(
+                    &result.pixels,
+                    result.width,
+                    result.height,
+                    &photo_palette,
+                    &self.dither_opts,
+                )
+            }
+            DitherAlgorithm::SierraTwoRowNoise => {
+                let photo_palette = self.palette.for_error_diffusion();
+                SierraTwoRowNoise.dither(
+                    &result.pixels,
+                    result.width,
+                    result.height,
+                    &photo_palette,
+                    &self.dither_opts,
+                )
+            }
+            DitherAlgorithm::SierraLiteNoise => {
+                let photo_palette = self.palette.for_error_diffusion();
+                SierraLiteNoise.dither(
                     &result.pixels,
                     result.width,
                     result.height,

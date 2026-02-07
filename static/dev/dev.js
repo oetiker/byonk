@@ -1,5 +1,18 @@
 // Byonk Dev Mode JavaScript
 
+// Per-algorithm default values for noise_scale and error_clamp.
+// When the user switches dither algorithm, these defaults are applied unless
+// the user has saved per-algorithm overrides in localStorage.
+const DITHER_DEFAULTS = {
+    '':                    { noiseScale: '0',   errorClamp: '0.08' }, // Auto (Atkinson)
+    'atkinson':            { noiseScale: '0',   errorClamp: '0.08' },
+    'floyd-steinberg':     { noiseScale: '5.0', errorClamp: '0.08' },
+    'jarvis-judice-ninke': { noiseScale: '5.0', errorClamp: '0.10' },
+    'sierra':              { noiseScale: '5.0', errorClamp: '0.10' },
+    'sierra-two-row':      { noiseScale: '4.0', errorClamp: '0.08' },
+    'sierra-lite':         { noiseScale: '2.0', errorClamp: '0.08' },
+};
+
 const state = {
     screens: [],
     devices: [],
@@ -16,6 +29,9 @@ const state = {
     // Per-device color overrides from color tuning popup.
     // Map of deviceKey → colors_actual string.  Persisted in localStorage.
     colorOverrides: {},
+    // Per-algorithm dither tuning overrides.
+    // Map of algorithm name → { noiseScale, errorClamp }.
+    ditherTuningOverrides: {},
 };
 
 // DOM elements
@@ -40,6 +56,11 @@ const elements = {
     useActual: document.getElementById('use-actual'),
     useActualLabel: document.getElementById('use-actual-label'),
     preserveExact: document.getElementById('preserve-exact'),
+    serpentine: document.getElementById('serpentine'),
+    exactAbsorbError: document.getElementById('exact-absorb-error'),
+    errorClamp: document.getElementById('error-clamp'),
+    chromaClamp: document.getElementById('chroma-clamp'),
+    noiseScale: document.getElementById('noise-scale'),
     consoleOutput: document.getElementById('console-output'),
     colorPopup: document.getElementById('color-popup'),
     popupClose: document.getElementById('color-popup-close'),
@@ -262,8 +283,33 @@ function setupEventListeners() {
         render();
     });
 
-    // Dither dropdown
+    // Dither dropdown — apply per-algorithm defaults or saved overrides
     elements.ditherSelect.addEventListener('change', () => {
+        applyDitherDefaults();
+        saveState();
+        render();
+    });
+
+    // Dither tunables
+    elements.serpentine.addEventListener('change', () => {
+        saveState();
+        render();
+    });
+    elements.exactAbsorbError.addEventListener('change', () => {
+        saveState();
+        render();
+    });
+    elements.errorClamp.addEventListener('change', () => {
+        saveDitherTuningOverride();
+        saveState();
+        render();
+    });
+    elements.chromaClamp.addEventListener('change', () => {
+        saveState();
+        render();
+    });
+    elements.noiseScale.addEventListener('change', () => {
+        saveDitherTuningOverride();
         saveState();
         render();
     });
@@ -277,6 +323,24 @@ function setupEventListeners() {
             render();
         }, 500);
     });
+}
+
+// Apply per-algorithm defaults (or saved overrides) when dither algorithm changes
+function applyDitherDefaults() {
+    const algo = elements.ditherSelect.value;
+    const override = state.ditherTuningOverrides[algo];
+    const defaults = DITHER_DEFAULTS[algo] || DITHER_DEFAULTS[''];
+    elements.noiseScale.value = override?.noiseScale ?? defaults.noiseScale;
+    elements.errorClamp.value = override?.errorClamp ?? defaults.errorClamp;
+}
+
+// Save current noise_scale and error_clamp as per-algorithm override
+function saveDitherTuningOverride() {
+    const algo = elements.ditherSelect.value;
+    state.ditherTuningOverrides[algo] = {
+        noiseScale: elements.noiseScale.value,
+        errorClamp: elements.errorClamp.value,
+    };
 }
 
 // Connect to Server-Sent Events for file changes
@@ -451,6 +515,26 @@ async function render() {
             queryParams.set('dither', elements.ditherSelect.value);
         }
 
+        // Dither tunables
+        if (!elements.serpentine.checked) {
+            queryParams.set('serpentine', 'false');
+        }
+        if (elements.exactAbsorbError.checked) {
+            queryParams.set('exact_absorb_error', 'true');
+        }
+        const errorClamp = elements.errorClamp.value;
+        if (errorClamp !== '' && errorClamp !== '0.08') {
+            queryParams.set('error_clamp', errorClamp);
+        }
+        const chromaClamp = elements.chromaClamp.value;
+        if (chromaClamp !== '') {
+            queryParams.set('chroma_clamp', chromaClamp);
+        }
+        const noiseScale = elements.noiseScale.value;
+        if (noiseScale !== '' && noiseScale !== '5') {
+            queryParams.set('noise_scale', noiseScale);
+        }
+
         // Add panel if selected (for measured color preview)
         if (elements.panelSelect.value) {
             queryParams.set('panel', elements.panelSelect.value);
@@ -542,7 +626,13 @@ function saveState() {
         useActual: elements.useActual.checked,
         preserveExact: elements.preserveExact.checked,
         dither: elements.ditherSelect.value,
+        serpentine: elements.serpentine.checked,
+        exactAbsorbError: elements.exactAbsorbError.checked,
+        errorClamp: elements.errorClamp.value,
+        chromaClamp: elements.chromaClamp.value,
+        noiseScale: elements.noiseScale.value,
         colorOverrides: state.colorOverrides,
+        ditherTuningOverrides: state.ditherTuningOverrides,
     };
     localStorage.setItem('byonk-dev-state', JSON.stringify(savedState));
 }
@@ -588,8 +678,26 @@ function loadSavedState() {
             if (data.dither) {
                 elements.ditherSelect.value = data.dither;
             }
+            if (typeof data.serpentine === 'boolean') {
+                elements.serpentine.checked = data.serpentine;
+            }
+            if (typeof data.exactAbsorbError === 'boolean') {
+                elements.exactAbsorbError.checked = data.exactAbsorbError;
+            }
+            if (data.errorClamp) {
+                elements.errorClamp.value = data.errorClamp;
+            }
+            if (typeof data.chromaClamp === 'string') {
+                elements.chromaClamp.value = data.chromaClamp;
+            }
+            if (data.noiseScale) {
+                elements.noiseScale.value = data.noiseScale;
+            }
             if (data.colorOverrides && typeof data.colorOverrides === 'object') {
                 state.colorOverrides = data.colorOverrides;
+            }
+            if (data.ditherTuningOverrides && typeof data.ditherTuningOverrides === 'object') {
+                state.ditherTuningOverrides = data.ditherTuningOverrides;
             }
 
             // Show device info banner if a device is selected

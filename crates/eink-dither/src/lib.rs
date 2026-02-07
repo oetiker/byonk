@@ -226,7 +226,8 @@ pub use api::{DitherError, EinkDitherer};
 pub use color::{LinearRgb, Oklab, Srgb};
 pub use dither::{
     Atkinson, BlueNoiseDither, Dither, DitherAlgorithm, DitherOptions, FloydSteinberg,
-    FloydSteinbergNoise, JarvisJudiceNinke, Sierra, SierraLite, SierraTwoRow, SimplexDither,
+    FloydSteinbergNoise, JarvisJudiceNinke, JarvisJudiceNinkeNoise, Sierra, SierraLite,
+    SierraLiteNoise, SierraNoise, SierraTwoRow, SierraTwoRowNoise, SimplexDither,
 };
 pub use output::{DitheredImage, RenderingIntent};
 pub use palette::{DistanceMetric, Palette, PaletteError, ParseColorError};

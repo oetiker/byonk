@@ -35,6 +35,7 @@ mod floyd_steinberg;
 mod floyd_steinberg_noise;
 mod jjn;
 mod kernel;
+mod kernel_noise;
 mod options;
 mod sierra;
 mod simplex;
@@ -45,6 +46,7 @@ pub use floyd_steinberg::FloydSteinberg;
 pub use floyd_steinberg_noise::FloydSteinbergNoise;
 pub use jjn::JarvisJudiceNinke;
 pub use kernel::*;
+pub use kernel_noise::*;
 pub use options::DitherOptions;
 pub use sierra::{Sierra, SierraLite, SierraTwoRow};
 pub use simplex::SimplexDither;
@@ -136,6 +138,30 @@ pub enum DitherAlgorithm {
     /// Minimal 2-row kernel with peak weight 2/4 = 50%. Fastest Sierra
     /// variant, similar characteristics to Floyd-Steinberg.
     SierraLite,
+
+    /// Jarvis-Judice-Ninke with blue noise kernel weight jitter.
+    ///
+    /// Varies the error diffusion direction per pixel using blue noise
+    /// to break "worm" artifacts while maintaining 100% error propagation.
+    JarvisJudiceNinkeNoise,
+
+    /// Sierra (full) with blue noise kernel weight jitter.
+    ///
+    /// Varies the error diffusion direction per pixel using blue noise
+    /// to break "worm" artifacts while maintaining 100% error propagation.
+    SierraNoise,
+
+    /// Sierra Two-Row with blue noise kernel weight jitter.
+    ///
+    /// Varies the error diffusion direction per pixel using blue noise
+    /// to break "worm" artifacts while maintaining 100% error propagation.
+    SierraTwoRowNoise,
+
+    /// Sierra Lite with blue noise kernel weight jitter.
+    ///
+    /// Varies the error diffusion direction per pixel using blue noise
+    /// to break "worm" artifacts while maintaining 100% error propagation.
+    SierraLiteNoise,
 }
 
 use crate::color::{LinearRgb, Oklab, Srgb};
@@ -372,22 +398,28 @@ pub(crate) fn dither_with_kernel(
         for x in x_range {
             let idx = y * width + x;
 
-            // Exact palette match: output exact color but let error flow through.
-            // This keeps text/UI crisp while preventing "wall" artifacts where
-            // exact-match bands block error diffusion in smooth gradients.
+            // Exact palette match handling.
             if let Some(palette_idx) = exact_matches[idx] {
                 output[idx] = palette_idx;
+                if options.exact_absorb_error {
+                    // Absorb: discard accumulated error, preventing color bleed
+                    // across hard boundaries like text, UI lines, and borders.
+                    continue;
+                }
+                // Pass-through: compute and diffuse error normally so gradient
+                // continuity is maintained across exact-match pixels.
                 let accumulated = error_buf.get_accumulated(x);
+                let pixel = LinearRgb::new(
+                    clamp_channel(image[idx].r + accumulated[0], options.error_clamp),
+                    clamp_channel(image[idx].g + accumulated[1], options.error_clamp),
+                    clamp_channel(image[idx].b + accumulated[2], options.error_clamp),
+                );
                 let nearest_linear = palette.actual_linear(palette_idx as usize);
                 let error = [
-                    clamp_channel(image[idx].r + accumulated[0], options.error_clamp)
-                        - nearest_linear.r,
-                    clamp_channel(image[idx].g + accumulated[1], options.error_clamp)
-                        - nearest_linear.g,
-                    clamp_channel(image[idx].b + accumulated[2], options.error_clamp)
-                        - nearest_linear.b,
+                    pixel.r - nearest_linear.r,
+                    pixel.g - nearest_linear.g,
+                    pixel.b - nearest_linear.b,
                 ];
-
                 let divisor = kernel.divisor as f32;
                 for &(dx, dy, weight) in kernel.entries {
                     let effective_dx = if reverse { -dx } else { dx };
@@ -489,6 +521,195 @@ pub(crate) fn dither_with_kernel(
         }
 
         // Advance error buffer after processing row
+        error_buf.advance_row();
+    }
+
+    output
+}
+
+/// Core error diffusion algorithm with blue noise jitter, parameterized by kernel.
+///
+/// Like [`dither_with_kernel`], but shifts weight between the kernel's `(1,0)` ("right")
+/// and `(0,1)` ("below") entries per pixel using a blue noise value. This breaks
+/// directional "worm" artifacts while preserving total error propagation.
+///
+/// The jitter formula:
+/// ```text
+/// alpha = (BLUE_NOISE_64[y%64][x%64] - 128) / 256    // -0.5..+0.5
+/// shift = (alpha * noise_scale).clamp(-base_below, base_right)
+/// w_right = base_right - shift
+/// w_below = base_below + shift
+/// ```
+/// All other kernel entries remain unchanged. Total propagation is preserved.
+pub(crate) fn dither_with_kernel_noise(
+    image: &[LinearRgb],
+    width: usize,
+    height: usize,
+    palette: &Palette,
+    kernel: &Kernel,
+    options: &DitherOptions,
+) -> Vec<u8> {
+    use blue_noise_matrix::BLUE_NOISE_64;
+
+    let mut output = vec![0u8; width * height];
+
+    // Pre-detect exact matches for entire image
+    let exact_matches: Vec<Option<u8>> = if options.preserve_exact_matches {
+        image
+            .iter()
+            .map(|&pixel| find_exact_match(pixel, palette))
+            .collect()
+    } else {
+        vec![None; width * height]
+    };
+
+    let threshold_sq = options.chroma_clamp * options.chroma_clamp;
+
+    // Find the indices of the "right" (dx=1, dy=0) and "below" (dx=0, dy=1) entries
+    // in the kernel. These are the two entries whose weights get jittered.
+    let right_idx = kernel
+        .entries
+        .iter()
+        .position(|&(dx, dy, _)| dx == 1 && dy == 0);
+    let below_idx = kernel
+        .entries
+        .iter()
+        .position(|&(dx, dy, _)| dx == 0 && dy == 1);
+
+    let base_right = right_idx.map(|i| kernel.entries[i].2 as f32).unwrap_or(0.0);
+    let base_below = below_idx.map(|i| kernel.entries[i].2 as f32).unwrap_or(0.0);
+
+    // Create error buffer with depth = max_dy + 1
+    let mut error_buf = ErrorBuffer::new(width, kernel.max_dy + 1);
+
+    for y in 0..height {
+        let reverse = options.serpentine && y % 2 == 1;
+
+        let x_range: Box<dyn Iterator<Item = usize>> = if reverse {
+            Box::new((0..width).rev())
+        } else {
+            Box::new(0..width)
+        };
+
+        for x in x_range {
+            let idx = y * width + x;
+
+            // Blue noise jitter for this pixel
+            let noise = BLUE_NOISE_64[y % 64][x % 64];
+            let alpha = (noise as f32 - 128.0) / 256.0; // -0.5..+0.5
+            let shift = (alpha * options.noise_scale).clamp(-base_below, base_right);
+            let w_right = base_right - shift;
+            let w_below = base_below + shift;
+
+            // Exact palette match handling
+            if let Some(palette_idx) = exact_matches[idx] {
+                output[idx] = palette_idx;
+                if options.exact_absorb_error {
+                    continue;
+                }
+                let accumulated = error_buf.get_accumulated(x);
+                let pixel = LinearRgb::new(
+                    clamp_channel(image[idx].r + accumulated[0], options.error_clamp),
+                    clamp_channel(image[idx].g + accumulated[1], options.error_clamp),
+                    clamp_channel(image[idx].b + accumulated[2], options.error_clamp),
+                );
+                let nearest_linear = palette.actual_linear(palette_idx as usize);
+                let error = [
+                    pixel.r - nearest_linear.r,
+                    pixel.g - nearest_linear.g,
+                    pixel.b - nearest_linear.b,
+                ];
+                let divisor = kernel.divisor as f32;
+                for (entry_i, &(dx, dy, weight)) in kernel.entries.iter().enumerate() {
+                    let effective_dx = if reverse { -dx } else { dx };
+                    let nx = x as i32 + effective_dx;
+                    if nx >= 0 && (nx as usize) < width {
+                        let ny = y + dy as usize;
+                        if ny < height {
+                            let w = if Some(entry_i) == right_idx {
+                                w_right
+                            } else if Some(entry_i) == below_idx {
+                                w_below
+                            } else {
+                                weight as f32
+                            };
+                            let scaled_error = [
+                                error[0] * w / divisor,
+                                error[1] * w / divisor,
+                                error[2] * w / divisor,
+                            ];
+                            error_buf.add_error(nx as usize, dy as usize, scaled_error);
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Add accumulated error to input pixel
+            let accumulated = error_buf.get_accumulated(x);
+            let pixel = LinearRgb::new(
+                clamp_channel(image[idx].r + accumulated[0], options.error_clamp),
+                clamp_channel(image[idx].g + accumulated[1], options.error_clamp),
+                clamp_channel(image[idx].b + accumulated[2], options.error_clamp),
+            );
+
+            // Chroma of original pixel (for chromatic damping)
+            let original_oklab = Oklab::from(image[idx]);
+            let original_chroma_sq =
+                original_oklab.a * original_oklab.a + original_oklab.b * original_oklab.b;
+
+            let oklab = Oklab::from(pixel);
+            let (nearest_idx, _dist) = palette.find_nearest(oklab);
+            output[idx] = nearest_idx as u8;
+
+            let nearest_linear = palette.actual_linear(nearest_idx);
+            let error = [
+                pixel.r - nearest_linear.r,
+                pixel.g - nearest_linear.g,
+                pixel.b - nearest_linear.b,
+            ];
+
+            // Chromatic error damping
+            let damped_error = if options.chroma_clamp < f32::INFINITY {
+                let ratio_sq = (original_chroma_sq / threshold_sq).min(1.0);
+                let alpha = ratio_sq * ratio_sq;
+                let err_mean = (error[0] + error[1] + error[2]) * (1.0 / 3.0);
+                [
+                    err_mean + alpha * (error[0] - err_mean),
+                    err_mean + alpha * (error[1] - err_mean),
+                    err_mean + alpha * (error[2] - err_mean),
+                ]
+            } else {
+                error
+            };
+
+            // Diffuse error to neighbors using jittered kernel
+            let divisor = kernel.divisor as f32;
+            for (entry_i, &(dx, dy, weight)) in kernel.entries.iter().enumerate() {
+                let effective_dx = if reverse { -dx } else { dx };
+                let nx = x as i32 + effective_dx;
+
+                if nx >= 0 && (nx as usize) < width {
+                    let ny = y + dy as usize;
+                    if ny < height {
+                        let w = if Some(entry_i) == right_idx {
+                            w_right
+                        } else if Some(entry_i) == below_idx {
+                            w_below
+                        } else {
+                            weight as f32
+                        };
+                        let scaled_error = [
+                            damped_error[0] * w / divisor,
+                            damped_error[1] * w / divisor,
+                            damped_error[2] * w / divisor,
+                        ];
+                        error_buf.add_error(nx as usize, dy as usize, scaled_error);
+                    }
+                }
+            }
+        }
+
         error_buf.advance_row();
     }
 

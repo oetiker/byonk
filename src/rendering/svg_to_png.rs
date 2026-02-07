@@ -3,6 +3,16 @@ use crate::models::DisplaySpec;
 use eink_dither::{
     DitherAlgorithm, EinkDitherer, Palette as EinkPalette, RenderingIntent, Srgb as EinkSrgb,
 };
+
+/// Optional dithering parameter overrides (dev mode tuning).
+#[derive(Debug, Default)]
+pub struct DitherTuning {
+    pub serpentine: Option<bool>,
+    pub error_clamp: Option<f32>,
+    pub chroma_clamp: Option<f32>,
+    pub noise_scale: Option<f32>,
+    pub exact_absorb_error: Option<bool>,
+}
 use resvg::usvg::{self, Transform};
 use std::io::Cursor;
 use std::sync::Arc;
@@ -85,6 +95,7 @@ impl SvgRenderer {
         use_actual: bool,
         dither: Option<&str>,
         preserve_exact: bool,
+        tuning: Option<&DitherTuning>,
     ) -> Result<Vec<u8>, RenderError> {
         let pixmap = self.rasterize_svg(svg_data, spec)?;
 
@@ -98,11 +109,13 @@ impl SvgRenderer {
                 DitherAlgorithm::FloydSteinbergNoise
             }
             Some(s) if s.eq_ignore_ascii_case("jarvis-judice-ninke") => {
-                DitherAlgorithm::JarvisJudiceNinke
+                DitherAlgorithm::JarvisJudiceNinkeNoise
             }
-            Some(s) if s.eq_ignore_ascii_case("sierra") => DitherAlgorithm::Sierra,
-            Some(s) if s.eq_ignore_ascii_case("sierra-two-row") => DitherAlgorithm::SierraTwoRow,
-            Some(s) if s.eq_ignore_ascii_case("sierra-lite") => DitherAlgorithm::SierraLite,
+            Some(s) if s.eq_ignore_ascii_case("sierra") => DitherAlgorithm::SierraNoise,
+            Some(s) if s.eq_ignore_ascii_case("sierra-two-row") => {
+                DitherAlgorithm::SierraTwoRowNoise
+            }
+            Some(s) if s.eq_ignore_ascii_case("sierra-lite") => DitherAlgorithm::SierraLiteNoise,
             _ => DitherAlgorithm::Auto, // Atkinson
         };
         let intent = RenderingIntent::Photo;
@@ -111,9 +124,26 @@ impl SvgRenderer {
         let pixels = rgba_to_eink_srgb(pixmap.data());
 
         // Dither using eink-dither
-        let ditherer = EinkDitherer::new(eink_palette, intent)
+        let mut ditherer = EinkDitherer::new(eink_palette, intent)
             .algorithm(algorithm)
             .preserve_exact_matches(preserve_exact);
+        if let Some(t) = tuning {
+            if let Some(s) = t.serpentine {
+                ditherer = ditherer.serpentine(s);
+            }
+            if let Some(ec) = t.error_clamp {
+                ditherer = ditherer.error_clamp(ec);
+            }
+            if let Some(cc) = t.chroma_clamp {
+                ditherer = ditherer.chroma_clamp(cc);
+            }
+            if let Some(ns) = t.noise_scale {
+                ditherer = ditherer.noise_scale(ns);
+            }
+            if let Some(ae) = t.exact_absorb_error {
+                ditherer = ditherer.exact_absorb_error(ae);
+            }
+        }
         let result = ditherer.dither(&pixels, spec.width as usize, spec.height as usize);
 
         // eink-dither indices are into the deduped palette, which matches output_palette
@@ -465,7 +495,16 @@ mod tests {
         let spec = DisplaySpec::from_dimensions(800, 200).unwrap();
         let palette = vec![(0, 0, 0), (255, 255, 255)];
         let png = renderer
-            .render_to_palette_png(svg.as_bytes(), spec, &palette, None, false, None, true)
+            .render_to_palette_png(
+                svg.as_bytes(),
+                spec,
+                &palette,
+                None,
+                false,
+                None,
+                true,
+                None,
+            )
             .unwrap();
         std::fs::write("/tmp/byonk-bitmap-font-test2.png", &png).unwrap();
         println!(

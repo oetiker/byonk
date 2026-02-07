@@ -7,12 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **Dither color bleed through exact-match pixels**: Pixels that exactly match a palette color (text, lines, borders) now absorb accumulated error instead of passing it through. This prevents dithering artifacts from bleeding across hard boundaries.
+
 ### Changed
 
+- **Photo error clamp lowered to 0.08**: Reduced from 0.3 to 0.08 to suppress self-reinforcing oscillation in blue gradients on sparse chromatic palettes.
 - **Dev mode UI cleanup**: Removed redundant controls (device model selector, width/height inputs, colors text input, render button, auto-refresh toggle). Dimensions and colors now derive from panel profile or defaults. All changes auto-refresh immediately. Added always-visible console below preview for render time and errors. Added dither algorithm dropdown with all available algorithms. Selecting a device entry shows an info banner and auto-selects the device's panel profile and dither setting. Time input defaults to empty (uses live current time). Render options group moved directly after color swatches.
 
 ### New
 
+- **Dev mode dither tunables**: Serpentine scanning toggle, exact absorbs error toggle, error clamp, chroma clamp, and noise scale controls in the Render Options panel for diagnosing dithering artifacts. Exact-match error absorption and noise scale are now configurable in the eink-dither crate.
 - **Panel profiles with measured colors**: Define display panels in `config.yaml` with official and measured (actual) display colors. Dithering uses measured colors to model what the panel really shows, producing more accurate output. Panels auto-detect from firmware `Board` header or can be assigned per-device.
 - **Dev mode panel preview**: Select a panel profile in dev mode to preview with measured colors — see what the physical display actually shows instead of ideal colors. Color swatches show both official and measured palettes.
 - **Dev mode color tuning**: Click any actual color swatch to open an HSL adjustment popup — adjust hue, saturation, and lightness with live preview. Changes immediately affect both dev preview and physical device rendering while the dev server runs. Copy the adjusted `colors_actual` string for pasting into `config.yaml`. Session-only (resets on server restart).
@@ -23,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Terminus TTF font demo screen (`fontdemo-terminus`): showcases all 9 embedded bitmap sizes (12–32px) in regular, bold, italic, and bold-italic styles
 - `fonts` global in Lua API: discover all available font families, styles, weights, and bitmap strike sizes at runtime
 
+- Blue noise kernel weight jitter for JJN and Sierra algorithms: all error diffusion algorithms now use blue noise jitter by default (like Floyd-Steinberg), breaking "worm" artifacts. Per-algorithm noise_scale and error_clamp defaults in dev UI with per-algorithm override persistence.
 - Auto-detect distance metric based on palette content -- chromatic palettes automatically use HyAB+chroma, achromatic palettes use Euclidean
 - Added color science documentation to eink-dither crate (distance metric rationale, pipeline diagram, inline WHY comments at every conversion site)
 - Four additional dithering algorithms selectable via Lua `dither` option or dev mode: `"jarvis-judice-ninke"` (wide 12-neighbor kernel, least oscillation), `"sierra"` (10-neighbor), `"sierra-two-row"` (7-neighbor), `"sierra-lite"` (3-neighbor). JJN and Sierra full are recommended for sparse chromatic palettes where Floyd-Steinberg oscillates.

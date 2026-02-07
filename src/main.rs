@@ -241,7 +241,7 @@ fn run_render_command(
     let is_unregistered = device_context.registration_code.is_some()
         && !config.is_device_registered(mac, device_context.registration_code.as_deref());
 
-    let (svg_content, final_palette, dither) = if is_unregistered {
+    let (svg_content, final_palette, dither, preserve_exact) = if is_unregistered {
         let code = device_context.registration_code.as_deref().unwrap();
 
         // Use registration screen if configured, otherwise default screen, otherwise built-in
@@ -280,29 +280,51 @@ fn run_render_command(
             )
         };
 
-        (svg, cli_palette, None)
+        (svg, cli_palette, None, true)
     } else {
         // Normal render path
         let script_result = content_pipeline
             .run_script_for_device(mac, Some(device_context.clone()))
             .map_err(|e| anyhow::anyhow!("Script error: {e}"))?;
 
-        // Apply color priority chain: script > device config > CLI flag
-        let palette = if let Some(ref script_colors) = script_result.script_colors {
-            byonk::api::display::parse_colors_header(&script_colors.join(","))
-        } else if let Some(ref config_colors) = script_result.device_config_colors {
-            byonk::api::display::parse_colors_header(config_colors)
-        } else {
-            cli_palette
-        };
+        // Resolve device config for palette/dither/panel (single lookup, same as display.rs)
+        let device_config = config.get_device_config(mac).or_else(|| {
+            device_context
+                .registration_code
+                .as_deref()
+                .and_then(|code| config.get_device_config_for_code(code))
+        });
+        let dc_colors = device_config.and_then(|dc| dc.colors.clone());
+        let dc_dither = device_config.and_then(|dc| dc.dither.clone());
+        let dc_panel = device_config.and_then(|dc| dc.panel.clone());
+        let panel = dc_panel.as_deref().and_then(|name| config.get_panel(name));
+        let panel_colors = panel.map(|p| p.colors.clone());
+        let measured = panel
+            .and_then(|p| p.colors_actual.as_deref())
+            .map(byonk::api::display::parse_colors_header);
 
-        let dither = script_result.script_dither.clone();
+        let render_params = byonk::api::display::resolve_render_params(
+            script_result.script_colors.as_deref(),
+            script_result.script_dither.as_deref(),
+            script_result.script_preserve_exact,
+            dc_colors.as_deref(),
+            dc_dither.as_deref(),
+            panel_colors.as_deref(),
+            &cli_palette,
+            measured,
+            None,
+        );
 
         let svg = content_pipeline
             .render_svg_from_script(&script_result, Some(&device_context))
             .map_err(|e| anyhow::anyhow!("Template error: {e}"))?;
 
-        (svg, palette, dither)
+        (
+            svg,
+            render_params.palette,
+            render_params.dither,
+            render_params.preserve_exact,
+        )
     };
 
     // Render to PNG
@@ -314,7 +336,7 @@ fn run_render_command(
             None,
             false,
             dither.as_deref(),
-            true,
+            preserve_exact,
         )
         .map_err(|e| anyhow::anyhow!("Render error: {e}"))?;
 
@@ -601,10 +623,13 @@ async fn run_server() -> anyhow::Result<()> {
 
 /// Run the HTTP server with dev mode (file watching, live reload)
 async fn run_dev_server() -> anyhow::Result<()> {
-    use axum::{routing::get, Router};
+    use axum::{
+        routing::{delete, get, post},
+        Router,
+    };
     use byonk::api::dev::{
-        handle_dev_css, handle_dev_js, handle_dev_page, handle_events, handle_render,
-        handle_resolve_mac, handle_screens, DevState,
+        handle_delete_panel_colors, handle_dev_css, handle_dev_js, handle_dev_page, handle_events,
+        handle_render, handle_resolve_mac, handle_screens, handle_set_panel_colors, DevState,
     };
     use byonk::assets::AssetLoader;
     use byonk::services::FileWatcher;
@@ -662,11 +687,19 @@ async fn run_dev_server() -> anyhow::Result<()> {
         tracing::warn!("File watcher not active - set SCREENS_DIR to enable live reload");
     }
 
-    // Create application state using shared server module
-    let state = server::create_app_state(asset_loader.clone())?;
+    // Create shared color overrides for dev mode color tuning
+    let panel_color_overrides =
+        Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
 
-    // Create dev state
+    // Create application state with shared overrides
     let config = Arc::new(AppConfig::load_from_assets(&asset_loader));
+    let state = server::create_app_state_with_overrides(
+        asset_loader.clone(),
+        config.clone(),
+        panel_color_overrides.clone(),
+    )?;
+
+    // Create dev state sharing the same overrides
     let dev_state = DevState {
         config,
         content_pipeline: state.content_pipeline.clone(),
@@ -674,6 +707,7 @@ async fn run_dev_server() -> anyhow::Result<()> {
         renderer: state.renderer.clone(),
         file_watcher,
         asset_loader,
+        panel_color_overrides,
     };
 
     // Build dev routes as a nested router with DevState
@@ -685,6 +719,8 @@ async fn run_dev_server() -> anyhow::Result<()> {
         .route("/events", get(handle_events))
         .route("/render", get(handle_render))
         .route("/resolve-mac", get(handle_resolve_mac))
+        .route("/panel-colors", post(handle_set_panel_colors))
+        .route("/panel-colors/:panel", delete(handle_delete_panel_colors))
         .with_state(dev_state);
 
     // Build router: start with shared API routes, add dev routes

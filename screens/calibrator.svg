@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
+  <defs>
+    <style>
+      text {
+        {% include "components/hinting.svg" %}
+      }
+    </style>
+    {% for g in data.gradients %}
+    <linearGradient id="{{ g.id }}" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:rgb(255,255,255)"/>
+      <stop offset="100%" style="stop-color:rgb({{ g.r2 }},{{ g.g2 }},{{ g.b2 }})"/>
+    </linearGradient>
+    {% endfor %}
+    <linearGradient id="huesweep" x1="0%" y1="0%" x2="100%" y2="0%">
+      {% for stop in data.hue_stops %}
+      <stop offset="{{ stop.offset }}" style="stop-color:{{ stop.color }}"/>
+      {% endfor %}
+    </linearGradient>
+  </defs>
+
+  <!-- Black background = uniform grid -->
+  <rect width="{{ data.width }}" height="{{ data.height }}" fill="#000000"/>
+
+  <!-- White-to-color gradient bars -->
+  {% for g in data.gradients %}
+  <rect x="{{ data.grid }}" y="{{ g.y }}" width="{{ data.bar_w }}" height="{{ data.bar_h }}" fill="url(#{{ g.id }})"/>
+  <text x="{{ g.label_x }}" y="{{ g.label_y }}" font-family="X11Misc6x" font-size="{{ data.font_size }}" fill="black">{{ g.name }}</text>
+  {% endfor %}
+
+  <!-- Hue sweep bar -->
+  <rect x="{{ data.grid }}" y="{{ data.rainbow_y }}" width="{{ data.bar_w }}" height="{{ data.bar_h }}" fill="url(#huesweep)"/>
+
+  <!-- Photo in right half of gradient area -->
+  <image x="{{ data.img_x }}" y="{{ data.img_y }}" width="{{ data.img_w }}" height="{{ data.img_h }}" href="photo.png" preserveAspectRatio="xMidYMid slice"/>
+
+  <!-- Color patches -->
+  {% for patch in data.patches %}
+  <rect x="{{ patch.x }}" y="{{ data.patch_y }}" width="{{ patch.width }}" height="{{ data.patch_inner }}" fill="{{ patch.color }}"/>
+  <text x="{{ patch.label_x }}" y="{{ data.patch_label_y }}" fill="{{ patch.text_color }}" font-family="X11Misc6x" font-size="{{ data.font_size }}">{{ patch.label }}</text>
+  {% endfor %}
+</svg>

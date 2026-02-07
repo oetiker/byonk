@@ -22,12 +22,8 @@ pub struct ScriptResult {
     pub params: HashMap<String, serde_yaml::Value>,
     /// Optional color palette override from Lua script (hex RGB strings)
     pub script_colors: Option<Vec<String>>,
-    /// Optional color palette from device config (comma-separated hex string)
-    pub device_config_colors: Option<String>,
     /// Optional dither mode from Lua script ("photo" or "graphics")
     pub script_dither: Option<String>,
-    /// Optional dither mode from device config ("photo" or "graphics")
-    pub device_config_dither: Option<String>,
     /// Optional preserve_exact override from Lua script
     pub script_preserve_exact: Option<bool>,
 }
@@ -158,8 +154,6 @@ impl ContentPipeline {
                     &screen_config,
                     &device_config.params,
                     device_ctx,
-                    device_config.colors.clone(),
-                    device_config.dither.clone(),
                 );
             }
             // Device config exists but screen not found — fall through to default
@@ -180,7 +174,7 @@ impl ContentPipeline {
             panel: None,
         });
 
-        self.run_script_for_screen(&screen_config, &dc.params, device_ctx, None, None)
+        self.run_script_for_screen(&screen_config, &dc.params, device_ctx)
     }
 
     /// Run script for a screen by name with custom params (without rendering)
@@ -197,7 +191,7 @@ impl ContentPipeline {
             .resolve_screen(screen_name)
             .ok_or_else(|| ContentError::ScreenNotFound(screen_name.to_string()))?;
 
-        self.run_script_for_screen(&screen, &params, device_ctx, None, None)
+        self.run_script_for_screen(&screen, &params, device_ctx)
     }
 
     /// Run script for a specific screen (without rendering)
@@ -206,8 +200,6 @@ impl ContentPipeline {
         screen: &ScreenConfig,
         params: &HashMap<String, serde_yaml::Value>,
         device_ctx: Option<DeviceContext>,
-        device_config_colors: Option<String>,
-        device_config_dither: Option<String>,
     ) -> Result<ScriptResult, ContentError> {
         // Run the Lua script (no timestamp override for normal operation)
         let lua_result =
@@ -248,9 +240,7 @@ impl ContentPipeline {
             template_path: screen.template.clone(),
             params: params.clone(),
             script_colors: lua_result.colors,
-            device_config_colors,
             script_dither: lua_result.dither,
-            device_config_dither,
             script_preserve_exact: lua_result.preserve_exact,
         })
     }
@@ -567,9 +557,7 @@ impl ContentPipeline {
             template_path: template_path.to_path_buf(),
             params: yaml_params,
             script_colors: lua_result.colors,
-            device_config_colors: None,
             script_dither: lua_result.dither,
-            device_config_dither: None,
             script_preserve_exact: lua_result.preserve_exact,
         })
     }

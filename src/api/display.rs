@@ -6,6 +6,7 @@ use axum::{
 };
 use serde::Serialize;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use utoipa::ToSchema;
 
 use super::headers::HeaderMapExt;
@@ -49,6 +50,73 @@ pub fn colors_to_hex_strings(colors: &[(u8, u8, u8)]) -> Vec<String> {
         .collect()
 }
 
+/// Resolved rendering parameters for the dithering pipeline.
+pub struct RenderParams {
+    pub palette: Vec<(u8, u8, u8)>,
+    pub measured_colors: Option<Vec<(u8, u8, u8)>>,
+    pub dither: Option<String>,
+    pub preserve_exact: bool,
+}
+
+/// Resolve the pre-script palette for device context.
+/// Chain: device_config_colors > panel_colors > fallback_palette
+pub fn resolve_ctx_palette(
+    device_config_colors: Option<&str>,
+    panel_colors: Option<&str>,
+    fallback_palette: &[(u8, u8, u8)],
+) -> Vec<(u8, u8, u8)> {
+    if let Some(cc) = device_config_colors {
+        parse_colors_header(cc)
+    } else if let Some(pc) = panel_colors {
+        parse_colors_header(pc)
+    } else {
+        fallback_palette.to_vec()
+    }
+}
+
+/// Resolve all rendering parameters after script execution.
+///
+/// Palette: script_colors > device_config_colors > panel_colors > fallback
+/// Dither: script_dither > device_config_dither > None
+/// Preserve: script_preserve_exact > override > true
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_render_params(
+    script_colors: Option<&[String]>,
+    script_dither: Option<&str>,
+    script_preserve_exact: Option<bool>,
+    device_config_colors: Option<&str>,
+    device_config_dither: Option<&str>,
+    panel_colors: Option<&str>,
+    fallback_palette: &[(u8, u8, u8)],
+    measured_colors: Option<Vec<(u8, u8, u8)>>,
+    preserve_exact_override: Option<bool>,
+) -> RenderParams {
+    let palette = if let Some(sc) = script_colors {
+        parse_colors_header(&sc.join(","))
+    } else if let Some(cc) = device_config_colors {
+        parse_colors_header(cc)
+    } else if let Some(pc) = panel_colors {
+        parse_colors_header(pc)
+    } else {
+        fallback_palette.to_vec()
+    };
+
+    let dither = script_dither
+        .map(|s| s.to_string())
+        .or_else(|| device_config_dither.map(|s| s.to_string()));
+
+    let preserve_exact = script_preserve_exact
+        .or(preserve_exact_override)
+        .unwrap_or(true);
+
+    RenderParams {
+        palette,
+        measured_colors,
+        dither,
+        preserve_exact,
+    }
+}
+
 /// Get display content for a device
 ///
 /// Returns JSON with an image_url that the device should fetch separately.
@@ -83,6 +151,7 @@ pub async fn handle_display<R: DeviceRegistry>(
     State(_renderer): State<Arc<RenderService>>,
     State(content_pipeline): State<Arc<ContentPipeline>>,
     State(content_cache): State<Arc<ContentCache>>,
+    State(panel_color_overrides): State<Arc<RwLock<std::collections::HashMap<String, String>>>>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     // Extract required headers
@@ -92,6 +161,13 @@ pub async fn handle_display<R: DeviceRegistry>(
     let has_ed25519 = headers.get_str("X-Public-Key").is_some()
         && headers.get_str("X-Signature").is_some()
         && headers.get_str("X-Timestamp").is_some();
+
+    // Ed25519 public key for registration code derivation (if present)
+    let ed25519_public_key: Option<String> = if has_ed25519 {
+        headers.get_str("X-Public-Key").map(|s| s.to_string())
+    } else {
+        None
+    };
 
     if has_ed25519 {
         let public_key_hex = headers.require_str("X-Public-Key")?;
@@ -140,10 +216,18 @@ pub async fn handle_display<R: DeviceRegistry>(
 
     let api_key = ApiKey::new(api_key_str);
 
+    // Derive registration code: Ed25519 public key takes priority over API key.
+    // This ensures the registration code is stable even if the API key changes.
+    let identity_key = if let Some(ref pk) = ed25519_public_key {
+        ApiKey::new(pk)
+    } else {
+        api_key.clone()
+    };
+
     // Check device registration when enabled
-    // Registration uses the API key's derived code OR MAC address to identify devices
+    // Registration uses the identity key's derived code OR MAC address to identify devices
     if config.registration.enabled {
-        let registration_code = api_key.registration_code();
+        let registration_code = identity_key.registration_code();
 
         // Check if device is registered (by MAC address OR by registration code)
         if !config.is_device_registered(device_id_str, Some(&registration_code)) {
@@ -272,6 +356,8 @@ pub async fn handle_display<R: DeviceRegistry>(
 
     tracing::info!(
         device_id = %device_id,
+        registration_code = %identity_key.registration_code(),
+        board = ?headers.get_str("Board"),
         width = width,
         height = height,
         "Display request received"
@@ -291,12 +377,93 @@ pub async fn handle_display<R: DeviceRegistry>(
 
     // Parse color palette from headers (firmware Colors header)
     let header_colors_str = headers.get_str("Colors");
-    // Initial palette: firmware header → system default
     let initial_colors_str = header_colors_str.unwrap_or(DEFAULT_COLORS);
     let initial_palette = parse_colors_header(initial_colors_str);
-    let initial_color_hex = colors_to_hex_strings(&initial_palette);
 
-    // Build device context for script (using initial palette before config/script overrides)
+    // Resolve panel and device config for this device
+    let board_header = headers.get_str("Board").map(|s| s.to_string());
+    let registration_code = identity_key.registration_code();
+
+    let (device_config, device_config_key) =
+        if let Some(dc) = config.get_device_config(device_id_str) {
+            (Some(dc), Some(device_id_str.to_string()))
+        } else if let Some(dc) = config.get_device_config_for_code(&registration_code) {
+            (Some(dc), Some(registration_code.clone()))
+        } else {
+            (None, None)
+        };
+    let device_config_panel = device_config.and_then(|dc| dc.panel.clone());
+    let device_config_colors = device_config.and_then(|dc| dc.colors.clone());
+
+    let (panel, panel_source) = if let Some(ref panel_name) = device_config_panel {
+        if let Some(p) = config.get_panel(panel_name) {
+            (Some(p), Some(format!("device_config:{}", panel_name)))
+        } else {
+            (None, None)
+        }
+    } else if let Some((name, p)) = board_header
+        .as_deref()
+        .and_then(|b| config.find_panel_for_board(b))
+    {
+        (Some(p), Some(format!("board_header:{}", name)))
+    } else {
+        (None, None)
+    };
+
+    // Resolve measured colors: dev override > panel.colors_actual > Measured-Colors header > None
+    // Dev overrides (from color adjustment popup) take highest priority when present.
+    // Config always trumps firmware-reported values.
+    let measured_colors_header = headers.get_str("Measured-Colors").map(|s| s.to_string());
+    let panel_name_for_override = device_config_panel.as_deref();
+    let override_colors = if let Some(pname) = panel_name_for_override {
+        panel_color_overrides.read().await.get(pname).cloned()
+    } else {
+        None
+    };
+    let measured_source;
+    let measured_colors: Option<Vec<(u8, u8, u8)>> = if let Some(ref oc) = override_colors {
+        measured_source = "dev_override";
+        Some(parse_colors_header(oc))
+    } else if let Some(actual) = panel.and_then(|p| p.colors_actual.as_deref()) {
+        measured_source = "panel.colors_actual";
+        Some(parse_colors_header(actual))
+    } else if let Some(ref hdr) = measured_colors_header {
+        measured_source = "Measured-Colors header";
+        Some(parse_colors_header(hdr))
+    } else {
+        measured_source = "none";
+        None
+    };
+
+    // Panel official colors for palette chain
+    let panel_colors_for_chain: Option<String> = panel.map(|p| p.colors.clone());
+
+    tracing::debug!(
+        device_id = device_id_str,
+        registration_code = %registration_code,
+        device_config_key = ?device_config_key,
+        device_config_screen = ?device_config.map(|dc| &dc.screen),
+        panel_source = ?panel_source,
+        panel_colors = ?panel_colors_for_chain,
+        panel_colors_actual = ?panel.and_then(|p| p.colors_actual.as_deref()),
+        board_header = ?board_header,
+        measured_colors_header = ?measured_colors_header,
+        measured_source = measured_source,
+        "Device config and panel resolution"
+    );
+
+    // Pre-script resolved palette for device context:
+    // device_config_colors > panel_colors > firmware header > default
+    // Matches the resolve_palette chain (minus script_colors, unknown until script runs)
+    let device_config_dither = device_config.and_then(|dc| dc.dither.clone());
+    let ctx_palette = resolve_ctx_palette(
+        device_config_colors.as_deref(),
+        panel_colors_for_chain.as_deref(),
+        &initial_palette,
+    );
+    let ctx_color_hex = colors_to_hex_strings(&ctx_palette);
+
+    // Build device context for script (palette matches dithering chain)
     let device_ctx = DeviceContext {
         mac: device.device_id.to_string(),
         battery_voltage: device.battery_voltage,
@@ -305,41 +472,10 @@ pub async fn handle_display<R: DeviceRegistry>(
         firmware_version: Some(device.firmware_version.clone()),
         width: Some(width),
         height: Some(height),
-
-        registration_code: Some(api_key.registration_code()),
-        board: headers.get_str("Board").map(|s| s.to_string()),
-        colors: Some(initial_color_hex),
+        registration_code: Some(registration_code),
+        board: board_header.clone(),
+        colors: Some(ctx_color_hex),
     };
-
-    // Resolve panel for this device:
-    // 1. Explicit panel from device config
-    // 2. Auto-detect from Board header
-    let board_header = headers.get_str("Board").map(|s| s.to_string());
-    let device_config_panel = config
-        .get_device_config(device_id_str)
-        .or_else(|| config.get_device_config_for_code(&api_key.registration_code()))
-        .and_then(|dc| dc.panel.clone());
-
-    let panel = device_config_panel
-        .as_deref()
-        .and_then(|name| config.get_panel(name))
-        .or_else(|| {
-            board_header
-                .as_deref()
-                .and_then(|b| config.find_panel_for_board(b))
-                .map(|(_, p)| p)
-        });
-
-    // Resolve measured colors: Measured-Colors header > panel.colors_actual > None
-    let measured_colors_header = headers.get_str("Measured-Colors").map(|s| s.to_string());
-    let measured_colors: Option<Vec<(u8, u8, u8)>> = measured_colors_header
-        .as_deref()
-        .map(parse_colors_header)
-        .or_else(|| {
-            panel
-                .and_then(|p| p.colors_actual.as_deref())
-                .map(parse_colors_header)
-        });
 
     // Run script, render SVG, and cache the result (PNG rendering happens in /api/image)
     let device_mac = device.device_id.to_string();
@@ -348,50 +484,53 @@ pub async fn handle_display<R: DeviceRegistry>(
     let cache = content_cache.clone();
     let ctx = device_ctx.clone();
     let header_colors_for_chain = header_colors_str.map(|s| s.to_string());
+    let dc_colors = device_config_colors;
+    let dc_dither = device_config_dither;
 
     // Run in spawn_blocking because Lua scripts use blocking HTTP requests
     let (refresh_rate, skip_update, content_hash, error_msg) =
         tokio::task::spawn_blocking(move || {
-            // Helper to resolve the final palette using the priority chain:
-            // script_colors > device_config_colors > firmware header > system default
-            let resolve_palette =
-                |result: &crate::services::content_pipeline::ScriptResult| -> Vec<(u8, u8, u8)> {
-                    if let Some(ref script_colors) = result.script_colors {
-                        // Strongest: Lua script returned colors
-                        let hex = script_colors.join(",");
-                        parse_colors_header(&hex)
-                    } else if let Some(ref config_colors) = result.device_config_colors {
-                        // Next: device config colors
-                        parse_colors_header(config_colors)
-                    } else if let Some(ref hdr) = header_colors_for_chain {
-                        // Next: firmware Colors header
-                        parse_colors_header(hdr)
-                    } else {
-                        // System default
-                        parse_colors_header(DEFAULT_COLORS)
-                    }
-                };
-
-            // Helper to resolve dither mode: script > device config > None (default graphics)
-            let resolve_dither =
-                |result: &crate::services::content_pipeline::ScriptResult| -> Option<String> {
-                    result
-                        .script_dither
-                        .clone()
-                        .or_else(|| result.device_config_dither.clone())
-                };
-
-            // Helper to resolve preserve_exact: script > None (default true)
-            let resolve_preserve_exact =
-                |result: &crate::services::content_pipeline::ScriptResult| -> Option<bool> {
-                    result.script_preserve_exact
-                };
-
             match pipeline.run_script_for_device(&mac, Some(ctx.clone())) {
                 Ok(result) => {
-                    let palette = resolve_palette(&result);
-                    let dither = resolve_dither(&result);
-                    let preserve_exact = resolve_preserve_exact(&result);
+                    let fallback = header_colors_for_chain
+                        .as_deref()
+                        .map(parse_colors_header)
+                        .unwrap_or_else(|| parse_colors_header(DEFAULT_COLORS));
+
+                    tracing::debug!(
+                        device = %mac,
+                        script_colors = ?result.script_colors,
+                        script_dither = ?result.script_dither,
+                        script_preserve_exact = ?result.script_preserve_exact,
+                        dc_colors = ?dc_colors,
+                        dc_dither = ?dc_dither,
+                        panel_colors = ?panel_colors_for_chain,
+                        header_colors = ?header_colors_for_chain,
+                        measured_colors = ?measured_colors.as_ref().map(|mc| colors_to_hex_strings(mc)),
+                        "Resolving render params for device"
+                    );
+
+                    let params = resolve_render_params(
+                        result.script_colors.as_deref(),
+                        result.script_dither.as_deref(),
+                        result.script_preserve_exact,
+                        dc_colors.as_deref(),
+                        dc_dither.as_deref(),
+                        panel_colors_for_chain.as_deref(),
+                        &fallback,
+                        measured_colors.clone(),
+                        None,
+                    );
+
+                    tracing::debug!(
+                        device = %mac,
+                        resolved_palette = ?colors_to_hex_strings(&params.palette),
+                        resolved_dither = ?params.dither,
+                        resolved_preserve_exact = params.preserve_exact,
+                        has_measured = params.measured_colors.is_some(),
+                        "Resolved render params"
+                    );
+
                     if result.skip_update {
                         (result.refresh_rate, true, None, None)
                     } else {
@@ -405,10 +544,10 @@ pub async fn handle_display<R: DeviceRegistry>(
                                     width,
                                     height,
                                 )
-                                .with_colors(Some(palette))
-                                .with_colors_actual(measured_colors.clone())
-                                .with_dither(dither)
-                                .with_preserve_exact(preserve_exact);
+                                .with_colors(Some(params.palette))
+                                .with_colors_actual(params.measured_colors)
+                                .with_dither(params.dither)
+                                .with_preserve_exact(Some(params.preserve_exact));
                                 let hash = cached.content_hash.clone();
                                 cache.store(cached);
                                 (result.refresh_rate, false, Some(hash), None)
@@ -417,13 +556,18 @@ pub async fn handle_display<R: DeviceRegistry>(
                                 // Template rendering failed - cache error SVG
                                 let error_msg = e.to_string();
                                 let error_svg = pipeline.render_error_svg(&error_msg);
+                                let fallback_palette = resolve_ctx_palette(
+                                    dc_colors.as_deref(),
+                                    panel_colors_for_chain.as_deref(),
+                                    &fallback,
+                                );
                                 let cached = CachedContent::new(
                                     error_svg,
                                     "_error".to_string(),
                                     width,
                                     height,
                                 )
-                                .with_colors(Some(palette));
+                                .with_colors(Some(fallback_palette));
                                 let hash = cached.content_hash.clone();
                                 cache.store(cached);
                                 (60, false, Some(hash), Some(error_msg))
@@ -432,11 +576,16 @@ pub async fn handle_display<R: DeviceRegistry>(
                     }
                 }
                 Err(e) => {
-                    // Script error - cache error SVG (use header or default palette)
-                    let fallback_palette = header_colors_for_chain
+                    // Script error - cache error SVG
+                    let fallback = header_colors_for_chain
                         .as_deref()
                         .map(parse_colors_header)
                         .unwrap_or_else(|| parse_colors_header(DEFAULT_COLORS));
+                    let fallback_palette = resolve_ctx_palette(
+                        dc_colors.as_deref(),
+                        panel_colors_for_chain.as_deref(),
+                        &fallback,
+                    );
                     let error_msg = e.to_string();
                     let error_svg = pipeline.render_error_svg(&error_msg);
                     let cached = CachedContent::new(error_svg, "_error".to_string(), width, height)
@@ -545,14 +694,27 @@ pub async fn handle_image<R: DeviceRegistry>(
     // Colors are always stored in cache by the display handler
     let fallback_palette = parse_colors_header(DEFAULT_COLORS);
     let palette = cached.colors.as_deref().unwrap_or(&fallback_palette);
+    let dither = cached.dither.as_deref();
+    let colors_actual = cached.colors_actual.as_deref();
+    let preserve_exact = cached.preserve_exact.unwrap_or(true);
+
+    tracing::debug!(
+        content_hash = %content_hash,
+        palette = ?colors_to_hex_strings(palette),
+        colors_actual = ?colors_actual.map(colors_to_hex_strings),
+        dither = ?dither,
+        preserve_exact = preserve_exact,
+        "Dither parameters for PNG render"
+    );
+
     let png_bytes = content_pipeline.render_png_from_svg(
         &cached.rendered_svg,
         spec,
         palette,
-        cached.colors_actual.as_deref(),
+        colors_actual,
         false, // production always uses official colors
-        cached.dither.as_deref(),
-        cached.preserve_exact.unwrap_or(true),
+        dither,
+        preserve_exact,
     )?;
 
     tracing::info!(size_bytes = png_bytes.len(), "Image rendered and served");

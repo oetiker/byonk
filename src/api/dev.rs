@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
@@ -33,6 +34,7 @@ pub struct DevState {
     pub renderer: Arc<RenderService>,
     pub file_watcher: Arc<FileWatcher>,
     pub asset_loader: Arc<AssetLoader>,
+    pub panel_color_overrides: Arc<RwLock<HashMap<String, String>>>,
 }
 
 /// Query parameters for /dev/render
@@ -65,6 +67,8 @@ pub struct RenderQuery {
     pub use_actual: Option<bool>,
     /// Whether to preserve exact palette matches (default: true)
     pub preserve_exact: Option<bool>,
+    /// Dither algorithm override from dev UI (e.g. "atkinson", "floyd-steinberg")
+    pub dither: Option<String>,
 }
 
 /// Convert serde_yaml params to serde_json values
@@ -108,6 +112,8 @@ pub struct ScreenInfo {
 pub struct DeviceInfo {
     pub id: String,
     pub screen: String,
+    pub panel: Option<String>,
+    pub dither: Option<String>,
 }
 
 /// Panel info for the panels list
@@ -212,6 +218,8 @@ pub async fn handle_screens(State(state): State<DevState>) -> Json<ScreensRespon
         .map(|(id, dev)| DeviceInfo {
             id: id.clone(),
             screen: dev.screen.clone(),
+            panel: dev.panel.clone(),
+            dither: dev.dither.clone(),
         })
         .collect();
 
@@ -301,13 +309,48 @@ pub async fn handle_resolve_mac(
     }
 }
 
+/// Request body for POST /dev/panel-colors
+#[derive(Debug, Deserialize)]
+pub struct PanelColorsRequest {
+    pub panel: String,
+    pub colors_actual: String,
+}
+
+/// Set color overrides for a panel (dev mode color tuning)
+pub async fn handle_set_panel_colors(
+    State(state): State<DevState>,
+    Json(body): Json<PanelColorsRequest>,
+) -> StatusCode {
+    state
+        .panel_color_overrides
+        .write()
+        .await
+        .insert(body.panel, body.colors_actual);
+    StatusCode::OK
+}
+
+/// Remove color overrides for a panel, reverting to config.yaml values
+pub async fn handle_delete_panel_colors(
+    State(state): State<DevState>,
+    axum::extract::Path(panel): axum::extract::Path<String>,
+) -> StatusCode {
+    state.panel_color_overrides.write().await.remove(&panel);
+    StatusCode::OK
+}
+
 /// Render a screen and return PNG
 pub async fn handle_render(
     State(state): State<DevState>,
     Query(query): Query<RenderQuery>,
 ) -> Response {
     // Resolve screen config: MAC takes precedence, then explicit screen
-    let (screen_config, resolved_params, device_config_colors) = if let Some(ref mac) = query.mac {
+    let (
+        screen_config,
+        resolved_params,
+        device_config_colors,
+        device_config_panel,
+        device_config_dither,
+    ) = if let Some(ref mac) = query.mac {
         // Try MAC lookup first, then registration code lookup
         match state
             .config
@@ -344,7 +387,13 @@ pub async fn handle_render(
                 };
                 // Convert device params to JSON
                 let params: HashMap<String, serde_json::Value> = yaml_params_to_json(&dc.params);
-                (sc, Some(params), dc.colors.clone())
+                (
+                    sc,
+                    Some(params),
+                    dc.colors.clone(),
+                    dc.panel.clone(),
+                    dc.dither.clone(),
+                )
             }
             None => {
                 return (
@@ -359,7 +408,7 @@ pub async fn handle_render(
         }
     } else if let Some(ref screen_name) = query.screen {
         if let Some(config) = state.config.screens.get(screen_name) {
-            (config.clone(), None, None)
+            (config.clone(), None, None, None, None)
         } else {
             // Try auto-discovering screen from filesystem
             let script = format!("{}.lua", screen_name);
@@ -372,6 +421,8 @@ pub async fn handle_render(
                         template: PathBuf::from(&template),
                         default_refresh: 900,
                     },
+                    None,
+                    None,
                     None,
                     None,
                 )
@@ -416,7 +467,7 @@ pub async fn handle_render(
     }
 
     // Build initial palette from colors param or model default (acts as "firmware header")
-    // Priority chain: script_colors > device_config_colors > query.colors > model default
+    // Priority chain: script_colors > device_config_colors > panel_colors > query.colors > model default
     let query_palette: Vec<(u8, u8, u8)> = if let Some(ref colors_str) = query.colors {
         crate::api::display::parse_colors_header(colors_str)
     } else if query.model == "x" {
@@ -430,9 +481,19 @@ pub async fn handle_render(
         crate::api::display::parse_colors_header("#000000,#555555,#AAAAAA,#FFFFFF")
     };
 
-    // Apply device config colors override (stronger than query/model default)
+    // Resolve panel: query.panel (UI override) > device_config_panel > None
+    let panel = query
+        .panel
+        .as_deref()
+        .or(device_config_panel.as_deref())
+        .and_then(|name| state.config.get_panel(name));
+    let panel_colors: Option<String> = panel.as_ref().map(|p| p.colors.clone());
+
+    // Apply priority chain: device_config_colors > panel_colors > query/model default
     let default_palette: Vec<(u8, u8, u8)> = if let Some(ref config_colors) = device_config_colors {
         crate::api::display::parse_colors_header(config_colors)
+    } else if let Some(ref pc) = panel_colors {
+        crate::api::display::parse_colors_header(pc)
     } else {
         query_palette.clone()
     };
@@ -511,22 +572,68 @@ pub async fn handle_render(
         }
     };
 
-    // Apply script colors override (strongest in priority chain)
-    let final_palette = if let Some(ref sc) = script_colors {
-        crate::api::display::parse_colors_header(&sc.join(","))
+    // Resolve measured colors: dev override > panel.colors_actual
+    let panel_name_for_override = query.panel.as_deref().or(device_config_panel.as_deref());
+    let override_colors = if let Some(pname) = panel_name_for_override {
+        state.panel_color_overrides.read().await.get(pname).cloned()
     } else {
-        default_palette
+        None
+    };
+    let measured_colors: Option<Vec<(u8, u8, u8)>> = if let Some(ref oc) = override_colors {
+        Some(crate::api::display::parse_colors_header(oc))
+    } else {
+        panel
+            .as_ref()
+            .and_then(|p| p.colors_actual.as_deref())
+            .map(crate::api::display::parse_colors_header)
     };
 
-    // Resolve panel for measured colors (dev mode preview)
-    let panel = query
-        .panel
-        .as_deref()
-        .and_then(|name| state.config.get_panel(name));
+    tracing::debug!(
+        screen = ?query.screen,
+        mac = ?query.mac,
+        script_colors = ?script_colors,
+        script_dither = ?script_dither,
+        script_preserve_exact = ?script_preserve_exact,
+        dc_colors = ?device_config_colors,
+        dc_dither = ?device_config_dither,
+        panel_colors = ?panel_colors,
+        query_colors = ?query.colors,
+        measured_colors = ?measured_colors.as_deref().map(crate::api::display::colors_to_hex_strings),
+        "Resolving dev render params"
+    );
 
-    let measured_colors: Option<Vec<(u8, u8, u8)>> = panel
-        .and_then(|p| p.colors_actual.as_deref())
-        .map(crate::api::display::parse_colors_header);
+    // In dev mode, UI dither overrides everything including script dither
+    let (effective_script_dither, effective_device_dither) = if query.dither.is_some() {
+        // UI explicitly selected a dither — override script and device config
+        (None, query.dither.as_deref())
+    } else {
+        // No UI override — normal priority: script > device config
+        (script_dither.as_deref(), device_config_dither.as_deref())
+    };
+
+    let render_params = crate::api::display::resolve_render_params(
+        script_colors.as_deref(),
+        effective_script_dither,
+        script_preserve_exact,
+        device_config_colors.as_deref(),
+        effective_device_dither,
+        panel_colors.as_deref(),
+        &query_palette,
+        measured_colors.clone(),
+        query.preserve_exact,
+    );
+
+    let final_palette = render_params.palette;
+    let final_dither = render_params.dither;
+    let preserve_exact = render_params.preserve_exact;
+
+    tracing::debug!(
+        resolved_palette = ?crate::api::display::colors_to_hex_strings(&final_palette),
+        resolved_dither = ?final_dither,
+        resolved_preserve_exact = preserve_exact,
+        has_measured = measured_colors.is_some(),
+        "Resolved dev render params"
+    );
 
     // Convert SVG to PNG with palette-aware dithering
     let display_spec = DisplaySpec::from_dimensions(width, height).unwrap_or(DisplaySpec::OG);
@@ -538,18 +645,13 @@ pub async fn handle_render(
         .unwrap_or_else(|| measured_colors.is_some())
         && measured_colors.is_some();
 
-    // Resolve preserve_exact: script > query param > default (true)
-    let preserve_exact = script_preserve_exact
-        .or(query.preserve_exact)
-        .unwrap_or(true);
-
     match state.content_pipeline.render_png_from_svg(
         &svg,
         display_spec,
         &final_palette,
         measured_colors.as_deref(),
         use_actual,
-        script_dither.as_deref(),
+        final_dither.as_deref(),
         preserve_exact,
     ) {
         Ok(png_bytes) => (

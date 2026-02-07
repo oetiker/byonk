@@ -26,46 +26,40 @@
                     </select>
                 </div>
 
-                <div class="form-group">
-                    <label for="model-select">Device Model</label>
-                    <select id="model-select">
-                        <option value="og" data-width="800" data-height="480" data-colors="#000000,#555555,#AAAAAA,#FFFFFF">TRMNL OG (800x480, 4 grey)</option>
-                        <option value="og" data-width="800" data-height="480" data-colors="#000000,#FFFFFF,#FF0000,#FFFF00">TRMNL OG 4-Color (800x480)</option>
-                        <option value="x" data-width="1872" data-height="1404" data-colors="#000000,#111111,#222222,#333333,#444444,#555555,#666666,#777777,#888888,#999999,#AAAAAA,#BBBBBB,#CCCCCC,#DDDDDD,#EEEEEE,#FFFFFF">TRMNL X (1872x1404, 16 grey)</option>
-                        <option value="og" data-width="800" data-height="480" data-colors="#000000,#555555,#AAAAAA,#FFFFFF">XTEink X4 (800x480, 4 grey)</option>
-                        <option value="og" data-width="800" data-height="480" data-colors="#000000,#555555,#AAAAAA,#FFFFFF">Waveshare (800x480, 4 grey)</option>
-                        <option value="og" data-width="296" data-height="128" data-colors="#000000,#555555,#AAAAAA,#FFFFFF">Seeed Xiao (296x128, 4 grey)</option>
-                        <option value="og" data-width="296" data-height="128" data-colors="#000000,#FFFFFF,#FF0000">Seeed Xiao 3-Color (296x128)</option>
-                        <option value="og" data-width="800" data-height="480" data-colors="#000000,#555555,#AAAAAA,#FFFFFF">reTerminal E1001 (800x480, 4 grey)</option>
-                        <option value="og" data-width="800" data-height="480" data-colors="#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00">reTerminal E1002 (800x480, 6 color)</option>
-                    </select>
+                <div id="device-info" class="device-info hidden">
+                    Device entry selected — render settings sync with the actual device screen.
                 </div>
 
                 <div class="form-group">
                     <label for="panel-select">Panel Profile</label>
                     <select id="panel-select">
-                        <option value="">None (use colors below)</option>
+                        <option value="">None (use default colors)</option>
                     </select>
-                    <label class="checkbox-label" id="use-actual-label" style="display:none">
-                        <input type="checkbox" id="use-actual" checked>
-                        Show actual panel colors
-                    </label>
                 </div>
 
                 <div class="form-group">
-                    <label for="colors-input">Colors</label>
-                    <input type="text" id="colors-input" placeholder="#000000,#555555,#AAAAAA,#FFFFFF">
                     <div id="color-swatches" class="color-swatches"></div>
                 </div>
 
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="width-input">Width</label>
-                        <input type="number" id="width-input" value="800" min="100" max="2000">
-                    </div>
-                    <div class="form-group">
-                        <label for="height-input">Height</label>
-                        <input type="number" id="height-input" value="480" min="100" max="2000">
+                <div class="form-group render-options">
+                    <label>Render Options</label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="preserve-exact" checked>
+                        Preserve exact matches
+                        <span class="option-hint">affects dev preview and actual device screen</span>
+                    </label>
+                    <label class="checkbox-label" id="use-actual-label" style="display:none">
+                        <input type="checkbox" id="use-actual" checked>
+                        Show actual panel colors
+                        <span class="option-hint">dev preview only</span>
+                    </label>
+                    <div class="dither-row">
+                        <label for="dither-select">Dither</label>
+                        <select id="dither-select">
+                            <option value="">Auto</option>
+                            <option value="atkinson">Atkinson</option>
+                            <option value="floyd-steinberg">Floyd-Steinberg</option>
+                        </select>
                     </div>
                 </div>
 
@@ -80,26 +74,17 @@
                     </div>
                 </div>
 
-                <div class="form-group">
-                    <label for="time-input">Current Time</label>
-                    <input type="datetime-local" id="time-input">
+                <div class="form-group time-group">
+                    <label for="time-input">Current Time <span id="time-mode" class="time-mode">live</span></label>
+                    <div class="time-row">
+                        <input type="datetime-local" id="time-input">
+                        <button id="time-reset" class="time-reset hidden" title="Reset to live time">&times;</button>
+                    </div>
                 </div>
 
                 <div class="form-group">
                     <label for="params-input">Custom Parameters (JSON)</label>
                     <textarea id="params-input" placeholder='{"key": "value"}'>{}</textarea>
-                </div>
-
-                <div class="form-actions">
-                    <button id="render-btn" class="btn primary">Render</button>
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="auto-refresh" checked>
-                        Auto-refresh on file change
-                    </label>
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="preserve-exact" checked>
-                        Preserve exact matches
-                    </label>
                 </div>
             </div>
 
@@ -120,18 +105,44 @@
                     <span id="display-size">800 x 480</span>
                     <span id="render-time"></span>
                 </div>
+                <div id="console" class="console">
+                    <pre id="console-output"></pre>
+                </div>
             </div>
         </main>
-
-        <div id="error-panel" class="panel error-panel hidden">
-            <h2>Errors</h2>
-            <pre id="error-content"></pre>
-            <button id="dismiss-error" class="btn">Dismiss</button>
-        </div>
 
         <footer>
             <p>Byonk Dev Mode - Edit your Lua scripts and SVG templates, see changes instantly</p>
         </footer>
+    </div>
+
+    <div id="color-popup" class="color-popup hidden">
+        <div class="color-popup-header">
+            <span>Adjust Color</span>
+            <button class="color-popup-close" id="color-popup-close">&times;</button>
+        </div>
+        <div class="color-popup-preview">
+            <div class="preview-box" id="popup-original-color"></div>
+            <span class="preview-arrow">&rarr;</span>
+            <div class="preview-box" id="popup-live-color"></div>
+        </div>
+        <div class="color-popup-slider">
+            <label>Hue <span id="popup-hue-val">0</span></label>
+            <input type="range" id="popup-hue" min="0" max="360" value="0">
+        </div>
+        <div class="color-popup-slider">
+            <label>Saturation <span id="popup-sat-val">0%</span></label>
+            <input type="range" id="popup-sat" min="0" max="100" value="0">
+        </div>
+        <div class="color-popup-slider">
+            <label>Lightness <span id="popup-lit-val">0%</span></label>
+            <input type="range" id="popup-lit" min="0" max="100" value="0">
+        </div>
+        <div class="color-popup-hex">
+            <label>Hex</label>
+            <input type="text" id="popup-hex-input" maxlength="7" placeholder="#000000">
+        </div>
+        <button class="color-popup-reset" id="popup-reset-btn">Reset to original</button>
     </div>
 
     <script src="/dev/dev.js"></script>

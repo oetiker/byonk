@@ -7,10 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **Dev mode UI cleanup**: Removed redundant controls (device model selector, width/height inputs, colors text input, render button, auto-refresh toggle). Dimensions and colors now derive from panel profile or defaults. All changes auto-refresh immediately. Added always-visible console below preview for render time and errors. Added dither algorithm dropdown (Auto/Atkinson/Floyd-Steinberg). Selecting a device entry shows an info banner and auto-selects the device's panel profile and dither setting. Time input defaults to empty (uses live current time). Render options group moved directly after color swatches.
+
 ### New
 
 - **Panel profiles with measured colors**: Define display panels in `config.yaml` with official and measured (actual) display colors. Dithering uses measured colors to model what the panel really shows, producing more accurate output. Panels auto-detect from firmware `Board` header or can be assigned per-device.
 - **Dev mode panel preview**: Select a panel profile in dev mode to preview with measured colors — see what the physical display actually shows instead of ideal colors. Color swatches show both official and measured palettes.
+- **Dev mode color tuning**: Click any actual color swatch to open an HSL adjustment popup — adjust hue, saturation, and lightness with live preview. Changes immediately affect both dev preview and physical device rendering while the dev server runs. Copy the adjusted `colors_actual` string for pasting into `config.yaml`. Session-only (resets on server restart).
 - **Measured-Colors header**: Firmware can send `Measured-Colors` header with actual display colors, overriding panel profile measured colors.
 - **`preserve_exact` option**: Disable "preserve exact color matches" via Lua script (`preserve_exact = false` in return table) or dev mode UI checkbox. When disabled, ALL pixels go through enhancement + dithering — no shortcuts for palette-matching pixels.
 - Floyd-Steinberg dithering with blue noise kernel jitter (`dither="floyd-steinberg"`): breaks "worm" artifacts on smooth gradients while maintaining 100% error propagation. Also accepts `"atkinson"` as alias for `"photo"`.
@@ -29,7 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Production, dev, and CLI rendering now share a single palette/dither resolution implementation. Previously, the production path performed a second device config lookup with different priority order, causing palette and dither settings to diverge from dev mode.
+- Error diffusion (floyd-steinberg, atkinson) grey-to-chromatic bleeding with measured panel colors — lowered `kchroma` from 10 to 5 instead of switching to Euclidean, preventing grey→green while preserving chromatic reproduction
+- Dev mode now auto-resolves `panel` and `dither` from device config when rendering by MAC address, matching device render behavior
 - Device config entries now work with auto-discovered screens (screens that exist as `.lua`+`.svg` files but aren't listed in the `screens:` section of `config.yaml`). Previously, devices referencing unlisted screens were treated as unregistered.
+- Production display path now uses panel profile official colors as the palette when a panel is assigned to a device. Previously, panel `colors` were ignored in the palette resolution chain, causing a mismatch between the 4-grey default palette and the panel's 6-color measured colors — dithering matched against wrong actual colors.
 - Dev mode panel preview: greyscale palettes now correctly show measured colors (e.g., `#383838..#B8B8B0`) instead of evenly-spaced grey values. When "Show actual panel colors" is enabled, output uses indexed PNG with PLTE to preserve measured colors. B&W forcing is now limited to the dithering distance calculation only — the preview shows raw measured values.
 - Dev mode: added "Show actual panel colors" toggle checkbox. Only visible when a panel with measured colors is selected. State persists in localStorage.
 - Color palette dithering: grey pixels no longer incorrectly map to chromatic colors (e.g., red) when using multi-color palettes. Uses HyAB perceptual distance metric (Abasi et al., 2020) with chroma coupling penalty, which prevents achromatic pixels from matching chromatic palette entries.

@@ -36,11 +36,11 @@
 filter="url(#shadow)">BYONK</text>
   <text x="{{ data.center_x }}" y="{{ data.tagline_y }}" font-size="{{ data.font_tagline }}" class="font-semibold" fill="#ffffff" opacity="0.8" filter="url(#shadow)">Bring Your Own Ink</text>
 
-  <!-- Registration code box (only shown when device needs registration) -->
+  <!-- Registration code box (only shown when device needs registration) 
   {% if device.registration_code %}
   <rect x="{{ data.reg_box_x }}" y="{{ data.reg_box_y }}" width="{{ data.reg_box_width }}" height="{{ data.reg_box_height }}" fill="#000000" opacity="0.75"/>
   <text x="{{ data.center_x }}" y="{{ data.reg_text_y }}" font-size="{{ data.font_reg_code }}" class="font-bold" fill="#ffffff">{{ device.registration_code_hyphenated }}</text>
-  {% endif %}
+  {% endif %} -->
 
   <!-- Display palette color swatches -->
   {% for swatch in data.swatches %}

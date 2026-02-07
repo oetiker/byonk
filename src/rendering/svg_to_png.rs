@@ -88,18 +88,14 @@ impl SvgRenderer {
         let (eink_palette, output_palette) = build_eink_palette(palette, actual, use_actual)?;
 
         // Determine rendering intent and algorithm
-        let (intent, algorithm) = match dither {
-            Some(s) if s.eq_ignore_ascii_case("photo") || s.eq_ignore_ascii_case("atkinson") => {
-                (RenderingIntent::Photo, DitherAlgorithm::Auto)
-            }
+        // All paths use Photo intent (saturation/contrast preprocessing + error diffusion)
+        let algorithm = match dither {
             Some(s) if s.eq_ignore_ascii_case("floyd-steinberg") => {
-                (RenderingIntent::Photo, DitherAlgorithm::FloydSteinbergNoise)
+                DitherAlgorithm::FloydSteinbergNoise
             }
-            Some(s) if s.eq_ignore_ascii_case("simplex") => {
-                (RenderingIntent::Graphics, DitherAlgorithm::Simplex)
-            }
-            _ => (RenderingIntent::Graphics, DitherAlgorithm::Auto),
+            _ => DitherAlgorithm::Auto, // Atkinson
         };
+        let intent = RenderingIntent::Photo;
 
         // Convert RGBA pixmap to eink-dither Srgb pixels
         let pixels = rgba_to_eink_srgb(pixmap.data());

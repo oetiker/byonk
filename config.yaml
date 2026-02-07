@@ -13,7 +13,92 @@ registration:
 # "api_key" (default) - devices send Access-Token header
 # "ed25519" - devices use Ed25519 signature authentication
 # Note: /api/display always accepts both methods regardless of this setting
-auth_mode: ed25519
+auth_mode: api_key
+
+# Panel profiles with measured display colors
+# Each panel maps official (ideal) colors to measured (actual) colors.
+# Dev mode uses measured colors to preview what the panel really shows.
+# colors: official palette sent to device
+# colors_actual: measured colors as they appear on the physical display
+# match: exact match against firmware Board header for auto-detection
+panels:
+  trmnl_og:
+    name: "TRMNL OG (4-grey)"
+    match: "trmnl_og"
+    width: 800
+    height: 480
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#6E6E6E,#9C9C9C,#B8B8B0"
+  trmnl_og_4clr:
+    name: "TRMNL OG (4-color)"
+    match: "trmnl_og_4clr"
+    width: 800
+    height: 480
+    colors: "#000000,#FFFFFF,#FF0000,#FFFF00"
+    colors_actual: "#383038,#B8B8B0,#9C484B,#D0BE47"
+  trmnl_x:
+    name: "TRMNL X (16-grey)"
+    match: "trmnl_x"
+    width: 1872
+    height: 1404
+    colors: "#000000,#111111,#222222,#333333,#444444,#555555,#666666,#777777,#888888,#999999,#AAAAAA,#BBBBBB,#CCCCCC,#DDDDDD,#EEEEEE,#FFFFFF"
+    colors_actual: "#383838,#434343,#4E4E4E,#595959,#646464,#6E6E6E,#787878,#828282,#8B8B8B,#949494,#9C9C9C,#A3A3A3,#AAAAAA,#B0B0B0,#B5B5B2,#B8B8B0"
+  xteink_x4:
+    name: "XTEink X4 (4-grey)"
+    match: "xteink_x4"
+    width: 800
+    height: 480
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#6E6E6E,#9C9C9C,#B8B8B0"
+  waveshare:
+    name: "Waveshare (4-grey)"
+    match: "waveshare"
+    width: 800
+    height: 480
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#6E6E6E,#9C9C9C,#B8B8B0"
+  seeed_xiao_c3:
+    name: "Seeed Xiao C3 (4-grey)"
+    match: "seeed_xiao_c3"
+    width: 296
+    height: 128
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#6E6E6E,#9C9C9C,#B8B8B0"
+  seeed_xiao_s3:
+    name: "Seeed Xiao S3 (4-grey)"
+    match: "seeed_xiao_s3"
+    width: 296
+    height: 128
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#6E6E6E,#9C9C9C,#B8B8B0"
+  xiao_epaper:
+    name: "Seeed Xiao ePaper (4-grey)"
+    match: "xiao_epaper"
+    width: 296
+    height: 128
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#6E6E6E,#9C9C9C,#B8B8B0"
+  xiao_epaper_3clr:
+    name: "Seeed Xiao 3-Color"
+    match: "xiao_epaper_3clr"
+    width: 296
+    height: 128
+    colors: "#000000,#FFFFFF,#FF0000"
+    colors_actual: "#383038,#B8B8B0,#9C484B"
+  reterminal_e1001:
+    name: "reTerminal E1001 (4-grey)"
+    match: "reterminal_e1001"
+    width: 800
+    height: 480
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#000000,#2A2A2A,#676767,#FFFFFF"
+  reterminal_e1002:
+    name: "reTerminal E1002 (6-color)"
+    match: "reterminal_e1002"
+    width: 800
+    height: 480
+    colors: "#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00"
+    colors_actual: "#000000,#FFFFFF,#DB0303,#FFF427,#25549F,#3A855B"
 
 screens:
   # Default screen - shows time and a message
@@ -21,7 +106,7 @@ screens:
     script: default.lua
     template: default.svg
     default_refresh: 300
-
+    
   # Floerli room booking display
   floerli:
     script: floerli.lua
@@ -58,6 +143,12 @@ screens:
     template: hello.svg
     default_refresh: 60
 
+  # CMYK gradient and palette calibrator
+  calibrator:
+    script: calibrator.lua
+    template: calibrator.svg
+    default_refresh: 3600
+
 # Map devices to screens
 # Use MAC address (e.g., "94:A9:90:8C:6D:18") or registration code (e.g., "ABCDE-FGHJK")
 devices:
@@ -74,7 +165,17 @@ devices:
     params:
       station: "Trans, Dorf"
       limit: 8
+  "QHUTU-REZWE":
+    panel: reterminal_e1001
+    screen: gphoto
+    dither: atkinson
+    params:
+      album_url: "https://photos.app.goo.gl/3YtQJztqj9QynkeP8"
+      show_status: false
+      refresh_rate: 300
 
+    # atkinson
+ 
   # Test device for transit (docs sample)
   "TR:AN:SI:T0:00:00":
     screen: transit
@@ -131,6 +232,17 @@ devices:
   #   params:
   #     station: "Olten, Südwest"
   #     limit: 8
-
+  "XXSFE-VAGTB":
+    screen: calibrator
+    -- screen: gphoto
+    -- screen: default
+    dither: floyd-steinberg
+    # atkinson
+    panel: reterminal_e1002
+    params:
+      album_url: "https://photos.app.goo.gl/stkXoE7XY7shVMWA6"
+      show_status: false
+      refresh_rate: 300
+      
 # Default screen for devices not in the devices list
 default_screen: default

@@ -56,8 +56,6 @@ const elements = {
     useActual: document.getElementById('use-actual'),
     useActualLabel: document.getElementById('use-actual-label'),
     preserveExact: document.getElementById('preserve-exact'),
-    serpentine: document.getElementById('serpentine'),
-    exactAbsorbError: document.getElementById('exact-absorb-error'),
     errorClamp: document.getElementById('error-clamp'),
     chromaClamp: document.getElementById('chroma-clamp'),
     noiseScale: document.getElementById('noise-scale'),
@@ -291,14 +289,6 @@ function setupEventListeners() {
     });
 
     // Dither tunables
-    elements.serpentine.addEventListener('change', () => {
-        saveState();
-        render();
-    });
-    elements.exactAbsorbError.addEventListener('change', () => {
-        saveState();
-        render();
-    });
     elements.errorClamp.addEventListener('change', () => {
         saveDitherTuningOverride();
         saveState();
@@ -516,12 +506,6 @@ async function render() {
         }
 
         // Dither tunables
-        if (!elements.serpentine.checked) {
-            queryParams.set('serpentine', 'false');
-        }
-        if (elements.exactAbsorbError.checked) {
-            queryParams.set('exact_absorb_error', 'true');
-        }
         const errorClamp = elements.errorClamp.value;
         if (errorClamp !== '' && errorClamp !== '0.08') {
             queryParams.set('error_clamp', errorClamp);
@@ -626,8 +610,6 @@ function saveState() {
         useActual: elements.useActual.checked,
         preserveExact: elements.preserveExact.checked,
         dither: elements.ditherSelect.value,
-        serpentine: elements.serpentine.checked,
-        exactAbsorbError: elements.exactAbsorbError.checked,
         errorClamp: elements.errorClamp.value,
         chromaClamp: elements.chromaClamp.value,
         noiseScale: elements.noiseScale.value,
@@ -677,12 +659,6 @@ function loadSavedState() {
             }
             if (data.dither) {
                 elements.ditherSelect.value = data.dither;
-            }
-            if (typeof data.serpentine === 'boolean') {
-                elements.serpentine.checked = data.serpentine;
-            }
-            if (typeof data.exactAbsorbError === 'boolean') {
-                elements.exactAbsorbError.checked = data.exactAbsorbError;
             }
             if (data.errorClamp) {
                 elements.errorClamp.value = data.errorClamp;

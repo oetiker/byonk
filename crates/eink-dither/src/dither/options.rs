@@ -104,7 +104,7 @@ pub struct DitherOptions {
     /// When `false`, accumulated error passes through (original behavior),
     /// maintaining smooth gradient continuity but allowing bleed.
     ///
-    /// Default: `false` (pass-through — original behavior)
+    /// Default: `true` (absorb — prevents bleed across boundaries)
     pub exact_absorb_error: bool,
 }
 
@@ -116,7 +116,7 @@ impl Default for DitherOptions {
             error_clamp: 0.5,
             chroma_clamp: f32::INFINITY,
             noise_scale: 5.0,
-            exact_absorb_error: false,
+            exact_absorb_error: true,
         }
     }
 }

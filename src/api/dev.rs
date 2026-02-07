@@ -71,16 +71,12 @@ pub struct RenderQuery {
     pub dither: Option<String>,
     /// Measured/actual colors override from dev UI color tuning
     pub colors_actual: Option<String>,
-    /// Serpentine scanning override
-    pub serpentine: Option<bool>,
     /// Error clamp override
     pub error_clamp: Option<f32>,
     /// Chroma clamp override
     pub chroma_clamp: Option<f32>,
-    /// Blue noise jitter scale override (Floyd-Steinberg Noise only)
+    /// Blue noise jitter scale override
     pub noise_scale: Option<f32>,
-    /// Whether exact-match pixels absorb accumulated error
-    pub exact_absorb_error: Option<bool>,
 }
 
 /// Convert serde_yaml params to serde_json values
@@ -683,17 +679,15 @@ pub async fn handle_render(
         && measured_colors.is_some();
 
     let tuning = crate::rendering::svg_to_png::DitherTuning {
-        serpentine: query.serpentine,
+        serpentine: None,
         error_clamp: query.error_clamp,
         chroma_clamp: query.chroma_clamp,
         noise_scale: query.noise_scale,
-        exact_absorb_error: query.exact_absorb_error,
+        exact_absorb_error: None,
     };
-    let has_tuning = tuning.serpentine.is_some()
-        || tuning.error_clamp.is_some()
+    let has_tuning = tuning.error_clamp.is_some()
         || tuning.chroma_clamp.is_some()
-        || tuning.noise_scale.is_some()
-        || tuning.exact_absorb_error.is_some();
+        || tuning.noise_scale.is_some();
 
     match state.content_pipeline.render_png_from_svg(
         &svg,

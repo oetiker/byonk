@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Dither color bleed through exact-match pixels**: Pixels that exactly match a palette color (text, lines, borders) now absorb accumulated error instead of passing it through. This prevents dithering artifacts from bleeding across hard boundaries.
+- **Dither color bleed through exact-match pixels**: Pixels that exactly match a palette color (text, lines, borders) now always absorb accumulated error, preventing dithering artifacts from bleeding across hard boundaries.
 
 ### Changed
 

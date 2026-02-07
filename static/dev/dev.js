@@ -13,6 +13,9 @@ const state = {
         colorIndex: -1,
         originalHex: '',
     },
+    // Per-device color overrides from color tuning popup.
+    // Map of deviceKey → colors_actual string.  Persisted in localStorage.
+    colorOverrides: {},
 };
 
 // DOM elements
@@ -209,12 +212,21 @@ function setupEventListeners() {
             const option = elements.screenSelect.selectedOptions[0];
             if (option.dataset.panel) {
                 elements.panelSelect.value = option.dataset.panel;
-                updateColorSwatches();
-                updateUseActualVisibility();
             }
             if (option.dataset.dither) {
                 elements.ditherSelect.value = option.dataset.dither;
             }
+            // Apply saved color override for this device (if any)
+            const deviceKey = selected.slice('device:'.length);
+            const override = state.colorOverrides[deviceKey];
+            if (override) {
+                const panelOpt = elements.panelSelect.selectedOptions[0];
+                if (panelOpt?.value) {
+                    panelOpt.dataset.colorsActual = override;
+                }
+            }
+            updateColorSwatches();
+            updateUseActualVisibility();
         }
 
         updateDeviceFrame();
@@ -494,6 +506,29 @@ async function render() {
     }
 }
 
+// Apply restored color overrides to panel option DOM and sync to server.
+// Called after loadSavedState restores state.colorOverrides from localStorage.
+function applyRestoredColorOverrides() {
+    const selected = elements.screenSelect.value;
+    if (!selected.startsWith('device:')) return;
+    const deviceKey = selected.slice('device:'.length);
+    const override = state.colorOverrides[deviceKey];
+    if (!override) return;
+
+    // Apply to the current panel option's dataset
+    const panelOpt = elements.panelSelect.selectedOptions[0];
+    if (panelOpt?.value) {
+        panelOpt.dataset.colorsActual = override;
+    }
+
+    // POST to server so the production handler picks it up
+    fetch('/dev/panel-colors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device: deviceKey, colors_actual: override }),
+    }).catch(e => console.error('Failed to restore panel colors:', e));
+}
+
 // Save state to localStorage
 function saveState() {
     const savedState = {
@@ -507,6 +542,7 @@ function saveState() {
         useActual: elements.useActual.checked,
         preserveExact: elements.preserveExact.checked,
         dither: elements.ditherSelect.value,
+        colorOverrides: state.colorOverrides,
     };
     localStorage.setItem('byonk-dev-state', JSON.stringify(savedState));
 }
@@ -552,10 +588,16 @@ function loadSavedState() {
             if (data.dither) {
                 elements.ditherSelect.value = data.dither;
             }
+            if (data.colorOverrides && typeof data.colorOverrides === 'object') {
+                state.colorOverrides = data.colorOverrides;
+            }
 
             // Show device info banner if a device is selected
             const isDevice = elements.screenSelect.value.startsWith('device:');
             elements.deviceInfo.classList.toggle('hidden', !isDevice);
+
+            // Re-apply color overrides to DOM and sync to server
+            applyRestoredColorOverrides();
 
             updateDeviceFrame();
             updateColorSwatches();
@@ -836,11 +878,13 @@ function applyColorChange(newHex) {
     // Update swatch backgrounds
     updateColorSwatches();
 
-    // POST to server (keyed by device config key) and debounced re-render.
-    // The POST syncs the color override to the production handler so the
-    // actual device picks it up.  Only meaningful when a device is selected.
+    // Track override per-device for localStorage persistence
     const selected = elements.screenSelect.value;
     const deviceKey = selected.startsWith('device:') ? selected.slice('device:'.length) : '';
+    if (deviceKey) {
+        state.colorOverrides[deviceKey] = actualColors.join(',');
+        saveState();
+    }
     clearTimeout(applyDebounceTimer);
     applyDebounceTimer = setTimeout(async () => {
         if (deviceKey) {

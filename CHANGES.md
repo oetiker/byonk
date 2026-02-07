@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Dev mode UI cleanup**: Removed redundant controls (device model selector, width/height inputs, colors text input, render button, auto-refresh toggle). Dimensions and colors now derive from panel profile or defaults. All changes auto-refresh immediately. Added always-visible console below preview for render time and errors. Added dither algorithm dropdown (Auto/Atkinson/Floyd-Steinberg). Selecting a device entry shows an info banner and auto-selects the device's panel profile and dither setting. Time input defaults to empty (uses live current time). Render options group moved directly after color swatches.
+- **Dev mode UI cleanup**: Removed redundant controls (device model selector, width/height inputs, colors text input, render button, auto-refresh toggle). Dimensions and colors now derive from panel profile or defaults. All changes auto-refresh immediately. Added always-visible console below preview for render time and errors. Added dither algorithm dropdown with all available algorithms. Selecting a device entry shows an info banner and auto-selects the device's panel profile and dither setting. Time input defaults to empty (uses live current time). Render options group moved directly after color swatches.
 
 ### New
 
@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Auto-detect distance metric based on palette content -- chromatic palettes automatically use HyAB+chroma, achromatic palettes use Euclidean
 - Added color science documentation to eink-dither crate (distance metric rationale, pipeline diagram, inline WHY comments at every conversion site)
+- Four additional dithering algorithms selectable via Lua `dither` option or dev mode: `"jarvis-judice-ninke"` (wide 12-neighbor kernel, least oscillation), `"sierra"` (10-neighbor), `"sierra-two-row"` (7-neighbor), `"sierra-lite"` (3-neighbor). JJN and Sierra full are recommended for sparse chromatic palettes where Floyd-Steinberg oscillates.
 
 ### Changed
 
@@ -43,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dev mode: added "Show actual panel colors" toggle checkbox. Only visible when a panel with measured colors is selected. State persists in localStorage.
 - Color palette dithering: grey pixels no longer incorrectly map to chromatic colors (e.g., red) when using multi-color palettes. Uses HyAB perceptual distance metric (Abasi et al., 2020) with chroma coupling penalty, which prevents achromatic pixels from matching chromatic palette entries.
 - Photo dithering color reproduction: switched error diffusion (Photo intent) from HyAB+chroma distance to plain Euclidean OKLab for unbiased palette matching. Muted colors (skin tones, overcast sky, concrete, shadows) now reproduce faithfully instead of collapsing to B&W. Sweep test across 2000+ OKLab colors shows avg DeltaE=0.047 (nearly imperceptible). Blue-noise (Graphics) path retains HyAB kchroma=10 for grey safety.
+- Floyd-Steinberg oscillation artifacts on sparse chromatic palettes: lowered Photo intent error clamp from 0.5 to 0.3 to reduce high-amplitude overshoot that caused green→blue→green inversions and blue→black collapse at hue boundaries. Affects all error diffusion algorithms equally.
+- Dev mode dither and color overrides now propagate to the physical device render. Both overrides are keyed per-device (not per-panel), so multiple users can tune different devices simultaneously. Dev dither override takes highest priority, beating even Lua script settings.
+- Dev mode clipboard copy (for `colors_actual`) now works over plain HTTP by falling back to `execCommand('copy')` when `navigator.clipboard` is unavailable.
 - Preprocessor exact match detection: match against official palette colors (what input content uses) instead of actual measured colors. Input SVGs reference official values, so matching must target those.
 - PNG output ~27% smaller: added oxipng post-processing with zopfli compression and adaptive filter selection
 

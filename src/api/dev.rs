@@ -17,12 +17,12 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
 use crate::assets::AssetLoader;
 use crate::models::{AppConfig, DisplaySpec, ScreenConfig};
+use crate::server::DevOverrides;
 use crate::services::{ContentCache, ContentPipeline, DeviceContext, FileWatcher, RenderService};
 
 /// Dev mode application state
@@ -34,7 +34,7 @@ pub struct DevState {
     pub renderer: Arc<RenderService>,
     pub file_watcher: Arc<FileWatcher>,
     pub asset_loader: Arc<AssetLoader>,
-    pub panel_color_overrides: Arc<RwLock<HashMap<String, String>>>,
+    pub dev_overrides: DevOverrides,
 }
 
 /// Query parameters for /dev/render
@@ -69,6 +69,8 @@ pub struct RenderQuery {
     pub preserve_exact: Option<bool>,
     /// Dither algorithm override from dev UI (e.g. "atkinson", "floyd-steinberg")
     pub dither: Option<String>,
+    /// Measured/actual colors override from dev UI color tuning
+    pub colors_actual: Option<String>,
 }
 
 /// Convert serde_yaml params to serde_json values
@@ -312,29 +314,36 @@ pub async fn handle_resolve_mac(
 /// Request body for POST /dev/panel-colors
 #[derive(Debug, Deserialize)]
 pub struct PanelColorsRequest {
-    pub panel: String,
+    pub device: String,
     pub colors_actual: String,
 }
 
-/// Set color overrides for a panel (dev mode color tuning)
+/// Set color overrides for a device (dev mode color tuning).
+/// Keyed by device config key so each device's tuning is independent.
 pub async fn handle_set_panel_colors(
     State(state): State<DevState>,
     Json(body): Json<PanelColorsRequest>,
 ) -> StatusCode {
     state
-        .panel_color_overrides
+        .dev_overrides
+        .panel_colors
         .write()
         .await
-        .insert(body.panel, body.colors_actual);
+        .insert(body.device, body.colors_actual);
     StatusCode::OK
 }
 
-/// Remove color overrides for a panel, reverting to config.yaml values
+/// Remove color overrides for a device, reverting to config.yaml values
 pub async fn handle_delete_panel_colors(
     State(state): State<DevState>,
-    axum::extract::Path(panel): axum::extract::Path<String>,
+    axum::extract::Path(device): axum::extract::Path<String>,
 ) -> StatusCode {
-    state.panel_color_overrides.write().await.remove(&panel);
+    state
+        .dev_overrides
+        .panel_colors
+        .write()
+        .await
+        .remove(&device);
     StatusCode::OK
 }
 
@@ -572,15 +581,9 @@ pub async fn handle_render(
         }
     };
 
-    // Resolve measured colors: dev override > panel.colors_actual
-    let panel_name_for_override = query.panel.as_deref().or(device_config_panel.as_deref());
-    let override_colors = if let Some(pname) = panel_name_for_override {
-        state.panel_color_overrides.read().await.get(pname).cloned()
-    } else {
-        None
-    };
-    let measured_colors: Option<Vec<(u8, u8, u8)>> = if let Some(ref oc) = override_colors {
-        Some(crate::api::display::parse_colors_header(oc))
+    // Resolve measured colors: query param (from dev UI color tuning) > panel.colors_actual
+    let measured_colors: Option<Vec<(u8, u8, u8)>> = if let Some(ref ca) = query.colors_actual {
+        Some(crate::api::display::parse_colors_header(ca))
     } else {
         panel
             .as_ref()
@@ -610,6 +613,30 @@ pub async fn handle_render(
         // No UI override — normal priority: script > device config
         (script_dither.as_deref(), device_config_dither.as_deref())
     };
+
+    // Sync overrides to shared state so the production /api/display handler picks
+    // them up for the actual device render.  Both maps are keyed by the device
+    // config key (= query.mac when a device entry is selected in the dev UI).
+    if let Some(ref device_key) = query.mac {
+        // Dither
+        let mut dither_map = state.dev_overrides.dither.write().await;
+        if let Some(ref dither_val) = query.dither {
+            dither_map.insert(device_key.clone(), dither_val.clone());
+        } else {
+            dither_map.remove(device_key.as_str());
+        }
+        drop(dither_map);
+
+        // Color (actual/measured) — only sync when the dev UI sends tuned colors
+        if let Some(ref ca) = query.colors_actual {
+            state
+                .dev_overrides
+                .panel_colors
+                .write()
+                .await
+                .insert(device_key.clone(), ca.clone());
+        }
+    }
 
     let render_params = crate::api::display::resolve_render_params(
         script_colors.as_deref(),

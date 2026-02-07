@@ -6,7 +6,6 @@ use axum::{
 };
 use serde::Serialize;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use utoipa::ToSchema;
 
 use super::headers::HeaderMapExt;
@@ -14,6 +13,7 @@ use crate::error::ApiError;
 use crate::models::{
     verify_ed25519_signature, ApiKey, AppConfig, Device, DeviceId, DeviceModel, DisplaySpec,
 };
+use crate::server::DevOverrides;
 use crate::services::{
     CachedContent, ContentCache, ContentPipeline, DeviceContext, DeviceRegistry, RenderService,
 };
@@ -148,10 +148,9 @@ pub fn resolve_render_params(
 pub async fn handle_display<R: DeviceRegistry>(
     State(config): State<Arc<AppConfig>>,
     State(registry): State<Arc<R>>,
-    State(_renderer): State<Arc<RenderService>>,
     State(content_pipeline): State<Arc<ContentPipeline>>,
     State(content_cache): State<Arc<ContentCache>>,
-    State(panel_color_overrides): State<Arc<RwLock<std::collections::HashMap<String, String>>>>,
+    State(dev_overrides): State<DevOverrides>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     // Extract required headers
@@ -384,14 +383,39 @@ pub async fn handle_display<R: DeviceRegistry>(
     let board_header = headers.get_str("Board").map(|s| s.to_string());
     let registration_code = identity_key.registration_code();
 
-    let (device_config, device_config_key) =
-        if let Some(dc) = config.get_device_config(device_id_str) {
-            (Some(dc), Some(device_id_str.to_string()))
-        } else if let Some(dc) = config.get_device_config_for_code(&registration_code) {
-            (Some(dc), Some(registration_code.clone()))
+    // Resolve device config — also capture the actual config key (used for dev override lookups).
+    // get_key_value returns the key as stored in the HashMap, so it matches the dev UI exactly.
+    let (device_config, device_entry_key) = {
+        // Try MAC (exact, then uppercase-normalized)
+        let by_mac = config.devices.get_key_value(device_id_str).or_else(|| {
+            let upper = device_id_str.to_uppercase();
+            if upper != device_id_str {
+                config.devices.get_key_value(&upper)
+            } else {
+                None
+            }
+        });
+        if let Some((k, dc)) = by_mac {
+            (Some(dc), Some(k.clone()))
         } else {
-            (None, None)
-        };
+            // Try registration code (hyphenated + raw normalized)
+            let norm = registration_code.to_uppercase().replace('-', "");
+            let by_code = if norm.len() == 10 {
+                let hyph = format!("{}-{}", &norm[..5], &norm[5..]);
+                config
+                    .devices
+                    .get_key_value(&hyph)
+                    .or_else(|| config.devices.get_key_value(&norm))
+            } else {
+                config.devices.get_key_value(&norm)
+            };
+            if let Some((k, dc)) = by_code {
+                (Some(dc), Some(k.clone()))
+            } else {
+                (None, None)
+            }
+        }
+    };
     let device_config_panel = device_config.and_then(|dc| dc.panel.clone());
     let device_config_colors = device_config.and_then(|dc| dc.colors.clone());
 
@@ -411,12 +435,11 @@ pub async fn handle_display<R: DeviceRegistry>(
     };
 
     // Resolve measured colors: dev override > panel.colors_actual > Measured-Colors header > None
-    // Dev overrides (from color adjustment popup) take highest priority when present.
-    // Config always trumps firmware-reported values.
+    // Dev overrides are keyed by device config key (not panel name) so each device
+    // can be tuned independently even when sharing the same panel profile.
     let measured_colors_header = headers.get_str("Measured-Colors").map(|s| s.to_string());
-    let panel_name_for_override = device_config_panel.as_deref();
-    let override_colors = if let Some(pname) = panel_name_for_override {
-        panel_color_overrides.read().await.get(pname).cloned()
+    let override_colors = if let Some(ref key) = device_entry_key {
+        dev_overrides.panel_colors.read().await.get(key).cloned()
     } else {
         None
     };
@@ -441,7 +464,7 @@ pub async fn handle_display<R: DeviceRegistry>(
     tracing::debug!(
         device_id = device_id_str,
         registration_code = %registration_code,
-        device_config_key = ?device_config_key,
+        device_entry_key = ?device_entry_key,
         device_config_screen = ?device_config.map(|dc| &dc.screen),
         panel_source = ?panel_source,
         panel_colors = ?panel_colors_for_chain,
@@ -455,6 +478,12 @@ pub async fn handle_display<R: DeviceRegistry>(
     // Pre-script resolved palette for device context:
     // device_config_colors > panel_colors > firmware header > default
     // Matches the resolve_palette chain (minus script_colors, unknown until script runs)
+    // Dither: dev override (highest priority, set via dev UI) vs device config
+    let dev_dither_override = if let Some(ref key) = device_entry_key {
+        dev_overrides.dither.read().await.get(key).cloned()
+    } else {
+        None
+    };
     let device_config_dither = device_config.and_then(|dc| dc.dither.clone());
     let ctx_palette = resolve_ctx_palette(
         device_config_colors.as_deref(),
@@ -486,6 +515,7 @@ pub async fn handle_display<R: DeviceRegistry>(
     let header_colors_for_chain = header_colors_str.map(|s| s.to_string());
     let dc_colors = device_config_colors;
     let dc_dither = device_config_dither;
+    let dev_dither = dev_dither_override;
 
     // Run in spawn_blocking because Lua scripts use blocking HTTP requests
     let (refresh_rate, skip_update, content_hash, error_msg) =
@@ -504,18 +534,26 @@ pub async fn handle_display<R: DeviceRegistry>(
                         script_preserve_exact = ?result.script_preserve_exact,
                         dc_colors = ?dc_colors,
                         dc_dither = ?dc_dither,
+                        dev_dither = ?dev_dither,
                         panel_colors = ?panel_colors_for_chain,
                         header_colors = ?header_colors_for_chain,
                         measured_colors = ?measured_colors.as_ref().map(|mc| colors_to_hex_strings(mc)),
                         "Resolving render params for device"
                     );
 
+                    // Dev UI dither override beats everything (including script)
+                    let (eff_script_dither, eff_dc_dither) = if dev_dither.is_some() {
+                        (None, dev_dither.as_deref())
+                    } else {
+                        (result.script_dither.as_deref(), dc_dither.as_deref())
+                    };
+
                     let params = resolve_render_params(
                         result.script_colors.as_deref(),
-                        result.script_dither.as_deref(),
+                        eff_script_dither,
                         result.script_preserve_exact,
                         dc_colors.as_deref(),
-                        dc_dither.as_deref(),
+                        eff_dc_dither,
                         panel_colors_for_chain.as_deref(),
                         &fallback,
                         measured_colors.clone(),

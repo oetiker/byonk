@@ -687,16 +687,15 @@ async fn run_dev_server() -> anyhow::Result<()> {
         tracing::warn!("File watcher not active - set SCREENS_DIR to enable live reload");
     }
 
-    // Create shared color overrides for dev mode color tuning
-    let panel_color_overrides =
-        Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
+    // Create shared dev overrides (shared between dev UI and production handlers)
+    let dev_overrides = server::DevOverrides::default();
 
     // Create application state with shared overrides
     let config = Arc::new(AppConfig::load_from_assets(&asset_loader));
     let state = server::create_app_state_with_overrides(
         asset_loader.clone(),
         config.clone(),
-        panel_color_overrides.clone(),
+        dev_overrides.clone(),
     )?;
 
     // Create dev state sharing the same overrides
@@ -707,7 +706,7 @@ async fn run_dev_server() -> anyhow::Result<()> {
         renderer: state.renderer.clone(),
         file_watcher,
         asset_loader,
-        panel_color_overrides,
+        dev_overrides,
     };
 
     // Build dev routes as a nested router with DevState

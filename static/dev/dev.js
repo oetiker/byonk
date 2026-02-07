@@ -443,6 +443,11 @@ async function render() {
         if (elements.panelSelect.value) {
             queryParams.set('panel', elements.panelSelect.value);
             queryParams.set('use_actual', elements.useActual.checked ? 'true' : 'false');
+            // Send tuned actual colors directly so the preview doesn't need the override map
+            const panelOpt = elements.panelSelect.selectedOptions[0];
+            if (panelOpt?.dataset.colorsActual) {
+                queryParams.set('colors_actual', panelOpt.dataset.colorsActual);
+            }
         }
 
         // Add screen or mac (mac takes precedence)
@@ -831,21 +836,26 @@ function applyColorChange(newHex) {
     // Update swatch backgrounds
     updateColorSwatches();
 
-    // POST to server and debounced re-render
-    const panelId = panelOption.value;
+    // POST to server (keyed by device config key) and debounced re-render.
+    // The POST syncs the color override to the production handler so the
+    // actual device picks it up.  Only meaningful when a device is selected.
+    const selected = elements.screenSelect.value;
+    const deviceKey = selected.startsWith('device:') ? selected.slice('device:'.length) : '';
     clearTimeout(applyDebounceTimer);
     applyDebounceTimer = setTimeout(async () => {
-        try {
-            await fetch('/dev/panel-colors', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    panel: panelId,
-                    colors_actual: actualColors.join(','),
-                }),
-            });
-        } catch (e) {
-            console.error('Failed to update panel colors:', e);
+        if (deviceKey) {
+            try {
+                await fetch('/dev/panel-colors', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        device: deviceKey,
+                        colors_actual: actualColors.join(','),
+                    }),
+                });
+            } catch (e) {
+                console.error('Failed to update panel colors:', e);
+            }
         }
         render();
     }, 300);
@@ -855,7 +865,7 @@ function copyActualColors() {
     const panelOption = elements.panelSelect.selectedOptions[0];
     if (!panelOption || !panelOption.dataset.colorsActual) return;
     const text = panelOption.dataset.colorsActual;
-    navigator.clipboard.writeText(text).then(() => {
+    copyToClipboard(text).then(() => {
         const btn = document.querySelector('.copy-colors-btn');
         if (btn) {
             btn.textContent = 'Copied!';
@@ -866,6 +876,23 @@ function copyActualColors() {
             }, 1500);
         }
     });
+}
+
+// Clipboard helper — navigator.clipboard requires a secure context (HTTPS or
+// localhost).  The dev server runs plain HTTP, so fall back to execCommand.
+function copyToClipboard(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text);
+    }
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    return Promise.resolve();
 }
 
 // Setup popup event listeners (called from init)

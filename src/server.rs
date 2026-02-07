@@ -23,9 +23,18 @@ use crate::error::ApiError;
 use crate::models::AppConfig;
 use crate::services::{ContentCache, ContentPipeline, InMemoryRegistry, RenderService};
 
-/// Shared color overrides: panel_id → overridden colors_actual string.
-/// Used by the dev GUI to let users adjust measured colors at runtime.
-pub type PanelColorOverrides = Arc<RwLock<HashMap<String, String>>>;
+/// Runtime overrides set by the dev GUI and consumed by production handlers.
+///
+/// Both maps are keyed by **device config key** (the key from `config.devices`)
+/// so that each device can be tuned independently, even when multiple devices
+/// share the same panel profile.
+#[derive(Clone, Default)]
+pub struct DevOverrides {
+    /// device_config_key → overridden `colors_actual` string (from color-tuning popup).
+    pub panel_colors: Arc<RwLock<HashMap<String, String>>>,
+    /// device_config_key → dither algorithm string (from dither dropdown).
+    pub dither: Arc<RwLock<HashMap<String, String>>>,
+}
 
 /// Custom span maker that adds a unique request ID to each request's tracing span.
 #[derive(Clone, Copy)]
@@ -54,7 +63,7 @@ pub struct AppState {
     pub renderer: Arc<RenderService>,
     pub content_pipeline: Arc<ContentPipeline>,
     pub content_cache: Arc<ContentCache>,
-    pub panel_color_overrides: PanelColorOverrides,
+    pub dev_overrides: DevOverrides,
 }
 
 /// Create application state from an asset loader.
@@ -68,15 +77,14 @@ pub fn create_app_state_with_config(
     asset_loader: Arc<AssetLoader>,
     config: Arc<AppConfig>,
 ) -> anyhow::Result<AppState> {
-    let overrides = Arc::new(RwLock::new(HashMap::new()));
-    create_app_state_with_overrides(asset_loader, config, overrides)
+    create_app_state_with_overrides(asset_loader, config, DevOverrides::default())
 }
 
-/// Create application state with a shared color overrides map (for dev mode).
+/// Create application state with shared overrides (for dev mode).
 pub fn create_app_state_with_overrides(
     asset_loader: Arc<AssetLoader>,
     config: Arc<AppConfig>,
-    panel_color_overrides: PanelColorOverrides,
+    dev_overrides: DevOverrides,
 ) -> anyhow::Result<AppState> {
     let registry = Arc::new(InMemoryRegistry::new());
     let renderer = Arc::new(RenderService::new(&asset_loader)?);
@@ -92,7 +100,7 @@ pub fn create_app_state_with_overrides(
         renderer,
         content_pipeline,
         content_cache,
-        panel_color_overrides,
+        dev_overrides,
     })
 }
 
@@ -149,10 +157,9 @@ async fn handle_display(
     api::handle_display(
         axum::extract::State(state.config),
         axum::extract::State(state.registry),
-        axum::extract::State(state.renderer),
         axum::extract::State(state.content_pipeline),
         axum::extract::State(state.content_cache),
-        axum::extract::State(state.panel_color_overrides),
+        axum::extract::State(state.dev_overrides),
         headers,
     )
     .await

@@ -115,6 +115,7 @@ return {
     info_bar_y = height - scale_pixel(32),
     font_sm = scale_font(14),
   },
-  dither = "floyd-steinberg",
+  -- dither = "floyd-steinberg",
+  dither = "jarvis-judice-ninke",
   refresh_rate = refresh_rate
 }

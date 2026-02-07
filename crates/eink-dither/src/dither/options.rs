@@ -43,7 +43,8 @@ pub struct DitherOptions {
     ///
     /// When a pixel exactly matches a palette color (byte-for-byte), skip
     /// dithering entirely. This keeps text and solid UI elements crisp.
-    /// Error is neither diffused into nor out of these pixels.
+    /// These pixels absorb any accumulated error from neighbors, acting
+    /// as error sinks that prevent color bleed across hard boundaries.
     ///
     /// Default: `true`
     pub preserve_exact_matches: bool,
@@ -82,6 +83,29 @@ pub struct DitherOptions {
     ///
     /// Default: `f32::INFINITY` (no damping — legacy behavior)
     pub chroma_clamp: f32,
+
+    /// Blue noise jitter scale for Floyd-Steinberg Noise algorithm.
+    ///
+    /// Controls how much the error diffusion weights vary per pixel:
+    /// - `0.0` = no jitter (equivalent to plain Floyd-Steinberg)
+    /// - `2.0` = mild (±14% weight variation)
+    /// - `5.0` = default (±31% weight variation)
+    /// - `8.0` = aggressive (±50% weight variation)
+    ///
+    /// Only affects `FloydSteinbergNoise` algorithm; ignored by others.
+    ///
+    /// Default: `5.0`
+    pub noise_scale: f32,
+
+    /// Whether exact-match pixels absorb accumulated error.
+    ///
+    /// When `true`, exact-match pixels act as error sinks — accumulated error
+    /// from neighbors is discarded, preventing color bleed across boundaries.
+    /// When `false`, accumulated error passes through (original behavior),
+    /// maintaining smooth gradient continuity but allowing bleed.
+    ///
+    /// Default: `false` (pass-through — original behavior)
+    pub exact_absorb_error: bool,
 }
 
 impl Default for DitherOptions {
@@ -91,6 +115,8 @@ impl Default for DitherOptions {
             preserve_exact_matches: true,
             error_clamp: 0.5,
             chroma_clamp: f32::INFINITY,
+            noise_scale: 5.0,
+            exact_absorb_error: false,
         }
     }
 }
@@ -144,6 +170,26 @@ impl DitherOptions {
     #[inline]
     pub fn chroma_clamp(mut self, clamp: f32) -> Self {
         self.chroma_clamp = clamp;
+        self
+    }
+
+    /// Set blue noise jitter scale for Floyd-Steinberg Noise algorithm.
+    ///
+    /// # Arguments
+    /// * `scale` - Jitter scale (0.0 = no jitter, 2.0 = default, 4.0 = aggressive)
+    #[inline]
+    pub fn noise_scale(mut self, scale: f32) -> Self {
+        self.noise_scale = scale;
+        self
+    }
+
+    /// Set whether exact-match pixels absorb accumulated error.
+    ///
+    /// # Arguments
+    /// * `absorb` - When true, exact matches discard error; when false, error passes through
+    #[inline]
+    pub fn exact_absorb_error(mut self, absorb: bool) -> Self {
+        self.exact_absorb_error = absorb;
         self
     }
 }

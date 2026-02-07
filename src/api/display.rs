@@ -753,6 +753,7 @@ pub async fn handle_image<R: DeviceRegistry>(
         false, // production always uses official colors
         dither,
         preserve_exact,
+        None, // no tuning overrides in production
     )?;
 
     tracing::info!(size_bytes = png_bytes.len(), "Image rendered and served");

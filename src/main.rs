@@ -337,6 +337,7 @@ fn run_render_command(
             false,
             dither.as_deref(),
             preserve_exact,
+            None, // no tuning overrides in CLI
         )
         .map_err(|e| anyhow::anyhow!("Render error: {e}"))?;
 

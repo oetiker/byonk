@@ -64,14 +64,8 @@ use crate::palette::Palette;
 /// ```
 pub struct FloydSteinbergNoise;
 
-/// Jitter scale: how much the right/below weights vary.
-///
-/// With alpha in [-0.5, +0.5] and JITTER_SCALE = 2.0:
-/// - right weight varies from 6.0 to 8.0 (base 7.0 ± 1.0)
-/// - below weight varies from 4.0 to 6.0 (base 5.0 ± 1.0)
-///
-/// This is ~14% variation — enough to break worms without
-/// introducing visible noise.
+/// Default jitter scale (used by tests that reference the constant).
+#[cfg(test)]
 const JITTER_SCALE: f32 = 2.0;
 
 impl Dither for FloydSteinbergNoise {
@@ -112,9 +106,14 @@ impl Dither for FloydSteinbergNoise {
             for x in x_range {
                 let idx = y * width + x;
 
-                // Exact palette match: output exact color but let error flow through
+                // Exact palette match handling.
                 if let Some(palette_idx) = exact_matches[idx] {
                     output[idx] = palette_idx;
+                    if options.exact_absorb_error {
+                        // Absorb: discard accumulated error
+                        continue;
+                    }
+                    // Pass-through: compute and diffuse error normally
                     let accumulated = error_buf.get_accumulated(x);
                     let nearest_linear = palette.actual_linear(palette_idx as usize);
                     let error = [
@@ -126,9 +125,16 @@ impl Dither for FloydSteinbergNoise {
                             - nearest_linear.b,
                     ];
 
-                    // Diffuse with jittered weights (even for exact matches,
-                    // to keep error flow consistent)
-                    diffuse_jittered(&error, x, y, width, height, reverse, &mut error_buf);
+                    diffuse_jittered(
+                        &error,
+                        x,
+                        y,
+                        width,
+                        height,
+                        reverse,
+                        options.noise_scale,
+                        &mut error_buf,
+                    );
                     continue;
                 }
 
@@ -173,7 +179,16 @@ impl Dither for FloydSteinbergNoise {
                 };
 
                 // Diffuse with jittered weights
-                diffuse_jittered(&damped_error, x, y, width, height, reverse, &mut error_buf);
+                diffuse_jittered(
+                    &damped_error,
+                    x,
+                    y,
+                    width,
+                    height,
+                    reverse,
+                    options.noise_scale,
+                    &mut error_buf,
+                );
             }
 
             error_buf.advance_row();
@@ -188,6 +203,7 @@ impl Dither for FloydSteinbergNoise {
 /// Rotates weight between the "right" and "below" directions using
 /// blue noise, keeping total propagation at 100%.
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn diffuse_jittered(
     error: &[f32; 3],
     x: usize,
@@ -195,6 +211,7 @@ fn diffuse_jittered(
     width: usize,
     height: usize,
     reverse: bool,
+    jitter_scale: f32,
     error_buf: &mut ErrorBuffer,
 ) {
     // Blue noise jitter: rotate weight between right and below
@@ -202,9 +219,9 @@ fn diffuse_jittered(
     let alpha = (noise as f32 - 128.0) / 256.0; // -0.5..+0.5
 
     // Jittered weights (float, will be divided by 16)
-    let w_right = 7.0 - alpha * JITTER_SCALE;
+    let w_right = 7.0 - alpha * jitter_scale;
     let w_below_left = 3.0_f32;
-    let w_below = 5.0 + alpha * JITTER_SCALE;
+    let w_below = 5.0 + alpha * jitter_scale;
     let w_below_right = 1.0_f32;
 
     // Floyd-Steinberg entries: (dx, dy, weight)

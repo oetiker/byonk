@@ -398,6 +398,7 @@ impl ContentPipeline {
         use_actual: bool,
         dither: Option<&str>,
         preserve_exact: bool,
+        tuning: Option<&crate::rendering::svg_to_png::DitherTuning>,
     ) -> Result<Vec<u8>, ContentError> {
         let png_bytes = self.renderer.svg_renderer.render_to_palette_png(
             svg.as_bytes(),
@@ -407,6 +408,7 @@ impl ContentPipeline {
             use_actual,
             dither,
             preserve_exact,
+            tuning,
         )?;
         Ok(png_bytes)
     }

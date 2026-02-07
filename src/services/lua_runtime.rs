@@ -24,6 +24,12 @@ pub struct ScriptResult {
     pub dither: Option<String>,
     /// Optional preserve_exact override from script
     pub preserve_exact: Option<bool>,
+    /// Optional error clamp override from script
+    pub error_clamp: Option<f32>,
+    /// Optional blue noise jitter scale override from script
+    pub noise_scale: Option<f32>,
+    /// Optional chroma clamp override from script
+    pub chroma_clamp: Option<f32>,
 }
 
 /// Error type for Lua script execution
@@ -126,6 +132,11 @@ impl LuaRuntime {
             _ => None,
         };
 
+        // Parse optional dither tuning parameters from script return
+        let error_clamp = result.get::<f32>("error_clamp").ok();
+        let noise_scale = result.get::<f32>("noise_scale").ok();
+        let chroma_clamp = result.get::<f32>("chroma_clamp").ok();
+
         Ok(ScriptResult {
             data,
             refresh_rate,
@@ -133,6 +144,9 @@ impl LuaRuntime {
             colors,
             dither,
             preserve_exact,
+            error_clamp,
+            noise_scale,
+            chroma_clamp,
         })
     }
 

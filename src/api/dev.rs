@@ -365,6 +365,9 @@ pub async fn handle_render(
         device_config_colors,
         device_config_panel,
         device_config_dither,
+        dc_error_clamp,
+        dc_noise_scale,
+        dc_chroma_clamp,
     ) = if let Some(ref mac) = query.mac {
         // Try MAC lookup first, then registration code lookup
         match state
@@ -408,6 +411,9 @@ pub async fn handle_render(
                     dc.colors.clone(),
                     dc.panel.clone(),
                     dc.dither.clone(),
+                    dc.error_clamp,
+                    dc.noise_scale,
+                    dc.chroma_clamp,
                 )
             }
             None => {
@@ -423,7 +429,7 @@ pub async fn handle_render(
         }
     } else if let Some(ref screen_name) = query.screen {
         if let Some(config) = state.config.screens.get(screen_name) {
-            (config.clone(), None, None, None, None)
+            (config.clone(), None, None, None, None, None, None, None)
         } else {
             // Try auto-discovering screen from filesystem
             let script = format!("{}.lua", screen_name);
@@ -436,6 +442,9 @@ pub async fn handle_render(
                         template: PathBuf::from(&template),
                         default_refresh: 900,
                     },
+                    None,
+                    None,
+                    None,
                     None,
                     None,
                     None,
@@ -554,16 +563,19 @@ pub async fn handle_render(
             .render_svg_from_script(&script_result, Some(&ctx))
             .map_err(|e| e.to_string())?;
 
-        Ok::<(String, Option<Vec<String>>, Option<String>, Option<bool>), String>((
+        Ok::<(String, Option<Vec<String>>, Option<String>, Option<bool>, Option<f32>, Option<f32>, Option<f32>), String>((
             svg,
             script_result.script_colors,
             script_result.script_dither,
             script_result.script_preserve_exact,
+            script_result.script_error_clamp,
+            script_result.script_noise_scale,
+            script_result.script_chroma_clamp,
         ))
     })
     .await;
 
-    let (svg, script_colors, script_dither, script_preserve_exact) = match result {
+    let (svg, script_colors, script_dither, script_preserve_exact, script_error_clamp, script_noise_scale, script_chroma_clamp) = match result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             return (
@@ -642,7 +654,39 @@ pub async fn handle_render(
                 .await
                 .insert(device_key.clone(), ca.clone());
         }
+
+        // Tuning — sync when the dev UI sends tuning params
+        let has_query_tuning = query.error_clamp.is_some()
+            || query.noise_scale.is_some()
+            || query.chroma_clamp.is_some();
+        let mut tuning_map = state.dev_overrides.tuning.write().await;
+        if has_query_tuning {
+            tuning_map.insert(
+                device_key.clone(),
+                (query.error_clamp, query.noise_scale, query.chroma_clamp),
+            );
+        } else {
+            tuning_map.remove(device_key.as_str());
+        }
+        drop(tuning_map);
     }
+
+    // Resolve tuning: query params (dev UI) > script > device config > None
+    let tuning = if query.error_clamp.is_some()
+        || query.noise_scale.is_some()
+        || query.chroma_clamp.is_some()
+    {
+        (query.error_clamp, query.noise_scale, query.chroma_clamp)
+    } else {
+        crate::api::display::resolve_tuning(
+            script_error_clamp,
+            script_noise_scale,
+            script_chroma_clamp,
+            dc_error_clamp,
+            dc_noise_scale,
+            dc_chroma_clamp,
+        )
+    };
 
     let render_params = crate::api::display::resolve_render_params(
         script_colors.as_deref(),
@@ -654,6 +698,7 @@ pub async fn handle_render(
         &query_palette,
         measured_colors.clone(),
         query.preserve_exact,
+        tuning,
     );
 
     let final_palette = render_params.palette;
@@ -680,9 +725,9 @@ pub async fn handle_render(
 
     let tuning = crate::rendering::svg_to_png::DitherTuning {
         serpentine: None,
-        error_clamp: query.error_clamp,
-        chroma_clamp: query.chroma_clamp,
-        noise_scale: query.noise_scale,
+        error_clamp: render_params.error_clamp,
+        chroma_clamp: render_params.chroma_clamp,
+        noise_scale: render_params.noise_scale,
         exact_absorb_error: None,
     };
     let has_tuning = tuning.error_clamp.is_some()

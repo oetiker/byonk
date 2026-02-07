@@ -56,6 +56,26 @@ pub struct RenderParams {
     pub measured_colors: Option<Vec<(u8, u8, u8)>>,
     pub dither: Option<String>,
     pub preserve_exact: bool,
+    pub error_clamp: Option<f32>,
+    pub noise_scale: Option<f32>,
+    pub chroma_clamp: Option<f32>,
+}
+
+/// Resolve dither tuning parameters.
+/// Priority: script values > device config values > None (algorithm defaults)
+pub fn resolve_tuning(
+    script_error_clamp: Option<f32>,
+    script_noise_scale: Option<f32>,
+    script_chroma_clamp: Option<f32>,
+    config_error_clamp: Option<f32>,
+    config_noise_scale: Option<f32>,
+    config_chroma_clamp: Option<f32>,
+) -> (Option<f32>, Option<f32>, Option<f32>) {
+    (
+        script_error_clamp.or(config_error_clamp),
+        script_noise_scale.or(config_noise_scale),
+        script_chroma_clamp.or(config_chroma_clamp),
+    )
 }
 
 /// Resolve the pre-script palette for device context.
@@ -90,6 +110,7 @@ pub fn resolve_render_params(
     fallback_palette: &[(u8, u8, u8)],
     measured_colors: Option<Vec<(u8, u8, u8)>>,
     preserve_exact_override: Option<bool>,
+    tuning: (Option<f32>, Option<f32>, Option<f32>),
 ) -> RenderParams {
     let palette = if let Some(sc) = script_colors {
         parse_colors_header(&sc.join(","))
@@ -114,6 +135,9 @@ pub fn resolve_render_params(
         measured_colors,
         dither,
         preserve_exact,
+        error_clamp: tuning.0,
+        noise_scale: tuning.1,
+        chroma_clamp: tuning.2,
     }
 }
 
@@ -485,6 +509,16 @@ pub async fn handle_display<R: DeviceRegistry>(
         None
     };
     let device_config_dither = device_config.and_then(|dc| dc.dither.clone());
+
+    // Tuning: dev override > device config > None (algorithm defaults)
+    let dev_tuning_override = if let Some(ref key) = device_entry_key {
+        dev_overrides.tuning.read().await.get(key).cloned()
+    } else {
+        None
+    };
+    let dc_error_clamp = device_config.and_then(|dc| dc.error_clamp);
+    let dc_noise_scale = device_config.and_then(|dc| dc.noise_scale);
+    let dc_chroma_clamp = device_config.and_then(|dc| dc.chroma_clamp);
     let ctx_palette = resolve_ctx_palette(
         device_config_colors.as_deref(),
         panel_colors_for_chain.as_deref(),
@@ -516,6 +550,7 @@ pub async fn handle_display<R: DeviceRegistry>(
     let dc_colors = device_config_colors;
     let dc_dither = device_config_dither;
     let dev_dither = dev_dither_override;
+    let dev_tuning = dev_tuning_override;
 
     // Run in spawn_blocking because Lua scripts use blocking HTTP requests
     let (refresh_rate, skip_update, content_hash, error_msg) =
@@ -548,6 +583,20 @@ pub async fn handle_display<R: DeviceRegistry>(
                         (result.script_dither.as_deref(), dc_dither.as_deref())
                     };
 
+                    // Resolve tuning: dev override > script > device config > None
+                    let tuning = if let Some(ref dt) = dev_tuning {
+                        *dt
+                    } else {
+                        resolve_tuning(
+                            result.script_error_clamp,
+                            result.script_noise_scale,
+                            result.script_chroma_clamp,
+                            dc_error_clamp,
+                            dc_noise_scale,
+                            dc_chroma_clamp,
+                        )
+                    };
+
                     let params = resolve_render_params(
                         result.script_colors.as_deref(),
                         eff_script_dither,
@@ -558,6 +607,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                         &fallback,
                         measured_colors.clone(),
                         None,
+                        tuning,
                     );
 
                     tracing::debug!(
@@ -585,7 +635,8 @@ pub async fn handle_display<R: DeviceRegistry>(
                                 .with_colors(Some(params.palette))
                                 .with_colors_actual(params.measured_colors)
                                 .with_dither(params.dither)
-                                .with_preserve_exact(Some(params.preserve_exact));
+                                .with_preserve_exact(Some(params.preserve_exact))
+                                .with_tuning(params.error_clamp, params.noise_scale, params.chroma_clamp);
                                 let hash = cached.content_hash.clone();
                                 cache.store(cached);
                                 (result.refresh_rate, false, Some(hash), None)
@@ -745,6 +796,18 @@ pub async fn handle_image<R: DeviceRegistry>(
         "Dither parameters for PNG render"
     );
 
+    // Build DitherTuning from cached tuning values (set by script or device config)
+    let tuning = crate::rendering::svg_to_png::DitherTuning {
+        serpentine: None,
+        error_clamp: cached.error_clamp,
+        chroma_clamp: cached.chroma_clamp,
+        noise_scale: cached.noise_scale,
+        exact_absorb_error: None,
+    };
+    let has_tuning = tuning.error_clamp.is_some()
+        || tuning.chroma_clamp.is_some()
+        || tuning.noise_scale.is_some();
+
     let png_bytes = content_pipeline.render_png_from_svg(
         &cached.rendered_svg,
         spec,
@@ -753,7 +816,7 @@ pub async fn handle_image<R: DeviceRegistry>(
         false, // production always uses official colors
         dither,
         preserve_exact,
-        None, // no tuning overrides in production
+        if has_tuning { Some(&tuning) } else { None },
     )?;
 
     tracing::info!(size_bytes = png_bytes.len(), "Image rendered and served");

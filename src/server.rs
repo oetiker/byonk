@@ -34,6 +34,8 @@ pub struct DevOverrides {
     pub panel_colors: Arc<RwLock<HashMap<String, String>>>,
     /// device_config_key → dither algorithm string (from dither dropdown).
     pub dither: Arc<RwLock<HashMap<String, String>>>,
+    /// device_config_key → dither tuning (error_clamp, noise_scale, chroma_clamp).
+    pub tuning: Arc<RwLock<HashMap<String, (Option<f32>, Option<f32>, Option<f32>)>>>,
 }
 
 /// Custom span maker that adds a unique request ID to each request's tracing span.

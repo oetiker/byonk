@@ -89,6 +89,15 @@ pub struct DeviceConfig {
 
     /// Optional panel profile name (references panels section)
     pub panel: Option<String>,
+
+    /// Optional error clamp override for dithering (e.g. 0.08)
+    pub error_clamp: Option<f32>,
+
+    /// Optional blue noise jitter scale override (e.g. 0.6)
+    pub noise_scale: Option<f32>,
+
+    /// Optional chroma clamp override for dithering
+    pub chroma_clamp: Option<f32>,
 }
 
 /// Device registration settings
@@ -343,6 +352,9 @@ mod tests {
                 colors: None,
                 dither: None,
                 panel: None,
+                error_clamp: None,
+                noise_scale: None,
+                chroma_clamp: None,
             },
         );
 
@@ -375,6 +387,9 @@ mod tests {
                 colors: None,
                 dither: None,
                 panel: None,
+                error_clamp: None,
+                noise_scale: None,
+                chroma_clamp: None,
             },
         );
 
@@ -404,6 +419,9 @@ mod tests {
                 colors: None,
                 dither: None,
                 panel: None,
+                error_clamp: None,
+                noise_scale: None,
+                chroma_clamp: None,
             },
         );
 
@@ -552,6 +570,9 @@ registration:
                 colors: None,
                 dither: None,
                 panel: None,
+                error_clamp: None,
+                noise_scale: None,
+                chroma_clamp: None,
             },
         );
 
@@ -590,6 +611,9 @@ registration:
                 colors: None,
                 dither: None,
                 panel: None,
+                error_clamp: None,
+                noise_scale: None,
+                chroma_clamp: None,
             },
         );
 
@@ -602,6 +626,9 @@ registration:
                 colors: None,
                 dither: None,
                 panel: None,
+                error_clamp: None,
+                noise_scale: None,
+                chroma_clamp: None,
             },
         );
 

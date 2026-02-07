@@ -28,6 +28,12 @@ pub struct CachedContent {
     pub dither: Option<String>,
     /// Whether to preserve exact palette matches (None = default true)
     pub preserve_exact: Option<bool>,
+    /// Optional error clamp for dithering
+    pub error_clamp: Option<f32>,
+    /// Optional blue noise jitter scale for dithering
+    pub noise_scale: Option<f32>,
+    /// Optional chroma clamp for dithering
+    pub chroma_clamp: Option<f32>,
 }
 
 impl CachedContent {
@@ -45,6 +51,9 @@ impl CachedContent {
             colors_actual: None,
             dither: None,
             preserve_exact: None,
+            error_clamp: None,
+            noise_scale: None,
+            chroma_clamp: None,
         }
     }
 
@@ -69,6 +78,19 @@ impl CachedContent {
     /// Set the preserve_exact flag
     pub fn with_preserve_exact(mut self, preserve_exact: Option<bool>) -> Self {
         self.preserve_exact = preserve_exact;
+        self
+    }
+
+    /// Set dither tuning parameters
+    pub fn with_tuning(
+        mut self,
+        error_clamp: Option<f32>,
+        noise_scale: Option<f32>,
+        chroma_clamp: Option<f32>,
+    ) -> Self {
+        self.error_clamp = error_clamp;
+        self.noise_scale = noise_scale;
+        self.chroma_clamp = chroma_clamp;
         self
     }
 }

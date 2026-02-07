@@ -241,7 +241,7 @@ fn run_render_command(
     let is_unregistered = device_context.registration_code.is_some()
         && !config.is_device_registered(mac, device_context.registration_code.as_deref());
 
-    let (svg_content, final_palette, dither, preserve_exact) = if is_unregistered {
+    let (svg_content, final_palette, dither, preserve_exact, cli_error_clamp, cli_noise_scale, cli_chroma_clamp) = if is_unregistered {
         let code = device_context.registration_code.as_deref().unwrap();
 
         // Use registration screen if configured, otherwise default screen, otherwise built-in
@@ -280,7 +280,7 @@ fn run_render_command(
             )
         };
 
-        (svg, cli_palette, None, true)
+        (svg, cli_palette, None, true, None, None, None)
     } else {
         // Normal render path
         let script_result = content_pipeline
@@ -303,6 +303,19 @@ fn run_render_command(
             .and_then(|p| p.colors_actual.as_deref())
             .map(byonk::api::display::parse_colors_header);
 
+        let dc_error_clamp = device_config.and_then(|dc| dc.error_clamp);
+        let dc_noise_scale = device_config.and_then(|dc| dc.noise_scale);
+        let dc_chroma_clamp = device_config.and_then(|dc| dc.chroma_clamp);
+
+        let tuning = byonk::api::display::resolve_tuning(
+            script_result.script_error_clamp,
+            script_result.script_noise_scale,
+            script_result.script_chroma_clamp,
+            dc_error_clamp,
+            dc_noise_scale,
+            dc_chroma_clamp,
+        );
+
         let render_params = byonk::api::display::resolve_render_params(
             script_result.script_colors.as_deref(),
             script_result.script_dither.as_deref(),
@@ -313,6 +326,7 @@ fn run_render_command(
             &cli_palette,
             measured,
             None,
+            tuning,
         );
 
         let svg = content_pipeline
@@ -324,10 +338,24 @@ fn run_render_command(
             render_params.palette,
             render_params.dither,
             render_params.preserve_exact,
+            render_params.error_clamp,
+            render_params.noise_scale,
+            render_params.chroma_clamp,
         )
     };
 
     // Render to PNG
+    let cli_tuning = byonk::rendering::svg_to_png::DitherTuning {
+        serpentine: None,
+        error_clamp: cli_error_clamp,
+        chroma_clamp: cli_chroma_clamp,
+        noise_scale: cli_noise_scale,
+        exact_absorb_error: None,
+    };
+    let has_cli_tuning = cli_tuning.error_clamp.is_some()
+        || cli_tuning.chroma_clamp.is_some()
+        || cli_tuning.noise_scale.is_some();
+
     let png_bytes = content_pipeline
         .render_png_from_svg(
             &svg_content,
@@ -337,7 +365,7 @@ fn run_render_command(
             false,
             dither.as_deref(),
             preserve_exact,
-            None, // no tuning overrides in CLI
+            if has_cli_tuning { Some(&cli_tuning) } else { None },
         )
         .map_err(|e| anyhow::anyhow!("Render error: {e}"))?;
 

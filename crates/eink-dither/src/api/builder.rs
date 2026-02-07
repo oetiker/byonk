@@ -266,6 +266,23 @@ impl EinkDitherer {
     #[inline]
     pub fn algorithm(mut self, algorithm: DitherAlgorithm) -> Self {
         self.algorithm = algorithm;
+        // Apply per-algorithm defaults. Subsequent .error_clamp() / .noise_scale()
+        // calls (e.g. from dev UI tuning) override these.
+        match algorithm {
+            DitherAlgorithm::JarvisJudiceNinke
+            | DitherAlgorithm::JarvisJudiceNinkeNoise
+            | DitherAlgorithm::Sierra
+            | DitherAlgorithm::SierraNoise => {
+                self.dither_opts = self.dither_opts.error_clamp(0.10);
+            }
+            DitherAlgorithm::SierraTwoRowNoise => {
+                self.dither_opts = self.dither_opts.noise_scale(4.0);
+            }
+            DitherAlgorithm::SierraLiteNoise => {
+                self.dither_opts = self.dither_opts.noise_scale(2.0);
+            }
+            _ => {}
+        }
         self
     }
 

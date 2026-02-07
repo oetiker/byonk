@@ -269,17 +269,20 @@ impl EinkDitherer {
         // Apply per-algorithm defaults. Subsequent .error_clamp() / .noise_scale()
         // calls (e.g. from dev UI tuning) override these.
         match algorithm {
-            DitherAlgorithm::JarvisJudiceNinke
-            | DitherAlgorithm::JarvisJudiceNinkeNoise
-            | DitherAlgorithm::Sierra
-            | DitherAlgorithm::SierraNoise => {
-                self.dither_opts = self.dither_opts.error_clamp(0.10);
+            DitherAlgorithm::FloydSteinberg | DitherAlgorithm::FloydSteinbergNoise => {
+                self.dither_opts = self.dither_opts.error_clamp(0.12).noise_scale(4.0);
             }
-            DitherAlgorithm::SierraTwoRowNoise => {
-                self.dither_opts = self.dither_opts.noise_scale(4.0);
+            DitherAlgorithm::JarvisJudiceNinke | DitherAlgorithm::JarvisJudiceNinkeNoise => {
+                self.dither_opts = self.dither_opts.error_clamp(0.03).noise_scale(6.0);
             }
-            DitherAlgorithm::SierraLiteNoise => {
-                self.dither_opts = self.dither_opts.noise_scale(2.0);
+            DitherAlgorithm::Sierra | DitherAlgorithm::SierraNoise => {
+                self.dither_opts = self.dither_opts.error_clamp(0.10).noise_scale(5.5);
+            }
+            DitherAlgorithm::SierraTwoRow | DitherAlgorithm::SierraTwoRowNoise => {
+                self.dither_opts = self.dither_opts.error_clamp(0.10).noise_scale(7.0);
+            }
+            DitherAlgorithm::SierraLite | DitherAlgorithm::SierraLiteNoise => {
+                self.dither_opts = self.dither_opts.error_clamp(0.11).noise_scale(2.5);
             }
             _ => {}
         }

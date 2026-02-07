@@ -6,11 +6,11 @@
 const DITHER_DEFAULTS = {
     '':                    { noiseScale: '0',   errorClamp: '0.08' }, // Auto (Atkinson)
     'atkinson':            { noiseScale: '0',   errorClamp: '0.08' },
-    'floyd-steinberg':     { noiseScale: '5.0', errorClamp: '0.08' },
-    'jarvis-judice-ninke': { noiseScale: '5.0', errorClamp: '0.10' },
-    'sierra':              { noiseScale: '5.0', errorClamp: '0.10' },
-    'sierra-two-row':      { noiseScale: '4.0', errorClamp: '0.08' },
-    'sierra-lite':         { noiseScale: '2.0', errorClamp: '0.08' },
+    'floyd-steinberg':     { noiseScale: '4.0', errorClamp: '0.12' },
+    'jarvis-judice-ninke': { noiseScale: '6.0', errorClamp: '0.03' },
+    'sierra':              { noiseScale: '5.5', errorClamp: '0.10' },
+    'sierra-two-row':      { noiseScale: '7.0', errorClamp: '0.10' },
+    'sierra-lite':         { noiseScale: '2.5', errorClamp: '0.11' },
 };
 
 const state = {

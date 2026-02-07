@@ -65,6 +65,10 @@ impl SvgRenderer {
     /// The `dither` parameter selects the dithering algorithm:
     /// - `"photo"` / `"atkinson"` - Atkinson error diffusion (best color accuracy)
     /// - `"floyd-steinberg"` - Floyd-Steinberg with blue noise jitter (smooth gradients)
+    /// - `"jarvis-judice-ninke"` - JJN error diffusion (wide kernel, least oscillation)
+    /// - `"sierra"` - Sierra full error diffusion (wide kernel)
+    /// - `"sierra-two-row"` - Sierra two-row error diffusion
+    /// - `"sierra-lite"` - Sierra Lite error diffusion (minimal kernel)
     /// - `"graphics"` (default) - Blue noise ordered dithering
     /// - `"simplex"` - Barycentric ordered dithering (up to 4-color blending)
     ///
@@ -93,6 +97,12 @@ impl SvgRenderer {
             Some(s) if s.eq_ignore_ascii_case("floyd-steinberg") => {
                 DitherAlgorithm::FloydSteinbergNoise
             }
+            Some(s) if s.eq_ignore_ascii_case("jarvis-judice-ninke") => {
+                DitherAlgorithm::JarvisJudiceNinke
+            }
+            Some(s) if s.eq_ignore_ascii_case("sierra") => DitherAlgorithm::Sierra,
+            Some(s) if s.eq_ignore_ascii_case("sierra-two-row") => DitherAlgorithm::SierraTwoRow,
+            Some(s) if s.eq_ignore_ascii_case("sierra-lite") => DitherAlgorithm::SierraLite,
             _ => DitherAlgorithm::Auto, // Atkinson
         };
         let intent = RenderingIntent::Photo;

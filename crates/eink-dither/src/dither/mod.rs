@@ -111,6 +111,31 @@ pub enum DitherAlgorithm {
     /// to break "worm" artifacts while maintaining 100% error propagation.
     /// Best for photographs with smooth gradients.
     FloydSteinbergNoise,
+
+    /// Jarvis-Judice-Ninke error diffusion (100% propagation, 12 neighbors).
+    ///
+    /// Large 3-row kernel with peak weight 7/48 ≈ 14.6%. The wide spread
+    /// prevents oscillation artifacts on sparse chromatic palettes while
+    /// maintaining full error propagation for accurate color reproduction.
+    JarvisJudiceNinke,
+
+    /// Sierra (full) error diffusion (100% propagation, 10 neighbors).
+    ///
+    /// 3-row kernel with peak weight 5/32 ≈ 15.6%. Similar anti-oscillation
+    /// properties to JJN with slightly fewer neighbors.
+    Sierra,
+
+    /// Sierra two-row error diffusion (100% propagation, 7 neighbors).
+    ///
+    /// 2-row kernel with peak weight 4/16 = 25%. Faster than full Sierra
+    /// with good oscillation resistance.
+    SierraTwoRow,
+
+    /// Sierra Lite error diffusion (100% propagation, 3 neighbors).
+    ///
+    /// Minimal 2-row kernel with peak weight 2/4 = 50%. Fastest Sierra
+    /// variant, similar characteristics to Floyd-Steinberg.
+    SierraLite,
 }
 
 use crate::color::{LinearRgb, Oklab, Srgb};

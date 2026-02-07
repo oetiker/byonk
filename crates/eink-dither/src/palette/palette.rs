@@ -341,11 +341,10 @@ impl Palette {
             // and error diffusion naturally converges to the correct
             // average over a neighborhood of pixels.
             //
-            // Note: pure dark greys may see minor blue tinting (DeltaE
-            // ~0.05) because blue (L=0.45) is Euclidean-closer to dark
-            // grey (L=0.37) than black (L=0.0). This is a fundamental
-            // property of OKLab Euclidean distance and is imperceptible
-            // on e-ink displays.
+            // Grey pixels matching dark chromatic entries with similar
+            // lightness is expected and desirable — error diffusion
+            // uses all palette colors to produce smooth multi-color
+            // grey gradients that cancel to neutral in aggregate.
             p.distance_metric = DistanceMetric::Euclidean;
         }
         p

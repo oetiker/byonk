@@ -8,7 +8,7 @@
 use crate::color::Srgb;
 use crate::dither::{
     Atkinson, BlueNoiseDither, Dither, DitherAlgorithm, DitherOptions, FloydSteinberg,
-    FloydSteinbergNoise, SimplexDither,
+    FloydSteinbergNoise, JarvisJudiceNinke, Sierra, SierraLite, SierraTwoRow, SimplexDither,
 };
 use crate::output::{DitheredImage, RenderingIntent};
 use crate::palette::Palette;
@@ -61,7 +61,9 @@ impl EinkDitherer {
     /// - **Photo**: `PreprocessOptions::photo()` (saturation 1.2, contrast 1.1)
     /// - **Graphics**: `PreprocessOptions::graphics()` (no enhancement)
     ///
-    /// Dither options default to `DitherOptions::new()` (serpentine, error clamp 0.5).
+    /// Dither options default to `DitherOptions::new()` with serpentine scanning.
+    /// Photo intent uses error clamp 0.3 (reduced from 0.5 to prevent oscillation
+    /// on sparse chromatic palettes); Graphics uses default clamp 0.5.
     ///
     /// # Arguments
     ///
@@ -83,11 +85,20 @@ impl EinkDitherer {
             RenderingIntent::Photo => PreprocessOptions::photo(),
             RenderingIntent::Graphics => PreprocessOptions::graphics(),
         };
+        // Photo intent: lower error_clamp from default 0.5 to 0.3 to reduce
+        // oscillation artifacts on sparse chromatic palettes. With clamp=0.5,
+        // pixel+error can range [-0.5, 1.5]; at 0.3 it's [-0.3, 1.3], which
+        // prevents high-amplitude overshoot in Floyd-Steinberg and other
+        // concentrated kernels.
+        let dither_opts = match intent {
+            RenderingIntent::Photo => DitherOptions::new().error_clamp(0.3),
+            RenderingIntent::Graphics => DitherOptions::new(),
+        };
         Self {
             palette,
             intent,
             preprocess,
-            dither_opts: DitherOptions::new(),
+            dither_opts,
             algorithm: DitherAlgorithm::Auto,
         }
     }
@@ -317,6 +328,46 @@ impl EinkDitherer {
             DitherAlgorithm::FloydSteinbergNoise => {
                 let photo_palette = self.palette.for_error_diffusion();
                 FloydSteinbergNoise.dither(
+                    &result.pixels,
+                    result.width,
+                    result.height,
+                    &photo_palette,
+                    &self.dither_opts,
+                )
+            }
+            DitherAlgorithm::JarvisJudiceNinke => {
+                let photo_palette = self.palette.for_error_diffusion();
+                JarvisJudiceNinke.dither(
+                    &result.pixels,
+                    result.width,
+                    result.height,
+                    &photo_palette,
+                    &self.dither_opts,
+                )
+            }
+            DitherAlgorithm::Sierra => {
+                let photo_palette = self.palette.for_error_diffusion();
+                Sierra.dither(
+                    &result.pixels,
+                    result.width,
+                    result.height,
+                    &photo_palette,
+                    &self.dither_opts,
+                )
+            }
+            DitherAlgorithm::SierraTwoRow => {
+                let photo_palette = self.palette.for_error_diffusion();
+                SierraTwoRow.dither(
+                    &result.pixels,
+                    result.width,
+                    result.height,
+                    &photo_palette,
+                    &self.dither_opts,
+                )
+            }
+            DitherAlgorithm::SierraLite => {
+                let photo_palette = self.palette.for_error_diffusion();
+                SierraLite.dither(
                     &result.pixels,
                     result.width,
                     result.height,

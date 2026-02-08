@@ -308,6 +308,45 @@ panels:
 | `height` | No | Display height in pixels |
 | `colors` | Yes | Official palette colors (comma-separated hex) |
 | `colors_actual` | No | Measured/actual colors the panel really displays |
+| `dither` | No | Per-panel dither tuning defaults (see below) |
+
+### Panel Dither Defaults
+
+Panels can carry default dither tuning values that apply to all devices using that panel. This avoids repeating the same tuning in every device config entry.
+
+```yaml
+panels:
+  trmnl_og_4clr:
+    name: "TRMNL OG (4-color)"
+    colors: "#000000,#FFFFFF,#FF0000,#FFFF00"
+    colors_actual: "#303030,#D0D0C8,#C04040,#D0D020"
+    dither:
+      error_clamp: 0.1         # flat default for all algorithms
+      noise_scale: 5.0
+      floyd-steinberg:          # per-algorithm override
+        error_clamp: 0.08
+        noise_scale: 4.0
+      atkinson:
+        error_clamp: 0.12
+```
+
+The `dither` section supports:
+- **Flat keys** (`error_clamp`, `noise_scale`, `chroma_clamp`): default values for all algorithms
+- **Algorithm sub-sections**: per-algorithm overrides that take priority over flat defaults
+
+Resolution within a panel: per-algorithm value > flat default > None.
+
+Algorithm names accept aliases (e.g. `photo` for `atkinson`, `graphics` for `blue-noise`, `jjn` for `jarvis-judice-ninke`).
+
+The overall tuning priority chain is:
+
+| Priority | Source |
+|----------|--------|
+| 1 (highest) | Dev UI overrides |
+| 2 | Lua script return values |
+| 3 | Device config (`error_clamp`, `noise_scale`, `chroma_clamp`) |
+| 4 | Panel dither defaults |
+| 5 (lowest) | Built-in per-algorithm defaults |
 
 ### Panel Assignment
 

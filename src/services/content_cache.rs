@@ -81,16 +81,11 @@ impl CachedContent {
         self
     }
 
-    /// Set dither tuning parameters
-    pub fn with_tuning(
-        mut self,
-        error_clamp: Option<f32>,
-        noise_scale: Option<f32>,
-        chroma_clamp: Option<f32>,
-    ) -> Self {
-        self.error_clamp = error_clamp;
-        self.noise_scale = noise_scale;
-        self.chroma_clamp = chroma_clamp;
+    /// Set dither tuning parameters from a DitherTuningValues
+    pub fn with_tuning(mut self, tuning: &crate::models::DitherTuningValues) -> Self {
+        self.error_clamp = tuning.error_clamp;
+        self.noise_scale = tuning.noise_scale;
+        self.chroma_clamp = tuning.chroma_clamp;
         self
     }
 }

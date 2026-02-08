@@ -11,7 +11,8 @@ use utoipa::ToSchema;
 use super::headers::HeaderMapExt;
 use crate::error::ApiError;
 use crate::models::{
-    verify_ed25519_signature, ApiKey, AppConfig, Device, DeviceId, DeviceModel, DisplaySpec,
+    normalize_algorithm_name, verify_ed25519_signature, ApiKey, AppConfig, Device, DeviceId,
+    DeviceModel, DisplaySpec, DitherTuningValues,
 };
 use crate::server::DevOverrides;
 use crate::services::{
@@ -62,20 +63,13 @@ pub struct RenderParams {
 }
 
 /// Resolve dither tuning parameters.
-/// Priority: script values > device config values > None (algorithm defaults)
+/// Priority: script > device config > panel > None (algorithm defaults)
 pub fn resolve_tuning(
-    script_error_clamp: Option<f32>,
-    script_noise_scale: Option<f32>,
-    script_chroma_clamp: Option<f32>,
-    config_error_clamp: Option<f32>,
-    config_noise_scale: Option<f32>,
-    config_chroma_clamp: Option<f32>,
-) -> crate::server::TuningOverride {
-    (
-        script_error_clamp.or(config_error_clamp),
-        script_noise_scale.or(config_noise_scale),
-        script_chroma_clamp.or(config_chroma_clamp),
-    )
+    script: &DitherTuningValues,
+    device_config: &DitherTuningValues,
+    panel: &DitherTuningValues,
+) -> DitherTuningValues {
+    script.or(device_config).or(panel)
 }
 
 /// Resolve the pre-script palette for device context.
@@ -110,7 +104,7 @@ pub fn resolve_render_params(
     fallback_palette: &[(u8, u8, u8)],
     measured_colors: Option<Vec<(u8, u8, u8)>>,
     preserve_exact_override: Option<bool>,
-    tuning: crate::server::TuningOverride,
+    tuning: &DitherTuningValues,
 ) -> RenderParams {
     let palette = if let Some(sc) = script_colors {
         parse_colors_header(&sc.join(","))
@@ -135,9 +129,9 @@ pub fn resolve_render_params(
         measured_colors,
         dither,
         preserve_exact,
-        error_clamp: tuning.0,
-        noise_scale: tuning.1,
-        chroma_clamp: tuning.2,
+        error_clamp: tuning.error_clamp,
+        noise_scale: tuning.noise_scale,
+        chroma_clamp: tuning.chroma_clamp,
     }
 }
 
@@ -275,10 +269,10 @@ pub async fn handle_display<R: DeviceRegistry>(
                 firmware_version: headers.get_str("FW-Version").map(|s| s.to_string()),
                 width: Some(width),
                 height: Some(height),
-
                 registration_code: Some(code.to_string()),
                 board: headers.get_str("Board").map(|s| s.to_string()),
                 colors: Some(color_hex.clone()),
+                ..Default::default()
             };
 
             // Use registration screen if configured, otherwise use default screen
@@ -510,15 +504,32 @@ pub async fn handle_display<R: DeviceRegistry>(
     };
     let device_config_dither = device_config.and_then(|dc| dc.dither.clone());
 
-    // Tuning: dev override > device config > None (algorithm defaults)
-    let dev_tuning_override = if let Some(ref key) = device_entry_key {
+    // Tuning: dev override > device config > panel > None (algorithm defaults)
+    let dev_tuning_override: Option<DitherTuningValues> = if let Some(ref key) = device_entry_key {
         dev_overrides.tuning.read().await.get(key).cloned()
     } else {
         None
     };
-    let dc_error_clamp = device_config.and_then(|dc| dc.error_clamp);
-    let dc_noise_scale = device_config.and_then(|dc| dc.noise_scale);
-    let dc_chroma_clamp = device_config.and_then(|dc| dc.chroma_clamp);
+    let dc_tuning = DitherTuningValues {
+        error_clamp: device_config.and_then(|dc| dc.error_clamp),
+        noise_scale: device_config.and_then(|dc| dc.noise_scale),
+        chroma_clamp: device_config.and_then(|dc| dc.chroma_clamp),
+    };
+
+    // Resolve panel dither config for pre-script algorithm
+    let panel_dither_config = panel.and_then(|p| p.dither.clone());
+    // Pre-script algorithm: dev override > device config > default "graphics"
+    let pre_script_algo = dev_dither_override
+        .as_deref()
+        .or(device_config_dither.as_deref())
+        .unwrap_or("graphics");
+    let panel_tuning = panel_dither_config
+        .as_ref()
+        .map(|pdc| pdc.resolve_for_algorithm(Some(pre_script_algo)))
+        .unwrap_or_default();
+    // Pre-script resolved tuning for device context: dc > panel
+    let pre_script_tuning = dc_tuning.or(&panel_tuning);
+
     let ctx_palette = resolve_ctx_palette(
         device_config_colors.as_deref(),
         panel_colors_for_chain.as_deref(),
@@ -538,6 +549,10 @@ pub async fn handle_display<R: DeviceRegistry>(
         registration_code: Some(registration_code),
         board: board_header.clone(),
         colors: Some(ctx_color_hex),
+        dither_algorithm: Some(pre_script_algo.to_string()),
+        dither_error_clamp: pre_script_tuning.error_clamp,
+        dither_noise_scale: pre_script_tuning.noise_scale,
+        dither_chroma_clamp: pre_script_tuning.chroma_clamp,
     };
 
     // Run script, render SVG, and cache the result (PNG rendering happens in /api/image)
@@ -551,6 +566,8 @@ pub async fn handle_display<R: DeviceRegistry>(
     let dc_dither = device_config_dither;
     let dev_dither = dev_dither_override;
     let dev_tuning = dev_tuning_override;
+    let dc_tuning_for_closure = dc_tuning;
+    let panel_dither_for_closure = panel_dither_config;
 
     // Run in spawn_blocking because Lua scripts use blocking HTTP requests
     let (refresh_rate, skip_update, content_hash, error_msg) =
@@ -583,18 +600,37 @@ pub async fn handle_display<R: DeviceRegistry>(
                         (result.script_dither.as_deref(), dc_dither.as_deref())
                     };
 
-                    // Resolve tuning: dev override > script > device config > None
-                    let tuning = if let Some(ref dt) = dev_tuning {
-                        *dt
+                    // Determine final algorithm for panel tuning resolution
+                    let final_algo_str = if dev_dither.is_some() {
+                        dev_dither.as_deref()
                     } else {
-                        resolve_tuning(
-                            result.script_error_clamp,
-                            result.script_noise_scale,
-                            result.script_chroma_clamp,
-                            dc_error_clamp,
-                            dc_noise_scale,
-                            dc_chroma_clamp,
-                        )
+                        result
+                            .script_dither
+                            .as_deref()
+                            .or(dc_dither.as_deref())
+                    };
+                    let final_algo_normalized =
+                        final_algo_str.map(normalize_algorithm_name);
+
+                    // Re-resolve panel tuning for the final algorithm (may differ from pre-script)
+                    let panel_final_tuning = panel_dither_for_closure
+                        .as_ref()
+                        .map(|pdc| {
+                            pdc.resolve_for_algorithm(final_algo_normalized.as_deref())
+                        })
+                        .unwrap_or_default();
+
+                    let script_tuning = DitherTuningValues {
+                        error_clamp: result.script_error_clamp,
+                        noise_scale: result.script_noise_scale,
+                        chroma_clamp: result.script_chroma_clamp,
+                    };
+
+                    // Resolve tuning: dev override > script > device config > panel > algorithm defaults
+                    let tuning = if let Some(ref dt) = dev_tuning {
+                        dt.clone()
+                    } else {
+                        resolve_tuning(&script_tuning, &dc_tuning_for_closure, &panel_final_tuning)
                     };
 
                     let params = resolve_render_params(
@@ -607,7 +643,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                         &fallback,
                         measured_colors.clone(),
                         None,
-                        tuning,
+                        &tuning,
                     );
 
                     tracing::debug!(
@@ -636,7 +672,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                                 .with_colors_actual(params.measured_colors)
                                 .with_dither(params.dither)
                                 .with_preserve_exact(Some(params.preserve_exact))
-                                .with_tuning(params.error_clamp, params.noise_scale, params.chroma_clamp);
+                                .with_tuning(&tuning);
                                 let hash = cached.content_hash.clone();
                                 cache.store(cached);
                                 (result.refresh_rate, false, Some(hash), None)

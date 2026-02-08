@@ -48,7 +48,7 @@ impl TestApp {
         let asset_loader = Arc::new(AssetLoader::new(None, None, None));
 
         // Load config and disable registration
-        let mut config = AppConfig::load_from_assets(&asset_loader);
+        let mut config = AppConfig::load_from_assets(&asset_loader).expect("Failed to load config");
         config.registration.enabled = false;
 
         let state = create_app_state_with_config(asset_loader, Arc::new(config))

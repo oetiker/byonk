@@ -98,8 +98,12 @@ panels:
     width: 800
     height: 480
     colors: "#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00"
-    colors_actual: "#000000,#FFFFFF,#DB0303,#FFF427,#25549F,#3A855B"
-
+    colors_actual: "#000000,#FFFFFF,#B50303,#FFEE00,#205497,#0D876B"
+    dither:
+      sierra-light:
+        error_clamp: 0.11
+        noise_scale: 5
+        
 screens:
   # Default screen - shows time and a message
   default:
@@ -170,7 +174,7 @@ devices:
     screen: gphoto
     dither: atkinson
     params:
-      album_url: "https://photos.app.goo.gl/3YtQJztqj9QynkeP8"
+      album_url: "https://photos.app.goo.gl/xS9tWGRShAzf3YCg6"
       show_status: false
       refresh_rate: 300
 
@@ -233,14 +237,14 @@ devices:
   #     station: "Olten, Südwest"
   #     limit: 8
   "XXSFE-VAGTB":
-    screen: calibrator
-    -- screen: gphoto
-    -- screen: default
+    # screen: calibrator
+    screen: gphoto
+    # screen: default
     dither: floyd-steinberg
     # atkinson
     panel: reterminal_e1002
     params:
-      album_url: "https://photos.app.goo.gl/stkXoE7XY7shVMWA6"
+      album_url: "https://photos.app.goo.gl/xS9tWGRShAzf3YCg6"
       show_status: false
       refresh_rate: 300
       

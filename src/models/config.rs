@@ -3,6 +3,141 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+/// Dither tuning values for error_clamp, noise_scale, chroma_clamp.
+///
+/// Used at every level of the tuning priority chain:
+/// panel defaults, device config, script overrides, dev UI overrides.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct DitherTuningValues {
+    pub error_clamp: Option<f32>,
+    pub noise_scale: Option<f32>,
+    pub chroma_clamp: Option<f32>,
+}
+
+impl DitherTuningValues {
+    /// Merge: self takes priority, other fills gaps.
+    pub fn or(&self, other: &DitherTuningValues) -> DitherTuningValues {
+        DitherTuningValues {
+            error_clamp: self.error_clamp.or(other.error_clamp),
+            noise_scale: self.noise_scale.or(other.noise_scale),
+            chroma_clamp: self.chroma_clamp.or(other.chroma_clamp),
+        }
+    }
+
+    /// Returns true if all fields are None.
+    pub fn is_empty(&self) -> bool {
+        self.error_clamp.is_none() && self.noise_scale.is_none() && self.chroma_clamp.is_none()
+    }
+}
+
+/// Panel dither configuration with flat defaults and per-algorithm overrides.
+///
+/// Deserialized from a YAML map where scalar keys (`error_clamp`, `noise_scale`,
+/// `chroma_clamp`) become `defaults` and map-valued keys become per-algorithm
+/// overrides in `algorithms`.
+///
+/// ```yaml
+/// dither:
+///   error_clamp: 0.1         # flat default for all algorithms
+///   noise_scale: 5.0
+///   floyd-steinberg:          # per-algorithm override
+///     error_clamp: 0.08
+///     noise_scale: 4.0
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct PanelDitherConfig {
+    pub defaults: DitherTuningValues,
+    pub algorithms: HashMap<String, DitherTuningValues>,
+}
+
+impl PanelDitherConfig {
+    /// Resolve tuning for a specific algorithm.
+    /// Returns per-algorithm values (if present) merged with flat defaults.
+    pub fn resolve_for_algorithm(&self, algorithm: Option<&str>) -> DitherTuningValues {
+        if let Some(algo) = algorithm {
+            let normalized = normalize_algorithm_name(algo);
+            if let Some(algo_tuning) = self.algorithms.get(&normalized) {
+                return algo_tuning.or(&self.defaults);
+            }
+        }
+        self.defaults.clone()
+    }
+}
+
+impl<'de> Deserialize<'de> for PanelDitherConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{MapAccess, Visitor};
+        use std::fmt;
+
+        struct PanelDitherVisitor;
+
+        impl<'de> Visitor<'de> for PanelDitherVisitor {
+            type Value = PanelDitherConfig;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter
+                    .write_str("a map with optional scalar tuning keys and per-algorithm sub-maps")
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<PanelDitherConfig, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                let mut defaults = DitherTuningValues::default();
+                let mut algorithms = HashMap::new();
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "error_clamp" => {
+                            defaults.error_clamp = Some(map.next_value()?);
+                        }
+                        "noise_scale" => {
+                            defaults.noise_scale = Some(map.next_value()?);
+                        }
+                        "chroma_clamp" => {
+                            defaults.chroma_clamp = Some(map.next_value()?);
+                        }
+                        _ => {
+                            // Treat as algorithm name with sub-map of tuning values
+                            let tuning: DitherTuningValues = map.next_value()?;
+                            let normalized = normalize_algorithm_name(&key);
+                            algorithms.insert(normalized, tuning);
+                        }
+                    }
+                }
+
+                Ok(PanelDitherConfig {
+                    defaults,
+                    algorithms,
+                })
+            }
+        }
+
+        deserializer.deserialize_map(PanelDitherVisitor)
+    }
+}
+
+/// Normalize dither algorithm name to its canonical form.
+///
+/// Accepts common aliases and returns the canonical hyphenated name
+/// used throughout the system.
+pub fn normalize_algorithm_name(name: &str) -> String {
+    match name.to_lowercase().as_str() {
+        "photo" | "atkinson" => "atkinson".to_string(),
+        "graphics" | "blue-noise" | "blue_noise" | "bluenoise" => "blue-noise".to_string(),
+        "floyd-steinberg" | "floyd_steinberg" | "floydsteinberg" => "floyd-steinberg".to_string(),
+        "jjn" | "jarvis-judice-ninke" | "jarvis_judice_ninke" => "jarvis-judice-ninke".to_string(),
+        "sierra" => "sierra".to_string(),
+        "sierra-two-row" | "sierra_two_row" | "sierratworow" => "sierra-two-row".to_string(),
+        "sierra-lite" | "sierra_lite" | "sierralite" => "sierra-lite".to_string(),
+        "simplex" => "simplex".to_string(),
+        other => other.to_string(),
+    }
+}
+
 /// Application configuration loaded from config.yaml
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
@@ -47,6 +182,9 @@ pub struct PanelConfig {
     pub colors: String,
     /// Measured/actual colors (comma-separated hex)
     pub colors_actual: Option<String>,
+    /// Per-panel dither tuning defaults
+    #[serde(default)]
+    pub dither: Option<PanelDitherConfig>,
 }
 
 fn default_screen() -> Option<String> {
@@ -137,29 +275,26 @@ impl Default for RegistrationConfig {
 }
 
 impl AppConfig {
-    /// Load configuration from AssetLoader (embedded or external)
-    pub fn load_from_assets(loader: &AssetLoader) -> Self {
-        match loader.read_config_string() {
-            Ok(content) => match serde_yaml::from_str(&content) {
-                Ok(config) => {
-                    let config: Self = config;
-                    tracing::info!(
-                        screens = config.screens.len(),
-                        devices = config.devices.len(),
-                        "Loaded configuration"
-                    );
-                    config
-                }
-                Err(e) => {
-                    tracing::warn!(%e, "Failed to parse config, using defaults");
-                    Self::default()
-                }
-            },
-            Err(e) => {
-                tracing::warn!(%e, "Failed to read config, using defaults");
-                Self::default()
-            }
-        }
+    /// Load configuration from AssetLoader (embedded or external).
+    ///
+    /// Returns an error if the config file cannot be read or contains
+    /// invalid YAML. The error message includes the line and column
+    /// of the first problem found.
+    pub fn load_from_assets(loader: &AssetLoader) -> anyhow::Result<Self> {
+        let content = loader
+            .read_config_string()
+            .map_err(|e| anyhow::anyhow!("Failed to read config: {e}"))?;
+
+        let config: Self = serde_yaml::from_str(&content)
+            .map_err(|e| anyhow::anyhow!("Invalid config.yaml: {e}"))?;
+
+        tracing::info!(
+            screens = config.screens.len(),
+            devices = config.devices.len(),
+            "Loaded configuration"
+        );
+
+        Ok(config)
     }
 
     /// Get screen config for a device by MAC address
@@ -638,5 +773,191 @@ registration:
         assert!(config.is_device_registered("00:00:00:00:00:00", Some("XYZABCDEFG")));
         // Should not find unknown
         assert!(!config.is_device_registered("00:00:00:00:00:00", Some("UNKNOWNCODE")));
+    }
+
+    #[test]
+    fn test_dither_tuning_values_or() {
+        let a = DitherTuningValues {
+            error_clamp: Some(0.1),
+            noise_scale: None,
+            chroma_clamp: Some(2.0),
+        };
+        let b = DitherTuningValues {
+            error_clamp: Some(0.2),
+            noise_scale: Some(5.0),
+            chroma_clamp: None,
+        };
+        let merged = a.or(&b);
+        assert_eq!(merged.error_clamp, Some(0.1)); // a wins
+        assert_eq!(merged.noise_scale, Some(5.0)); // b fills gap
+        assert_eq!(merged.chroma_clamp, Some(2.0)); // a wins
+    }
+
+    #[test]
+    fn test_dither_tuning_values_is_empty() {
+        assert!(DitherTuningValues::default().is_empty());
+        assert!(!DitherTuningValues {
+            error_clamp: Some(0.1),
+            ..Default::default()
+        }
+        .is_empty());
+    }
+
+    #[test]
+    fn test_panel_dither_config_flat_only() {
+        let yaml = r#"
+error_clamp: 0.1
+noise_scale: 5.0
+"#;
+        let config: PanelDitherConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.defaults.error_clamp, Some(0.1));
+        assert_eq!(config.defaults.noise_scale, Some(5.0));
+        assert_eq!(config.defaults.chroma_clamp, None);
+        assert!(config.algorithms.is_empty());
+    }
+
+    #[test]
+    fn test_panel_dither_config_per_algorithm_only() {
+        let yaml = r#"
+floyd-steinberg:
+  error_clamp: 0.08
+  noise_scale: 4.0
+atkinson:
+  error_clamp: 0.12
+"#;
+        let config: PanelDitherConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.defaults.is_empty());
+        assert_eq!(config.algorithms.len(), 2);
+        let fs = config.algorithms.get("floyd-steinberg").unwrap();
+        assert_eq!(fs.error_clamp, Some(0.08));
+        assert_eq!(fs.noise_scale, Some(4.0));
+        let atk = config.algorithms.get("atkinson").unwrap();
+        assert_eq!(atk.error_clamp, Some(0.12));
+    }
+
+    #[test]
+    fn test_panel_dither_config_mixed() {
+        let yaml = r#"
+error_clamp: 0.1
+noise_scale: 5.0
+floyd-steinberg:
+  error_clamp: 0.08
+  noise_scale: 4.0
+atkinson:
+  error_clamp: 0.12
+"#;
+        let config: PanelDitherConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.defaults.error_clamp, Some(0.1));
+        assert_eq!(config.defaults.noise_scale, Some(5.0));
+        assert_eq!(config.algorithms.len(), 2);
+    }
+
+    #[test]
+    fn test_panel_dither_config_resolve_for_algorithm() {
+        let yaml = r#"
+error_clamp: 0.1
+noise_scale: 5.0
+floyd-steinberg:
+  error_clamp: 0.08
+"#;
+        let config: PanelDitherConfig = serde_yaml::from_str(yaml).unwrap();
+
+        // Algorithm match: per-algo error_clamp, default noise_scale
+        let resolved = config.resolve_for_algorithm(Some("floyd-steinberg"));
+        assert_eq!(resolved.error_clamp, Some(0.08));
+        assert_eq!(resolved.noise_scale, Some(5.0)); // from defaults
+
+        // Algorithm miss: falls back to defaults
+        let resolved = config.resolve_for_algorithm(Some("sierra"));
+        assert_eq!(resolved.error_clamp, Some(0.1));
+        assert_eq!(resolved.noise_scale, Some(5.0));
+
+        // None algorithm: falls back to defaults
+        let resolved = config.resolve_for_algorithm(None);
+        assert_eq!(resolved.error_clamp, Some(0.1));
+    }
+
+    #[test]
+    fn test_normalize_algorithm_name() {
+        // Canonical names
+        assert_eq!(normalize_algorithm_name("atkinson"), "atkinson");
+        assert_eq!(
+            normalize_algorithm_name("floyd-steinberg"),
+            "floyd-steinberg"
+        );
+        assert_eq!(
+            normalize_algorithm_name("jarvis-judice-ninke"),
+            "jarvis-judice-ninke"
+        );
+        assert_eq!(normalize_algorithm_name("sierra"), "sierra");
+        assert_eq!(normalize_algorithm_name("sierra-two-row"), "sierra-two-row");
+        assert_eq!(normalize_algorithm_name("sierra-lite"), "sierra-lite");
+        assert_eq!(normalize_algorithm_name("blue-noise"), "blue-noise");
+        assert_eq!(normalize_algorithm_name("simplex"), "simplex");
+
+        // Aliases
+        assert_eq!(normalize_algorithm_name("photo"), "atkinson");
+        assert_eq!(normalize_algorithm_name("graphics"), "blue-noise");
+        assert_eq!(normalize_algorithm_name("jjn"), "jarvis-judice-ninke");
+
+        // Case insensitive
+        assert_eq!(
+            normalize_algorithm_name("Floyd-Steinberg"),
+            "floyd-steinberg"
+        );
+        assert_eq!(normalize_algorithm_name("ATKINSON"), "atkinson");
+
+        // Underscore variants
+        assert_eq!(
+            normalize_algorithm_name("floyd_steinberg"),
+            "floyd-steinberg"
+        );
+        assert_eq!(normalize_algorithm_name("sierra_two_row"), "sierra-two-row");
+    }
+
+    #[test]
+    fn test_panel_dither_config_normalizes_aliases() {
+        let yaml = r#"
+photo:
+  error_clamp: 0.12
+jjn:
+  error_clamp: 0.05
+"#;
+        let config: PanelDitherConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.algorithms.contains_key("atkinson"));
+        assert!(config.algorithms.contains_key("jarvis-judice-ninke"));
+
+        let resolved = config.resolve_for_algorithm(Some("photo"));
+        assert_eq!(resolved.error_clamp, Some(0.12));
+
+        let resolved = config.resolve_for_algorithm(Some("jarvis-judice-ninke"));
+        assert_eq!(resolved.error_clamp, Some(0.05));
+    }
+
+    #[test]
+    fn test_panel_config_with_dither() {
+        let yaml = r##"
+name: "Test Panel"
+colors: "#000000,#FFFFFF"
+dither:
+  error_clamp: 0.1
+  floyd-steinberg:
+    error_clamp: 0.08
+"##;
+        let config: PanelConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.dither.is_some());
+        let dither = config.dither.unwrap();
+        assert_eq!(dither.defaults.error_clamp, Some(0.1));
+        assert!(dither.algorithms.contains_key("floyd-steinberg"));
+    }
+
+    #[test]
+    fn test_panel_config_without_dither() {
+        let yaml = r##"
+name: "Test Panel"
+colors: "#000000,#FFFFFF"
+"##;
+        let config: PanelConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.dither.is_none());
     }
 }

@@ -57,6 +57,14 @@ pub struct DeviceContext {
     pub board: Option<String>,
     /// Available display colors as hex RGB strings (e.g. ["#000000", "#FFFFFF", "#FF0000"])
     pub colors: Option<Vec<String>>,
+    /// Pre-script resolved dither algorithm name
+    pub dither_algorithm: Option<String>,
+    /// Pre-script resolved error clamp
+    pub dither_error_clamp: Option<f32>,
+    /// Pre-script resolved noise scale
+    pub dither_noise_scale: Option<f32>,
+    /// Pre-script resolved chroma clamp
+    pub dither_chroma_clamp: Option<f32>,
 }
 
 /// Error from the content pipeline

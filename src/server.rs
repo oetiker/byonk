@@ -20,11 +20,8 @@ use tracing::{Level, Span};
 use crate::api;
 use crate::assets::AssetLoader;
 use crate::error::ApiError;
-use crate::models::AppConfig;
+use crate::models::{AppConfig, DitherTuningValues};
 use crate::services::{ContentCache, ContentPipeline, InMemoryRegistry, RenderService};
-
-/// Dither tuning override: (error_clamp, noise_scale, chroma_clamp).
-pub type TuningOverride = (Option<f32>, Option<f32>, Option<f32>);
 
 /// Runtime overrides set by the dev GUI and consumed by production handlers.
 ///
@@ -37,8 +34,8 @@ pub struct DevOverrides {
     pub panel_colors: Arc<RwLock<HashMap<String, String>>>,
     /// device_config_key → dither algorithm string (from dither dropdown).
     pub dither: Arc<RwLock<HashMap<String, String>>>,
-    /// device_config_key → dither tuning (error_clamp, noise_scale, chroma_clamp).
-    pub tuning: Arc<RwLock<HashMap<String, TuningOverride>>>,
+    /// device_config_key → dither tuning values.
+    pub tuning: Arc<RwLock<HashMap<String, DitherTuningValues>>>,
 }
 
 /// Custom span maker that adds a unique request ID to each request's tracing span.
@@ -73,7 +70,7 @@ pub struct AppState {
 
 /// Create application state from an asset loader.
 pub fn create_app_state(asset_loader: Arc<AssetLoader>) -> anyhow::Result<AppState> {
-    let config = Arc::new(AppConfig::load_from_assets(&asset_loader));
+    let config = Arc::new(AppConfig::load_from_assets(&asset_loader)?);
     create_app_state_with_config(asset_loader, config)
 }
 

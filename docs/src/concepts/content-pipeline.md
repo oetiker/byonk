@@ -252,7 +252,7 @@ The priority chain is: **dev UI override** > **script `dither`** > **device conf
 
 ### Dither Tuning
 
-Fine-tune dithering behavior with three parameters, settable per-device in `config.yaml` or per-script in the Lua return table:
+Fine-tune dithering behavior with three parameters, settable at multiple levels:
 
 | Parameter | Description | Typical range |
 |-----------|-------------|---------------|
@@ -260,9 +260,11 @@ Fine-tune dithering behavior with three parameters, settable per-device in `conf
 | `noise_scale` | Blue noise jitter scale. Higher values break worm artifacts more aggressively. | 0.3 – 1.0 |
 | `chroma_clamp` | Limits chromatic error propagation. Prevents color bleeding. | 0.5 – 5.0 |
 
-Use [dev mode](../guide/dev-mode.md) to find optimal values interactively, then commit them to `config.yaml` or your Lua script for production use.
+Use [dev mode](../guide/dev-mode.md) to find optimal values interactively, then commit them to your panel profile, device config, or Lua script for production use.
 
-Priority chain: **dev UI override** > **script return** > **device config** > **algorithm defaults**.
+Priority chain: **dev UI override** > **script return** > **device config** > **panel dither defaults** > **algorithm defaults**.
+
+Panel dither defaults are especially useful because optimal tuning is usually tied to the color palette (which is tied to the panel). Set them once in the panel profile and every device using that panel inherits good defaults. See [Panel Dither Defaults](../guide/configuration.md#panel-dither-defaults) for the config format.
 
 ### Output Format
 

@@ -51,10 +51,38 @@ end
 | `height` | number or nil | Display height in pixels (480 or 1404) |
 | `board` | string or nil | Board identifier (e.g., "trmnl_og_4clr") |
 | `colors` | table or nil | Display palette as hex RGB strings (e.g., {"#000000", "#FFFFFF"}) |
+| `dither` | table | Pre-script resolved dither tuning (see below) |
 
 **Type:** `table`
 
 > **Note:** Device fields may be `nil` if the device doesn't report them. Always check before using.
+
+#### device.dither
+
+The `device.dither` sub-table contains the pre-script resolved dither tuning values (panel defaults merged with device config). Scripts can read these to make selective adjustments rather than setting everything blindly.
+
+```lua
+-- Read current tuning
+local algo = device.dither.algorithm       -- "floyd-steinberg" (resolved algorithm)
+local ec = device.dither.error_clamp       -- 0.08 (from panel/device config)
+local ns = device.dither.noise_scale       -- 4.0
+local cc = device.dither.chroma_clamp      -- nil (not set)
+
+-- Selectively override: halve the error clamp, keep everything else
+return {
+  data = { ... },
+  refresh_rate = 300,
+  error_clamp = (device.dither.error_clamp or 0.1) * 0.5,
+  -- noise_scale not returned -> keeps panel/device value
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `algorithm` | string or nil | Pre-script resolved dither algorithm |
+| `error_clamp` | number or nil | Error diffusion clamp (from device config / panel) |
+| `noise_scale` | number or nil | Blue noise jitter scale |
+| `chroma_clamp` | number or nil | Chromatic error clamp |
 
 ### layout
 
@@ -1070,9 +1098,11 @@ return {
 | `noise_scale` | number or nil | Blue noise jitter scale (e.g. 0.6) |
 | `chroma_clamp` | number or nil | Limits chromatic error propagation (e.g. 2.0) |
 
-Fine-tune dithering behavior per-script. These override device config values but are overridden by dev UI settings.
+Fine-tune dithering behavior per-script. These override device config and panel default values but are overridden by dev UI settings.
 
-Use [dev mode](../guide/dev-mode.md) to interactively find good values, then set them here for production use.
+Priority chain: **dev UI** > **script return** > **device config** > **panel dither defaults** > **algorithm defaults**.
+
+Use [dev mode](../guide/dev-mode.md) to interactively find good values, then set them here or in the [panel dither defaults](../guide/configuration.md#panel-dither-defaults) for production use.
 
 ```lua
 -- Tuned values for a photo screen on a 4-color panel

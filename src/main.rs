@@ -195,7 +195,7 @@ fn run_render_command(
     }
 
     // Load config and initialize services
-    let config = Arc::new(AppConfig::load_from_assets(&asset_loader));
+    let config = Arc::new(AppConfig::load_from_assets(&asset_loader)?);
     let renderer = Arc::new(RenderService::new(&asset_loader)?);
     let content_pipeline = Arc::new(
         ContentPipeline::new(config.clone(), asset_loader, renderer.clone())
@@ -311,18 +311,30 @@ fn run_render_command(
             .and_then(|p| p.colors_actual.as_deref())
             .map(byonk::api::display::parse_colors_header);
 
-        let dc_error_clamp = device_config.and_then(|dc| dc.error_clamp);
-        let dc_noise_scale = device_config.and_then(|dc| dc.noise_scale);
-        let dc_chroma_clamp = device_config.and_then(|dc| dc.chroma_clamp);
+        let dc_tuning = byonk::models::DitherTuningValues {
+            error_clamp: device_config.and_then(|dc| dc.error_clamp),
+            noise_scale: device_config.and_then(|dc| dc.noise_scale),
+            chroma_clamp: device_config.and_then(|dc| dc.chroma_clamp),
+        };
 
-        let tuning = byonk::api::display::resolve_tuning(
-            script_result.script_error_clamp,
-            script_result.script_noise_scale,
-            script_result.script_chroma_clamp,
-            dc_error_clamp,
-            dc_noise_scale,
-            dc_chroma_clamp,
-        );
+        // Resolve panel dither tuning for the effective algorithm
+        let panel_dither_config = panel.and_then(|p| p.dither.clone());
+        let effective_algo = script_result
+            .script_dither
+            .as_deref()
+            .or(dc_dither.as_deref());
+        let effective_algo_normalized = effective_algo.map(byonk::models::normalize_algorithm_name);
+        let panel_tuning = panel_dither_config
+            .as_ref()
+            .map(|pdc| pdc.resolve_for_algorithm(effective_algo_normalized.as_deref()))
+            .unwrap_or_default();
+
+        let script_tuning = byonk::models::DitherTuningValues {
+            error_clamp: script_result.script_error_clamp,
+            noise_scale: script_result.script_noise_scale,
+            chroma_clamp: script_result.script_chroma_clamp,
+        };
+        let tuning = byonk::api::display::resolve_tuning(&script_tuning, &dc_tuning, &panel_tuning);
 
         let render_params = byonk::api::display::resolve_render_params(
             script_result.script_colors.as_deref(),
@@ -334,7 +346,7 @@ fn run_render_command(
             &cli_palette,
             measured,
             None,
-            tuning,
+            &tuning,
         );
 
         let svg = content_pipeline
@@ -732,7 +744,7 @@ async fn run_dev_server() -> anyhow::Result<()> {
     let dev_overrides = server::DevOverrides::default();
 
     // Create application state with shared overrides
-    let config = Arc::new(AppConfig::load_from_assets(&asset_loader));
+    let config = Arc::new(AppConfig::load_from_assets(&asset_loader)?);
     let state = server::create_app_state_with_overrides(
         asset_loader.clone(),
         config.clone(),

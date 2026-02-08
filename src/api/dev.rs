@@ -522,6 +522,26 @@ pub async fn handle_render(
         query_palette.clone()
     };
 
+    // Pre-script dither algorithm: query dither > device config > "graphics"
+    let pre_script_algo = query
+        .dither
+        .as_deref()
+        .or(device_config_dither.as_deref())
+        .unwrap_or("graphics");
+
+    // Pre-script panel tuning for device context
+    let panel_dither_config_pre = panel.as_ref().and_then(|p| p.dither.clone());
+    let pre_panel_tuning = panel_dither_config_pre
+        .as_ref()
+        .map(|pdc| pdc.resolve_for_algorithm(Some(pre_script_algo)))
+        .unwrap_or_default();
+    let pre_dc_tuning = crate::models::DitherTuningValues {
+        error_clamp: dc_error_clamp,
+        noise_scale: dc_noise_scale,
+        chroma_clamp: dc_chroma_clamp,
+    };
+    let pre_script_tuning = pre_dc_tuning.or(&pre_panel_tuning);
+
     // Create device context
     let device_ctx = DeviceContext {
         mac: query
@@ -536,6 +556,10 @@ pub async fn handle_render(
         height: Some(height),
         registration_code: None,
         colors: Some(crate::api::display::colors_to_hex_strings(&default_palette)),
+        dither_algorithm: Some(pre_script_algo.to_string()),
+        dither_error_clamp: pre_script_tuning.error_clamp,
+        dither_noise_scale: pre_script_tuning.noise_scale,
+        dither_chroma_clamp: pre_script_tuning.chroma_clamp,
         ..Default::default()
     };
 
@@ -682,7 +706,11 @@ pub async fn handle_render(
         if has_query_tuning {
             tuning_map.insert(
                 device_key.clone(),
-                (query.error_clamp, query.noise_scale, query.chroma_clamp),
+                crate::models::DitherTuningValues {
+                    error_clamp: query.error_clamp,
+                    noise_scale: query.noise_scale,
+                    chroma_clamp: query.chroma_clamp,
+                },
             );
         } else {
             tuning_map.remove(device_key.as_str());
@@ -690,21 +718,40 @@ pub async fn handle_render(
         drop(tuning_map);
     }
 
-    // Resolve tuning: query params (dev UI) > script > device config > None
+    // Resolve panel dither tuning for the effective algorithm
+    let panel_dither_config = panel.as_ref().and_then(|p| p.dither.clone());
+    let effective_algo = effective_device_dither
+        .or(effective_script_dither)
+        .or(device_config_dither.as_deref());
+    let effective_algo_normalized = effective_algo.map(crate::models::normalize_algorithm_name);
+    let panel_tuning = panel_dither_config
+        .as_ref()
+        .map(|pdc| pdc.resolve_for_algorithm(effective_algo_normalized.as_deref()))
+        .unwrap_or_default();
+
+    let dc_tuning = crate::models::DitherTuningValues {
+        error_clamp: dc_error_clamp,
+        noise_scale: dc_noise_scale,
+        chroma_clamp: dc_chroma_clamp,
+    };
+
+    // Resolve tuning: query params (dev UI) > script > device config > panel > None
     let tuning = if query.error_clamp.is_some()
         || query.noise_scale.is_some()
         || query.chroma_clamp.is_some()
     {
-        (query.error_clamp, query.noise_scale, query.chroma_clamp)
+        crate::models::DitherTuningValues {
+            error_clamp: query.error_clamp,
+            noise_scale: query.noise_scale,
+            chroma_clamp: query.chroma_clamp,
+        }
     } else {
-        crate::api::display::resolve_tuning(
-            script_error_clamp,
-            script_noise_scale,
-            script_chroma_clamp,
-            dc_error_clamp,
-            dc_noise_scale,
-            dc_chroma_clamp,
-        )
+        let script_tuning = crate::models::DitherTuningValues {
+            error_clamp: script_error_clamp,
+            noise_scale: script_noise_scale,
+            chroma_clamp: script_chroma_clamp,
+        };
+        crate::api::display::resolve_tuning(&script_tuning, &dc_tuning, &panel_tuning)
     };
 
     let render_params = crate::api::display::resolve_render_params(
@@ -717,7 +764,7 @@ pub async fn handle_render(
         &query_palette,
         measured_colors.clone(),
         query.preserve_exact,
-        tuning,
+        &tuning,
     );
 
     let final_palette = render_params.palette;

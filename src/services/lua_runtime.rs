@@ -208,6 +208,21 @@ impl LuaRuntime {
                 }
                 device_table.set("colors", colors_table)?;
             }
+            // Add dither sub-table with pre-script resolved values
+            let dither_table = lua.create_table()?;
+            if let Some(ref algo) = ctx.dither_algorithm {
+                dither_table.set("algorithm", algo.as_str())?;
+            }
+            if let Some(ec) = ctx.dither_error_clamp {
+                dither_table.set("error_clamp", ec)?;
+            }
+            if let Some(ns) = ctx.dither_noise_scale {
+                dither_table.set("noise_scale", ns)?;
+            }
+            if let Some(cc) = ctx.dither_chroma_clamp {
+                dither_table.set("chroma_clamp", cc)?;
+            }
+            device_table.set("dither", dither_table)?;
         }
         globals.set("device", device_table)?;
 

@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
-- **Dither tuning in config and Lua**: `error_clamp`, `noise_scale`, and `chroma_clamp` can now be set per-device in `config.yaml` or returned from Lua scripts. Values found during dev mode calibration can be committed to config for production use. Priority chain: dev UI > script > device config > algorithm defaults.
+- **Per-panel dither tuning defaults**: Panels can now carry `dither` section with per-algorithm tuning defaults (`error_clamp`, `noise_scale`, `chroma_clamp`). Optimal tuning is tied to the color palette, so setting it once on the panel avoids repeating values in every device config. Supports flat defaults and per-algorithm overrides. New priority chain: dev UI > script > device config > panel dither defaults > algorithm defaults.
+- **Dither context in Lua**: Scripts can read pre-script resolved tuning via `device.dither` table (`algorithm`, `error_clamp`, `noise_scale`, `chroma_clamp`) to make selective adjustments rather than setting everything blindly.
+- **Dither tuning in config and Lua**: `error_clamp`, `noise_scale`, and `chroma_clamp` can now be set per-device in `config.yaml` or returned from Lua scripts. Values found during dev mode calibration can be committed to config for production use.
 
 ### Fixed
 

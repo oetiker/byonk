@@ -1,8 +1,6 @@
 use crate::error::RenderError;
 use crate::models::DisplaySpec;
-use eink_dither::{
-    DitherAlgorithm, EinkDitherer, Palette as EinkPalette, RenderingIntent, Srgb as EinkSrgb,
-};
+use eink_dither::{DitherAlgorithm, EinkDitherer, Palette as EinkPalette, Srgb as EinkSrgb};
 
 /// Optional dithering parameter overrides (dev mode tuning).
 #[derive(Debug, Default)]
@@ -102,29 +100,25 @@ impl SvgRenderer {
         // Build eink-dither palette with dedup (eink-dither rejects duplicates)
         let (eink_palette, output_palette) = build_eink_palette(palette, actual, use_actual)?;
 
-        // Determine rendering intent and algorithm
-        // All paths use Photo intent (saturation/contrast preprocessing + error diffusion)
+        // Determine algorithm
         let algorithm = match dither {
-            Some(s) if s.eq_ignore_ascii_case("floyd-steinberg") => {
-                DitherAlgorithm::FloydSteinbergNoise
-            }
+            Some(s) if s.eq_ignore_ascii_case("floyd-steinberg") => DitherAlgorithm::FloydSteinberg,
             Some(s) if s.eq_ignore_ascii_case("jarvis-judice-ninke") => {
-                DitherAlgorithm::JarvisJudiceNinkeNoise
+                DitherAlgorithm::JarvisJudiceNinke
             }
-            Some(s) if s.eq_ignore_ascii_case("sierra") => DitherAlgorithm::SierraNoise,
-            Some(s) if s.eq_ignore_ascii_case("sierra-two-row") => {
-                DitherAlgorithm::SierraTwoRowNoise
-            }
-            Some(s) if s.eq_ignore_ascii_case("sierra-lite") => DitherAlgorithm::SierraLiteNoise,
-            _ => DitherAlgorithm::Auto, // Atkinson
+            Some(s) if s.eq_ignore_ascii_case("sierra") => DitherAlgorithm::Sierra,
+            Some(s) if s.eq_ignore_ascii_case("sierra-two-row") => DitherAlgorithm::SierraTwoRow,
+            Some(s) if s.eq_ignore_ascii_case("sierra-lite") => DitherAlgorithm::SierraLite,
+            Some(s) if s.eq_ignore_ascii_case("stucki") => DitherAlgorithm::Stucki,
+            Some(s) if s.eq_ignore_ascii_case("burkes") => DitherAlgorithm::Burkes,
+            _ => DitherAlgorithm::Atkinson,
         };
-        let intent = RenderingIntent::Photo;
 
         // Convert RGBA pixmap to eink-dither Srgb pixels
         let pixels = rgba_to_eink_srgb(pixmap.data());
 
         // Dither using eink-dither
-        let mut ditherer = EinkDitherer::new(eink_palette, intent)
+        let mut ditherer = EinkDitherer::new(eink_palette)
             .algorithm(algorithm)
             .preserve_exact_matches(preserve_exact);
         if let Some(t) = tuning {

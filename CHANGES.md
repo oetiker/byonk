@@ -9,7 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- Added **Stucki** and **Burkes** dithering algorithms.
+
 ### Changed
+
+- **Simplified dither system**: removed graphics/photo intent split and blue-noise/simplex ordered dithering. All algorithms are now error diffusion with configurable blue noise jitter (`noise_scale`). Plain and noise variants are unified — set `noise_scale: 0` for no jitter.
+- **Default dither algorithm** is now `atkinson` (was `graphics` blue-noise ordered dithering).
+- **Grey palette auto-detection**: greyscale palettes (R=G=B for all colors) automatically use `error_clamp: 0.6` for better tonal range, unless explicitly overridden.
+- Removed `"graphics"`, `"photo"`, `"blue-noise"`, and `"simplex"` dither aliases. Use algorithm names directly: `"atkinson"`, `"floyd-steinberg"`, etc.
 
 ### Fixed
 

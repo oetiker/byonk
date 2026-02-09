@@ -522,12 +522,12 @@ pub async fn handle_render(
         query_palette.clone()
     };
 
-    // Pre-script dither algorithm: query dither > device config > "graphics"
+    // Pre-script dither algorithm: query dither > device config > "atkinson"
     let pre_script_algo = query
         .dither
         .as_deref()
         .or(device_config_dither.as_deref())
-        .unwrap_or("graphics");
+        .unwrap_or("atkinson");
 
     // Pre-script panel tuning for device context
     let panel_dither_config_pre = panel.as_ref().and_then(|p| p.dither.clone());

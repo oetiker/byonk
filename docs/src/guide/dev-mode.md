@@ -50,12 +50,13 @@ Dev mode provides tools for calibrating dithering to match your physical display
 
 ### Dither Algorithm Selection
 
-The dither dropdown lets you try all 7 algorithms on your content:
-- `graphics` (default) — blue noise ordered dithering
-- `photo` / `atkinson` — Atkinson error diffusion
+The dither dropdown lets you try all 8 algorithms on your content:
+- `atkinson` (default) — Atkinson error diffusion (75% propagation)
 - `floyd-steinberg` — Floyd-Steinberg with blue noise jitter
 - `jarvis-judice-ninke` — wide 12-neighbor kernel
 - `sierra`, `sierra-two-row`, `sierra-lite` — Sierra family
+- `stucki` — wide 12-neighbor kernel similar to JJN
+- `burkes` — 7-neighbor kernel, good balance of speed and quality
 
 ### Dither Tuning Controls
 

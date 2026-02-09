@@ -2,16 +2,10 @@
 //!
 //! [`EinkDitherer`] wraps the dithering pipeline with fluent configuration
 //! and optional preprocessing overrides.
-//! Users configure palette, intent, and optional tweaks in a single chain,
-//! then call [`dither()`](EinkDitherer::dither) for the complete pipeline.
 
 use crate::color::Srgb;
-use crate::dither::{
-    Atkinson, BlueNoiseDither, Dither, DitherAlgorithm, DitherOptions, FloydSteinberg,
-    FloydSteinbergNoise, JarvisJudiceNinke, JarvisJudiceNinkeNoise, Sierra, SierraLite,
-    SierraLiteNoise, SierraNoise, SierraTwoRow, SierraTwoRowNoise, SimplexDither,
-};
-use crate::output::{DitheredImage, RenderingIntent};
+use crate::dither::{dither_with_kernel_noise, DitherAlgorithm, DitherOptions};
+use crate::output::DitheredImage;
 use crate::palette::Palette;
 use crate::preprocess::{PreprocessOptions, Preprocessor};
 
@@ -19,25 +13,25 @@ use crate::preprocess::{PreprocessOptions, Preprocessor};
 ///
 /// `EinkDitherer` is the recommended entry point for the crate. It wraps the
 /// complete pipeline (preprocessing, dithering, output) behind a fluent builder
-/// API with sensible defaults for each rendering intent.
+/// API with sensible defaults.
 ///
 /// # Design
 ///
-/// - Constructor requires [`Palette`] + [`RenderingIntent`] (no invalid states)
+/// - Constructor requires [`Palette`] (no invalid states)
 /// - Configuration methods consume and return `self` (standard builder pattern)
 /// - [`dither()`](Self::dither) takes `&self` so the builder is **reusable**
 ///   across multiple images
-/// - Intent-specific defaults are set in the constructor but can be overridden
+/// - Per-algorithm defaults are applied when `.algorithm()` is called
 ///
 /// # Example
 ///
 /// ```
-/// use eink_dither::{EinkDitherer, Palette, RenderingIntent, Srgb};
+/// use eink_dither::{EinkDitherer, Palette, Srgb};
 ///
 /// let colors = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)];
 /// let palette = Palette::new(&colors, None).unwrap();
 ///
-/// let ditherer = EinkDitherer::new(palette, RenderingIntent::Photo)
+/// let ditherer = EinkDitherer::new(palette)
 ///     .saturation(1.8)
 ///     .contrast(1.2);
 ///
@@ -49,105 +43,54 @@ use crate::preprocess::{PreprocessOptions, Preprocessor};
 /// ```
 pub struct EinkDitherer {
     palette: Palette,
-    intent: RenderingIntent,
     preprocess: PreprocessOptions,
     dither_opts: DitherOptions,
     algorithm: DitherAlgorithm,
+    /// Whether error_clamp was explicitly set by the user (vs algorithm default).
+    error_clamp_explicit: bool,
 }
 
 impl EinkDitherer {
-    /// Create a new ditherer with the given palette and rendering intent.
+    /// Create a new ditherer with the given palette.
     ///
-    /// Preprocessing defaults are selected based on the intent:
-    /// - **Photo**: `PreprocessOptions::photo()` (saturation 1.2, contrast 1.1)
-    /// - **Graphics**: `PreprocessOptions::graphics()` (no enhancement)
-    ///
-    /// Dither options default to `DitherOptions::new()` with serpentine scanning.
-    /// Photo intent uses error clamp 0.3 (reduced from 0.5 to prevent oscillation
-    /// on sparse chromatic palettes); Graphics uses default clamp 0.5.
-    ///
-    /// # Arguments
-    ///
-    /// * `palette` - The e-ink display's color palette
-    /// * `intent` - Rendering intent (Photo or Graphics)
+    /// Default algorithm is Atkinson with error_clamp=0.08.
+    /// Preprocessing defaults: saturation 1.0, contrast 1.0 (no enhancement).
     ///
     /// # Example
     ///
     /// ```
-    /// use eink_dither::{EinkDitherer, Palette, RenderingIntent, Srgb};
+    /// use eink_dither::{EinkDitherer, Palette, Srgb};
     ///
     /// let colors = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)];
     /// let palette = Palette::new(&colors, None).unwrap();
     ///
-    /// let ditherer = EinkDitherer::new(palette, RenderingIntent::Photo);
+    /// let ditherer = EinkDitherer::new(palette);
     /// ```
-    pub fn new(palette: Palette, intent: RenderingIntent) -> Self {
-        let preprocess = match intent {
-            RenderingIntent::Photo => PreprocessOptions::photo(),
-            RenderingIntent::Graphics => PreprocessOptions::graphics(),
-        };
-        // Photo intent: lower error_clamp from default 0.5 to 0.08 to reduce
-        // oscillation artifacts on sparse chromatic palettes. At 0.08 the
-        // pixel+error range is [-0.08, 1.08] — tight enough to suppress
-        // self-reinforcing oscillation in blue gradients while still allowing
-        // smooth dithering.
-        let dither_opts = match intent {
-            RenderingIntent::Photo => DitherOptions::new().error_clamp(0.08),
-            RenderingIntent::Graphics => DitherOptions::new(),
-        };
+    pub fn new(palette: Palette) -> Self {
         Self {
             palette,
-            intent,
-            preprocess,
-            dither_opts,
-            algorithm: DitherAlgorithm::Auto,
+            preprocess: PreprocessOptions::default(),
+            dither_opts: DitherOptions::new().error_clamp(0.08),
+            algorithm: DitherAlgorithm::Atkinson,
+            error_clamp_explicit: false,
         }
     }
 
     /// Set target dimensions for resize.
-    ///
-    /// The image will be resized to these exact dimensions using Lanczos3
-    /// filtering before any preprocessing or dithering.
-    ///
-    /// # Arguments
-    ///
-    /// * `width` - Target width in pixels
-    /// * `height` - Target height in pixels
     #[inline]
     pub fn resize(mut self, width: u32, height: u32) -> Self {
         self.preprocess = self.preprocess.resize(width, height);
         self
     }
 
-    /// Set saturation multiplier.
-    ///
-    /// Saturation is adjusted in Oklch color space for perceptually correct
-    /// results without hue shifts.
-    ///
-    /// - 1.0 = no change
-    /// - 1.2 = default for Photo intent
-    /// - 0.5 = reduce saturation by half
-    ///
-    /// # Arguments
-    ///
-    /// * `factor` - Saturation multiplier
+    /// Set saturation multiplier (Oklch space).
     #[inline]
     pub fn saturation(mut self, factor: f32) -> Self {
         self.preprocess = self.preprocess.saturation(factor);
         self
     }
 
-    /// Set contrast multiplier.
-    ///
-    /// Contrast is adjusted in linear RGB space around the midpoint (0.5).
-    ///
-    /// - 1.0 = no change
-    /// - 1.1 = default for Photo intent
-    /// - 1.5 = high contrast
-    ///
-    /// # Arguments
-    ///
-    /// * `factor` - Contrast multiplier
+    /// Set contrast multiplier (linear RGB space).
     #[inline]
     pub fn contrast(mut self, factor: f32) -> Self {
         self.preprocess = self.preprocess.contrast(factor);
@@ -155,13 +98,6 @@ impl EinkDitherer {
     }
 
     /// Set serpentine scanning mode.
-    ///
-    /// When enabled (default), odd rows are processed right-to-left to
-    /// eliminate directional "worm" artifacts in error diffusion.
-    ///
-    /// # Arguments
-    ///
-    /// * `enabled` - Whether to enable serpentine scanning
     #[inline]
     pub fn serpentine(mut self, enabled: bool) -> Self {
         self.dither_opts = self.dither_opts.serpentine(enabled);
@@ -170,27 +106,16 @@ impl EinkDitherer {
 
     /// Set error clamping threshold.
     ///
-    /// Accumulated error is clamped to this range to prevent "blooming"
-    /// with small palettes.
-    ///
-    /// # Arguments
-    ///
-    /// * `clamp` - Maximum error magnitude per channel (default: 0.5)
+    /// This explicitly overrides the per-algorithm default and the
+    /// greyscale palette auto-detection override.
     #[inline]
     pub fn error_clamp(mut self, clamp: f32) -> Self {
         self.dither_opts = self.dither_opts.error_clamp(clamp);
+        self.error_clamp_explicit = true;
         self
     }
 
     /// Set chromatic error clamping threshold.
-    ///
-    /// Controls how much per-channel error can deviate from the mean
-    /// (achromatic) error during error diffusion. Lower values prevent
-    /// color blowout in photos while preserving B&W dithering quality.
-    ///
-    /// # Arguments
-    ///
-    /// * `clamp` - Maximum chromatic deviation per channel (default: f32::INFINITY)
     #[inline]
     pub fn chroma_clamp(mut self, clamp: f32) -> Self {
         self.dither_opts = self.dither_opts.chroma_clamp(clamp);
@@ -198,17 +123,6 @@ impl EinkDitherer {
     }
 
     /// Set whether to preserve exact palette matches.
-    ///
-    /// When enabled (default), pixels that exactly match a palette color bypass
-    /// both preprocessing (saturation/contrast) and dithering, preserving crisp
-    /// edges in text and UI elements.
-    ///
-    /// When disabled, ALL pixels go through the full pipeline (enhancement +
-    /// dithering), which can be useful for artistic effects or testing.
-    ///
-    /// # Arguments
-    ///
-    /// * `enabled` - Whether to preserve exact palette matches
     #[inline]
     pub fn preserve_exact_matches(mut self, enabled: bool) -> Self {
         self.dither_opts = self.dither_opts.preserve_exact_matches(enabled);
@@ -216,11 +130,7 @@ impl EinkDitherer {
         self
     }
 
-    /// Set blue noise jitter scale for Floyd-Steinberg Noise algorithm.
-    ///
-    /// # Arguments
-    ///
-    /// * `scale` - Jitter scale (0.0 = no jitter, 2.0 = default, 4.0 = aggressive)
+    /// Set blue noise jitter scale.
     #[inline]
     pub fn noise_scale(mut self, scale: f32) -> Self {
         self.dither_opts = self.dither_opts.noise_scale(scale);
@@ -228,10 +138,6 @@ impl EinkDitherer {
     }
 
     /// Set whether exact-match pixels absorb accumulated error.
-    ///
-    /// # Arguments
-    ///
-    /// * `absorb` - When true, exact matches discard error; when false, error passes through
     #[inline]
     pub fn exact_absorb_error(mut self, absorb: bool) -> Self {
         self.dither_opts = self.dither_opts.exact_absorb_error(absorb);
@@ -240,225 +146,63 @@ impl EinkDitherer {
 
     /// Set the dithering algorithm.
     ///
-    /// Overrides the default algorithm for the rendering intent:
-    /// - **Photo** default: [`DitherAlgorithm::Atkinson`]
-    /// - **Graphics** default: [`DitherAlgorithm::BlueNoise`]
-    ///
-    /// Use [`DitherAlgorithm::Simplex`] for barycentric ordered dithering
-    /// with up to 4-color blending per pixel (27% better accuracy than
-    /// blue noise).
-    ///
-    /// # Arguments
-    ///
-    /// * `algorithm` - The dithering algorithm to use
+    /// Applies per-algorithm defaults for error_clamp and noise_scale.
+    /// Subsequent `.error_clamp()` / `.noise_scale()` calls override these.
     ///
     /// # Example
     ///
     /// ```
-    /// use eink_dither::{EinkDitherer, Palette, RenderingIntent, DitherAlgorithm, Srgb};
+    /// use eink_dither::{EinkDitherer, Palette, DitherAlgorithm, Srgb};
     ///
     /// let colors = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)];
     /// let palette = Palette::new(&colors, None).unwrap();
     ///
-    /// let ditherer = EinkDitherer::new(palette, RenderingIntent::Graphics)
-    ///     .algorithm(DitherAlgorithm::Simplex);
+    /// let ditherer = EinkDitherer::new(palette)
+    ///     .algorithm(DitherAlgorithm::FloydSteinberg);
     /// ```
     #[inline]
     pub fn algorithm(mut self, algorithm: DitherAlgorithm) -> Self {
         self.algorithm = algorithm;
-        // Apply per-algorithm defaults. Subsequent .error_clamp() / .noise_scale()
-        // calls (e.g. from dev UI tuning) override these.
-        match algorithm {
-            DitherAlgorithm::FloydSteinberg | DitherAlgorithm::FloydSteinbergNoise => {
-                self.dither_opts = self.dither_opts.error_clamp(0.12).noise_scale(4.0);
-            }
-            DitherAlgorithm::JarvisJudiceNinke | DitherAlgorithm::JarvisJudiceNinkeNoise => {
-                self.dither_opts = self.dither_opts.error_clamp(0.03).noise_scale(6.0);
-            }
-            DitherAlgorithm::Sierra | DitherAlgorithm::SierraNoise => {
-                self.dither_opts = self.dither_opts.error_clamp(0.10).noise_scale(5.5);
-            }
-            DitherAlgorithm::SierraTwoRow | DitherAlgorithm::SierraTwoRowNoise => {
-                self.dither_opts = self.dither_opts.error_clamp(0.10).noise_scale(7.0);
-            }
-            DitherAlgorithm::SierraLite | DitherAlgorithm::SierraLiteNoise => {
-                self.dither_opts = self.dither_opts.error_clamp(0.11).noise_scale(2.5);
-            }
-            _ => {}
-        }
+        let (error_clamp, noise_scale) = algorithm.defaults();
+        self.dither_opts = self
+            .dither_opts
+            .error_clamp(error_clamp)
+            .noise_scale(noise_scale);
+        self.error_clamp_explicit = false;
         self
     }
 
     /// Dither raw sRGB pixels into a [`DitheredImage`].
     ///
-    /// This is the primary processing method. It applies the full pipeline:
+    /// Applies the full pipeline:
     /// 1. Preprocess (resize, saturation, contrast)
-    /// 2. Dither (Atkinson for Photo, BlueNoise for Graphics)
+    /// 2. Dither (error diffusion with selected kernel)
     /// 3. Wrap in [`DitheredImage`]
     ///
-    /// The builder is reusable -- `dither()` takes `&self` so you can call
-    /// it multiple times with different images.
-    ///
-    /// # Arguments
-    ///
-    /// * `pixels` - Input pixels in sRGB space, row-major order
-    /// * `width` - Image width in pixels
-    /// * `height` - Image height in pixels
-    ///
-    /// # Returns
-    ///
-    /// A [`DitheredImage`] with palette indices, dimensions, and the palette.
-    ///
-    /// # Panics (debug only)
-    ///
-    /// Debug-asserts that `pixels.len() == width * height`.
+    /// The builder is reusable -- `dither()` takes `&self`.
     pub fn dither(&self, pixels: &[Srgb], width: usize, height: usize) -> DitheredImage {
-        // 1. Preprocess with the builder's custom options
+        // 1. Preprocess
         let preprocessor = Preprocessor::new(&self.palette, self.preprocess.clone());
         let result = preprocessor.process(pixels, width, height);
 
-        // 2. Resolve algorithm (Auto uses intent defaults)
-        let algorithm = match self.algorithm {
-            DitherAlgorithm::Auto => match self.intent {
-                RenderingIntent::Photo => DitherAlgorithm::Atkinson,
-                RenderingIntent::Graphics => DitherAlgorithm::BlueNoise,
-            },
-            explicit => explicit,
+        // 2. Resolve dither options, applying greyscale override if needed
+        let dither_opts = if !self.error_clamp_explicit && self.palette.is_greyscale() {
+            self.dither_opts.clone().error_clamp(0.6)
+        } else {
+            self.dither_opts.clone()
         };
 
-        // 3. Dither using the selected algorithm
-        let indices = match algorithm {
-            DitherAlgorithm::Auto => unreachable!("resolved above"),
-            DitherAlgorithm::Atkinson => {
-                // Use Euclidean distance for error diffusion — see
-                // Palette::for_error_diffusion() for rationale.
-                let photo_palette = self.palette.for_error_diffusion();
-                Atkinson.dither(
-                    &result.pixels,
-                    result.width,
-                    result.height,
-                    &photo_palette,
-                    &self.dither_opts,
-                )
-            }
-            DitherAlgorithm::FloydSteinberg => {
-                let photo_palette = self.palette.for_error_diffusion();
-                FloydSteinberg.dither(
-                    &result.pixels,
-                    result.width,
-                    result.height,
-                    &photo_palette,
-                    &self.dither_opts,
-                )
-            }
-            DitherAlgorithm::BlueNoise => BlueNoiseDither.dither(
-                &result.pixels,
-                result.width,
-                result.height,
-                &self.palette,
-                &self.dither_opts,
-            ),
-            DitherAlgorithm::Simplex => {
-                let simplex = SimplexDither::new(&self.palette);
-                simplex.dither(
-                    &result.pixels,
-                    result.width,
-                    result.height,
-                    &self.palette,
-                    &self.dither_opts,
-                )
-            }
-            DitherAlgorithm::FloydSteinbergNoise => {
-                let photo_palette = self.palette.for_error_diffusion();
-                FloydSteinbergNoise.dither(
-                    &result.pixels,
-                    result.width,
-                    result.height,
-                    &photo_palette,
-                    &self.dither_opts,
-                )
-            }
-            DitherAlgorithm::JarvisJudiceNinke => {
-                let photo_palette = self.palette.for_error_diffusion();
-                JarvisJudiceNinke.dither(
-                    &result.pixels,
-                    result.width,
-                    result.height,
-                    &photo_palette,
-                    &self.dither_opts,
-                )
-            }
-            DitherAlgorithm::Sierra => {
-                let photo_palette = self.palette.for_error_diffusion();
-                Sierra.dither(
-                    &result.pixels,
-                    result.width,
-                    result.height,
-                    &photo_palette,
-                    &self.dither_opts,
-                )
-            }
-            DitherAlgorithm::SierraTwoRow => {
-                let photo_palette = self.palette.for_error_diffusion();
-                SierraTwoRow.dither(
-                    &result.pixels,
-                    result.width,
-                    result.height,
-                    &photo_palette,
-                    &self.dither_opts,
-                )
-            }
-            DitherAlgorithm::SierraLite => {
-                let photo_palette = self.palette.for_error_diffusion();
-                SierraLite.dither(
-                    &result.pixels,
-                    result.width,
-                    result.height,
-                    &photo_palette,
-                    &self.dither_opts,
-                )
-            }
-            DitherAlgorithm::JarvisJudiceNinkeNoise => {
-                let photo_palette = self.palette.for_error_diffusion();
-                JarvisJudiceNinkeNoise.dither(
-                    &result.pixels,
-                    result.width,
-                    result.height,
-                    &photo_palette,
-                    &self.dither_opts,
-                )
-            }
-            DitherAlgorithm::SierraNoise => {
-                let photo_palette = self.palette.for_error_diffusion();
-                SierraNoise.dither(
-                    &result.pixels,
-                    result.width,
-                    result.height,
-                    &photo_palette,
-                    &self.dither_opts,
-                )
-            }
-            DitherAlgorithm::SierraTwoRowNoise => {
-                let photo_palette = self.palette.for_error_diffusion();
-                SierraTwoRowNoise.dither(
-                    &result.pixels,
-                    result.width,
-                    result.height,
-                    &photo_palette,
-                    &self.dither_opts,
-                )
-            }
-            DitherAlgorithm::SierraLiteNoise => {
-                let photo_palette = self.palette.for_error_diffusion();
-                SierraLiteNoise.dither(
-                    &result.pixels,
-                    result.width,
-                    result.height,
-                    &photo_palette,
-                    &self.dither_opts,
-                )
-            }
-        };
+        // 3. Dither using unified kernel dispatch
+        let photo_palette = self.palette.for_error_diffusion();
+        let kernel = self.algorithm.kernel();
+        let indices = dither_with_kernel_noise(
+            &result.pixels,
+            result.width,
+            result.height,
+            &photo_palette,
+            kernel,
+            &dither_opts,
+        );
 
         // 4. Wrap in DitheredImage
         DitheredImage::new(indices, result.width, result.height, self.palette.clone())
@@ -495,49 +239,30 @@ mod tests {
     }
 
     #[test]
-    fn test_new_photo_defaults() {
+    fn test_new_defaults() {
         let palette = test_palette();
-        let ditherer = EinkDitherer::new(palette, RenderingIntent::Photo);
+        let ditherer = EinkDitherer::new(palette);
 
-        // Photo defaults: saturation 1.0, contrast 1.0 (no boost —
-        // error diffusion naturally amplifies chroma)
         assert!(
             (ditherer.preprocess.saturation - 1.0).abs() < f32::EPSILON,
-            "Photo should default to saturation 1.0"
+            "Should default to saturation 1.0"
         );
         assert!(
             (ditherer.preprocess.contrast - 1.0).abs() < f32::EPSILON,
-            "Photo should default to contrast 1.0"
-        );
-    }
-
-    #[test]
-    fn test_new_graphics_defaults() {
-        let palette = test_palette();
-        let ditherer = EinkDitherer::new(palette, RenderingIntent::Graphics);
-
-        // Graphics defaults: saturation 1.0, contrast 1.0
-        assert!(
-            (ditherer.preprocess.saturation - 1.0).abs() < f32::EPSILON,
-            "Graphics should default to saturation 1.0"
-        );
-        assert!(
-            (ditherer.preprocess.contrast - 1.0).abs() < f32::EPSILON,
-            "Graphics should default to contrast 1.0"
+            "Should default to contrast 1.0"
         );
     }
 
     #[test]
     fn test_builder_chaining() {
         let palette = test_palette();
-        let ditherer = EinkDitherer::new(palette, RenderingIntent::Photo)
+        let ditherer = EinkDitherer::new(palette)
             .resize(800, 600)
             .saturation(1.8)
             .contrast(1.2)
             .serpentine(false)
             .error_clamp(0.3);
 
-        // Verify all values were set
         assert_eq!(ditherer.preprocess.target_width, Some(800));
         assert_eq!(ditherer.preprocess.target_height, Some(600));
         assert!((ditherer.preprocess.saturation - 1.8).abs() < f32::EPSILON);
@@ -549,7 +274,7 @@ mod tests {
     #[test]
     fn test_dither_produces_valid_output() {
         let palette = test_palette();
-        let ditherer = EinkDitherer::new(palette.clone(), RenderingIntent::Photo);
+        let ditherer = EinkDitherer::new(palette.clone());
         let pixels = gradient_4x4();
 
         let result = ditherer.dither(&pixels, 4, 4);
@@ -558,7 +283,6 @@ mod tests {
         assert_eq!(result.height(), 4);
         assert_eq!(result.indices().len(), 16);
 
-        // All indices must be valid
         for &idx in result.indices() {
             assert!(
                 (idx as usize) < palette.len(),
@@ -572,55 +296,26 @@ mod tests {
     #[test]
     fn test_dither_reusable() {
         let palette = test_palette();
-        let ditherer = EinkDitherer::new(palette.clone(), RenderingIntent::Photo);
+        let ditherer = EinkDitherer::new(palette);
         let pixels = gradient_4x4();
 
-        // Call dither twice with the same builder
         let result1 = ditherer.dither(&pixels, 4, 4);
         let result2 = ditherer.dither(&pixels, 4, 4);
 
-        // Both should be valid
-        assert_eq!(result1.width(), 4);
-        assert_eq!(result1.height(), 4);
-        assert_eq!(result2.width(), 4);
-        assert_eq!(result2.height(), 4);
-
-        // Same input should produce same output (deterministic)
         assert_eq!(result1.indices(), result2.indices());
     }
 
     #[test]
-    fn test_photo_and_graphics_differ() {
-        let palette = test_palette();
-        let pixels = gradient_4x4();
-
-        let photo = EinkDitherer::new(palette.clone(), RenderingIntent::Photo);
-        let graphics = EinkDitherer::new(palette, RenderingIntent::Graphics);
-
-        let photo_result = photo.dither(&pixels, 4, 4);
-        let graphics_result = graphics.dither(&pixels, 4, 4);
-
-        // Different algorithms + different preprocessing should produce different output
-        assert_ne!(
-            photo_result.indices(),
-            graphics_result.indices(),
-            "Photo and Graphics should produce different dither patterns"
-        );
-    }
-
-    #[test]
     fn test_custom_saturation_affects_output() {
-        // Use a richer palette so saturation differences are visible
         let colors = [
-            Srgb::from_u8(0, 0, 0),       // black
-            Srgb::from_u8(255, 255, 255), // white
-            Srgb::from_u8(255, 0, 0),     // red
-            Srgb::from_u8(0, 255, 0),     // green
-            Srgb::from_u8(0, 0, 255),     // blue
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(0, 255, 0),
+            Srgb::from_u8(0, 0, 255),
         ];
         let palette = Palette::new(&colors, None).unwrap();
 
-        // Desaturated pastel input that sits between palette colors
         let pixels: Vec<Srgb> = (0..16)
             .map(|i| {
                 let r = 128u8.wrapping_add((i * 5) as u8);
@@ -630,17 +325,45 @@ mod tests {
             })
             .collect();
 
-        let low_sat = EinkDitherer::new(palette.clone(), RenderingIntent::Photo).saturation(0.5);
-        let high_sat = EinkDitherer::new(palette, RenderingIntent::Photo).saturation(3.0);
+        let low_sat = EinkDitherer::new(palette.clone()).saturation(0.5);
+        let high_sat = EinkDitherer::new(palette).saturation(3.0);
 
         let low_result = low_sat.dither(&pixels, 4, 4);
         let high_result = high_sat.dither(&pixels, 4, 4);
 
-        // Very different saturation should produce different output with a rich palette
         assert_ne!(
             low_result.indices(),
             high_result.indices(),
-            "Different saturation should produce different dither patterns on colorful input"
+            "Different saturation should produce different dither patterns"
         );
+    }
+
+    #[test]
+    fn test_greyscale_palette_uses_higher_clamp() {
+        let grey_palette = Palette::new(
+            &[Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)],
+            None,
+        )
+        .unwrap();
+        assert!(grey_palette.is_greyscale());
+
+        let color_palette = Palette::new(
+            &[
+                Srgb::from_u8(0, 0, 0),
+                Srgb::from_u8(255, 255, 255),
+                Srgb::from_u8(255, 0, 0),
+            ],
+            None,
+        )
+        .unwrap();
+        assert!(!color_palette.is_greyscale());
+    }
+
+    #[test]
+    fn test_algorithm_sets_defaults() {
+        let palette = test_palette();
+        let ditherer = EinkDitherer::new(palette).algorithm(DitherAlgorithm::FloydSteinberg);
+        assert!((ditherer.dither_opts.error_clamp - 0.12).abs() < f32::EPSILON);
+        assert!((ditherer.dither_opts.noise_scale - 4.0).abs() < f32::EPSILON);
     }
 }

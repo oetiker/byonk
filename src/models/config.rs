@@ -126,14 +126,14 @@ impl<'de> Deserialize<'de> for PanelDitherConfig {
 /// used throughout the system.
 pub fn normalize_algorithm_name(name: &str) -> String {
     match name.to_lowercase().as_str() {
-        "photo" | "atkinson" => "atkinson".to_string(),
-        "graphics" | "blue-noise" | "blue_noise" | "bluenoise" => "blue-noise".to_string(),
+        "atkinson" => "atkinson".to_string(),
         "floyd-steinberg" | "floyd_steinberg" | "floydsteinberg" => "floyd-steinberg".to_string(),
         "jjn" | "jarvis-judice-ninke" | "jarvis_judice_ninke" => "jarvis-judice-ninke".to_string(),
         "sierra" => "sierra".to_string(),
         "sierra-two-row" | "sierra_two_row" | "sierratworow" => "sierra-two-row".to_string(),
         "sierra-lite" | "sierra_lite" | "sierralite" => "sierra-lite".to_string(),
-        "simplex" => "simplex".to_string(),
+        "stucki" => "stucki".to_string(),
+        "burkes" => "burkes".to_string(),
         other => other.to_string(),
     }
 }
@@ -222,7 +222,7 @@ pub struct DeviceConfig {
     /// Optional display color override (comma-separated hex, e.g. "#000000,#FFFFFF,#FF0000")
     pub colors: Option<String>,
 
-    /// Optional dither mode override ("photo" or "graphics")
+    /// Optional dither algorithm override (e.g. "atkinson", "floyd-steinberg")
     pub dither: Option<String>,
 
     /// Optional panel profile name (references panels section)
@@ -892,12 +892,10 @@ floyd-steinberg:
         assert_eq!(normalize_algorithm_name("sierra"), "sierra");
         assert_eq!(normalize_algorithm_name("sierra-two-row"), "sierra-two-row");
         assert_eq!(normalize_algorithm_name("sierra-lite"), "sierra-lite");
-        assert_eq!(normalize_algorithm_name("blue-noise"), "blue-noise");
-        assert_eq!(normalize_algorithm_name("simplex"), "simplex");
+        assert_eq!(normalize_algorithm_name("stucki"), "stucki");
+        assert_eq!(normalize_algorithm_name("burkes"), "burkes");
 
         // Aliases
-        assert_eq!(normalize_algorithm_name("photo"), "atkinson");
-        assert_eq!(normalize_algorithm_name("graphics"), "blue-noise");
         assert_eq!(normalize_algorithm_name("jjn"), "jarvis-judice-ninke");
 
         // Case insensitive
@@ -918,7 +916,7 @@ floyd-steinberg:
     #[test]
     fn test_panel_dither_config_normalizes_aliases() {
         let yaml = r#"
-photo:
+atkinson:
   error_clamp: 0.12
 jjn:
   error_clamp: 0.05
@@ -927,7 +925,7 @@ jjn:
         assert!(config.algorithms.contains_key("atkinson"));
         assert!(config.algorithms.contains_key("jarvis-judice-ninke"));
 
-        let resolved = config.resolve_for_algorithm(Some("photo"));
+        let resolved = config.resolve_for_algorithm(Some("atkinson"));
         assert_eq!(resolved.error_clamp, Some(0.12));
 
         let resolved = config.resolve_for_algorithm(Some("jarvis-judice-ninke"));

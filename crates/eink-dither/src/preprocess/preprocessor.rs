@@ -32,7 +32,7 @@
 //! let palette = Palette::new(&colors, None).unwrap();
 //!
 //! // Configure preprocessing with resize
-//! let options = PreprocessOptions::photo().resize(100, 100);
+//! let options = PreprocessOptions::new().resize(100, 100);
 //! let preprocessor = Preprocessor::new(&palette, options);
 //!
 //! // Process an image (2x1 pixels: black and mid-gray)
@@ -63,7 +63,7 @@ use super::resize::resize_lanczos;
 ///
 /// let colors = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)];
 /// let palette = Palette::new(&colors, None).unwrap();
-/// let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+/// let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 ///
 /// let input = [Srgb::from_u8(128, 128, 128)];
 /// let result = preprocessor.process(&input, 1, 1);
@@ -116,8 +116,8 @@ pub struct PreprocessResult {
 /// # Photo vs Graphics Intent
 ///
 /// Use presets for common scenarios:
-/// - [`PreprocessOptions::photo()`]: Enhances photos with saturation/contrast boost
-/// - [`PreprocessOptions::graphics()`]: No enhancement for logos/text/UI
+/// - [`PreprocessOptions::new()`]: Enhances photos with saturation/contrast boost
+/// - [`PreprocessOptions::new()`]: No enhancement for logos/text/UI
 ///
 /// The preprocessor holds a reference to the palette and cannot outlive it.
 ///
@@ -152,7 +152,7 @@ impl<'a> Preprocessor<'a> {
     ///
     /// let colors = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)];
     /// let palette = Palette::new(&colors, None).unwrap();
-    /// let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+    /// let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
     /// ```
     #[inline]
     pub fn new(palette: &'a Palette, options: PreprocessOptions) -> Self {
@@ -218,7 +218,7 @@ impl<'a> Preprocessor<'a> {
     ///
     /// let colors = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)];
     /// let palette = Palette::new(&colors, None).unwrap();
-    /// let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+    /// let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
     ///
     /// let input = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(128, 128, 128)];
     /// let result = preprocessor.process(&input, 2, 1);
@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn test_exact_match_detection_black() {
         let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 
         let black = Srgb::from_u8(0, 0, 0);
         assert_eq!(
@@ -376,7 +376,7 @@ mod tests {
     #[test]
     fn test_exact_match_detection_white() {
         let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 
         let white = Srgb::from_u8(255, 255, 255);
         assert_eq!(
@@ -389,7 +389,7 @@ mod tests {
     #[test]
     fn test_exact_match_detection_gray_no_match() {
         let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 
         let gray = Srgb::from_u8(128, 128, 128);
         assert_eq!(
@@ -402,7 +402,7 @@ mod tests {
     #[test]
     fn test_exact_match_detection_near_black() {
         let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 
         // 1 LSB off from black
         let near_black = Srgb::from_u8(1, 0, 0);
@@ -420,7 +420,7 @@ mod tests {
         let actual = [Srgb::from_u8(200, 50, 50)]; // Actual muddy red
         let palette = Palette::new(&official, Some(&actual)).unwrap();
 
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 
         // Input matches OFFICIAL color (bright red) - should match
         let bright_red = Srgb::from_u8(255, 0, 0);
@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn test_process_returns_correct_lengths() {
         let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 
         let input = [
             Srgb::from_u8(0, 0, 0),
@@ -468,7 +468,7 @@ mod tests {
     #[test]
     fn test_process_detects_exact_matches() {
         let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 
         let input = [
             Srgb::from_u8(0, 0, 0),       // Black - matches
@@ -519,7 +519,7 @@ mod tests {
     #[test]
     fn test_boost_saturation_increases_chroma() {
         let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 
         // A saturated red color
         let red = LinearRgb::new(0.8, 0.2, 0.1);
@@ -540,7 +540,7 @@ mod tests {
     #[test]
     fn test_boost_saturation_gray_stays_gray() {
         let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 
         // Pure gray (no chroma to boost)
         let gray = LinearRgb::new(0.5, 0.5, 0.5);
@@ -564,7 +564,7 @@ mod tests {
     #[test]
     fn test_boost_saturation_preserves_hue() {
         let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 
         // Orange color
         let orange = LinearRgb::new(0.7, 0.3, 0.1);
@@ -584,7 +584,7 @@ mod tests {
     #[test]
     fn test_boost_saturation_preserves_lightness() {
         let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 
         let color = LinearRgb::new(0.6, 0.3, 0.2);
         let boosted = preprocessor.boost_saturation(color, 1.5);
@@ -607,7 +607,7 @@ mod tests {
     #[test]
     fn test_adjust_contrast_midpoint_unchanged() {
         let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 
         // Mid-gray at exactly 0.5
         let midpoint = LinearRgb::new(0.5, 0.5, 0.5);
@@ -633,7 +633,7 @@ mod tests {
     #[test]
     fn test_adjust_contrast_dark_gets_darker() {
         let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 
         // Dark gray below midpoint
         let dark = LinearRgb::new(0.3, 0.3, 0.3);
@@ -656,7 +656,7 @@ mod tests {
     #[test]
     fn test_adjust_contrast_light_gets_lighter() {
         let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 
         // Light gray above midpoint
         let light = LinearRgb::new(0.7, 0.7, 0.7);
@@ -679,7 +679,7 @@ mod tests {
     #[test]
     fn test_adjust_contrast_factor_one_no_change() {
         let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 
         let color = LinearRgb::new(0.3, 0.5, 0.7);
         let adjusted = preprocessor.adjust_contrast(color, 1.0);
@@ -756,7 +756,7 @@ mod tests {
     #[test]
     fn test_process_with_photo_preset() {
         let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 
         let input = [
             Srgb::from_u8(0, 0, 0),       // Black (exact match)
@@ -777,7 +777,7 @@ mod tests {
     #[test]
     fn test_process_with_graphics_preset() {
         let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::graphics());
+        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 
         let input = [Srgb::from_u8(128, 64, 32)];
         let result = preprocessor.process(&input, 1, 1);
@@ -802,7 +802,7 @@ mod tests {
     #[test]
     fn test_process_2d_image() {
         let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::photo());
+        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
 
         // 2x2 image
         let input = [
@@ -872,7 +872,7 @@ mod tests {
     fn test_process_with_resize() {
         let palette = bw_palette();
         // Set up resize to 50x50
-        let options = PreprocessOptions::graphics().resize(50, 50);
+        let options = PreprocessOptions::new().resize(50, 50);
         let preprocessor = Preprocessor::new(&palette, options);
 
         // 100x100 solid gray image
@@ -894,7 +894,7 @@ mod tests {
     fn test_process_without_resize() {
         let palette = bw_palette();
         // No resize specified
-        let options = PreprocessOptions::graphics();
+        let options = PreprocessOptions::new();
         let preprocessor = Preprocessor::new(&palette, options);
 
         let input = vec![Srgb::from_u8(128, 128, 128); 100 * 100];
@@ -913,7 +913,7 @@ mod tests {
         let palette = bw_palette();
 
         // Create a small image with a specific pattern
-        let options = PreprocessOptions::photo().resize(2, 2);
+        let options = PreprocessOptions::new().resize(2, 2);
         let preprocessor = Preprocessor::new(&palette, options);
 
         // 4x4 gradient-like input
@@ -947,7 +947,7 @@ mod tests {
     #[ignore = "requires image crate for actual resize"]
     fn test_resize_full_pipeline_with_photo_preset() {
         let palette = bw_palette();
-        let options = PreprocessOptions::photo().resize(10, 10);
+        let options = PreprocessOptions::new().resize(10, 10);
         let preprocessor = Preprocessor::new(&palette, options);
 
         // 50x50 image with mix of colors
@@ -991,7 +991,7 @@ mod tests {
         ];
         let palette = Palette::new(&colors, None).unwrap();
 
-        let options = PreprocessOptions::graphics().resize(5, 5);
+        let options = PreprocessOptions::new().resize(5, 5);
         let preprocessor = Preprocessor::new(&palette, options);
 
         // Solid gray (matches palette)

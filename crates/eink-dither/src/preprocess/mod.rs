@@ -35,63 +35,7 @@
 //!
 //! This keeps text and UI elements crisp while photos get full enhancement.
 //!
-//! # Presets
-//!
-//! Two presets cover common use cases:
-//!
-//! - [`PreprocessOptions::photo()`]: Saturation 1.5, contrast 1.1 - for photographs
-//! - [`PreprocessOptions::graphics()`]: No enhancement - for logos, text, UI
-//!
 //! # Complete Workflow Example
-//!
-//! ```ignore
-//! use eink_dither::{
-//!     Srgb, Palette, Preprocessor, PreprocessOptions, PreprocessResult,
-//!     Atkinson, Dither, DitherOptions,
-//! };
-//!
-//! // 1. Define your e-ink palette
-//! let colors = [
-//!     Srgb::from_u8(0, 0, 0),       // Black
-//!     Srgb::from_u8(255, 255, 255), // White
-//! ];
-//! let palette = Palette::new(&colors, None).unwrap();
-//!
-//! // 2. Configure preprocessing for photos with resize
-//! let preprocess_opts = PreprocessOptions::photo()
-//!     .resize(10, 10);  // Target e-ink display size
-//!
-//! // 3. Create preprocessor
-//! let preprocessor = Preprocessor::new(&palette, preprocess_opts);
-//!
-//! // 4. Load your image pixels (example: 20x20 mid-gray)
-//! let input_pixels: Vec<Srgb> = vec![Srgb::from_u8(128, 128, 128); 20 * 20];
-//!
-//! // 5. Preprocess: resize -> detect matches -> enhance
-//! let result: PreprocessResult = preprocessor.process(&input_pixels, 20, 20);
-//!
-//! // Result contains resized dimensions
-//! assert_eq!(result.width, 10);
-//! assert_eq!(result.height, 10);
-//! assert_eq!(result.pixels.len(), 10 * 10);
-//!
-//! // 6. Dither the preprocessed image
-//! let dither_opts = DitherOptions::new();
-//! let indices = Atkinson.dither(
-//!     &result.pixels,
-//!     result.width,
-//!     result.height,
-//!     &palette,
-//!     &dither_opts,
-//! );
-//!
-//! // indices contains palette indices for each pixel
-//! assert_eq!(indices.len(), 10 * 10);
-//! ```
-//!
-//! # Graphics Mode Example
-//!
-//! For logos and UI elements, use graphics mode (no enhancement):
 //!
 //! ```
 //! use eink_dither::{Srgb, Palette, Preprocessor, PreprocessOptions};
@@ -99,8 +43,32 @@
 //! let colors = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)];
 //! let palette = Palette::new(&colors, None).unwrap();
 //!
-//! // Graphics preset: saturation=1.0, contrast=1.0 (no enhancement)
-//! let options = PreprocessOptions::graphics();
+//! // Configure preprocessing
+//! let options = PreprocessOptions::new().saturation(1.2).contrast(1.1);
+//! let preprocessor = Preprocessor::new(&palette, options);
+//!
+//! // Load your image pixels (example: 10x10 mid-gray)
+//! let input_pixels: Vec<Srgb> = vec![Srgb::from_u8(128, 128, 128); 10 * 10];
+//!
+//! // Preprocess: detect matches -> enhance
+//! let result = preprocessor.process(&input_pixels, 10, 10);
+//!
+//! assert_eq!(result.width, 10);
+//! assert_eq!(result.height, 10);
+//! assert_eq!(result.pixels.len(), 10 * 10);
+//! ```
+//!
+//! # Exact Match Example
+//!
+//! Pixels that exactly match palette colors are preserved without enhancement:
+//!
+//! ```
+//! use eink_dither::{Srgb, Palette, Preprocessor, PreprocessOptions};
+//!
+//! let colors = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)];
+//! let palette = Palette::new(&colors, None).unwrap();
+//!
+//! let options = PreprocessOptions::new();
 //! let preprocessor = Preprocessor::new(&palette, options);
 //!
 //! // Black pixels stay exactly black

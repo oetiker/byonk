@@ -980,7 +980,7 @@ return {
   refresh_rate = 300,       -- Seconds until next refresh
   skip_update = false,      -- Optional: skip rendering, just check back later
   colors = { "#000000", "#FFFFFF", "#FF0000" },  -- Optional: override display palette
-  dither = "photo",         -- Optional: dither algorithm
+  dither = "atkinson",      -- Optional: dither algorithm
   preserve_exact = true,    -- Optional: preserve exact palette matches (default: true)
   error_clamp = 0.08,       -- Optional: error diffusion clamp
   noise_scale = 0.6,        -- Optional: blue noise jitter scale
@@ -1050,27 +1050,28 @@ Controls the dithering algorithm used when converting SVG to e-ink PNG. Availabl
 
 | Value | Algorithm | Description |
 |-------|-----------|-------------|
-| `"graphics"` | Blue noise (default) | Ordered dithering for UI content |
-| `"photo"` or `"atkinson"` | Atkinson | Error diffusion for photographs |
+| `"atkinson"` (default) | Atkinson | Error diffusion (75% propagation) |
 | `"floyd-steinberg"` | Floyd-Steinberg | General-purpose error diffusion |
 | `"jarvis-judice-ninke"` | JJN | Wide kernel, least oscillation |
 | `"sierra"` | Sierra | 10-neighbor error diffusion |
 | `"sierra-two-row"` | Sierra Two-Row | 7-neighbor error diffusion |
 | `"sierra-lite"` | Sierra Lite | Fastest error diffusion |
+| `"stucki"` | Stucki | Wide 12-neighbor kernel similar to JJN |
+| `"burkes"` | Burkes | 7-neighbor, good balance of speed and quality |
 
 The dither mode follows a priority chain:
 
 1. **Dev UI override** (strongest) — set in dev mode
 2. **Script `dither`** — returned in the script result table
 3. **Device config `dither`** — set per-device in `config.yaml`
-4. **Default** — `"graphics"`
+4. **Default** — `"atkinson"`
 
 ```lua
--- Use photo dithering for a screen that displays images
+-- Use Floyd-Steinberg dithering for a screen that displays images
 return {
   data = { image_url = "..." },
   refresh_rate = 3600,
-  dither = "photo"
+  dither = "floyd-steinberg"
 }
 ```
 

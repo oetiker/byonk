@@ -92,7 +92,7 @@ pub struct DitherOptions {
     /// - `5.0` = default (±31% weight variation)
     /// - `8.0` = aggressive (±50% weight variation)
     ///
-    /// Only affects `FloydSteinbergNoise` algorithm; ignored by others.
+    /// All error diffusion algorithms support this jitter.
     ///
     /// Default: `5.0`
     pub noise_scale: f32,

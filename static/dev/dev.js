@@ -4,13 +4,14 @@
 // When the user switches dither algorithm, these defaults are applied unless
 // the user has saved per-algorithm overrides in localStorage.
 const DITHER_DEFAULTS = {
-    '':                    { noiseScale: '0',   errorClamp: '0.08' }, // Auto (Atkinson)
     'atkinson':            { noiseScale: '0',   errorClamp: '0.08' },
     'floyd-steinberg':     { noiseScale: '4.0', errorClamp: '0.12' },
     'jarvis-judice-ninke': { noiseScale: '6.0', errorClamp: '0.03' },
     'sierra':              { noiseScale: '5.5', errorClamp: '0.10' },
     'sierra-two-row':      { noiseScale: '7.0', errorClamp: '0.10' },
     'sierra-lite':         { noiseScale: '2.5', errorClamp: '0.11' },
+    'stucki':              { noiseScale: '6.0', errorClamp: '0.03' },
+    'burkes':              { noiseScale: '7.0', errorClamp: '0.10' },
 };
 
 const state = {
@@ -319,7 +320,7 @@ function setupEventListeners() {
 function applyDitherDefaults() {
     const algo = elements.ditherSelect.value;
     const override = state.ditherTuningOverrides[algo];
-    const defaults = DITHER_DEFAULTS[algo] || DITHER_DEFAULTS[''];
+    const defaults = DITHER_DEFAULTS[algo] || DITHER_DEFAULTS['atkinson'];
     elements.noiseScale.value = override?.noiseScale ?? defaults.noiseScale;
     elements.errorClamp.value = override?.errorClamp ?? defaults.errorClamp;
 }

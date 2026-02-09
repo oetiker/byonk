@@ -103,15 +103,16 @@ The `dither` option selects which dithering algorithm to use. All algorithms per
 
 | Algorithm | Value | Description |
 |-----------|-------|-------------|
-| Blue noise (default) | `"graphics"` | Ordered dithering with blue noise. Best for UI content: text, icons, charts. |
-| Atkinson | `"photo"` or `"atkinson"` | Error diffusion (6/8 distribution). Good for photographs with moderate detail. |
+| Atkinson (default) | `"atkinson"` | Error diffusion (75% propagation). Good general-purpose default. |
 | Floyd-Steinberg | `"floyd-steinberg"` | Error diffusion with blue noise jitter. Smooth gradients, good general-purpose. |
-| Jarvis-Judice-Ninke | `"jarvis-judice-ninke"` | Wide 12-neighbor kernel. Least oscillation on sparse chromatic palettes. |
+| Jarvis-Judice-Ninke | `"jarvis-judice-ninke"` or `"jjn"` | Wide 12-neighbor kernel. Least oscillation on sparse chromatic palettes. |
 | Sierra | `"sierra"` | 10-neighbor kernel. Good balance of quality and speed. |
 | Sierra Two-Row | `"sierra-two-row"` | 7-neighbor kernel. Lighter weight than full Sierra. |
 | Sierra Lite | `"sierra-lite"` | 3-neighbor kernel. Fastest error diffusion. |
+| Stucki | `"stucki"` | Wide 12-neighbor kernel similar to JJN. |
+| Burkes | `"burkes"` | 7-neighbor kernel. Good balance of speed and quality. |
 
-For most screens, the default `"graphics"` works well. Use `"photo"` or `"floyd-steinberg"` for photographic content. For sparse chromatic palettes (e.g. black/white/red/yellow), try `"jarvis-judice-ninke"` or `"sierra"` to reduce oscillation artifacts.
+For most screens, the default `"atkinson"` works well. Use `"floyd-steinberg"` for photographic content. For sparse chromatic palettes (e.g. black/white/red/yellow), try `"jarvis-judice-ninke"` or `"sierra"` to reduce oscillation artifacts.
 
 ## Default Screen
 
@@ -336,7 +337,7 @@ The `dither` section supports:
 
 Resolution within a panel: per-algorithm value > flat default > None.
 
-Algorithm names accept aliases (e.g. `photo` for `atkinson`, `graphics` for `blue-noise`, `jjn` for `jarvis-judice-ninke`).
+Algorithm names accept aliases (e.g. `jjn` for `jarvis-judice-ninke`).
 
 The overall tuning priority chain is:
 

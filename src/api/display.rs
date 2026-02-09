@@ -518,11 +518,11 @@ pub async fn handle_display<R: DeviceRegistry>(
 
     // Resolve panel dither config for pre-script algorithm
     let panel_dither_config = panel.and_then(|p| p.dither.clone());
-    // Pre-script algorithm: dev override > device config > default "graphics"
+    // Pre-script algorithm: dev override > device config > default "atkinson"
     let pre_script_algo = dev_dither_override
         .as_deref()
         .or(device_config_dither.as_deref())
-        .unwrap_or("graphics");
+        .unwrap_or("atkinson");
     let panel_tuning = panel_dither_config
         .as_ref()
         .map(|pdc| pdc.resolve_for_algorithm(Some(pre_script_algo)))

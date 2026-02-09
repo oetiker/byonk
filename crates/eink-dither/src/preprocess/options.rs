@@ -18,19 +18,15 @@
 ///
 /// # Presets
 ///
-/// Two presets are provided for common use cases:
-/// - [`photo()`](Self::photo): Boost saturation and contrast for photographs
-/// - [`graphics()`](Self::graphics): No enhancement for logos, text, UI elements
-///
 /// # Example
 ///
 /// ```
 /// use eink_dither::PreprocessOptions;
 ///
-/// // Use photo preset (recommended for most images)
-/// let options = PreprocessOptions::photo();
+/// // Default options (saturation 1.0, contrast 1.0)
+/// let options = PreprocessOptions::new();
 ///
-/// // Or customize with builder pattern
+/// // Customize with builder pattern
 /// let options = PreprocessOptions::new()
 ///     .resize(800, 600)
 ///     .saturation(1.3)
@@ -136,43 +132,6 @@ impl PreprocessOptions {
     pub fn preserve_exact_matches(mut self, enabled: bool) -> Self {
         self.preserve_exact_matches = enabled;
         self
-    }
-
-    /// Preset for photo rendering intent.
-    ///
-    /// No saturation or contrast boost — error diffusion naturally amplifies
-    /// chroma ~1.5-2x for muted colors through error propagation, so
-    /// preprocessing boosts cause visible oversaturation. Users can override
-    /// via [`EinkDitherer::saturation()`] / [`EinkDitherer::contrast()`].
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use eink_dither::PreprocessOptions;
-    ///
-    /// let options = PreprocessOptions::photo()
-    ///     .resize(1024, 768);
-    /// ```
-    #[inline]
-    pub fn photo() -> Self {
-        Self::default()
-    }
-
-    /// Preset for graphics rendering intent.
-    ///
-    /// No saturation or contrast changes — preserves original colors
-    /// for logos, text, and UI elements.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use eink_dither::PreprocessOptions;
-    ///
-    /// let options = PreprocessOptions::graphics();
-    /// ```
-    #[inline]
-    pub fn graphics() -> Self {
-        Self::default()
     }
 }
 
@@ -280,46 +239,12 @@ mod tests {
     }
 
     #[test]
-    fn test_photo_preset() {
-        let opts = PreprocessOptions::photo();
-        assert!(opts.target_width.is_none());
-        assert!(opts.target_height.is_none());
-        assert!(
-            (opts.saturation - 1.0).abs() < f32::EPSILON,
-            "photo preset should have saturation 1.0"
-        );
-        assert!(
-            (opts.contrast - 1.0).abs() < f32::EPSILON,
-            "photo preset should have contrast 1.1"
-        );
-        assert!(opts.preserve_exact_matches);
-    }
-
-    #[test]
-    fn test_graphics_preset() {
-        let opts = PreprocessOptions::graphics();
-        assert!(opts.target_width.is_none());
-        assert!(opts.target_height.is_none());
-        assert!(
-            (opts.saturation - 1.0).abs() < f32::EPSILON,
-            "graphics preset should have saturation 1.0"
-        );
-        assert!(
-            (opts.contrast - 1.0).abs() < f32::EPSILON,
-            "graphics preset should have contrast 1.0"
-        );
-        assert!(opts.preserve_exact_matches);
-    }
-
-    #[test]
-    fn test_preset_with_builder() {
-        // Can chain builder methods on presets
-        let opts = PreprocessOptions::photo().resize(800, 600).saturation(1.3);
+    fn test_builder_with_resize_and_overrides() {
+        let opts = PreprocessOptions::new().resize(800, 600).saturation(1.3);
 
         assert_eq!(opts.target_width, Some(800));
         assert_eq!(opts.target_height, Some(600));
         assert!((opts.saturation - 1.3).abs() < f32::EPSILON);
-        // Contrast from photo preset unchanged
         assert!((opts.contrast - 1.0).abs() < f32::EPSILON);
     }
 }

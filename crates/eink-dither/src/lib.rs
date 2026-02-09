@@ -15,40 +15,30 @@
 //!
 //! # Quick Start
 //!
-//! The [`EinkDitherer`] builder is the primary entry point. Configure your
-//! palette, rendering intent, and optional tweaks in a single chain:
+//! The [`EinkDitherer`] builder is the primary entry point:
 //!
 //! ```
-//! use eink_dither::{EinkDitherer, Palette, RenderingIntent, Srgb};
+//! use eink_dither::{EinkDitherer, Palette, Srgb};
 //!
 //! let colors = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)];
 //! let palette = Palette::new(&colors, None).unwrap();
 //!
-//! let ditherer = EinkDitherer::new(palette, RenderingIntent::Photo);
+//! let ditherer = EinkDitherer::new(palette);
 //! let pixels = vec![Srgb::from_u8(128, 128, 128); 4];
 //! let result = ditherer.dither(&pixels, 2, 2);
 //! ```
-//!
-//! # Rendering Intents
-//!
-//! Two rendering intents are available:
-//!
-//! - **Photo** ([`RenderingIntent::Photo`]): Atkinson error diffusion with
-//!   saturation/contrast boost. Best for photographs and natural images.
-//! - **Graphics** ([`RenderingIntent::Graphics`]): Blue noise ordered dithering
-//!   with no enhancement. Best for logos, text, and UI elements.
 //!
 //! # Direct Pixel API
 //!
 //! For in-memory pixels, use [`EinkDitherer::dither()`]:
 //!
 //! ```
-//! use eink_dither::{EinkDitherer, Palette, RenderingIntent, Srgb};
+//! use eink_dither::{EinkDitherer, Palette, Srgb};
 //!
 //! let colors = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)];
 //! let palette = Palette::new(&colors, None).unwrap();
 //!
-//! let ditherer = EinkDitherer::new(palette, RenderingIntent::Photo);
+//! let ditherer = EinkDitherer::new(palette);
 //! let pixels = vec![Srgb::from_u8(128, 128, 128); 4];
 //! let result = ditherer.dither(&pixels, 2, 2);
 //!
@@ -66,13 +56,16 @@
 //!
 //! # Dithering Algorithms
 //!
-//! Multiple error diffusion algorithms are available via the [`Dither`] trait:
+//! Eight error diffusion algorithms are available via [`DitherAlgorithm`]:
 //!
-//! - Atkinson (75% error propagation, ideal for small palettes)
+//! - Atkinson (75% error propagation, ideal for small palettes — default)
 //! - Floyd-Steinberg (classic algorithm)
 //! - Jarvis-Judice-Ninke (large kernel, smooth gradients)
-//! - Sierra family (various speed/quality tradeoffs)
-//! - Blue noise ordered dithering (no error diffusion artifacts)
+//! - Sierra family (full, two-row, lite — various speed/quality tradeoffs)
+//! - Stucki (sharper center weights)
+//! - Burkes (simplified Stucki, 2 rows)
+//!
+//! All algorithms support blue noise kernel jitter via the `noise_scale` option.
 //!
 //! # Color Science
 //!
@@ -190,10 +183,7 @@
 //!
 //! **Tuning constants:** `kl = 2.0, kc = 1.0, kchroma = 10.0`. The high
 //! `kchroma` value (increased from an initial estimate of 2.0) was
-//! determined empirically: blue noise dithering's
-//! [`find_second_nearest`](crate::dither::BlueNoiseDither) needs
-//! `kchroma > 8.2` to prevent yellow (L=0.97) from capturing grey
-//! pixels that should map to white (L=1.0).
+//! determined empirically.
 //!
 //! See [`DistanceMetric::HyAB`] for the implementation.
 //!
@@ -224,11 +214,7 @@ mod domain_tests;
 
 pub use api::{DitherError, EinkDitherer};
 pub use color::{LinearRgb, Oklab, Srgb};
-pub use dither::{
-    Atkinson, BlueNoiseDither, Dither, DitherAlgorithm, DitherOptions, FloydSteinberg,
-    FloydSteinbergNoise, JarvisJudiceNinke, JarvisJudiceNinkeNoise, Sierra, SierraLite,
-    SierraLiteNoise, SierraNoise, SierraTwoRow, SierraTwoRowNoise, SimplexDither,
-};
-pub use output::{DitheredImage, RenderingIntent};
+pub use dither::{DitherAlgorithm, DitherOptions};
+pub use output::DitheredImage;
 pub use palette::{DistanceMetric, Palette, PaletteError, ParseColorError};
 pub use preprocess::{PreprocessOptions, PreprocessResult, Preprocessor};

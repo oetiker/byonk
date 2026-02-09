@@ -181,6 +181,60 @@ pub const SIERRA_LITE: Kernel = Kernel {
     max_dy: 1,
 };
 
+/// Stucki dithering kernel.
+///
+/// Distributes error to 12 neighbors over 3 rows with 100% propagation (42/42).
+/// Similar to JJN but with different weight distribution — higher center weights
+/// and lower corner weights produce slightly sharper results.
+///
+/// ```text
+///            X   8   4
+///    2   4   8   4   2
+///    1   2   4   2   1
+/// ```
+pub const STUCKI: Kernel = Kernel {
+    entries: &[
+        (1, 0, 8),
+        (2, 0, 4),
+        (-2, 1, 2),
+        (-1, 1, 4),
+        (0, 1, 8),
+        (1, 1, 4),
+        (2, 1, 2),
+        (-2, 2, 1),
+        (-1, 2, 2),
+        (0, 2, 4),
+        (1, 2, 2),
+        (2, 2, 1),
+    ],
+    divisor: 42,
+    max_dy: 2,
+};
+
+/// Burkes dithering kernel.
+///
+/// Distributes error to 7 neighbors over 2 rows with 100% propagation (32/32).
+/// A simplified variant of Stucki using only 2 rows. Faster than Stucki/JJN
+/// while maintaining wide error spread.
+///
+/// ```text
+///            X   8   4
+///    2   4   8   4   2
+/// ```
+pub const BURKES: Kernel = Kernel {
+    entries: &[
+        (1, 0, 8),
+        (2, 0, 4),
+        (-2, 1, 2),
+        (-1, 1, 4),
+        (0, 1, 8),
+        (1, 1, 4),
+        (2, 1, 2),
+    ],
+    divisor: 32,
+    max_dy: 1,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,6 +383,44 @@ mod tests {
     }
 
     #[test]
+    fn test_stucki_propagation_100_percent() {
+        let sum: u8 = STUCKI.entries.iter().map(|(_, _, w)| w).sum();
+        assert_eq!(sum, 42, "Stucki weights should sum to 42");
+        assert_eq!(STUCKI.divisor, 42, "Stucki divisor should be 42");
+    }
+
+    #[test]
+    fn test_stucki_max_dy() {
+        let actual_max_dy = STUCKI
+            .entries
+            .iter()
+            .map(|(_, dy, _)| *dy as usize)
+            .max()
+            .unwrap();
+        assert_eq!(actual_max_dy, STUCKI.max_dy, "Stucki max_dy mismatch");
+        assert_eq!(STUCKI.max_dy, 2, "Stucki reaches 2 rows ahead");
+    }
+
+    #[test]
+    fn test_burkes_propagation_100_percent() {
+        let sum: u8 = BURKES.entries.iter().map(|(_, _, w)| w).sum();
+        assert_eq!(sum, 32, "Burkes weights should sum to 32");
+        assert_eq!(BURKES.divisor, 32, "Burkes divisor should be 32");
+    }
+
+    #[test]
+    fn test_burkes_max_dy() {
+        let actual_max_dy = BURKES
+            .entries
+            .iter()
+            .map(|(_, dy, _)| *dy as usize)
+            .max()
+            .unwrap();
+        assert_eq!(actual_max_dy, BURKES.max_dy, "Burkes max_dy mismatch");
+        assert_eq!(BURKES.max_dy, 1, "Burkes reaches 1 row ahead");
+    }
+
+    #[test]
     fn test_kernel_entry_count() {
         assert_eq!(ATKINSON.entries.len(), 6, "Atkinson should have 6 entries");
         assert_eq!(
@@ -352,5 +444,7 @@ mod tests {
             3,
             "Sierra Lite should have 3 entries"
         );
+        assert_eq!(STUCKI.entries.len(), 12, "Stucki should have 12 entries");
+        assert_eq!(BURKES.entries.len(), 7, "Burkes should have 7 entries");
     }
 }

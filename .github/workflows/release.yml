@@ -272,6 +272,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: byonk-*
           merge-multiple: true
 
       - name: Extract release notes

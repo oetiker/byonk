@@ -9,14 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
-### Changed
-
-### Fixed
-
-## 0.12.0 - 2026-02-09
-
-### New
-
 - **Perceptual dithering engine**: Vendored [eink-dither](crates/eink-dither/) crate with Oklab color matching, gamma-correct linear RGB processing, and automatic distance metric selection (HyAB+chroma for color palettes, Euclidean OKLab for greyscale). Eight dithering algorithms: `blue-noise` (default), `atkinson`/`photo`, `floyd-steinberg`, `jarvis-judice-ninke`/`jjn`, `sierra`, `sierra-two-row`, `sierra-lite`, `simplex`. All error diffusion algorithms use blue noise kernel jitter to break "worm" artifacts.
 - **Panel profiles**: Define display panels in `config.yaml` with official and measured (actual) colors, per-algorithm dither tuning defaults, and auto-detection from firmware `Board` header. Panels can also be assigned per-device. Measured colors let the dithering engine model what the panel really shows. `Measured-Colors` firmware header can override panel profile.
 - **Dither tuning**: Fine-tune `error_clamp`, `noise_scale`, and `chroma_clamp` per-panel, per-device, per-script, or via dev UI. Scripts can read pre-resolved tuning via `device.dither` table. Priority chain: dev UI > script > device config > panel defaults > algorithm defaults.
@@ -25,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Google Photos screen** (`gphoto`): Display random photos from a shared Google Photos album (HTML scraping, no OAuth).
 - **Terminus font demo** (`fontdemo-terminus`): Showcases all 9 embedded bitmap sizes (12–32px) in regular, bold, italic, and bold-italic.
 - **`fonts` global in Lua**: Discover available font families, styles, weights, and bitmap strike sizes at runtime.
+
 ### Changed
 
 - **PNG output ~27% smaller**: oxipng post-processing with zopfli compression and adaptive filter selection.

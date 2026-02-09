@@ -9,60 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
-- **Per-panel dither tuning defaults**: Panels can now carry `dither` section with per-algorithm tuning defaults (`error_clamp`, `noise_scale`, `chroma_clamp`). Optimal tuning is tied to the color palette, so setting it once on the panel avoids repeating values in every device config. Supports flat defaults and per-algorithm overrides. New priority chain: dev UI > script > device config > panel dither defaults > algorithm defaults.
-- **Dither context in Lua**: Scripts can read pre-script resolved tuning via `device.dither` table (`algorithm`, `error_clamp`, `noise_scale`, `chroma_clamp`) to make selective adjustments rather than setting everything blindly.
-- **Dither tuning in config and Lua**: `error_clamp`, `noise_scale`, and `chroma_clamp` can now be set per-device in `config.yaml` or returned from Lua scripts. Values found during dev mode calibration can be committed to config for production use.
-
-### Fixed
-
-- **Dither color bleed through exact-match pixels**: Pixels that exactly match a palette color (text, lines, borders) now always absorb accumulated error, preventing dithering artifacts from bleeding across hard boundaries.
-
-### Changed
-
-- **Documentation cleanup**: Removed duplicated sections across configuration, device-mapping, and dev-mode docs. Added panels section, dither algorithms reference, dither tuning documentation, and display calibration guide.
-- **Photo error clamp lowered to 0.08**: Reduced from 0.3 to 0.08 to suppress self-reinforcing oscillation in blue gradients on sparse chromatic palettes.
-- **Dev mode UI cleanup**: Removed redundant controls (device model selector, width/height inputs, colors text input, render button, auto-refresh toggle). Dimensions and colors now derive from panel profile or defaults. All changes auto-refresh immediately. Added always-visible console below preview for render time and errors. Added dither algorithm dropdown with all available algorithms. Selecting a device entry shows an info banner and auto-selects the device's panel profile and dither setting. Time input defaults to empty (uses live current time). Render options group moved directly after color swatches.
-
-### New
-
-- **Dev mode dither tunables**: Serpentine scanning toggle, exact absorbs error toggle, error clamp, chroma clamp, and noise scale controls in the Render Options panel for diagnosing dithering artifacts. Exact-match error absorption and noise scale are now configurable in the eink-dither crate.
-- **Panel profiles with measured colors**: Define display panels in `config.yaml` with official and measured (actual) display colors. Dithering uses measured colors to model what the panel really shows, producing more accurate output. Panels auto-detect from firmware `Board` header or can be assigned per-device.
-- **Dev mode panel preview**: Select a panel profile in dev mode to preview with measured colors — see what the physical display actually shows instead of ideal colors. Color swatches show both official and measured palettes.
-- **Dev mode color tuning**: Click any actual color swatch to open an HSL adjustment popup — adjust hue, saturation, and lightness with live preview. Changes immediately affect both dev preview and physical device rendering while the dev server runs. Copy the adjusted `colors_actual` string for pasting into `config.yaml`. Session-only (resets on server restart).
-- **Measured-Colors header**: Firmware can send `Measured-Colors` header with actual display colors, overriding panel profile measured colors.
-- **`preserve_exact` option**: Disable "preserve exact color matches" via Lua script (`preserve_exact = false` in return table) or dev mode UI checkbox. When disabled, ALL pixels go through enhancement + dithering — no shortcuts for palette-matching pixels.
-- Floyd-Steinberg dithering with blue noise kernel jitter (`dither="floyd-steinberg"`): breaks "worm" artifacts on smooth gradients while maintaining 100% error propagation. Also accepts `"atkinson"` as alias for `"photo"`.
-- Google Photos screen (`gphoto`): displays random photos from a shared Google Photos album using HTML scraping (no OAuth required)
-- Terminus TTF font demo screen (`fontdemo-terminus`): showcases all 9 embedded bitmap sizes (12–32px) in regular, bold, italic, and bold-italic styles
-- `fonts` global in Lua API: discover all available font families, styles, weights, and bitmap strike sizes at runtime
-
-- Blue noise kernel weight jitter for JJN and Sierra algorithms: all error diffusion algorithms now use blue noise jitter by default (like Floyd-Steinberg), breaking "worm" artifacts. Per-algorithm noise_scale and error_clamp defaults in dev UI with per-algorithm override persistence.
-- Auto-detect distance metric based on palette content -- chromatic palettes automatically use HyAB+chroma, achromatic palettes use Euclidean
-- Added color science documentation to eink-dither crate (distance metric rationale, pipeline diagram, inline WHY comments at every conversion site)
-- Four additional dithering algorithms selectable via Lua `dither` option or dev mode: `"jarvis-judice-ninke"` (wide 12-neighbor kernel, least oscillation), `"sierra"` (10-neighbor), `"sierra-two-row"` (7-neighbor), `"sierra-lite"` (3-neighbor). JJN and Sierra full are recommended for sparse chromatic palettes where Floyd-Steinberg oscillates.
+- **Perceptual dithering engine**: Vendored [eink-dither](crates/eink-dither/) crate with Oklab color matching, gamma-correct linear RGB processing, and automatic distance metric selection (HyAB+chroma for color palettes, Euclidean OKLab for greyscale). Eight dithering algorithms: `blue-noise` (default), `atkinson`/`photo`, `floyd-steinberg`, `jarvis-judice-ninke`/`jjn`, `sierra`, `sierra-two-row`, `sierra-lite`, `simplex`. All error diffusion algorithms use blue noise kernel jitter to break "worm" artifacts.
+- **Panel profiles**: Define display panels in `config.yaml` with official and measured (actual) colors, per-algorithm dither tuning defaults, and auto-detection from firmware `Board` header. Panels can also be assigned per-device. Measured colors let the dithering engine model what the panel really shows. `Measured-Colors` firmware header can override panel profile.
+- **Dither tuning**: Fine-tune `error_clamp`, `noise_scale`, and `chroma_clamp` per-panel, per-device, per-script, or via dev UI. Scripts can read pre-resolved tuning via `device.dither` table. Priority chain: dev UI > script > device config > panel defaults > algorithm defaults.
+- **Dev mode overhaul**: Dither algorithm dropdown, tuning controls (serpentine, exact absorb, error clamp, noise scale, chroma clamp), panel preview with measured colors, click-to-tune HSL color popup, always-visible console. Dimensions and colors derive from panel profile. All changes auto-refresh. Dev overrides propagate to physical device renders.
+- **`preserve_exact` option**: Disable exact color match preservation via Lua (`preserve_exact = false`) or dev UI — forces all pixels through enhancement + dithering.
+- **Google Photos screen** (`gphoto`): Display random photos from a shared Google Photos album (HTML scraping, no OAuth).
+- **Terminus font demo** (`fontdemo-terminus`): Showcases all 9 embedded bitmap sizes (12–32px) in regular, bold, italic, and bold-italic.
+- **`fonts` global in Lua**: Discover available font families, styles, weights, and bitmap strike sizes at runtime.
 
 ### Changed
 
-- Replaced hand-rolled dithering with vendored [eink-dither](crates/eink-dither/) crate — perceptually correct Oklab color matching, gamma-correct linear RGB processing, and two rendering intents (Photo and Graphics)
-- New `dither` option for devices (`config.yaml`) and Lua scripts (return value): set to `"photo"` for Atkinson error diffusion with saturation/contrast boost (ideal for photographs), or `"graphics"` (default) for blue noise ordered dithering optimized for UI content
-- Consolidated three PNG encoder methods into a single `encode_png` helper, removing duplicate boilerplate
+- **PNG output ~27% smaller**: oxipng post-processing with zopfli compression and adaptive filter selection.
+- **Config errors are fatal**: `config.yaml` parse errors now abort startup with a clear message instead of silently falling back to defaults.
+- **Documentation reorganized**: Consolidated duplicated sections, added panels, dither algorithms, dither tuning, and display calibration docs.
 
 ### Fixed
 
-- Production, dev, and CLI rendering now share a single palette/dither resolution implementation. Previously, the production path performed a second device config lookup with different priority order, causing palette and dither settings to diverge from dev mode.
-- Error diffusion (floyd-steinberg, atkinson) grey-to-chromatic bleeding with measured panel colors — lowered `kchroma` from 10 to 5 instead of switching to Euclidean, preventing grey→green while preserving chromatic reproduction
-- Dev mode now auto-resolves `panel` and `dither` from device config when rendering by MAC address, matching device render behavior
-- Device config entries now work with auto-discovered screens (screens that exist as `.lua`+`.svg` files but aren't listed in the `screens:` section of `config.yaml`). Previously, devices referencing unlisted screens were treated as unregistered.
-- Production display path now uses panel profile official colors as the palette when a panel is assigned to a device. Previously, panel `colors` were ignored in the palette resolution chain, causing a mismatch between the 4-grey default palette and the panel's 6-color measured colors — dithering matched against wrong actual colors.
-- Dev mode panel preview: greyscale palettes now correctly show measured colors (e.g., `#383838..#B8B8B0`) instead of evenly-spaced grey values. When "Show actual panel colors" is enabled, output uses indexed PNG with PLTE to preserve measured colors. B&W forcing is now limited to the dithering distance calculation only — the preview shows raw measured values.
-- Dev mode: added "Show actual panel colors" toggle checkbox. Only visible when a panel with measured colors is selected. State persists in localStorage.
-- Color palette dithering: grey pixels no longer incorrectly map to chromatic colors (e.g., red) when using multi-color palettes. Uses HyAB perceptual distance metric (Abasi et al., 2020) with chroma coupling penalty, which prevents achromatic pixels from matching chromatic palette entries.
-- Photo dithering color reproduction: switched error diffusion (Photo intent) from HyAB+chroma distance to plain Euclidean OKLab for unbiased palette matching. Muted colors (skin tones, overcast sky, concrete, shadows) now reproduce faithfully instead of collapsing to B&W. Sweep test across 2000+ OKLab colors shows avg DeltaE=0.047 (nearly imperceptible). Blue-noise (Graphics) path retains HyAB kchroma=10 for grey safety.
-- Floyd-Steinberg oscillation artifacts on sparse chromatic palettes: lowered Photo intent error clamp from 0.5 to 0.3 to reduce high-amplitude overshoot that caused green→blue→green inversions and blue→black collapse at hue boundaries. Affects all error diffusion algorithms equally.
-- Dev mode dither and color overrides now propagate to the physical device render. Both overrides are keyed per-device (not per-panel), so multiple users can tune different devices simultaneously. Dev dither override takes highest priority, beating even Lua script settings.
-- Dev mode clipboard copy (for `colors_actual`) now works over plain HTTP by falling back to `execCommand('copy')` when `navigator.clipboard` is unavailable.
-- Preprocessor exact match detection: match against official palette colors (what input content uses) instead of actual measured colors. Input SVGs reference official values, so matching must target those.
-- PNG output ~27% smaller: added oxipng post-processing with zopfli compression and adaptive filter selection
+- Exact-match pixels (text, lines, borders) now absorb accumulated dither error, preventing artifacts from bleeding across hard boundaries.
+- Device config entries work with auto-discovered screens (`.lua`+`.svg` files not listed in `config.yaml`).
+- Dev mode clipboard copy works over plain HTTP.
 
 ## 0.11.0 - 2026-02-01
 

@@ -75,14 +75,36 @@ Click any actual-color swatch to open the HSL adjustment popup. Adjust hue, satu
 
 When you select a device entry and adjust dither algorithm, tuning parameters, or measured colors, changes are synced to the production `/api/display` handler. The physical device picks up the new settings on its next refresh.
 
+### Calibrator Screen
+
+Byonk ships a built-in `calibrator` screen designed specifically for display calibration. Assign it to your device temporarily while tuning:
+
+```yaml
+devices:
+  "ABCDE-FGHJK":
+    screen: calibrator
+    panel: my_panel
+    dither: atkinson
+```
+
+The calibrator shows everything you need to evaluate dithering quality:
+
+- **White-to-color gradients** for each palette color — reveals error diffusion artifacts, oscillation, and color bleeding
+- **Full hue sweep** at 100% saturation — shows how the ditherer maps arbitrary colors to your limited palette
+- **Test photo** — real-world image to judge overall photo reproduction
+- **Solid color patches** with hex labels — compare what the panel actually displays against the expected color values
+
+Use the calibrator on your physical device while adjusting tuning in dev mode — the live sync means every change you make is immediately visible on the display.
+
 ### Calibration Workflow
 
-1. **Select your device** from the dropdown — this loads its screen, panel, and dither settings
-2. **Choose a dither algorithm** that works well for your content type
-3. **Adjust tuning parameters** (error_clamp, noise_scale, chroma_clamp) until the preview looks good
-4. **Calibrate measured colors** by clicking actual-color swatches and adjusting HSL
-5. **Verify on device** — changes sync automatically; wait for the next device refresh
-6. **Commit to config** — copy the values to `config.yaml` for permanent use:
+1. **Assign the `calibrator` screen** to your device in `config.yaml`
+2. **Select your device** in dev mode — this loads its screen, panel, and dither settings
+3. **Choose a dither algorithm** that works well for your content type
+4. **Adjust tuning parameters** (error_clamp, noise_scale, chroma_clamp) until the preview looks good
+5. **Calibrate measured colors** by clicking actual-color swatches and adjusting HSL to match the solid patches on the physical display
+6. **Verify on device** — changes sync automatically; wait for the next device refresh
+7. **Commit to config** — copy the values to `config.yaml` and switch back to your normal screen:
 
 ```yaml
 panels:

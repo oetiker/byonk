@@ -9,8 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
-- Added **Stucki** and **Burkes** dithering algorithms.
+### Changed
 
+### Fixed
+
+## 0.14.0 - 2026-02-14
+
+### New
+
+- Added **Stucki** and **Burkes** dithering algorithms.
 ### Changed
 
 - **Simplified dither system**: removed graphics/photo intent split and blue-noise/simplex ordered dithering. All algorithms are now error diffusion with configurable blue noise jitter (`noise_scale`). Plain and noise variants are unified — set `noise_scale: 0` for no jitter.

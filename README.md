@@ -32,10 +32,10 @@ Then open `http://localhost:3000/dev` in your browser:
 
 Full documentation is available at **[oetiker.github.io/byonk](https://oetiker.github.io/byonk)**:
 
-- [Installation Guide](https://oetiker.github.io/byonk/guide/installation.html)
-- [Creating Your First Screen](https://oetiker.github.io/byonk/tutorial/first-screen.html)
-- [Lua API Reference](https://oetiker.github.io/byonk/api/lua-api.html)
-- [Dev Mode](https://oetiker.github.io/byonk/guide/dev-mode.html)
+- [Installation Guide](https://oetiker.github.io/byonk/dev/guide/installation.html)
+- [Creating Your First Screen](https://oetiker.github.io/byonk/dev/tutorial/first-screen.html)
+- [Lua API Reference](https://oetiker.github.io/byonk/dev/api/lua-api.html)
+- [Dev Mode](https://oetiker.github.io/byonk/dev/guide/dev-mode.html)
 
 ## License
 

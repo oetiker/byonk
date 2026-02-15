@@ -10,6 +10,7 @@ pub struct DitherTuning {
     pub chroma_clamp: Option<f32>,
     pub noise_scale: Option<f32>,
     pub exact_absorb_error: Option<bool>,
+    pub strength: Option<f32>,
 }
 use resvg::usvg::{self, Transform};
 use std::io::Cursor;
@@ -72,6 +73,7 @@ impl SvgRenderer {
     /// The output format is chosen automatically based on the palette content.
     /// The `dither` parameter selects the dithering algorithm:
     /// - `"photo"` / `"atkinson"` - Atkinson error diffusion (best color accuracy)
+    /// - `"atkinson-hybrid"` - Atkinson hybrid (100% achromatic / 75% chromatic)
     /// - `"floyd-steinberg"` - Floyd-Steinberg with blue noise jitter (smooth gradients)
     /// - `"jarvis-judice-ninke"` - JJN error diffusion (wide kernel, least oscillation)
     /// - `"sierra"` - Sierra full error diffusion (wide kernel)
@@ -102,6 +104,7 @@ impl SvgRenderer {
 
         // Determine algorithm
         let algorithm = match dither {
+            Some(s) if s.eq_ignore_ascii_case("atkinson-hybrid") => DitherAlgorithm::AtkinsonHybrid,
             Some(s) if s.eq_ignore_ascii_case("floyd-steinberg") => DitherAlgorithm::FloydSteinberg,
             Some(s) if s.eq_ignore_ascii_case("jarvis-judice-ninke") => {
                 DitherAlgorithm::JarvisJudiceNinke
@@ -136,6 +139,9 @@ impl SvgRenderer {
             }
             if let Some(ae) = t.exact_absorb_error {
                 ditherer = ditherer.exact_absorb_error(ae);
+            }
+            if let Some(st) = t.strength {
+                ditherer = ditherer.strength(st);
             }
         }
         let result = ditherer.dither(&pixels, spec.width as usize, spec.height as usize);

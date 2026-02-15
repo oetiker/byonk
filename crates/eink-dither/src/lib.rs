@@ -56,9 +56,10 @@
 //!
 //! # Dithering Algorithms
 //!
-//! Eight error diffusion algorithms are available via [`DitherAlgorithm`]:
+//! Nine error diffusion algorithms are available via [`DitherAlgorithm`]:
 //!
 //! - Atkinson (75% error propagation, ideal for small palettes — default)
+//! - AtkinsonHybrid (100% achromatic / 75% chromatic — fixes color drift)
 //! - Floyd-Steinberg (classic algorithm)
 //! - Jarvis-Judice-Ninke (large kernel, smooth gradients)
 //! - Sierra family (full, two-row, lite — various speed/quality tradeoffs)

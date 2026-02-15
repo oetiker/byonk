@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// Dither tuning values for error_clamp, noise_scale, chroma_clamp.
+/// Dither tuning values for error_clamp, noise_scale, chroma_clamp, strength.
 ///
 /// Used at every level of the tuning priority chain:
 /// panel defaults, device config, script overrides, dev UI overrides.
@@ -12,6 +12,7 @@ pub struct DitherTuningValues {
     pub error_clamp: Option<f32>,
     pub noise_scale: Option<f32>,
     pub chroma_clamp: Option<f32>,
+    pub strength: Option<f32>,
 }
 
 impl DitherTuningValues {
@@ -21,12 +22,16 @@ impl DitherTuningValues {
             error_clamp: self.error_clamp.or(other.error_clamp),
             noise_scale: self.noise_scale.or(other.noise_scale),
             chroma_clamp: self.chroma_clamp.or(other.chroma_clamp),
+            strength: self.strength.or(other.strength),
         }
     }
 
     /// Returns true if all fields are None.
     pub fn is_empty(&self) -> bool {
-        self.error_clamp.is_none() && self.noise_scale.is_none() && self.chroma_clamp.is_none()
+        self.error_clamp.is_none()
+            && self.noise_scale.is_none()
+            && self.chroma_clamp.is_none()
+            && self.strength.is_none()
     }
 }
 
@@ -100,6 +105,9 @@ impl<'de> Deserialize<'de> for PanelDitherConfig {
                         "chroma_clamp" => {
                             defaults.chroma_clamp = Some(map.next_value()?);
                         }
+                        "strength" => {
+                            defaults.strength = Some(map.next_value()?);
+                        }
                         _ => {
                             // Treat as algorithm name with sub-map of tuning values
                             let tuning: DitherTuningValues = map.next_value()?;
@@ -127,6 +135,7 @@ impl<'de> Deserialize<'de> for PanelDitherConfig {
 pub fn normalize_algorithm_name(name: &str) -> String {
     match name.to_lowercase().as_str() {
         "atkinson" => "atkinson".to_string(),
+        "atkinson-hybrid" | "atkinson_hybrid" | "atkinsonhybrid" => "atkinson-hybrid".to_string(),
         "floyd-steinberg" | "floyd_steinberg" | "floydsteinberg" => "floyd-steinberg".to_string(),
         "jjn" | "jarvis-judice-ninke" | "jarvis_judice_ninke" => "jarvis-judice-ninke".to_string(),
         "sierra" => "sierra".to_string(),
@@ -236,6 +245,9 @@ pub struct DeviceConfig {
 
     /// Optional chroma clamp override for dithering
     pub chroma_clamp: Option<f32>,
+
+    /// Optional dither strength override (0.0 = no diffusion, 1.0 = standard)
+    pub strength: Option<f32>,
 }
 
 /// Device registration settings
@@ -490,6 +502,7 @@ mod tests {
                 error_clamp: None,
                 noise_scale: None,
                 chroma_clamp: None,
+                strength: None,
             },
         );
 
@@ -525,6 +538,7 @@ mod tests {
                 error_clamp: None,
                 noise_scale: None,
                 chroma_clamp: None,
+                strength: None,
             },
         );
 
@@ -557,6 +571,7 @@ mod tests {
                 error_clamp: None,
                 noise_scale: None,
                 chroma_clamp: None,
+                strength: None,
             },
         );
 
@@ -708,6 +723,7 @@ registration:
                 error_clamp: None,
                 noise_scale: None,
                 chroma_clamp: None,
+                strength: None,
             },
         );
 
@@ -749,6 +765,7 @@ registration:
                 error_clamp: None,
                 noise_scale: None,
                 chroma_clamp: None,
+                strength: None,
             },
         );
 
@@ -764,6 +781,7 @@ registration:
                 error_clamp: None,
                 noise_scale: None,
                 chroma_clamp: None,
+                strength: None,
             },
         );
 
@@ -781,16 +799,19 @@ registration:
             error_clamp: Some(0.1),
             noise_scale: None,
             chroma_clamp: Some(2.0),
+            strength: None,
         };
         let b = DitherTuningValues {
             error_clamp: Some(0.2),
             noise_scale: Some(5.0),
             chroma_clamp: None,
+            strength: Some(0.8),
         };
         let merged = a.or(&b);
         assert_eq!(merged.error_clamp, Some(0.1)); // a wins
         assert_eq!(merged.noise_scale, Some(5.0)); // b fills gap
         assert_eq!(merged.chroma_clamp, Some(2.0)); // a wins
+        assert_eq!(merged.strength, Some(0.8)); // b fills gap
     }
 
     #[test]
@@ -882,6 +903,10 @@ floyd-steinberg:
         // Canonical names
         assert_eq!(normalize_algorithm_name("atkinson"), "atkinson");
         assert_eq!(
+            normalize_algorithm_name("atkinson-hybrid"),
+            "atkinson-hybrid"
+        );
+        assert_eq!(
             normalize_algorithm_name("floyd-steinberg"),
             "floyd-steinberg"
         );
@@ -909,6 +934,10 @@ floyd-steinberg:
         assert_eq!(
             normalize_algorithm_name("floyd_steinberg"),
             "floyd-steinberg"
+        );
+        assert_eq!(
+            normalize_algorithm_name("atkinson_hybrid"),
+            "atkinson-hybrid"
         );
         assert_eq!(normalize_algorithm_name("sierra_two_row"), "sierra-two-row");
     }

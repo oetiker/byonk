@@ -34,6 +34,8 @@ pub struct CachedContent {
     pub noise_scale: Option<f32>,
     /// Optional chroma clamp for dithering
     pub chroma_clamp: Option<f32>,
+    /// Optional dither strength
+    pub strength: Option<f32>,
 }
 
 impl CachedContent {
@@ -54,6 +56,7 @@ impl CachedContent {
             error_clamp: None,
             noise_scale: None,
             chroma_clamp: None,
+            strength: None,
         }
     }
 
@@ -86,6 +89,7 @@ impl CachedContent {
         self.error_clamp = tuning.error_clamp;
         self.noise_scale = tuning.noise_scale;
         self.chroma_clamp = tuning.chroma_clamp;
+        self.strength = tuning.strength;
         self
     }
 }

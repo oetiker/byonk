@@ -8,6 +8,7 @@
 //! Multiple diffusion kernels are available:
 //!
 //! - **Atkinson**: 75% error propagation, ideal for small palettes (default)
+//! - **AtkinsonHybrid**: Hybrid propagation — 100% achromatic, 75% chromatic
 //! - **Floyd-Steinberg**: Classic algorithm, 100% propagation
 //! - **Jarvis-Judice-Ninke**: Large kernel, smoother gradients
 //! - **Sierra family**: Various speed/quality tradeoffs
@@ -49,6 +50,15 @@ pub enum DitherAlgorithm {
     /// Best for photographs with small palettes. Produces smooth gradients.
     #[default]
     Atkinson,
+
+    /// Atkinson hybrid error diffusion.
+    ///
+    /// Uses the same 6-neighbor Atkinson kernel shape but with hybrid
+    /// error propagation: 100% for the achromatic (mean) component and
+    /// 75% for the chromatic (deviation from mean) component. This fixes
+    /// color drift on chromatic palettes while preserving Atkinson's
+    /// distinctive high-contrast character.
+    AtkinsonHybrid,
 
     /// Floyd-Steinberg error diffusion (100% propagation).
     ///
@@ -94,7 +104,7 @@ impl DitherAlgorithm {
     /// Get the error diffusion kernel for this algorithm.
     pub fn kernel(&self) -> &'static Kernel {
         match self {
-            Self::Atkinson => &ATKINSON,
+            Self::Atkinson | Self::AtkinsonHybrid => &ATKINSON,
             Self::FloydSteinberg => &FLOYD_STEINBERG,
             Self::JarvisJudiceNinke => &JARVIS_JUDICE_NINKE,
             Self::Sierra => &SIERRA,
@@ -108,7 +118,7 @@ impl DitherAlgorithm {
     /// Get the per-algorithm default (error_clamp, noise_scale) for chromatic palettes.
     pub fn defaults(&self) -> (f32, f32) {
         match self {
-            Self::Atkinson => (0.08, 0.0),
+            Self::Atkinson | Self::AtkinsonHybrid => (0.08, 0.0),
             Self::FloydSteinberg => (0.12, 4.0),
             Self::JarvisJudiceNinke => (0.03, 6.0),
             Self::Sierra => (0.10, 5.5),
@@ -117,6 +127,15 @@ impl DitherAlgorithm {
             Self::Stucki => (0.03, 6.0),
             Self::Burkes => (0.10, 7.0),
         }
+    }
+
+    /// Whether this algorithm uses hybrid achromatic/chromatic error propagation.
+    ///
+    /// When true, the dither loop splits error into achromatic (mean) and
+    /// chromatic (deviation) components, propagating each with a different
+    /// divisor to prevent color drift.
+    pub fn is_hybrid_propagation(&self) -> bool {
+        matches!(self, Self::AtkinsonHybrid)
     }
 }
 
@@ -249,6 +268,9 @@ pub(crate) fn dither_with_kernel_noise(
     let base_right = right_idx.map(|i| kernel.entries[i].2 as f32).unwrap_or(0.0);
     let base_below = below_idx.map(|i| kernel.entries[i].2 as f32).unwrap_or(0.0);
 
+    // For hybrid propagation: achromatic divisor = weight_sum (100%), chromatic = kernel.divisor (75%)
+    let weight_sum: f32 = kernel.entries.iter().map(|&(_, _, w)| w as f32).sum();
+
     // Create error buffer with depth = max_dy + 1
     let mut error_buf = ErrorBuffer::new(width, kernel.max_dy + 1);
 
@@ -289,6 +311,11 @@ pub(crate) fn dither_with_kernel_noise(
                     pixel.g - nearest_linear.g,
                     pixel.b - nearest_linear.b,
                 ];
+                let strength_error = [
+                    error[0] * options.strength,
+                    error[1] * options.strength,
+                    error[2] * options.strength,
+                ];
                 let divisor = kernel.divisor as f32;
                 for (entry_i, &(dx, dy, weight)) in kernel.entries.iter().enumerate() {
                     let effective_dx = if reverse { -dx } else { dx };
@@ -303,11 +330,22 @@ pub(crate) fn dither_with_kernel_noise(
                             } else {
                                 weight as f32
                             };
-                            let scaled_error = [
-                                error[0] * w / divisor,
-                                error[1] * w / divisor,
-                                error[2] * w / divisor,
-                            ];
+                            let scaled_error = if options.hybrid_propagation {
+                                let em =
+                                    (strength_error[0] + strength_error[1] + strength_error[2])
+                                        * (1.0 / 3.0);
+                                [
+                                    em * w / weight_sum + (strength_error[0] - em) * w / divisor,
+                                    em * w / weight_sum + (strength_error[1] - em) * w / divisor,
+                                    em * w / weight_sum + (strength_error[2] - em) * w / divisor,
+                                ]
+                            } else {
+                                [
+                                    strength_error[0] * w / divisor,
+                                    strength_error[1] * w / divisor,
+                                    strength_error[2] * w / divisor,
+                                ]
+                            };
                             error_buf.add_error(nx as usize, dy as usize, scaled_error);
                         }
                     }
@@ -353,6 +391,13 @@ pub(crate) fn dither_with_kernel_noise(
                 error
             };
 
+            // Apply strength scaling
+            let strength_error = [
+                damped_error[0] * options.strength,
+                damped_error[1] * options.strength,
+                damped_error[2] * options.strength,
+            ];
+
             // Diffuse error to neighbors using jittered kernel
             let divisor = kernel.divisor as f32;
             for (entry_i, &(dx, dy, weight)) in kernel.entries.iter().enumerate() {
@@ -369,11 +414,22 @@ pub(crate) fn dither_with_kernel_noise(
                         } else {
                             weight as f32
                         };
-                        let scaled_error = [
-                            damped_error[0] * w / divisor,
-                            damped_error[1] * w / divisor,
-                            damped_error[2] * w / divisor,
-                        ];
+                        let scaled_error = if options.hybrid_propagation {
+                            // Hybrid: 100% achromatic + 75% chromatic propagation
+                            let em = (strength_error[0] + strength_error[1] + strength_error[2])
+                                * (1.0 / 3.0);
+                            [
+                                em * w / weight_sum + (strength_error[0] - em) * w / divisor,
+                                em * w / weight_sum + (strength_error[1] - em) * w / divisor,
+                                em * w / weight_sum + (strength_error[2] - em) * w / divisor,
+                            ]
+                        } else {
+                            [
+                                strength_error[0] * w / divisor,
+                                strength_error[1] * w / divisor,
+                                strength_error[2] * w / divisor,
+                            ]
+                        };
                         error_buf.add_error(nx as usize, dy as usize, scaled_error);
                     }
                 }
@@ -475,6 +531,7 @@ mod tests {
     #[test]
     fn test_algorithm_kernel_mapping() {
         assert_eq!(DitherAlgorithm::Atkinson.kernel().divisor, 8);
+        assert_eq!(DitherAlgorithm::AtkinsonHybrid.kernel().divisor, 8);
         assert_eq!(DitherAlgorithm::FloydSteinberg.kernel().divisor, 16);
         assert_eq!(DitherAlgorithm::JarvisJudiceNinke.kernel().divisor, 48);
         assert_eq!(DitherAlgorithm::Sierra.kernel().divisor, 32);
@@ -490,8 +547,101 @@ mod tests {
         assert!((ec - 0.08).abs() < f32::EPSILON);
         assert!((ns - 0.0).abs() < f32::EPSILON);
 
+        let (ec, ns) = DitherAlgorithm::AtkinsonHybrid.defaults();
+        assert!((ec - 0.08).abs() < f32::EPSILON);
+        assert!((ns - 0.0).abs() < f32::EPSILON);
+
         let (ec, ns) = DitherAlgorithm::FloydSteinberg.defaults();
         assert!((ec - 0.12).abs() < f32::EPSILON);
         assert!((ns - 4.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_hybrid_propagation_flag() {
+        assert!(!DitherAlgorithm::Atkinson.is_hybrid_propagation());
+        assert!(DitherAlgorithm::AtkinsonHybrid.is_hybrid_propagation());
+        assert!(!DitherAlgorithm::FloydSteinberg.is_hybrid_propagation());
+    }
+
+    /// Helper: create a B&W palette for strength tests.
+    fn bw_palette() -> Palette {
+        Palette::new(
+            &[Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)],
+            None,
+        )
+        .unwrap()
+    }
+
+    /// Helper: create a 4x4 mid-grey image (forces dithering between B&W).
+    fn grey_4x4() -> Vec<LinearRgb> {
+        let mid = Srgb::from_u8(128, 128, 128);
+        let lin = LinearRgb::from(mid);
+        vec![lin; 16]
+    }
+
+    #[test]
+    fn test_strength_1_matches_default() {
+        let palette = bw_palette();
+        let image = grey_4x4();
+        let kernel = DitherAlgorithm::FloydSteinberg.kernel();
+
+        let default_opts = DitherOptions::new().error_clamp(0.12).noise_scale(0.0);
+        let strength_1_opts = default_opts.clone().strength(1.0);
+
+        let result_default =
+            dither_with_kernel_noise(&image, 4, 4, &palette, kernel, &default_opts);
+        let result_strength_1 =
+            dither_with_kernel_noise(&image, 4, 4, &palette, kernel, &strength_1_opts);
+
+        assert_eq!(
+            result_default, result_strength_1,
+            "strength=1.0 should produce identical output to default"
+        );
+    }
+
+    #[test]
+    fn test_strength_0_produces_nearest_color() {
+        let palette = bw_palette();
+        let image = grey_4x4();
+        let kernel = DitherAlgorithm::FloydSteinberg.kernel();
+        let opts = DitherOptions::new()
+            .error_clamp(0.12)
+            .noise_scale(0.0)
+            .strength(0.0)
+            .preserve_exact_matches(false);
+
+        let result = dither_with_kernel_noise(&image, 4, 4, &palette, kernel, &opts);
+
+        // With strength=0, no error diffusion occurs. Every pixel gets the
+        // same nearest-color mapping (mid-grey is closer to white in linear space).
+        let first = result[0];
+        assert!(
+            result.iter().all(|&v| v == first),
+            "strength=0 should produce uniform nearest-color (no dithering pattern)"
+        );
+    }
+
+    #[test]
+    fn test_strength_half_differs_from_1() {
+        let palette = bw_palette();
+        let image = grey_4x4();
+        let kernel = DitherAlgorithm::FloydSteinberg.kernel();
+
+        let opts_1 = DitherOptions::new()
+            .error_clamp(0.12)
+            .noise_scale(0.0)
+            .strength(1.0);
+        let opts_half = DitherOptions::new()
+            .error_clamp(0.12)
+            .noise_scale(0.0)
+            .strength(0.5);
+
+        let result_1 = dither_with_kernel_noise(&image, 4, 4, &palette, kernel, &opts_1);
+        let result_half = dither_with_kernel_noise(&image, 4, 4, &palette, kernel, &opts_half);
+
+        assert_ne!(
+            result_1, result_half,
+            "strength=0.5 should produce a different pattern than strength=1.0"
+        );
     }
 }

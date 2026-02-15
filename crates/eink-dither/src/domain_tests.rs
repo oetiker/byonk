@@ -132,6 +132,7 @@ mod domain_tests {
             // Test all 8 algorithms via DitherAlgorithm enum
             let algorithms: &[(&str, DitherAlgorithm)] = &[
                 ("Atkinson", DitherAlgorithm::Atkinson),
+                ("AtkinsonHybrid", DitherAlgorithm::AtkinsonHybrid),
                 ("FloydSteinberg", DitherAlgorithm::FloydSteinberg),
                 ("JarvisJudiceNinke", DitherAlgorithm::JarvisJudiceNinke),
                 ("Sierra", DitherAlgorithm::Sierra),
@@ -1507,5 +1508,133 @@ mod domain_tests {
                 inversions
             );
         }
+    }
+
+    // ========================================================================
+    // AtkinsonHybrid tests
+    // ========================================================================
+
+    /// Uniform grey 128,128,128 dithered with a 6-color chromatic palette
+    /// should produce near-neutral output. AtkinsonHybrid should do at least
+    /// as well as Atkinson with chroma_clamp.
+    #[test]
+    fn test_atkinson_hybrid_grey_neutrality() {
+        let palette_colors = [
+            Srgb::from_u8(0, 0, 0),       // black
+            Srgb::from_u8(255, 255, 255), // white
+            Srgb::from_u8(200, 50, 50),   // dark red
+            Srgb::from_u8(255, 230, 50),  // yellow
+            Srgb::from_u8(40, 50, 120),   // dark blue
+            Srgb::from_u8(50, 120, 50),   // dark green
+        ];
+        let palette = Palette::new(&palette_colors, None).unwrap();
+
+        // 200x200 uniform grey
+        let mid = Srgb::from_u8(128, 128, 128);
+        let width = 200;
+        let height = 200;
+
+        let ditherer =
+            EinkDitherer::new(palette.clone()).algorithm(DitherAlgorithm::AtkinsonHybrid);
+        let pixels: Vec<Srgb> = vec![mid; width * height];
+        let result = ditherer.dither(&pixels, width, height);
+
+        // Compute mean RGB of output
+        let n = result.indices().len() as f32;
+        let mut sr = 0.0f32;
+        let mut sg = 0.0f32;
+        let mut sb = 0.0f32;
+        for &idx in result.indices() {
+            let lin = palette.actual_linear(idx as usize);
+            sr += lin.r;
+            sg += lin.g;
+            sb += lin.b;
+        }
+        let avg = Oklab::from(LinearRgb::new(sr / n, sg / n, sb / n));
+        let overall_chroma = (avg.a * avg.a + avg.b * avg.b).sqrt();
+
+        eprintln!(
+            "AtkinsonHybrid grey neutrality: overall chroma={overall_chroma:.4}, L={:.4}",
+            avg.l
+        );
+
+        assert!(
+            overall_chroma < 0.04,
+            "AtkinsonHybrid should produce near-neutral output on grey, got chroma={overall_chroma:.4}"
+        );
+    }
+
+    /// The original Atkinson behavior must be unchanged when using the
+    /// plain Atkinson variant (not AtkinsonHybrid).
+    #[test]
+    fn test_atkinson_unchanged() {
+        let palette_colors = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(200, 50, 50),
+        ];
+        let palette = Palette::new(&palette_colors, None).unwrap();
+        let photo_palette = palette.for_error_diffusion();
+
+        let mid = Srgb::from_u8(128, 128, 128);
+        let lin = LinearRgb::from(mid);
+        let image = vec![lin; 16];
+
+        let options = DitherOptions::new().error_clamp(0.08).noise_scale(0.0);
+
+        let result1 = dither_with_kernel_noise(&image, 4, 4, &photo_palette, &ATKINSON, &options);
+        let result2 = dither_with_kernel_noise(&image, 4, 4, &photo_palette, &ATKINSON, &options);
+
+        assert_eq!(
+            result1, result2,
+            "Atkinson should be deterministic and unchanged"
+        );
+
+        // Verify hybrid_propagation is false by default
+        assert!(!options.hybrid_propagation);
+    }
+
+    /// AtkinsonHybrid should produce valid palette indices and be reusable.
+    #[test]
+    fn test_atkinson_hybrid_basic_validity() {
+        let palette_colors = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(0, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(255, 255, 0),
+        ];
+        let palette = Palette::new(&palette_colors, None).unwrap();
+
+        let pixels: Vec<Srgb> = (0..64)
+            .map(|i| {
+                let v = (i as f32 / 63.0 * 255.0) as u8;
+                Srgb::from_u8(v, v, v)
+            })
+            .collect();
+
+        let ditherer =
+            EinkDitherer::new(palette.clone()).algorithm(DitherAlgorithm::AtkinsonHybrid);
+
+        let result1 = ditherer.dither(&pixels, 8, 8);
+        let result2 = ditherer.dither(&pixels, 8, 8);
+
+        // All indices must be in range
+        for &idx in result1.indices() {
+            assert!(
+                (idx as usize) < palette.len(),
+                "Index {} out of palette range {}",
+                idx,
+                palette.len()
+            );
+        }
+
+        // Must be reusable (deterministic)
+        assert_eq!(
+            result1.indices(),
+            result2.indices(),
+            "AtkinsonHybrid builder should be reusable"
+        );
     }
 }

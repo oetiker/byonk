@@ -32,6 +32,8 @@ pub struct ScriptResult {
     pub script_noise_scale: Option<f32>,
     /// Optional chroma clamp override from Lua script
     pub script_chroma_clamp: Option<f32>,
+    /// Optional dither strength override from Lua script
+    pub script_strength: Option<f32>,
 }
 
 /// Device context passed to templates and Lua scripts
@@ -65,6 +67,8 @@ pub struct DeviceContext {
     pub dither_noise_scale: Option<f32>,
     /// Pre-script resolved chroma clamp
     pub dither_chroma_clamp: Option<f32>,
+    /// Pre-script resolved dither strength
+    pub dither_strength: Option<f32>,
 }
 
 /// Error from the content pipeline
@@ -189,6 +193,7 @@ impl ContentPipeline {
             error_clamp: None,
             noise_scale: None,
             chroma_clamp: None,
+            strength: None,
         });
 
         self.run_script_for_screen(&screen_config, &dc.params, device_ctx)
@@ -262,6 +267,7 @@ impl ContentPipeline {
             script_error_clamp: lua_result.error_clamp,
             script_noise_scale: lua_result.noise_scale,
             script_chroma_clamp: lua_result.chroma_clamp,
+            script_strength: lua_result.strength,
         })
     }
 
@@ -584,6 +590,7 @@ impl ContentPipeline {
             script_error_clamp: lua_result.error_clamp,
             script_noise_scale: lua_result.noise_scale,
             script_chroma_clamp: lua_result.chroma_clamp,
+            script_strength: lua_result.strength,
         })
     }
 }

@@ -144,6 +144,15 @@ impl EinkDitherer {
         self
     }
 
+    /// Set error diffusion strength.
+    ///
+    /// Scales the diffused error before propagation (0.0 = no diffusion, 1.0 = standard).
+    #[inline]
+    pub fn strength(mut self, strength: f32) -> Self {
+        self.dither_opts = self.dither_opts.strength(strength);
+        self
+    }
+
     /// Set the dithering algorithm.
     ///
     /// Applies per-algorithm defaults for error_clamp and noise_scale.
@@ -167,7 +176,8 @@ impl EinkDitherer {
         self.dither_opts = self
             .dither_opts
             .error_clamp(error_clamp)
-            .noise_scale(noise_scale);
+            .noise_scale(noise_scale)
+            .hybrid_propagation(algorithm.is_hybrid_propagation());
         self.error_clamp_explicit = false;
         self
     }
@@ -362,8 +372,22 @@ mod tests {
     #[test]
     fn test_algorithm_sets_defaults() {
         let palette = test_palette();
-        let ditherer = EinkDitherer::new(palette).algorithm(DitherAlgorithm::FloydSteinberg);
+        let ditherer =
+            EinkDitherer::new(palette.clone()).algorithm(DitherAlgorithm::FloydSteinberg);
         assert!((ditherer.dither_opts.error_clamp - 0.12).abs() < f32::EPSILON);
         assert!((ditherer.dither_opts.noise_scale - 4.0).abs() < f32::EPSILON);
+        assert!(!ditherer.dither_opts.hybrid_propagation);
+
+        let ditherer = EinkDitherer::new(palette).algorithm(DitherAlgorithm::AtkinsonHybrid);
+        assert!((ditherer.dither_opts.error_clamp - 0.08).abs() < f32::EPSILON);
+        assert!((ditherer.dither_opts.noise_scale - 0.0).abs() < f32::EPSILON);
+        assert!(ditherer.dither_opts.hybrid_propagation);
+    }
+
+    #[test]
+    fn test_builder_strength() {
+        let palette = test_palette();
+        let ditherer = EinkDitherer::new(palette).strength(0.5);
+        assert!((ditherer.dither_opts.strength - 0.5).abs() < f32::EPSILON);
     }
 }

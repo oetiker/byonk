@@ -30,6 +30,8 @@ pub struct ScriptResult {
     pub noise_scale: Option<f32>,
     /// Optional chroma clamp override from script
     pub chroma_clamp: Option<f32>,
+    /// Optional dither strength override from script
+    pub strength: Option<f32>,
 }
 
 /// Error type for Lua script execution
@@ -136,6 +138,7 @@ impl LuaRuntime {
         let error_clamp = result.get::<f32>("error_clamp").ok();
         let noise_scale = result.get::<f32>("noise_scale").ok();
         let chroma_clamp = result.get::<f32>("chroma_clamp").ok();
+        let strength = result.get::<f32>("strength").ok();
 
         Ok(ScriptResult {
             data,
@@ -147,6 +150,7 @@ impl LuaRuntime {
             error_clamp,
             noise_scale,
             chroma_clamp,
+            strength,
         })
     }
 
@@ -221,6 +225,9 @@ impl LuaRuntime {
             }
             if let Some(cc) = ctx.dither_chroma_clamp {
                 dither_table.set("chroma_clamp", cc)?;
+            }
+            if let Some(st) = ctx.dither_strength {
+                dither_table.set("strength", st)?;
             }
             device_table.set("dither", dither_table)?;
         }

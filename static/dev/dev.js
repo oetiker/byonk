@@ -5,6 +5,7 @@
 // the user has saved per-algorithm overrides in localStorage.
 const DITHER_DEFAULTS = {
     'atkinson':            { noiseScale: '0',   errorClamp: '0.08' },
+    'atkinson-hybrid':     { noiseScale: '0',   errorClamp: '0.08' },
     'floyd-steinberg':     { noiseScale: '4.0', errorClamp: '0.12' },
     'jarvis-judice-ninke': { noiseScale: '6.0', errorClamp: '0.03' },
     'sierra':              { noiseScale: '5.5', errorClamp: '0.10' },
@@ -60,6 +61,7 @@ const elements = {
     errorClamp: document.getElementById('error-clamp'),
     chromaClamp: document.getElementById('chroma-clamp'),
     noiseScale: document.getElementById('noise-scale'),
+    strength: document.getElementById('strength'),
     consoleOutput: document.getElementById('console-output'),
     colorPopup: document.getElementById('color-popup'),
     popupClose: document.getElementById('color-popup-close'),
@@ -304,6 +306,10 @@ function setupEventListeners() {
         saveState();
         render();
     });
+    elements.strength.addEventListener('change', () => {
+        saveState();
+        render();
+    });
 
     // Params input (debounced)
     let paramsTimeout;
@@ -519,6 +525,10 @@ async function render() {
         if (noiseScale !== '' && noiseScale !== '5') {
             queryParams.set('noise_scale', noiseScale);
         }
+        const strength = elements.strength.value;
+        if (strength !== '' && strength !== '1' && strength !== '1.0') {
+            queryParams.set('strength', strength);
+        }
 
         // Add panel if selected (for measured color preview)
         if (elements.panelSelect.value) {
@@ -614,6 +624,7 @@ function saveState() {
         errorClamp: elements.errorClamp.value,
         chromaClamp: elements.chromaClamp.value,
         noiseScale: elements.noiseScale.value,
+        strength: elements.strength.value,
         colorOverrides: state.colorOverrides,
         ditherTuningOverrides: state.ditherTuningOverrides,
     };
@@ -669,6 +680,9 @@ function loadSavedState() {
             }
             if (data.noiseScale) {
                 elements.noiseScale.value = data.noiseScale;
+            }
+            if (data.strength) {
+                elements.strength.value = data.strength;
             }
             if (data.colorOverrides && typeof data.colorOverrides === 'object') {
                 state.colorOverrides = data.colorOverrides;

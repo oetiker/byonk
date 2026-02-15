@@ -62,6 +62,7 @@ Each device entry maps a MAC address to a screen:
 | `error_clamp` | No | Error clamp for dithering (e.g. `0.08`). Limits error diffusion amplitude. |
 | `noise_scale` | No | Blue noise jitter scale (e.g. `0.6`). Controls noise modulation strength. |
 | `chroma_clamp` | No | Chroma clamp for dithering. Limits chromatic error propagation. |
+| `strength` | No | Error diffusion strength (0.0–2.0, default 1.0). Lower = less dithering texture. |
 
 ### MAC Address Format
 
@@ -104,6 +105,7 @@ The `dither` option selects which dithering algorithm to use. All algorithms per
 | Algorithm | Value | Description |
 |-----------|-------|-------------|
 | Atkinson (default) | `"atkinson"` | Error diffusion (75% propagation). Good general-purpose default. |
+| Atkinson Hybrid | `"atkinson-hybrid"` | Hybrid propagation: 100% achromatic, 75% chromatic. Fixes color drift on chromatic palettes. |
 | Floyd-Steinberg | `"floyd-steinberg"` | Error diffusion with blue noise jitter. Smooth gradients, good general-purpose. |
 | Jarvis-Judice-Ninke | `"jarvis-judice-ninke"` or `"jjn"` | Wide 12-neighbor kernel. Least oscillation on sparse chromatic palettes. |
 | Sierra | `"sierra"` | 10-neighbor kernel. Good balance of quality and speed. |
@@ -112,7 +114,7 @@ The `dither` option selects which dithering algorithm to use. All algorithms per
 | Stucki | `"stucki"` | Wide 12-neighbor kernel similar to JJN. |
 | Burkes | `"burkes"` | 7-neighbor kernel. Good balance of speed and quality. |
 
-For most screens, the default `"atkinson"` works well. Use `"floyd-steinberg"` for photographic content. For sparse chromatic palettes (e.g. black/white/red/yellow), try `"jarvis-judice-ninke"` or `"sierra"` to reduce oscillation artifacts.
+For most screens, the default `"atkinson"` works well. Use `"atkinson-hybrid"` for chromatic palettes where Atkinson shows color drift. Use `"floyd-steinberg"` for photographic content. For sparse chromatic palettes (e.g. black/white/red/yellow), try `"jarvis-judice-ninke"` or `"sierra"` to reduce oscillation artifacts.
 
 ## Default Screen
 
@@ -332,7 +334,7 @@ panels:
 ```
 
 The `dither` section supports:
-- **Flat keys** (`error_clamp`, `noise_scale`, `chroma_clamp`): default values for all algorithms
+- **Flat keys** (`error_clamp`, `noise_scale`, `chroma_clamp`, `strength`): default values for all algorithms
 - **Algorithm sub-sections**: per-algorithm overrides that take priority over flat defaults
 
 Resolution within a panel: per-algorithm value > flat default > None.
@@ -345,7 +347,7 @@ The overall tuning priority chain is:
 |----------|--------|
 | 1 (highest) | Dev UI overrides |
 | 2 | Lua script return values |
-| 3 | Device config (`error_clamp`, `noise_scale`, `chroma_clamp`) |
+| 3 | Device config (`error_clamp`, `noise_scale`, `chroma_clamp`, `strength`) |
 | 4 | Panel dither defaults |
 | 5 (lowest) | Built-in per-algorithm defaults |
 

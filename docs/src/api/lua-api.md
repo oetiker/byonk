@@ -67,6 +67,7 @@ local algo = device.dither.algorithm       -- "floyd-steinberg" (resolved algori
 local ec = device.dither.error_clamp       -- 0.08 (from panel/device config)
 local ns = device.dither.noise_scale       -- 4.0
 local cc = device.dither.chroma_clamp      -- nil (not set)
+local st = device.dither.strength          -- 1.0 (default)
 
 -- Selectively override: halve the error clamp, keep everything else
 return {
@@ -83,6 +84,7 @@ return {
 | `error_clamp` | number or nil | Error diffusion clamp (from device config / panel) |
 | `noise_scale` | number or nil | Blue noise jitter scale |
 | `chroma_clamp` | number or nil | Chromatic error clamp |
+| `strength` | number or nil | Error diffusion strength (0.0–2.0, default 1.0) |
 
 ### layout
 
@@ -985,6 +987,7 @@ return {
   error_clamp = 0.08,       -- Optional: error diffusion clamp
   noise_scale = 0.6,        -- Optional: blue noise jitter scale
   chroma_clamp = 2.0,       -- Optional: chromatic error clamp
+  strength = 0.8,           -- Optional: error diffusion strength (default 1.0)
 }
 ```
 
@@ -1051,6 +1054,7 @@ Controls the dithering algorithm used when converting SVG to e-ink PNG. Availabl
 | Value | Algorithm | Description |
 |-------|-----------|-------------|
 | `"atkinson"` (default) | Atkinson | Error diffusion (75% propagation) |
+| `"atkinson-hybrid"` | Atkinson Hybrid | 100% achromatic / 75% chromatic propagation |
 | `"floyd-steinberg"` | Floyd-Steinberg | General-purpose error diffusion |
 | `"jarvis-judice-ninke"` | JJN | Wide kernel, least oscillation |
 | `"sierra"` | Sierra | 10-neighbor error diffusion |
@@ -1091,13 +1095,14 @@ return {
 }
 ```
 
-### error_clamp, noise_scale, chroma_clamp
+### error_clamp, noise_scale, chroma_clamp, strength
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `error_clamp` | number or nil | Limits error diffusion amplitude (e.g. 0.08) |
 | `noise_scale` | number or nil | Blue noise jitter scale (e.g. 0.6) |
 | `chroma_clamp` | number or nil | Limits chromatic error propagation (e.g. 2.0) |
+| `strength` | number or nil | Error diffusion strength multiplier (0.0 = no diffusion, 1.0 = standard, default) |
 
 Fine-tune dithering behavior per-script. These override device config and panel default values but are overridden by dev UI settings.
 
@@ -1112,7 +1117,8 @@ return {
   refresh_rate = 3600,
   dither = "floyd-steinberg",
   error_clamp = 0.08,
-  noise_scale = 0.5
+  noise_scale = 0.5,
+  strength = 0.8
 }
 ```
 

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- Added **dither strength** parameter (`strength`) for error diffusion. Scales the diffused error before propagation: `0.0` = no diffusion (pure nearest-color), `0.5` = subtle, `1.0` = standard (default, backward compatible), `>1.0` = exaggerated. Available in config.yaml (`strength:`), Lua scripts (`device.dither.strength`), dev mode UI, and the eink-dither crate API.
+- Added **Atkinson Hybrid** dithering algorithm (`"atkinson-hybrid"`). Uses the same 6-neighbor Atkinson kernel but with hybrid error propagation: 100% for the achromatic (brightness) component and 75% for the chromatic (color deviation) component. Fixes Atkinson's color drift on chromatic palettes while preserving its distinctive high-contrast character.
+
 ### Changed
 
 ### Fixed

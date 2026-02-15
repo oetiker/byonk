@@ -60,6 +60,7 @@ pub struct RenderParams {
     pub error_clamp: Option<f32>,
     pub noise_scale: Option<f32>,
     pub chroma_clamp: Option<f32>,
+    pub strength: Option<f32>,
 }
 
 /// Resolve dither tuning parameters.
@@ -132,6 +133,7 @@ pub fn resolve_render_params(
         error_clamp: tuning.error_clamp,
         noise_scale: tuning.noise_scale,
         chroma_clamp: tuning.chroma_clamp,
+        strength: tuning.strength,
     }
 }
 
@@ -514,6 +516,7 @@ pub async fn handle_display<R: DeviceRegistry>(
         error_clamp: device_config.and_then(|dc| dc.error_clamp),
         noise_scale: device_config.and_then(|dc| dc.noise_scale),
         chroma_clamp: device_config.and_then(|dc| dc.chroma_clamp),
+        strength: device_config.and_then(|dc| dc.strength),
     };
 
     // Resolve panel dither config for pre-script algorithm
@@ -553,6 +556,7 @@ pub async fn handle_display<R: DeviceRegistry>(
         dither_error_clamp: pre_script_tuning.error_clamp,
         dither_noise_scale: pre_script_tuning.noise_scale,
         dither_chroma_clamp: pre_script_tuning.chroma_clamp,
+        dither_strength: pre_script_tuning.strength,
     };
 
     // Run script, render SVG, and cache the result (PNG rendering happens in /api/image)
@@ -624,6 +628,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                         error_clamp: result.script_error_clamp,
                         noise_scale: result.script_noise_scale,
                         chroma_clamp: result.script_chroma_clamp,
+                        strength: result.script_strength,
                     };
 
                     // Resolve tuning: dev override > script > device config > panel > algorithm defaults
@@ -839,10 +844,12 @@ pub async fn handle_image<R: DeviceRegistry>(
         chroma_clamp: cached.chroma_clamp,
         noise_scale: cached.noise_scale,
         exact_absorb_error: None,
+        strength: cached.strength,
     };
     let has_tuning = tuning.error_clamp.is_some()
         || tuning.chroma_clamp.is_some()
-        || tuning.noise_scale.is_some();
+        || tuning.noise_scale.is_some()
+        || tuning.strength.is_some();
 
     let png_bytes = content_pipeline.render_png_from_svg(
         &cached.rendered_svg,

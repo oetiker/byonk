@@ -106,6 +106,29 @@ pub struct DitherOptions {
     ///
     /// Default: `true` (absorb — prevents bleed across boundaries)
     pub exact_absorb_error: bool,
+
+    /// Error diffusion strength multiplier.
+    ///
+    /// Scales the diffused error uniformly before propagation to neighbors:
+    /// - `0.0` = no error diffusion (pure nearest-color posterization)
+    /// - `0.5` = subtle dithering, less texture
+    /// - `1.0` = standard behavior (backward compatible default)
+    /// - `>1.0` = exaggerated texture
+    ///
+    /// Default: `1.0`
+    pub strength: f32,
+
+    /// Use hybrid achromatic/chromatic error propagation.
+    ///
+    /// When enabled, the error is split into achromatic (mean RGB) and
+    /// chromatic (deviation from mean) components. The achromatic component
+    /// is propagated at 100% (weight/weight_sum) while the chromatic component
+    /// is propagated at the kernel's native rate (weight/divisor, typically 75%
+    /// for Atkinson). This prevents color drift on chromatic palettes while
+    /// preserving the algorithm's distinctive character.
+    ///
+    /// Default: `false`
+    pub hybrid_propagation: bool,
 }
 
 impl Default for DitherOptions {
@@ -117,6 +140,8 @@ impl Default for DitherOptions {
             chroma_clamp: f32::INFINITY,
             noise_scale: 5.0,
             exact_absorb_error: true,
+            strength: 1.0,
+            hybrid_propagation: false,
         }
     }
 }
@@ -192,6 +217,26 @@ impl DitherOptions {
         self.exact_absorb_error = absorb;
         self
     }
+
+    /// Set error diffusion strength.
+    ///
+    /// # Arguments
+    /// * `strength` - Multiplier for diffused error (0.0 = no diffusion, 1.0 = standard)
+    #[inline]
+    pub fn strength(mut self, strength: f32) -> Self {
+        self.strength = strength;
+        self
+    }
+
+    /// Enable or disable hybrid achromatic/chromatic error propagation.
+    ///
+    /// # Arguments
+    /// * `enabled` - Whether to use hybrid propagation (true for AtkinsonHybrid)
+    #[inline]
+    pub fn hybrid_propagation(mut self, enabled: bool) -> Self {
+        self.hybrid_propagation = enabled;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -262,5 +307,23 @@ mod tests {
         assert!(!opts.serpentine);
         assert!(!opts.preserve_exact_matches);
         assert!((opts.error_clamp - 0.25).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_default_strength() {
+        let opts = DitherOptions::default();
+        assert!(
+            (opts.strength - 1.0).abs() < f32::EPSILON,
+            "strength should default to 1.0"
+        );
+    }
+
+    #[test]
+    fn test_builder_strength() {
+        let opts = DitherOptions::new().strength(0.5);
+        assert!((opts.strength - 0.5).abs() < f32::EPSILON);
+        // Other values unchanged
+        assert!(opts.serpentine);
+        assert!((opts.error_clamp - 0.5).abs() < f32::EPSILON);
     }
 }

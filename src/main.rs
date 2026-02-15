@@ -249,6 +249,7 @@ fn run_render_command(
         cli_error_clamp,
         cli_noise_scale,
         cli_chroma_clamp,
+        cli_strength,
     ) = if is_unregistered {
         let code = device_context.registration_code.as_deref().unwrap();
 
@@ -288,7 +289,7 @@ fn run_render_command(
             )
         };
 
-        (svg, cli_palette, None, true, None, None, None)
+        (svg, cli_palette, None, true, None, None, None, None)
     } else {
         // Normal render path
         let script_result = content_pipeline
@@ -315,6 +316,7 @@ fn run_render_command(
             error_clamp: device_config.and_then(|dc| dc.error_clamp),
             noise_scale: device_config.and_then(|dc| dc.noise_scale),
             chroma_clamp: device_config.and_then(|dc| dc.chroma_clamp),
+            strength: device_config.and_then(|dc| dc.strength),
         };
 
         // Resolve panel dither tuning for the effective algorithm
@@ -333,6 +335,7 @@ fn run_render_command(
             error_clamp: script_result.script_error_clamp,
             noise_scale: script_result.script_noise_scale,
             chroma_clamp: script_result.script_chroma_clamp,
+            strength: script_result.script_strength,
         };
         let tuning = byonk::api::display::resolve_tuning(&script_tuning, &dc_tuning, &panel_tuning);
 
@@ -361,6 +364,7 @@ fn run_render_command(
             render_params.error_clamp,
             render_params.noise_scale,
             render_params.chroma_clamp,
+            render_params.strength,
         )
     };
 
@@ -371,10 +375,12 @@ fn run_render_command(
         chroma_clamp: cli_chroma_clamp,
         noise_scale: cli_noise_scale,
         exact_absorb_error: None,
+        strength: cli_strength,
     };
     let has_cli_tuning = cli_tuning.error_clamp.is_some()
         || cli_tuning.chroma_clamp.is_some()
-        || cli_tuning.noise_scale.is_some();
+        || cli_tuning.noise_scale.is_some()
+        || cli_tuning.strength.is_some();
 
     let png_bytes = content_pipeline
         .render_png_from_svg(

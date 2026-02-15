@@ -215,17 +215,19 @@ Byonk uses the [eink-dither](https://github.com/oetiker/byonk/tree/main/crates/e
 
 ### Dither Algorithms
 
-Byonk supports 7 dithering algorithms, selectable per-device or per-script via the `dither` option:
+Byonk supports 9 dithering algorithms, selectable per-device or per-script via the `dither` option:
 
 | Algorithm | Value | Best for |
 |-----------|-------|----------|
-| Blue noise (default) | `"graphics"` | UI content: text, icons, charts |
-| Atkinson | `"photo"` or `"atkinson"` | Photographs with moderate detail |
+| Atkinson (default) | `"atkinson"` | General-purpose, good for small palettes |
+| Atkinson Hybrid | `"atkinson-hybrid"` | Chromatic palettes (fixes color drift) |
 | Floyd-Steinberg | `"floyd-steinberg"` | General-purpose, smooth gradients |
 | Jarvis-Judice-Ninke | `"jarvis-judice-ninke"` | Sparse chromatic palettes (least oscillation) |
 | Sierra | `"sierra"` | Good quality/speed balance |
 | Sierra Two-Row | `"sierra-two-row"` | Lighter weight error diffusion |
 | Sierra Lite | `"sierra-lite"` | Fastest error diffusion |
+| Stucki | `"stucki"` | Wide kernel similar to JJN |
+| Burkes | `"burkes"` | Good balance of speed and quality |
 
 All error diffusion algorithms use blue noise jitter to break "worm" artifacts. Color matching is performed in perceptually uniform **Oklab** space with gamma-correct linear RGB processing.
 
@@ -252,13 +254,14 @@ The priority chain is: **dev UI override** > **script `dither`** > **device conf
 
 ### Dither Tuning
 
-Fine-tune dithering behavior with three parameters, settable at multiple levels:
+Fine-tune dithering behavior with these parameters, settable at multiple levels:
 
 | Parameter | Description | Typical range |
 |-----------|-------------|---------------|
 | `error_clamp` | Limits error diffusion amplitude. Lower values reduce oscillation. | 0.05 – 0.5 |
 | `noise_scale` | Blue noise jitter scale. Higher values break worm artifacts more aggressively. | 0.3 – 1.0 |
 | `chroma_clamp` | Limits chromatic error propagation. Prevents color bleeding. | 0.5 – 5.0 |
+| `strength` | Scales diffused error before propagation. 0.0 = no diffusion, 1.0 = standard. | 0.0 – 2.0 |
 
 Use [dev mode](../guide/dev-mode.md) to find optimal values interactively, then commit them to your panel profile, device config, or Lua script for production use.
 

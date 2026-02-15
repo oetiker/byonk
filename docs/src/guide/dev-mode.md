@@ -50,8 +50,9 @@ Dev mode provides tools for calibrating dithering to match your physical display
 
 ### Dither Algorithm Selection
 
-The dither dropdown lets you try all 8 algorithms on your content:
+The dither dropdown lets you try all 9 algorithms on your content:
 - `atkinson` (default) — Atkinson error diffusion (75% propagation)
+- `atkinson-hybrid` — Atkinson with hybrid propagation (100% achromatic / 75% chromatic)
 - `floyd-steinberg` — Floyd-Steinberg with blue noise jitter
 - `jarvis-judice-ninke` — wide 12-neighbor kernel
 - `sierra`, `sierra-two-row`, `sierra-lite` — Sierra family
@@ -102,7 +103,7 @@ Use the calibrator on your physical device while adjusting tuning in dev mode �
 1. **Assign the `calibrator` screen** to your device in `config.yaml`
 2. **Select your device** in dev mode — this loads its screen, panel, and dither settings
 3. **Choose a dither algorithm** that works well for your content type
-4. **Adjust tuning parameters** (error_clamp, noise_scale, chroma_clamp) until the preview looks good
+4. **Adjust tuning parameters** (error_clamp, noise_scale, chroma_clamp, strength) until the preview looks good
 5. **Calibrate measured colors** by clicking actual-color swatches and adjusting HSL to match the solid patches on the physical display
 6. **Verify on device** — changes sync automatically; wait for the next device refresh
 7. **Commit to config** — copy the values to `config.yaml` and switch back to your normal screen:
@@ -123,7 +124,7 @@ devices:
     noise_scale: 0.5    # from dev mode tuning
 ```
 
-Tuning values can also be set per-script in the Lua return table — see [Lua API](../api/lua-api.md#error_clamp-noise_scale-chroma_clamp).
+Tuning values can also be set per-script in the Lua return table — see [Lua API](../api/lua-api.md#error_clamp-noise_scale-chroma_clamp-strength).
 
 ## Configuration
 

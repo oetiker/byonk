@@ -77,6 +77,8 @@ pub struct RenderQuery {
     pub chroma_clamp: Option<f32>,
     /// Blue noise jitter scale override
     pub noise_scale: Option<f32>,
+    /// Dither strength override (0.0 = no diffusion, 1.0 = standard)
+    pub strength: Option<f32>,
 }
 
 /// Convert serde_yaml params to serde_json values
@@ -368,6 +370,7 @@ pub async fn handle_render(
         dc_error_clamp,
         dc_noise_scale,
         dc_chroma_clamp,
+        dc_strength,
     ) = if let Some(ref mac) = query.mac {
         // Try MAC lookup first, then registration code lookup
         match state
@@ -414,6 +417,7 @@ pub async fn handle_render(
                     dc.error_clamp,
                     dc.noise_scale,
                     dc.chroma_clamp,
+                    dc.strength,
                 )
             }
             None => {
@@ -429,7 +433,17 @@ pub async fn handle_render(
         }
     } else if let Some(ref screen_name) = query.screen {
         if let Some(config) = state.config.screens.get(screen_name) {
-            (config.clone(), None, None, None, None, None, None, None)
+            (
+                config.clone(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
         } else {
             // Try auto-discovering screen from filesystem
             let script = format!("{}.lua", screen_name);
@@ -442,6 +456,7 @@ pub async fn handle_render(
                         template: PathBuf::from(&template),
                         default_refresh: 900,
                     },
+                    None,
                     None,
                     None,
                     None,
@@ -539,6 +554,7 @@ pub async fn handle_render(
         error_clamp: dc_error_clamp,
         noise_scale: dc_noise_scale,
         chroma_clamp: dc_chroma_clamp,
+        strength: dc_strength,
     };
     let pre_script_tuning = pre_dc_tuning.or(&pre_panel_tuning);
 
@@ -560,6 +576,7 @@ pub async fn handle_render(
         dither_error_clamp: pre_script_tuning.error_clamp,
         dither_noise_scale: pre_script_tuning.noise_scale,
         dither_chroma_clamp: pre_script_tuning.chroma_clamp,
+        dither_strength: pre_script_tuning.strength,
         ..Default::default()
     };
 
@@ -596,6 +613,7 @@ pub async fn handle_render(
                 Option<f32>,
                 Option<f32>,
                 Option<f32>,
+                Option<f32>,
             ),
             String,
         >((
@@ -606,6 +624,7 @@ pub async fn handle_render(
             script_result.script_error_clamp,
             script_result.script_noise_scale,
             script_result.script_chroma_clamp,
+            script_result.script_strength,
         ))
     })
     .await;
@@ -618,6 +637,7 @@ pub async fn handle_render(
         script_error_clamp,
         script_noise_scale,
         script_chroma_clamp,
+        script_strength,
     ) = match result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
@@ -701,7 +721,8 @@ pub async fn handle_render(
         // Tuning — sync when the dev UI sends tuning params
         let has_query_tuning = query.error_clamp.is_some()
             || query.noise_scale.is_some()
-            || query.chroma_clamp.is_some();
+            || query.chroma_clamp.is_some()
+            || query.strength.is_some();
         let mut tuning_map = state.dev_overrides.tuning.write().await;
         if has_query_tuning {
             tuning_map.insert(
@@ -710,6 +731,7 @@ pub async fn handle_render(
                     error_clamp: query.error_clamp,
                     noise_scale: query.noise_scale,
                     chroma_clamp: query.chroma_clamp,
+                    strength: query.strength,
                 },
             );
         } else {
@@ -733,23 +755,27 @@ pub async fn handle_render(
         error_clamp: dc_error_clamp,
         noise_scale: dc_noise_scale,
         chroma_clamp: dc_chroma_clamp,
+        strength: dc_strength,
     };
 
     // Resolve tuning: query params (dev UI) > script > device config > panel > None
     let tuning = if query.error_clamp.is_some()
         || query.noise_scale.is_some()
         || query.chroma_clamp.is_some()
+        || query.strength.is_some()
     {
         crate::models::DitherTuningValues {
             error_clamp: query.error_clamp,
             noise_scale: query.noise_scale,
             chroma_clamp: query.chroma_clamp,
+            strength: query.strength,
         }
     } else {
         let script_tuning = crate::models::DitherTuningValues {
             error_clamp: script_error_clamp,
             noise_scale: script_noise_scale,
             chroma_clamp: script_chroma_clamp,
+            strength: script_strength,
         };
         crate::api::display::resolve_tuning(&script_tuning, &dc_tuning, &panel_tuning)
     };
@@ -795,10 +821,12 @@ pub async fn handle_render(
         chroma_clamp: render_params.chroma_clamp,
         noise_scale: render_params.noise_scale,
         exact_absorb_error: None,
+        strength: render_params.strength,
     };
     let has_tuning = tuning.error_clamp.is_some()
         || tuning.chroma_clamp.is_some()
-        || tuning.noise_scale.is_some();
+        || tuning.noise_scale.is_some()
+        || tuning.strength.is_some();
 
     match state.content_pipeline.render_png_from_svg(
         &svg,

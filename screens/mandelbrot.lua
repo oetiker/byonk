@@ -46,7 +46,7 @@ local W = math.min(320, math.floor(width / 6))
 if W < 80 then W = 80 end
 local H = math.max(1, math.floor(W * aspect))
 
--- Quantise to a fixed number of grey levels so adjacent pixels often share
+-- Quantise to a fixed number of output levels so adjacent pixels often share
 -- a colour (good RLE compression) while still looking smooth after dither.
 local levels = 48
 local level_max = levels - 1
@@ -62,13 +62,50 @@ local y_step = extent_y * 2 / H
 local x_origin = cx - extent_x
 local y_origin = cy + extent_y  -- top row → maximum cy (math orientation)
 
--- Pre-compute the hex colour for each level.
+-- Build the escape-time gradient from the panel's own palette, sorted by
+-- perceived luminance. This way a greyscale panel gets a smooth black→white
+-- ramp, while a 4-colour panel (e.g. black/white/red/yellow) gets a warm
+-- black→red→yellow→white flame ramp that the dither engine can match
+-- cleanly to the actual panel colours.
+local palette = layout.colors or {"#000000", "#555555", "#AAAAAA", "#FFFFFF"}
+local stops = {}
+for _, c in ipairs(palette) do
+  local hex = c:gsub("#", "")
+  local r = tonumber(hex:sub(1, 2), 16) or 0
+  local g = tonumber(hex:sub(3, 4), 16) or 0
+  local b = tonumber(hex:sub(5, 6), 16) or 0
+  -- Rec. 709 luminance — monotonic in perceived brightness.
+  local lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+  stops[#stops + 1] = { r = r, g = g, b = b, lum = lum }
+end
+table.sort(stops, function(a, b) return a.lum < b.lum end)
+local stop_count = #stops
+local last_seg = stop_count - 1
+
+-- Pre-compute the hex colour for each gradient level by linear-interpolating
+-- between adjacent palette stops. RGB lerp is fine here because the dither
+-- engine does the final perceptual matching to the actual panel colours.
 local level_colors = {}
 for i = 0, level_max do
-  local g = floor(255 * i / level_max + 0.5)
-  level_colors[i] = string.format("#%02x%02x%02x", g, g, g)
+  local t = i / level_max
+  local seg = t * last_seg
+  local idx = floor(seg)
+  if idx >= last_seg then
+    idx = last_seg - 1
+    if idx < 0 then idx = 0 end
+  end
+  local frac = seg - idx
+  local a = stops[idx + 1]
+  local b = stops[idx + 2] or a
+  local r = floor(a.r + (b.r - a.r) * frac + 0.5)
+  local g = floor(a.g + (b.g - a.g) * frac + 0.5)
+  local bb = floor(a.b + (b.b - a.b) * frac + 0.5)
+  level_colors[i] = string.format("#%02x%02x%02x", r, g, bb)
 end
-local black_color = "#000000"
+
+-- Interior of the set uses the panel's darkest colour (almost always black).
+local darkest = stops[1]
+local black_color = string.format("#%02x%02x%02x", darkest.r, darkest.g, darkest.b)
 
 -- Compute the fractal and run-length encode each row on the fly.
 local pieces = {}

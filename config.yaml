@@ -147,6 +147,12 @@ screens:
     template: hello.svg
     default_refresh: 60
 
+  # Random Mandelbrot set view
+  mandelbrot:
+    script: mandelbrot.lua
+    template: mandelbrot.svg
+    default_refresh: 600
+
   # CMYK gradient and palette calibrator
   calibrator:
     script: calibrator.lua
@@ -222,6 +228,11 @@ devices:
   # Test device for hello tutorial
   "TE:ST:HE:LL:00:00":
     screen: hello
+    params: {}
+
+  # Test device for random Mandelbrot views
+  "TE:ST:MA:ND:00:00":
+    screen: mandelbrot
     params: {}
 
   # Example: Device showing Floerli room "Rosa"

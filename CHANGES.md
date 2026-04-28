@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- **Mandelbrot screen** (`mandelbrot`): Renders a random, aesthetically-pleasing region of the Mandelbrot set on each refresh. Picks from a curated list of well-known locations (Seahorse Valley, Elephant Valley, Mini Mandelbrot, Feigenbaum Point, ...), jitters the centre and zoom, computes escape-time in Lua with smooth iteration count, run-length encodes horizontal pixel runs for compact SVG output, and labels the view with location name, zoom factor, and complex centre coordinates. Builds the escape-time gradient from the panel's own `layout.colors` (sorted by Rec. 709 luminance), so greyscale panels get a black→white ramp and colour panels get a natural through-the-palette ramp (e.g. black→red→yellow→white on a 4-colour TRMNL OG).
 ### Changed
 
 ### Fixed

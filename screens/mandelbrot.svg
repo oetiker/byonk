@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
+  <defs>
+    <style>
+      text {
+        font-family: Outfit, sans-serif;
+        {% include "components/hinting.svg" %}
+      }
+      .caption {
+        font-weight: 600;
+        fill: #ffffff;
+        paint-order: stroke;
+        stroke: #000000;
+        stroke-width: 3;
+        stroke-linejoin: round;
+      }
+      .coords {
+        font-weight: 400;
+        fill: #ffffff;
+        paint-order: stroke;
+        stroke: #000000;
+        stroke-width: 2;
+        stroke-linejoin: round;
+      }
+    </style>
+  </defs>
+
+  <!-- Solid white background so any seams show as white, not artefacts. -->
+  <rect width="{{ data.width }}" height="{{ data.height }}" fill="#ffffff"/>
+
+  <!-- Computed Mandelbrot pixels (run-length-encoded rects). -->
+  {{ data.svg_pixels | safe }}
+
+  <!-- Location caption, bottom-left, with a black stroke halo for legibility. -->
+  <text class="caption" x="{{ data.pad }}" y="{{ data.caption_y }}" font-size="{{ data.font_caption }}">{{ data.caption }}</text>
+  <text class="coords"  x="{{ data.pad }}" y="{{ data.coords_y }}"  font-size="{{ data.font_coords }}">{{ data.coords }}</text>
+</svg>

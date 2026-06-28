@@ -5,6 +5,7 @@
 # Getting Started
 
 - [Installation](guide/installation.md)
+- [Home Assistant Add-on](guide/ha-addon.md)
 - [Configuration](guide/configuration.md)
 - [Dev Mode](guide/dev-mode.md)
 

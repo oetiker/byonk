@@ -75,15 +75,18 @@ fn addon_config_matches_design() {
         Some("0.0.0.0:3000")
     );
 
-    // exactly the two intended options exist in the schema
-    assert!(
-        cfg["schema"].get("admin_token").is_some(),
-        "schema.admin_token"
-    );
-    assert!(cfg["schema"].get("log_level").is_some(), "schema.log_level");
-    assert!(
-        cfg["schema"].get("registration").is_none()
-            && cfg["schema"].get("default_screen").is_none(),
-        "schema must not duplicate integration-owned settings"
+    // schema exposes EXACTLY the two intended options — nothing the Phase 3
+    // integration owns (registration_enabled, auth_mode, default_screen, ...).
+    let schema_keys: std::collections::BTreeSet<&str> = cfg["schema"]
+        .as_mapping()
+        .expect("schema mapping")
+        .keys()
+        .filter_map(Value::as_str)
+        .collect();
+    let expected: std::collections::BTreeSet<&str> =
+        ["admin_token", "log_level"].into_iter().collect();
+    assert_eq!(
+        schema_keys, expected,
+        "add-on schema must expose exactly admin_token + log_level"
     );
 }

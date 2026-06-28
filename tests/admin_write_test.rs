@@ -46,6 +46,24 @@ async fn test_add_unknown_screen_returns_400() {
 }
 
 #[tokio::test]
+async fn test_patch_settings_toggles_registration() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
+
+    let resp = app
+        .patch_json(
+            "/api/admin/settings",
+            &[AUTH],
+            r#"{"registration_enabled":false}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::OK);
+
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert!(on_disk.contains("enabled: false"));
+}
+
+#[tokio::test]
 async fn test_patch_then_delete_device() {
     let dir = tempfile::tempdir().unwrap();
     let (app, _) = TestApp::new_admin_with_file("secret", dir.path());

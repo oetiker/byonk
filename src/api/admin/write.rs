@@ -207,3 +207,49 @@ pub async fn delete_device(
 
     Ok(Json(serde_json::json!({ "deleted": key })))
 }
+
+#[derive(Deserialize)]
+pub struct SettingsWrite {
+    pub registration_enabled: Option<bool>,
+    pub auth_mode: Option<String>,
+    pub default_screen: Option<String>,
+}
+
+pub async fn patch_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SettingsWrite>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&state, &headers)?;
+    let path = require_file_config(&state)?;
+    let _guard = state.write_lock.lock().await;
+
+    let mut yaml = state
+        .asset_loader
+        .read_config_string()
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    if let Some(enabled) = body.registration_enabled {
+        yaml = config_writer::set_scalar(&yaml, &["registration", "enabled"], enabled.into())
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+    }
+    if let Some(mode) = &body.auth_mode {
+        if mode != "api_key" && mode != "ed25519" {
+            return Err(ApiError::BadRequest(
+                "auth_mode must be api_key or ed25519".into(),
+            ));
+        }
+        yaml = config_writer::set_scalar(&yaml, &["auth_mode"], mode.as_str().into())
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+    }
+    if let Some(screen) = &body.default_screen {
+        if !state.config.load().screens.contains_key(screen) {
+            return Err(ApiError::BadRequest(format!("unknown screen `{screen}`")));
+        }
+        yaml = config_writer::set_scalar(&yaml, &["default_screen"], screen.as_str().into())
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+    }
+
+    persist(&state, &path, yaml)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}

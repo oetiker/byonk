@@ -13,3 +13,7 @@ docs/mermaid-init.js
 docs/src/images/
 
 .venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+

@@ -25,4 +25,5 @@
 # API Reference
 
 - [HTTP API](api/http-api.md)
+- [Admin API](api/admin-api.md)
 - [Lua API](api/lua-api.md)

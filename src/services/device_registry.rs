@@ -13,6 +13,9 @@ pub trait DeviceRegistry: Send + Sync {
 
     /// Find device by ID (MAC address)
     async fn find_by_id(&self, device_id: &DeviceId) -> Result<Option<Device>, ApiError>;
+
+    /// List all known devices.
+    async fn list_all(&self) -> Result<Vec<Device>, ApiError>;
 }
 
 /// In-memory device metadata storage
@@ -46,6 +49,11 @@ impl DeviceRegistry for InMemoryRegistry {
         let devices = self.devices.read().await;
         Ok(devices.get(device_id).cloned())
     }
+
+    async fn list_all(&self) -> Result<Vec<Device>, ApiError> {
+        let devices = self.devices.read().await;
+        Ok(devices.values().cloned().collect())
+    }
 }
 
 #[cfg(test)]
@@ -64,6 +72,26 @@ mod tests {
 
         assert!(found.is_some());
         assert_eq!(found.unwrap().device_id, device.device_id);
+    }
+
+    #[tokio::test]
+    async fn test_list_all_returns_all_devices() {
+        let registry = InMemoryRegistry::new();
+        let d1 = Device::new(
+            DeviceId::new("AA:AA:AA:AA:AA:AA"),
+            DeviceModel::OG,
+            "1".into(),
+        );
+        let d2 = Device::new(
+            DeviceId::new("BB:BB:BB:BB:BB:BB"),
+            DeviceModel::X,
+            "2".into(),
+        );
+        registry.upsert(d1).await.unwrap();
+        registry.upsert(d2).await.unwrap();
+
+        let all = registry.list_all().await.unwrap();
+        assert_eq!(all.len(), 2);
     }
 
     #[tokio::test]

@@ -45,6 +45,14 @@ anyhow = "1"
 # CLI
 clap = { version = "4", features = ["derive"] }
 
+# Config hot-reload + comment-preserving YAML edits
+arc-swap = "1"
+yamlpath = "1"
+yamlpatch = "1"
+# Must stay in sync with the yaml_serde version yamlpatch depends on:
+# Op values are yaml_serde::Value, so a mismatched major/minor would not unify.
+yaml_serde = "0.10"
+
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"

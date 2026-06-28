@@ -1,3 +1,21 @@
+--[[ @params
+album_url:
+  type: url
+  label: "Album URL"
+  required: true
+  description: "Shared Google Photos album link"
+show_status:
+  type: bool
+  label: "Show status overlay"
+  default: false
+refresh_rate:
+  type: int
+  label: "Refresh rate"
+  default: 3600
+  min: 60
+  unit: "s"
+  mode: box
+]]
 -- Google Photos shared album display
 -- Fetches random photos from a shared Google Photos album
 -- Uses HTML scraping of the shared album page (no OAuth required)

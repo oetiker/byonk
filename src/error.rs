@@ -25,6 +25,15 @@ pub enum ApiError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    #[error("Unauthorized")]
+    Unauthorized,
+
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+
+    #[error("Conflict: {0}")]
+    Conflict(String),
 }
 
 impl From<crate::services::content_pipeline::ContentError> for ApiError {
@@ -66,6 +75,9 @@ impl IntoResponse for ApiError {
             ApiError::Render(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
             ApiError::Content(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
             ApiError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
+            ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, self.to_string()),
+            ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
+            ApiError::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
         };
 
         let body = Json(json!({
@@ -80,6 +92,24 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_api_error_unauthorized_status() {
+        let resp = ApiError::Unauthorized.into_response();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn test_api_error_bad_request_status() {
+        let resp = ApiError::BadRequest("nope".into()).into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_api_error_conflict_status() {
+        let resp = ApiError::Conflict("dup".into()).into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
 
     #[test]
     fn test_api_error_missing_header() {

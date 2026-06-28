@@ -175,6 +175,10 @@ pub struct AppConfig {
     /// Note: /api/display always accepts both methods regardless of this setting
     #[serde(default = "default_auth_mode")]
     pub auth_mode: String,
+
+    /// Admin/management API settings
+    #[serde(default)]
+    pub admin: AdminConfig,
 }
 
 /// Panel profile with official and measured display colors
@@ -249,6 +253,15 @@ pub struct DeviceConfig {
 
     /// Optional dither strength override (0.0 = no diffusion, 1.0 = standard)
     pub strength: Option<f32>,
+}
+
+/// Admin/management API settings.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct AdminConfig {
+    /// Bearer token gating `/api/admin/*`. If unset (and `BYONK_ADMIN_TOKEN` is
+    /// unset), the admin API is disabled (returns 404).
+    #[serde(default)]
+    pub token: Option<String>,
 }
 
 /// Device registration settings
@@ -455,6 +468,7 @@ impl Default for AppConfig {
             default_screen: Some("default".to_string()),
             registration: RegistrationConfig::default(),
             auth_mode: default_auth_mode(),
+            admin: AdminConfig::default(),
         }
     }
 }
@@ -462,6 +476,16 @@ impl Default for AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_admin_token_parses_and_defaults() {
+        let yaml = "admin:\n  token: secret123\nscreens: {}\n";
+        let cfg: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.admin.token.as_deref(), Some("secret123"));
+
+        let cfg2: AppConfig = serde_yaml::from_str("screens: {}\n").unwrap();
+        assert_eq!(cfg2.admin.token, None);
+    }
 
     #[test]
     fn test_default_config() {

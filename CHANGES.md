@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Mandelbrot screen** (`mandelbrot`): Renders a random, aesthetically-pleasing region of the Mandelbrot set on each refresh. Picks from a curated list of well-known locations (Seahorse Valley, Elephant Valley, Mini Mandelbrot, Feigenbaum Point, ...), jitters the centre and zoom, computes escape-time in Lua with smooth iteration count, run-length encodes horizontal pixel runs for compact SVG output, and labels the view with location name, zoom factor, and complex centre coordinates. Builds the escape-time gradient from the panel's own `layout.colors` (sorted by Rec. 709 luminance), so greyscale panels get a black→white ramp and colour panels get a natural through-the-palette ramp (e.g. black→red→yellow→white on a 4-colour TRMNL OG).
 - **reTerminal E1004 panel profile** (`reterminal_e1004`): 1200×1600, 6-color Spectra 6 palette. Added to the bundled `config.yaml`.
+- **Admin/management API** (`/api/admin/*`), gated by a bearer token
+  (`BYONK_ADMIN_TOKEN` env or `admin.token` in config; disabled = returns 404):
+  read device telemetry, pending/unregistered devices, effective config, and
+  screen param schemas; create/update/delete device mappings and update global
+  settings (`registration_enabled`, `auth_mode`, `default_screen`).
+- **Per-screen parameter schemas** via a parsed (not executed) `@params` header in
+  each screen's `.lua`, with UI hints (label, min/max/step/unit/mode, enum
+  options, sensitive/multiline/hidden/advanced). Bundled screens now declare
+  their params.
+- **Config hot-reload**: admin writes update `config.yaml` in place (preserving
+  comments and formatting via targeted YAML path patching) and take effect
+  without a restart.
+
 ### Changed
 
 - **Panel auto-detection now also matches the `Model` header.** Previously a panel's `match:` was only compared against the firmware `Board` header. The reTerminal E1004 reports its panel identity in `Model` (and sends no `Board` header), so it could never auto-detect a panel and fell back to the greyscale default. Matching now tries `Board` first, then `Model`.

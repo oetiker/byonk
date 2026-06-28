@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::assets::AssetLoader;
 use crate::error::RenderError;
-use crate::models::{AppConfig, DisplaySpec, ScreenConfig};
+use crate::models::{DisplaySpec, ScreenConfig};
 use crate::services::{FontFaceInfo, LuaRuntime, RenderService, TemplateService};
 
 /// Result from running a Lua script (before rendering)
@@ -89,7 +89,7 @@ pub enum ContentError {
 
 /// Content pipeline that orchestrates script → template → render
 pub struct ContentPipeline {
-    config: Arc<AppConfig>,
+    config: crate::server::SharedConfig,
     asset_loader: Arc<AssetLoader>,
     lua_runtime: LuaRuntime,
     template_service: TemplateService,
@@ -98,7 +98,7 @@ pub struct ContentPipeline {
 
 impl ContentPipeline {
     pub fn new(
-        config: Arc<AppConfig>,
+        config: crate::server::SharedConfig,
         asset_loader: Arc<AssetLoader>,
         renderer: Arc<RenderService>,
     ) -> Result<Self, ContentError> {
@@ -135,7 +135,8 @@ impl ContentPipeline {
 
     /// Resolve a screen by name from config or filesystem auto-discovery
     fn resolve_screen(&self, screen_name: &str) -> Option<ScreenConfig> {
-        self.config.screens.get(screen_name).cloned().or_else(|| {
+        let config = self.config.load();
+        config.screens.get(screen_name).cloned().or_else(|| {
             let all_files = self.asset_loader.list_screens();
             let lua_file = format!("{}.lua", screen_name);
             let svg_file = format!("{}.svg", screen_name);
@@ -159,11 +160,12 @@ impl ContentPipeline {
         device_ctx: Option<DeviceContext>,
     ) -> Result<ScriptResult, ContentError> {
         // Look up device config - try registration code first, then MAC address
+        let config = self.config.load();
         let device_config = device_ctx
             .as_ref()
             .and_then(|ctx| ctx.registration_code.as_deref())
-            .and_then(|code| self.config.get_device_config_for_code(code))
-            .or_else(|| self.config.get_device_config(device_mac));
+            .and_then(|code| config.get_device_config_for_code(code))
+            .or_else(|| config.get_device_config(device_mac));
 
         if let Some(device_config) = device_config {
             // Found device config — resolve screen from config or filesystem
@@ -179,7 +181,7 @@ impl ContentPipeline {
 
         // Fall back to default screen with empty params
         let screen_config = self
-            .resolve_screen(self.config.default_screen.as_deref().unwrap_or("default"))
+            .resolve_screen(config.default_screen.as_deref().unwrap_or("default"))
             .ok_or_else(|| ContentError::ScreenNotFound(device_mac.to_string()))?;
 
         static EMPTY_DEVICE: std::sync::OnceLock<crate::models::DeviceConfig> =

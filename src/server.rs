@@ -3,6 +3,7 @@
 //! This module provides the router and application state used by both
 //! the production server and integration tests.
 
+use arc_swap::ArcSwap;
 use axum::{
     http::{header::CONNECTION, Request},
     routing::{get, post},
@@ -57,10 +58,17 @@ impl<B> MakeSpan<B> for RequestIdSpan {
     }
 }
 
+/// Hot-swappable application config shared by the server and the content pipeline.
+pub type SharedConfig = std::sync::Arc<ArcSwap<AppConfig>>;
+
 /// Application state shared across all handlers.
 #[derive(Clone)]
 pub struct AppState {
-    pub config: Arc<AppConfig>,
+    pub config: SharedConfig,
+    pub asset_loader: Arc<AssetLoader>,
+    pub admin_token: Option<String>,
+    /// Serializes admin config writes so concurrent requests can't interleave file patches.
+    pub write_lock: Arc<tokio::sync::Mutex<()>>,
     pub registry: Arc<InMemoryRegistry>,
     pub renderer: Arc<RenderService>,
     pub content_pipeline: Arc<ContentPipeline>,
@@ -70,8 +78,8 @@ pub struct AppState {
 
 /// Create application state from an asset loader.
 pub fn create_app_state(asset_loader: Arc<AssetLoader>) -> anyhow::Result<AppState> {
-    let config = Arc::new(AppConfig::load_from_assets(&asset_loader)?);
-    create_app_state_with_config(asset_loader, config)
+    let config = AppConfig::load_from_assets(&asset_loader)?;
+    create_app_state_with_config(asset_loader, Arc::new(config))
 }
 
 /// Create application state with a custom config.
@@ -88,22 +96,43 @@ pub fn create_app_state_with_overrides(
     config: Arc<AppConfig>,
     dev_overrides: DevOverrides,
 ) -> anyhow::Result<AppState> {
+    let admin_token = std::env::var("BYONK_ADMIN_TOKEN")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| config.admin.token.clone());
+
+    let shared_config: SharedConfig = Arc::new(ArcSwap::from(config));
+
     let registry = Arc::new(InMemoryRegistry::new());
     let renderer = Arc::new(RenderService::new(&asset_loader)?);
     let content_pipeline = Arc::new(
-        ContentPipeline::new(config.clone(), asset_loader, renderer.clone())
-            .map_err(|e| anyhow::anyhow!("Failed to create content pipeline: {e}"))?,
+        ContentPipeline::new(
+            shared_config.clone(),
+            asset_loader.clone(),
+            renderer.clone(),
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to create content pipeline: {e}"))?,
     );
     let content_cache = Arc::new(ContentCache::new());
 
     Ok(AppState {
-        config,
+        config: shared_config,
+        asset_loader,
+        admin_token,
+        write_lock: Arc::new(tokio::sync::Mutex::new(())),
         registry,
         renderer,
         content_pipeline,
         content_cache,
         dev_overrides,
     })
+}
+
+/// Reparse the config file via the asset loader and atomically swap it in.
+pub fn reload_config(state: &AppState) -> anyhow::Result<()> {
+    let fresh = AppConfig::load_from_assets(&state.asset_loader)?;
+    state.config.store(Arc::new(fresh));
+    Ok(())
 }
 
 /// Build the API router with all endpoints and middleware.
@@ -126,6 +155,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/time/", get(api::handle_time))
         // Health check
         .route("/health", get(|| async { "OK" }))
+        // Admin API
+        .nest("/api/admin", crate::api::admin::admin_router())
         // Add state and tracing with request IDs
         .with_state(state)
         .layer(TraceLayer::new_for_http().make_span_with(RequestIdSpan))
@@ -145,7 +176,7 @@ async fn handle_setup(
     headers: axum::http::HeaderMap,
 ) -> Result<impl axum::response::IntoResponse, ApiError> {
     api::handle_setup(
-        axum::extract::State(state.config),
+        axum::extract::State(state.config.load_full()),
         axum::extract::State(state.registry),
         headers,
     )
@@ -157,7 +188,7 @@ async fn handle_display(
     headers: axum::http::HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
     api::handle_display(
-        axum::extract::State(state.config),
+        axum::extract::State(state.config.load_full()),
         axum::extract::State(state.registry),
         axum::extract::State(state.content_pipeline),
         axum::extract::State(state.content_cache),
@@ -179,4 +210,25 @@ async fn handle_image(
         path,
     )
     .await
+}
+
+#[cfg(test)]
+mod reload_tests {
+    use super::*;
+
+    #[test]
+    fn test_config_swap_is_visible() {
+        let loader = Arc::new(AssetLoader::new(None, None, None));
+        let state = create_app_state(loader).unwrap();
+        assert!(state.config.load().screens.contains_key("default"));
+
+        // Swap in a config with a sentinel screen and confirm the snapshot updates.
+        let mut cfg = (**state.config.load()).clone();
+        cfg.default_screen = Some("sentinel".to_string());
+        state.config.store(Arc::new(cfg));
+        assert_eq!(
+            state.config.load().default_screen.as_deref(),
+            Some("sentinel")
+        );
+    }
 }

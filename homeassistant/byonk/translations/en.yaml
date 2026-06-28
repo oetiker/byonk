@@ -1,0 +1,10 @@
+configuration:
+  admin_token:
+    name: Admin token
+    description: >-
+      Managed automatically by the Byonk Home Assistant integration. Leave this
+      blank — you do not need to set it by hand. While empty, the management API
+      stays disabled.
+  log_level:
+    name: Log level
+    description: Verbosity of the Byonk server log.

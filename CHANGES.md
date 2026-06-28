@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- **Home Assistant add-on**: run Byonk as a Supervisor add-on (references the
+  prebuilt `ghcr.io/oetiker/byonk` image) with persistent, editable
+  config/screens/fonts and a host port for TRMNL devices. Byonk reads
+  `admin_token` and `log_level` from the add-on options (`/data/options.json`);
+  the admin token stays the single source of truth, dormant until provisioned by
+  the forthcoming Byonk integration. See *Getting Started → Home Assistant Add-on*.
 - **Mandelbrot screen** (`mandelbrot`): Renders a random, aesthetically-pleasing region of the Mandelbrot set on each refresh. Picks from a curated list of well-known locations (Seahorse Valley, Elephant Valley, Mini Mandelbrot, Feigenbaum Point, ...), jitters the centre and zoom, computes escape-time in Lua with smooth iteration count, run-length encodes horizontal pixel runs for compact SVG output, and labels the view with location name, zoom factor, and complex centre coordinates. Builds the escape-time gradient from the panel's own `layout.colors` (sorted by Rec. 709 luminance), so greyscale panels get a black→white ramp and colour panels get a natural through-the-palette ramp (e.g. black→red→yellow→white on a 4-colour TRMNL OG).
 - **reTerminal E1004 panel profile** (`reterminal_e1004`): 1200×1600, 6-color Spectra 6 palette. Added to the bundled `config.yaml`.
 - **Admin/management API** (`/api/admin/*`), gated by a bearer token

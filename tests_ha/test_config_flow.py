@@ -27,6 +27,10 @@ async def test_happy_path_creates_entry_without_token(hass):
             new=AsyncMock(return_value="abcd1234_byonk"),
         ),
         patch(
+            "custom_components.byonk.config_flow.async_read_token",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
             "custom_components.byonk.config_flow.async_provision_token",
             new=AsyncMock(return_value="tok"),
         ),

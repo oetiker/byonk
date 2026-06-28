@@ -83,12 +83,8 @@ async def async_provision_token(hass: HomeAssistant, slug: str) -> str:
 
 async def async_read_token(hass: HomeAssistant, slug: str) -> str | None:
     """Read the admin token back from the add-on option (single source of truth)."""
-    try:
-        mgr = _get_addon_manager(hass, slug)
-        info = await mgr.async_get_addon_info()
-    except (AddonError, KeyError):
-        # Supervisor unavailable or add-on not yet queryable — treat as no token.
-        return None
+    mgr = _get_addon_manager(hass, slug)
+    info = await mgr.async_get_addon_info()
     token = (info.options or {}).get("admin_token")
     return token or None
 

@@ -329,7 +329,8 @@ back to free-form key/values. Built in `param_form.py`.
 custom_components/byonk/
   __init__.py        # async_setup_entry/unload, runtime_data, ties trust+coordinator
   manifest.json
-  const.py           # DOMAIN, BYONK_ADDON_REPO_URL, addon config-slug, defaults
+  const.py           # DOMAIN, BYONK_ADDON_REPO_URL ("https://github.com/oetiker/byonk"),
+                     #   addon config-slug ("byonk"), defaults
   addon.py           # ByonkAddonManager, slug discovery, repo-add, install/start, token provision/read-back
   api.py             # admin API client + typed errors
   coordinator.py     # DataUpdateCoordinator + reconciliation

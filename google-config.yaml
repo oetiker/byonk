@@ -1,0 +1,136 @@
+# Byonk Configuration
+# Maps devices to screens and provides screen definitions
+
+# Device Registration (enabled by default)
+# New devices show a 10-character registration code on screen.
+# Add the code (hyphenated format) to the 'devices' section below.
+# Set enabled: false to allow any device to connect.
+registration:
+  enabled: true
+  # screen: default  # Optional: custom screen for registration (default: uses default_screen)
+
+# Authentication mode advertised to devices via /api/setup
+# "api_key" (default) - devices send Access-Token header
+# "ed25519" - devices use Ed25519 signature authentication
+# Note: /api/display always accepts both methods regardless of this setting
+auth_mode: ed25519
+
+screens:
+  # Default screen - shows time and a message
+  default:
+    script: default.lua
+    template: default.svg
+    default_refresh: 300
+
+  # Floerli room booking display
+  floerli:
+    script: floerli.lua
+    template: floerli.svg
+    default_refresh: 900
+
+  # Public transport departures
+  transit:
+    script: transit.lua
+    template: transit.svg
+    default_refresh: 60
+
+  # Gray level test
+  graytest:
+    script: graytest.lua
+    template: graytest.svg
+    default_refresh: 3600
+
+  # Bitmap font demo (parameterized by font_prefix)
+  fontdemo-bitmap:
+    script: fontdemo-bitmap.lua
+    template: fontdemo-bitmap.svg
+    default_refresh: 3600
+
+  # Hinting demo - comparing engines and targets
+  hintdemo:
+    script: hintdemo.lua
+    template: hintdemo.svg
+    default_refresh: 3600
+
+  # Hello world tutorial screen
+  hello:
+    script: hello.lua
+    template: hello.svg
+    default_refresh: 60
+
+# Map devices to screens
+# Use MAC address (e.g., "94:A9:90:8C:6D:18") or registration code (e.g., "ABCDE-FGHJK")
+devices:
+  # Example using registration code (read from device screen):
+  # "ABCDE-FGHJK":
+  #   screen: transit
+  #   colors: "#000000,#FFFFFF,#FF0000"  # Optional: override display palette
+  #   params:
+  #     station: "Olten"
+  #
+  # Tobi's device - bus stop departures
+  "B4:A9:90:8C:6D:18":
+    screen: transit
+    params:
+      station: "Trans, Dorf"
+      limit: 8
+
+  # Test device for transit (docs sample)
+  "TR:AN:SI:T0:00:00":
+    screen: transit
+    params:
+      station: "Trans, Dorf"
+      limit: 8
+
+  # Test device for gray levels
+  "TE:ST:GR:AY:00:00":
+    screen: graytest
+    params: {}
+
+  # Test devices for bitmap font demos
+  "X11Helv":
+    screen: fontdemo-bitmap
+    params:
+      font_prefix: "X11Helv"
+  "X11LuSans":
+    screen: fontdemo-bitmap
+    params:
+      font_prefix: "X11LuSans"
+  "X11LuType":
+    screen: fontdemo-bitmap
+    params:
+      font_prefix: "X11LuType"
+  "X11Term":
+    screen: fontdemo-bitmap
+    params:
+      font_prefix: "X11Term"
+  "X11Misc":
+    screen: fontdemo-bitmap
+    params:
+      font_prefix: "X11Misc"
+
+  # Test device for hinting demo
+  "HI:NT:DE:MO:00:00":
+    screen: hintdemo
+    params: {}
+
+  # Test device for hello tutorial
+  "TE:ST:HE:LL:00:00":
+    screen: hello
+    params: {}
+
+  # Example: Device showing Floerli room "Rosa"
+  # "AA:BB:CC:DD:EE:FF":
+  #   screen: floerli
+  #   params:
+  #     room: "Rosa"
+
+  # Example: Device showing transit departures
+  # "BB:CC:DD:EE:FF:00":
+  #   screen: transit
+  #   params:
+  #     station: "Olten, Südwest"
+  #     limit: 8
+
+# Default screen for devices not in the devices list
+default_screen: default

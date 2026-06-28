@@ -270,6 +270,13 @@ devices:
             serde_yaml::Value::from("hello")
         );
         assert!(out.contains("# top comment"));
+        // Trailing top-level comment must survive AND stay after the device
+        // content (not relocated into the middle of the devices map).
+        assert!(out.contains("# trailing comment"));
+        assert!(
+            out.find("# trailing comment").unwrap() > out.rfind("screen:").unwrap(),
+            "trailing comment was relocated above device content:\n{out}"
+        );
     }
 
     #[test]
@@ -283,6 +290,13 @@ devices:
             serde_yaml::Value::from("graytest")
         );
         assert!(out.contains("# top comment"));
+        // Trailing top-level comment must survive AND stay after the device
+        // content (not relocated into the middle of the devices map).
+        assert!(out.contains("# trailing comment"));
+        assert!(
+            out.find("# trailing comment").unwrap() > out.rfind("screen:").unwrap(),
+            "trailing comment was relocated above device content:\n{out}"
+        );
     }
 
     #[test]

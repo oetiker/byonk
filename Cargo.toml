@@ -49,6 +49,8 @@ clap = { version = "4", features = ["derive"] }
 arc-swap = "1"
 yamlpath = "1"
 yamlpatch = "1"
+# Must stay in sync with the yaml_serde version yamlpatch depends on:
+# Op values are yaml_serde::Value, so a mismatched major/minor would not unify.
 yaml_serde = "0.10"
 
 # Utilities

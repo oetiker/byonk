@@ -1,0 +1,27 @@
+name: Byonk
+version: "0.15.0"
+slug: byonk
+description: Self-hosted content server for TRMNL e-ink devices
+url: https://github.com/oetiker/byonk/tree/main/homeassistant/byonk
+image: ghcr.io/oetiker/byonk
+arch:
+  - amd64
+  - aarch64
+init: true
+ports:
+  3000/tcp: 3000
+ports_description:
+  3000/tcp: TRMNL device + admin API access (point your device here)
+map:
+  - addon_config:rw
+environment:
+  CONFIG_FILE: /config/config.yaml
+  SCREENS_DIR: /config/screens
+  FONTS_DIR: /config/fonts
+  BIND_ADDR: 0.0.0.0:3000
+options:
+  admin_token: ""
+  log_level: info
+schema:
+  admin_token: "password?"
+  log_level: "list(trace|debug|info|warn|error)"

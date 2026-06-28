@@ -77,8 +77,16 @@ mod tests {
     #[tokio::test]
     async fn test_list_all_returns_all_devices() {
         let registry = InMemoryRegistry::new();
-        let d1 = Device::new(DeviceId::new("AA:AA:AA:AA:AA:AA"), DeviceModel::OG, "1".into());
-        let d2 = Device::new(DeviceId::new("BB:BB:BB:BB:BB:BB"), DeviceModel::X, "2".into());
+        let d1 = Device::new(
+            DeviceId::new("AA:AA:AA:AA:AA:AA"),
+            DeviceModel::OG,
+            "1".into(),
+        );
+        let d2 = Device::new(
+            DeviceId::new("BB:BB:BB:BB:BB:BB"),
+            DeviceModel::X,
+            "2".into(),
+        );
         registry.upsert(d1).await.unwrap();
         registry.upsert(d2).await.unwrap();
 

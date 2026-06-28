@@ -127,7 +127,10 @@ fn parse_options(raw: serde_yaml::Value) -> Result<Vec<EnumOption>, String> {
     let mut out = Vec::new();
     for item in seq {
         if let Some(s) = item.as_str() {
-            out.push(EnumOption { value: s.to_string(), label: s.to_string() });
+            out.push(EnumOption {
+                value: s.to_string(),
+                label: s.to_string(),
+            });
         } else if let Some(map) = item.as_mapping() {
             let value = map
                 .get(serde_yaml::Value::from("value"))
@@ -162,8 +165,8 @@ pub fn parse_schema(yaml: &str) -> Result<ParamSchema, String> {
             .as_str()
             .ok_or_else(|| "param keys must be strings".to_string())?
             .to_string();
-        let raw: RawField = serde_yaml::from_value(v)
-            .map_err(|e| format!("param `{name}`: {e}"))?;
+        let raw: RawField =
+            serde_yaml::from_value(v).map_err(|e| format!("param `{name}`: {e}"))?;
 
         let options = match raw.options {
             Some(o) => parse_options(o)?,
@@ -227,7 +230,11 @@ pub fn validate_params(
         }
     }
 
-    if errors.is_empty() { Ok(()) } else { Err(errors) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 fn check_value(field: &ParamField, value: &serde_yaml::Value) -> Result<(), String> {
@@ -260,7 +267,9 @@ fn check_value(field: &ParamField, value: &serde_yaml::Value) -> Result<(), Stri
                 .as_str()
                 .ok_or_else(|| format!("param `{name}` must be one of the enum values"))?;
             if !field.options.iter().any(|o| o.value == s) {
-                return Err(format!("param `{name}` value `{s}` is not an allowed option"));
+                return Err(format!(
+                    "param `{name}` value `{s}` is not an allowed option"
+                ));
             }
         }
     }
@@ -354,7 +363,10 @@ mod tests {
     use std::collections::HashMap;
 
     fn params(pairs: &[(&str, serde_yaml::Value)]) -> HashMap<String, serde_yaml::Value> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     #[test]

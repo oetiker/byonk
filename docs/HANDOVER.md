@@ -1,6 +1,6 @@
 # Handover — Byonk ↔ Home Assistant
 
-_Last updated: 2026-06-28_
+_Last updated: 2026-06-28 (Phase 2 complete, PR #20)_
 
 ## Goal (the whole effort)
 
@@ -62,6 +62,8 @@ Key source: `src/api/admin/{mod,read,write}.rs`, `src/models/param_schema.rs`, `
 
 ## Deferred / fast-follow items (non-blocking, from the final review)
 
+### Phase 1 deferred
+
 1. Convert the per-handler `require_admin` call into a nested-router **middleware layer** so a future admin endpoint can't silently skip auth.
 2. Reconcile write-path screen validation (config-only) with `ContentPipeline::resolve_screen`'s filesystem auto-discovery — or document that admin writes require a configured `screens:` entry.
 3. Minor hardening: `extract_params_block` should require the `@params` marker inside a `--[[ ]]` comment; surface `persist` rollback-write failures; `config_writer` insert assumes 2-space indent and a non-flow `devices:` map.
@@ -75,6 +77,6 @@ Key source: `src/api/admin/{mod,read,write}.rs`, `src/models/param_schema.rs`, `
 
 ## Build / verify
 
-- `make check` — fmt + clippy + tests (all green as of Phase 1).
+- `make check` — fmt + clippy + tests (all green as of Phase 2).
 - `make docs` — mdBook build (clean).
 - `make build` / `make release`.

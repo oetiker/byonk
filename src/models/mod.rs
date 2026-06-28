@@ -10,6 +10,6 @@ pub use config::{
 pub use device::{verify_ed25519_signature, ApiKey, Device, DeviceId, DeviceModel, Ed25519Error};
 pub use display_spec::DisplaySpec;
 pub use param_schema::{
-    extract_params_block, parse_schema, schema_for_script, EnumOption, ParamField, ParamSchema,
-    ParamType,
+    extract_params_block, parse_schema, schema_for_script, validate_params, EnumOption, ParamField,
+    ParamSchema, ParamType,
 };

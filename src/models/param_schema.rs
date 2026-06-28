@@ -10,6 +10,8 @@
 //! ```
 //! It is parsed as YAML — never executed.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -202,6 +204,83 @@ pub fn schema_for_script(lua_source: &str) -> Result<Option<ParamSchema>, String
     }
 }
 
+/// Validate a params map against a schema. Returns all problems found (not just
+/// the first). Params not described by the schema are allowed (ignored).
+pub fn validate_params(
+    schema: &ParamSchema,
+    params: &HashMap<String, serde_yaml::Value>,
+) -> Result<(), Vec<String>> {
+    let mut errors = Vec::new();
+
+    for field in &schema.fields {
+        match params.get(&field.name) {
+            None => {
+                if field.required {
+                    errors.push(format!("missing required param `{}`", field.name));
+                }
+            }
+            Some(value) => {
+                if let Err(e) = check_value(field, value) {
+                    errors.push(e);
+                }
+            }
+        }
+    }
+
+    if errors.is_empty() { Ok(()) } else { Err(errors) }
+}
+
+fn check_value(field: &ParamField, value: &serde_yaml::Value) -> Result<(), String> {
+    let name = &field.name;
+    match field.param_type {
+        ParamType::String | ParamType::Color | ParamType::Url => {
+            if !value.is_string() {
+                return Err(format!("param `{name}` must be a string"));
+            }
+        }
+        ParamType::Bool => {
+            if !value.is_bool() {
+                return Err(format!("param `{name}` must be a boolean"));
+            }
+        }
+        ParamType::Int => {
+            let n = value
+                .as_i64()
+                .ok_or_else(|| format!("param `{name}` must be an integer"))?;
+            check_range(field, n as f64)?;
+        }
+        ParamType::Float => {
+            let n = value
+                .as_f64()
+                .ok_or_else(|| format!("param `{name}` must be a number"))?;
+            check_range(field, n)?;
+        }
+        ParamType::Enum => {
+            let s = value
+                .as_str()
+                .ok_or_else(|| format!("param `{name}` must be one of the enum values"))?;
+            if !field.options.iter().any(|o| o.value == s) {
+                return Err(format!("param `{name}` value `{s}` is not an allowed option"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_range(field: &ParamField, n: f64) -> Result<(), String> {
+    if let Some(min) = field.min {
+        if n < min {
+            return Err(format!("param `{}` must be >= {min}", field.name));
+        }
+    }
+    if let Some(max) = field.max {
+        if n > max {
+            return Err(format!("param `{}` must be <= {max}", field.name));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,5 +349,45 @@ mod tests {
     fn test_schema_for_script_err_when_malformed() {
         let lua = "--[[ @params\nk:\n  type: banana\n]]\n";
         assert!(schema_for_script(lua).is_err());
+    }
+
+    use std::collections::HashMap;
+
+    fn params(pairs: &[(&str, serde_yaml::Value)]) -> HashMap<String, serde_yaml::Value> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    }
+
+    #[test]
+    fn test_validate_missing_required() {
+        let schema = parse_schema("station:\n  type: string\n  required: true\n").unwrap();
+        let errs = validate_params(&schema, &params(&[])).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("station")));
+    }
+
+    #[test]
+    fn test_validate_type_mismatch() {
+        let schema = parse_schema("limit:\n  type: int\n").unwrap();
+        let errs = validate_params(&schema, &params(&[("limit", "abc".into())])).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("limit")));
+    }
+
+    #[test]
+    fn test_validate_min_max() {
+        let schema = parse_schema("limit:\n  type: int\n  min: 1\n  max: 30\n").unwrap();
+        assert!(validate_params(&schema, &params(&[("limit", 50i64.into())])).is_err());
+        assert!(validate_params(&schema, &params(&[("limit", 8i64.into())])).is_ok());
+    }
+
+    #[test]
+    fn test_validate_enum_membership() {
+        let schema = parse_schema("k:\n  type: enum\n  options: [a, b]\n").unwrap();
+        assert!(validate_params(&schema, &params(&[("k", "c".into())])).is_err());
+        assert!(validate_params(&schema, &params(&[("k", "a".into())])).is_ok());
+    }
+
+    #[test]
+    fn test_validate_ok_when_optional_absent() {
+        let schema = parse_schema("station:\n  type: string\n").unwrap();
+        assert!(validate_params(&schema, &params(&[])).is_ok());
     }
 }

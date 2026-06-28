@@ -11,15 +11,12 @@ from homeassistant.components.hassio import (
     get_supervisor_client,
 )
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.singleton import singleton
 
 from .const import ADDON_CONFIG_SLUG, ADDON_NAME, BYONK_ADDON_REPO_URL, DEFAULT_PORT
 
 _LOGGER = logging.getLogger(__name__)
-DATA_ADDON_MANAGER = "byonk_addon_manager"
 
 
-@singleton(DATA_ADDON_MANAGER)
 @callback
 def _get_addon_manager(hass: HomeAssistant, slug: str) -> AddonManager:
     return AddonManager(hass, _LOGGER, ADDON_NAME, slug)
@@ -86,8 +83,12 @@ async def async_provision_token(hass: HomeAssistant, slug: str) -> str:
 
 async def async_read_token(hass: HomeAssistant, slug: str) -> str | None:
     """Read the admin token back from the add-on option (single source of truth)."""
-    mgr = _get_addon_manager(hass, slug)
-    info = await mgr.async_get_addon_info()
+    try:
+        mgr = _get_addon_manager(hass, slug)
+        info = await mgr.async_get_addon_info()
+    except (AddonError, KeyError):
+        # Supervisor unavailable or add-on not yet queryable — treat as no token.
+        return None
     token = (info.options or {}).get("admin_token")
     return token or None
 

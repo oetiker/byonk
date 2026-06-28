@@ -1,0 +1,9 @@
+{
+  "config": {
+    "abort": {
+      "not_hassio": "Byonk requires the Byonk add-on, which needs a Home Assistant Supervised or HAOS installation.",
+      "single_instance_allowed": "Byonk is already configured.",
+      "addon_error": "Could not install or start the Byonk add-on automatically. Add the repository https://github.com/oetiker/byonk to the add-on store, install the Byonk add-on, then retry."
+    }
+  }
+}

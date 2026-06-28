@@ -1,0 +1,87 @@
+"""Data coordinator for byonk."""
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+from datetime import timedelta
+import logging
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+
+from .api import ByonkApiError, ByonkAuthError, ByonkClient
+from .const import DOMAIN, UPDATE_INTERVAL_SECONDS
+
+_LOGGER = logging.getLogger(__name__)
+
+type ByonkConfigEntry = ConfigEntry["ByonkCoordinator"]
+
+
+@dataclass(frozen=True)
+class ByonkData:
+    devices: list[dict]
+    pending: list[dict]
+    screens: list[dict]
+    panels: list[dict]
+    dither: list[str]
+    config: dict
+
+    def screen_names(self) -> list[str]:
+        return [s["name"] for s in self.screens]
+
+    def panel_names(self) -> list[str]:
+        return [p["name"] for p in self.panels]
+
+    def screen_params(self, name: str) -> list[dict]:
+        for s in self.screens:
+            if s["name"] == name:
+                return s.get("params") or []
+        return []
+
+    def default_screen(self) -> str | None:
+        return self.config.get("default_screen")
+
+    def registration_enabled(self) -> bool:
+        return bool(self.config.get("registration", {}).get("enabled", False))
+
+    def auth_mode(self) -> str | None:
+        return self.config.get("auth_mode")
+
+
+class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
+    def __init__(
+        self, hass: HomeAssistant, entry: ByonkConfigEntry, client: ByonkClient, slug: str
+    ) -> None:
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=DOMAIN,
+            update_interval=timedelta(seconds=UPDATE_INTERVAL_SECONDS),
+            always_update=False,
+        )
+        self.client = client
+        self.entry = entry
+        self.slug = slug
+
+    async def _async_update_data(self) -> ByonkData:
+        try:
+            devices, pending, screens, config = await asyncio.gather(
+                self.client.async_get_devices(),
+                self.client.async_get_pending(),
+                self.client.async_get_screens(),
+                self.client.async_get_config(),
+            )
+        except ByonkAuthError as err:
+            raise ConfigEntryAuthFailed(str(err)) from err
+        except ByonkApiError as err:
+            raise UpdateFailed(str(err)) from err
+        return ByonkData(
+            devices=devices,
+            pending=pending,
+            screens=screens.get("screens", []),
+            panels=screens.get("panels", []),
+            dither=screens.get("dither_algorithms", []),
+            config=config,
+        )

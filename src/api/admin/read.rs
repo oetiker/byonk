@@ -10,6 +10,68 @@ use crate::services::DeviceRegistry;
 use super::require_admin;
 
 #[derive(Serialize)]
+pub struct PendingDevice {
+    pub mac: String,
+    pub registration_code: String,
+    pub model: String,
+    pub firmware_version: String,
+    pub last_seen: String,
+}
+
+pub async fn pending(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<PendingDevice>>, ApiError> {
+    require_admin(&state, &headers)?;
+
+    let config = state.config.load();
+    let mut out = Vec::new();
+    for d in state.registry.list_all().await? {
+        let mac = d.device_id.to_string();
+        let code = d.api_key.registration_code();
+        if config.is_device_registered(&mac, Some(&code)) {
+            continue;
+        }
+        out.push(PendingDevice {
+            mac,
+            registration_code: code,
+            model: d.model.to_string(),
+            firmware_version: d.firmware_version.clone(),
+            last_seen: d.last_seen.to_rfc3339(),
+        });
+    }
+    Ok(Json(out))
+}
+
+pub async fn get_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&state, &headers)?;
+
+    let text = state
+        .asset_loader
+        .read_config_string()
+        .map_err(|e| ApiError::Internal(format!("read config: {e}")))?;
+    let mut value: serde_yaml::Value = serde_yaml::from_str(&text)
+        .map_err(|e| ApiError::Internal(format!("parse config: {e}")))?;
+
+    // Strip admin.token from the response.
+    if let Some(map) = value.as_mapping_mut() {
+        if let Some(admin) = map
+            .get_mut(serde_yaml::Value::from("admin"))
+            .and_then(|a| a.as_mapping_mut())
+        {
+            admin.remove(serde_yaml::Value::from("token"));
+        }
+    }
+
+    let json =
+        serde_json::to_value(&value).map_err(|e| ApiError::Internal(format!("to json: {e}")))?;
+    Ok(Json(json))
+}
+
+#[derive(Serialize)]
 pub struct AdminDevice {
     /// Config key (MAC or registration code) if configured, else the MAC.
     pub key: String,

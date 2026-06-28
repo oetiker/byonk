@@ -37,6 +37,8 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 /// All admin routes, to be nested under `/api/admin`.
 pub fn admin_router() -> Router<AppState> {
-    Router::new().route("/devices", get(read::list_devices))
-    // read.rs/write.rs add more routes in later tasks
+    Router::new()
+        .route("/devices", get(read::list_devices))
+        .route("/pending", get(read::pending))
+        .route("/config", get(read::get_config))
 }

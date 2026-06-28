@@ -1,0 +1,14 @@
+{
+  "domain": "byonk",
+  "name": "Byonk",
+  "version": "0.1.0",
+  "documentation": "https://github.com/oetiker/byonk",
+  "issue_tracker": "https://github.com/oetiker/byonk/issues",
+  "codeowners": ["@oetiker"],
+  "config_flow": true,
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "dependencies": [],
+  "after_dependencies": ["hassio"],
+  "requirements": []
+}

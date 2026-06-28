@@ -17,7 +17,7 @@ refresh_rate:
   mode: box
 ]]
 -- Google Photos shared album display
--- Fetches random photos from a shared Google Photos album
+-- Shows photos from a shared Google Photos album in order, one per refresh
 -- Uses HTML scraping of the shared album page (no OAuth required)
 
 local width = layout.width
@@ -99,12 +99,15 @@ if #image_urls == 0 then
   return error_return("No images found in album")
 end
 
--- Select random image using real system time (not overrideable time_now)
-local seed = os.time()
-math.randomseed(seed)
-local idx = math.random(#image_urls)
+-- Select image in album order, advancing one per refresh interval.
+-- Stateless: the "pointer" is derived from real system time (not overrideable
+-- time_now), so it survives restarts. floor(now/refresh_rate) ticks up by one
+-- each interval, walking the album in order and wrapping at the end.
+refresh_rate = tonumber(refresh_rate) or 3600
+if refresh_rate <= 0 then refresh_rate = 3600 end
+local idx = (math.floor(os.time() / refresh_rate) % #image_urls) + 1
 local selected_url = image_urls[idx]
-log_info("Random: seed=" .. seed .. " idx=" .. idx .. "/" .. #image_urls)
+log_info("Sequential: idx=" .. idx .. "/" .. #image_urls)
 
 -- Append size parameters for device dimensions
 local sized_url = selected_url .. "=w" .. width .. "-h" .. height .. "-no"

@@ -155,6 +155,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/time/", get(api::handle_time))
         // Health check
         .route("/health", get(|| async { "OK" }))
+        // Admin API
+        .nest("/api/admin", crate::api::admin::admin_router())
         // Add state and tracing with request IDs
         .with_state(state)
         .layer(TraceLayer::new_for_http().make_span_with(RequestIdSpan))

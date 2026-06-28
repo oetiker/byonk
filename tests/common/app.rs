@@ -127,6 +127,72 @@ impl TestApp {
         }
     }
 
+    /// Admin app whose config is EMBEDDED only (writes will return 409),
+    /// with the given admin token enabled.
+    pub fn new_admin(token: &str) -> Self {
+        let asset_loader = Arc::new(AssetLoader::new(None, None, None));
+        let mut config = AppConfig::load_from_assets(&asset_loader).expect("load config");
+        config.admin.token = Some(token.to_string());
+        let state =
+            create_app_state_with_config(asset_loader, Arc::new(config)).expect("create state");
+        let registry = state.registry.clone();
+        let content_cache = state.content_cache.clone();
+        let router = build_router(state);
+        Self {
+            router,
+            registry,
+            content_cache,
+        }
+    }
+
+    /// Admin app backed by a real config FILE seeded from the embedded default
+    /// (writes succeed). Returns (app, config_path). `dir` must outlive the app.
+    pub fn new_admin_with_file(token: &str, dir: &std::path::Path) -> (Self, std::path::PathBuf) {
+        let config_path = dir.join("config.yaml");
+        let embedded = AssetLoader::new(None, None, None);
+        let yaml = embedded.read_config_string().expect("read embedded config");
+        std::fs::write(&config_path, format!("admin:\n  token: {token}\n{yaml}"))
+            .expect("write config file");
+
+        let asset_loader = Arc::new(AssetLoader::new(None, None, Some(config_path.clone())));
+        let config = AppConfig::load_from_assets(&asset_loader).expect("load config");
+        let state =
+            create_app_state_with_config(asset_loader, Arc::new(config)).expect("create state");
+        let registry = state.registry.clone();
+        let content_cache = state.content_cache.clone();
+        let router = build_router(state);
+        (
+            Self {
+                router,
+                registry,
+                content_cache,
+            },
+            config_path,
+        )
+    }
+
+    pub async fn patch_json(
+        &self,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: &str,
+    ) -> TestResponse {
+        let mut builder = Request::patch(path).header("Content-Type", "application/json");
+        for (n, v) in headers {
+            builder = builder.header(*n, *v);
+        }
+        self.request(builder.body(Body::from(body.to_string())).unwrap())
+            .await
+    }
+
+    pub async fn delete(&self, path: &str, headers: &[(&str, &str)]) -> TestResponse {
+        let mut builder = Request::delete(path);
+        for (n, v) in headers {
+            builder = builder.header(*n, *v);
+        }
+        self.request(builder.body(Body::empty()).unwrap()).await
+    }
+
     /// Register a device and return the api_key
     pub async fn register_device(&self, mac: &str) -> String {
         let headers = [("ID", mac), ("FW-Version", "1.0.0"), ("Model", "og")];

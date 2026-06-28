@@ -421,7 +421,7 @@ devices:
 
 The script scrapes the shared album HTML page to extract `lh3.googleusercontent.com` image URLs, then:
 
-1. Selects a random image from the album
+1. Selects an image from the album in order, advancing by one each refresh interval (derived statelessly from the clock, so it survives restarts)
 2. Appends size parameters (`=w{width}-h{height}-no`) to request device-sized images
 3. Fetches and base64-encodes the image for embedding in SVG
 4. Caches album HTML for 1 hour and images for 24 hours

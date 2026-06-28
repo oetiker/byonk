@@ -210,9 +210,9 @@ pub async fn delete_device(
 
 #[derive(Deserialize)]
 pub struct SettingsWrite {
-    pub registration_enabled: Option<bool>,
-    pub auth_mode: Option<String>,
-    pub default_screen: Option<String>,
+    pub(crate) registration_enabled: Option<bool>,
+    pub(crate) auth_mode: Option<String>,
+    pub(crate) default_screen: Option<String>,
 }
 
 pub async fn patch_settings(
@@ -224,6 +224,21 @@ pub async fn patch_settings(
     let path = require_file_config(&state)?;
     let _guard = state.write_lock.lock().await;
 
+    // 1. Validate all provided fields before touching yaml.
+    if let Some(mode) = &body.auth_mode {
+        if mode != "api_key" && mode != "ed25519" {
+            return Err(ApiError::BadRequest(
+                "auth_mode must be api_key or ed25519".into(),
+            ));
+        }
+    }
+    if let Some(screen) = &body.default_screen {
+        if !state.config.load().screens.contains_key(screen) {
+            return Err(ApiError::BadRequest(format!("unknown screen `{screen}`")));
+        }
+    }
+
+    // 2. Apply all mutations.
     let mut yaml = state
         .asset_loader
         .read_config_string()
@@ -234,22 +249,15 @@ pub async fn patch_settings(
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
     if let Some(mode) = &body.auth_mode {
-        if mode != "api_key" && mode != "ed25519" {
-            return Err(ApiError::BadRequest(
-                "auth_mode must be api_key or ed25519".into(),
-            ));
-        }
         yaml = config_writer::set_scalar(&yaml, &["auth_mode"], mode.as_str().into())
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
     if let Some(screen) = &body.default_screen {
-        if !state.config.load().screens.contains_key(screen) {
-            return Err(ApiError::BadRequest(format!("unknown screen `{screen}`")));
-        }
         yaml = config_writer::set_scalar(&yaml, &["default_screen"], screen.as_str().into())
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
 
+    // 3. Persist.
     persist(&state, &path, yaml)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }

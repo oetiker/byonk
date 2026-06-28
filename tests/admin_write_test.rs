@@ -64,6 +64,30 @@ async fn test_patch_settings_toggles_registration() {
 }
 
 #[tokio::test]
+async fn test_patch_settings_bogus_auth_mode_returns_400() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+    let resp = app
+        .patch_json("/api/admin/settings", &[AUTH], r#"{"auth_mode":"bogus"}"#)
+        .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_patch_settings_unknown_default_screen_returns_400() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+    let resp = app
+        .patch_json(
+            "/api/admin/settings",
+            &[AUTH],
+            r#"{"default_screen":"does-not-exist"}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn test_patch_then_delete_device() {
     let dir = tempfile::tempdir().unwrap();
     let (app, _) = TestApp::new_admin_with_file("secret", dir.path());

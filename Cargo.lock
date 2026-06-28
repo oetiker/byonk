@@ -358,6 +358,7 @@ dependencies = [
  "utoipa",
  "utoipa-swagger-ui",
  "wiremock",
+ "yaml_serde",
  "yamlpatch",
  "yamlpath",
 ]

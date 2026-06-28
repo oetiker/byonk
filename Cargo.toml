@@ -49,6 +49,7 @@ clap = { version = "4", features = ["derive"] }
 arc-swap = "1"
 yamlpath = "1"
 yamlpatch = "1"
+yaml_serde = "0.10"
 
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }

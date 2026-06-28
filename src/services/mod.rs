@@ -1,3 +1,4 @@
+pub mod config_writer;
 pub mod content_cache;
 pub mod content_pipeline;
 pub mod device_registry;
@@ -7,6 +8,7 @@ pub mod lua_runtime;
 pub mod renderer;
 pub mod template_service;
 
+pub use config_writer::{remove_device, set_scalar, upsert_device, ConfigWriteError};
 pub use content_cache::{CachedContent, ContentCache};
 pub use content_pipeline::{ContentPipeline, DeviceContext};
 pub use device_registry::{DeviceRegistry, InMemoryRegistry};

@@ -57,7 +57,6 @@ async fn test_broken_params_returns_schema_error() {
 }
 
 #[tokio::test]
-#[ignore] // un-ignored in Task 12 once transit.lua has @params
 async fn test_transit_has_station_param_after_headers_added() {
     // After Task 12 adds @params headers, transit exposes a `station` param.
     let app = TestApp::new_admin("secret");

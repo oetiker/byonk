@@ -1,3 +1,18 @@
+--[[ @params
+station:
+  type: string
+  label: "Stop name"
+  default: "Olten, Südwest"
+  description: "Stop name as used by the transport API"
+limit:
+  type: int
+  label: "Departures"
+  default: 8
+  min: 1
+  max: 30
+  mode: box
+  description: "Number of departures to show"
+]]
 -- Public transport departure display
 -- Fetches real-time departures from Swiss OpenData Transport API
 

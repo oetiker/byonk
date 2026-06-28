@@ -619,14 +619,24 @@ fn run_status_command() {
 async fn run_server() -> anyhow::Result<()> {
     use byonk::assets::AssetLoader;
 
-    // Initialize tracing
+    // Read HA add-on options (no-op outside the add-on). Read before tracing init
+    // so `log_level` can shape the default filter; defer the warning until logging is up.
+    let addon = byonk::addon_options::read_options(&byonk::addon_options::options_path());
+    let default_filter = byonk::addon_options::log_filter(&addon)
+        .unwrap_or_else(|| "byonk=debug,tower_http=debug".to_string());
+
+    // Initialize tracing (RUST_LOG env wins; else add-on log_level; else default)
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "byonk=debug,tower_http=debug".into()),
+                .unwrap_or_else(|_| default_filter.into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
+
+    if let byonk::addon_options::ReadResult::Malformed(msg) = &addon {
+        tracing::warn!("Ignoring add-on options: {msg}");
+    }
 
     // Create asset loader with optional external paths from env vars
     let screens_dir = std::env::var("SCREENS_DIR").ok().map(PathBuf::from);
@@ -664,8 +674,11 @@ async fn run_server() -> anyhow::Result<()> {
         _ => {}
     }
 
-    // Create application state using shared server module
-    let state = server::create_app_state(asset_loader)?;
+    // Create application state, injecting the add-on admin token (if any) into config.
+    // Explicit BYONK_ADMIN_TOKEN env still wins (server resolves env before config.admin.token).
+    let mut config = byonk::models::AppConfig::load_from_assets(&asset_loader)?;
+    byonk::addon_options::apply_to_config(&addon, &mut config);
+    let state = server::create_app_state_with_config(asset_loader, std::sync::Arc::new(config))?;
 
     // Build router: start with shared API routes, add production-only routes
     let app = server::build_router(state)

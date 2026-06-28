@@ -145,6 +145,21 @@ impl TestApp {
         }
     }
 
+    /// Build a test app from an arbitrary config (embedded assets, in-memory).
+    pub fn from_config(config: AppConfig) -> Self {
+        let asset_loader = Arc::new(AssetLoader::new(None, None, None));
+        let state =
+            create_app_state_with_config(asset_loader, Arc::new(config)).expect("create state");
+        let registry = state.registry.clone();
+        let content_cache = state.content_cache.clone();
+        let router = build_router(state);
+        Self {
+            router,
+            registry,
+            content_cache,
+        }
+    }
+
     /// Admin app backed by a real config FILE seeded from the embedded default
     /// (writes succeed). Returns (app, config_path). `dir` must outlive the app.
     pub fn new_admin_with_file(token: &str, dir: &std::path::Path) -> (Self, std::path::PathBuf) {

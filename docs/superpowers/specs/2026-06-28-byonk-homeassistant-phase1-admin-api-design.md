@@ -97,7 +97,7 @@ All endpoints are JSON, under `/api/admin/`, token-gated as above. Errors use th
 | `GET /api/admin/devices` | All known devices: union of configured devices and live-seen devices. Each entry merges configured mapping (screen, dither, panel, colors, params) with live telemetry (model, firmware, `last_seen`, `battery_voltage`, `rssi`) and the **resolved active** screen/dither/panel actually being served. |
 | `GET /api/admin/pending` | Devices that have connected but are **not registered** — includes the registration code shown on-device, model/firmware, `last_seen`. Empty when registration is disabled. |
 | `GET /api/admin/config` | The full effective configuration as JSON (devices, screens, panels, global settings). Secrets such as `admin.token` are omitted. |
-| `GET /api/admin/screens` | Enumerations the integration needs to build native forms: list of screens each with its **param schema**; list of available panel profiles; list of available dither algorithms. |
+| `GET /api/admin/screens` | Enumerations the integration needs to build native forms: list of screens each with its **param schema** (and any schema-parse error for that screen); list of available panel profiles; list of available dither algorithms. |
 
 ### Write
 
@@ -125,57 +125,103 @@ All endpoints are JSON, under `/api/admin/`, token-gated as above. Errors use th
 
 ## 5. Per-screen parameter schema
 
-### Where it lives
+The schema is **part of the screen definition** — it lives in the screen's own `.lua`
+file, so it travels with the screen (portable/shareable) and sits right next to the code
+that reads `params.*`, minimizing drift.
 
-An **optional `params_schema:` block** under each screen in `config.yaml`, beside the
-existing `script` / `template` / `default_refresh` fields. Declarative, readable without
-executing Lua, and co-located with the screen definition.
+### Where it lives: a `@params` header in the `.lua` file
 
-*(Alternative considered and rejected for Phase 1: embedding the schema inside the Lua
-script. Rejected to avoid having to execute Lua merely to read metadata, and to keep the
-schema serializable straight from config.)*
+A YAML block inside a Lua block-comment at the top of the script, **parsed textually —
+never executed**. byonk extracts the text between the `@params` marker and the closing
+`]]`, then parses it as YAML.
 
-### Shape
+```lua
+--[[ @params
+station:
+  type: string
+  label: "Stop name"
+  required: true
+  description: "Stop name as used by the transport API"
+limit:
+  type: int
+  label: "Departures"
+  default: 8
+  min: 1
+  max: 30
+  unit: ""
+  mode: box
+]]
 
-Each schema entry is a list of field descriptors:
-
-```yaml
-screens:
-  transit:
-    script: transit.lua
-    template: transit.svg
-    default_refresh: 60
-    params_schema:
-      - name: station
-        type: string
-        required: true
-        description: "Stop name as used by the transport API"
-      - name: limit
-        type: int
-        required: false
-        default: 8
-        description: "Number of departures to show"
+local station = params.station or "Olten, Südwest"
+local limit   = params.limit or 8
 ```
 
-Field descriptor fields:
+*(Alternatives considered and rejected: `params_schema:` in `config.yaml` — far from the
+code, drifts, and not portable with the screen; a sidecar file — proliferates files. A
+Lua-executed metadata table was rejected to avoid running scripts merely to read
+metadata.)*
 
-- `name` (string, required)
-- `type` (enum, required): one of `string | int | float | bool | enum | color | url`
+### Schema shape
+
+The block is a mapping of **param key → field descriptor**.
+
+**Core fields (always supported):**
+
+- `type` (required): one of `string | int | float | bool | enum | color | url`
 - `required` (bool, default `false`)
 - `default` (any, optional)
-- `description` (string, optional)
-- `options` (list, required **iff** `type == enum`): allowed values
+- `description` (string, optional) — helper text
+- `label` (string, optional) — display name; falls back to a prettified key
 
-### Behavior
+**UI-helper fields (all included in v1):**
 
-- Exposed via `GET /api/admin/screens`.
-- Used to **validate** `params` on `POST`/`PATCH` device writes. Screens with no
-  `params_schema` accept arbitrary params (back-compat; no validation).
+- Numbers (`int`/`float`): `min`, `max`, `step`, `unit` (e.g. `"s"`, `"dBm"`),
+  `mode` (`box | slider`)
+- `enum`: `options` as a list of `{ value, label }` pairs (a bare list of values is also
+  accepted and labels default to the values)
+- `sensitive` (bool) — mask the field (rendered as a password input)
+- `multiline` (bool) — long-text input
+- `hidden` (bool) — debug-only params (e.g. `test_timestamp`); known to byonk/docs but
+  omitted from HA forms by default
+- `advanced` (bool) — shown under an "advanced" expander in the form
+
+**Deferred to a later phase:** `pattern` (regex), `group`/`section` (form grouping),
+`show_if` (conditional visibility).
+
+### Validation at ingestion (warn, non-fatal)
+
+When a screen is loaded (startup and on reload), byonk parses and validates its `@params`
+block:
+
+- A **well-formed** block is stored and exposed via `GET /api/admin/screens`.
+- A **malformed** block (bad YAML, unknown `type`, `enum` without `options`, etc.) is
+  **logged as a clear error and surfaced in `GET /api/admin/screens`** for that screen,
+  but **byonk keeps serving the screen** with its params treated as unvalidated. One
+  screen's typo never takes the server down.
+- A screen with **no `@params` block** is valid and accepts arbitrary params
+  (back-compat).
+
+### Use
+
+- Exposed via `GET /api/admin/screens` (with per-screen parse errors, if any).
+- Used to **validate** `params` on `POST`/`PATCH` device writes, per field `type`,
+  `required`, and numeric/enum constraints. Screens without a valid schema skip param
+  validation.
 - Keeping the schema in sync with the Lua implementation is the screen author's
-  responsibility (same as any schema/impl split). Existing screens in this repo gain
-  `params_schema` blocks as part of this phase where their params are known
-  (`transit`, `gphoto`, `mandelbrot`, `fontdemo-bitmap`, …); screens without one keep
-  working.
+  responsibility (advisory, same as any schema/impl split).
+
+### Scope of work: schema **all** screens in this repo
+
+Every screen in `screens/` gets a `@params` header as part of Phase 1, derived by reading
+each script's `params.*` usage:
+
+| Screen | Params |
+|---|---|
+| `transit` | `station` str (def "Olten, Südwest"); `limit` int (def 8, min 1, max 30) |
+| `gphoto` | `album_url` url **(required)**; `show_status` bool (def false); `refresh_rate` int (def 3600, unit "s") |
+| `floerli` | `room` str (def "Rosa"); `test_timestamp` int (**hidden**, debug) |
+| `fontdemo-bitmap` | `font_prefix` **enum** [X11Helv, X11LuSans, X11LuType, X11Term, X11Misc] (def X11Helv) |
+| `default`, `graytest`, `hello`, `hintdemo`, `calibrator`, `mandelbrot`, `fontdemo-terminus` | no params (no `@params` block, or an empty one) |
 
 ---
 
@@ -240,13 +286,19 @@ afterward.
 - `src/server.rs` — add `/api/admin/*` routes; `AppState.config` → arc-swap; admin auth
   middleware.
 - `src/api/` — new admin handlers module.
-- `src/models/config.rs` — `params_schema` on screen config; optional `admin.token`; JSON
-  (de)serialization for API responses; helpers to add/edit/remove device blocks and patch
-  globals.
+- `src/models/config.rs` — optional `admin.token`; JSON (de)serialization for API
+  responses; helpers to add/edit/remove device blocks and patch globals.
+- New module for the **`@params` schema**: types for the field descriptors, a textual
+  extractor that pulls the `@params` block out of a `.lua` file, a parser/validator
+  (warn-non-fatal), and param-value validation against a schema.
+- Screen loading (`AssetLoader` / `ContentPipeline` / `RenderService` where `.lua` files
+  are read) — extract + validate each screen's `@params` at load/reload; cache the parsed
+  schema and any parse error per screen.
 - `src/services/device_registry.rs` — a method to list all devices (registry is currently
   find-by-id only); compute pending/unregistered set.
 - `src/services/content_pipeline.rs` — read config via the swappable handle.
 - New module for comment-preserving YAML patching (wrapping `yamlpath`/`yamlpatch`).
+- `screens/*.lua` — add `@params` headers to all screens (per §5 table).
 - `Cargo.toml` — add `yamlpath`, `yamlpatch`, `arc-swap`.
 
 ---
@@ -257,9 +309,12 @@ Follow the project's TDD discipline; write tests first.
 
 - **YAML patch unit tests:** add/edit/remove device + global scalar edits each preserve
   surrounding comments; malformed inputs rejected.
-- **Param-schema tests:** schema parses from config; serializes correctly via
-  `GET /api/admin/screens`; param validation accepts/rejects correctly per type and
-  `required`.
+- **Param-schema tests:** `@params` extraction from a `.lua` file (incl. no-block and
+  empty-block cases); well-formed schema parses and serializes correctly via
+  `GET /api/admin/screens`; a malformed block is reported as an error there **without**
+  failing the server and the screen still renders; param validation accepts/rejects per
+  `type`, `required`, and numeric/enum constraints; all repo screens' `@params` headers
+  parse cleanly.
 - **API integration tests** (axum harness, mirroring existing `tests/`): each endpoint's
   happy path + error paths — `401` (wrong token), `404` (admin disabled, unknown device),
   `409` (duplicate key, embedded-only config), `400` (validation failures).
@@ -273,8 +328,8 @@ Follow the project's TDD discipline; write tests first.
 
 - `CHANGES.md` — add entries under **Unreleased** for the admin API, param schemas, and
   hot-reload.
-- `docs/src/` — new page documenting the admin API (endpoints, auth, `params_schema`
-  format), wired into `SUMMARY.md`.
+- `docs/src/` — new page documenting the admin API (endpoints, auth) and the `@params`
+  screen-schema format, wired into `SUMMARY.md`.
 
 ---
 
@@ -284,8 +339,11 @@ Follow the project's TDD discipline; write tests first.
   device-block strategy and scalar-only global Replaces (§6). Covered by round-trip tests.
 - **Hot-reload touching many config readers** → contained by the arc-swap accessor; the
   pipeline is the one non-trivial consumer and is explicitly addressed (§7).
-- **Schema drift** between `params_schema` and Lua → author responsibility; validation is
-  advisory and screens without a schema stay permissive (back-compat).
+- **Schema drift** between the `@params` header and the Lua code → minimized by
+  co-location in the same file; validation is advisory and screens without a schema stay
+  permissive (back-compat).
+- **`@params` extractor edge cases** (nested `]]`, CRLF, BOM, indentation) → covered by
+  extractor unit tests; malformed blocks degrade gracefully (warn, serve unvalidated).
 - **Empty/flow constructs in existing config** (e.g. `params: {}`) → exercised by tests
   against the repo's real `config.yaml` to catch patcher edge cases early.
 

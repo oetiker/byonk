@@ -1,8 +1,13 @@
 //! Admin/management API (`/api/admin/*`), gated by a bearer token.
 
 pub mod read;
+pub mod write;
 
-use axum::{http::HeaderMap, routing::get, Router};
+use axum::{
+    http::HeaderMap,
+    routing::{get, patch},
+    Router,
+};
 
 use crate::error::ApiError;
 use crate::server::AppState;
@@ -38,7 +43,11 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 /// All admin routes, to be nested under `/api/admin`.
 pub fn admin_router() -> Router<AppState> {
     Router::new()
-        .route("/devices", get(read::list_devices))
+        .route("/devices", get(read::list_devices).post(write::add_device))
+        .route(
+            "/devices/:key",
+            patch(write::patch_device).delete(write::delete_device),
+        )
         .route("/pending", get(read::pending))
         .route("/config", get(read::get_config))
         .route("/screens", get(read::screens))

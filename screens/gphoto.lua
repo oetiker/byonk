@@ -103,6 +103,8 @@ end
 -- Stateless: the "pointer" is derived from real system time (not overrideable
 -- time_now), so it survives restarts. floor(now/refresh_rate) ticks up by one
 -- each interval, walking the album in order and wrapping at the end.
+refresh_rate = tonumber(refresh_rate) or 3600
+if refresh_rate <= 0 then refresh_rate = 3600 end
 local idx = (math.floor(os.time() / refresh_rate) % #image_urls) + 1
 local selected_url = image_urls[idx]
 log_info("Sequential: idx=" .. idx .. "/" .. #image_urls)

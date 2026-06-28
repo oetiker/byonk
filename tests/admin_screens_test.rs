@@ -2,6 +2,7 @@ mod common;
 
 use axum::http::StatusCode;
 use common::TestApp;
+use tempfile::tempdir;
 
 const AUTH: (&str, &str) = ("Authorization", "Bearer secret");
 
@@ -24,6 +25,35 @@ async fn test_screens_lists_screens_and_enums() {
         .unwrap()
         .iter()
         .any(|d| d == "atkinson"));
+}
+
+#[tokio::test]
+async fn test_screens_unauthorized() {
+    let app = TestApp::new_admin("secret");
+    let resp = app.get("/api/admin/screens").await;
+    assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_broken_params_returns_schema_error() {
+    let dir = tempdir().expect("tempdir");
+    let app = TestApp::new_admin_with_screens("secret", dir.path());
+
+    let resp = app.get_with_headers("/api/admin/screens", &[AUTH]).await;
+    assert_eq!(resp.status, StatusCode::OK);
+
+    let json: serde_json::Value = resp.json();
+    let screens = json["screens"].as_array().expect("screens array");
+    let broken = screens
+        .iter()
+        .find(|s| s["name"] == "broken")
+        .expect("broken screen in response");
+
+    assert!(
+        broken["schema_error"].is_string(),
+        "expected schema_error to be a string, got: {:?}",
+        broken["schema_error"]
+    );
 }
 
 #[tokio::test]

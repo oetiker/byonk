@@ -171,6 +171,48 @@ impl TestApp {
         )
     }
 
+    /// Admin app with a custom screens directory containing a `broken.lua` with an
+    /// invalid `@params` block, wired up via a fresh `config.yaml` on disk.
+    /// Use this to exercise the warn-not-fatal `schema_error` path.
+    /// `dir` must outlive the app.
+    pub fn new_admin_with_screens(token: &str, dir: &std::path::Path) -> Self {
+        // Create screens/ subdirectory with broken.lua and broken.svg
+        let screens_dir = dir.join("screens");
+        std::fs::create_dir_all(&screens_dir).expect("create screens dir");
+
+        std::fs::write(
+            screens_dir.join("broken.lua"),
+            "--[[ @params\nk:\n  type: banana\n]]\n",
+        )
+        .expect("write broken.lua");
+
+        std::fs::write(
+            screens_dir.join("broken.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg"></svg>"#,
+        )
+        .expect("write broken.svg");
+
+        // Write a minimal config.yaml pointing at the broken screen
+        let config_path = dir.join("config.yaml");
+        let yaml = format!(
+            "admin:\n  token: {token}\ndefault_screen: broken\nscreens:\n  broken:\n    script: broken.lua\n    template: broken.svg\n"
+        );
+        std::fs::write(&config_path, yaml).expect("write config.yaml");
+
+        let asset_loader = Arc::new(AssetLoader::new(Some(screens_dir), None, Some(config_path)));
+        let config = AppConfig::load_from_assets(&asset_loader).expect("load config");
+        let state =
+            create_app_state_with_config(asset_loader, Arc::new(config)).expect("create state");
+        let registry = state.registry.clone();
+        let content_cache = state.content_cache.clone();
+        let router = build_router(state);
+        Self {
+            router,
+            registry,
+            content_cache,
+        }
+    }
+
     pub async fn patch_json(
         &self,
         path: &str,

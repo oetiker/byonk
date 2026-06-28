@@ -182,7 +182,8 @@ pub struct AppConfig {
 pub struct PanelConfig {
     /// Human-readable display name (e.g. "TRMNL OG (4-grey)")
     pub name: String,
-    /// Exact string match against firmware Board header
+    /// Exact string match against the firmware `Board` header (or the `Model`
+    /// header as a fallback, for devices that report panel identity there).
     #[serde(rename = "match")]
     pub match_pattern: Option<String>,
     pub width: Option<u32>,

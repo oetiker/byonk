@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 import logging
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -77,7 +77,7 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
             raise ConfigEntryAuthFailed(str(err)) from err
         except ByonkApiError as err:
             raise UpdateFailed(str(err)) from err
-        return ByonkData(
+        data = ByonkData(
             devices=devices,
             pending=pending,
             screens=screens.get("screens", []),
@@ -85,3 +85,29 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
             dither=screens.get("dither_algorithms", []),
             config=config,
         )
+        self._async_reconcile(data)
+        return data
+
+    def _async_reconcile(self, data: ByonkData) -> None:
+        existing = {
+            sub.unique_id: sub_id
+            for sub_id, sub in self.entry.subentries.items()
+            if sub.subentry_type == "device"
+        }
+        registered_keys = {
+            d["key"] for d in data.devices if d.get("registered")
+        }
+        for key in registered_keys - set(existing):
+            self.hass.config_entries.async_add_subentry(
+                self.entry,
+                ConfigSubentry(
+                    data={"key": key},
+                    subentry_type="device",
+                    title=key,
+                    unique_id=key,
+                ),
+            )
+        for key in set(existing) - registered_keys:
+            self.hass.config_entries.async_remove_subentry(
+                self.entry, existing[key]
+            )

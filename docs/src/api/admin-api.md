@@ -74,6 +74,8 @@ config mapping, plus any configured devices that have never connected yet.
 Field notes:
 - `key` — the config map key for this device (MAC or registration code).
 - `registered` — `true` if the device appears in the `devices:` config section.
+- `registration_code` is an empty string for devices that appear in config but have never
+  connected (it is never `null`).
 - Telemetry fields (`model`, `firmware_version`, `last_seen`, `battery_voltage`, `rssi`) are
   `null` for devices that are configured but have never connected.
 - `screen`, `dither`, `panel`, `colors`, `params` reflect the resolved config mapping; they
@@ -175,6 +177,7 @@ supported dither algorithms.
 Field notes:
 - `schema_error` is `null` when the schema parsed successfully, or a string describing the
   error when the `@params` block is malformed or the script file cannot be read.
+- `width` and `height` may be `null` for panels without explicit dimensions.
 - Optional `ParamField` keys (`label`, `description`, `min`, `max`, `step`, `unit`, `mode`,
   `options`) are omitted from the JSON when not set.
 
@@ -211,9 +214,16 @@ Required fields: `key`, `screen`. All other fields are optional.
 
 ### PATCH /api/admin/devices/:key
 
-Update an existing device mapping. Only the provided fields are changed; omitted fields
-keep their current values. The `:key` in the URL must match an existing entry in the
+Update an existing device mapping. The `:key` in the URL must match an existing entry in the
 `devices:` config section.
+
+The top-level fields (`screen`, `panel`, `dither`, `colors`) merge individually: omitted
+ones keep their current values.
+
+**`params` is a full replacement:** when the `params` key is present in the request body, it
+replaces the device's entire param map. To change a single param, send the complete set of
+params including any unchanged ones. Omit the `params` key entirely to leave existing params
+untouched.
 
 **Request body** (all fields optional):
 
@@ -221,7 +231,7 @@ keep their current values. The `:key` in the URL must match an existing entry in
 {
   "screen": "transit",
   "dither": "floyd-steinberg",
-  "params": { "limit": 5 }
+  "params": { "station": "Bern, Bahnhof", "limit": 5 }
 }
 ```
 

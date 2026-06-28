@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Config hot-reload**: admin writes update `config.yaml` in place (preserving
   comments and formatting via targeted YAML path patching) and take effect
   without a restart.
+
 ### Changed
 
 - **Panel auto-detection now also matches the `Model` header.** Previously a panel's `match:` was only compared against the firmware `Board` header. The reTerminal E1004 reports its panel identity in `Model` (and sends no `Board` header), so it could never auto-detect a panel and fell back to the greyscale default. Matching now tries `Board` first, then `Model`.

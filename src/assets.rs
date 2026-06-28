@@ -219,6 +219,11 @@ impl AssetLoader {
         fonts
     }
 
+    /// Path to the external config file, if one is configured.
+    pub fn config_path(&self) -> Option<&std::path::Path> {
+        self.config_file.as_deref()
+    }
+
     /// Read the config file
     ///
     /// If an external path is configured and exists, uses that.
@@ -439,6 +444,17 @@ mod tests {
         assert!(loader.screens_dir.is_some());
         assert!(loader.fonts_dir.is_some());
         assert!(loader.config_file.is_some());
+    }
+
+    #[test]
+    fn test_config_path_getter() {
+        let loader = AssetLoader::new(None, None, Some(PathBuf::from("/tmp/x.yaml")));
+        assert_eq!(
+            loader.config_path(),
+            Some(std::path::Path::new("/tmp/x.yaml"))
+        );
+        let embedded = AssetLoader::new(None, None, None);
+        assert_eq!(embedded.config_path(), None);
     }
 
     #[test]

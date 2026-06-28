@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Panel auto-detection now also matches the `Model` header.** Previously a panel's `match:` was only compared against the firmware `Board` header. The reTerminal E1004 reports its panel identity in `Model` (and sends no `Board` header), so it could never auto-detect a panel and fell back to the greyscale default. Matching now tries `Board` first, then `Model`.
 - The "Device not registered" log line now includes the device's `Board`, `Model`, `Colors` headers and resolved `width`/`height`. This makes it possible to author a matching panel profile (`match:`, `colors:`) for a brand-new device directly from the server log, before it has been registered.
+- Refreshed all dependencies in `Cargo.lock` to the latest versions compatible with the existing `Cargo.toml` ranges (`cargo update`), including the `rustls-webpki` 0.103.10 → 0.103.13 security bump. No source changes required; full check suite passes.
 
 ### Fixed
 

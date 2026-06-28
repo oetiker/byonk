@@ -4,6 +4,7 @@ use axum::{extract::State, http::HeaderMap, Json};
 use serde::Serialize;
 
 use crate::error::ApiError;
+use crate::models::param_schema::{schema_for_script, ParamField};
 use crate::server::AppState;
 use crate::services::DeviceRegistry;
 
@@ -158,4 +159,85 @@ pub async fn list_devices(
     }
 
     Ok(Json(out))
+}
+
+#[derive(Serialize)]
+pub struct ScreenInfo {
+    pub name: String,
+    pub params: Vec<ParamField>,
+    pub schema_error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct PanelInfo {
+    pub name: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub colors: String,
+}
+
+#[derive(Serialize)]
+pub struct ScreensResponse {
+    pub screens: Vec<ScreenInfo>,
+    pub panels: Vec<PanelInfo>,
+    pub dither_algorithms: Vec<String>,
+}
+
+/// Canonical dither algorithm names byonk understands.
+const DITHER_ALGORITHMS: &[&str] = &[
+    "floyd-steinberg",
+    "atkinson",
+    "atkinson-hybrid",
+    "jarvis-judice-ninke",
+    "sierra",
+    "sierra-two-row",
+    "sierra-lite",
+    "sierra-light",
+    "stucki",
+    "burkes",
+];
+
+pub async fn screens(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<ScreensResponse>, ApiError> {
+    require_admin(&state, &headers)?;
+    let config = state.config.load();
+
+    let mut screens = Vec::new();
+    for (name, sc) in &config.screens {
+        let (params, schema_error) = match state.asset_loader.read_screen_string(&sc.script) {
+            Err(e) => (Vec::new(), Some(format!("cannot read script: {e}"))),
+            Ok(src) => match schema_for_script(&src) {
+                Ok(Some(schema)) => (schema.fields, None),
+                Ok(None) => (Vec::new(), None),
+                Err(e) => {
+                    tracing::warn!(screen = %name, error = %e, "invalid @params schema");
+                    (Vec::new(), Some(e))
+                }
+            },
+        };
+        screens.push(ScreenInfo {
+            name: name.clone(),
+            params,
+            schema_error,
+        });
+    }
+
+    let panels = config
+        .panels
+        .iter()
+        .map(|(name, p)| PanelInfo {
+            name: name.clone(),
+            width: p.width,
+            height: p.height,
+            colors: p.colors.clone(),
+        })
+        .collect();
+
+    Ok(Json(ScreensResponse {
+        screens,
+        panels,
+        dither_algorithms: DITHER_ALGORITHMS.iter().map(|s| s.to_string()).collect(),
+    }))
 }

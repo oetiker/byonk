@@ -41,4 +41,5 @@ pub fn admin_router() -> Router<AppState> {
         .route("/devices", get(read::list_devices))
         .route("/pending", get(read::pending))
         .route("/config", get(read::get_config))
+        .route("/screens", get(read::screens))
 }

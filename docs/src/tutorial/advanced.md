@@ -421,10 +421,10 @@ devices:
 
 The script scrapes the shared album HTML page to extract `lh3.googleusercontent.com` image URLs, then:
 
-1. Selects an image from the album in order, advancing by one each refresh interval (derived statelessly from the clock, so it survives restarts)
+1. Selects an image from the album in order, advancing by one each refresh interval (derived statelessly from the system clock, so it survives restarts)
 2. Appends size parameters (`=w{width}-h{height}-no`) to request device-sized images
 3. Fetches and base64-encodes the image for embedding in SVG
-4. Caches album HTML for 1 hour and images for 24 hours
+4. Fetches album HTML without caching and caches images for 24 hours
 
 This approach works because Google's shared album pages embed image URLs directly in the HTML, even though the Photos API sharing features were deprecated in March 2025.
 

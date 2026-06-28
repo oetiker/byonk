@@ -21,3 +21,30 @@ class ByonkHubEntity(CoordinatorEntity[ByonkCoordinator]):
             manufacturer="Byonk",
             configuration_url=coordinator.client._base,  # noqa: SLF001
         )
+
+
+class ByonkDeviceEntity(CoordinatorEntity[ByonkCoordinator]):
+    """Entity attached to one TRMNL device."""
+
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator: ByonkCoordinator, key: str) -> None:
+        super().__init__(coordinator)
+        self._key = key
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, key)},
+            name=f"TRMNL {key}",
+            manufacturer="TRMNL",
+            via_device=(DOMAIN, coordinator.entry.entry_id),
+        )
+
+    @property
+    def device(self) -> dict | None:
+        for d in self.coordinator.data.devices:
+            if d.get("key") == self._key:
+                return d
+        return None
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.device is not None

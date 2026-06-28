@@ -49,3 +49,28 @@ async fn blank_options_token_keeps_admin_dormant() {
         .await;
     assert_eq!(resp.status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn blank_option_clears_preexisting_config_token() {
+    // A token sitting in config (e.g. a user-edited /config/config.yaml) must NOT
+    // keep the admin API alive when the add-on option is blank — the add-on option
+    // is the single source of truth, so a blank option disables the API.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("options.json");
+    std::fs::write(&path, r#"{"admin_token":""}"#).expect("write options");
+    let result = read_options(&path);
+
+    let loader = Arc::new(AssetLoader::new(None, None, None));
+    let mut config = AppConfig::load_from_assets(&loader).expect("load config");
+    config.admin.token = Some("stale-config-token".to_string());
+    apply_to_config(&result, &mut config);
+
+    let app = TestApp::from_config(config);
+    let resp = app
+        .get_with_headers(
+            "/api/admin/devices",
+            &[("Authorization", "Bearer stale-config-token")],
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::NOT_FOUND);
+}

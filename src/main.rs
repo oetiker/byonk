@@ -637,6 +637,9 @@ async fn run_server() -> anyhow::Result<()> {
     if let byonk::addon_options::ReadResult::Malformed(msg) = &addon {
         tracing::warn!("Ignoring add-on options: {msg}");
     }
+    if let Some(level) = byonk::addon_options::invalid_log_level(&addon) {
+        tracing::warn!("Ignoring unknown add-on log_level '{level}'; using default");
+    }
 
     // Create asset loader with optional external paths from env vars
     let screens_dir = std::env::var("SCREENS_DIR").ok().map(PathBuf::from);

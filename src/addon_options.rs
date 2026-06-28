@@ -73,16 +73,39 @@ pub fn log_filter(result: &ReadResult) -> Option<String> {
     }
 }
 
-/// Apply add-on options to the in-memory config. Only a non-empty `admin_token`
-/// has an effect — it sets `config.admin.token`. byonk never persists this.
-pub fn apply_to_config(result: &ReadResult, config: &mut AppConfig) {
+/// The configured `log_level` string when it is present but not a recognized
+/// level, so the caller can warn before falling back to the default filter.
+/// `None` when the level is absent, blank, valid, or there is no options file.
+pub fn invalid_log_level(result: &ReadResult) -> Option<String> {
     if let ReadResult::Parsed(opts) = result {
-        if let Some(token) = opts.admin_token.as_deref() {
-            let token = token.trim();
-            if !token.is_empty() {
-                config.admin.token = Some(token.to_string());
+        if let Some(level) = opts.log_level.as_deref() {
+            if !level.trim().is_empty() && level_to_filter(level).is_none() {
+                return Some(level.to_string());
             }
         }
+    }
+    None
+}
+
+/// Apply add-on options to the in-memory config.
+///
+/// When an options file was successfully parsed (byonk is running as an HA
+/// add-on), the `admin_token` option is **authoritative**: a non-empty value
+/// sets `config.admin.token`; a blank or absent value **clears** it so the admin
+/// API stays dormant — the add-on option is the single source of truth. An
+/// explicit `BYONK_ADMIN_TOKEN` env var still wins (resolved before
+/// `config.admin.token` in `server.rs`). When there is no options file
+/// (`Missing`) or it could not be parsed (`Malformed`), the config is left
+/// untouched so non-add-on runs keep their Phase 1 behavior. byonk never
+/// persists the token.
+pub fn apply_to_config(result: &ReadResult, config: &mut AppConfig) {
+    if let ReadResult::Parsed(opts) = result {
+        config.admin.token = opts
+            .admin_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string);
     }
 }
 
@@ -174,20 +197,74 @@ mod tests {
     }
 
     #[test]
-    fn apply_ignores_blank_token_and_missing() {
-        let mut config = embedded_config();
-        config.admin.token = Some("keep".to_string());
-
-        // Blank/whitespace token must not clobber an existing value.
+    fn apply_blank_or_absent_token_clears_existing() {
+        // In add-on mode (Parsed) the option is authoritative: a blank or absent
+        // admin_token must clear any pre-existing config token so the admin API
+        // stays dormant — the add-on option is the single source of truth.
         let blank = ReadResult::Parsed(AddonOptions {
             admin_token: Some("   ".to_string()),
             log_level: None,
         });
+        let mut config = embedded_config();
+        config.admin.token = Some("stale".to_string());
         apply_to_config(&blank, &mut config);
-        assert_eq!(config.admin.token.as_deref(), Some("keep"));
+        assert_eq!(
+            config.admin.token, None,
+            "blank option must clear the token"
+        );
 
-        // Missing options file leaves config untouched.
+        let absent = ReadResult::Parsed(AddonOptions {
+            admin_token: None,
+            log_level: Some("info".to_string()),
+        });
+        let mut config = embedded_config();
+        config.admin.token = Some("stale".to_string());
+        apply_to_config(&absent, &mut config);
+        assert_eq!(
+            config.admin.token, None,
+            "absent option must clear the token"
+        );
+    }
+
+    #[test]
+    fn apply_missing_or_malformed_leaves_token_untouched() {
+        // Non-add-on runs (no options file) and unreadable files must keep the
+        // Phase 1 config token rather than disabling the admin API.
+        let mut config = embedded_config();
+        config.admin.token = Some("keep".to_string());
+
         apply_to_config(&ReadResult::Missing, &mut config);
         assert_eq!(config.admin.token.as_deref(), Some("keep"));
+
+        apply_to_config(&ReadResult::Malformed("bad json".to_string()), &mut config);
+        assert_eq!(config.admin.token.as_deref(), Some("keep"));
+    }
+
+    #[test]
+    fn invalid_log_level_reports_only_present_unknown() {
+        let unknown = ReadResult::Parsed(AddonOptions {
+            admin_token: None,
+            log_level: Some("verbose".to_string()),
+        });
+        assert_eq!(invalid_log_level(&unknown).as_deref(), Some("verbose"));
+
+        let valid = ReadResult::Parsed(AddonOptions {
+            admin_token: None,
+            log_level: Some("info".to_string()),
+        });
+        assert_eq!(invalid_log_level(&valid), None);
+
+        let blank = ReadResult::Parsed(AddonOptions {
+            admin_token: None,
+            log_level: Some("  ".to_string()),
+        });
+        assert_eq!(invalid_log_level(&blank), None);
+
+        let absent = ReadResult::Parsed(AddonOptions {
+            admin_token: None,
+            log_level: None,
+        });
+        assert_eq!(invalid_log_level(&absent), None);
+        assert_eq!(invalid_log_level(&ReadResult::Missing), None);
     }
 }

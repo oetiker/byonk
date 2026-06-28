@@ -254,6 +254,11 @@ pub async fn handle_display<R: DeviceRegistry>(
                 device_id = device_id_str,
                 registration_code = %registration_code,
                 custom_screen = config.registration.screen.as_deref(),
+                board = ?headers.get_str("Board"),
+                model = ?headers.get_str("Model"),
+                colors = ?headers.get_str("Colors"),
+                width = width,
+                height = height,
                 "Device not registered, showing registration screen"
             );
             let code = registration_code.as_str();
@@ -450,6 +455,10 @@ pub async fn handle_display<R: DeviceRegistry>(
         .and_then(|b| config.find_panel_for_board(b))
     {
         (Some(p), Some(format!("board_header:{}", name)))
+    } else if let Some((name, p)) = config.find_panel_for_board(model_str) {
+        // Some devices (e.g. reTerminal E1004) report their panel identity in the
+        // `Model` header rather than `Board`; fall back to matching against it.
+        (Some(p), Some(format!("model_header:{}", name)))
     } else {
         (None, None)
     };

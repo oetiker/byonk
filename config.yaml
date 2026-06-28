@@ -103,7 +103,22 @@ panels:
       sierra-light:
         error_clamp: 0.11
         noise_scale: 5
-        
+  reterminal_e1004:
+    name: "reTerminal E1004 (6-color, 13.3\")"
+    # E1004 firmware reports its identity in the `Model` header (not `Board`),
+    # which the panel matcher now also checks.
+    match: "reterminal_e1004"
+    width: 1200
+    height: 1600
+    colors: "#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00"
+    # Seeded from the E1002's measured Spectra 6 values (same color technology).
+    # Re-calibrate with the `calibrator` screen for this specific panel if needed.
+    colors_actual: "#000000,#FFFFFF,#B50303,#FFEE00,#205497,#0D876B"
+    dither:
+      sierra-light:
+        error_clamp: 0.11
+        noise_scale: 5
+
 screens:
   # Default screen - shows time and a message
   default:
@@ -175,6 +190,11 @@ devices:
     params:
       station: "Trans, Dorf"
       limit: 8
+  # reTerminal E1004 (13.3" 6-color Spectra 6).
+  # No explicit `panel:` — the reterminal_e1004 panel auto-detects via the Model header.
+  "44:1B:F6:83:93:38":
+    screen: default
+    params: {}
   "QHUTU-REZWE":
     panel: reterminal_e1001
     screen: gphoto

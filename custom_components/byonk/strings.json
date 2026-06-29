@@ -7,6 +7,17 @@
     }
   },
   "entity": {
+    "select": {
+      "screen": {
+        "name": "Screen"
+      },
+      "dither": {
+        "name": "Dither"
+      },
+      "panel": {
+        "name": "Panel"
+      }
+    },
     "sensor": {
       "battery_voltage": {
         "name": "Battery voltage"

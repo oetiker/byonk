@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import ByonkApiError, ByonkAuthError, ByonkClient
 from .const import DOMAIN, UPDATE_INTERVAL_SECONDS
+from .repairs import async_sync_pending_issues
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -86,6 +87,7 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
             config=config,
         )
         self._async_reconcile(data)
+        async_sync_pending_issues(self.hass, data.pending)
         return data
 
     def _async_reconcile(self, data: ByonkData) -> None:

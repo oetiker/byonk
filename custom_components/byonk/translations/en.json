@@ -1,4 +1,10 @@
 {
+  "issues": {
+    "device_pending": {
+      "title": "TRMNL device {code} is waiting to be set up",
+      "description": "A {model} device showing code {code} has connected but is not configured. Add it via the Byonk integration's Add device action."
+    }
+  },
   "config": {
     "abort": {
       "not_hassio": "Byonk requires the Byonk add-on, which needs a Home Assistant Supervised or HAOS installation.",

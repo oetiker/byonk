@@ -1,6 +1,7 @@
 """Config flow for the Byonk integration."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
@@ -66,6 +67,21 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
             title="Byonk",
             data={CONF_ADDON_SLUG: slug, CONF_BASE_URL: base_url},
         )
+
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        entry = self._get_reauth_entry()
+        slug = entry.data[CONF_ADDON_SLUG]
+        token = await async_read_token(self.hass, slug)
+        if not token:
+            await async_provision_token(self.hass, slug)
+        return self.async_update_reload_and_abort(entry, data=entry.data)
 
 
 class ByonkDeviceSubentryFlow(ConfigSubentryFlow):

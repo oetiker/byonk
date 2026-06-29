@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- **Home Assistant integration** (`custom_components/byonk/`): zero-touch
+  Supervised-only setup — installs and starts the Byonk add-on automatically,
+  generates the admin token without any user input, and keeps it in sync.  Exposes a
+  *Byonk Server* hub device (registration toggle, auth-mode and default-screen
+  selects, pending-devices sensor) and per-TRMNL device entities (battery, signal,
+  last-seen, firmware, model sensors; screen, dither, and panel selects).  New TRMNL
+  devices are onboarded via a Home Assistant Repairs issue; device→screen mappings and
+  per-screen parameters are managed through subentry forms.  Re-authentication
+  re-provisions the token automatically if it becomes invalid.  See *Getting Started →
+  Home Assistant Integration*.
 - **Home Assistant add-on**: run Byonk as a Supervisor add-on (references the
   prebuilt `ghcr.io/oetiker/byonk` image) with persistent, editable
   config/screens/fonts and a host port for TRMNL devices. Byonk reads

@@ -6,6 +6,33 @@
       "addon_error": "Could not install or start the Byonk add-on automatically. Add the repository https://github.com/oetiker/byonk to the add-on store, install the Byonk add-on, then retry."
     }
   },
+  "config_subentries": {
+    "device": {
+      "initiate_flow": {
+        "user": "Add device"
+      },
+      "step": {
+        "user": {
+          "title": "Add device",
+          "description": "Select a pending device and assign it a screen.",
+          "data": {
+            "key": "Device key / registration code",
+            "screen": "Screen",
+            "dither": "Dither algorithm",
+            "panel": "Panel type"
+          }
+        },
+        "params": {
+          "title": "Screen parameters",
+          "description": "Configure the screen's dynamic parameters."
+        },
+        "reconfigure": {
+          "title": "Reconfigure device",
+          "description": "Update the screen parameters for this device."
+        }
+      }
+    }
+  },
   "entity": {
     "switch": {
       "registration_enabled": {

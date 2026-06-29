@@ -152,7 +152,7 @@ ha-vm: ## Boot the Home Assistant OS test VM (headless)
 	bash tools/ha-vm/run.sh
 
 ha-vm-stop: ## Stop a running test VM
-	-pkill -f 'name byonk-haos' || true
+	-pkill -f 'name byonk-haos'
 
 ha-vm-clean: ## Delete the test VM disk + varstore (full reset)
 	rm -rf tools/ha-vm/work

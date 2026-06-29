@@ -4,6 +4,10 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 resolve_tools
 
+HA_PORT="${HA_PORT:-8123}"
+BYONK_PORT="${BYONK_PORT:-3000}"
+SMB_PORT="${SMB_PORT:-4445}"
+
 [ -f "$DISK" ] || bash "$HA_VM_DIR/fetch.sh"
 
 # Prepare a writable UEFI varstore matching the firmware size.
@@ -16,8 +20,8 @@ if [ ! -f "$VARS" ]; then
   fi
 fi
 
-echo "HA UI:  http://localhost:8123   (first boot takes several minutes)"
-echo "byonk:  http://localhost:3000"
+echo "HA UI:  http://localhost:${HA_PORT}   (first boot takes several minutes)"
+echo "byonk:  http://localhost:${BYONK_PORT}"
 exec "$QEMU" \
   -name byonk-haos \
   -M virt,accel=hvf,highmem=on \
@@ -25,7 +29,7 @@ exec "$QEMU" \
   -drive "if=pflash,format=raw,readonly=on,file=$EFI_CODE" \
   -drive "if=pflash,format=raw,file=$VARS" \
   -drive "if=virtio,format=qcow2,file=$DISK" \
-  -netdev user,id=net0,hostfwd=tcp::8123-:8123,hostfwd=tcp::3000-:3000,hostfwd=tcp::4445-:445 \
+  -netdev user,id=net0,hostfwd=tcp::${HA_PORT}-:8123,hostfwd=tcp::${BYONK_PORT}-:3000,hostfwd=tcp::${SMB_PORT}-:445 \
   -device virtio-net-pci,netdev=net0 \
   -device virtio-rng-pci \
   -display none -serial mon:stdio

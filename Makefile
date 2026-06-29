@@ -156,3 +156,6 @@ ha-vm-stop: ## Stop a running test VM
 
 ha-vm-clean: ## Delete the test VM disk + varstore (full reset)
 	rm -rf tools/ha-vm/work
+
+ha-deploy: ## Sync custom_components/byonk into the running test VM (needs SMB_USER/SMB_PASS)
+	bash tools/ha-vm/deploy.sh

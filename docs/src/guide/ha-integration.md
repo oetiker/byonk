@@ -44,7 +44,7 @@ automatically, and exposes Byonk devices and settings as Home Assistant entities
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| Battery | Sensor | Battery level (%) |
+| Battery | Sensor | Battery voltage (V) |
 | Signal | Sensor | Wi-Fi RSSI (dBm) |
 | Last seen | Sensor | Timestamp of last check-in |
 | Firmware | Sensor | Firmware version string |
@@ -58,9 +58,9 @@ automatically, and exposes Byonk devices and settings as Home Assistant entities
 When a TRMNL device boots for the first time it displays a **registration code** on
 its e-ink screen.  Byonk records the device as pending.
 
-1. A **Repairs** issue titled *Pending Byonk device* appears in Home Assistant.
-2. Open the issue and click **Fix** (or go to the Byonk integration and click **Add
-   device**).
+1. A **Repairs** issue titled *Pending Byonk device* appears in Home Assistant to alert
+   you (it is informational — there is no **Fix** button).
+2. Open the Byonk integration and use the **Add device** action.
 3. In the form, choose the registration code that matches the code shown on the device
    and select the screen you want displayed on it.
 4. Optionally set a dither algorithm and panel profile.

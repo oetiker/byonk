@@ -139,4 +139,20 @@ help:
 	@echo "  make docs-dev     Start docs dev server"
 	@echo "  make docs-samples Generate sample images (auto-starts server)"
 	@echo ""
+	@echo "Home Assistant VM:"
+	@echo "  make ha-vm        Boot the Home Assistant OS test VM (headless)"
+	@echo "  make ha-vm-stop   Stop a running test VM"
+	@echo "  make ha-vm-clean  Delete the test VM disk + varstore (full reset)"
+	@echo ""
 	@echo "  make help         Show this help"
+
+.PHONY: ha-vm ha-vm-stop ha-vm-clean ha-deploy
+
+ha-vm: ## Boot the Home Assistant OS test VM (headless)
+	bash tools/ha-vm/run.sh
+
+ha-vm-stop: ## Stop a running test VM
+	-pkill -f 'name byonk-haos' || true
+
+ha-vm-clean: ## Delete the test VM disk + varstore (full reset)
+	rm -rf tools/ha-vm/work

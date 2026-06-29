@@ -24,9 +24,21 @@ from .addon import (
     async_provision_token,
     async_read_token,
 )
-from .api import ByonkClient
+from .api import ByonkApiError, ByonkAuthError, ByonkClient
 from .const import CONF_ADDON_SLUG, CONF_BASE_URL, DOMAIN
 from .param_form import build_params_schema
+
+
+async def _token_authenticates(hass, base_url, token) -> bool:
+    """True if the token authenticates (or we cannot tell); False only on a definitive auth failure."""
+    client = ByonkClient(async_get_clientsession(hass), base_url, token)
+    try:
+        await client.async_get_config()
+    except ByonkAuthError:
+        return False
+    except ByonkApiError:
+        return True  # transient/connection: don't reprovision
+    return True
 
 
 class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -79,7 +91,9 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
         entry = self._get_reauth_entry()
         slug = entry.data[CONF_ADDON_SLUG]
         token = await async_read_token(self.hass, slug)
-        if not token:
+        if not token or not await _token_authenticates(
+            self.hass, entry.data[CONF_BASE_URL], token
+        ):
             await async_provision_token(self.hass, slug)
         return self.async_update_reload_and_abort(entry, data=entry.data)
 

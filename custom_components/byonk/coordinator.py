@@ -65,6 +65,7 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
         self.client = client
         self.entry = entry
         self.slug = slug
+        self._missing_removals: dict[str, int] = {}
 
     async def _async_update_data(self) -> ByonkData:
         try:
@@ -109,7 +110,14 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
                     unique_id=key,
                 ),
             )
-        for key in set(existing) - registered_keys:
-            self.hass.config_entries.async_remove_subentry(
-                self.entry, existing[key]
-            )
+        absent = set(existing) - registered_keys
+        # reset strike counts for devices that are present
+        for key in registered_keys:
+            self._missing_removals.pop(key, None)
+        for key in absent:
+            self._missing_removals[key] = self._missing_removals.get(key, 0) + 1
+            if self._missing_removals[key] >= 2:
+                self.hass.config_entries.async_remove_subentry(
+                    self.entry, existing[key]
+                )
+                self._missing_removals.pop(key, None)

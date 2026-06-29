@@ -56,7 +56,7 @@ async def async_ensure_addon_installed(hass: HomeAssistant) -> str:
 
     slug = item.slug
     # Install if needed.
-    if not getattr(item, "installed", False):
+    if not item.installed:
         await client.store.install_addon(slug)
     await _async_start(hass, slug)
     return slug

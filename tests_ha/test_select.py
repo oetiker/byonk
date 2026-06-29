@@ -31,7 +31,7 @@ async def test_screen_select_resets_params_to_defaults(hass):
     ):
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
-        ent = next(s for s in hass.states.async_all("select") if "screen" in s.entity_id)
+        ent = next(s for s in hass.states.async_all("select") if "trmnl" in s.entity_id and "screen" in s.entity_id)
         await hass.services.async_call(
             "select", "select_option",
             {"entity_id": ent.entity_id, "option": "weather"}, blocking=True,

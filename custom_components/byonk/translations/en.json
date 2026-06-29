@@ -7,6 +7,11 @@
     }
   },
   "entity": {
+    "switch": {
+      "registration_enabled": {
+        "name": "Registration enabled"
+      }
+    },
     "select": {
       "screen": {
         "name": "Screen"
@@ -16,6 +21,12 @@
       },
       "panel": {
         "name": "Panel"
+      },
+      "default_screen": {
+        "name": "Default screen"
+      },
+      "auth_mode": {
+        "name": "Auth mode"
       }
     },
     "sensor": {

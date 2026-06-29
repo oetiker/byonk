@@ -3,6 +3,11 @@ target/
 .DS_Store
 .claude
 config-google.yaml
+
+# Local-only working files (kept on disk, never committed)
+google-config.yaml
+.planning/color-dither-bug.md
+crates/eink-dither/reference/
 # Documentation build output
 docs/node_modules/
 docs/doc_build/
@@ -11,3 +16,9 @@ docs/book/
 docs/mermaid.min.js
 docs/mermaid-init.js
 docs/src/images/
+
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+

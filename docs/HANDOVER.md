@@ -1,6 +1,6 @@
 # Handover — Byonk ↔ Home Assistant
 
-_Last updated: 2026-06-28 (Phase 2 complete, PR #20)_
+_Last updated: 2026-06-29 (Phase 3 complete, PR #22)_
 
 ## Goal (the whole effort)
 
@@ -13,17 +13,20 @@ Both live as folders in this repo and talk to a byonk **admin API**. Byonk stays
 ### Phase plan (each phase = its own spec → plan → implementation)
 1. **Phase 1 — Byonk admin/management API. ✅ DONE** (see below).
 2. **Phase 2 — HA Add-on** packaging. ✅ DONE (PR **#20**). Direct prebuilt-image add-on (`repository.yaml` at repo root + `homeassistant/byonk/`), static `environment:` for paths/bind, editable persistent `/config` via `map: addon_config:rw`, host port 3000 for LAN devices. byonk reads `admin_token`+`log_level` from `/data/options.json` (read-only; no token gen/persist/log). No Ingress (out of scope).
-3. **Phase 3 — HA Integration** (`custom_components/byonk/`): config flow, HA Device per TRMNL, sensors, diagnostic entities, select/number/switch/text controls, subentry-based device add/edit, registration onboarding. Consumes the Phase 1 API.
-4. **Phase 4 — Release & docs** (multi-arch publishing aligned to add-on versions, mdBook docs, HACS metadata).
+3. **Phase 3 — HA Integration** (`custom_components/byonk/`). ✅ DONE (PR **#22**). Python custom integration; zero-touch **Supervised/HAOS-only** trust (auto-installs the add-on via the Supervisor store API, provisions the admin token into the add-on option, reads it back — entry stores NO token); one *Byonk Server* hub device (registration switch, default-screen/auth-mode selects, pending-devices sensor) + one HA device per TRMNL (battery/signal/last-seen/firmware/model sensors + screen/dither/panel selects); coordinator mirrors `config.yaml` into config **subentries** (devices keyed by MAC); subentry add/edit form renders per-screen `@params` as HA selectors; Repairs-based onboarding matched by registration code. Consumes the Phase 1 API only; **no Rust changes**.
+4. **Phase 4 — Release & docs** (multi-arch publishing aligned to add-on versions, mdBook docs, HACS default-list + brands metadata, add-on `version:` automation).
 
 ## Current status
 
 - **Phase 1 is merged** into `main` (PR #19, commit `33ed51f`).
-- **Phase 2 is complete and in review:** PR **#20** → https://github.com/oetiker/byonk/pull/20
-  - Branch: `feat/homeassistant-addon` (cut from `main`; base of the PR is `main`).
-  - Built task-by-task with TDD (4 tasks); every task individually reviewed + a final whole-branch review (verdict: ready to merge, no Critical/Important). Full suite green; `make docs` clean.
-  - SDD ledger: `.superpowers/sdd/progress.md` (git-ignored) has per-task commits + deferred Minors.
-- **Phase 3 (HA Integration) is NEXT.** Phase 4 not begun.
+- **Phase 2 is merged** into `main` (PR #20, commit `ca367b2`).
+- **Phase 3 is complete and in review:** PR **#22** → https://github.com/oetiker/byonk/pull/22
+  - Branch: `feat/homeassistant-integration` (cut from `main`; base of the PR is `main`).
+  - Built task-by-task with TDD (14 tasks) via subagent-driven development; every task individually reviewed + a final whole-branch review (opus). The final review caught + fixed two cross-cutting bugs before the PR: (1) missing entry **reload listener** → runtime-added subentries had no entities; (2) onboarding by **registration code** → duplicate HA devices (byonk `/devices` emits a seen device by MAC *and* the config entry by code) — now keyed by **MAC**, code as label.
+  - Verification: `tests_ha/` **26 passing** (`pytest-homeassistant-custom-component`, HA 2026.2.3, Py 3.13); `ruff` + `mdbook` clean; Rust untouched. Python env is an isolated `.venv` (uv, Py 3.13) — HA Core does not support 3.14.
+  - SDD ledger: `.superpowers/sdd/progress.md` (git-ignored) has per-task commits + the deferred fast-follow list.
+  - **Non-blocking fast-follows** (from the final review): secondary-branch test gaps (subentry remove, 4 untested device sensors, several selector cases, Repairs delete/mac-fallback, "token already valid" reauth); minor hardening (tear down a device only on *sustained* `registered:false`; `addon.py` `getattr(...,"installed",False)` default; add a `base_url` property vs `client._base`; `make ha-setup`/README note for the `.venv`).
+- **Phase 4 (Release & docs) is NEXT.**
 
 ## What Phase 1 delivered (the API Phase 3 will consume)
 

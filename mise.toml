@@ -1,0 +1,3 @@
+[tools]
+cargo = "latest"
+rust = "latest"

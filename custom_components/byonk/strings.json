@@ -1,0 +1,86 @@
+{
+  "issues": {
+    "device_pending": {
+      "title": "TRMNL device {code} is waiting to be set up",
+      "description": "A {model} device showing code {code} has connected but is not configured. Add it via the Byonk integration's Add device action."
+    }
+  },
+  "config": {
+    "abort": {
+      "not_hassio": "Byonk requires the Byonk add-on, which needs a Home Assistant Supervised or HAOS installation.",
+      "single_instance_allowed": "Byonk is already configured.",
+      "addon_error": "Could not install or start the Byonk add-on automatically. Add the repository https://github.com/oetiker/byonk to the add-on store, install the Byonk add-on, then retry."
+    }
+  },
+  "config_subentries": {
+    "device": {
+      "initiate_flow": {
+        "user": "Add device"
+      },
+      "step": {
+        "user": {
+          "title": "Add device",
+          "description": "Select a pending device and assign it a screen.",
+          "data": {
+            "key": "Device key / registration code",
+            "screen": "Screen",
+            "dither": "Dither algorithm",
+            "panel": "Panel type"
+          }
+        },
+        "params": {
+          "title": "Screen parameters",
+          "description": "Configure the screen's dynamic parameters."
+        },
+        "reconfigure": {
+          "title": "Reconfigure device",
+          "description": "Update the screen parameters for this device."
+        }
+      }
+    }
+  },
+  "entity": {
+    "switch": {
+      "registration_enabled": {
+        "name": "Registration enabled"
+      }
+    },
+    "select": {
+      "screen": {
+        "name": "Screen"
+      },
+      "dither": {
+        "name": "Dither"
+      },
+      "panel": {
+        "name": "Panel"
+      },
+      "default_screen": {
+        "name": "Default screen"
+      },
+      "auth_mode": {
+        "name": "Auth mode"
+      }
+    },
+    "sensor": {
+      "battery_voltage": {
+        "name": "Battery voltage"
+      },
+      "rssi": {
+        "name": "Signal strength"
+      },
+      "last_seen": {
+        "name": "Last seen"
+      },
+      "firmware_version": {
+        "name": "Firmware version"
+      },
+      "model": {
+        "name": "Model"
+      },
+      "pending_devices": {
+        "name": "Pending devices"
+      }
+    }
+  }
+}

@@ -3,7 +3,7 @@
 
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 
-.PHONY: all build release debug run clean docs docs-dev check fmt lint test help
+.PHONY: all build release debug run clean docs docs-dev check fmt lint test ha-setup ha-check help
 
 # Default target
 all: release
@@ -97,6 +97,18 @@ docs-samples: release
 # Check everything before commit
 check: fmt lint test
 	@echo "All checks passed!"
+
+# =============================================================================
+# Home Assistant Integration
+# =============================================================================
+
+ha-setup:
+	uv venv --python 3.13 .venv
+	uv pip install --python .venv -r requirements_test.txt
+
+ha-check: ## run ruff + pytest for the HA integration (run 'make ha-setup' once first)
+	.venv/bin/ruff check custom_components/byonk
+	.venv/bin/python -m pytest tests_ha -q
 
 # =============================================================================
 # Help

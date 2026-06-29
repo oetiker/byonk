@@ -110,7 +110,7 @@ class ByonkDeviceSubentryFlow(ConfigSubentryFlow):
 
         pending_opts = [
             selector.SelectOptionDict(
-                value=p.get("registration_code") or p["mac"],
+                value=p["mac"],
                 label=f'{p.get("registration_code") or p["mac"]} · {p.get("model","?")}',
             )
             for p in data.pending
@@ -169,9 +169,10 @@ class ByonkDeviceSubentryFlow(ConfigSubentryFlow):
         )
         self._screen = device.get("screen")
         fields = self._coordinator.data.screen_params(self._screen)
-        if user_input is not None:
+        if user_input is not None or not fields:
+            params = user_input or {}
             await self._coordinator.client.async_update_device(
-                self._key, {"screen": self._screen, "params": user_input}
+                self._key, {"screen": self._screen, "params": params}
             )
             await self._coordinator.async_request_refresh()
             return self.async_update_and_abort(

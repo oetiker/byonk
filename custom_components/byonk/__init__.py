@@ -17,6 +17,7 @@ from .const import (
     PLATFORMS,
 )
 from .coordinator import ByonkConfigEntry, ByonkCoordinator
+from .name_sync import async_setup_name_sync
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ByonkConfigEntry) -> bool:
@@ -54,6 +55,7 @@ async def _async_setup_device_entry(hass: HomeAssistant, entry: ByonkConfigEntry
         raise ConfigEntryNotReady("byonk hub not ready")
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    await async_setup_name_sync(hass, entry, coordinator)
     return True
 
 

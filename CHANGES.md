@@ -75,6 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   isn't in the running config). Home Assistant blanks a select whose current value is
   absent from its option list; the byonk device selects now include the current value
   alongside the real choices so the actual setting is always visible.
+- **Home Assistant signal-strength (RSSI) sensor** is now enabled by default instead of
+  hidden, so a device's WiFi signal is visible without manually enabling the entity.
 
 ## 0.15.0 - 2026-04-28
 

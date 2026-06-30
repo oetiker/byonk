@@ -39,7 +39,6 @@ DEVICE_SENSORS: tuple[ByonkSensorDesc, ...] = (
         device_class=SensorDeviceClass.SIGNAL_STRENGTH,
         native_unit_of_measurement="dBm",
         entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
         value=lambda d: d.get("rssi"),
     ),
     ByonkSensorDesc(

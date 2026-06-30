@@ -60,14 +60,16 @@ async def test_model_sensor_state(hass, byonk):
     assert state.state == "og"
 
 
-async def test_rssi_sensor_disabled_by_default(hass, byonk):
-    """rssi sensor must exist in entity registry but be disabled by default."""
+async def test_rssi_sensor_enabled_by_default(hass, byonk):
+    """rssi sensor is enabled by default and exposes the signal strength."""
     await _setup_entry(hass, byonk)
     registry = er.async_get(hass)
     key = DEV["key"]
-    # Look up entity_id from the registry by unique_id
     entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"{key}_rssi")
     assert entity_id is not None, "rssi entity must exist in entity registry"
     entry = registry.async_get(entity_id)
     assert entry is not None
-    assert entry.disabled_by is not None, "rssi sensor must be disabled by default"
+    assert entry.disabled_by is None, "rssi sensor must be enabled by default"
+    state = hass.states.get(entity_id)
+    assert state is not None
+    assert int(state.state) == -58

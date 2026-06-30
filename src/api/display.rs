@@ -161,7 +161,7 @@ pub fn resolve_render_params(
         ("Battery-Voltage" = Option<f32>, Header, description = "Battery voltage"),
         ("RSSI" = Option<i32>, Header, description = "WiFi signal strength"),
         ("FW-Version" = Option<String>, Header, description = "Firmware version"),
-        ("Model" = Option<String>, Header, description = "Device model ('og' or 'x')"),
+        ("Model" = Option<String>, Header, description = "Device model string reported by the device"),
     ),
     tag = "Display"
 )]
@@ -527,6 +527,7 @@ pub async fn handle_display<R: DeviceRegistry>(
         registration_code = %registration_code,
         device_entry_key = ?device_entry_key,
         device_config_screen = ?device_config.map(|dc| &dc.screen),
+        device_name = ?device_config.and_then(|dc| dc.name.as_deref()),
         panel_source = ?panel_source,
         panel_colors = ?panel_colors_for_chain,
         panel_colors_actual = ?panel.and_then(|p| p.colors_actual.as_deref()),

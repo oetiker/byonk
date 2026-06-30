@@ -46,7 +46,7 @@ pub struct SetupResponse {
     params(
         ("ID" = String, Header, description = "Device MAC address (e.g., 'AA:BB:CC:DD:EE:FF')"),
         ("FW-Version" = String, Header, description = "Firmware version (e.g., '1.7.1')"),
-        ("Model" = String, Header, description = "Device model ('og' or 'x')"),
+        ("Model" = String, Header, description = "Device model string reported by the device"),
     ),
     tag = "Device"
 )]
@@ -64,7 +64,7 @@ pub async fn handle_setup<R: DeviceRegistry>(
     tracing::info!(
         device_id = %device_id,
         fw_version = fw_version,
-        model = ?model,
+        model = %model,
         "Setup request received"
     );
 

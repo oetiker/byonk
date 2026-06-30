@@ -157,9 +157,9 @@ HA rename (and on the initial seeding push).
 - Admin API: `DeviceWrite` gains `name`; `patch_device` merges it
   (`body.name.or(existing.name)`); `device_block` writes `name:` when present;
   `AdminDevice` exposes `name` (both seen and unseen paths).
-- The friendly name is surfaced where devices are currently shown by MAC: the
-  dev UI device list and the relevant device log lines. (MAC remains the config
-  key and the stable identifier; `name` is purely a label.)
+- The friendly name is surfaced in the admin API (`AdminDevice` exposes `name`)
+  and the relevant device log lines. (MAC remains the config key and the stable
+  identifier; `name` is purely a label.)
 
 ### HA side
 
@@ -220,3 +220,6 @@ HA rename (and on the initial seeding push).
   `Height` into the registry) is deferred; it is a larger capture-layer change
   and not required for #2 or #4.
 - No change to the dev-preview UI model query parameter.
+- Surfacing the device name in the dev-preview UI device list is deferred to a
+  fast-follow (the dev UI is a developer preview tool; the admin API and device
+  log line already expose the name).

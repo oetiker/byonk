@@ -61,7 +61,7 @@ pub struct DeviceContext {
     pub battery_voltage: Option<f32>,
     /// WiFi signal strength (if available)
     pub rssi: Option<i32>,
-    /// Device model ("og" or "x")
+    /// Verbatim model string the device reported (e.g. "og", "x", "reterminal_e1002")
     pub model: Option<String>,
     /// Firmware version
     pub firmware_version: Option<String>,
@@ -585,11 +585,7 @@ impl ContentPipeline {
             .map_err(|e| e.to_string())?;
 
         // Use script's refresh rate, or fall back to default
-        let refresh_rate = if lua_result.refresh_rate > 0 {
-            lua_result.refresh_rate
-        } else {
-            default_refresh
-        };
+        let refresh_rate = resolve_refresh_rate(lua_result.refresh_rate, None, default_refresh);
 
         Ok(ScriptResult {
             data: lua_result.data,

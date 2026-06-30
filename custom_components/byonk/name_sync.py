@@ -36,7 +36,7 @@ async def async_setup_name_sync(
         try:
             await coordinator.client.async_update_device(key, {"name": name})
         except ByonkApiError as err:
-            _LOGGER.debug("name sync failed for %s: %s", key, err)
+            _LOGGER.warning("name sync failed for %s: %s", key, err)
             return
         await coordinator.async_request_refresh()
 

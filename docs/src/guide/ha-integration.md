@@ -91,7 +91,7 @@ lets you update the parameter values without removing and re-adding the device.
 
 **Device naming**: the device's name is owned by Home Assistant. Rename the device
 the usual way (device card → pencil icon) and byonk will mirror the name automatically
-on the next update. No changes are needed in byonk's config directly.
+when you rename the device in Home Assistant. No changes are needed in byonk's config directly.
 
 ## Re-authentication
 

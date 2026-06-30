@@ -10,7 +10,8 @@ ARG BINARY_DIR=binaries
 COPY ${BINARY_DIR}/amd64/byonk /app/byonk
 COPY fonts ./fonts
 COPY screens ./screens
-COPY config.yaml ./config.yaml
+# Ship the device-free default; config.yaml is the developer's local test config.
+COPY default-config.yaml ./config.yaml
 EXPOSE 3000
 ENTRYPOINT ["/app/byonk"]
 CMD ["serve"]
@@ -23,7 +24,8 @@ ARG BINARY_DIR=binaries
 COPY ${BINARY_DIR}/arm64/byonk /app/byonk
 COPY fonts ./fonts
 COPY screens ./screens
-COPY config.yaml ./config.yaml
+# Ship the device-free default; config.yaml is the developer's local test config.
+COPY default-config.yaml ./config.yaml
 EXPOSE 3000
 ENTRYPOINT ["/app/byonk"]
 CMD ["serve"]

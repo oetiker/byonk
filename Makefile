@@ -23,17 +23,22 @@ debug: fmt lint
 # Alias for debug build
 build: debug
 
+# Local-testing env: use the developer's config.yaml + live screens/fonts.
+# The shipped/embedded default (default-config.yaml) stays device-free; this
+# only affects local `make run`/`watch`, not what byonk ships with.
+DEV_RUN_ENV = CONFIG_FILE=config.yaml SCREENS_DIR=screens FONTS_DIR=fonts
+
 # Run the server (debug mode)
 run: fmt lint
-	cargo run
+	$(DEV_RUN_ENV) cargo run
 
 # Run the server (release mode)
 run-release: release
-	./target/release/byonk
+	$(DEV_RUN_ENV) ./target/release/byonk
 
 # Run with auto-reload (requires cargo-watch)
 watch:
-	cargo watch -x run
+	$(DEV_RUN_ENV) cargo watch -x run
 
 # Format code
 fmt:

@@ -1,6 +1,7 @@
 """Config flow for the Byonk integration."""
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from typing import Any
 
@@ -27,6 +28,24 @@ from .addon import (
 from .api import ByonkApiError, ByonkAuthError, ByonkClient
 from .const import CONF_ADDON_SLUG, CONF_BASE_URL, DOMAIN
 from .param_form import build_params_schema
+
+# Provisioning restarts the add-on; byonk's HTTP needs a moment to come back up
+# and load the new token. Probe the admin API until it answers (or give up).
+PROBE_ATTEMPTS = 15
+PROBE_DELAY = 2  # seconds between attempts (~30s total)
+
+
+async def _async_probe_ready(hass, base_url, token) -> bool:
+    """Probe the admin API until it authenticates, tolerating add-on restart latency."""
+    client = ByonkClient(async_get_clientsession(hass), base_url, token)
+    for attempt in range(PROBE_ATTEMPTS):
+        try:
+            await client.async_get_config()
+            return True
+        except ByonkApiError:
+            if attempt < PROBE_ATTEMPTS - 1:
+                await asyncio.sleep(PROBE_DELAY)
+    return False
 
 
 async def _token_authenticates(hass, base_url, token) -> bool:
@@ -67,16 +86,13 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
             if not token:
                 token = await async_provision_token(self.hass, slug)
             base_url = await async_get_base_url(self.hass, slug)
-            client = ByonkClient(
-                async_get_clientsession(self.hass), base_url, token
-            )
-            await client.async_get_config()  # auth probe
         except AddonError:
             return self.async_abort(reason="addon_error")
-        except ByonkApiError:
-            # The add-on installed and started, but its admin API did not
-            # respond/authenticate (e.g. an image too old to expose it, or the
-            # token did not take effect). Abort cleanly instead of raising a 500.
+
+        # Provisioning restarts the add-on; retry the probe while byonk's HTTP
+        # comes back up. If it never answers/authenticates, abort cleanly
+        # (e.g. an image too old to expose the admin API) instead of raising 500.
+        if not await _async_probe_ready(self.hass, base_url, token):
             return self.async_abort(reason="addon_unhealthy")
 
         await self.async_set_unique_id(DOMAIN)

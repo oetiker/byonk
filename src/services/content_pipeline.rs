@@ -6,6 +6,22 @@ use crate::error::RenderError;
 use crate::models::{DisplaySpec, ScreenConfig};
 use crate::services::{FontFaceInfo, LuaRuntime, RenderService, TemplateService};
 
+/// Resolve the effective refresh rate.
+/// Precedence: Lua-returned (>0) > per-device override (>0) > screen default.
+pub(crate) fn resolve_refresh_rate(
+    lua_refresh: u32,
+    device_override: Option<u32>,
+    screen_default: u32,
+) -> u32 {
+    if lua_refresh > 0 {
+        lua_refresh
+    } else if let Some(r) = device_override.filter(|&r| r > 0) {
+        r
+    } else {
+        screen_default
+    }
+}
+
 /// Result from running a Lua script (before rendering)
 pub struct ScriptResult {
     /// Data returned by the script
@@ -69,6 +85,8 @@ pub struct DeviceContext {
     pub dither_chroma_clamp: Option<f32>,
     /// Pre-script resolved dither strength
     pub dither_strength: Option<f32>,
+    /// Per-device refresh override (seconds) from DeviceConfig; 0/None = no override.
+    pub refresh_override: Option<u32>,
 }
 
 /// Error from the content pipeline
@@ -159,6 +177,7 @@ impl ContentPipeline {
         device_mac: &str,
         device_ctx: Option<DeviceContext>,
     ) -> Result<ScriptResult, ContentError> {
+        let mut device_ctx = device_ctx;
         // Look up device config - try registration code first, then MAC address
         let config = self.config.load();
         let device_config = device_ctx
@@ -170,6 +189,9 @@ impl ContentPipeline {
         if let Some(device_config) = device_config {
             // Found device config — resolve screen from config or filesystem
             if let Some(screen_config) = self.resolve_screen(&device_config.screen) {
+                if let Some(ctx) = device_ctx.as_mut() {
+                    ctx.refresh_override = device_config.refresh;
+                }
                 return self.run_script_for_screen(
                     &screen_config,
                     &device_config.params,
@@ -188,14 +210,7 @@ impl ContentPipeline {
             std::sync::OnceLock::new();
         let dc = EMPTY_DEVICE.get_or_init(|| crate::models::DeviceConfig {
             screen: "default".to_string(),
-            params: HashMap::new(),
-            colors: None,
-            dither: None,
-            panel: None,
-            error_clamp: None,
-            noise_scale: None,
-            chroma_clamp: None,
-            strength: None,
+            ..Default::default()
         });
 
         self.run_script_for_screen(&screen_config, &dc.params, device_ctx)
@@ -230,12 +245,13 @@ impl ContentPipeline {
             self.lua_runtime
                 .run_script(&screen.script, params, device_ctx.as_ref(), None)?;
 
-        // Use script's refresh rate, or fall back to screen's default
-        let refresh_rate = if lua_result.refresh_rate > 0 {
-            lua_result.refresh_rate
-        } else {
-            screen.default_refresh
-        };
+        // Use script's refresh rate, device override, or fall back to screen's default
+        let device_override = device_ctx.as_ref().and_then(|c| c.refresh_override);
+        let refresh_rate = resolve_refresh_rate(
+            lua_result.refresh_rate,
+            device_override,
+            screen.default_refresh,
+        );
 
         if lua_result.skip_update {
             tracing::debug!(
@@ -536,7 +552,7 @@ impl ContentPipeline {
         )
     }
 
-    /// Run script directly with explicit paths (for dev mode)
+    /// Run script directly with explicit paths (for dev mode — no device config consulted)
     pub fn run_script_direct(
         &self,
         script_path: &std::path::Path,
@@ -594,5 +610,26 @@ impl ContentPipeline {
             script_chroma_clamp: lua_result.chroma_clamp,
             script_strength: lua_result.strength,
         })
+    }
+}
+
+#[cfg(test)]
+mod refresh_tests {
+    use super::resolve_refresh_rate;
+
+    #[test]
+    fn lua_wins_over_override_and_default() {
+        assert_eq!(resolve_refresh_rate(120, Some(600), 900), 120);
+    }
+
+    #[test]
+    fn override_wins_over_default_when_lua_zero() {
+        assert_eq!(resolve_refresh_rate(0, Some(600), 900), 600);
+    }
+
+    #[test]
+    fn zero_override_is_ignored() {
+        assert_eq!(resolve_refresh_rate(0, Some(0), 900), 900);
+        assert_eq!(resolve_refresh_rate(0, None, 900), 900);
     }
 }

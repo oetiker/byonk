@@ -598,6 +598,7 @@ pub async fn handle_display<R: DeviceRegistry>(
         dither_noise_scale: pre_script_tuning.noise_scale,
         dither_chroma_clamp: pre_script_tuning.chroma_clamp,
         dither_strength: pre_script_tuning.strength,
+        refresh_override: None,
     };
 
     // Run script, render SVG, and cache the result (PNG rendering happens in /api/image)

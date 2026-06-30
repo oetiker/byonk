@@ -224,7 +224,7 @@ fn default_refresh() -> u32 {
 }
 
 /// Configuration for a specific device
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct DeviceConfig {
     /// Which screen to display
     pub screen: String,
@@ -253,6 +253,10 @@ pub struct DeviceConfig {
 
     /// Optional dither strength override (0.0 = no diffusion, 1.0 = standard)
     pub strength: Option<f32>,
+
+    /// Optional per-device refresh override in seconds (0/absent = use Lua/screen default)
+    #[serde(default)]
+    pub refresh: Option<u32>,
 }
 
 /// Admin/management API settings.
@@ -520,14 +524,7 @@ mod tests {
             "AA:BB:CC:DD:EE:FF".to_string(),
             DeviceConfig {
                 screen: "custom".to_string(),
-                params: HashMap::new(),
-                colors: None,
-                dither: None,
-                panel: None,
-                error_clamp: None,
-                noise_scale: None,
-                chroma_clamp: None,
-                strength: None,
+                ..Default::default()
             },
         );
 
@@ -556,14 +553,7 @@ mod tests {
             "AA:BB:CC:DD:EE:FF".to_string(),
             DeviceConfig {
                 screen: "test".to_string(),
-                params: HashMap::new(),
-                colors: None,
-                dither: None,
-                panel: None,
-                error_clamp: None,
-                noise_scale: None,
-                chroma_clamp: None,
-                strength: None,
+                ..Default::default()
             },
         );
 
@@ -589,14 +579,7 @@ mod tests {
             "AA:BB:CC:DD:EE:FF".to_string(),
             DeviceConfig {
                 screen: "nonexistent".to_string(),
-                params: HashMap::new(),
-                colors: None,
-                dither: None,
-                panel: None,
-                error_clamp: None,
-                noise_scale: None,
-                chroma_clamp: None,
-                strength: None,
+                ..Default::default()
             },
         );
 
@@ -741,14 +724,7 @@ registration:
             "ABCDE-FGHJK".to_string(),
             DeviceConfig {
                 screen: "custom".to_string(),
-                params: HashMap::new(),
-                colors: None,
-                dither: None,
-                panel: None,
-                error_clamp: None,
-                noise_scale: None,
-                chroma_clamp: None,
-                strength: None,
+                ..Default::default()
             },
         );
 
@@ -783,14 +759,7 @@ registration:
             "AA:BB:CC:DD:EE:FF".to_string(),
             DeviceConfig {
                 screen: "test".to_string(),
-                params: HashMap::new(),
-                colors: None,
-                dither: None,
-                panel: None,
-                error_clamp: None,
-                noise_scale: None,
-                chroma_clamp: None,
-                strength: None,
+                ..Default::default()
             },
         );
 
@@ -799,14 +768,7 @@ registration:
             "XYZABCDEFG".to_string(),
             DeviceConfig {
                 screen: "test".to_string(),
-                params: HashMap::new(),
-                colors: None,
-                dither: None,
-                panel: None,
-                error_clamp: None,
-                noise_scale: None,
-                chroma_clamp: None,
-                strength: None,
+                ..Default::default()
             },
         );
 

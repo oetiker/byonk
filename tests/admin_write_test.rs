@@ -274,3 +274,43 @@ async fn test_patch_settings_unknown_registration_screen_returns_400() {
         .await;
     assert_eq!(resp.status, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn test_patch_refresh_reads_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+
+    app.post_json(
+        "/api/admin/devices",
+        &[AUTH],
+        r#"{"key":"AA:BB","screen":"hello"}"#,
+    )
+    .await;
+    let resp = app
+        .patch_json("/api/admin/devices/AA:BB", &[AUTH], r#"{"refresh":600}"#)
+        .await;
+    assert_eq!(resp.status, StatusCode::OK);
+
+    let listed = app.get_with_headers("/api/admin/devices", &[AUTH]).await;
+    let json: serde_json::Value = listed.json();
+    let row = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["key"] == "AA:BB")
+        .unwrap();
+    assert_eq!(row["refresh"], 600);
+
+    // 0 clears the override.
+    app.patch_json("/api/admin/devices/AA:BB", &[AUTH], r#"{"refresh":0}"#)
+        .await;
+    let listed = app.get_with_headers("/api/admin/devices", &[AUTH]).await;
+    let json: serde_json::Value = listed.json();
+    let row = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["key"] == "AA:BB")
+        .unwrap();
+    assert_eq!(row["refresh"], serde_json::Value::Null);
+}

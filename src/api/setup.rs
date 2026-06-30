@@ -9,7 +9,7 @@ use utoipa::ToSchema;
 
 use super::headers::HeaderMapExt;
 use crate::error::ApiError;
-use crate::models::{AppConfig, Device, DeviceId, DeviceModel};
+use crate::models::{AppConfig, Device, DeviceId};
 use crate::services::DeviceRegistry;
 
 /// Response from the /api/setup endpoint
@@ -58,9 +58,7 @@ pub async fn handle_setup<R: DeviceRegistry>(
     // Extract headers
     let device_id_str = headers.require_str("ID")?;
     let fw_version = headers.get_str("FW-Version").unwrap_or("unknown");
-    let model_str = headers.get_str("Model").unwrap_or("og");
-
-    let model = DeviceModel::parse(model_str);
+    let model = headers.get_str("Model").unwrap_or("og").to_string();
     let device_id = DeviceId::new(device_id_str);
 
     tracing::info!(

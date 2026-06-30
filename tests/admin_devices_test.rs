@@ -46,3 +46,35 @@ async fn test_admin_devices_lists_seen_device() {
     let arr = json.as_array().expect("array");
     assert!(arr.iter().any(|d| d["mac"] == "AA:BB:CC:DD:EE:FF"));
 }
+
+#[tokio::test]
+async fn test_custom_model_header_is_stored_verbatim() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+
+    // A reTerminal reports its own model string (not "og"/"x").
+    let mac = "9C:13:9E:AB:99:D4";
+    let resp = app
+        .get_with_headers(
+            "/api/setup",
+            &[
+                ("ID", mac),
+                ("FW-Version", "1.0.0"),
+                ("Model", "reterminal_e1002"),
+            ],
+        )
+        .await;
+    assert_eq!(resp.status, axum::http::StatusCode::OK);
+
+    let listed = app
+        .get_with_headers("/api/admin/devices", &[("Authorization", "Bearer secret")])
+        .await;
+    let json: serde_json::Value = listed.json();
+    let row = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["mac"] == mac)
+        .expect("device row present");
+    assert_eq!(row["model"], "reterminal_e1002");
+}

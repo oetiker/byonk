@@ -59,13 +59,12 @@ impl DeviceRegistry for InMemoryRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::DeviceModel;
 
     #[tokio::test]
     async fn test_upsert_and_find() {
         let registry = InMemoryRegistry::new();
         let device_id = DeviceId::new("AA:BB:CC:DD:EE:FF");
-        let device = Device::new(device_id.clone(), DeviceModel::OG, "1.0.0".into());
+        let device = Device::new(device_id.clone(), "og".to_string(), "1.0.0".into());
 
         registry.upsert(device.clone()).await.unwrap();
         let found = registry.find_by_id(&device_id).await.unwrap();
@@ -79,12 +78,12 @@ mod tests {
         let registry = InMemoryRegistry::new();
         let d1 = Device::new(
             DeviceId::new("AA:AA:AA:AA:AA:AA"),
-            DeviceModel::OG,
+            "og".to_string(),
             "1".into(),
         );
         let d2 = Device::new(
             DeviceId::new("BB:BB:BB:BB:BB:BB"),
-            DeviceModel::X,
+            "x".to_string(),
             "2".into(),
         );
         registry.upsert(d1).await.unwrap();
@@ -99,11 +98,11 @@ mod tests {
         let registry = InMemoryRegistry::new();
         let device_id = DeviceId::new("AA:BB:CC:DD:EE:FF");
 
-        let mut device1 = Device::new(device_id.clone(), DeviceModel::OG, "1.0.0".into());
+        let mut device1 = Device::new(device_id.clone(), "og".to_string(), "1.0.0".into());
         device1.battery_voltage = Some(4.0);
         registry.upsert(device1).await.unwrap();
 
-        let mut device2 = Device::new(device_id.clone(), DeviceModel::OG, "1.0.0".into());
+        let mut device2 = Device::new(device_id.clone(), "og".to_string(), "1.0.0".into());
         device2.battery_voltage = Some(3.5);
         registry.upsert(device2).await.unwrap();
 

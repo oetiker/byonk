@@ -12,7 +12,7 @@ use super::headers::HeaderMapExt;
 use crate::error::ApiError;
 use crate::models::{
     normalize_algorithm_name, verify_ed25519_signature, ApiKey, AppConfig, Device, DeviceId,
-    DeviceModel, DisplaySpec, DitherTuningValues,
+    DisplaySpec, DitherTuningValues,
 };
 use crate::server::DevOverrides;
 use crate::services::{
@@ -354,7 +354,7 @@ pub async fn handle_display<R: DeviceRegistry>(
             let mut pending_device = registry.find_by_id(&pending_id).await?.unwrap_or_else(|| {
                 Device::new(
                     pending_id.clone(),
-                    DeviceModel::parse(model_str),
+                    model_str.to_string(),
                     headers
                         .get_str("FW-Version")
                         .unwrap_or("unknown")
@@ -362,7 +362,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                 )
             });
             pending_device.api_key = identity_key.clone();
-            pending_device.model = DeviceModel::parse(model_str);
+            pending_device.model = model_str.to_string();
             pending_device.firmware_version = headers
                 .get_str("FW-Version")
                 .unwrap_or("unknown")
@@ -399,7 +399,7 @@ pub async fn handle_display<R: DeviceRegistry>(
     // Get or create device metadata
     let device_id = DeviceId::new(device_id_str);
     let model_str = headers.get_str("Model").unwrap_or("og");
-    let model = DeviceModel::parse(model_str);
+    let model = model_str.to_string();
     let fw_version = headers
         .get_str("FW-Version")
         .unwrap_or("unknown")
@@ -408,7 +408,7 @@ pub async fn handle_display<R: DeviceRegistry>(
     let mut device = registry
         .find_by_id(&device_id)
         .await?
-        .unwrap_or_else(|| Device::new(device_id.clone(), model, fw_version.clone()));
+        .unwrap_or_else(|| Device::new(device_id.clone(), model.clone(), fw_version.clone()));
 
     tracing::info!(
         device_id = %device_id,

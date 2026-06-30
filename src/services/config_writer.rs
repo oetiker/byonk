@@ -187,18 +187,24 @@ pub fn upsert_device(
 
 /// Insert a freshly block-serialized device under an empty `devices:` header,
 /// preserving everything else (including trailing comments).
+///
+/// Handles two forms of an empty devices section:
+/// - `devices:` — null / empty block (e.g. after the last device was removed)
+/// - `devices: {}` — empty flow mapping (e.g. the shipped default config)
+///
+/// In both cases we replace whatever follows `devices:` on that line with
+/// `\n<indented block>`, producing a valid block mapping.
 fn insert_into_empty_devices(
     base: &str,
     key: &str,
     block: &serde_yaml::Mapping,
 ) -> Result<String, ConfigWriteError> {
+    // Confirm the `devices` key is present via the YAML parser (gives a clean
+    // error if the document is malformed or the key is missing).
     let doc = document(base)?;
     let route = yamlpath::Route::default().with_key("devices");
-    let feature = doc
-        .query_pretty(&route)
+    doc.query_pretty(&route)
         .map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
-    let header_byte = feature.location.byte_span.0;
-    let header_line_end = next_line_start(base, header_byte);
 
     // Serialize `{ key: block }` then indent every line by two spaces so the
     // device key sits one level under `devices:`.
@@ -220,8 +226,27 @@ fn insert_into_empty_devices(
         }
     }
 
+    // Locate `devices:` by text search (reliable for both null and flow-mapping
+    // forms; yamlpath VALUE spans are unreliable for null/flow values).
+    // We look for `\ndevices:` to avoid false matches inside comments or strings.
+    const NEEDLE: &str = "\ndevices:";
+    let after_colon = base
+        .find(NEEDLE)
+        .map(|i| i + NEEDLE.len())
+        .or_else(|| {
+            if base.starts_with("devices:") {
+                Some("devices:".len())
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| ConfigWriteError::Patch("`devices:` not found in config".into()))?;
+
+    // Replace everything from the colon to end-of-line (e.g. ` {}\n` or `\n`)
+    // with `\n<indented_block>`, leaving `devices:` intact as a block header.
+    let header_line_end = next_line_start(base, after_colon);
     let mut out = base.to_string();
-    out.insert_str(header_line_end, &indented);
+    out.replace_range(after_colon..header_line_end, &format!("\n{indented}"));
     Ok(out)
 }
 
@@ -332,5 +357,30 @@ devices:
             remove_device(SAMPLE, "ZZ:ZZ"),
             Err(ConfigWriteError::NotFound(_))
         ));
+    }
+
+    #[test]
+    fn test_upsert_into_empty_flow_mapping() {
+        // `devices: {}` is the shipped default config format; ensure a device
+        // can be added to it without producing invalid YAML.
+        let yaml = "\
+# top comment
+registration:
+  enabled: true
+auth_mode: api_key
+# Devices are owned by Home Assistant; none ship by default.
+devices: {}
+";
+        let mut block = serde_yaml::Mapping::new();
+        block.insert("screen".into(), "hello".into());
+        let out = upsert_device(yaml, "CC:DD:EE:FF:00:11", &block).unwrap();
+        let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            v["devices"]["CC:DD:EE:FF:00:11"]["screen"],
+            serde_yaml::Value::from("hello")
+        );
+        // Comments must survive.
+        assert!(out.contains("# top comment"));
+        assert!(out.contains("# Devices are owned by Home Assistant"));
     }
 }

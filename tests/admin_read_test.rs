@@ -1,7 +1,7 @@
 mod common;
 
 use axum::http::StatusCode;
-use byonk::models::ApiKey;
+use byonk::models::{ApiKey, AppConfig};
 use common::TestApp;
 
 const AUTH: (&str, &str) = ("Authorization", "Bearer secret");
@@ -29,11 +29,17 @@ async fn test_pending_requires_auth() {
 
 #[tokio::test]
 async fn test_pending_excludes_registered_device() {
-    let app = TestApp::new_admin("secret");
-    // "B4:A9:90:8C:6D:18" is present in the embedded config's devices section,
-    // so it counts as registered. Once we trigger the setup flow for that MAC,
-    // it must NOT appear in /api/admin/pending.
+    // The embedded default ships with devices: {} (HA owns them).
+    // Build a config that explicitly registers this MAC so the test
+    // remains independent of what the embedded default contains.
     let registered_mac = "B4:A9:90:8C:6D:18";
+    let yaml = format!(
+        "admin:\n  token: secret\nregistration:\n  enabled: true\n\
+         screens:\n  default:\n    script: default.lua\n    template: default.svg\n\
+         devices:\n  \"{registered_mac}\":\n    screen: default\n"
+    );
+    let config: AppConfig = serde_yaml::from_str(&yaml).expect("parse test config");
+    let app = TestApp::from_config(config);
     app.register_device(registered_mac).await;
 
     let resp = app.get_with_headers("/api/admin/pending", &[AUTH]).await;

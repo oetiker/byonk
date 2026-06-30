@@ -41,7 +41,7 @@ struct EmbeddedFonts;
 /// Embedded default config
 #[derive(RustEmbed)]
 #[folder = "."]
-#[include = "config.yaml"]
+#[include = "default-config.yaml"]
 struct EmbeddedConfig;
 
 /// Asset category for selective operations
@@ -238,13 +238,16 @@ impl AssetLoader {
         }
 
         // Fall back to embedded
-        EmbeddedConfig::get("config.yaml")
+        EmbeddedConfig::get("default-config.yaml")
             .map(|f| {
                 tracing::trace!("Loading config from embedded assets");
                 f.data
             })
             .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotFound, "Embedded config.yaml not found")
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "Embedded default-config.yaml not found",
+                )
             })
     }
 
@@ -331,7 +334,7 @@ impl AssetLoader {
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                if let Some(data) = EmbeddedConfig::get("config.yaml") {
+                if let Some(data) = EmbeddedConfig::get("default-config.yaml") {
                     fs::write(path, &*data.data)?;
                     report.config_seeded = true;
                     tracing::info!(path = %path.display(), "Seeded config file with embedded default");
@@ -405,7 +408,7 @@ impl AssetLoader {
                     if let Some(parent) = path.parent() {
                         fs::create_dir_all(parent)?;
                     }
-                    if let Some(data) = EmbeddedConfig::get("config.yaml") {
+                    if let Some(data) = EmbeddedConfig::get("default-config.yaml") {
                         fs::write(&path, &*data.data)?;
                         report.written.push(path.display().to_string());
                     }
@@ -421,7 +424,7 @@ impl AssetLoader {
         match category {
             AssetCategory::Screens => EmbeddedScreens::iter().map(|s| s.to_string()).collect(),
             AssetCategory::Fonts => EmbeddedFonts::iter().map(|s| s.to_string()).collect(),
-            AssetCategory::Config => vec!["config.yaml".to_string()],
+            AssetCategory::Config => vec!["default-config.yaml".to_string()],
         }
     }
 }
@@ -584,7 +587,7 @@ mod tests {
     fn test_list_embedded_config() {
         let config = AssetLoader::list_embedded(AssetCategory::Config);
         assert_eq!(config.len(), 1);
-        assert_eq!(config[0], "config.yaml");
+        assert_eq!(config[0], "default-config.yaml");
     }
 
     #[test]
@@ -937,6 +940,20 @@ mod tests {
         assert!(screens.contains(&"subdir/valid.lua".to_string()));
         assert!(!screens.contains(&"subdir/invalid.txt".to_string()));
         // Note: png files are handled differently - they're for images, not templates
+    }
+
+    #[test]
+    fn test_embedded_default_has_no_devices() {
+        // AssetLoader::new(screens_dir, fonts_dir, config_path) — all None = embedded-only.
+        let loader = AssetLoader::new(None, None, None);
+        let text = loader.read_config_string().expect("read embedded config");
+        let cfg: serde_yaml::Value = serde_yaml::from_str(&text).expect("parse embedded config");
+        let devices = cfg.get("devices").expect("devices key present");
+        let map = devices.as_mapping().expect("devices is a mapping");
+        assert!(
+            map.is_empty(),
+            "embedded default config must ship zero devices"
+        );
     }
 
     #[test]

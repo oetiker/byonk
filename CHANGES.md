@@ -41,6 +41,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without a restart.
 - Admin settings API accepts `registration_screen` to set the screen shown to
   new (un-onboarded) devices.
+- **Per-device refresh interval (Home Assistant)**: each TRMNL device now has a
+  *Refresh interval* Number entity. The value (seconds) overrides the screen's
+  static default; a screen's own Lua `refresh_rate` still takes precedence, and
+  `0` means "no override". Stored per device in byonk's config (`refresh:`).
+- **Device naming (Home Assistant)**: renaming a TRMNL device in Home Assistant
+  now mirrors the name down to byonk (stored as `name:` on the device), so byonk
+  no longer identifies the device only by MAC. The sync is one-way (HA owns the
+  name).
 
 ### Changed
 
@@ -55,6 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is derived statelessly from the clock (no persistent state needed), so it
   survives server restarts and wraps around at the end of the album.
 - **Panel auto-detection now also matches the `Model` header.** Previously a panel's `match:` was only compared against the firmware `Board` header. The reTerminal E1004 reports its panel identity in `Model` (and sends no `Board` header), so it could never auto-detect a panel and fell back to the greyscale default. Matching now tries `Board` first, then `Model`.
+- **Reported device model** is now the verbatim `Model` header the device sends
+  (e.g. a reTerminal reports its real model) instead of being collapsed to
+  `og`/`x`. Genuine TRMNL OG/X devices are unaffected.
 - The "Device not registered" log line now includes the device's `Board`, `Model`, `Colors` headers and resolved `width`/`height`. This makes it possible to author a matching panel profile (`match:`, `colors:`) for a brand-new device directly from the server log, before it has been registered.
 - Refreshed all dependencies in `Cargo.lock` to the latest versions compatible with the existing `Cargo.toml` ranges (`cargo update`), including the `rustls-webpki` 0.103.10 → 0.103.13 security bump. No source changes required; full check suite passes.
 

@@ -47,10 +47,11 @@ automatically, and exposes Byonk devices and settings as Home Assistant entities
 | Signal strength | Sensor | Wi-Fi RSSI (dBm) |
 | Last seen | Sensor | Timestamp of last check-in |
 | Firmware version | Sensor | Firmware version string |
-| Model | Sensor | Panel model identifier |
+| Model | Sensor | Verbatim `Model` header reported by the device |
 | Screen | Select | Active screen assigned to this device |
 | Dither | Select | Dither algorithm override |
 | Panel | Select | Panel profile override |
+| Refresh interval | Number | Per-device refresh interval in seconds (`0` = no override). Precedence: screen's Lua `refresh_rate` > this override > screen's static default |
 
 ## Onboarding a New Device
 
@@ -87,6 +88,10 @@ entity on the device card.  To adjust dither algorithm or panel type, use the
 To update the per-screen parameters (drawn from the screen's `@params` schema), open
 the device in **Settings → Devices & Services** and click **Reconfigure**.  The form
 lets you update the parameter values without removing and re-adding the device.
+
+**Device naming**: the device's name is owned by Home Assistant. Rename the device
+the usual way (device card → pencil icon) and byonk will mirror the name automatically
+on the next update. No changes are needed in byonk's config directly.
 
 ## Re-authentication
 

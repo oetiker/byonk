@@ -8,11 +8,8 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.components.hassio import AddonError
 from homeassistant.config_entries import (
-    ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
-    ConfigSubentryFlow,
-    SubentryFlowResult,
 )
 from homeassistant.core import callback
 from homeassistant.helpers import selector
@@ -26,7 +23,13 @@ from .addon import (
     async_read_token,
 )
 from .api import ByonkApiError, ByonkAuthError, ByonkClient
-from .const import CONF_ADDON_SLUG, CONF_BASE_URL, DOMAIN
+from .const import (
+    CONF_ADDON_SLUG,
+    CONF_BASE_URL,
+    CONF_DEVICE_KEY,
+    CONF_HUB_ENTRY_ID,
+    DOMAIN,
+)
 from .param_form import build_params_schema
 
 # Provisioning restarts the add-on; byonk's HTTP needs a moment to come back up
@@ -65,17 +68,23 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
-    @classmethod
+    def __init__(self) -> None:
+        self._discovery: dict[str, Any] = {}
+        self._key: str | None = None
+        self._screen: str | None = None
+        self._extra: dict[str, Any] = {}
+
     @callback
-    def async_get_supported_subentry_types(
-        cls, config_entry: ConfigEntry
-    ) -> dict[str, type[ConfigSubentryFlow]]:
-        return {"device": ByonkDeviceSubentryFlow}
+    def _hub_entry(self):
+        for entry in self._async_current_entries(include_ignore=False):
+            if entry.unique_id == DOMAIN:
+                return entry
+        return None
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        if self._async_current_entries():
+        if any(e.unique_id == DOMAIN for e in self._async_current_entries(include_ignore=False)):
             return self.async_abort(reason="single_instance_allowed")
         if not is_hassio(self.hass):
             return self.async_abort(reason="not_hassio")
@@ -118,46 +127,36 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
             await async_provision_token(self.hass, slug)
         return self.async_update_reload_and_abort(entry, data=entry.data)
 
+    async def async_step_integration_discovery(
+        self, discovery_info: dict[str, Any]
+    ) -> ConfigFlowResult:
+        mac = discovery_info["key"]
+        await self.async_set_unique_id(mac)
+        self._abort_if_unique_id_configured()
+        self._discovery = discovery_info
+        self.context["title_placeholders"] = {
+            "name": f"TRMNL {mac}",
+            "code": discovery_info.get("code") or mac,
+        }
+        return await self.async_step_configure()
 
-class ByonkDeviceSubentryFlow(ConfigSubentryFlow):
-    """Add or edit a device->screen mapping."""
-
-    def __init__(self) -> None:
-        self._key: str | None = None
-        self._screen: str | None = None
-        self._extra: dict[str, Any] = {}
-
-    @property
-    def _coordinator(self):
-        return self._get_entry().runtime_data
-
-    async def async_step_user(
+    async def async_step_configure(
         self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        data = self._coordinator.data
+    ) -> ConfigFlowResult:
+        hub = self._hub_entry()
+        if hub is None:
+            return self.async_abort(reason="no_hub")
+        data = hub.runtime_data.data
         if user_input is not None:
-            self._key = user_input["key"]
+            self._key = self._discovery["key"]
             self._screen = user_input["screen"]
             self._extra = {
                 k: user_input[k] for k in ("panel", "dither") if user_input.get(k)
             }
-            return await self.async_step_params()
+            return await self.async_step_dev_params()
 
-        pending_opts = [
-            selector.SelectOptionDict(
-                value=p["mac"],
-                label=f'{p.get("registration_code") or p["mac"]} · {p.get("model","?")}',
-            )
-            for p in data.pending
-        ]
         schema = vol.Schema(
             {
-                vol.Required("key"): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=pending_opts, custom_value=True,
-                        mode=selector.SelectSelectorMode.DROPDOWN,
-                    )
-                ),
                 vol.Required("screen"): selector.SelectSelector(
                     selector.SelectSelectorConfig(
                         options=data.screen_names(),
@@ -171,52 +170,59 @@ class ByonkDeviceSubentryFlow(ConfigSubentryFlow):
                 ),
                 vol.Optional("panel"): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=data.panel_names(), mode=selector.SelectSelectorMode.DROPDOWN
+                        options=data.panel_names(),
+                        mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),
             }
         )
-        return self.async_show_form(step_id="user", data_schema=schema)
+        return self.async_show_form(
+            step_id="configure",
+            data_schema=schema,
+            description_placeholders={
+                "code": self._discovery.get("code") or self._discovery["key"]
+            },
+        )
 
-    async def async_step_params(
+    async def async_step_dev_params(
         self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        fields = self._coordinator.data.screen_params(self._screen)
+    ) -> ConfigFlowResult:
+        hub = self._hub_entry()
+        coordinator = hub.runtime_data
+        fields = coordinator.data.screen_params(self._screen)
         if user_input is not None or not fields:
             params = user_input or {}
-            payload = {"key": self._key, "screen": self._screen, "params": params, **self._extra}
-            await self._coordinator.client.async_add_device(payload)
-            # Do NOT refresh the coordinator here: a refresh runs _async_reconcile,
-            # which would create the device subentry itself (unique_id=key) and make
-            # the async_create_entry below abort with "already_configured". Let this
-            # flow own subentry creation; the subentry-change reload listener
-            # refreshes the coordinator and creates the entities.
+            payload = {
+                "key": self._key, "screen": self._screen, "params": params, **self._extra
+            }
+            await coordinator.client.async_add_device(payload)
             return self.async_create_entry(
-                title=self._key, data={"key": self._key}, unique_id=self._key
+                title=f"TRMNL {self._key}",
+                data={CONF_DEVICE_KEY: self._key, CONF_HUB_ENTRY_ID: hub.entry_id},
             )
         return self.async_show_form(
-            step_id="params", data_schema=build_params_schema(fields)
+            step_id="dev_params", data_schema=build_params_schema(fields)
         )
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        sub = self._get_reconfigure_subentry()
-        self._key = sub.data["key"]
+    ) -> ConfigFlowResult:
+        entry = self._get_reconfigure_entry()
+        self._key = entry.data[CONF_DEVICE_KEY]
+        hub = self._hub_entry()
+        coordinator = hub.runtime_data
         device = next(
-            (d for d in self._coordinator.data.devices if d["key"] == self._key), {}
+            (d for d in coordinator.data.devices if d["key"] == self._key), {}
         )
         self._screen = device.get("screen")
-        fields = self._coordinator.data.screen_params(self._screen)
+        fields = coordinator.data.screen_params(self._screen)
         if user_input is not None or not fields:
             params = user_input or {}
-            await self._coordinator.client.async_update_device(
+            await coordinator.client.async_update_device(
                 self._key, {"screen": self._screen, "params": params}
             )
-            await self._coordinator.async_request_refresh()
-            return self.async_update_and_abort(
-                self._get_entry(), sub, data={"key": self._key}
-            )
+            await coordinator.async_request_refresh()
+            return self.async_abort(reason="reconfigure_successful")
         return self.async_show_form(
             step_id="reconfigure",
             data_schema=build_params_schema(fields, current=device.get("params") or {}),

@@ -286,7 +286,11 @@ pub async fn handle_display<R: DeviceRegistry>(
             // built-in registration screen. We deliberately do NOT fall back to
             // default_screen here: an unregistered device must show its
             // registration code so it can be onboarded (e.g. in Home Assistant).
-            let screen_to_use = config.registration.screen.as_deref();
+            let screen_to_use = config
+                .registration
+                .screen
+                .as_deref()
+                .filter(|s| !s.is_empty());
 
             let (registration_svg, screen_name, refresh_rate) = if let Some(screen_name) =
                 screen_to_use

@@ -213,6 +213,7 @@ pub struct SettingsWrite {
     pub(crate) registration_enabled: Option<bool>,
     pub(crate) auth_mode: Option<String>,
     pub(crate) default_screen: Option<String>,
+    pub(crate) registration_screen: Option<String>,
 }
 
 pub async fn patch_settings(
@@ -237,6 +238,11 @@ pub async fn patch_settings(
             return Err(ApiError::BadRequest(format!("unknown screen `{screen}`")));
         }
     }
+    if let Some(screen) = &body.registration_screen {
+        if !screen.is_empty() && !state.config.load().screens.contains_key(screen) {
+            return Err(ApiError::BadRequest(format!("unknown screen `{screen}`")));
+        }
+    }
 
     // 2. Apply all mutations.
     let mut yaml = state
@@ -255,6 +261,11 @@ pub async fn patch_settings(
     if let Some(screen) = &body.default_screen {
         yaml = config_writer::set_scalar(&yaml, &["default_screen"], screen.as_str().into())
             .map_err(|e| ApiError::Internal(e.to_string()))?;
+    }
+    if let Some(screen) = &body.registration_screen {
+        yaml =
+            config_writer::set_scalar(&yaml, &["registration", "screen"], screen.as_str().into())
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
 
     // 3. Persist.

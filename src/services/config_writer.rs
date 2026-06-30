@@ -45,27 +45,52 @@ fn render(doc: Document) -> String {
     doc.source().to_string()
 }
 
-/// Replace a scalar value at `path` (e.g. `["registration","enabled"]`),
+/// Set a scalar value at `path` (e.g. `["registration","enabled"]`),
 /// preserving all surrounding comments and formatting.
+///
+/// If the key already exists it is replaced in place; if it is absent it is
+/// added to its parent mapping (which must exist). This covers the common case
+/// where a key is optional in config and may not be present yet.
 pub fn set_scalar(
     yaml: &str,
     path: &[&str],
     value: serde_yaml::Value,
 ) -> Result<String, ConfigWriteError> {
+    assert!(!path.is_empty(), "set_scalar: path must not be empty");
+
     let doc = document(yaml)?;
 
+    // Build the full route to the target key.
     let mut route = yamlpath::Route::default();
     for key in path {
         route = route.with_key(*key);
     }
 
-    let patch = Patch {
-        route,
+    // Try Replace first (key already exists). On failure, fall back to Add
+    // at the parent route (adds the key to an existing mapping).
+    let replace_patch = Patch {
+        route: route.clone(),
         operation: Op::Replace(to_patch_value(&value)?),
     };
+    if let Ok(new_doc) = apply_yaml_patches(&doc, &[replace_patch]) {
+        return Ok(render(new_doc));
+    }
 
-    let new_doc =
-        apply_yaml_patches(&doc, &[patch]).map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
+    // Key doesn't exist yet — add it to the parent mapping.
+    let last_key = path.last().expect("non-empty path");
+    let mut parent_route = yamlpath::Route::default();
+    for key in &path[..path.len() - 1] {
+        parent_route = parent_route.with_key(*key);
+    }
+    let add_patch = Patch {
+        route: parent_route,
+        operation: Op::Add {
+            key: last_key.to_string(),
+            value: to_patch_value(&value)?,
+        },
+    };
+    let new_doc = apply_yaml_patches(&doc, &[add_patch])
+        .map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
     Ok(render(new_doc))
 }
 

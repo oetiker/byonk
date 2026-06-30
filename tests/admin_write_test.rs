@@ -112,3 +112,59 @@ async fn test_patch_then_delete_device() {
     let del_again = app.delete("/api/admin/devices/CC:DD", &[AUTH]).await;
     assert_eq!(del_again.status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn test_patch_settings_registration_screen_persists() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
+
+    let resp = app
+        .patch_json(
+            "/api/admin/settings",
+            &[AUTH],
+            r#"{"registration_screen":"transit"}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::OK);
+
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        on_disk.contains("screen: transit"),
+        "expected 'screen: transit' in:\n{on_disk}"
+    );
+}
+
+#[tokio::test]
+async fn test_patch_settings_registration_screen_empty_is_builtin_sentinel() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
+
+    let resp = app
+        .patch_json(
+            "/api/admin/settings",
+            &[AUTH],
+            r#"{"registration_screen":""}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::OK);
+
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        on_disk.contains("screen: ''") || on_disk.contains("screen: \"\""),
+        "expected empty screen sentinel in:\n{on_disk}"
+    );
+}
+
+#[tokio::test]
+async fn test_patch_settings_unknown_registration_screen_returns_400() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+    let resp = app
+        .patch_json(
+            "/api/admin/settings",
+            &[AUTH],
+            r#"{"registration_screen":"does-not-exist"}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+}

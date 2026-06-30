@@ -6,18 +6,19 @@ from dataclasses import dataclass
 from datetime import timedelta
 import logging
 
-from homeassistant.config_entries import ConfigEntry, ConfigSubentry
+from homeassistant.config_entries import SOURCE_INTEGRATION_DISCOVERY, ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import ByonkApiError, ByonkAuthError, ByonkClient
-from .const import DOMAIN, UPDATE_INTERVAL_SECONDS
-from .repairs import async_sync_pending_issues
+from .const import CONF_DEVICE_KEY, DOMAIN, UPDATE_INTERVAL_SECONDS
 
 _LOGGER = logging.getLogger(__name__)
 
 type ByonkConfigEntry = ConfigEntry["ByonkCoordinator"]
+
+REMOVE_STRIKES = 2
 
 
 @dataclass(frozen=True)
@@ -41,7 +42,12 @@ class ByonkData:
                 return s.get("params") or []
         return []
 
+    def registration_screen(self) -> str | None:
+        return self.config.get("registration", {}).get("screen")
+
     def default_screen(self) -> str | None:
+        # Retained only so the not-yet-renamed hub select keeps working between
+        # this task and Task 5, where the select is repurposed and this is removed.
         return self.config.get("default_screen")
 
     def registration_enabled(self) -> bool:
@@ -65,7 +71,8 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
         self.client = client
         self.entry = entry
         self.slug = slug
-        self._missing_removals: dict[str, int] = {}
+        self._remove_strikes: dict[str, int] = {}
+        self._orphan_strikes: dict[str, int] = {}
 
     async def _async_update_data(self) -> ByonkData:
         try:
@@ -87,37 +94,83 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
             dither=screens.get("dither_algorithms", []),
             config=config,
         )
-        self._async_reconcile(data)
-        async_sync_pending_issues(self.hass, data.pending)
+        # Skip reconcile on the very first refresh: entry.runtime_data is not yet
+        # set at that point (it is set in __init__.py after async_config_entry_first_refresh
+        # returns), so HA device-entry lookups and eager task execution would race against
+        # the incomplete setup. Discovery sync is still scheduled with eager_start=False so
+        # it runs on the first real event-loop yield AFTER runtime_data is set.
+        if self.data is not None:
+            await self._async_reconcile(data)
+        self._async_sync_discovery(data)
         return data
 
-    def _async_reconcile(self, data: ByonkData) -> None:
-        existing = {
-            sub.unique_id: sub_id
-            for sub_id, sub in self.entry.subentries.items()
-            if sub.subentry_type == "device"
+    def _device_entries(self) -> dict[str, ConfigEntry]:
+        return {
+            e.data[CONF_DEVICE_KEY]: e
+            for e in self.hass.config_entries.async_entries(DOMAIN)
+            if CONF_DEVICE_KEY in e.data
         }
-        registered_keys = {
-            d["key"] for d in data.devices if d.get("registered")
-        }
-        for key in registered_keys - set(existing):
-            self.hass.config_entries.async_add_subentry(
-                self.entry,
-                ConfigSubentry(
-                    data={"key": key},
-                    subentry_type="device",
-                    title=key,
-                    unique_id=key,
-                ),
-            )
-        absent = set(existing) - registered_keys
-        # reset strike counts for devices that are present
-        for key in registered_keys:
-            self._missing_removals.pop(key, None)
-        for key in absent:
-            self._missing_removals[key] = self._missing_removals.get(key, 0) + 1
-            if self._missing_removals[key] >= 2:
-                self.hass.config_entries.async_remove_subentry(
-                    self.entry, existing[key]
+
+    async def _async_reconcile(self, data: ByonkData) -> None:
+        device_entries = self._device_entries()
+        ha_keys = set(device_entries)
+        byonk_registered = {d["key"] for d in data.devices if d.get("registered")}
+
+        for key in ha_keys & byonk_registered:
+            self._remove_strikes.pop(key, None)
+            self._orphan_strikes.pop(key, None)
+
+        # HA entry exists, byonk no longer registers it -> remove HA entry (grace).
+        for key in ha_keys - byonk_registered:
+            self._remove_strikes[key] = self._remove_strikes.get(key, 0) + 1
+            if self._remove_strikes[key] >= REMOVE_STRIKES:
+                self._remove_strikes.pop(key, None)
+                self.hass.async_create_task(
+                    self.hass.config_entries.async_remove(device_entries[key].entry_id)
                 )
-                self._missing_removals.pop(key, None)
+
+        # byonk registers a device HA has no entry for -> orphan; delete from byonk (grace).
+        for key in byonk_registered - ha_keys:
+            self._orphan_strikes[key] = self._orphan_strikes.get(key, 0) + 1
+            if self._orphan_strikes[key] >= REMOVE_STRIKES:
+                self._orphan_strikes.pop(key, None)
+                try:
+                    await self.client.async_delete_device(key)
+                except ByonkApiError as err:
+                    _LOGGER.warning("orphan prune failed for %s: %s", key, err)
+
+    def _async_sync_discovery(self, data: ByonkData) -> None:
+        pending_macs = {p["mac"] for p in data.pending}
+        configured = set(self._device_entries())
+        flows = self.hass.config_entries.flow.async_progress_by_handler(
+            DOMAIN, include_uninitialized=True
+        )
+        discovery_flows = [
+            f for f in flows
+            if f["context"].get("source") == SOURCE_INTEGRATION_DISCOVERY
+        ]
+        in_progress = {f["context"].get("unique_id") for f in discovery_flows}
+
+        for p in data.pending:
+            mac = p["mac"]
+            if mac in configured or mac in in_progress:
+                continue
+            # eager_start=False ensures the flow task runs on the next event-loop
+            # iteration, after entry.runtime_data has been set by async_setup_entry.
+            self.hass.async_create_task(
+                self.hass.config_entries.flow.async_init(
+                    DOMAIN,
+                    context={"source": SOURCE_INTEGRATION_DISCOVERY},
+                    data={
+                        "key": mac,
+                        "code": p.get("registration_code"),
+                        "model": p.get("model"),
+                    },
+                ),
+                eager_start=False,
+            )
+
+        for f in discovery_flows:
+            uid = f["context"].get("unique_id")
+            if uid and uid not in pending_macs:
+                self.hass.config_entries.flow.async_abort(f["flow_id"])

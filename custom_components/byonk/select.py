@@ -6,6 +6,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .const import CONF_DEVICE_KEY
 from .coordinator import ByonkConfigEntry, ByonkCoordinator
 from .entity import ByonkDeviceEntity, ByonkHubEntity
 from .param_form import default_params
@@ -15,21 +16,19 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ByonkConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator = entry.runtime_data
-    async_add_entities(
-        [ByonkDefaultScreenSelect(coordinator), ByonkAuthModeSelect(coordinator)]
-    )
-    for sub_id, sub in entry.subentries.items():
-        if sub.subentry_type != "device":
-            continue
-        key = sub.data["key"]
+    if CONF_DEVICE_KEY in entry.data:
+        key = entry.data[CONF_DEVICE_KEY]
         async_add_entities(
             [
                 ByonkScreenSelect(coordinator, key),
                 ByonkDitherSelect(coordinator, key),
                 ByonkPanelSelect(coordinator, key),
-            ],
-            config_subentry_id=sub_id,
+            ]
         )
+        return
+    async_add_entities(
+        [ByonkDefaultScreenSelect(coordinator), ByonkAuthModeSelect(coordinator)]
+    )
 
 
 class _ByonkSelect(ByonkDeviceEntity, SelectEntity):

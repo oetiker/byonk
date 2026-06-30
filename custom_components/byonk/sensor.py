@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
+from .const import CONF_DEVICE_KEY
 from .coordinator import ByonkConfigEntry
 from .entity import ByonkDeviceEntity, ByonkHubEntity
 
@@ -67,15 +68,15 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ByonkConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator = entry.runtime_data
-    async_add_entities([ByonkPendingSensor(coordinator)])
-    for sub_id, sub in entry.subentries.items():
-        if sub.subentry_type != "device":
-            continue
-        key = sub.data["key"]
+    if CONF_DEVICE_KEY in entry.data:
+        key = entry.data[CONF_DEVICE_KEY]
         async_add_entities(
-            (ByonkDeviceSensor(coordinator, key, desc) for desc in DEVICE_SENSORS),
-            config_subentry_id=sub_id,
+            ByonkDeviceSensor(coordinator, key, desc) for desc in DEVICE_SENSORS
         )
+        return
+    # hub entry: no hub sensors after the pending sensor is removed (Task 5).
+    # ByonkPendingSensor still added here until Task 5 removes it.
+    async_add_entities([ByonkPendingSensor(coordinator)])
 
 
 class ByonkPendingSensor(ByonkHubEntity, SensorEntity):

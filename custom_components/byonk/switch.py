@@ -8,6 +8,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .const import CONF_DEVICE_KEY
 from .coordinator import ByonkConfigEntry
 from .entity import ByonkHubEntity
 
@@ -15,6 +16,8 @@ from .entity import ByonkHubEntity
 async def async_setup_entry(
     hass: HomeAssistant, entry: ByonkConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
+    if CONF_DEVICE_KEY in entry.data:
+        return
     async_add_entities([ByonkRegistrationSwitch(entry.runtime_data)])
 
 

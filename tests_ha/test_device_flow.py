@@ -87,3 +87,13 @@ async def test_hub_single_instance(hass, byonk):
     )
     assert result["type"] == "abort"
     assert result["reason"] == "single_instance_allowed"
+
+
+async def test_hub_reconfigure_aborts_not_supported(hass, byonk):
+    """Reconfigure on the hub entry must abort gracefully (not raise KeyError)."""
+    hub = await _setup_hub(hass)
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "reconfigure", "entry_id": hub.entry_id}
+    )
+    assert result["type"] == "abort"
+    assert result["reason"] == "not_supported"

@@ -188,6 +188,8 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         hub = self._hub_entry()
+        if hub is None:
+            return self.async_abort(reason="no_hub")
         coordinator = hub.runtime_data
         fields = coordinator.data.screen_params(self._screen)
         if user_input is not None or not fields:
@@ -208,8 +210,12 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         entry = self._get_reconfigure_entry()
+        if CONF_DEVICE_KEY not in entry.data:
+            return self.async_abort(reason="not_supported")
         self._key = entry.data[CONF_DEVICE_KEY]
         hub = self._hub_entry()
+        if hub is None:
+            return self.async_abort(reason="no_hub")
         coordinator = hub.runtime_data
         device = next(
             (d for d in coordinator.data.devices if d["key"] == self._key), {}

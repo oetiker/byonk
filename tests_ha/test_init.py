@@ -10,7 +10,7 @@ SCREENS = {
     "panels": [{"name": "trmnl_og", "width": 800, "height": 480, "colors": "bw"}],
     "dither_algorithms": ["atkinson"],
 }
-CONFIG = {"registration": {"enabled": True}, "default_screen": "transit", "auth_mode": "api_key"}
+CONFIG = {"registration": {"enabled": True}, "auth_mode": "api_key"}
 
 
 def _entry():

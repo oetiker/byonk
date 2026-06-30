@@ -75,7 +75,6 @@ async def async_setup_entry(
         )
         return
     # hub entry: no diagnostic hub sensors (pending devices surface as Discovered cards)
-    return
 
 
 class ByonkDeviceSensor(ByonkDeviceEntity, SensorEntity):

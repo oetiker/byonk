@@ -136,7 +136,7 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
 
     def _async_sync_discovery(self, data: ByonkData) -> None:
         pending_macs = {p["mac"] for p in data.pending}
-        configured = set(self._device_entries())
+        configured = {e.unique_id for e in self.hass.config_entries.async_entries(DOMAIN) if e.unique_id != DOMAIN}
         flows = self.hass.config_entries.flow.async_progress_by_handler(
             DOMAIN, include_uninitialized=True
         )

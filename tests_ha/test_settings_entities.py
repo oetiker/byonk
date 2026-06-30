@@ -7,7 +7,7 @@ from tests_ha.conftest import make_hub_entry
 
 SCREENS = {"screens": [{"name": "transit", "params": [], "schema_error": None}],
            "panels": [], "dither_algorithms": []}
-CONFIG = {"registration": {"enabled": False}, "default_screen": "transit", "auth_mode": "api_key"}
+CONFIG = {"registration": {"enabled": False}, "auth_mode": "api_key"}
 
 
 async def test_registration_switch_turns_on(hass):

@@ -39,9 +39,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Config hot-reload**: admin writes update `config.yaml` in place (preserving
   comments and formatting via targeted YAML path patching) and take effect
   without a restart.
+- Admin settings API accepts `registration_screen` to set the screen shown to
+  new (un-onboarded) devices.
 
 ### Changed
 
+- Home Assistant integration: TRMNL devices are now Home Assistant–owned. A new
+  device appears as a native **Discovered** card; configuring it creates a
+  per-device config entry and writes the mapping to byonk. Home Assistant is the
+  source of truth — byonk ships with no devices and mappings without a matching
+  HA device are pruned automatically. Replaces the previous subentry +
+  Repairs-issue onboarding.
 - **Google Photos screen now displays photos in album order** instead of picking
   a random one each refresh. The position advances by one per refresh interval and
   is derived statelessly from the clock (no persistent state needed), so it

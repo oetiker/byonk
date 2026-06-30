@@ -37,17 +37,16 @@ automatically, and exposes Byonk devices and settings as Home Assistant entities
 |--------|------|-------------|
 | Registration enabled | Switch | Allow new TRMNL devices to register |
 | Auth mode | Select | Authentication mode for device requests |
-| Default screen | Select | Fallback screen shown to unregistered devices |
-| Pending devices | Sensor | Count of devices waiting to be onboarded |
+| New device screen | Select | Screen shown on un-onboarded devices while awaiting configuration |
 
 ### Per-device entities (one device per TRMNL)
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| Battery | Sensor | Battery voltage (V) |
-| Signal | Sensor | Wi-Fi RSSI (dBm) |
+| Battery voltage | Sensor | Battery voltage (V) |
+| Signal strength | Sensor | Wi-Fi RSSI (dBm) |
 | Last seen | Sensor | Timestamp of last check-in |
-| Firmware | Sensor | Firmware version string |
+| Firmware version | Sensor | Firmware version string |
 | Model | Sensor | Panel model identifier |
 | Screen | Select | Active screen assigned to this device |
 | Dither | Select | Dither algorithm override |
@@ -55,26 +54,39 @@ automatically, and exposes Byonk devices and settings as Home Assistant entities
 
 ## Onboarding a New Device
 
-When a TRMNL device boots for the first time it displays a **registration code** on
-its e-ink screen.  Byonk records the device as pending.
+Byonk ships with no devices configured — Home Assistant is the source of truth.
+When a TRMNL device boots for the first time, it contacts Byonk and displays a
+**registration code** on its e-ink screen while waiting to be claimed.
 
-1. A **Repairs** issue titled *Pending Byonk device* appears in Home Assistant to alert
-   you (it is informational — there is no **Fix** button).
-2. Open the Byonk integration and use the **Add device** action.
-3. In the form, choose the registration code that matches the code shown on the device
-   and select the screen you want displayed on it.
-4. Optionally set a dither algorithm and panel profile.
-5. Submit — the device is now registered and will start fetching its assigned screen.
+A **Discovered** card for the new device appears automatically in
+**Settings → Devices & Services**.
 
-> **Note:** Byonk tracks connected-but-unregistered devices in memory, so the
-> pending list clears if the Byonk add-on restarts. A device reappears as pending
-> the next time it checks in (TRMNL devices poll on their refresh interval).
+1. Click **Configure** on the Discovered card.
+2. In the *Set up TRMNL device* form, choose the screen you want displayed on the
+   device. Optionally set a dither algorithm and panel type.
+3. If the chosen screen declares parameters (via its `@params` schema), a second form
+   appears to fill in those values.
+4. Submit — the device is now an HA device with its own config entry, and its
+   screen mapping is written to Byonk. The device starts fetching its assigned screen
+   on the next refresh.
+
+> **Note:** The **New device screen** select on the *Byonk Server* hub device
+> controls what an un-onboarded device displays on its e-ink panel while waiting to
+> be configured in Home Assistant.
+
+Removing an HA device (via **Settings → Devices & Services → Delete**) removes its
+mapping from Byonk. Byonk mappings that have no corresponding HA device are pruned
+automatically.
 
 ## Editing Device Settings
 
-To change the screen or parameters for an already-registered device, open the Byonk
-integration, locate the device subentry, and click **Configure**.  The reconfigure
-form lets you update screen parameters without removing and re-adding the device.
+To change the screen for an already-onboarded device, use the **Screen** select
+entity on the device card.  To adjust dither algorithm or panel type, use the
+**Dither** or **Panel** select entities.
+
+To update the per-screen parameters (drawn from the screen's `@params` schema), open
+the device in **Settings → Devices & Services** and click **Reconfigure**.  The form
+lets you update the parameter values without removing and re-adding the device.
 
 ## Re-authentication
 

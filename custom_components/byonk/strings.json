@@ -56,8 +56,8 @@
       "panel": {
         "name": "Panel"
       },
-      "default_screen": {
-        "name": "Default screen"
+      "new_device_screen": {
+        "name": "New device screen"
       },
       "auth_mode": {
         "name": "Auth mode"
@@ -78,9 +78,6 @@
       },
       "model": {
         "name": "Model"
-      },
-      "pending_devices": {
-        "name": "Pending devices"
       }
     }
   }

@@ -16,7 +16,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import CONF_DEVICE_KEY
 from .coordinator import ByonkConfigEntry
-from .entity import ByonkDeviceEntity, ByonkHubEntity
+from .entity import ByonkDeviceEntity
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -74,35 +74,8 @@ async def async_setup_entry(
             ByonkDeviceSensor(coordinator, key, desc) for desc in DEVICE_SENSORS
         )
         return
-    # hub entry: no hub sensors after the pending sensor is removed (Task 5).
-    # ByonkPendingSensor still added here until Task 5 removes it.
-    async_add_entities([ByonkPendingSensor(coordinator)])
-
-
-class ByonkPendingSensor(ByonkHubEntity, SensorEntity):
-    _attr_translation_key = "pending_devices"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    def __init__(self, coordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_pending_devices"
-
-    @property
-    def native_value(self) -> int:
-        return len(self.coordinator.data.pending)
-
-    @property
-    def extra_state_attributes(self) -> dict:
-        return {
-            "devices": [
-                {
-                    "registration_code": p.get("registration_code"),
-                    "model": p.get("model"),
-                    "last_seen": p.get("last_seen"),
-                }
-                for p in self.coordinator.data.pending
-            ]
-        }
+    # hub entry: no diagnostic hub sensors (pending devices surface as Discovered cards)
+    return
 
 
 class ByonkDeviceSensor(ByonkDeviceEntity, SensorEntity):

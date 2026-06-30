@@ -2,7 +2,8 @@ from unittest.mock import AsyncMock, patch
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.byonk.const import CONF_ADDON_SLUG, CONF_BASE_URL, DOMAIN
+from custom_components.byonk.const import BUILTIN_SCREEN_LABEL, CONF_ADDON_SLUG, CONF_BASE_URL, DOMAIN
+from tests_ha.conftest import make_hub_entry
 
 SCREENS = {"screens": [{"name": "transit", "params": [], "schema_error": None}],
            "panels": [], "dither_algorithms": []}
@@ -30,3 +31,39 @@ async def test_registration_switch_turns_on(hass):
             "switch", "turn_on", {"entity_id": ent.entity_id}, blocking=True
         )
     assert settings.await_args.args[0] == {"registration_enabled": True}
+
+
+async def test_new_device_screen_select(hass, byonk):
+    byonk.config = {"registration": {"enabled": True, "screen": "transit"}}
+    hub = make_hub_entry(hass)
+    await hass.config_entries.async_setup(hub.entry_id)
+    await hass.async_block_till_done()
+
+    state = hass.states.get("select.byonk_new_device_screen")
+    assert state is not None
+    assert state.state == "transit"
+
+    await hass.services.async_call(
+        "select", "select_option",
+        {"entity_id": "select.byonk_new_device_screen", "option": "transit"},
+        blocking=True,
+    )
+    assert byonk.update_settings.await_args.args[0] == {"registration_screen": "transit"}
+
+
+async def test_new_device_screen_builtin(hass, byonk):
+    # no registration.screen configured -> shows the built-in label
+    byonk.config = {"registration": {"enabled": True}}
+    hub = make_hub_entry(hass)
+    await hass.config_entries.async_setup(hub.entry_id)
+    await hass.async_block_till_done()
+
+    state = hass.states.get("select.byonk_new_device_screen")
+    assert state.state == BUILTIN_SCREEN_LABEL
+
+    await hass.services.async_call(
+        "select", "select_option",
+        {"entity_id": "select.byonk_new_device_screen", "option": BUILTIN_SCREEN_LABEL},
+        blocking=True,
+    )
+    assert byonk.update_settings.await_args.args[0] == {"registration_screen": ""}

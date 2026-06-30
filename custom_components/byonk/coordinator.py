@@ -45,11 +45,6 @@ class ByonkData:
     def registration_screen(self) -> str | None:
         return self.config.get("registration", {}).get("screen")
 
-    def default_screen(self) -> str | None:
-        # Retained only so the not-yet-renamed hub select keeps working between
-        # this task and Task 5, where the select is repurposed and this is removed.
-        return self.config.get("default_screen")
-
     def registration_enabled(self) -> bool:
         return bool(self.config.get("registration", {}).get("enabled", False))
 

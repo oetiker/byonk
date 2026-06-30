@@ -1,9 +1,9 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from homeassistant.config_entries import ConfigEntryState
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.byonk.const import CONF_ADDON_SLUG, CONF_BASE_URL, CONF_DEVICE_KEY, DOMAIN
+from custom_components.byonk.const import CONF_ADDON_SLUG, CONF_BASE_URL, DOMAIN
 from tests_ha.conftest import make_device_entry, make_hub_entry
 
 DEV = {

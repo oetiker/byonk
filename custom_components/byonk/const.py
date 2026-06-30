@@ -19,5 +19,4 @@ CONF_HUB_ENTRY_ID = "hub_entry_id"
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SELECT, Platform.SWITCH]
 
-# Repairs
-ISSUE_PENDING_PREFIX = "device_pending_"
+BUILTIN_SCREEN_LABEL = "(built-in)"

@@ -6,7 +6,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_DEVICE_KEY
+from .const import BUILTIN_SCREEN_LABEL, CONF_DEVICE_KEY
 from .coordinator import ByonkConfigEntry, ByonkCoordinator
 from .entity import ByonkDeviceEntity, ByonkHubEntity
 from .param_form import default_params
@@ -27,7 +27,7 @@ async def async_setup_entry(
         )
         return
     async_add_entities(
-        [ByonkDefaultScreenSelect(coordinator), ByonkAuthModeSelect(coordinator)]
+        [ByonkNewDeviceScreenSelect(coordinator), ByonkAuthModeSelect(coordinator)]
     )
 
 
@@ -83,24 +83,28 @@ class ByonkPanelSelect(_ByonkSelect):
         await self._write({"panel": option})
 
 
-class ByonkDefaultScreenSelect(ByonkHubEntity, SelectEntity):
-    _attr_translation_key = "default_screen"
+class ByonkNewDeviceScreenSelect(ByonkHubEntity, SelectEntity):
+    _attr_translation_key = "new_device_screen"
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, coordinator) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_default_screen"
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_new_device_screen"
 
     @property
     def options(self) -> list[str]:
-        return self.coordinator.data.screen_names()
+        return [BUILTIN_SCREEN_LABEL, *self.coordinator.data.screen_names()]
 
     @property
     def current_option(self) -> str | None:
-        return self.coordinator.data.default_screen()
+        screen = self.coordinator.data.registration_screen()
+        return screen or BUILTIN_SCREEN_LABEL
 
     async def async_select_option(self, option: str) -> None:
-        await self.coordinator.client.async_update_settings({"default_screen": option})
+        value = "" if option == BUILTIN_SCREEN_LABEL else option
+        await self.coordinator.client.async_update_settings(
+            {"registration_screen": value}
+        )
         await self.coordinator.async_request_refresh()
 
 

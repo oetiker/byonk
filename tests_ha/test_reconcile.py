@@ -1,6 +1,6 @@
 from homeassistant.config_entries import SOURCE_INTEGRATION_DISCOVERY
 
-from custom_components.byonk.const import CONF_DEVICE_KEY, DOMAIN
+from custom_components.byonk.const import DOMAIN
 from tests_ha.conftest import make_device_entry, make_hub_entry
 
 DEV = {

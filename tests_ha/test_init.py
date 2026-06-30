@@ -34,4 +34,4 @@ async def test_setup_entry_creates_hub_and_loads(hass):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.LOADED
-    assert entry.runtime_data.data.default_screen() == "transit"
+    assert entry.runtime_data.data.auth_mode() == "api_key"

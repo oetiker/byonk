@@ -1,7 +1,7 @@
 import voluptuous as vol
 from homeassistant.helpers import selector
 
-from custom_components.byonk.param_form import build_params_schema
+from custom_components.byonk.param_form import build_params_schema, coerce_params
 
 FIELDS = [
     {"name": "station", "type": "string", "required": True, "label": "Stop"},
@@ -9,6 +9,30 @@ FIELDS = [
     {"name": "theme", "type": "enum", "options": ["light", "dark"]},
     {"name": "enabled", "type": "bool", "default": True},
 ]
+
+
+def test_coerce_int_params_from_number_selector_float():
+    """HA's NumberSelector yields floats; int fields must be coerced to int so
+    byonk (which requires a real integer) accepts them."""
+    coerced = coerce_params(FIELDS, {"limit": 8.0, "station": "Olten", "enabled": True})
+    assert coerced["limit"] == 8
+    assert isinstance(coerced["limit"], int)
+    # non-int fields pass through untouched
+    assert coerced["station"] == "Olten"
+    assert coerced["enabled"] is True
+
+
+def test_coerce_leaves_non_integer_float_for_int_field():
+    """A non-whole float for an int field is left as-is so byonk reports the
+    validation error rather than us silently truncating."""
+    coerced = coerce_params(FIELDS, {"limit": 8.5})
+    assert coerced["limit"] == 8.5
+
+
+def test_coerce_float_field_stays_float():
+    fields = [{"name": "opacity", "type": "float"}]
+    coerced = coerce_params(fields, {"opacity": 0.5})
+    assert coerced["opacity"] == 0.5
 
 
 def test_builds_selectors_per_type():

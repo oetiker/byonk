@@ -30,7 +30,7 @@ from .const import (
     CONF_HUB_ENTRY_ID,
     DOMAIN,
 )
-from .param_form import build_params_schema
+from .param_form import build_params_schema, coerce_params
 
 # Provisioning restarts the add-on; byonk's HTTP needs a moment to come back up
 # and load the new token. Probe the admin API until it answers (or give up).
@@ -193,11 +193,21 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
         coordinator = hub.runtime_data
         fields = coordinator.data.screen_params(self._screen)
         if user_input is not None or not fields:
-            params = user_input or {}
+            params = coerce_params(fields, user_input or {})
             payload = {
                 "key": self._key, "screen": self._screen, "params": params, **self._extra
             }
-            await coordinator.client.async_add_device(payload)
+            try:
+                await coordinator.client.async_add_device(payload)
+            except ByonkApiError as err:
+                if not fields:
+                    return self.async_abort(reason="add_failed")
+                return self.async_show_form(
+                    step_id="dev_params",
+                    data_schema=build_params_schema(fields, current=params),
+                    errors={"base": "add_failed"},
+                    description_placeholders={"error": str(err)},
+                )
             return self.async_create_entry(
                 title=f"TRMNL {self._key}",
                 data={CONF_DEVICE_KEY: self._key, CONF_HUB_ENTRY_ID: hub.entry_id},
@@ -223,10 +233,20 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
         self._screen = device.get("screen")
         fields = coordinator.data.screen_params(self._screen)
         if user_input is not None or not fields:
-            params = user_input or {}
-            await coordinator.client.async_update_device(
-                self._key, {"screen": self._screen, "params": params}
-            )
+            params = coerce_params(fields, user_input or {})
+            try:
+                await coordinator.client.async_update_device(
+                    self._key, {"screen": self._screen, "params": params}
+                )
+            except ByonkApiError as err:
+                if not fields:
+                    return self.async_abort(reason="update_failed")
+                return self.async_show_form(
+                    step_id="reconfigure",
+                    data_schema=build_params_schema(fields, current=params),
+                    errors={"base": "update_failed"},
+                    description_placeholders={"error": str(err)},
+                )
             await coordinator.async_request_refresh()
             return self.async_abort(reason="reconfigure_successful")
         return self.async_show_form(

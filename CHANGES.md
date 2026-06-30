@@ -88,6 +88,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alongside the real choices so the actual setting is always visible.
 - **Home Assistant signal-strength (RSSI) sensor** is now enabled by default instead of
   hidden, so a device's WiFi signal is visible without manually enabling the entity.
+- **Home Assistant integer screen-parameters** (e.g. transit's `limit`) no longer fail
+  onboarding with "Unknown error occurred". Home Assistant's number input returns a
+  float, which byonk rejected as a non-integer; the integration now coerces whole-number
+  floats back to `int` before sending. byonk validation errors are also shown as a
+  readable form message instead of a generic crash.
 
 ## 0.15.0 - 2026-04-28
 

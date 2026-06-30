@@ -1,13 +1,13 @@
-# Phase 6 — Device-page enhancements (model string + per-device refresh)
+# Phase 6 — Device-page enhancements (model string + per-device refresh + device name)
 
-_Status: design approved 2026-06-30. Covers two of the four device-page findings
-surfaced during Phase 5 live validation. (Finding #1 — Panel/Dither read-back —
-and finding #3 — RSSI sensor enabled by default — are already fixed and
-committed; they are out of scope here.)_
+_Status: design approved 2026-06-30. Covers three device-page improvements (the
+two remaining Phase-5 findings plus a device-naming follow-up). Finding #1 —
+Panel/Dither read-back — and finding #3 — RSSI sensor enabled by default — are
+already fixed and committed; they are out of scope here._
 
 ## Background
 
-During hands-on testing of an HA-onboarded TRMNL's device page, two gaps were
+During hands-on testing of an HA-onboarded TRMNL's device page, three gaps were
 found:
 
 - **#2 — Model shows "og" for a reTerminal E1002.** byonk collapses every device
@@ -18,6 +18,11 @@ found:
   screen-level `default_refresh`, overridable only by the screen's Lua
   (`refresh_rate`). There is no way to make a single device refresh on a
   different cadence.
+- **#5 — Devices are identified only by MAC.** A TRMNL appears as
+  `TRMNL <mac>` in HA and is keyed by MAC in byonk. There is no friendly name,
+  which is awkward in real life. Home Assistant already lets a user rename a
+  device, but that name lives only in HA and is not reflected in byonk's config,
+  logs, or dev UI.
 
 ## Finding #2 — Surface the real model string
 
@@ -132,6 +137,61 @@ override only replaces the static screen default.
 - Add `Platform.NUMBER` to the integration's `PLATFORMS` list (in code) so the
   new platform is set up and torn down with the others.
 
+## Finding #5 — Device name (HA-owned, synced to byonk)
+
+### Approach
+
+Home Assistant owns the name (consistent with the Phase-5 "HA owns devices"
+model). The user renames the device with HA's native device rename (the ✏️ on
+the device page, which sets `name_by_user`); the integration mirrors that name
+down to byonk. There is **no** separate "Name" entity and **no** name field in
+the onboarding/reconfigure dialogs — those would duplicate HA's built-in rename.
+
+The sync is **one-way, HA → byonk**. byonk never pushes a name upward; HA is
+authoritative. A hand-edited `name:` in `config.yaml` is overwritten on the next
+HA rename (and on the initial seeding push).
+
+### byonk side
+
+- `DeviceConfig` gains `name: Option<String>`.
+- Admin API: `DeviceWrite` gains `name`; `patch_device` merges it
+  (`body.name.or(existing.name)`); `device_block` writes `name:` when present;
+  `AdminDevice` exposes `name` (both seen and unseen paths).
+- The friendly name is surfaced where devices are currently shown by MAC: the
+  dev UI device list and the relevant device log lines. (MAC remains the config
+  key and the stable identifier; `name` is purely a label.)
+
+### HA side
+
+- The synced value is **`device.name_by_user` only** — the name the user
+  deliberately chose. The auto-generated default (`TRMNL <mac>`, i.e.
+  `device.name`) is **not** synced, so byonk's config is not polluted with a
+  redundant MAC-based name before the user renames. `effective_name =
+  device.name_by_user or ""` (empty string = "no user name").
+- byonk treats an empty `name` as no name (`None`); with no name set, byonk
+  displays the MAC as before.
+- On device-entry setup, resolve the HA device for this entry
+  (`identifiers={(DOMAIN, key)}`) and:
+  - **Seed once:** if `effective_name` differs from byonk's stored name, PATCH
+    byonk `{"name": effective_name}`.
+  - **Track changes:** register `async_track_device_registry_updated_event` for
+    that device id; on an `update` action whose name changed, PATCH byonk with
+    the new `effective_name`, then `async_request_refresh()`. Register via
+    `entry.async_on_unload(...)` so the listener is torn down with the entry.
+- The HA device id is assigned after the device is created (first entity
+  platform setup). Resolve it after `async_config_entry_first_refresh`/platform
+  setup; if not yet present, the next registry-updated event will carry it.
+- No new entity and no new platform for this feature.
+
+### Edge cases
+
+- **Name cleared in HA** (`name_by_user` reset to `None`): `effective_name`
+  becomes `""`; byonk clears its stored name and reverts to displaying the MAC.
+- **byonk device not yet present** (orphan/removal grace window): a failed PATCH
+  is logged and ignored; the next registry event or refresh re-attempts.
+- **Loops:** sync is one-way, so there is no echo. Seeding only PATCHes when the
+  value actually differs, avoiding a write on every setup.
+
 ## Testing
 
 **Rust**
@@ -144,10 +204,15 @@ override only replaces the static screen default.
 - Admin integration test: `PATCH /api/admin/devices/:key {"refresh": N}` then
   `GET` reads `refresh == N` back (seen and unseen device paths), mirroring the
   Phase-6 finding-#1 guards.
+- Admin integration test: `PATCH /api/admin/devices/:key {"name": "Kitchen"}`
+  then `GET` reads `name == "Kitchen"` back.
 
 **HA (`tests_ha`)**
 - `test_number.py`: the device refresh Number reflects byonk's stored value and,
   on `set_value`, PATCHes `{"refresh": N}`.
+- `test_name_sync.py`: after the device entry is set up, renaming the HA device
+  (set `name_by_user`) PATCHes byonk `{"name": ...}`; the initial seeding push
+  fires when byonk's stored name differs from HA's.
 
 ## Out of scope
 

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from homeassistant.components.number import NumberEntity
-from homeassistant.const import EntityCategory, UnitOfTime
+from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -20,8 +20,9 @@ async def async_setup_entry(
 
 
 class ByonkRefreshNumber(ByonkDeviceEntity, NumberEntity):
+    # No entity_category: this is a primary control, so it sits in the device's
+    # "Controls" card alongside the screen/dither/panel selects.
     _attr_translation_key = "refresh"
-    _attr_entity_category = EntityCategory.CONFIG
     _attr_native_min_value = 0
     _attr_native_max_value = 86400
     _attr_native_step = 60

@@ -131,8 +131,10 @@ override only replaces the static screen default.
   - `async_set_native_value(value)` → PATCH `{"refresh": int(value)}` then
     `async_request_refresh()`.
   - Bounds: `native_min_value = 0`, `native_max_value = 86400`,
-    `native_step = 60`, `native_unit_of_measurement = "s"`,
-    `entity_category = CONFIG`.
+    `native_step = 60`, `native_unit_of_measurement = "s"`.
+  - No `entity_category`: it is a primary control, so it sits in the device's
+    "Controls" card alongside the screen/dither/panel selects (not the separate
+    Configuration card).
   - `0 = no override` (byonk falls back to Lua/screen default).
 - Add `Platform.NUMBER` to the integration's `PLATFORMS` list (in code) so the
   new platform is set up and torn down with the others.

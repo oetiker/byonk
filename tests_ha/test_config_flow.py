@@ -63,3 +63,35 @@ async def test_addon_failure_aborts_gracefully(hass):
         result = await _start(hass)
     assert result["type"] == FlowResultType.ABORT
     assert result["reason"] == "addon_error"
+
+
+async def test_auth_probe_failure_aborts_not_500(hass):
+    """A dormant/old add-on (admin API 404/401) must abort cleanly, not raise."""
+    from custom_components.byonk.api import ByonkAuthError
+
+    with (
+        patch("custom_components.byonk.config_flow.is_hassio", return_value=True),
+        patch(
+            "custom_components.byonk.config_flow.async_ensure_addon_installed",
+            new=AsyncMock(return_value="abcd1234_byonk"),
+        ),
+        patch(
+            "custom_components.byonk.config_flow.async_read_token",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "custom_components.byonk.config_flow.async_provision_token",
+            new=AsyncMock(return_value="tok"),
+        ),
+        patch(
+            "custom_components.byonk.config_flow.async_get_base_url",
+            new=AsyncMock(return_value="http://addon:3000"),
+        ),
+        patch(
+            "custom_components.byonk.config_flow.ByonkClient.async_get_config",
+            new=AsyncMock(side_effect=ByonkAuthError("GET /api/admin/config -> 404")),
+        ),
+    ):
+        result = await _start(hass)
+    assert result["type"] == FlowResultType.ABORT
+    assert result["reason"] == "addon_unhealthy"

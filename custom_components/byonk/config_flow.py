@@ -73,6 +73,11 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
             await client.async_get_config()  # auth probe
         except AddonError:
             return self.async_abort(reason="addon_error")
+        except ByonkApiError:
+            # The add-on installed and started, but its admin API did not
+            # respond/authenticate (e.g. an image too old to expose it, or the
+            # token did not take effect). Abort cleanly instead of raising a 500.
+            return self.async_abort(reason="addon_unhealthy")
 
         await self.async_set_unique_id(DOMAIN)
         return self.async_create_entry(

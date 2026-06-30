@@ -186,7 +186,11 @@ class ByonkDeviceSubentryFlow(ConfigSubentryFlow):
             params = user_input or {}
             payload = {"key": self._key, "screen": self._screen, "params": params, **self._extra}
             await self._coordinator.client.async_add_device(payload)
-            await self._coordinator.async_request_refresh()
+            # Do NOT refresh the coordinator here: a refresh runs _async_reconcile,
+            # which would create the device subentry itself (unique_id=key) and make
+            # the async_create_entry below abort with "already_configured". Let this
+            # flow own subentry creation; the subentry-change reload listener
+            # refreshes the coordinator and creates the entities.
             return self.async_create_entry(
                 title=self._key, data={"key": self._key}, unique_id=self._key
             )

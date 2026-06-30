@@ -282,13 +282,11 @@ pub async fn handle_display<R: DeviceRegistry>(
                 ..Default::default()
             };
 
-            // Use registration screen if configured, otherwise use default screen
-            // Both have device.registration_code available for display
-            let screen_to_use = config
-                .registration
-                .screen
-                .as_deref()
-                .or(config.default_screen.as_deref());
+            // Use the custom registration screen if configured, otherwise the
+            // built-in registration screen. We deliberately do NOT fall back to
+            // default_screen here: an unregistered device must show its
+            // registration code so it can be onboarded (e.g. in Home Assistant).
+            let screen_to_use = config.registration.screen.as_deref();
 
             let (registration_svg, screen_name, refresh_rate) = if let Some(screen_name) =
                 screen_to_use
@@ -343,6 +341,36 @@ pub async fn handle_display<R: DeviceRegistry>(
                 .with_colors(Some(palette));
             let hash = cached.content_hash.clone();
             content_cache.store(cached);
+
+            // Record the unregistered device in the registry so it surfaces in
+            // /api/admin/pending for onboarding. Store the identity key so the
+            // pending registration_code matches the code shown on this screen
+            // (Device::new() would otherwise assign a random api_key).
+            let pending_id = DeviceId::new(device_id_str);
+            let mut pending_device = registry.find_by_id(&pending_id).await?.unwrap_or_else(|| {
+                Device::new(
+                    pending_id.clone(),
+                    DeviceModel::parse(model_str),
+                    headers
+                        .get_str("FW-Version")
+                        .unwrap_or("unknown")
+                        .to_string(),
+                )
+            });
+            pending_device.api_key = identity_key.clone();
+            pending_device.model = DeviceModel::parse(model_str);
+            pending_device.firmware_version = headers
+                .get_str("FW-Version")
+                .unwrap_or("unknown")
+                .to_string();
+            if let Some(battery) = headers.get_parsed::<f32>("Battery-Voltage") {
+                pending_device.battery_voltage = Some(battery);
+            }
+            if let Some(rssi) = headers.get_parsed::<i32>("RSSI") {
+                pending_device.rssi = Some(rssi);
+            }
+            pending_device.last_seen = chrono::Utc::now();
+            registry.upsert(pending_device).await?;
 
             // Build image URL
             let host = headers.get_str("Host").unwrap_or("localhost:3000");

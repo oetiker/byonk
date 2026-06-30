@@ -52,6 +52,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Device onboarding**: unregistered devices that contact `/api/display` are now
+  recorded in the device registry, so they appear in `/api/admin/pending` (and can be
+  onboarded from the Home Assistant integration). Previously a device that only ever
+  hit `/api/display` was shown a registration screen but never tracked, so it never
+  surfaced as pending. The pending entry's registration code now matches the code
+  shown on the device.
+- **Registration screen**: an unregistered device is now always shown its registration
+  code — the built-in registration screen — even when a `default_screen` is configured.
+  Previously `default_screen` took precedence and hid the code, blocking code-matched
+  onboarding. Set `registration.screen` to override with a custom registration screen.
+
 ## 0.15.0 - 2026-04-28
 
 ### New

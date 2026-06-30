@@ -293,3 +293,47 @@ async fn test_display_fallback_to_api_key() {
     common::assert_ok(&response);
     common::assert_valid_display_response(&response);
 }
+
+/// Bug B regression test: an unregistered device must be shown the built-in
+/// registration screen (screen_name="_registration") even when `default_screen`
+/// is configured. The embedded config has `default_screen: default`, so without
+/// the fix the device would get the "default" screen with no registration code.
+#[tokio::test]
+async fn test_unregistered_device_shows_registration_screen_despite_default_screen() {
+    // The embedded config has `default_screen: default` and `registration.enabled: true`.
+    // new_admin only adds the admin token; everything else comes from the embedded config.
+    let app = TestApp::new_admin("secret");
+
+    // Use a MAC that is NOT in config.devices so the unregistered branch is taken.
+    let mac = macs::UNKNOWN_DEVICE;
+    let api_key = "reg-screen-bug-b-test-key";
+    let headers = [
+        ("ID", mac),
+        ("Access-Token", api_key),
+        ("Width", "800"),
+        ("Height", "480"),
+        ("FW-Version", "1.7.1"),
+        ("Model", "og"),
+        ("Host", "localhost:3000"),
+    ];
+
+    let response = app.get_with_headers("/api/display", &headers).await;
+    common::assert_ok(&response);
+
+    let json: serde_json::Value = response.json();
+    let filename = json["filename"].as_str().unwrap();
+
+    // Verify the cached content is the built-in registration screen, not the default screen
+    let cached = app
+        .content_cache
+        .get(filename)
+        .expect("Content should be cached after /api/display");
+
+    assert_eq!(
+        cached.screen_name, "_registration",
+        "Unregistered device must be served the built-in registration screen \
+         (screen_name='_registration'), not the default screen. \
+         Got screen_name='{}' instead",
+        cached.screen_name
+    );
+}

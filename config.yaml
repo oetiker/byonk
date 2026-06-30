@@ -7,7 +7,9 @@
 # Set enabled: false to allow any device to connect.
 registration:
   enabled: true
-  # screen: default  # Optional: custom screen for registration (default: uses default_screen)
+  # screen: my_screen  # Optional: custom registration screen. Default: the built-in
+  #                    # registration screen, which shows the 10-char code so the
+  #                    # device can be onboarded (e.g. in Home Assistant).
 
 # Authentication mode advertised to devices via /api/setup
 # "api_key" (default) - devices send Access-Token header

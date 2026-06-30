@@ -66,6 +66,10 @@ its e-ink screen.  Byonk records the device as pending.
 4. Optionally set a dither algorithm and panel profile.
 5. Submit — the device is now registered and will start fetching its assigned screen.
 
+> **Note:** Byonk tracks connected-but-unregistered devices in memory, so the
+> pending list clears if the Byonk add-on restarts. A device reappears as pending
+> the next time it checks in (TRMNL devices poll on their refresh interval).
+
 ## Editing Device Settings
 
 To change the screen or parameters for an already-registered device, open the Byonk

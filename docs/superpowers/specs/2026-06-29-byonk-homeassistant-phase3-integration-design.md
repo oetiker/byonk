@@ -290,14 +290,29 @@ devices show their code screen rather than nothing.
 
 ## 8. byonk-side changes
 
-**None required.** Phase 1 already renders a registration screen showing each unregistered
-device's registration code (`src/api/display.rs`, `render_registration_screen`), which is the
-on-device half of the code-matching onboarding. The admin API already exposes everything the
-integration needs.
+> **Correction (Phase 4 live validation, 2026-06-30):** the "None required" claim
+> below was **wrong** — onboarding could not work end-to-end against a real device
+> until two byonk bugs were fixed (commit `026dce7`):
+> - **A.** `handle_display` returned the registration screen for an unregistered
+>   device *before* `registry.upsert`, so a device that only hits `/api/display`
+>   was never tracked and never appeared in `/api/admin/pending` — the integration
+>   could not surface or onboard it. Now the device is recorded (with its identity
+>   key, so the pending code matches the on-screen code) before returning.
+> - **B.** the unregistered-device screen fell back to `default_screen`, hiding the
+>   registration code. Now it shows `registration.screen` if configured, else the
+>   built-in code-bearing screen.
+> Phase 1's pending tests inserted devices into the registry directly, and the
+> Phase 3 integration tests used a mocked byonk, so neither exercised the real
+> "unregistered device hits `/api/display`" path. A real device did.
 
-**Optional fast-follow (deferred):** ship/point `config.registration.screen` at an HA-worded
-registration screen ("Set me up in Home Assistant — code: ABCD-1234"). Adds a screen asset;
-not needed for Phase 3.
+**Originally believed: none required.** Phase 1 renders a registration screen showing each
+unregistered device's registration code (`src/api/display.rs`, `render_registration_screen`),
+the on-device half of the code-matching onboarding; the admin API exposes what the
+integration needs. (See the correction above for why this was incomplete.)
+
+**Optional fast-follow (still deferred):** ship/point `config.registration.screen` at an
+HA-worded registration screen ("Set me up in Home Assistant — code: ABCD-1234"). Adds a
+screen asset; not needed for Phase 3.
 
 ---
 

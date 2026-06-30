@@ -17,6 +17,11 @@ CONF_BASE_URL = "base_url"
 CONF_DEVICE_KEY = "device_key"
 CONF_HUB_ENTRY_ID = "hub_entry_id"
 
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SELECT, Platform.SWITCH]
+PLATFORMS: list[Platform] = [
+    Platform.SENSOR,
+    Platform.SELECT,
+    Platform.SWITCH,
+    Platform.NUMBER,
+]
 
 BUILTIN_SCREEN_LABEL = "(built-in)"

@@ -54,6 +54,11 @@
         "name": "Auth mode"
       }
     },
+    "number": {
+     "refresh": {
+      "name": "Refresh interval"
+     }
+    },
     "sensor": {
       "battery_voltage": {
         "name": "Battery voltage"

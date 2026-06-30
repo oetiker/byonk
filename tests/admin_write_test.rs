@@ -114,6 +114,112 @@ async fn test_patch_then_delete_device() {
 }
 
 #[tokio::test]
+async fn test_patch_panel_and_dither_read_back() {
+    // Repro for the device-page bug: setting Panel/Dither via PATCH writes to
+    // disk but GET /api/admin/devices reported them as null. The device is
+    // POSTed into the shipped empty `devices: {}` map (the live scenario).
+    let dir = tempfile::tempdir().unwrap();
+    let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
+
+    let resp = app
+        .post_json(
+            "/api/admin/devices",
+            &[AUTH],
+            r#"{"key":"9C:13:9E:AB:99:D4","screen":"calibrator"}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::OK);
+
+    let resp = app
+        .patch_json(
+            "/api/admin/devices/9C:13:9E:AB:99:D4",
+            &[AUTH],
+            r#"{"panel":"trmnl_x"}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::OK);
+
+    let resp = app
+        .patch_json(
+            "/api/admin/devices/9C:13:9E:AB:99:D4",
+            &[AUTH],
+            r#"{"dither":"atkinson"}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::OK);
+
+    // Disk has both keys (this part already worked in the field).
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        on_disk.contains("panel: trmnl_x"),
+        "expected 'panel: trmnl_x' on disk:\n{on_disk}"
+    );
+    assert!(
+        on_disk.contains("dither: atkinson"),
+        "expected 'dither: atkinson' on disk:\n{on_disk}"
+    );
+
+    // The bug: GET /api/admin/devices must read them back, not null.
+    let listed = app.get_with_headers("/api/admin/devices", &[AUTH]).await;
+    let json: serde_json::Value = listed.json();
+    let row = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["key"] == "9C:13:9E:AB:99:D4")
+        .expect("device row present");
+    assert_eq!(row["screen"], "calibrator", "screen should read back");
+    assert_eq!(row["panel"], "trmnl_x", "panel should read back");
+    assert_eq!(row["dither"], "atkinson", "dither should read back");
+}
+
+#[tokio::test]
+async fn test_patch_panel_and_dither_read_back_for_seen_device() {
+    // Same as above, but the device has been SEEN by the registry first (it
+    // polled /api/setup). This exercises the first loop of list_devices, which
+    // is the path the live HA-onboarded device takes.
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+
+    let mac = "9C:13:9E:AB:99:D4";
+    app.register_device(mac).await;
+
+    let resp = app
+        .post_json(
+            "/api/admin/devices",
+            &[AUTH],
+            r#"{"key":"9C:13:9E:AB:99:D4","screen":"calibrator"}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::OK);
+
+    app.patch_json(
+        "/api/admin/devices/9C:13:9E:AB:99:D4",
+        &[AUTH],
+        r#"{"panel":"trmnl_x"}"#,
+    )
+    .await;
+    app.patch_json(
+        "/api/admin/devices/9C:13:9E:AB:99:D4",
+        &[AUTH],
+        r#"{"dither":"atkinson"}"#,
+    )
+    .await;
+
+    let listed = app.get_with_headers("/api/admin/devices", &[AUTH]).await;
+    let json: serde_json::Value = listed.json();
+    let row = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["key"] == mac)
+        .expect("device row present");
+    assert_eq!(row["screen"], "calibrator", "screen should read back");
+    assert_eq!(row["panel"], "trmnl_x", "panel should read back");
+    assert_eq!(row["dither"], "atkinson", "dither should read back");
+}
+
+#[tokio::test]
 async fn test_patch_settings_registration_screen_persists() {
     let dir = tempfile::tempdir().unwrap();
     let (app, path) = TestApp::new_admin_with_file("secret", dir.path());

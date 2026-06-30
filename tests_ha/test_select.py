@@ -7,6 +7,37 @@ SCREENS = {"screens": [
     "panels": [{"name": "trmnl_og"}], "dither_algorithms": ["atkinson", "sierra"]}
 
 
+async def test_panel_select_shows_value_not_in_options(hass, byonk):
+    """A stored panel/dither byonk reports must show even if it is not a
+    current option, instead of rendering as "unknown" (HA blanks a select
+    whose current_option is absent from options)."""
+    byonk.devices = [
+        {
+            "key": "AA:BB",
+            "registered": True,
+            "screen": "transit",
+            "dither": "atkinson",
+            "panel": "reterminal_e1002",  # not in SCREENS["panels"]
+        }
+    ]
+    byonk.screens = SCREENS
+    hub = make_hub_entry(hass)
+    await hass.config_entries.async_setup(hub.entry_id)
+    await hass.async_block_till_done()
+    dev_entry = make_device_entry(hass, hub, "AA:BB")
+    await hass.config_entries.async_setup(dev_entry.entry_id)
+    await hass.async_block_till_done()
+
+    panel = next(
+        s for s in hass.states.async_all("select")
+        if "trmnl" in s.entity_id and "panel" in s.entity_id
+    )
+    assert panel.state == "reterminal_e1002"
+    # The real option is still offered alongside the stored value.
+    assert "trmnl_og" in panel.attributes["options"]
+    assert "reterminal_e1002" in panel.attributes["options"]
+
+
 async def test_screen_select_resets_params_to_defaults(hass, byonk):
     byonk.devices = [DEV]
     byonk.screens = SCREENS

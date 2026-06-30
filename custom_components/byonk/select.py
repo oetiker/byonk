@@ -39,6 +39,22 @@ class _ByonkSelect(ByonkDeviceEntity, SelectEntity):
         self._attr_unique_id = f"{key}_{self._field}"
         self._attr_translation_key = self._field
 
+    def _base_options(self) -> list[str]:
+        """Options offered by byonk for this field."""
+        raise NotImplementedError
+
+    @property
+    def options(self) -> list[str]:
+        # HA blanks a select whose current_option is not among options (state
+        # becomes "unknown"). byonk can legitimately hold a value that is not a
+        # current option (e.g. a panel that is not in the running config, or a
+        # value set out-of-band), so surface it alongside the real choices.
+        opts = self._base_options()
+        current = self.current_option
+        if current and current not in opts:
+            return [*opts, current]
+        return opts
+
     @property
     def current_option(self) -> str | None:
         device = self.device
@@ -52,8 +68,7 @@ class _ByonkSelect(ByonkDeviceEntity, SelectEntity):
 class ByonkScreenSelect(_ByonkSelect):
     _field = "screen"
 
-    @property
-    def options(self) -> list[str]:
+    def _base_options(self) -> list[str]:
         return self.coordinator.data.screen_names()
 
     async def async_select_option(self, option: str) -> None:
@@ -64,8 +79,7 @@ class ByonkScreenSelect(_ByonkSelect):
 class ByonkDitherSelect(_ByonkSelect):
     _field = "dither"
 
-    @property
-    def options(self) -> list[str]:
+    def _base_options(self) -> list[str]:
         return self.coordinator.data.dither
 
     async def async_select_option(self, option: str) -> None:
@@ -75,8 +89,7 @@ class ByonkDitherSelect(_ByonkSelect):
 class ByonkPanelSelect(_ByonkSelect):
     _field = "panel"
 
-    @property
-    def options(self) -> list[str]:
+    def _base_options(self) -> list[str]:
         return self.coordinator.data.panel_names()
 
     async def async_select_option(self, option: str) -> None:

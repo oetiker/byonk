@@ -70,6 +70,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code — the built-in registration screen — even when a `default_screen` is configured.
   Previously `default_screen` took precedence and hid the code, blocking code-matched
   onboarding. Set `registration.screen` to override with a custom registration screen.
+- **Home Assistant device Panel/Dither selects** no longer show "unknown" when the
+  device's stored value is not one of the offered options (e.g. a panel profile that
+  isn't in the running config). Home Assistant blanks a select whose current value is
+  absent from its option list; the byonk device selects now include the current value
+  alongside the real choices so the actual setting is always visible.
 
 ## 0.15.0 - 2026-04-28
 

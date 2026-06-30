@@ -92,6 +92,7 @@ pub struct AdminDevice {
     pub colors: Option<String>,
     pub params: serde_json::Value,
     pub refresh: Option<u32>,
+    pub name: Option<String>,
 }
 
 pub async fn list_devices(
@@ -131,6 +132,7 @@ pub async fn list_devices(
                 .map(|c| serde_json::to_value(&c.params).unwrap_or(serde_json::Value::Null))
                 .unwrap_or(serde_json::Value::Null),
             refresh: dc.and_then(|c| c.refresh),
+            name: dc.and_then(|c| c.name.clone()),
         });
     }
 
@@ -158,6 +160,7 @@ pub async fn list_devices(
             colors: dc.colors.clone(),
             params: serde_json::to_value(&dc.params).unwrap_or(serde_json::Value::Null),
             refresh: dc.refresh,
+            name: dc.name.clone(),
         });
     }
 

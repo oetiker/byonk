@@ -276,6 +276,44 @@ async fn test_patch_settings_unknown_registration_screen_returns_400() {
 }
 
 #[tokio::test]
+async fn test_patch_name_reads_back_and_clears() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+
+    app.post_json(
+        "/api/admin/devices",
+        &[AUTH],
+        r#"{"key":"AA:BB","screen":"hello"}"#,
+    )
+    .await;
+    app.patch_json("/api/admin/devices/AA:BB", &[AUTH], r#"{"name":"Kitchen"}"#)
+        .await;
+
+    let listed = app.get_with_headers("/api/admin/devices", &[AUTH]).await;
+    let json: serde_json::Value = listed.json();
+    let row = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["key"] == "AA:BB")
+        .unwrap();
+    assert_eq!(row["name"], "Kitchen");
+
+    // Empty string clears it.
+    app.patch_json("/api/admin/devices/AA:BB", &[AUTH], r#"{"name":""}"#)
+        .await;
+    let listed = app.get_with_headers("/api/admin/devices", &[AUTH]).await;
+    let json: serde_json::Value = listed.json();
+    let row = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["key"] == "AA:BB")
+        .unwrap();
+    assert_eq!(row["name"], serde_json::Value::Null);
+}
+
+#[tokio::test]
 async fn test_patch_refresh_reads_back() {
     let dir = tempfile::tempdir().unwrap();
     let (app, _) = TestApp::new_admin_with_file("secret", dir.path());

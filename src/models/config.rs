@@ -257,6 +257,10 @@ pub struct DeviceConfig {
     /// Optional per-device refresh override in seconds (0/absent = use Lua/screen default)
     #[serde(default)]
     pub refresh: Option<u32>,
+
+    /// Optional friendly name (mirrored from Home Assistant; absent = identify by MAC)
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 /// Admin/management API settings.

@@ -24,6 +24,7 @@ pub struct DeviceWrite {
     pub colors: Option<String>,
     pub params: Option<HashMap<String, serde_yaml::Value>>,
     pub refresh: Option<u32>,
+    pub name: Option<String>,
 }
 
 /// Guard: writes require a file-backed config.
@@ -75,6 +76,11 @@ fn device_block(w: &DeviceWrite, screen: &str) -> serde_yaml::Mapping {
     if let Some(r) = w.refresh {
         if r > 0 {
             m.insert("refresh".into(), serde_yaml::Value::from(r));
+        }
+    }
+    if let Some(n) = &w.name {
+        if !n.is_empty() {
+            m.insert("name".into(), n.as_str().into());
         }
     }
     if let Some(params) = &w.params {
@@ -175,6 +181,7 @@ pub async fn patch_device(
         colors: body.colors.clone().or(existing.colors.clone()),
         params: Some(body.params.clone().unwrap_or(existing.params.clone())),
         refresh: body.refresh.or(existing.refresh),
+        name: body.name.clone().or(existing.name.clone()),
     };
 
     let empty = HashMap::new();

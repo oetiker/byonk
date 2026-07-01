@@ -220,6 +220,47 @@ async fn test_patch_panel_and_dither_read_back_for_seen_device() {
 }
 
 #[tokio::test]
+async fn test_patch_params_submap_reads_back_with_populated_devices() {
+    // Repro for the nested-params write bug: with a populated devices map, the
+    // config writer mis-indented the params sub-map so it parsed back empty.
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+
+    // Two devices -> populated devices map (exercises the non-empty write path).
+    app.post_json(
+        "/api/admin/devices",
+        &[AUTH],
+        r#"{"key":"AA:BB","screen":"hello"}"#,
+    )
+    .await;
+    app.post_json(
+        "/api/admin/devices",
+        &[AUTH],
+        r#"{"key":"CC:DD","screen":"hello"}"#,
+    )
+    .await;
+
+    let resp = app
+        .patch_json(
+            "/api/admin/devices/AA:BB",
+            &[AUTH],
+            r#"{"params":{"station":"Olten"}}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::OK);
+
+    let listed = app.get_with_headers("/api/admin/devices", &[AUTH]).await;
+    let json: serde_json::Value = listed.json();
+    let row = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["key"] == "AA:BB")
+        .expect("device row present");
+    assert_eq!(row["params"]["station"], "Olten", "params should read back");
+}
+
+#[tokio::test]
 async fn test_patch_settings_registration_screen_persists() {
     let dir = tempfile::tempdir().unwrap();
     let (app, path) = TestApp::new_admin_with_file("secret", dir.path());

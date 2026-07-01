@@ -13,24 +13,24 @@ async def _setup(hass, byonk):
     await hass.async_block_till_done()
 
 
-async def test_refresh_number_reflects_value(hass, byonk):
-    await _setup(hass, byonk)
-    ent = next(
-        s for s in hass.states.async_all("number")
-        if "trmnl" in s.entity_id and "refresh" in s.entity_id
+def _refresh(hass):
+    return next(
+        s for s in hass.states.async_all("text")
+        if "trmnl" in s.entity_id and s.entity_id.endswith("_refresh")
     )
-    assert int(float(ent.state)) == 600
 
 
-async def test_refresh_number_sets_value(hass, byonk):
+async def test_refresh_reflects_value(hass, byonk):
     await _setup(hass, byonk)
-    ent = next(
-        s for s in hass.states.async_all("number")
-        if "trmnl" in s.entity_id and "refresh" in s.entity_id
-    )
+    assert _refresh(hass).state == "600"
+
+
+async def test_refresh_sets_value(hass, byonk):
+    await _setup(hass, byonk)
+    ent = _refresh(hass)
     await hass.services.async_call(
-        "number", "set_value",
-        {"entity_id": ent.entity_id, "value": 300}, blocking=True,
+        "text", "set_value",
+        {"entity_id": ent.entity_id, "value": "300"}, blocking=True,
     )
     key, payload = byonk.update_device.await_args.args
     assert key == "AA:BB"

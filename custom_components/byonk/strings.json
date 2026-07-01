@@ -52,11 +52,6 @@
         "name": "Auth mode"
       }
     },
-    "number": {
-      "refresh": {
-        "name": "Refresh"
-      }
-    },
     "sensor": {
       "battery_voltage": {
         "name": "Battery voltage"
@@ -72,6 +67,11 @@
       },
       "model": {
         "name": "Model"
+      }
+    },
+    "text": {
+      "refresh": {
+        "name": "Refresh"
       }
     }
   }

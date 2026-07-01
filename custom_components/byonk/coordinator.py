@@ -68,6 +68,11 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
         self.slug = slug
         self._remove_strikes: dict[str, int] = {}
         self._orphan_strikes: dict[str, int] = {}
+        self._param_locks: dict[str, asyncio.Lock] = {}
+
+    def param_lock(self, key: str) -> asyncio.Lock:
+        """Per-device lock serialising read-modify-write of the params dict."""
+        return self._param_locks.setdefault(key, asyncio.Lock())
 
     async def _async_update_data(self) -> ByonkData:
         try:

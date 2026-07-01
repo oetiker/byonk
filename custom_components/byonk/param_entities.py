@@ -17,6 +17,8 @@ from .entity import ByonkDeviceEntity
 
 _LOGGER = logging.getLogger(__name__)
 
+_UNSET = object()  # sentinel: no optimistic value pending
+
 
 class ByonkParamEntity(ByonkDeviceEntity):
     """Base for entities editing one screen @param of a device."""
@@ -31,6 +33,8 @@ class ByonkParamEntity(ByonkDeviceEntity):
         self._field = field
         self._attr_unique_id = f"{key}_param_{field['name']}"
         self._attr_name = field.get("label") or field["name"]
+        # Value written locally but not yet confirmed by a coordinator refresh.
+        self._optimistic = _UNSET
 
     @property
     def _current_params(self) -> dict:
@@ -39,6 +43,8 @@ class ByonkParamEntity(ByonkDeviceEntity):
 
     @property
     def _value(self):
+        if self._optimistic is not _UNSET:
+            return self._optimistic
         return self._current_params.get(self._field["name"])
 
     @property
@@ -52,21 +58,31 @@ class ByonkParamEntity(ByonkDeviceEntity):
         return any(f["name"] == self._field["name"] for f in fields)
 
     async def _write_param(self, value) -> None:
-        async with self.coordinator.param_lock(self._key):
-            device = self.device
-            params = dict(device.get("params") or {}) if device else {}
-            params[self._field["name"]] = value
-            try:
-                await self.coordinator.client.async_update_device(
-                    self._key, {"params": params}
-                )
-            except ByonkApiError as err:
-                _LOGGER.warning(
-                    "param write failed for %s.%s: %s",
-                    self._key, self._field["name"], err,
-                )
-                return
-            await self.coordinator.async_refresh()
+        # byonk merges a params PATCH key-by-key (no screen change), so we send
+        # only this field — no read-modify-write, no cross-entity clobbering.
+        try:
+            await self.coordinator.client.async_update_device(
+                self._key, {"params": {self._field["name"]: value}}
+            )
+        except ByonkApiError as err:
+            _LOGGER.warning(
+                "param write failed for %s.%s: %s",
+                self._key, self._field["name"], err,
+            )
+            return
+        # Reflect immediately; a coordinator refresh confirms and clears it.
+        self._optimistic = value
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        if (
+            self._optimistic is not _UNSET
+            and self._current_params.get(self._field["name"]) == self._optimistic
+        ):
+            self._optimistic = _UNSET
+        super()._handle_coordinator_update()
 
 
 class ByonkParamText(ByonkParamEntity, TextEntity):

@@ -261,6 +261,88 @@ async fn test_patch_params_submap_reads_back_with_populated_devices() {
 }
 
 #[tokio::test]
+async fn test_patch_params_merge_preserves_other_keys() {
+    // Editing one param (no screen change) must merge, not replace: a second
+    // single-key PATCH must not drop the first key.
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+    app.post_json(
+        "/api/admin/devices",
+        &[AUTH],
+        r#"{"key":"AA:BB","screen":"hello"}"#,
+    )
+    .await;
+
+    app.patch_json(
+        "/api/admin/devices/AA:BB",
+        &[AUTH],
+        r#"{"params":{"station":"Olten"}}"#,
+    )
+    .await;
+    app.patch_json(
+        "/api/admin/devices/AA:BB",
+        &[AUTH],
+        r#"{"params":{"limit":"5"}}"#,
+    )
+    .await;
+
+    let listed = app.get_with_headers("/api/admin/devices", &[AUTH]).await;
+    let json: serde_json::Value = listed.json();
+    let row = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["key"] == "AA:BB")
+        .unwrap();
+    assert_eq!(
+        row["params"]["station"], "Olten",
+        "first key preserved after 2nd patch"
+    );
+    assert_eq!(row["params"]["limit"], "5", "second key present");
+}
+
+#[tokio::test]
+async fn test_patch_with_screen_change_replaces_params() {
+    // A screen change replaces params wholesale (new screen's defaults).
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+    app.post_json(
+        "/api/admin/devices",
+        &[AUTH],
+        r#"{"key":"AA:BB","screen":"hello"}"#,
+    )
+    .await;
+    app.patch_json(
+        "/api/admin/devices/AA:BB",
+        &[AUTH],
+        r#"{"params":{"old":"x"}}"#,
+    )
+    .await;
+
+    app.patch_json(
+        "/api/admin/devices/AA:BB",
+        &[AUTH],
+        r#"{"screen":"graytest","params":{"new":"y"}}"#,
+    )
+    .await;
+
+    let listed = app.get_with_headers("/api/admin/devices", &[AUTH]).await;
+    let json: serde_json::Value = listed.json();
+    let row = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["key"] == "AA:BB")
+        .unwrap();
+    assert_eq!(
+        row["params"].get("old"),
+        None,
+        "old key dropped on screen change"
+    );
+    assert_eq!(row["params"]["new"], "y", "new key present");
+}
+
+#[tokio::test]
 async fn test_patch_settings_registration_screen_persists() {
     let dir = tempfile::tempdir().unwrap();
     let (app, path) = TestApp::new_admin_with_file("secret", dir.path());

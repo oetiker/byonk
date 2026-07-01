@@ -173,13 +173,34 @@ pub async fn patch_device(
 
     // Merge: start from existing, override provided fields.
     let screen = body.screen.clone().unwrap_or(existing.screen.clone());
+
+    // Params: a screen change replaces params wholesale (the new screen's
+    // defaults). Without a screen change, provided params are merged key-by-key
+    // into the existing set, so editing one parameter never drops the others.
+    let params = if body.screen.is_none() {
+        match &body.params {
+            Some(p) => {
+                let mut merged = existing.params.clone();
+                for (k, v) in p {
+                    merged.insert(k.clone(), v.clone());
+                }
+                merged
+            }
+            None => existing.params.clone(),
+        }
+    } else {
+        body.params
+            .clone()
+            .unwrap_or_else(|| existing.params.clone())
+    };
+
     let merged = DeviceWrite {
         key: Some(key.clone()),
         screen: Some(screen.clone()),
         panel: body.panel.clone().or(existing.panel.clone()),
         dither: body.dither.clone().or(existing.dither.clone()),
         colors: body.colors.clone().or(existing.colors.clone()),
-        params: Some(body.params.clone().unwrap_or(existing.params.clone())),
+        params: Some(params),
         refresh: body.refresh.or(existing.refresh),
         name: body.name.clone().or(existing.name.clone()),
     };

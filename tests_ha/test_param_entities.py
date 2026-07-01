@@ -37,7 +37,7 @@ async def test_no_param_entities_for_paramless_screen(hass, byonk):
     assert hass.states.get("text.trmnl_aa_bb_station") is None
 
 
-async def test_text_param_write_sends_full_params(hass, byonk):
+async def test_text_param_write_sends_single_key_and_shows_immediately(hass, byonk):
     await _setup(hass, byonk, "transit", {"station": "Olten"})
     await hass.services.async_call(
         "text", "set_value",
@@ -45,7 +45,10 @@ async def test_text_param_write_sends_full_params(hass, byonk):
     )
     key, payload = byonk.update_device.await_args.args
     assert key == "AA:BB"
+    # only this field is sent; byonk merges it (other params preserved server-side)
     assert payload == {"params": {"station": "Bern"}}
+    # optimistic: the new value shows immediately, before any coordinator refresh
+    assert hass.states.get("text.trmnl_aa_bb_station").state == "Bern"
 
 
 async def test_param_entities_reconcile_on_screen_change(hass, byonk):
@@ -105,10 +108,10 @@ async def test_int_param_is_text_and_coerces_to_int(hass, byonk):
         {"entity_id": "text.trmnl_aa_bb_limit", "value": "12"}, blocking=True,
     )
     key, payload = byonk.update_device.await_args.args
-    assert payload["params"]["limit"] == 12
+    # only the edited field is sent; byonk merges (station preserved server-side)
+    assert payload == {"params": {"limit": 12}}
     assert isinstance(payload["params"]["limit"], int)
-    # other params preserved
-    assert payload["params"]["station"] == "Olten"
+    assert hass.states.get("text.trmnl_aa_bb_limit").state == "12"
 
 
 async def test_int_param_rejects_non_whole_number(hass, byonk):

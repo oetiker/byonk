@@ -97,11 +97,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alongside the real choices so the actual setting is always visible.
 - **Home Assistant signal-strength (RSSI) sensor** is now enabled by default instead of
   hidden, so a device's WiFi signal is visible without manually enabling the entity.
-- **Screen parameter values with sub-maps now persist.** When more than one device was
-  configured, byonk's comment-preserving config writer mis-indented a device's `params`
-  sub-map (writing the entries as siblings of `params:` instead of children), so the
-  values parsed back empty and Home Assistant showed them as "unknown". The writer now
-  serializes and nests device blocks correctly.
+- **Screen parameter values now persist and apply immediately.** Two fixes: (1) byonk's
+  comment-preserving config writer mis-indented a device's `params` sub-map when more than
+  one device was configured (writing entries as siblings of `params:` instead of children),
+  so values parsed back empty and Home Assistant showed "unknown" — the writer now nests
+  device blocks correctly; (2) `PATCH /api/admin/devices/:key` now merges `params`
+  key-by-key when no screen change is included (a screen change still replaces them), so
+  editing one parameter no longer drops the others. The Home Assistant param entities
+  update optimistically for instant feedback.
 - **Home Assistant integer screen-parameters** (e.g. transit's `limit`) no longer fail
   onboarding with "Unknown error occurred". Home Assistant's number input returns a
   float, which byonk rejected as a non-integer; the integration now coerces whole-number

@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 
 from homeassistant.components.text import TextEntity, TextMode
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api import ByonkApiError
@@ -47,11 +47,15 @@ class ByonkRefreshText(ByonkDeviceEntity, TextEntity):
     def __init__(self, coordinator: ByonkCoordinator, key: str) -> None:
         super().__init__(coordinator, key)
         self._attr_unique_id = f"{key}_refresh"
+        self._optimistic: str | None = None
+
+    def _stored(self) -> str:
+        device = self.device
+        return "0" if device is None else str(device.get("refresh") or 0)
 
     @property
     def native_value(self) -> str | None:
-        device = self.device
-        return None if device is None else str(device.get("refresh") or 0)
+        return self._optimistic if self._optimistic is not None else self._stored()
 
     async def async_set_value(self, value: str) -> None:
         try:
@@ -68,4 +72,12 @@ class ByonkRefreshText(ByonkDeviceEntity, TextEntity):
         except ByonkApiError as err:
             _LOGGER.warning("refresh write failed for %s: %s", self._key, err)
             return
+        self._optimistic = str(seconds)
+        self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        if self._optimistic is not None and self._stored() == self._optimistic:
+            self._optimistic = None
+        super()._handle_coordinator_update()

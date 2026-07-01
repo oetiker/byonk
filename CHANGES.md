@@ -103,8 +103,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so values parsed back empty and Home Assistant showed "unknown" — the writer now nests
   device blocks correctly; (2) `PATCH /api/admin/devices/:key` now merges `params`
   key-by-key when no screen change is included (a screen change still replaces them), so
-  editing one parameter no longer drops the others. The Home Assistant param entities
-  update optimistically for instant feedback.
+  editing one parameter no longer drops the others. Each Home Assistant param entity
+  sends only its own value, and edits are reflected on the next coordinator refresh.
 - **Home Assistant integer screen-parameters** (e.g. transit's `limit`) no longer fail
   onboarding with "Unknown error occurred". Home Assistant's number input returns a
   float, which byonk rejected as a non-integer; the integration now coerces whole-number

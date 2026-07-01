@@ -14,10 +14,6 @@
       "dev_params": {
         "title": "Screen parameters",
         "description": "Configure the screen's dynamic parameters."
-      },
-      "reconfigure": {
-        "title": "Reconfigure device",
-        "description": "Update the screen parameters for this device."
       }
     },
     "abort": {
@@ -27,14 +23,10 @@
       "no_hub": "The Byonk hub is not set up yet. Set up the Byonk integration first.",
       "addon_error": "Could not install or start the Byonk add-on automatically. Add the repository https://github.com/oetiker/byonk to the add-on store, install the Byonk add-on, then retry.",
       "addon_unhealthy": "The Byonk add-on started, but its management API did not respond as expected. Make sure the Byonk add-on is up to date (a version that supports the admin API), then retry.",
-      "reconfigure_successful": "Device updated.",
-      "not_supported": "Reconfigure is only available for device entries, not the hub.",
-      "add_failed": "Could not add the device to Byonk.",
-      "update_failed": "Could not update the device in Byonk."
+      "add_failed": "Could not add the device to Byonk."
     },
     "error": {
-      "add_failed": "Byonk rejected the device settings: {error}",
-      "update_failed": "Byonk rejected the update: {error}"
+      "add_failed": "Byonk rejected the device settings: {error}"
     }
   },
   "entity": {

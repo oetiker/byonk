@@ -52,6 +52,7 @@ automatically, and exposes Byonk devices and settings as Home Assistant entities
 | Dither | Select | Dither algorithm override |
 | Panel | Select | Panel profile override |
 | Refresh interval | Number | Per-device refresh interval in seconds (`0` = no override). Precedence: screen's Lua `refresh_rate` > this override > screen's static default |
+| *Screen parameter* (one per param) | Text / Number / Switch / Select | Each parameter declared in the current screen's `@params` schema appears as its own entity in the **Controls** card (type mapped from the schema: string→Text, int/float→Number, bool→Switch, enum→Select). Changes apply instantly. The set of entities updates automatically when you assign a different screen to the device. |
 
 ## Onboarding a New Device
 
@@ -85,9 +86,10 @@ To change the screen for an already-onboarded device, use the **Screen** select
 entity on the device card.  To adjust dither algorithm or panel type, use the
 **Dither** or **Panel** select entities.
 
-To update the per-screen parameters (drawn from the screen's `@params` schema), open
-the device in **Settings → Devices & Services** and click **Reconfigure**.  The form
-lets you update the parameter values without removing and re-adding the device.
+To update the per-screen parameters, use the live entities in the device's **Controls**
+card — each parameter of the current screen appears as its own Text, Number, Switch, or
+Select entity and applies instantly.  The set of parameter entities updates automatically
+when you change the device's screen.
 
 **Device naming**: the device's name is owned by Home Assistant. Rename the device
 the usual way (device card → pencil icon) and byonk will mirror the name automatically

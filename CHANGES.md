@@ -49,9 +49,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now mirrors the name down to byonk (stored as `name:` on the device), so byonk
   no longer identifies the device only by MAC. The sync is one-way (HA owns the
   name).
+- **Home Assistant screen parameters are now live device-page entities**: each
+  parameter of a device's current screen appears as its own control in the
+  device's Controls card (Text / Number / Switch / Select by type) and applies
+  instantly. The controls update automatically when you change the device's
+  screen. This replaces the per-device Reconfigure dialog.
 
 ### Changed
 
+- The Home Assistant device **Reconfigure** dialog has been removed; screen
+  parameters are edited via the live device-page entities instead. (Onboarding
+  still prompts for a screen's parameters.)
 - Home Assistant integration: TRMNL devices are now Home Assistant–owned. A new
   device appears as a native **Discovered** card; configuring it creates a
   per-device config entry and writes the mapping to byonk. Home Assistant is the

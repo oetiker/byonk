@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.components.select import SelectEntity
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.components.text import TextEntity, TextMode
+from homeassistant.const import EntityCategory
 from homeassistant.core import callback
+from homeassistant.helpers import entity_registry as er
 
 from .api import ByonkApiError
 from .const import CONF_DEVICE_KEY
@@ -21,6 +22,9 @@ class ByonkParamEntity(ByonkDeviceEntity):
     """Base for entities editing one screen @param of a device."""
 
     _attr_has_entity_name = True
+    # Screen params live in the device's "Configuration" section, grouped apart
+    # from the primary screen/dither/panel/refresh controls in "Controls".
+    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, coordinator: ByonkCoordinator, key: str, field: dict) -> None:
         super().__init__(coordinator, key)
@@ -66,6 +70,13 @@ class ByonkParamEntity(ByonkDeviceEntity):
 
 
 class ByonkParamText(ByonkParamEntity, TextEntity):
+    """string/color/url params, plus int/float rendered as a text field.
+
+    Numbers use a text field (not a Number entity) so the label renders above a
+    full-width input like the other params; the value is coerced back to a real
+    int/float before it reaches byonk.
+    """
+
     def __init__(self, coordinator: ByonkCoordinator, key: str, field: dict) -> None:
         super().__init__(coordinator, key, field)
         self._attr_mode = (
@@ -78,32 +89,22 @@ class ByonkParamText(ByonkParamEntity, TextEntity):
         return None if v is None else str(v)
 
     async def async_set_value(self, value: str) -> None:
-        await self._write_param(value)
-
-
-class ByonkParamNumber(ByonkParamEntity, NumberEntity):
-    _attr_mode = NumberMode.BOX
-
-    def __init__(self, coordinator: ByonkCoordinator, key: str, field: dict) -> None:
-        super().__init__(coordinator, key, field)
-        if field.get("min") is not None:
-            self._attr_native_min_value = field["min"]
-        if field.get("max") is not None:
-            self._attr_native_max_value = field["max"]
-        self._attr_native_step = (
-            1.0 if field.get("type") == "int" else (field.get("step") or 0.01)
-        )
-        if field.get("unit"):
-            self._attr_native_unit_of_measurement = field["unit"]
-
-    @property
-    def native_value(self) -> float | None:
-        v = self._value
-        return None if v is None else float(v)
-
-    async def async_set_native_value(self, value: float) -> None:
-        coerced = int(value) if self._field.get("type") == "int" else value
-        await self._write_param(coerced)
+        ftype = self._field.get("type")
+        name = self._field["name"]
+        if ftype in ("int", "float"):
+            try:
+                num = float(value)
+            except (TypeError, ValueError):
+                _LOGGER.warning("param %s: %r is not a number", name, value)
+                return
+            if ftype == "int":
+                if num != int(num):
+                    _LOGGER.warning("param %s: %r must be a whole number", name, value)
+                    return
+                num = int(num)
+            await self._write_param(num)
+        else:
+            await self._write_param(value)
 
 
 class ByonkParamSelect(ByonkParamEntity, SelectEntity):
@@ -174,9 +175,19 @@ class ParamPlatformManager:
         for name in list(self._entities):
             if name not in desired:
                 entity = self._entities.pop(name)
-                self._coordinator.hass.async_create_task(
-                    entity.async_remove(force_remove=True)
-                )
+                self._remove_entity(entity)
+
+    def _remove_entity(self, entity: ByonkParamEntity) -> None:
+        # Delete the entity-registry entry so the entity disappears entirely.
+        # `async_remove()` alone only clears the state and leaves a stale
+        # "unavailable" registry entry lingering on the device page.
+        registry = er.async_get(self._coordinator.hass)
+        if entity.entity_id and registry.async_get(entity.entity_id):
+            registry.async_remove(entity.entity_id)
+        else:
+            self._coordinator.hass.async_create_task(
+                entity.async_remove(force_remove=True)
+            )
 
 
 def setup_param_platform(

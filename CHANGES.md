@@ -51,9 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   name).
 - **Home Assistant screen parameters are now live device-page entities**: each
   parameter of a device's current screen appears as its own control in the
-  device's Controls card (Text / Number / Switch / Select by type) and applies
-  instantly. The controls update automatically when you change the device's
-  screen. This replaces the per-device Reconfigure dialog.
+  device's **Configuration** section — a Text field (strings and numbers, with
+  numeric values validated on save), a Switch (booleans), or a Select (enums) —
+  and applies instantly. The controls update automatically when you change the
+  device's screen. This replaces the per-device Reconfigure dialog.
 
 ### Changed
 

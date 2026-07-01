@@ -13,6 +13,11 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ByonkConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     if CONF_DEVICE_KEY in entry.data:
+        # int/float params are rendered as text fields too (label-above), coerced
+        # back to numbers on write — see ByonkParamText.
         setup_param_platform(
-            entry, async_add_entities, {"string", "color", "url"}, ByonkParamText
+            entry,
+            async_add_entities,
+            {"string", "color", "url", "int", "float"},
+            ByonkParamText,
         )

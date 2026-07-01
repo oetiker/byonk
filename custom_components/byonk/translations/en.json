@@ -54,7 +54,7 @@
     },
     "number": {
       "refresh": {
-        "name": "Refresh interval"
+        "name": "Refresh"
       }
     },
     "sensor": {

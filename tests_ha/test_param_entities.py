@@ -1,3 +1,5 @@
+from homeassistant.helpers import entity_registry as er
+
 from tests_ha.conftest import make_device_entry, make_hub_entry
 
 SCREENS = {
@@ -56,6 +58,10 @@ async def test_param_entities_reconcile_on_screen_change(hass, byonk):
     assert hass.states.get("text.trmnl_aa_bb_station") is None
     assert hass.states.get("text.trmnl_aa_bb_room") is not None
     assert hass.states.get("text.trmnl_aa_bb_room").state == "Kitchen"
+    # The removed entity must be gone from the registry too (not just the state),
+    # otherwise it lingers on the device page as an "unavailable" entity.
+    registry = er.async_get(hass)
+    assert registry.async_get("text.trmnl_aa_bb_station") is None
 
 
 NUM_SCREENS = {
@@ -87,20 +93,33 @@ async def _setup_num(hass, byonk, screen, params):
     return hub
 
 
-async def test_int_param_number_coerces_to_int(hass, byonk):
+async def test_int_param_is_text_and_coerces_to_int(hass, byonk):
+    # int/float params render as Text (label-above), but the value is coerced
+    # back to a real int before it reaches byonk.
     await _setup_num(hass, byonk, "transit", {"station": "Olten", "limit": 8})
-    st = hass.states.get("number.trmnl_aa_bb_limit")
+    st = hass.states.get("text.trmnl_aa_bb_limit")
     assert st is not None
-    assert float(st.state) == 8.0
+    assert st.state == "8"
     await hass.services.async_call(
-        "number", "set_value",
-        {"entity_id": "number.trmnl_aa_bb_limit", "value": 12}, blocking=True,
+        "text", "set_value",
+        {"entity_id": "text.trmnl_aa_bb_limit", "value": "12"}, blocking=True,
     )
     key, payload = byonk.update_device.await_args.args
     assert payload["params"]["limit"] == 12
     assert isinstance(payload["params"]["limit"], int)
     # other params preserved
     assert payload["params"]["station"] == "Olten"
+
+
+async def test_int_param_rejects_non_whole_number(hass, byonk):
+    await _setup_num(hass, byonk, "transit", {"station": "Olten", "limit": 8})
+    byonk.update_device.reset_mock()
+    await hass.services.async_call(
+        "text", "set_value",
+        {"entity_id": "text.trmnl_aa_bb_limit", "value": "8.5"}, blocking=True,
+    )
+    # non-whole value for an int param is rejected locally; no write to byonk
+    assert not byonk.update_device.await_count
 
 
 async def test_bool_param_is_switch(hass, byonk):

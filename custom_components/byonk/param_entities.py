@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import logging
 
+from homeassistant.components.number import NumberEntity, NumberMode
+from homeassistant.components.select import SelectEntity
+from homeassistant.components.switch import SwitchEntity
 from homeassistant.components.text import TextEntity, TextMode
 from homeassistant.core import callback
 
@@ -76,6 +79,61 @@ class ByonkParamText(ByonkParamEntity, TextEntity):
 
     async def async_set_value(self, value: str) -> None:
         await self._write_param(value)
+
+
+class ByonkParamNumber(ByonkParamEntity, NumberEntity):
+    _attr_mode = NumberMode.BOX
+
+    def __init__(self, coordinator: ByonkCoordinator, key: str, field: dict) -> None:
+        super().__init__(coordinator, key, field)
+        if field.get("min") is not None:
+            self._attr_native_min_value = field["min"]
+        if field.get("max") is not None:
+            self._attr_native_max_value = field["max"]
+        self._attr_native_step = (
+            1.0 if field.get("type") == "int" else (field.get("step") or 0.01)
+        )
+        if field.get("unit"):
+            self._attr_native_unit_of_measurement = field["unit"]
+
+    @property
+    def native_value(self) -> float | None:
+        v = self._value
+        return None if v is None else float(v)
+
+    async def async_set_native_value(self, value: float) -> None:
+        coerced = int(value) if self._field.get("type") == "int" else value
+        await self._write_param(coerced)
+
+
+class ByonkParamSelect(ByonkParamEntity, SelectEntity):
+    @property
+    def options(self) -> list[str]:
+        opts = [o["value"] for o in self._field.get("options", [])]
+        current = self._value
+        if current is not None and current not in opts:
+            return [*opts, current]
+        return opts
+
+    @property
+    def current_option(self) -> str | None:
+        v = self._value
+        return None if v is None else str(v)
+
+    async def async_select_option(self, option: str) -> None:
+        await self._write_param(option)
+
+
+class ByonkParamSwitch(ByonkParamEntity, SwitchEntity):
+    @property
+    def is_on(self) -> bool:
+        return bool(self._value)
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._write_param(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._write_param(False)
 
 
 class ParamPlatformManager:

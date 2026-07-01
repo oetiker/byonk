@@ -9,6 +9,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import BUILTIN_SCREEN_LABEL, CONF_DEVICE_KEY
 from .coordinator import ByonkConfigEntry, ByonkCoordinator
 from .entity import ByonkDeviceEntity, ByonkHubEntity
+from .param_entities import ByonkParamSelect, setup_param_platform
 from .param_form import default_params
 
 
@@ -25,6 +26,7 @@ async def async_setup_entry(
                 ByonkPanelSelect(coordinator, key),
             ]
         )
+        setup_param_platform(entry, async_add_entities, {"enum"}, ByonkParamSelect)
         return
     async_add_entities(
         [ByonkNewDeviceScreenSelect(coordinator), ByonkAuthModeSelect(coordinator)]

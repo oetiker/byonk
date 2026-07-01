@@ -9,6 +9,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import CONF_DEVICE_KEY
 from .coordinator import ByonkConfigEntry, ByonkCoordinator
 from .entity import ByonkDeviceEntity
+from .param_entities import ByonkParamNumber, setup_param_platform
 
 
 async def async_setup_entry(
@@ -17,6 +18,9 @@ async def async_setup_entry(
     coordinator = entry.runtime_data
     if CONF_DEVICE_KEY in entry.data:
         async_add_entities([ByonkRefreshNumber(coordinator, entry.data[CONF_DEVICE_KEY])])
+        setup_param_platform(
+            entry, async_add_entities, {"int", "float"}, ByonkParamNumber
+        )
 
 
 class ByonkRefreshNumber(ByonkDeviceEntity, NumberEntity):

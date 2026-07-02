@@ -3,7 +3,7 @@
   Base layout template for TRMNL screens.
 
   Usage in screen templates:
-    {% extends "layouts/base.svg" %}
+    {% extends "byonk-base-v1/base.svg" %}
     {% block title %}My Screen{% endblock %}
     {% block content %}
       <text x="400" y="240">Hello World</text>

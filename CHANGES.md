@@ -32,10 +32,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read device telemetry, pending/unregistered devices, effective config, and
   screen param schemas; create/update/delete device mappings and update global
   settings (`registration_enabled`, `auth_mode`, `default_screen`).
-- **Per-screen parameter schemas** via a parsed (not executed) `@params` header in
-  each screen's `.lua`, with UI hints (label, min/max/step/unit/mode, enum
-  options, sensitive/multiline/hidden/advanced). Bundled screens now declare
-  their params.
+- **Screen packages**: screens are now distributed as packages. A package is a
+  directory tree with a `byonk-screens.yaml` manifest (`name`/`description`/
+  `author`/`license`); every folder inside it that contains a `meta.yaml` is a
+  screen, made of three fixed-name files — `meta.yaml` (title, description,
+  `byonk:` engine compatibility, default `refresh:`, and the `params:` schema),
+  `script.lua`, and `screen.svg`. Screens are referenced by a qualified
+  `handle/path` ref; the bundled screens ship in the embedded `byonk-builtin`
+  package. Shared SVG comes from the versioned `byonk-base-v1` standard library
+  (`{% extends "byonk-base-v1/base.svg" %}`, `{% include "byonk-base-v1/hinting.svg" %}`)
+  or repo-relative paths within a package. A `packages:` registry in `config.yaml`
+  maps handles to `{ repo, pin, token? }` sources. This replaces the old flat
+  `<name>.lua` + `<name>.svg` screens, the `screens:` config block, and the
+  `@params` Lua-comment schema (a clean break — no legacy reader).
+- **Per-screen parameter schemas** now live in each screen's `meta.yaml` `params:`
+  block, with UI hints (label, min/max/step/unit/mode, enum options,
+  sensitive/multiline/hidden/advanced). Bundled screens declare their params there.
 - **Config hot-reload**: admin writes update `config.yaml` in place (preserving
   comments and formatting via targeted YAML path patching) and take effect
   without a restart.

@@ -1,7 +1,7 @@
 <!--
   Reusable status bar component with icon indicators.
 
-  Usage: {% include "components/status_bar.svg" %}
+  Usage: {% include "byonk-base-v1/status_bar.svg" %}
 
   Expected variables:
     - wifi_status: "connected" | "disconnected" | "unknown" (optional)

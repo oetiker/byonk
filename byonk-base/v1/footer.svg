@@ -1,7 +1,7 @@
 <!--
   Reusable footer component with timestamp and optional message.
 
-  Usage: {% include "components/footer.svg" %}
+  Usage: {% include "byonk-base-v1/footer.svg" %}
 
   Expected variables:
     - updated_at: Timestamp string (optional)

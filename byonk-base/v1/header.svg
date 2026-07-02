@@ -1,7 +1,7 @@
 <!--
   Reusable header component with title and timestamp.
 
-  Usage: {% include "components/header.svg" %}
+  Usage: {% include "byonk-base-v1/header.svg" %}
 
   Expected variables:
     - title: Header title text

@@ -1,6 +1,7 @@
 pub mod config;
 pub mod device;
 pub mod display_spec;
+pub mod package_manifest;
 pub mod param_schema;
 pub mod screen_meta;
 

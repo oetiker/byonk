@@ -249,6 +249,21 @@ Existing installations keep working:
 - **Legacy global include paths.** Old-style `{% include "components/hinting.svg" %}`
   / `{% extends "layouts/base.svg" %}` continue to resolve in a compatibility
   mode. New packages use `byonk-base-v1/…` and repo-relative paths.
+- **Bare-name screen references (existing device configs).** Every current
+  device config assigns a **bare** screen name (`screen: gphoto`), and today's
+  built-in screens move under the `official` package. To keep existing installs
+  working with **zero config edits**, a `screen:` value containing **no `/`** is
+  resolved by a search order that reproduces today's behavior:
+  1. `local/<name>` — loose flat files (matching the current
+     external-overlay-wins precedence), then
+  2. `official/<name>` — the embedded official package.
+
+  The qualified `handle/path` form is the new *explicit* addressing; the bare
+  form remains valid indefinitely as the compatibility path. Accordingly, the
+  §9a.3 assignment validation is: a **bare** name must resolve via this search
+  order; a **qualified** `handle/path` must name a registered handle. No config
+  migration is required — existing `screen: gphoto` assignments and existing
+  `packages:`-free configs (official is embedded, always present) load unchanged.
 
 ## 8. Distribution
 
@@ -289,12 +304,14 @@ never takes down a screen that is already cached.
 
 ## 9a. Admin API surface (control & configuration)
 
-The registry, fetch, and package status must be fully controllable over the
-existing bearer-gated admin API (`/api/admin/*`), so the Home Assistant
-integration (and any admin UI) can configure packages and offer screen choices
-without editing config files. All endpoints follow current conventions: bearer
-auth via `require_admin`, JSON bodies, and config changes persisted through the
-existing config writer.
+There is **no byonk admin UI** today. The only ways to configure byonk are
+direct config-file editing and the bearer-gated admin API (`/api/admin/*`),
+and the **Home Assistant integration is the primary configuration front-end**.
+The registry, fetch, and package status must therefore be **fully** controllable
+over the admin API — package management is not an optional convenience layered on
+top of a UI; it is the only programmatic path, and HA drives it. All endpoints
+follow current conventions: bearer auth via `require_admin`, JSON bodies, and
+config changes persisted through the existing config writer.
 
 ### 9a.1 Package registry (new: `/api/admin/packages`)
 
@@ -370,8 +387,11 @@ field is set to.
 ### 9a.3 Device assignment & settings
 
 - Device write endpoints (`POST /devices`, `PATCH /devices/:key`) already carry a
-  `screen` field; it now accepts a `handle/path` reference. Assigning a screen
-  whose package handle is not registered is rejected with a clear error.
+  `screen` field; it now accepts a `handle/path` reference **and** a legacy bare
+  name. Validation: a **qualified** `handle/path` must name a registered handle
+  (else rejected with a clear error); a **bare** name must resolve via the §7
+  search order (`local/*` then `official/*`). This keeps existing bare-name
+  assignments valid — see §7.
 - **`PATCH /api/admin/settings`** gains `package_refresh_interval` (seconds; `0`
   disables periodic refresh — §8.2).
 

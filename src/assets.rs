@@ -886,7 +886,7 @@ mod tests {
 
         // Content should be overwritten with embedded
         let content = std::fs::read_to_string(&config_path).unwrap();
-        assert!(content.contains("screens:"));
+        assert!(content.contains("default_screen:"));
     }
 
     #[test]

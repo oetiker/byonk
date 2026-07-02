@@ -59,7 +59,7 @@ async fn test_config_returns_json_without_token() {
     let resp = app.get_with_headers("/api/admin/config", &[AUTH]).await;
     assert_eq!(resp.status, StatusCode::OK);
     let json: serde_json::Value = resp.json();
-    assert!(json["screens"].is_object());
+    assert!(json["panels"].is_object());
     // admin section present but token stripped
     assert!(json["admin"].is_object(), "admin section should be present");
     assert!(

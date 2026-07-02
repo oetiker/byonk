@@ -113,7 +113,6 @@ panels:
 
 # Screens are auto-discovered from the embedded `byonk-builtin` package
 # (the `screens/` tree) and any on-disk packages; no per-screen map is needed.
-screens: {}
 
 # Devices are owned by Home Assistant; none ship by default.
 devices: {}

@@ -147,6 +147,20 @@ pub fn normalize_algorithm_name(name: &str) -> String {
     }
 }
 
+/// Reference to a named screen package.
+///
+/// `repo == None` means the embedded byonk-builtin package.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct PackageRef {
+    #[serde(default)]
+    pub repo: Option<String>,
+    #[serde(default)]
+    pub pin: Option<String>,
+    /// Secret token; redacted in read APIs.
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
 /// Application configuration loaded from config.yaml
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
@@ -179,6 +193,10 @@ pub struct AppConfig {
     /// Admin/management API settings
     #[serde(default)]
     pub admin: AdminConfig,
+
+    /// Screen package registry
+    #[serde(default)]
+    pub packages: HashMap<String, PackageRef>,
 }
 
 /// Panel profile with official and measured display colors
@@ -202,7 +220,7 @@ pub struct PanelConfig {
 }
 
 fn default_screen() -> Option<String> {
-    Some("default".to_string())
+    Some("byonk-builtin/default".to_string())
 }
 
 /// Configuration for a screen (script + template)
@@ -473,10 +491,11 @@ impl Default for AppConfig {
             screens,
             devices: HashMap::new(),
             panels: HashMap::new(),
-            default_screen: Some("default".to_string()),
+            default_screen: default_screen(),
             registration: RegistrationConfig::default(),
             auth_mode: default_auth_mode(),
             admin: AdminConfig::default(),
+            packages: HashMap::new(),
         }
     }
 }
@@ -499,7 +518,7 @@ mod tests {
     fn test_default_config() {
         let config = AppConfig::default();
 
-        assert_eq!(config.default_screen, Some("default".to_string()));
+        assert_eq!(config.default_screen, Some("byonk-builtin/default".to_string()));
         assert!(config.screens.contains_key("default"));
         assert!(config.devices.is_empty());
 
@@ -593,7 +612,17 @@ mod tests {
 
     #[test]
     fn test_get_default_screen() {
-        let config = AppConfig::default();
+        let mut config = AppConfig::default();
+        // Seed the screen the default now points to (byonk-builtin/default).
+        // The old "default" seed remains; a later task empties the seeded map.
+        config.screens.insert(
+            "byonk-builtin/default".to_string(),
+            ScreenConfig {
+                script: PathBuf::from("default.lua"),
+                template: PathBuf::from("default.svg"),
+                default_refresh: 900,
+            },
+        );
 
         let result = config.get_default_screen();
         assert!(result.is_some());
@@ -630,8 +659,8 @@ mod tests {
 
     #[test]
     fn test_default_screen_function() {
-        // Test that default_screen function returns Some("default")
-        assert_eq!(default_screen(), Some("default".to_string()));
+        // Test that default_screen function returns Some("byonk-builtin/default")
+        assert_eq!(default_screen(), Some("byonk-builtin/default".to_string()));
     }
 
     #[test]
@@ -977,5 +1006,19 @@ colors: "#000000,#FFFFFF"
 "##;
         let config: PanelConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(config.dither.is_none());
+    }
+
+    #[test]
+    fn test_packages_registry_parses() {
+        let yaml = "packages:\n  byonk-builtin: {}\n  weather:\n    repo: github.com/acme/screens\n    pin: v1.4.0\n";
+        let cfg: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(cfg.packages.contains_key("byonk-builtin"));
+        assert_eq!(cfg.packages["weather"].pin.as_deref(), Some("v1.4.0"));
+        assert!(cfg.packages["byonk-builtin"].repo.is_none());
+    }
+
+    #[test]
+    fn test_default_screen_is_builtin() {
+        assert_eq!(default_screen(), Some("byonk-builtin/default".to_string()));
     }
 }

@@ -148,10 +148,13 @@ help:
 	@echo "  make ha-vm        Boot the Home Assistant OS test VM (headless)"
 	@echo "  make ha-vm-stop   Stop a running test VM"
 	@echo "  make ha-vm-clean  Delete the test VM disk + varstore (full reset)"
+	@echo "  make ha-deploy    Sync the integration into the VM (needs SMB_USER/SMB_PASS)"
+	@echo "  make ha-ssh       Open an SSH shell in the VM (needs Terminal & SSH add-on)"
+	@echo "  make ha-rebuild   Sync server source + rebuild the add-on (SMB + SSH)"
 	@echo ""
 	@echo "  make help         Show this help"
 
-.PHONY: ha-vm ha-vm-stop ha-vm-clean ha-deploy
+.PHONY: ha-vm ha-vm-stop ha-vm-clean ha-deploy ha-ssh ha-rebuild
 
 ha-vm: ## Boot the Home Assistant OS test VM (headless)
 	bash tools/ha-vm/run.sh
@@ -164,3 +167,9 @@ ha-vm-clean: ## Delete the test VM disk + varstore (full reset)
 
 ha-deploy: ## Sync custom_components/byonk into the running test VM (needs SMB_USER/SMB_PASS)
 	bash tools/ha-vm/deploy.sh
+
+ha-ssh: ## Open an SSH shell in the test VM, or run a command: make ha-ssh CMD="ha addons info local_byonk"
+	bash tools/ha-vm/ssh.sh $(CMD)
+
+ha-rebuild: ## Sync server source + rebuild the byonk add-on (needs SMB_USER/SMB_PASS + SSH setup)
+	bash tools/ha-vm/rebuild.sh

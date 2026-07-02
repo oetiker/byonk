@@ -79,9 +79,42 @@ After deployment, restart Home Assistant via the UI (**Developer Tools** → **R
 ha core restart
 ```
 
+## SSH Access (scriptable add-on rebuilds)
+
+For iterating on the byonk **server** (Rust), SSH into the VM so rebuilds can be
+triggered from the host instead of clicking through the UI. Host port `${SSH_PORT}`
+(default `2222`) is forwarded to guest `22`.
+
+One-time setup (needs the UI once):
+
+1. Boot the VM (`make ha-vm`) — the SSH port forward is already in `run.sh`.
+2. In the UI, install the official **Terminal & SSH** add-on (Add-on Store → *Terminal & SSH*).
+3. In its **Configuration**:
+   - **Authorized Keys**: add the public key `tools/ha-vm/ssh/id_ed25519.pub`
+     (generate the pair once with `ssh-keygen -t ed25519 -f tools/ha-vm/ssh/id_ed25519 -N ""`).
+   - **Network → SSH Port**: set to `22` (it defaults to Ingress-only/disabled).
+4. Start the add-on (enable *Start on boot*).
+
+Then, from the host:
+
+```bash
+make ha-ssh                                  # interactive shell in the VM
+make ha-ssh CMD="ha addons info local_byonk" # run a single command
+```
+
+Deploy a server change and rebuild the add-on in one step (needs SMB creds too):
+
+```bash
+SMB_USER=byonk SMB_PASS=byonk make ha-rebuild
+```
+
+`ha-rebuild` rsyncs the build inputs into the local add-on source over Samba, syncs
+`screens/` into the add-on's `SCREENS_DIR`, then runs `ha addons rebuild local_byonk`
+over SSH. The private key lives in `tools/ha-vm/ssh/` (gitignored).
+
 ## Networking Limitation
 
-The harness uses **user-mode NAT**. This exposes the forwarded ports (8123, 3000, 4445) to the Mac host only. Real LAN TRMNL e-ink devices **cannot** reach the VM. Bridged networking is out of scope for Phase 4.
+The harness uses **user-mode NAT**. This exposes the forwarded ports (8123, 3000, 4445, 2222) to the Mac host only. Real LAN TRMNL e-ink devices **cannot** reach the VM. Bridged networking is out of scope for Phase 4.
 
 ## Reset
 

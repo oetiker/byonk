@@ -24,3 +24,4 @@ __pycache__/
 
 # Home Assistant test VM artifacts (large/binary, machine-local)
 tools/ha-vm/work/
+tools/ha-vm/ssh/

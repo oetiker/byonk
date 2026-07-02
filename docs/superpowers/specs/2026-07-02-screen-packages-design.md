@@ -395,6 +395,32 @@ field is set to.
 - **`PATCH /api/admin/settings`** gains `package_refresh_interval` (seconds; `0`
   disables periodic refresh — §8.2).
 
+### 9a.4 Where package config lives in Home Assistant
+
+byonk is the source of truth (the API above); this section fixes *where the HA
+integration surfaces it*, because the current integration has no config screen —
+all server-level settings are entities hung on a "byonk" **hub device**, which
+makes that device double as a settings panel. Packages should not add more of
+that. The split:
+
+- **Configuration → a config-entry Options Flow** ("Configure" screen), which the
+  integration does not have today and must add. It hosts the package registry
+  (add/edit/remove `handle → {repo, pin, token}`), the default new-device screen,
+  and auth mode. These are occasional, form-shaped settings; the package `token`
+  is **secret** and therefore must live here, never as an entity. The Options Flow
+  is a thin front-end over `POST/PATCH/DELETE /api/admin/packages` and
+  `PATCH /settings` — it stores nothing itself.
+- **Status & actions → entities on the hub device.** Per-package fetch-status
+  sensors (`status`, `resolved_sha`, `last_fetched`, `error`), an "Update
+  packages" button (→ `POST /api/admin/packages/update`), and the existing
+  registration switch. These are worth observing, dashboarding, and automating.
+
+Net effect: the hub device remains (the idiomatic bridge/gateway representation,
+now holding status + actions), but every *configuration knob* moves off it into
+the Configure screen — resolving the "byonk shows up as a device" oddity. This is
+HA-integration work, tracked with the HA phases, not byonk-core phases 1–2; it
+depends only on the §9a API being present.
+
 ## 9. Impact on byonk internals
 
 - **`assets.rs`** — a package-aware loader: resolve `handle/path` → package (via

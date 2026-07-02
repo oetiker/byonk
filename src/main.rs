@@ -681,7 +681,7 @@ async fn run_server() -> anyhow::Result<()> {
     // Explicit BYONK_ADMIN_TOKEN env still wins (server resolves env before config.admin.token).
     let mut config = byonk::models::AppConfig::load_from_assets(&asset_loader)?;
     byonk::addon_options::apply_to_config(&addon, &mut config);
-    let state = server::create_app_state_with_config(asset_loader, std::sync::Arc::new(config))?;
+    let state = server::create_app_state_with_config(asset_loader, config)?;
 
     // Build router: start with shared API routes, add production-only routes
     let app = server::build_router(state)

@@ -21,7 +21,8 @@ use tracing::{Level, Span};
 use crate::api;
 use crate::assets::AssetLoader;
 use crate::error::ApiError;
-use crate::models::{AppConfig, DitherTuningValues};
+use crate::models::{config::PackageRef, AppConfig, DitherTuningValues};
+use crate::services::package_loader::PackageLoader;
 use crate::services::{ContentCache, ContentPipeline, InMemoryRegistry, RenderService};
 
 /// Runtime overrides set by the dev GUI and consumed by production handlers.
@@ -74,20 +75,45 @@ pub struct AppState {
     pub content_pipeline: Arc<ContentPipeline>,
     pub content_cache: Arc<ContentCache>,
     pub dev_overrides: DevOverrides,
+    pub package_loader: Arc<PackageLoader>,
 }
 
 /// Create application state from an asset loader.
 pub fn create_app_state(asset_loader: Arc<AssetLoader>) -> anyhow::Result<AppState> {
     let config = AppConfig::load_from_assets(&asset_loader)?;
-    create_app_state_with_config(asset_loader, Arc::new(config))
+    create_app_state_with_config(asset_loader, config)
 }
 
 /// Create application state with a custom config.
 pub fn create_app_state_with_config(
     asset_loader: Arc<AssetLoader>,
-    config: Arc<AppConfig>,
+    config: AppConfig,
 ) -> anyhow::Result<AppState> {
-    create_app_state_with_overrides(asset_loader, config, DevOverrides::default())
+    create_app_state_with_overrides(asset_loader, Arc::new(config), DevOverrides::default())
+}
+
+/// Build the set of on-disk packages from `PACKAGES_DIR`.
+///
+/// Only handles that appear in `registry` (i.e. `config.packages`) AND whose
+/// directory `dir/<handle>` exists on disk are included. Non-builtin packages
+/// are placed manually under `PACKAGES_DIR` in this phase; git fetching is a
+/// later plan. `byonk-builtin` needs no disk entry — it registers embedded
+/// inside `PackageLoader`.
+fn collect_disk_packages(
+    dir: &std::path::Path,
+    registry: &HashMap<String, PackageRef>,
+) -> HashMap<String, std::path::PathBuf> {
+    registry
+        .keys()
+        .filter_map(|handle| {
+            let path = dir.join(handle);
+            if path.is_dir() {
+                Some((handle.clone(), path))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Create application state with shared overrides (for dev mode).
@@ -101,7 +127,16 @@ pub fn create_app_state_with_overrides(
         .filter(|s| !s.is_empty())
         .or_else(|| config.admin.token.clone());
 
-    let shared_config: SharedConfig = Arc::new(ArcSwap::from(config));
+    let shared_config: SharedConfig = Arc::new(ArcSwap::from(config.clone()));
+
+    // Build package loader from PACKAGES_DIR env var (before content_pipeline so
+    // Task 9 can pass it in cleanly when ContentPipeline::new gains the parameter).
+    let disk_packages = std::env::var("PACKAGES_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(|dir| collect_disk_packages(std::path::Path::new(&dir), &config.packages))
+        .unwrap_or_default();
+    let package_loader = Arc::new(PackageLoader::new(asset_loader.clone(), disk_packages));
 
     let registry = Arc::new(InMemoryRegistry::new());
     let renderer = Arc::new(RenderService::new(&asset_loader)?);
@@ -125,6 +160,7 @@ pub fn create_app_state_with_overrides(
         content_pipeline,
         content_cache,
         dev_overrides,
+        package_loader,
     })
 }
 
@@ -215,6 +251,16 @@ async fn handle_image(
 #[cfg(test)]
 mod reload_tests {
     use super::*;
+
+    #[test]
+    fn test_appstate_has_package_loader() {
+        // Minimal smoke test: build state and resolve the builtin default screen.
+        let loader = std::sync::Arc::new(crate::assets::AssetLoader::new(None, None, None));
+        let cfg = crate::models::config::AppConfig::default();
+        let state = create_app_state_with_config(loader, cfg).unwrap();
+        // byonk-builtin is always registered:
+        assert!(state.package_loader.handles().iter().any(|h| h == "byonk-builtin"));
+    }
 
     #[test]
     fn test_config_swap_is_visible() {

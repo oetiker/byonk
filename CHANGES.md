@@ -80,6 +80,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Screen list**: `/api/admin/screens` now includes screens that exist on disk as a
+  matching `<name>.lua`/`<name>.svg` pair but aren't declared in `config.yaml`, along
+  with their parsed `@params`. This matches how the content pipeline already resolves a
+  device's screen by filename, so filesystem-only screens (e.g. `gphoto`) now appear in
+  the Home Assistant screen picker instead of being silently omitted.
+- **Assigning a disk-only screen**: the admin write endpoints (device `screen`,
+  `default_screen`, `registration_screen`) now accept auto-discovered screens too, so
+  selecting one (e.g. `gphoto`) no longer fails with `unknown screen`. Previously only
+  the listing was fixed, and the write still rejected the very screens it offered.
+- **`gphoto` screen**: `album_url` is no longer marked `required`, matching the script's
+  own behavior of showing its registration code until an album is configured. This lets
+  the screen be selected (and used as a default) before an album URL is entered.
 - **Device onboarding**: unregistered devices that contact `/api/display` are now
   recorded in the device registry, so they appear in `/api/admin/pending` (and can be
   onboarded from the Home Assistant integration). Previously a device that only ever

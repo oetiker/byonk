@@ -46,6 +46,32 @@ async fn test_add_unknown_screen_returns_400() {
 }
 
 #[tokio::test]
+async fn test_add_disk_only_screen_is_accepted() {
+    // `gphoto` ships as gphoto.lua/gphoto.svg on disk but is NOT in the default
+    // config's `screens:` map. Assigning it must succeed (auto-discovery), matching
+    // the render pipeline and the screens listing — not fail with "unknown screen".
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+    let body = r#"{"key":"CC:DD:EE:FF:00:11","screen":"gphoto"}"#;
+    let resp = app.post_json("/api/admin/devices", &[AUTH], body).await;
+    assert_eq!(resp.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_disk_only_screen_as_default_is_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+    let resp = app
+        .patch_json(
+            "/api/admin/settings",
+            &[AUTH],
+            r#"{"default_screen":"gphoto"}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn test_patch_settings_toggles_registration() {
     let dir = tempfile::tempdir().unwrap();
     let (app, path) = TestApp::new_admin_with_file("secret", dir.path());

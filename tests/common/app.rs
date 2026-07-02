@@ -207,6 +207,19 @@ impl TestApp {
         )
         .expect("write broken.svg");
 
+        // A valid screen present on disk but NOT declared in config.yaml.
+        // Exercises filesystem auto-discovery in the /api/admin/screens list.
+        std::fs::write(
+            screens_dir.join("extra.lua"),
+            "--[[ @params\ncolor:\n  type: string\n  label: \"Color\"\n]]\nreturn { data = {} }\n",
+        )
+        .expect("write extra.lua");
+        std::fs::write(
+            screens_dir.join("extra.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg"></svg>"#,
+        )
+        .expect("write extra.svg");
+
         // Write a minimal config.yaml pointing at the broken screen
         let config_path = dir.join("config.yaml");
         let yaml = format!(

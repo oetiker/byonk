@@ -210,24 +210,58 @@ pub async fn screens(
     require_admin(&state, &headers)?;
     let config = state.config.load();
 
+    // Read a screen script and extract its @params schema fields.
+    let read_params = |name: &str, script: &std::path::Path| match state
+        .asset_loader
+        .read_screen_string(script)
+    {
+        Err(e) => (Vec::new(), Some(format!("cannot read script: {e}"))),
+        Ok(src) => match schema_for_script(&src) {
+            Ok(Some(schema)) => (schema.fields, None),
+            Ok(None) => (Vec::new(), None),
+            Err(e) => {
+                tracing::warn!(screen = %name, error = %e, "invalid @params schema");
+                (Vec::new(), Some(e))
+            }
+        },
+    };
+
+    let mut seen = std::collections::HashSet::new();
     let mut screens = Vec::new();
+
+    // Config-defined screens (may carry custom script/template/refresh).
     for (name, sc) in &config.screens {
-        let (params, schema_error) = match state.asset_loader.read_screen_string(&sc.script) {
-            Err(e) => (Vec::new(), Some(format!("cannot read script: {e}"))),
-            Ok(src) => match schema_for_script(&src) {
-                Ok(Some(schema)) => (schema.fields, None),
-                Ok(None) => (Vec::new(), None),
-                Err(e) => {
-                    tracing::warn!(screen = %name, error = %e, "invalid @params schema");
-                    (Vec::new(), Some(e))
-                }
-            },
-        };
+        seen.insert(name.clone());
+        let (params, schema_error) = read_params(name, &sc.script);
         screens.push(ScreenInfo {
             name: name.clone(),
             params,
             schema_error,
         });
+    }
+
+    // Auto-discover screens on disk that aren't in config, matching how the
+    // content pipeline resolves a device's screen by filename (see
+    // ContentPipeline::resolve_screen).
+    let all_files = state.asset_loader.list_screens();
+    for file in &all_files {
+        if let Some(name) = file.strip_suffix(".lua") {
+            // Skip subdirectory assets (layouts/, components/) and configured screens.
+            if name.contains('/') || seen.contains(name) {
+                continue;
+            }
+            let svg_file = format!("{name}.svg");
+            if all_files.iter().any(|f| f == &svg_file) {
+                seen.insert(name.to_string());
+                let (params, schema_error) =
+                    read_params(name, &std::path::PathBuf::from(format!("{name}.lua")));
+                screens.push(ScreenInfo {
+                    name: name.to_string(),
+                    params,
+                    schema_error,
+                });
+            }
+        }
     }
 
     let panels = config

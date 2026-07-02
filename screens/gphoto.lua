@@ -2,8 +2,8 @@
 album_url:
   type: url
   label: "Album URL"
-  required: true
-  description: "Shared Google Photos album link"
+  required: false
+  description: "Shared Google Photos album link (until set, the screen shows its registration code)"
 show_status:
   type: bool
   label: "Show status overlay"

@@ -57,6 +57,29 @@ async fn test_broken_params_returns_schema_error() {
 }
 
 #[tokio::test]
+async fn test_disk_only_screen_is_auto_discovered() {
+    // A screen with matching .lua/.svg on disk but no config entry must still
+    // appear in the list (matches how the content pipeline resolves screens),
+    // including its parsed @params — so HA's screen picker can offer it.
+    let dir = tempdir().expect("tempdir");
+    let app = TestApp::new_admin_with_screens("secret", dir.path());
+
+    let resp = app.get_with_headers("/api/admin/screens", &[AUTH]).await;
+    assert_eq!(resp.status, StatusCode::OK);
+
+    let json: serde_json::Value = resp.json();
+    let screens = json["screens"].as_array().expect("screens array");
+    let extra = screens
+        .iter()
+        .find(|s| s["name"] == "extra")
+        .expect("auto-discovered `extra` screen in response");
+
+    let params = extra["params"].as_array().unwrap();
+    assert!(params.iter().any(|p| p["name"] == "color"));
+    assert!(extra["schema_error"].is_null());
+}
+
+#[tokio::test]
 async fn test_transit_has_station_param_after_headers_added() {
     // After Task 12 adds @params headers, transit exposes a `station` param.
     let app = TestApp::new_admin("secret");

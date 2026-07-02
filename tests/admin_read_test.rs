@@ -75,6 +75,50 @@ async fn test_config_requires_auth() {
     assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
 }
 
+/// Security: package tokens must NOT appear in GET /api/admin/config.
+/// `PackageRef.token` is documented "Secret token; redacted in read APIs".
+#[tokio::test]
+async fn test_config_redacts_package_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = "admin:\n  token: secret\npackages:\n  mypkg:\n    repo: https://github.com/example/screens\n    pin: v1.0.0\n    token: pkg-secret-abc\n";
+    let (app, _) = TestApp::new_with_config_yaml(yaml, dir.path());
+    let resp = app.get_with_headers("/api/admin/config", &[AUTH]).await;
+    assert_eq!(resp.status, StatusCode::OK);
+    let json: serde_json::Value = resp.json();
+
+    // The package entry should be present with repo and pin intact.
+    let pkg = &json["packages"]["mypkg"];
+    assert_eq!(
+        pkg["repo"].as_str(),
+        Some("https://github.com/example/screens"),
+        "packages.mypkg.repo must be present"
+    );
+    assert_eq!(
+        pkg["pin"].as_str(),
+        Some("v1.0.0"),
+        "packages.mypkg.pin must be present"
+    );
+
+    // Token must be absent — not just null, but the key must not be present.
+    assert!(
+        pkg.get("token").is_none() || pkg["token"].is_null(),
+        "packages.mypkg.token must be redacted from GET /api/admin/config"
+    );
+
+    // Double-check: the raw response body must not contain the secret.
+    let body = resp.text();
+    assert!(
+        !body.contains("pkg-secret-abc"),
+        "raw response must not contain the package token value"
+    );
+
+    // admin.token must still be stripped too.
+    assert!(
+        json["admin"]["token"].is_null(),
+        "admin.token must be stripped"
+    );
+}
+
 /// Bug A regression test: an unregistered Ed25519 device that only hits /api/display
 /// must appear in /api/admin/pending with a registration_code matching what is shown
 /// on the device screen (derived from the Access-Token, i.e. the identity key).

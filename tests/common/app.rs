@@ -158,6 +158,27 @@ impl TestApp {
         }
     }
 
+    /// Build a test app backed by an arbitrary config YAML string written to a file.
+    /// Returns `(app, config_path)`. `dir` must outlive the app.
+    pub fn new_with_config_yaml(yaml: &str, dir: &std::path::Path) -> (Self, std::path::PathBuf) {
+        let config_path = dir.join("config.yaml");
+        std::fs::write(&config_path, yaml).expect("write config file");
+        let asset_loader = Arc::new(AssetLoader::new(None, None, Some(config_path.clone())));
+        let config = AppConfig::load_from_assets(&asset_loader).expect("load config");
+        let state = create_app_state_with_config(asset_loader, config).expect("create state");
+        let registry = state.registry.clone();
+        let content_cache = state.content_cache.clone();
+        let router = build_router(state);
+        (
+            Self {
+                router,
+                registry,
+                content_cache,
+            },
+            config_path,
+        )
+    }
+
     /// Admin app backed by a real config FILE seeded from the embedded default
     /// (writes succeed). Returns (app, config_path). `dir` must outlive the app.
     pub fn new_admin_with_file(token: &str, dir: &std::path::Path) -> (Self, std::path::PathBuf) {

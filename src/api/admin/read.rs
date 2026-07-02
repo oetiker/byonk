@@ -66,6 +66,18 @@ pub async fn get_config(
         {
             admin.remove(serde_yaml::Value::from("token"));
         }
+        // Strip package tokens — `PackageRef.token` is documented as
+        // "Secret token; redacted in read APIs".
+        if let Some(packages) = map
+            .get_mut(serde_yaml::Value::from("packages"))
+            .and_then(|p| p.as_mapping_mut())
+        {
+            for (_, pkg) in packages.iter_mut() {
+                if let Some(pkg_map) = pkg.as_mapping_mut() {
+                    pkg_map.remove(serde_yaml::Value::from("token"));
+                }
+            }
+        }
     }
 
     let json =

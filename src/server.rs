@@ -99,6 +99,20 @@ pub fn create_app_state_with_config(
 /// are placed manually under `PACKAGES_DIR` in this phase; git fetching is a
 /// later plan. `byonk-builtin` needs no disk entry — it registers embedded
 /// inside `PackageLoader`.
+/// Build a [`PackageLoader`] from the embedded builtin package plus any on-disk
+/// packages under `PACKAGES_DIR` that are declared in `config.packages`.
+pub fn build_package_loader(
+    asset_loader: Arc<AssetLoader>,
+    config: &AppConfig,
+) -> Arc<PackageLoader> {
+    let disk_packages = std::env::var("PACKAGES_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(|dir| collect_disk_packages(std::path::Path::new(&dir), &config.packages))
+        .unwrap_or_default();
+    Arc::new(PackageLoader::new(asset_loader, disk_packages))
+}
+
 fn collect_disk_packages(
     dir: &std::path::Path,
     registry: &HashMap<String, PackageRef>,
@@ -129,14 +143,8 @@ pub fn create_app_state_with_overrides(
 
     let shared_config: SharedConfig = Arc::new(ArcSwap::from(config.clone()));
 
-    // Build package loader from PACKAGES_DIR env var (before content_pipeline so
-    // Task 9 can pass it in cleanly when ContentPipeline::new gains the parameter).
-    let disk_packages = std::env::var("PACKAGES_DIR")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .map(|dir| collect_disk_packages(std::path::Path::new(&dir), &config.packages))
-        .unwrap_or_default();
-    let package_loader = Arc::new(PackageLoader::new(asset_loader.clone(), disk_packages));
+    // Build package loader from the embedded builtin + PACKAGES_DIR env var.
+    let package_loader = build_package_loader(asset_loader.clone(), &config);
 
     let registry = Arc::new(InMemoryRegistry::new());
     let renderer = Arc::new(RenderService::new(&asset_loader)?);
@@ -145,6 +153,7 @@ pub fn create_app_state_with_overrides(
             shared_config.clone(),
             asset_loader.clone(),
             renderer.clone(),
+            package_loader.clone(),
         )
         .map_err(|e| anyhow::anyhow!("Failed to create content pipeline: {e}"))?,
     );
@@ -259,7 +268,11 @@ mod reload_tests {
         let cfg = crate::models::config::AppConfig::default();
         let state = create_app_state_with_config(loader, cfg).unwrap();
         // byonk-builtin is always registered:
-        assert!(state.package_loader.handles().iter().any(|h| h == "byonk-builtin"));
+        assert!(state
+            .package_loader
+            .handles()
+            .iter()
+            .any(|h| h == "byonk-builtin"));
     }
 
     #[test]

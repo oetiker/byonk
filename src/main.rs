@@ -199,8 +199,9 @@ fn run_render_command(
     let renderer = Arc::new(RenderService::new(&asset_loader)?);
     let shared: byonk::server::SharedConfig =
         std::sync::Arc::new(arc_swap::ArcSwap::from(config.clone()));
+    let package_loader = byonk::server::build_package_loader(asset_loader.clone(), &config);
     let content_pipeline = Arc::new(
-        ContentPipeline::new(shared, asset_loader, renderer.clone())
+        ContentPipeline::new(shared, asset_loader, renderer.clone(), package_loader)
             .expect("Failed to initialize content pipeline"),
     );
 

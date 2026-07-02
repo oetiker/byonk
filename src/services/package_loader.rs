@@ -32,6 +32,10 @@ pub trait PackageSource: Send + Sync {
     /// relative to the manifest `root` (or the package root if no `root`).
     fn screen_paths(&self) -> Vec<String>;
 
+    /// Package-relative paths of every `.svg` file in the package. Used to scope
+    /// Tera template registration to one package (screens + shared parts).
+    fn svg_files(&self) -> Vec<String>;
+
     /// The parsed package manifest.
     fn manifest(&self) -> &PackageManifest;
 }
@@ -115,6 +119,25 @@ impl DiskPackageSource {
             }
         }
     }
+
+    /// Recursively collect files (relative to `base`) whose extension is `ext`.
+    fn walk_ext(base: &Path, current: &Path, ext: &str, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(current) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                Self::walk_ext(base, &path, ext, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some(ext) {
+                if let Ok(rel) = path.strip_prefix(base) {
+                    if let Some(s) = rel.to_str() {
+                        out.push(s.replace('\\', "/"));
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl PackageSource for DiskPackageSource {
@@ -125,6 +148,13 @@ impl PackageSource for DiskPackageSource {
     fn screen_paths(&self) -> Vec<String> {
         let mut out = Vec::new();
         Self::walk_screens(&self.manifest_root, &self.manifest_root, &mut out);
+        out.sort();
+        out
+    }
+
+    fn svg_files(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        Self::walk_ext(&self.manifest_root, &self.manifest_root, "svg", &mut out);
         out.sort();
         out
     }
@@ -193,6 +223,29 @@ impl PackageSource for EmbeddedBuiltinSource {
                     None
                 } else {
                     Some(dir.to_string())
+                }
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    fn svg_files(&self) -> Vec<String> {
+        let prefix = if self.root_prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", self.root_prefix)
+        };
+        let mut out: Vec<String> = self
+            .loader
+            .list_screens()
+            .into_iter()
+            .filter_map(|entry| {
+                let under = entry.strip_prefix(&prefix)?;
+                if under.ends_with(".svg") {
+                    Some(under.to_string())
+                } else {
+                    None
                 }
             })
             .collect();

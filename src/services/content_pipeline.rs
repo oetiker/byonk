@@ -3,8 +3,18 @@ use std::sync::Arc;
 
 use crate::assets::AssetLoader;
 use crate::error::RenderError;
-use crate::models::{DisplaySpec, ScreenConfig};
+use crate::models::DisplaySpec;
+use crate::services::package_loader::{PackageLoader, PackageSource, ResolvedScreen};
 use crate::services::{FontFaceInfo, LuaRuntime, RenderService, TemplateService};
+
+/// Join a screen-relative directory with a file name (forward slashes).
+fn join_screen_rel(dir: &str, file: &str) -> String {
+    if dir.is_empty() || dir == "." {
+        file.to_string()
+    } else {
+        format!("{}/{}", dir.trim_end_matches('/'), file)
+    }
+}
 
 /// Resolve the effective refresh rate.
 /// Precedence: Lua-returned (>0) > per-device override (>0) > screen default.
@@ -30,10 +40,12 @@ pub struct ScriptResult {
     pub refresh_rate: u32,
     /// If true, no new content - just tell device to check back later
     pub skip_update: bool,
-    /// Screen name
+    /// Screen name (a `handle/path` ref), for logging
     pub screen_name: String,
-    /// Template path for rendering
-    pub template_path: std::path::PathBuf,
+    /// The screen's package source, for reading `screen.svg` + sibling parts
+    pub source: Arc<dyn PackageSource>,
+    /// The screen's package-relative directory
+    pub screen_dir: String,
     /// Config params
     pub params: HashMap<String, serde_yaml::Value>,
     /// Optional color palette override from Lua script (hex RGB strings)
@@ -108,10 +120,10 @@ pub enum ContentError {
 /// Content pipeline that orchestrates script → template → render
 pub struct ContentPipeline {
     config: crate::server::SharedConfig,
-    asset_loader: Arc<AssetLoader>,
     lua_runtime: LuaRuntime,
     template_service: TemplateService,
     renderer: Arc<RenderService>,
+    package_loader: Arc<PackageLoader>,
 }
 
 impl ContentPipeline {
@@ -119,6 +131,7 @@ impl ContentPipeline {
         config: crate::server::SharedConfig,
         asset_loader: Arc<AssetLoader>,
         renderer: Arc<RenderService>,
+        package_loader: Arc<PackageLoader>,
     ) -> Result<Self, ContentError> {
         // Build font info from the renderer's fontdb
         let mut font_families: HashMap<String, Vec<FontFaceInfo>> = HashMap::new();
@@ -140,34 +153,14 @@ impl ContentPipeline {
         }
 
         let lua_runtime = LuaRuntime::with_fonts(asset_loader.clone(), font_families);
-        let template_service = TemplateService::new(asset_loader.clone())?;
+        let template_service = TemplateService::new(asset_loader)?;
 
         Ok(Self {
             config,
-            asset_loader,
             lua_runtime,
             template_service,
             renderer,
-        })
-    }
-
-    /// Resolve a screen by name from config or filesystem auto-discovery
-    fn resolve_screen(&self, screen_name: &str) -> Option<ScreenConfig> {
-        let config = self.config.load();
-        config.screens.get(screen_name).cloned().or_else(|| {
-            let all_files = self.asset_loader.list_screens();
-            let lua_file = format!("{}.lua", screen_name);
-            let svg_file = format!("{}.svg", screen_name);
-            if all_files.iter().any(|f| f == &lua_file) && all_files.iter().any(|f| f == &svg_file)
-            {
-                Some(ScreenConfig {
-                    script: std::path::PathBuf::from(lua_file),
-                    template: std::path::PathBuf::from(svg_file),
-                    default_refresh: 900,
-                })
-            } else {
-                None
-            }
+            package_loader,
         })
     }
 
@@ -187,97 +180,97 @@ impl ContentPipeline {
             .or_else(|| config.get_device_config(device_mac));
 
         if let Some(device_config) = device_config {
-            // Found device config — resolve screen from config or filesystem
-            if let Some(screen_config) = self.resolve_screen(&device_config.screen) {
+            // Found device config — resolve the device's screen ref via packages.
+            if let Some(resolved) = self.package_loader.resolve(&device_config.screen) {
                 if let Some(ctx) = device_ctx.as_mut() {
                     ctx.refresh_override = device_config.refresh;
                 }
-                return self.run_script_for_screen(
-                    &screen_config,
+                return self.run_resolved(
+                    &resolved,
                     &device_config.params,
-                    device_ctx,
+                    device_ctx.as_ref(),
+                    None,
                 );
             }
             // Device config exists but screen not found — fall through to default
         }
 
-        // Fall back to default screen with empty params
-        let screen_config = self
-            .resolve_screen(config.default_screen.as_deref().unwrap_or("default"))
+        // Fall back to the default screen ref with empty params.
+        let default_ref = config
+            .default_screen
+            .as_deref()
+            .unwrap_or("byonk-builtin/default");
+        let resolved = self
+            .package_loader
+            .resolve(default_ref)
             .ok_or_else(|| ContentError::ScreenNotFound(device_mac.to_string()))?;
 
-        static EMPTY_DEVICE: std::sync::OnceLock<crate::models::DeviceConfig> =
-            std::sync::OnceLock::new();
-        let dc = EMPTY_DEVICE.get_or_init(|| crate::models::DeviceConfig {
-            screen: "default".to_string(),
-            ..Default::default()
-        });
-
-        self.run_script_for_screen(&screen_config, &dc.params, device_ctx)
+        let empty_params: HashMap<String, serde_yaml::Value> = HashMap::new();
+        self.run_resolved(&resolved, &empty_params, device_ctx.as_ref(), None)
     }
 
-    /// Run script for a screen by name with custom params (without rendering)
+    /// Run a screen by its `handle/path` ref with custom params (without rendering).
     ///
     /// This is used for running custom registration screens where params.code
     /// contains the registration code.
     pub fn run_screen_by_name(
         &self,
-        screen_name: &str,
+        screen_ref: &str,
         params: HashMap<String, serde_yaml::Value>,
         device_ctx: Option<DeviceContext>,
     ) -> Result<ScriptResult, ContentError> {
-        let screen = self
-            .resolve_screen(screen_name)
-            .ok_or_else(|| ContentError::ScreenNotFound(screen_name.to_string()))?;
+        let resolved = self
+            .package_loader
+            .resolve(screen_ref)
+            .ok_or_else(|| ContentError::ScreenNotFound(screen_ref.to_string()))?;
 
-        self.run_script_for_screen(&screen, &params, device_ctx)
+        self.run_resolved(&resolved, &params, device_ctx.as_ref(), None)
     }
 
-    /// Run script for a specific screen (without rendering)
-    fn run_script_for_screen(
+    /// Run a resolved screen's `script.lua` (without rendering).
+    fn run_resolved(
         &self,
-        screen: &ScreenConfig,
+        resolved: &ResolvedScreen,
         params: &HashMap<String, serde_yaml::Value>,
-        device_ctx: Option<DeviceContext>,
+        device_ctx: Option<&DeviceContext>,
+        timestamp_override: Option<i64>,
     ) -> Result<ScriptResult, ContentError> {
-        // Run the Lua script (no timestamp override for normal operation)
-        let lua_result =
-            self.lua_runtime
-                .run_script(&screen.script, params, device_ctx.as_ref(), None)?;
+        let screen_name = format!("{}/{}", resolved.handle, resolved.path);
+        let script_rel = join_screen_rel(&resolved.screen_dir, "script.lua");
+        let script_src = resolved.source.read_string(&script_rel).ok_or_else(|| {
+            ContentError::ScreenNotFound(format!("{screen_name} (missing script.lua)"))
+        })?;
 
-        // Use script's refresh rate, device override, or fall back to screen's default
-        let device_override = device_ctx.as_ref().and_then(|c| c.refresh_override);
-        let refresh_rate = resolve_refresh_rate(
-            lua_result.refresh_rate,
-            device_override,
-            screen.default_refresh,
+        // Run the Lua script, resolving require() against the screen's package.
+        let lua_result = self.lua_runtime.run_script(
+            &script_src,
+            &resolved.source,
+            &screen_name,
+            params,
+            device_ctx,
+            timestamp_override,
+        )?;
+
+        // Use script's refresh rate, device override, or the screen meta default.
+        let screen_default = resolved.meta.refresh.unwrap_or(900);
+        let device_override = device_ctx.and_then(|c| c.refresh_override);
+        let refresh_rate =
+            resolve_refresh_rate(lua_result.refresh_rate, device_override, screen_default);
+
+        tracing::debug!(
+            screen = %screen_name,
+            refresh_rate = refresh_rate,
+            skip_update = lua_result.skip_update,
+            "Script executed"
         );
-
-        if lua_result.skip_update {
-            tracing::debug!(
-                script = %screen.script.display(),
-                refresh_rate = refresh_rate,
-                "Script returned skip_update"
-            );
-        } else {
-            tracing::debug!(
-                script = %screen.script.display(),
-                refresh_rate = refresh_rate,
-                "Script executed successfully"
-            );
-        }
 
         Ok(ScriptResult {
             data: lua_result.data,
             refresh_rate,
             skip_update: lua_result.skip_update,
-            screen_name: screen
-                .script
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string(),
-            template_path: screen.template.clone(),
+            screen_name,
+            source: resolved.source.clone(),
+            screen_dir: resolved.screen_dir.clone(),
             params: params.clone(),
             script_colors: lua_result.colors,
             script_dither: lua_result.dither,
@@ -357,15 +350,22 @@ impl ContentPipeline {
 
         let template_data = serde_json::Value::Object(template_context);
 
-        // Render the template to SVG (with image reference resolution)
+        // Read the screen's `screen.svg` from its package.
+        let template_rel = join_screen_rel(&result.screen_dir, "screen.svg");
+        let template_src = result.source.read_string(&template_rel).ok_or_else(|| {
+            ContentError::Template(super::TemplateError::NotFound(template_rel.clone()))
+        })?;
+
+        // Render the template to SVG (scoped to the screen's package + byonk-base).
         let svg_content = self.template_service.render(
-            &result.template_path,
+            &template_src,
+            &result.source,
+            &result.screen_dir,
             &template_data,
-            &result.screen_name,
         )?;
 
         tracing::debug!(
-            template = %result.template_path.display(),
+            template = %template_rel,
             svg_len = svg_content.len(),
             "Template rendered to SVG"
         );
@@ -552,12 +552,11 @@ impl ContentPipeline {
         )
     }
 
-    /// Run script directly with explicit paths (for dev mode — no device config consulted)
+    /// Run a screen directly by its `handle/path` ref (for dev mode — no device
+    /// config consulted). Params come in as JSON and are converted to YAML.
     pub fn run_script_direct(
         &self,
-        script_path: &std::path::Path,
-        template_path: &std::path::Path,
-        default_refresh: u32,
+        screen_ref: &str,
         params: HashMap<String, serde_json::Value>,
         device_ctx: Option<DeviceContext>,
         timestamp_override: Option<i64>,
@@ -573,39 +572,18 @@ impl ContentPipeline {
             })
             .collect();
 
-        // Run the Lua script with optional timestamp override
-        let lua_result = self
-            .lua_runtime
-            .run_script(
-                script_path,
-                &yaml_params,
-                device_ctx.as_ref(),
-                timestamp_override,
-            )
-            .map_err(|e| e.to_string())?;
+        let resolved = self
+            .package_loader
+            .resolve(screen_ref)
+            .ok_or_else(|| format!("Screen '{screen_ref}' not found"))?;
 
-        // Use script's refresh rate, or fall back to default
-        let refresh_rate = resolve_refresh_rate(lua_result.refresh_rate, None, default_refresh);
-
-        Ok(ScriptResult {
-            data: lua_result.data,
-            refresh_rate,
-            skip_update: lua_result.skip_update,
-            screen_name: script_path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string(),
-            template_path: template_path.to_path_buf(),
-            params: yaml_params,
-            script_colors: lua_result.colors,
-            script_dither: lua_result.dither,
-            script_preserve_exact: lua_result.preserve_exact,
-            script_error_clamp: lua_result.error_clamp,
-            script_noise_scale: lua_result.noise_scale,
-            script_chroma_clamp: lua_result.chroma_clamp,
-            script_strength: lua_result.strength,
-        })
+        self.run_resolved(
+            &resolved,
+            &yaml_params,
+            device_ctx.as_ref(),
+            timestamp_override,
+        )
+        .map_err(|e| e.to_string())
     }
 }
 
@@ -627,5 +605,116 @@ mod refresh_tests {
     fn zero_override_is_ignored() {
         assert_eq!(resolve_refresh_rate(0, Some(0), 900), 900);
         assert_eq!(resolve_refresh_rate(0, None, 900), 900);
+    }
+}
+
+#[cfg(test)]
+mod pipeline_tests {
+    use super::*;
+    use crate::assets::AssetLoader;
+    use crate::services::package_loader::PackageLoader;
+    use std::collections::HashMap;
+    use std::fs;
+
+    fn write(dir: &std::path::Path, rel: &str, body: &str) {
+        let p = dir.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, body).unwrap();
+    }
+
+    fn build_pipeline(pl: Arc<PackageLoader>, loader: Arc<AssetLoader>) -> ContentPipeline {
+        let config = Arc::new(crate::models::AppConfig::default());
+        let shared: crate::server::SharedConfig = Arc::new(arc_swap::ArcSwap::from(config));
+        let renderer = Arc::new(RenderService::new(&loader).unwrap());
+        ContentPipeline::new(shared, loader, renderer, pl).unwrap()
+    }
+
+    #[test]
+    fn test_pipeline_runs_screen_from_package() {
+        let tmp = std::env::temp_dir().join(format!(
+            "byonk_pipeline_test_{}_{}",
+            std::process::id(),
+            "acme"
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        write(
+            &tmp,
+            "byonk-screens.yaml",
+            "name: t\ndescription: d\nauthor: a\nlicense: MIT\n",
+        );
+        write(
+            &tmp,
+            "weather/forecast/meta.yaml",
+            "title: F\ndescription: d\nbyonk: \"0.15\"\n",
+        );
+        write(
+            &tmp,
+            "weather/forecast/script.lua",
+            "return { data = { msg = 'hi' } }\n",
+        );
+        write(
+            &tmp,
+            "weather/forecast/screen.svg",
+            "<svg><t>{{ data.msg }}</t></svg>\n",
+        );
+
+        let loader = Arc::new(AssetLoader::new(None, None, None));
+        let mut disk = HashMap::new();
+        disk.insert("acme".to_string(), tmp.clone());
+        let pl = Arc::new(PackageLoader::new(loader.clone(), disk));
+        let pipeline = build_pipeline(pl, loader);
+
+        let result = pipeline
+            .run_screen_by_name("acme/weather/forecast", HashMap::new(), None)
+            .unwrap();
+        assert_eq!(result.data["msg"], serde_json::json!("hi"));
+        assert_eq!(result.screen_name, "acme/weather/forecast");
+        assert_eq!(result.screen_dir, "weather/forecast");
+
+        // And the template renders through the package source.
+        let svg = pipeline.render_svg_from_script(&result, None).unwrap();
+        assert!(svg.contains("<t>hi</t>"), "{svg}");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_pipeline_require_from_package() {
+        let tmp = std::env::temp_dir().join(format!("byonk_pipeline_req_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        write(
+            &tmp,
+            "byonk-screens.yaml",
+            "name: t\ndescription: d\nauthor: a\nlicense: MIT\n",
+        );
+        write(
+            &tmp,
+            "s/meta.yaml",
+            "title: S\ndescription: d\nbyonk: \"0.15\"\n",
+        );
+        write(
+            &tmp,
+            "lib/util.lua",
+            "return { n = function() return 7 end }\n",
+        );
+        write(
+            &tmp,
+            "s/script.lua",
+            "local u = require('lib/util'); return { data = { v = u.n() } }\n",
+        );
+        write(&tmp, "s/screen.svg", "<svg/>\n");
+
+        let loader = Arc::new(AssetLoader::new(None, None, None));
+        let mut disk = HashMap::new();
+        disk.insert("acme".to_string(), tmp.clone());
+        let pl = Arc::new(PackageLoader::new(loader.clone(), disk));
+        let pipeline = build_pipeline(pl, loader);
+
+        let result = pipeline
+            .run_screen_by_name("acme/s", HashMap::new(), None)
+            .unwrap();
+        assert_eq!(result.data["v"], serde_json::json!(7));
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

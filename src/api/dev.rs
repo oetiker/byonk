@@ -15,13 +15,12 @@ use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
 use crate::assets::AssetLoader;
-use crate::models::{AppConfig, DisplaySpec, ScreenConfig};
+use crate::models::{AppConfig, DisplaySpec};
 use crate::server::DevOverrides;
 use crate::services::{ContentCache, ContentPipeline, DeviceContext, FileWatcher, RenderService};
 
@@ -360,9 +359,9 @@ pub async fn handle_render(
     State(state): State<DevState>,
     Query(query): Query<RenderQuery>,
 ) -> Response {
-    // Resolve screen config: MAC takes precedence, then explicit screen
+    // Resolve screen ref: MAC takes precedence, then explicit screen
     let (
-        screen_config,
+        screen_ref,
         resolved_params,
         device_config_colors,
         device_config_panel,
@@ -379,37 +378,11 @@ pub async fn handle_render(
             .or_else(|| state.config.get_device_config_for_code(mac))
         {
             Some(dc) => {
-                // Resolve screen from config or auto-discovery
-                let sc = if let Some(sc) = state.config.screens.get(&dc.screen) {
-                    sc.clone()
-                } else {
-                    let script = format!("{}.lua", dc.screen);
-                    let template = format!("{}.svg", dc.screen);
-                    let files = state.asset_loader.list_screens();
-                    if files.iter().any(|f| f == &script) && files.iter().any(|f| f == &template) {
-                        ScreenConfig {
-                            script: PathBuf::from(&script),
-                            template: PathBuf::from(&template),
-                            default_refresh: 900,
-                        }
-                    } else {
-                        return (
-                            StatusCode::NOT_FOUND,
-                            Json(RenderErrorResponse {
-                                error: format!(
-                                    "Screen '{}' not found for device '{}'",
-                                    dc.screen, mac
-                                ),
-                                details: None,
-                            }),
-                        )
-                            .into_response();
-                    }
-                };
+                // The device's `screen` is a `handle/path` package ref.
                 // Convert device params to JSON
                 let params: HashMap<String, serde_json::Value> = yaml_params_to_json(&dc.params);
                 (
-                    sc,
+                    dc.screen.clone(),
                     Some(params),
                     dc.colors.clone(),
                     dc.panel.clone(),
@@ -432,50 +405,19 @@ pub async fn handle_render(
             }
         }
     } else if let Some(ref screen_name) = query.screen {
-        if let Some(config) = state.config.screens.get(screen_name) {
-            (
-                config.clone(),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-        } else {
-            // Try auto-discovering screen from filesystem
-            let script = format!("{}.lua", screen_name);
-            let template = format!("{}.svg", screen_name);
-            let files = state.asset_loader.list_screens();
-            if files.iter().any(|f| f == &script) && files.iter().any(|f| f == &template) {
-                (
-                    ScreenConfig {
-                        script: PathBuf::from(&script),
-                        template: PathBuf::from(&template),
-                        default_refresh: 900,
-                    },
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                )
-            } else {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(RenderErrorResponse {
-                        error: format!("Screen '{}' not found", screen_name),
-                        details: None,
-                    }),
-                )
-                    .into_response();
-            }
-        }
+        // `screen_name` is a `handle/path` package ref; validity is checked when
+        // the pipeline resolves it below.
+        (
+            screen_name.clone(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
     } else {
         return (
             StatusCode::BAD_REQUEST,
@@ -580,20 +522,15 @@ pub async fn handle_render(
         ..Default::default()
     };
 
-    // Run script directly with the screen config
+    // Run script directly with the resolved screen ref
     let pipeline = state.content_pipeline.clone();
-    let script_path = screen_config.script.clone();
-    let template_path = screen_config.template.clone();
-    let default_refresh = screen_config.default_refresh;
     let ctx = device_ctx.clone();
     let timestamp_override = query.timestamp;
 
     let result = tokio::task::spawn_blocking(move || {
         // Run the Lua script with optional timestamp override
         let script_result = pipeline.run_script_direct(
-            &script_path,
-            &template_path,
-            default_refresh,
+            &screen_ref,
             custom_params,
             Some(ctx.clone()),
             timestamp_override,

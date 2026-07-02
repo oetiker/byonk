@@ -26,8 +26,8 @@ This has three limitations we want to remove:
 
 The goal is a **package format** where a git repo holds one or more screens plus
 the shared Lua and SVG they use, described by structured YAML metadata, versioned
-atomically, addressable and installable by repo + pin, with the official screens
-shipping as one bundled package — and with old flat screens still readable.
+atomically, addressable and installable by repo + pin, with byonk's own screens
+shipping as one bundled, embedded package.
 
 ## 2. Concepts & terminology
 
@@ -41,7 +41,7 @@ shipping as one bundled package — and with old flat screens still readable.
   to `{ repo, pin, token? }`. The same repo may be registered under multiple
   handles at different pins.
 - **Screen reference** — `handle/path` (e.g. `weather/forecast`,
-  `official/gphoto`). This is what a device is assigned, and what the admin API
+  `byonk-builtin/gphoto`). This is what a device is assigned, and what the admin API
   reports as a screen's canonical name.
 - **`byonk-base-vN`** — a reserved namespace naming byonk's built-in "standard
   library" of shared SVG layouts/components and Lua helpers, versioned by the
@@ -89,7 +89,7 @@ root: contrib/trmnl                # OPTIONAL: scope screen discovery to a subtr
 
 - `name`, `description`, `author`, `license` are required. A repo missing the
   manifest, or missing any required field, is rejected at load with a clear
-  error (except the synthesized legacy `local` package — see §7).
+  error.
 - `root:` (optional) bounds screen discovery to a subtree, so a large mixed repo
   need not be scanned in full. When present, screen ids are relative to `root:`;
   when absent, discovery scans the whole repo and ids are full repo-relative
@@ -172,12 +172,12 @@ screen's `screen.svg` plus its package's `.svg` files (by repo-relative name) pl
 the `byonk-base-vN` templates. This prevents cross-package template-name
 collisions while preserving `extends`/`include`.
 
-## 5. Registry, addressing & the official package
+## 5. Registry, addressing & the byonk-builtin package
 
 ```yaml
 # byonk config
 packages:
-  official: {}                                          # built-in, embedded copy
+  byonk-builtin: {}                                          # built-in, embedded copy
   weather:      { repo: github.com/acme/screens, pin: v1.4.0 }
   weather-beta: { repo: github.com/acme/screens, pin: v2.0.0 }
   private:      { repo: github.com/acme/secret, pin: v1.0.0, token: ${GITHUB_TOKEN} }
@@ -189,7 +189,7 @@ packages:
   # device assignment
   screen: weather/forecast        # -> v1.4.0
   screen: weather-beta/forecast   # -> v2.0.0 (same repo, different handle)
-  screen: official/gphoto
+  screen: byonk-builtin/gphoto
   ```
 
 - **Two-level pinning** is achieved entirely through the registry: to run two
@@ -198,10 +198,10 @@ packages:
   greppable registry entry. Per-screen pinning falls out because each
   device→screen assignment independently picks a handle.
 
-- **The `official` package** — `official: {}` uses the copy **embedded** in byonk
-  (`rust-embed`), so the official screens are always present, work offline, and
+- **The `byonk-builtin` package** — `byonk-builtin: {}` uses the copy **embedded** in byonk
+  (`rust-embed`), so the byonk-builtin screens are always present, work offline, and
   are versioned with byonk itself. It may optionally be repointed to
-  `{ repo, pin }` to track official screens ahead of a byonk release. All of
+  `{ repo, pin }` to track byonk-builtin screens ahead of a byonk release. All of
   today's built-in screens move under this package.
 
 ## 6. Compatibility
@@ -235,35 +235,41 @@ it does not refuse to render. The author's declared range is advisory: it tells
 operators a screen may not behave as intended on this engine, without breaking a
 device that is otherwise working.
 
-## 7. Backward compatibility (legacy reader)
+## 7. No backward compatibility; one-time migration
 
-Existing installations keep working:
+byonk has no userbase yet, so there is **nothing external to preserve**.
+Deliberately, the package format is a clean break: **no legacy reader.**
 
-- **Loose flat pairs.** A `<name>.lua` + `<name>.svg` pair discovered outside any
-  package is folded into a synthesized `local` package (`local/<name>`). This
-  package is exempt from the mandatory-`byonk-screens.yaml` rule — byonk
-  synthesizes it as a compatibility shim.
-- **Legacy `@params`.** The existing `--[[ @params … ]]` extraction remains for
-  legacy screens that carry their schema in the Lua comment. New packages put
-  `params` in `meta.yaml`.
-- **Legacy global include paths.** Old-style `{% include "components/hinting.svg" %}`
-  / `{% extends "layouts/base.svg" %}` continue to resolve in a compatibility
-  mode. New packages use `byonk-base-v1/…` and repo-relative paths.
-- **Bare-name screen references (existing device configs).** Every current
-  device config assigns a **bare** screen name (`screen: gphoto`), and today's
-  built-in screens move under the `official` package. To keep existing installs
-  working with **zero config edits**, a `screen:` value containing **no `/`** is
-  resolved by a search order that reproduces today's behavior:
-  1. `local/<name>` — loose flat files (matching the current
-     external-overlay-wins precedence), then
-  2. `official/<name>` — the embedded official package.
+- **No** synthesized `local` package for loose flat files.
+- **No** `--[[ @params … ]]` comment parsing — `params` live only in `meta.yaml`.
+- **No** legacy global include paths — screens use `byonk-base-vN/…` and
+  repo-relative paths only.
+- **No** bare-name screen references — a device's `screen` field is always a
+  qualified `handle/path`.
 
-  The qualified `handle/path` form is the new *explicit* addressing; the bare
-  form remains valid indefinitely as the compatibility path. Accordingly, the
-  §9a.3 assignment validation is: a **bare** name must resolve via this search
-  order; a **qualified** `handle/path` must name a registered handle. No config
-  migration is required — existing `screen: gphoto` assignments and existing
-  `packages:`-free configs (official is embedded, always present) load unchanged.
+Instead, the existing built-in screens are **migrated** (and cleaned up/renamed)
+into the embedded `byonk-builtin` package, and the maintainer's own device configs are
+updated once as part of the migration. The migration map:
+
+| Old flat screen | New ref (path inside the `byonk-builtin` package) |
+|---|---|
+| `default` | `byonk-builtin/default` (the fallback; `config.default_screen` default updated to this) |
+| `gphoto` | `byonk-builtin/useful/gphoto` |
+| `transit` | `byonk-builtin/useful/swiss-departure-board` |
+| `calibrator` | `byonk-builtin/calibration/color` |
+| `graytest` | `byonk-builtin/calibration/grey` |
+| `hintdemo` | `byonk-builtin/demo/font/hinting` |
+| `fontdemo-bitmap` | `byonk-builtin/demo/font/bitmap` |
+| `fontdemo-terminus` | `byonk-builtin/demo/font/ttf` |
+| `hello` | `byonk-builtin/example/hello` |
+| `mandelbrot` | `byonk-builtin/example/mandelbrot` |
+| `floerli` | `byonk-builtin/example/webscrape` |
+
+Each migrated screen becomes a folder (`meta.yaml` + `script.lua` + `screen.svg`),
+its `@params` block moved into `meta.yaml` with a `title`/`description` added, and
+its includes rewritten from `components/…`/`layouts/…` to `byonk-base-v1/…`. The
+shared `layouts/base.svg` and `components/*.svg` become the embedded
+`byonk-base-v1` std assets.
 
 ## 8. Distribution
 
@@ -329,7 +335,7 @@ config changes persisted through the existing config writer.
     "error": null,                 // fetch/resolve error message when status=error
     "token_set": true,             // secret redacted; never returned in clear
     "screen_count": 3,
-    "builtin": false               // true for the embedded `official` handle
+    "builtin": false               // true for the embedded `byonk-builtin` handle
   }
   ```
 
@@ -338,7 +344,7 @@ config changes persisted through the existing config writer.
   initial fetch (async; `status` reflects progress).
 - **`PATCH /api/admin/packages/:handle`** — update `repo` / `pin` / `token`.
   Changing repo or pin re-resolves and fetches. `token` is write-only.
-- **`DELETE /api/admin/packages/:handle`** — unregister. The `official` builtin
+- **`DELETE /api/admin/packages/:handle`** — unregister. The `byonk-builtin`
   handle cannot be deleted. Deleting a handle still referenced by a device is
   rejected (or reported as a dangling reference — see §9a.3).
 - **`POST /api/admin/packages/:handle/update`** — force a re-fetch of one
@@ -387,11 +393,9 @@ field is set to.
 ### 9a.3 Device assignment & settings
 
 - Device write endpoints (`POST /devices`, `PATCH /devices/:key`) already carry a
-  `screen` field; it now accepts a `handle/path` reference **and** a legacy bare
-  name. Validation: a **qualified** `handle/path` must name a registered handle
-  (else rejected with a clear error); a **bare** name must resolve via the §7
-  search order (`local/*` then `official/*`). This keeps existing bare-name
-  assignments valid — see §7.
+  `screen` field; it now accepts a `handle/path` reference. Validation: the
+  reference must name a **registered handle** and an existing screen path within
+  it, else it is rejected with a clear error. There is no bare-name form (§7).
 - **`PATCH /api/admin/settings`** gains `package_refresh_interval` (seconds; `0`
   disables periodic refresh — §8.2).
 
@@ -424,12 +428,12 @@ depends only on the §9a API being present.
 ## 9. Impact on byonk internals
 
 - **`assets.rs`** — a package-aware loader: resolve `handle/path` → package (via
-  registry → cache/embedded/legacy overlay) → files. New responsibilities for
+  registry → cache/embedded overlay) → files. New responsibilities for
   discovering screens by `meta.yaml` marker (honoring `root:`).
-- **`param_schema.rs`** — schema source moves to `meta.yaml`; keep `@params`
-  extraction for the legacy reader. Field schema itself is unchanged.
+- **`param_schema.rs`** — schema source moves to `meta.yaml`; the `@params`
+  comment extraction is removed. Field schema itself is unchanged.
 - **`template_service.rs`** — per-repo scoped template registration plus
-  `byonk-base-vN`; legacy global-namespace mode retained.
+  `byonk-base-vN`; the old global `layouts/`+`components/` preload is removed.
 - **`lua_runtime.rs`** — install the sandboxed `require()` searcher (§4.3).
 - **`api/admin/read.rs`** — `ScreenInfo` gains `title` and `description` and
   `compat_warning`; the `/screens` response groups screens by package with
@@ -452,8 +456,9 @@ The design is unified, but implementation naturally splits:
 
 1. **Format & loader** — `byonk-screens.yaml`, `meta.yaml`, folder-per-screen
    discovery, repo-relative + `byonk-base-v1` resolution, Lua `require()`, the
-   registry schema, admin/config updates, the legacy reader. Packages placed on
-   disk manually (plus the embedded official package); no git fetching yet.
+   registry schema, admin/config updates, and migrating the built-in screens.
+   Packages placed on disk manually (plus the embedded byonk-builtin package);
+   no git fetching yet.
 2. **Distribution** — gix fetch/cache/update, pin semantics, offline behavior,
    host + token auth.
 
@@ -462,9 +467,6 @@ The design is unified, but implementation naturally splits:
 - **gix auth maturity.** Pure-Rust credential-helper/ssh support is less
   battle-tested than shelling out to `git`. Mitigation: `git2` fallback; validate
   private-repo fetch early in phase 2.
-- **Legacy resolution overlap.** The legacy global include namespace and the new
-  per-repo/`byonk-base-vN` scoping must coexist without surprising precedence.
-  Needs explicit precedence rules in the plan.
-- **Migration of official screens.** Moving all current screens under the
-  `official` package and rewriting their includes to `byonk-base-v1/…` is
+- **Migration of byonk-builtin screens.** Moving all current screens under the
+  `byonk-builtin` package and rewriting their includes to `byonk-base-v1/…` is
   mechanical but broad; the plan should cover it screen-by-screen.

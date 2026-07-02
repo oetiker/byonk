@@ -1,0 +1,21 @@
+<!--
+  Reusable footer component with timestamp and optional message.
+
+  Usage: {% include "components/footer.svg" %}
+
+  Expected variables:
+    - updated_at: Timestamp string (optional)
+    - footer_text: Custom footer text (optional)
+    - height: Screen height for positioning (default: 480)
+-->
+<rect x="0" y="{{ height | default(value=480) - 30 }}" width="100%" height="30" fill="rgb(245,245,245)"/>
+{% if footer_text %}
+<text x="20" y="{{ height | default(value=480) - 10 }}" fill="rgb(100,100,100)" font-family="sans-serif" font-size="12">
+  {{ footer_text }}
+</text>
+{% endif %}
+{% if updated_at %}
+<text x="{{ width | default(value=800) - 20 }}" y="{{ height | default(value=480) - 10 }}" text-anchor="end" fill="rgb(150,150,150)" font-family="sans-serif" font-size="12">
+  Updated: {{ updated_at }}
+</text>
+{% endif %}

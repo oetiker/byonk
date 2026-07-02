@@ -44,6 +44,13 @@ struct EmbeddedFonts;
 #[include = "default-config.yaml"]
 struct EmbeddedConfig;
 
+/// Embedded byonk-base std assets (versioned: v1/, v2/, ...).
+#[derive(RustEmbed)]
+#[folder = "byonk-base/"]
+#[include = "**/*.svg"]
+#[include = "**/*.lua"]
+struct EmbeddedBase;
+
 /// Asset category for selective operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssetCategory {
@@ -419,6 +426,21 @@ impl AssetLoader {
         Ok(report)
     }
 
+    /// Read a byonk-base asset by version-relative path, e.g. "v1/hinting.svg".
+    pub fn read_base(&self, rel: &str) -> Option<Cow<'static, [u8]>> {
+        EmbeddedBase::get(rel).map(|f| f.data)
+    }
+
+    pub fn read_base_string(&self, rel: &str) -> Option<String> {
+        self.read_base(rel)
+            .and_then(|b| String::from_utf8(b.into_owned()).ok())
+    }
+
+    /// List embedded base asset paths (e.g. ["v1/base.svg", ...]).
+    pub fn list_base(&self) -> Vec<String> {
+        EmbeddedBase::iter().map(|s| s.to_string()).collect()
+    }
+
     /// List embedded assets by category (for display)
     pub fn list_embedded(category: AssetCategory) -> Vec<String> {
         match category {
@@ -627,6 +649,14 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         std::fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
         assert!(!AssetLoader::is_empty_dir(temp_dir.path()));
+    }
+
+    #[test]
+    fn test_read_base_asset() {
+        let loader = AssetLoader::new(None, None, None);
+        assert!(loader.read_base_string("v1/hinting.svg").is_some());
+        assert!(loader.list_base().iter().any(|p| p == "v1/base.svg"));
+        assert!(loader.read_base_string("v1/does-not-exist.svg").is_none());
     }
 
     #[test]

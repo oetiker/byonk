@@ -1,0 +1,30 @@
+<!--
+  Reusable status bar component with icon indicators.
+
+  Usage: {% include "components/status_bar.svg" %}
+
+  Expected variables:
+    - wifi_status: "connected" | "disconnected" | "unknown" (optional)
+    - battery_level: 0-100 (optional)
+    - status_y: Y position (default: 0)
+-->
+<g transform="translate({{ width | default(value=800) - 80 }}, {{ status_y | default(value=15) }})">
+  <!-- WiFi indicator -->
+  {% if wifi_status == "connected" %}
+  <path d="M0,12 L4,4 L8,12 M2,9 L4,6 L6,9 M3.5,7 L4,6.5 L4.5,7" fill="none" stroke="rgb(80,80,80)" stroke-width="1.5"/>
+  {% elif wifi_status == "disconnected" %}
+  <path d="M0,12 L4,4 L8,12" fill="none" stroke="rgb(180,180,180)" stroke-width="1.5"/>
+  <line x1="1" y1="5" x2="7" y2="11" stroke="rgb(180,180,180)" stroke-width="1.5"/>
+  {% endif %}
+
+  <!-- Battery indicator -->
+  {% if battery_level is defined %}
+  <rect x="20" y="4" width="24" height="10" rx="2" fill="none" stroke="rgb(80,80,80)" stroke-width="1"/>
+  <rect x="44" y="6" width="2" height="6" fill="rgb(80,80,80)"/>
+  {% if battery_level > 20 %}
+  <rect x="22" y="6" width="{{ (battery_level / 100 * 20) | round }}" height="6" fill="rgb(80,80,80)"/>
+  {% else %}
+  <rect x="22" y="6" width="{{ (battery_level / 100 * 20) | round }}" height="6" fill="rgb(200,50,50)"/>
+  {% endif %}
+  {% endif %}
+</g>

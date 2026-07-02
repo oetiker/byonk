@@ -4,17 +4,8 @@ use std::sync::Arc;
 use crate::assets::AssetLoader;
 use crate::error::RenderError;
 use crate::models::DisplaySpec;
-use crate::services::package_loader::{PackageLoader, PackageSource, ResolvedScreen};
+use crate::services::package_loader::{join_rel, PackageLoader, PackageSource, ResolvedScreen};
 use crate::services::{FontFaceInfo, LuaRuntime, RenderService, TemplateService};
-
-/// Join a screen-relative directory with a file name (forward slashes).
-fn join_screen_rel(dir: &str, file: &str) -> String {
-    if dir.is_empty() || dir == "." {
-        file.to_string()
-    } else {
-        format!("{}/{}", dir.trim_end_matches('/'), file)
-    }
-}
 
 /// Resolve the effective refresh rate.
 /// Precedence: Lua-returned (>0) > per-device override (>0) > screen default.
@@ -236,7 +227,7 @@ impl ContentPipeline {
         timestamp_override: Option<i64>,
     ) -> Result<ScriptResult, ContentError> {
         let screen_name = format!("{}/{}", resolved.handle, resolved.path);
-        let script_rel = join_screen_rel(&resolved.screen_dir, "script.lua");
+        let script_rel = join_rel(&resolved.screen_dir, "script.lua");
         let script_src = resolved.source.read_string(&script_rel).ok_or_else(|| {
             ContentError::ScreenNotFound(format!("{screen_name} (missing script.lua)"))
         })?;
@@ -246,6 +237,7 @@ impl ContentPipeline {
             &script_src,
             &resolved.source,
             &screen_name,
+            &resolved.screen_dir,
             params,
             device_ctx,
             timestamp_override,
@@ -351,7 +343,7 @@ impl ContentPipeline {
         let template_data = serde_json::Value::Object(template_context);
 
         // Read the screen's `screen.svg` from its package.
-        let template_rel = join_screen_rel(&result.screen_dir, "screen.svg");
+        let template_rel = join_rel(&result.screen_dir, "screen.svg");
         let template_src = result.source.read_string(&template_rel).ok_or_else(|| {
             ContentError::Template(super::TemplateError::NotFound(template_rel.clone()))
         })?;
@@ -714,6 +706,42 @@ mod pipeline_tests {
             .run_screen_by_name("acme/s", HashMap::new(), None)
             .unwrap();
         assert_eq!(result.data["v"], serde_json::json!(7));
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_pipeline_read_asset_from_package() {
+        let tmp = std::env::temp_dir().join(format!("byonk_pipeline_asset_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        write(
+            &tmp,
+            "byonk-screens.yaml",
+            "name: t\ndescription: d\nauthor: a\nlicense: MIT\n",
+        );
+        write(
+            &tmp,
+            "s/meta.yaml",
+            "title: S\ndescription: d\nbyonk: \"0.15\"\n",
+        );
+        write(&tmp, "s/data.txt", "hello-asset");
+        write(
+            &tmp,
+            "s/script.lua",
+            "return { data = { c = read_asset('data.txt') } }\n",
+        );
+        write(&tmp, "s/screen.svg", "<svg/>\n");
+
+        let loader = Arc::new(AssetLoader::new(None, None, None));
+        let mut disk = HashMap::new();
+        disk.insert("acme".to_string(), tmp.clone());
+        let pl = Arc::new(PackageLoader::new(loader.clone(), disk));
+        let pipeline = build_pipeline(pl, loader);
+
+        let result = pipeline
+            .run_screen_by_name("acme/s", HashMap::new(), None)
+            .unwrap();
+        assert_eq!(result.data["c"], serde_json::json!("hello-asset"));
 
         let _ = fs::remove_dir_all(&tmp);
     }

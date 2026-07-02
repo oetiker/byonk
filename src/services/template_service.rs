@@ -3,16 +3,7 @@ use std::sync::{Arc, OnceLock};
 use tera::{Context, Tera};
 
 use crate::assets::AssetLoader;
-use crate::services::package_loader::PackageSource;
-
-/// Join a screen-relative directory with a file name (forward slashes).
-fn join_rel(dir: &str, file: &str) -> String {
-    if dir.is_empty() || dir == "." {
-        file.to_string()
-    } else {
-        format!("{}/{}", dir.trim_end_matches('/'), file)
-    }
-}
+use crate::services::package_loader::{join_rel, PackageSource};
 
 /// Compiled regex for matching image href attributes in SVG.
 /// Uses OnceLock to compile once and reuse across all render calls.

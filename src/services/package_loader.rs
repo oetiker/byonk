@@ -55,13 +55,39 @@ pub struct ResolvedScreen {
     pub screen_dir: String,
 }
 
-/// Join a manifest-`root` prefix with a package-relative path.
-fn join_rel(prefix: &str, rel: &str) -> String {
+/// Join a manifest-`root` (or screen-dir) prefix with a package-relative path,
+/// using forward slashes. Shared by every read path (packages, includes,
+/// image-refs, `read_asset`).
+pub fn join_rel(prefix: &str, rel: &str) -> String {
     if prefix.is_empty() || prefix == "." {
         rel.to_string()
     } else {
         format!("{}/{}", prefix.trim_end_matches('/'), rel)
     }
+}
+
+/// True if `rel` is a safe package-relative path that stays inside the package.
+///
+/// Rejects paths that are empty, absolute (`/…`), Windows drive/UNC-style
+/// (`C:\…`, leading `\`), or that contain any `..` path component (split on both
+/// `/` and `\`). This is the sandbox guard applied before every filesystem read
+/// so a screen can never escape its package via `require("../../etc/passwd")` or
+/// an SVG `href="../../secret"`.
+pub fn is_safe_rel(rel: &str) -> bool {
+    if rel.is_empty() {
+        return false;
+    }
+    // Absolute (unix) or leading backslash (windows-style absolute/UNC).
+    if rel.starts_with('/') || rel.starts_with('\\') {
+        return false;
+    }
+    // Windows drive letter, e.g. "C:\..." or "C:/...".
+    let bytes = rel.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        return false;
+    }
+    // No `..` component (normalize on both separators).
+    !rel.split(['/', '\\']).any(|c| c == "..")
 }
 
 /// Split `"handle/path"` on the FIRST `/`. The path portion may itself contain `/`.
@@ -142,6 +168,9 @@ impl DiskPackageSource {
 
 impl PackageSource for DiskPackageSource {
     fn read(&self, rel: &str) -> Option<Vec<u8>> {
+        if !is_safe_rel(rel) {
+            return None;
+        }
         std::fs::read(self.manifest_root.join(rel)).ok()
     }
 
@@ -195,6 +224,9 @@ impl EmbeddedBuiltinSource {
 
 impl PackageSource for EmbeddedBuiltinSource {
     fn read(&self, rel: &str) -> Option<Vec<u8>> {
+        if !is_safe_rel(rel) {
+            return None;
+        }
         let full = join_rel(&self.root_prefix, rel);
         self.loader
             .read_screen(Path::new(&full))
@@ -386,6 +418,55 @@ mod tests {
         assert!(pl.resolve("ghost/x").is_none());
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_is_safe_rel() {
+        // Safe paths.
+        assert!(is_safe_rel("lib/util.lua"));
+        assert!(is_safe_rel("logo.png"));
+        assert!(is_safe_rel("a/b/c.svg"));
+        // Unsafe: empty, absolute, drive/backslash, or containing `..`.
+        assert!(!is_safe_rel(""));
+        assert!(!is_safe_rel("/etc/passwd"));
+        assert!(!is_safe_rel("\\windows\\system32"));
+        assert!(!is_safe_rel("C:\\secret"));
+        assert!(!is_safe_rel("c:/secret"));
+        assert!(!is_safe_rel(".."));
+        assert!(!is_safe_rel("../x"));
+        assert!(!is_safe_rel("a/../../b"));
+        assert!(!is_safe_rel("a\\..\\b"));
+        assert!(!is_safe_rel("../../../../etc/passwd"));
+    }
+
+    #[test]
+    fn test_disk_source_blocks_traversal() {
+        let tmp = std::env::temp_dir().join(format!("byonk_pkg_traversal_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        write(
+            &tmp,
+            "byonk-screens.yaml",
+            "name: t\ndescription: d\nauthor: a\nlicense: MIT\n",
+        );
+        write(&tmp, "lib/util.lua", "return {}\n");
+        // A secret file OUTSIDE the package root (sibling of tmp).
+        let secret = tmp.parent().unwrap().join("byonk_secret_marker.txt");
+        fs::write(&secret, "TOP SECRET").unwrap();
+
+        let src = DiskPackageSource::load(&tmp).expect("load");
+        // Legitimate read works.
+        assert_eq!(
+            src.read_string("lib/util.lua").as_deref(),
+            Some("return {}\n")
+        );
+        // Traversal attempts all blocked (return None, never touch the FS).
+        assert!(src.read("../byonk_secret_marker.txt").is_none());
+        assert!(src.read("/etc/passwd").is_none());
+        assert!(src.read("lib/../../byonk_secret_marker.txt").is_none());
+        assert!(src.read("").is_none());
+
+        let _ = fs::remove_dir_all(&tmp);
+        let _ = fs::remove_file(&secret);
     }
 
     #[test]

@@ -113,13 +113,16 @@ impl LuaRuntime {
     ///
     /// `script_src` is the already-read `script.lua` contents. `source` is the
     /// screen's package source, used to resolve `require()` for package-relative
-    /// modules. `screen_name` (a `handle/path` ref) is used for logging and the
-    /// `read_asset` global.
+    /// modules and `read_asset()` for sibling files. `screen_name` (a `handle/path`
+    /// ref) is used for logging. `screen_dir` is the screen's package-relative
+    /// directory, against which `read_asset(path)` reads through `source`.
+    #[allow(clippy::too_many_arguments)]
     pub fn run_script(
         &self,
         script_src: &str,
         source: &Arc<dyn PackageSource>,
         screen_name: &str,
+        screen_dir: &str,
         params: &HashMap<String, serde_yaml::Value>,
         device_ctx: Option<&DeviceContext>,
         timestamp_override: Option<i64>,
@@ -127,7 +130,15 @@ impl LuaRuntime {
         let lua = Lua::new();
 
         // Set up the Lua environment
-        self.setup_globals(&lua, params, device_ctx, screen_name, timestamp_override)?;
+        self.setup_globals(
+            &lua,
+            params,
+            device_ctx,
+            screen_name,
+            source,
+            screen_dir,
+            timestamp_override,
+        )?;
 
         // Install the sandboxed `require()` scoped to this package + byonk-base.
         self.install_require(&lua, source)?;
@@ -202,10 +213,17 @@ impl LuaRuntime {
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("default");
+        // Screen dir is the script's parent directory (siblings resolve through it).
+        let screen_dir = script_path
+            .parent()
+            .and_then(|p| p.to_str())
+            .unwrap_or("")
+            .replace('\\', "/");
         self.run_script(
             &script_src,
             &source,
             screen_name,
+            &screen_dir,
             params,
             device_ctx,
             timestamp_override,
@@ -266,12 +284,15 @@ impl LuaRuntime {
     }
 
     /// Set up Lua global functions and variables
+    #[allow(clippy::too_many_arguments)]
     fn setup_globals(
         &self,
         lua: &Lua,
         params: &HashMap<String, serde_yaml::Value>,
         device_ctx: Option<&DeviceContext>,
-        screen_name: &str,
+        _screen_name: &str,
+        source: &Arc<dyn PackageSource>,
+        screen_dir: &str,
         timestamp_override: Option<i64>,
     ) -> LuaResult<()> {
         let globals = lua.globals();
@@ -486,19 +507,21 @@ impl LuaRuntime {
         globals.set("url_decode", url_decode)?;
 
         // read_asset(path) -> string (binary data)
-        // Reads from screens/<screen_name>/<path>
-        let asset_loader = self.asset_loader.clone();
-        let screen_prefix = screen_name.to_string();
+        // Reads a file sibling to the screen's `script.lua`, package-relative to
+        // `screen_dir`, through the screen's package source. The source applies the
+        // `is_safe_rel` sandbox guard, so `..` traversal is rejected.
+        let asset_source = source.clone();
+        let asset_dir = screen_dir.to_string();
         let read_asset = lua.create_function(move |lua, path: String| {
-            let full_path = format!("{screen_prefix}/{path}");
-            let asset_path = std::path::Path::new(&full_path);
-
-            match asset_loader.read_screen(asset_path) {
-                Ok(data) => {
+            let rel = crate::services::package_loader::join_rel(&asset_dir, &path);
+            match asset_source.read(&rel) {
+                Some(data) => {
                     // Return as Lua string (which can contain binary data)
-                    lua.create_string(&*data)
+                    lua.create_string(&data)
                 }
-                Err(e) => Err(mlua::Error::external(format!("Failed to read asset: {e}"))),
+                None => Err(mlua::Error::external(format!(
+                    "Failed to read asset: {rel}"
+                ))),
             }
         })?;
         globals.set("read_asset", read_asset)?;
@@ -1328,7 +1351,7 @@ mod require_tests {
         let src: Arc<dyn PackageSource> = Arc::new(MockSource);
         let script = "local u = require('lib/util'); return { data = { m = u.greet() } }";
         let res = rt
-            .run_script(script, &src, "t", &Default::default(), None, None)
+            .run_script(script, &src, "t", "", &Default::default(), None, None)
             .unwrap();
         assert_eq!(res.data["m"], serde_json::json!("hi"));
     }
@@ -1359,7 +1382,7 @@ mod require_tests {
         let script =
             "local a = require('lib/c'); local b = require('lib/c'); return { data = { a = a, b = b } }";
         let res = rt
-            .run_script(script, &src, "t", &Default::default(), None, None)
+            .run_script(script, &src, "t", "", &Default::default(), None, None)
             .unwrap();
         assert_eq!(res.data["a"], serde_json::json!(1));
         assert_eq!(res.data["b"], serde_json::json!(1));
@@ -1371,10 +1394,70 @@ mod require_tests {
         let src: Arc<dyn PackageSource> = Arc::new(MockSource);
         let script = "local x = require('nope/missing'); return { data = {} }";
         let err = rt
-            .run_script(script, &src, "t", &Default::default(), None, None)
+            .run_script(script, &src, "t", "", &Default::default(), None, None)
             .unwrap_err();
         assert!(
             err.to_string().contains("module 'nope/missing' not found"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_require_traversal_is_blocked() {
+        // A malicious `require("../escape")` must not read host files; the package
+        // source rejects the `..` path, so `require` reports "module not found".
+        let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
+        let src: Arc<dyn PackageSource> = Arc::new(MockSource);
+        let script = "local x = require('../escape'); return { data = {} }";
+        let err = rt
+            .run_script(script, &src, "t", "", &Default::default(), None, None)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("module '../escape' not found"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_read_asset_reads_sibling_via_source() {
+        // read_asset resolves package-relative to screen_dir through the source.
+        struct AssetSource;
+        impl PackageSource for AssetSource {
+            fn read(&self, rel: &str) -> Option<Vec<u8>> {
+                match rel {
+                    "s/data.txt" => Some(b"hello-asset".to_vec()),
+                    _ => None,
+                }
+            }
+            fn screen_paths(&self) -> Vec<String> {
+                vec![]
+            }
+            fn svg_files(&self) -> Vec<String> {
+                vec![]
+            }
+            fn manifest(&self) -> &crate::models::package_manifest::PackageManifest {
+                unreachable!()
+            }
+        }
+        let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
+        let src: Arc<dyn PackageSource> = Arc::new(AssetSource);
+        let script = "return { data = { c = read_asset('data.txt') } }";
+        let res = rt
+            .run_script(script, &src, "acme/s", "s", &Default::default(), None, None)
+            .unwrap();
+        assert_eq!(res.data["c"], serde_json::json!("hello-asset"));
+    }
+
+    #[test]
+    fn test_read_asset_traversal_is_blocked() {
+        let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
+        let src: Arc<dyn PackageSource> = Arc::new(MockSource);
+        let script = "return { data = { c = read_asset('../../etc/passwd') } }";
+        let err = rt
+            .run_script(script, &src, "t", "s", &Default::default(), None, None)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to read asset"),
             "unexpected error: {err}"
         );
     }

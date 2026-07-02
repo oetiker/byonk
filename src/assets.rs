@@ -174,7 +174,7 @@ impl AssetLoader {
                     // Recurse into subdirectories
                     Self::collect_screen_files(base_dir, &path, files);
                 } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.ends_with(".lua") || name.ends_with(".svg") {
+                    if name.ends_with(".lua") || name.ends_with(".svg") || name.ends_with(".yaml") {
                         // Get relative path from base_dir
                         if let Ok(relative) = path.strip_prefix(base_dir) {
                             if let Some(relative_str) = relative.to_str() {
@@ -515,8 +515,8 @@ mod tests {
     fn test_read_screen_embedded() {
         let loader = AssetLoader::new(None, None, None);
 
-        // Should find embedded hello.lua
-        let result = loader.read_screen(Path::new("hello.lua"));
+        // Should find embedded example/hello/script.lua
+        let result = loader.read_screen(Path::new("example/hello/script.lua"));
         assert!(result.is_ok());
 
         let content = result.unwrap();
@@ -538,7 +538,7 @@ mod tests {
     fn test_read_screen_string() {
         let loader = AssetLoader::new(None, None, None);
 
-        let result = loader.read_screen_string(Path::new("hello.lua"));
+        let result = loader.read_screen_string(Path::new("example/hello/script.lua"));
         assert!(result.is_ok());
 
         let content = result.unwrap();
@@ -552,9 +552,9 @@ mod tests {
         let screens = loader.list_screens();
         assert!(!screens.is_empty());
 
-        // Should include hello.lua and hello.svg
-        assert!(screens.iter().any(|s| s == "hello.lua"));
-        assert!(screens.iter().any(|s| s == "hello.svg"));
+        // Should include the migrated hello screen's package files
+        assert!(screens.iter().any(|s| s == "example/hello/script.lua"));
+        assert!(screens.iter().any(|s| s == "example/hello/screen.svg"));
     }
 
     #[test]
@@ -686,10 +686,10 @@ mod tests {
     #[test]
     fn test_read_screen_filesystem_fallback_to_embedded() {
         let temp_dir = tempfile::tempdir().unwrap();
-        // Don't create hello.lua in temp dir, should fall back to embedded
+        // Don't create the screen in temp dir, should fall back to embedded
 
         let loader = AssetLoader::new(Some(temp_dir.path().to_path_buf()), None, None);
-        let result = loader.read_screen(Path::new("hello.lua"));
+        let result = loader.read_screen(Path::new("example/hello/script.lua"));
 
         assert!(result.is_ok());
     }
@@ -708,7 +708,7 @@ mod tests {
         assert!(screens.contains(&"custom.svg".to_string()));
         assert!(!screens.contains(&"readme.txt".to_string()));
         // Also includes embedded
-        assert!(screens.contains(&"hello.lua".to_string()));
+        assert!(screens.contains(&"example/hello/script.lua".to_string()));
     }
 
     #[test]
@@ -764,7 +764,7 @@ mod tests {
         let report = result.unwrap();
         assert!(!report.screens_seeded.is_empty());
         assert!(screens_dir.exists());
-        assert!(screens_dir.join("hello.lua").exists());
+        assert!(screens_dir.join("example/hello/script.lua").exists());
     }
 
     #[test]
@@ -822,7 +822,7 @@ mod tests {
         assert!(result.is_ok());
         let report = result.unwrap();
         assert!(!report.written.is_empty());
-        assert!(screens_dir.join("hello.lua").exists());
+        assert!(screens_dir.join("example/hello/script.lua").exists());
     }
 
     #[test]

@@ -4,7 +4,7 @@
       /* Text base */
     text { text-anchor: middle; font-family: Outfit; font-weight: 500; }
     text {
-    {% include "components/hinting.svg" %}
+    {% include "byonk-base-v1/hinting.svg" %}
     }
        /* Text weights */
       .font-bold { font-weight: 700 }

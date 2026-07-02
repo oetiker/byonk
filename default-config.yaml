@@ -5,6 +5,9 @@ registration:
   enabled: true
 auth_mode: api_key
 
+# Screen shown to un-onboarded / unassigned devices.
+default_screen: byonk-builtin/default
+
 # Panel profiles with measured display colors
 # Each panel maps official (ideal) colors to measured (actual) colors.
 # Dev mode uses measured colors to preview what the panel really shows.
@@ -108,60 +111,9 @@ panels:
         error_clamp: 0.11
         noise_scale: 5
 
-screens:
-  # Default screen - shows time and a message
-  default:
-    script: default.lua
-    template: default.svg
-    default_refresh: 300
-
-  # Floerli room booking display
-  floerli:
-    script: floerli.lua
-    template: floerli.svg
-    default_refresh: 900
-
-  # Public transport departures
-  transit:
-    script: transit.lua
-    template: transit.svg
-    default_refresh: 60
-
-  # Gray level test
-  graytest:
-    script: graytest.lua
-    template: graytest.svg
-    default_refresh: 3600
-
-  # Bitmap font demo (parameterized by font_prefix)
-  fontdemo-bitmap:
-    script: fontdemo-bitmap.lua
-    template: fontdemo-bitmap.svg
-    default_refresh: 3600
-
-  # Hinting demo - comparing engines and targets
-  hintdemo:
-    script: hintdemo.lua
-    template: hintdemo.svg
-    default_refresh: 3600
-
-  # Hello world tutorial screen
-  hello:
-    script: hello.lua
-    template: hello.svg
-    default_refresh: 60
-
-  # Random Mandelbrot set view
-  mandelbrot:
-    script: mandelbrot.lua
-    template: mandelbrot.svg
-    default_refresh: 600
-
-  # CMYK gradient and palette calibrator
-  calibrator:
-    script: calibrator.lua
-    template: calibrator.svg
-    default_refresh: 3600
+# Screens are auto-discovered from the embedded `byonk-builtin` package
+# (the `screens/` tree) and any on-disk packages; no per-screen map is needed.
+screens: {}
 
 # Devices are owned by Home Assistant; none ship by default.
 devices: {}

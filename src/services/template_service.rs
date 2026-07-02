@@ -334,22 +334,22 @@ mod tests {
 
     #[test]
     fn test_builtin_layouts_loaded() {
-        // Test that embedded layouts are accessible
+        // Shared layouts now live in the embedded byonk-base library.
         let loader = Arc::new(crate::assets::AssetLoader::new(None, None, None));
-        let screens = loader.list_screens();
+        let base = loader.list_base();
 
-        assert!(screens.iter().any(|s| s == "layouts/base.svg"));
+        assert!(base.iter().any(|s| s == "v1/base.svg"));
     }
 
     #[test]
     fn test_builtin_components_loaded() {
-        // Test that embedded components are accessible
+        // Shared components now live in the embedded byonk-base library.
         let loader = Arc::new(crate::assets::AssetLoader::new(None, None, None));
-        let screens = loader.list_screens();
+        let base = loader.list_base();
 
-        assert!(screens.iter().any(|s| s == "components/header.svg"));
-        assert!(screens.iter().any(|s| s == "components/footer.svg"));
-        assert!(screens.iter().any(|s| s == "components/status_bar.svg"));
+        assert!(base.iter().any(|s| s == "v1/header.svg"));
+        assert!(base.iter().any(|s| s == "v1/footer.svg"));
+        assert!(base.iter().any(|s| s == "v1/status_bar.svg"));
     }
 
     /// In-memory package source for render tests.

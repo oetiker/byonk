@@ -1,14 +1,3 @@
---[[ @params
-room:
-  type: string
-  label: "Room name"
-  default: "Rosa"
-test_timestamp:
-  type: int
-  label: "Test timestamp"
-  hidden: true
-  description: "Debug: override current time (unix seconds)"
-]]
 -- Floerli room booking display
 -- Fetches schedule from floerli-olten.ch and shows current/upcoming bookings
 

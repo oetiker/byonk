@@ -2,7 +2,7 @@
   <defs>
     <style>
       text {
-        {% include "components/hinting.svg" %}
+        {% include "byonk-base-v1/hinting.svg" %}
       }
     </style>
     <!-- Horizontal gradient for dithering test -->

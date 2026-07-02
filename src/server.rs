@@ -279,7 +279,12 @@ mod reload_tests {
     fn test_config_swap_is_visible() {
         let loader = Arc::new(AssetLoader::new(None, None, None));
         let state = create_app_state(loader).unwrap();
-        assert!(state.config.load().screens.contains_key("default"));
+        // Screens are auto-discovered from packages now; the embedded config
+        // points the default screen at the builtin package.
+        assert_eq!(
+            state.config.load().default_screen.as_deref(),
+            Some("byonk-builtin/default")
+        );
 
         // Swap in a config with a sentinel screen and confirm the snapshot updates.
         let mut cfg = (**state.config.load()).clone();

@@ -2,7 +2,7 @@
   <style>
     text {
       font-family: Outfit;
-      {% include "components/hinting.svg" %}
+      {% include "byonk-base-v1/hinting.svg" %}
     }
   </style>
 

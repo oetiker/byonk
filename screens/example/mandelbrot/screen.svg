@@ -3,7 +3,7 @@
     <style>
       text {
         font-family: Outfit, sans-serif;
-        {% include "components/hinting.svg" %}
+        {% include "byonk-base-v1/hinting.svg" %}
       }
       .caption {
         font-weight: 600;

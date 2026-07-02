@@ -1,0 +1,13 @@
+title: Web Scrape (Flörli Bookings)
+description: Scrapes floerli-olten.ch and shows current and upcoming room bookings.
+byonk: "0.15"
+params:
+  room:
+    type: string
+    label: "Room name"
+    default: "Rosa"
+  test_timestamp:
+    type: int
+    label: "Test timestamp"
+    hidden: true
+    description: "Debug: override current time (unix seconds)"

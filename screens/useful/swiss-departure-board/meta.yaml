@@ -1,0 +1,18 @@
+title: Swiss Departure Board
+description: Real-time public transport departures from the Swiss OpenData Transport API.
+byonk: "0.15"
+refresh: 60
+params:
+  station:
+    type: string
+    label: "Stop name"
+    default: "Olten, Südwest"
+    description: "Stop name as used by the transport API"
+  limit:
+    type: int
+    label: "Departures"
+    default: 8
+    min: 1
+    max: 30
+    mode: box
+    description: "Number of departures to show"

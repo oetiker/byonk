@@ -9,7 +9,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use crate::error::ApiError;
-use crate::models::param_schema::{schema_for_script, validate_params};
+use crate::models::param_schema::validate_params;
 use crate::server::{reload_config, AppState};
 use crate::services::config_writer;
 
@@ -36,44 +36,20 @@ fn require_file_config(state: &AppState) -> Result<std::path::PathBuf, ApiError>
         .ok_or_else(|| ApiError::Conflict("config is embedded/read-only; set CONFIG_FILE".into()))
 }
 
-/// Resolve a screen's script path from config or filesystem auto-discovery.
-///
-/// Mirrors `ContentPipeline::resolve_screen` and the admin screens listing so
-/// that a screen present on disk as a `<name>.lua`/`<name>.svg` pair — but not
-/// declared in `config.yaml` — is writable, not just renderable and listable.
-fn resolve_screen_script(state: &AppState, screen: &str) -> Option<std::path::PathBuf> {
-    let config = state.config.load();
-    if let Some(sc) = config.screens.get(screen) {
-        return Some(sc.script.clone());
-    }
-    // Skip subdirectory assets (layouts/, components/).
-    if screen.contains('/') {
-        return None;
-    }
-    let all_files = state.asset_loader.list_screens();
-    let lua_file = format!("{screen}.lua");
-    let svg_file = format!("{screen}.svg");
-    if all_files.iter().any(|f| f == &lua_file) && all_files.iter().any(|f| f == &svg_file) {
-        Some(std::path::PathBuf::from(lua_file))
-    } else {
-        None
-    }
-}
-
-/// Validate the screen exists and (if it has a schema) the params pass it.
+/// Validate the screen ref resolves to a package screen and that the provided
+/// params pass its `meta.yaml` schema. A device `screen` is always a qualified
+/// `handle/path` package ref — there is no bare-name / flat-file resolution.
 fn validate_screen_and_params(
     state: &AppState,
     screen: &str,
     params: &HashMap<String, serde_yaml::Value>,
 ) -> Result<(), ApiError> {
-    let script = resolve_screen_script(state, screen)
+    let resolved = state
+        .package_loader
+        .resolve(screen)
         .ok_or_else(|| ApiError::BadRequest(format!("unknown screen `{screen}`")))?;
-    if let Ok(src) = state.asset_loader.read_screen_string(&script) {
-        if let Ok(Some(schema)) = schema_for_script(&src) {
-            if let Err(errs) = validate_params(&schema, params) {
-                return Err(ApiError::BadRequest(errs.join("; ")));
-            }
-        }
+    if let Err(errs) = validate_params(&resolved.meta.params, params) {
+        return Err(ApiError::BadRequest(errs.join("; ")));
     }
     Ok(())
 }
@@ -287,12 +263,12 @@ pub async fn patch_settings(
         }
     }
     if let Some(screen) = &body.default_screen {
-        if resolve_screen_script(&state, screen).is_none() {
+        if state.package_loader.resolve(screen).is_none() {
             return Err(ApiError::BadRequest(format!("unknown screen `{screen}`")));
         }
     }
     if let Some(screen) = &body.registration_screen {
-        if !screen.is_empty() && resolve_screen_script(&state, screen).is_none() {
+        if !screen.is_empty() && state.package_loader.resolve(screen).is_none() {
             return Err(ApiError::BadRequest(format!("unknown screen `{screen}`")));
         }
     }

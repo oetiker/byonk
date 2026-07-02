@@ -4,7 +4,8 @@ use axum::{extract::State, http::HeaderMap, Json};
 use serde::Serialize;
 
 use crate::error::ApiError;
-use crate::models::param_schema::{schema_for_script, ParamField};
+use crate::models::compat::{compat_warning, engine_version};
+use crate::models::param_schema::ParamField;
 use crate::server::AppState;
 use crate::services::DeviceRegistry;
 
@@ -169,9 +170,22 @@ pub async fn list_devices(
 
 #[derive(Serialize)]
 pub struct ScreenInfo {
-    pub name: String,
+    pub r#ref: String,
+    pub title: String,
+    pub description: String,
     pub params: Vec<ParamField>,
-    pub schema_error: Option<String>,
+    pub byonk: String,
+    pub compat_warning: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct PackageScreens {
+    pub handle: String,
+    pub name: String,
+    pub description: String,
+    pub author: String,
+    pub license: String,
+    pub screens: Vec<ScreenInfo>,
 }
 
 #[derive(Serialize)]
@@ -184,9 +198,24 @@ pub struct PanelInfo {
 
 #[derive(Serialize)]
 pub struct ScreensResponse {
-    pub screens: Vec<ScreenInfo>,
+    pub packages: Vec<PackageScreens>,
     pub panels: Vec<PanelInfo>,
     pub dither_algorithms: Vec<String>,
+}
+
+/// One entry in the package registry listing (`GET /packages`).
+#[derive(Serialize)]
+pub struct PackageInfo {
+    pub handle: String,
+    pub repo: Option<String>,
+    pub pin: Option<String>,
+    /// `true` for the embedded builtin or any package without a remote repo.
+    pub builtin: bool,
+    /// Whether an auth token is configured — the token itself is never serialized.
+    pub token_set: bool,
+    pub screen_count: usize,
+    /// Static in Plan 1 (fetch status/sha/last_fetched land in Plan 2).
+    pub status: String,
 }
 
 /// Canonical dither algorithm names byonk understands.
@@ -210,59 +239,43 @@ pub async fn screens(
     require_admin(&state, &headers)?;
     let config = state.config.load();
 
-    // Read a screen script and extract its @params schema fields.
-    let read_params = |name: &str, script: &std::path::Path| match state
-        .asset_loader
-        .read_screen_string(script)
-    {
-        Err(e) => (Vec::new(), Some(format!("cannot read script: {e}"))),
-        Ok(src) => match schema_for_script(&src) {
-            Ok(Some(schema)) => (schema.fields, None),
-            Ok(None) => (Vec::new(), None),
-            Err(e) => {
-                tracing::warn!(screen = %name, error = %e, "invalid @params schema");
-                (Vec::new(), Some(e))
+    // Group every resolved screen by its package handle. The package-level
+    // metadata (name/description/author/license) comes from that package's
+    // manifest, read off the first screen encountered for the handle.
+    let engine = engine_version();
+    let mut by_handle: std::collections::BTreeMap<String, PackageScreens> =
+        std::collections::BTreeMap::new();
+
+    for screen in state.package_loader.list_all() {
+        let entry = by_handle.entry(screen.handle.clone()).or_insert_with(|| {
+            let m = screen.source.manifest();
+            PackageScreens {
+                handle: screen.handle.clone(),
+                name: m.name.clone(),
+                description: m.description.clone(),
+                author: m.author.clone(),
+                license: m.license.clone(),
+                screens: Vec::new(),
             }
-        },
-    };
-
-    let mut seen = std::collections::HashSet::new();
-    let mut screens = Vec::new();
-
-    // Config-defined screens (may carry custom script/template/refresh).
-    for (name, sc) in &config.screens {
-        seen.insert(name.clone());
-        let (params, schema_error) = read_params(name, &sc.script);
-        screens.push(ScreenInfo {
-            name: name.clone(),
-            params,
-            schema_error,
+        });
+        entry.screens.push(ScreenInfo {
+            r#ref: format!("{}/{}", screen.handle, screen.path),
+            title: screen.meta.title.clone(),
+            description: screen.meta.description.clone(),
+            params: screen.meta.params.fields.clone(),
+            byonk: screen.meta.byonk.clone(),
+            compat_warning: compat_warning(engine, &screen.meta.byonk),
         });
     }
 
-    // Auto-discover screens on disk that aren't in config, matching how the
-    // content pipeline resolves a device's screen by filename (see
-    // ContentPipeline::resolve_screen).
-    let all_files = state.asset_loader.list_screens();
-    for file in &all_files {
-        if let Some(name) = file.strip_suffix(".lua") {
-            // Skip subdirectory assets (layouts/, components/) and configured screens.
-            if name.contains('/') || seen.contains(name) {
-                continue;
-            }
-            let svg_file = format!("{name}.svg");
-            if all_files.iter().any(|f| f == &svg_file) {
-                seen.insert(name.to_string());
-                let (params, schema_error) =
-                    read_params(name, &std::path::PathBuf::from(format!("{name}.lua")));
-                screens.push(ScreenInfo {
-                    name: name.to_string(),
-                    params,
-                    schema_error,
-                });
-            }
-        }
-    }
+    // Deterministic order: screens within each package sorted by ref.
+    let packages: Vec<PackageScreens> = by_handle
+        .into_values()
+        .map(|mut p| {
+            p.screens.sort_by(|a, b| a.r#ref.cmp(&b.r#ref));
+            p
+        })
+        .collect();
 
     let panels = config
         .panels
@@ -276,8 +289,53 @@ pub async fn screens(
         .collect();
 
     Ok(Json(ScreensResponse {
-        screens,
+        packages,
         panels,
         dither_algorithms: DITHER_ALGORITHMS.iter().map(|s| s.to_string()).collect(),
     }))
+}
+
+/// List the registered screen packages. `byonk-builtin` is always present (it is
+/// registered by the package loader even without a `packages:` config entry); any
+/// additional entries come from `config.packages`. The package `token` is never
+/// serialized — only whether one is set (`token_set`).
+pub async fn packages(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<PackageInfo>>, ApiError> {
+    require_admin(&state, &headers)?;
+    let config = state.config.load();
+
+    // Screen counts per handle, from the source of truth (the package loader).
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for screen in state.package_loader.list_all() {
+        *counts.entry(screen.handle).or_insert(0) += 1;
+    }
+
+    // Union of loader-registered handles and configured package handles, so the
+    // always-registered builtin appears and config-only packages are not dropped.
+    let mut handles: std::collections::BTreeSet<String> =
+        state.package_loader.handles().into_iter().collect();
+    handles.extend(config.packages.keys().cloned());
+
+    let out = handles
+        .into_iter()
+        .map(|handle| {
+            let pkg = config.packages.get(&handle);
+            let repo = pkg.and_then(|p| p.repo.clone());
+            let builtin =
+                handle == crate::services::package_loader::BUILTIN_HANDLE || repo.is_none();
+            PackageInfo {
+                repo,
+                pin: pkg.and_then(|p| p.pin.clone()),
+                builtin,
+                token_set: pkg.map(|p| p.token.is_some()).unwrap_or(false),
+                screen_count: counts.get(&handle).copied().unwrap_or(0),
+                status: "ready".to_string(),
+                handle,
+            }
+        })
+        .collect();
+
+    Ok(Json(out))
 }

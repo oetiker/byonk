@@ -73,18 +73,6 @@ pub struct ParamSchema {
     pub fields: Vec<ParamField>,
 }
 
-/// Extract the YAML text inside a `--[[ @params ... ]]` block. Returns `None`
-/// if no `@params` marker is present.
-pub fn extract_params_block(lua_source: &str) -> Option<String> {
-    let marker = lua_source.find("@params")?;
-    // Start after the rest of the marker line.
-    let after_marker = &lua_source[marker + "@params".len()..];
-    let body_start = after_marker.find('\n').map(|i| i + 1).unwrap_or(0);
-    let body = &after_marker[body_start..];
-    let end = body.find("]]")?;
-    Some(body[..end].to_string())
-}
-
 /// Raw descriptor as written in YAML (without the `name`, which is the map key).
 #[derive(Deserialize)]
 struct RawField {
@@ -218,15 +206,6 @@ pub fn parse_schema_from_value(v: &serde_yaml::Value) -> Result<ParamSchema, Str
     })
 }
 
-/// Extract + parse a screen's schema. `Ok(None)` when there is no `@params`
-/// block; `Err` when a block is present but malformed.
-pub fn schema_for_script(lua_source: &str) -> Result<Option<ParamSchema>, String> {
-    match extract_params_block(lua_source) {
-        None => Ok(None),
-        Some(body) => parse_schema(&body).map(Some),
-    }
-}
-
 /// Validate a params map against a schema. Returns all problems found (not just
 /// the first). Params not described by the schema are allowed (ignored).
 pub fn validate_params(
@@ -315,20 +294,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_block_present() {
-        let lua = "--[[ @params\nstation:\n  type: string\n]]\nlocal x = 1\n";
-        let block = extract_params_block(lua).unwrap();
-        assert!(block.contains("station:"));
-        assert!(block.contains("type: string"));
-        assert!(!block.contains("local x"));
-    }
-
-    #[test]
-    fn test_extract_block_absent() {
-        assert!(extract_params_block("local x = 1\n").is_none());
-    }
-
-    #[test]
     fn test_parse_minimal_field() {
         let schema = parse_schema("station:\n  type: string\n  required: true\n").unwrap();
         assert_eq!(schema.fields.len(), 1);
@@ -367,17 +332,6 @@ mod tests {
     #[test]
     fn test_parse_unknown_type_is_error() {
         assert!(parse_schema("k:\n  type: banana\n").is_err());
-    }
-
-    #[test]
-    fn test_schema_for_script_none_when_no_block() {
-        assert!(schema_for_script("local x = 1\n").unwrap().is_none());
-    }
-
-    #[test]
-    fn test_schema_for_script_err_when_malformed() {
-        let lua = "--[[ @params\nk:\n  type: banana\n]]\n";
-        assert!(schema_for_script(lua).is_err());
     }
 
     use std::collections::HashMap;

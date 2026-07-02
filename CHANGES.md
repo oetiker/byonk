@@ -58,6 +58,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Admin API is now package-aware.** `GET /api/admin/screens` returns screens
+  grouped by package (`packages[]`, each with `handle`/`name`/`description`/
+  `author`/`license` and a `screens[]` list of qualified `handle/path` refs
+  carrying `title`, `description`, `params`, `byonk` and a `compat_warning`).
+  A new `GET /api/admin/packages` lists the registered packages
+  (`builtin`/`token_set`/`screen_count`/`status`; the package `token` is never
+  serialized). Device `screen` values and the `default_screen`/
+  `registration.screen` settings must now be qualified `handle/path` refs
+  (e.g. `byonk-builtin/example/hello`); bare names and flat-file `@params`
+  discovery are no longer accepted.
 - The Home Assistant device **Reconfigure** dialog has been removed; screen
   parameters are edited via the live device-page entities instead. (Onboarding
   still prompts for a screen's parameters.)

@@ -22,6 +22,7 @@ use tokio_stream::StreamExt;
 use crate::assets::AssetLoader;
 use crate::models::{AppConfig, DisplaySpec};
 use crate::server::DevOverrides;
+use crate::services::package_loader::PackageLoader;
 use crate::services::{ContentCache, ContentPipeline, DeviceContext, FileWatcher, RenderService};
 
 /// Dev mode application state
@@ -33,6 +34,7 @@ pub struct DevState {
     pub renderer: Arc<RenderService>,
     pub file_watcher: Arc<FileWatcher>,
     pub asset_loader: Arc<AssetLoader>,
+    pub package_loader: Arc<PackageLoader>,
     pub dev_overrides: DevOverrides,
 }
 
@@ -179,45 +181,24 @@ pub async fn handle_dev_js() -> impl IntoResponse {
 /// Config-defined screens are included first, then any filesystem screens not in config
 /// are auto-discovered. This allows new screens to appear without restarting the server.
 pub async fn handle_screens(State(state): State<DevState>) -> Json<ScreensResponse> {
-    let mut seen = std::collections::HashSet::new();
-
-    // Start with config-defined screens (they may have custom settings)
+    // Every screen comes from the package loader (the source of truth). The
+    // `name` is the qualified `handle/path` ref the dev UI feeds back into
+    // `?screen=<ref>`; script/template are informational only.
     let mut screens: Vec<ScreenInfo> = state
-        .config
-        .screens
-        .iter()
-        .map(|(name, config)| {
-            seen.insert(name.clone());
+        .package_loader
+        .list_all()
+        .into_iter()
+        .map(|screen| {
+            let r#ref = format!("{}/{}", screen.handle, screen.path);
             ScreenInfo {
-                name: name.clone(),
-                script: config.script.display().to_string(),
-                template: config.template.display().to_string(),
-                default_refresh: config.default_refresh,
+                name: r#ref,
+                script: format!("{}/script.lua", screen.path),
+                template: format!("{}/screen.svg", screen.path),
+                default_refresh: screen.meta.refresh.unwrap_or(900),
             }
         })
         .collect();
-
-    // Auto-discover screens from filesystem that aren't in config
-    let all_files = state.asset_loader.list_screens();
-    for file in &all_files {
-        if let Some(name) = file.strip_suffix(".lua") {
-            // Skip subdirectories (layouts/, components/, etc.) and already-seen screens
-            if name.contains('/') || seen.contains(name) {
-                continue;
-            }
-            // Check that a matching .svg template exists
-            let svg_file = format!("{}.svg", name);
-            if all_files.iter().any(|f| f == &svg_file) {
-                seen.insert(name.to_string());
-                screens.push(ScreenInfo {
-                    name: name.to_string(),
-                    script: format!("{}.lua", name),
-                    template: svg_file,
-                    default_refresh: 900,
-                });
-            }
-        }
-    }
+    screens.sort_by(|a, b| a.name.cmp(&b.name));
 
     // Collect configured devices
     let devices: Vec<DeviceInfo> = state

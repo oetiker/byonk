@@ -784,6 +784,7 @@ async fn run_dev_server() -> anyhow::Result<()> {
         renderer: state.renderer.clone(),
         file_watcher,
         asset_loader,
+        package_loader: state.package_loader.clone(),
         dev_overrides,
     };
 

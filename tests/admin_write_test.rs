@@ -5,11 +5,19 @@ use common::TestApp;
 
 const AUTH: (&str, &str) = ("Authorization", "Bearer secret");
 
+// Device `screen` values are always qualified `handle/path` package refs.
+const HELLO: &str = "byonk-builtin/example/hello";
+const GREY: &str = "byonk-builtin/calibration/grey";
+const GPHOTO: &str = "byonk-builtin/useful/gphoto";
+const COLOR: &str = "byonk-builtin/calibration/color";
+const TRANSIT: &str = "byonk-builtin/useful/swiss-departure-board";
+const UNKNOWN: &str = "byonk-builtin/does-not-exist";
+
 #[tokio::test]
 async fn test_write_on_embedded_config_returns_409() {
     let app = TestApp::new_admin("secret"); // embedded-only
-    let body = r#"{"key":"CC:DD:EE:FF:00:11","screen":"hello"}"#;
-    let resp = app.post_json("/api/admin/devices", &[AUTH], body).await;
+    let body = format!(r#"{{"key":"CC:DD:EE:FF:00:11","screen":"{HELLO}"}}"#);
+    let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
     assert_eq!(resp.status, StatusCode::CONFLICT);
 }
 
@@ -18,56 +26,68 @@ async fn test_add_device_persists_and_hot_reloads() {
     let dir = tempfile::tempdir().unwrap();
     let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
 
-    let body = r#"{"key":"CC:DD:EE:FF:00:11","screen":"hello"}"#;
-    let resp = app.post_json("/api/admin/devices", &[AUTH], body).await;
+    let body = format!(r#"{{"key":"CC:DD:EE:FF:00:11","screen":"{HELLO}"}}"#);
+    let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
     assert_eq!(resp.status, StatusCode::OK);
 
     // File updated + comment preserved.
     let on_disk = std::fs::read_to_string(&path).unwrap();
     assert!(on_disk.contains("CC:DD:EE:FF:00:11"));
+    assert!(
+        on_disk.contains(HELLO),
+        "qualified screen ref written to disk"
+    );
 
     // Hot-reload: GET /devices shows it without restart.
     let listed = app.get_with_headers("/api/admin/devices", &[AUTH]).await;
     let json: serde_json::Value = listed.json();
-    assert!(json
+    let row = json
         .as_array()
         .unwrap()
         .iter()
-        .any(|d| d["mac"] == "CC:DD:EE:FF:00:11"));
+        .find(|d| d["mac"] == "CC:DD:EE:FF:00:11")
+        .expect("device present after hot reload");
+    assert_eq!(
+        row["screen"], HELLO,
+        "screen reads back as the qualified ref"
+    );
 }
 
 #[tokio::test]
 async fn test_add_unknown_screen_returns_400() {
     let dir = tempfile::tempdir().unwrap();
     let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
-    let body = r#"{"key":"CC:DD:EE:FF:00:11","screen":"does-not-exist"}"#;
+    let body = format!(r#"{{"key":"CC:DD:EE:FF:00:11","screen":"{UNKNOWN}"}}"#);
+    let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_add_bare_name_screen_is_rejected() {
+    // A bare (unqualified) name is no longer resolvable — it must be a `handle/path` ref.
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+    let body = r#"{"key":"CC:DD:EE:FF:00:11","screen":"hello"}"#;
     let resp = app.post_json("/api/admin/devices", &[AUTH], body).await;
     assert_eq!(resp.status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
-async fn test_add_disk_only_screen_is_accepted() {
-    // `gphoto` ships as gphoto.lua/gphoto.svg on disk but is NOT in the default
-    // config's `screens:` map. Assigning it must succeed (auto-discovery), matching
-    // the render pipeline and the screens listing — not fail with "unknown screen".
+async fn test_add_builtin_ref_screen_is_accepted() {
+    // A qualified builtin ref that ships in the embedded package must be assignable.
     let dir = tempfile::tempdir().unwrap();
     let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
-    let body = r#"{"key":"CC:DD:EE:FF:00:11","screen":"gphoto"}"#;
-    let resp = app.post_json("/api/admin/devices", &[AUTH], body).await;
+    let body = format!(r#"{{"key":"CC:DD:EE:FF:00:11","screen":"{GPHOTO}"}}"#);
+    let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
     assert_eq!(resp.status, StatusCode::OK);
 }
 
 #[tokio::test]
-async fn test_disk_only_screen_as_default_is_accepted() {
+async fn test_builtin_ref_as_default_is_accepted() {
     let dir = tempfile::tempdir().unwrap();
     let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
-    let resp = app
-        .patch_json(
-            "/api/admin/settings",
-            &[AUTH],
-            r#"{"default_screen":"gphoto"}"#,
-        )
-        .await;
+    let body = format!(r#"{{"default_screen":"{GPHOTO}"}}"#);
+    let resp = app.patch_json("/api/admin/settings", &[AUTH], &body).await;
     assert_eq!(resp.status, StatusCode::OK);
 }
 
@@ -103,13 +123,8 @@ async fn test_patch_settings_bogus_auth_mode_returns_400() {
 async fn test_patch_settings_unknown_default_screen_returns_400() {
     let dir = tempfile::tempdir().unwrap();
     let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
-    let resp = app
-        .patch_json(
-            "/api/admin/settings",
-            &[AUTH],
-            r#"{"default_screen":"does-not-exist"}"#,
-        )
-        .await;
+    let body = format!(r#"{{"default_screen":"{UNKNOWN}"}}"#);
+    let resp = app.patch_json("/api/admin/settings", &[AUTH], &body).await;
     assert_eq!(resp.status, StatusCode::BAD_REQUEST);
 }
 
@@ -120,7 +135,7 @@ async fn test_patch_then_delete_device() {
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        r#"{"key":"CC:DD","screen":"hello"}"#,
+        &format!(r#"{{"key":"CC:DD","screen":"{HELLO}"}}"#),
     )
     .await;
 
@@ -128,7 +143,7 @@ async fn test_patch_then_delete_device() {
         .patch_json(
             "/api/admin/devices/CC:DD",
             &[AUTH],
-            r#"{"screen":"graytest"}"#,
+            &format!(r#"{{"screen":"{GREY}"}}"#),
         )
         .await;
     assert_eq!(patch.status, StatusCode::OK);
@@ -151,7 +166,7 @@ async fn test_patch_panel_and_dither_read_back() {
         .post_json(
             "/api/admin/devices",
             &[AUTH],
-            r#"{"key":"9C:13:9E:AB:99:D4","screen":"calibrator"}"#,
+            &format!(r#"{{"key":"9C:13:9E:AB:99:D4","screen":"{COLOR}"}}"#),
         )
         .await;
     assert_eq!(resp.status, StatusCode::OK);
@@ -194,7 +209,7 @@ async fn test_patch_panel_and_dither_read_back() {
         .iter()
         .find(|d| d["key"] == "9C:13:9E:AB:99:D4")
         .expect("device row present");
-    assert_eq!(row["screen"], "calibrator", "screen should read back");
+    assert_eq!(row["screen"], COLOR, "screen should read back");
     assert_eq!(row["panel"], "trmnl_x", "panel should read back");
     assert_eq!(row["dither"], "atkinson", "dither should read back");
 }
@@ -214,7 +229,7 @@ async fn test_patch_panel_and_dither_read_back_for_seen_device() {
         .post_json(
             "/api/admin/devices",
             &[AUTH],
-            r#"{"key":"9C:13:9E:AB:99:D4","screen":"calibrator"}"#,
+            &format!(r#"{{"key":"9C:13:9E:AB:99:D4","screen":"{COLOR}"}}"#),
         )
         .await;
     assert_eq!(resp.status, StatusCode::OK);
@@ -240,7 +255,7 @@ async fn test_patch_panel_and_dither_read_back_for_seen_device() {
         .iter()
         .find(|d| d["key"] == mac)
         .expect("device row present");
-    assert_eq!(row["screen"], "calibrator", "screen should read back");
+    assert_eq!(row["screen"], COLOR, "screen should read back");
     assert_eq!(row["panel"], "trmnl_x", "panel should read back");
     assert_eq!(row["dither"], "atkinson", "dither should read back");
 }
@@ -256,13 +271,13 @@ async fn test_patch_params_submap_reads_back_with_populated_devices() {
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        r#"{"key":"AA:BB","screen":"hello"}"#,
+        &format!(r#"{{"key":"AA:BB","screen":"{TRANSIT}"}}"#),
     )
     .await;
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        r#"{"key":"CC:DD","screen":"hello"}"#,
+        &format!(r#"{{"key":"CC:DD","screen":"{HELLO}"}}"#),
     )
     .await;
 
@@ -295,7 +310,7 @@ async fn test_patch_params_merge_preserves_other_keys() {
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        r#"{"key":"AA:BB","screen":"hello"}"#,
+        &format!(r#"{{"key":"AA:BB","screen":"{TRANSIT}"}}"#),
     )
     .await;
 
@@ -308,7 +323,7 @@ async fn test_patch_params_merge_preserves_other_keys() {
     app.patch_json(
         "/api/admin/devices/AA:BB",
         &[AUTH],
-        r#"{"params":{"limit":"5"}}"#,
+        r#"{"params":{"limit":5}}"#,
     )
     .await;
 
@@ -324,7 +339,7 @@ async fn test_patch_params_merge_preserves_other_keys() {
         row["params"]["station"], "Olten",
         "first key preserved after 2nd patch"
     );
-    assert_eq!(row["params"]["limit"], "5", "second key present");
+    assert_eq!(row["params"]["limit"], 5, "second key present");
 }
 
 #[tokio::test]
@@ -335,7 +350,7 @@ async fn test_patch_with_screen_change_replaces_params() {
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        r#"{"key":"AA:BB","screen":"hello"}"#,
+        &format!(r#"{{"key":"AA:BB","screen":"{HELLO}"}}"#),
     )
     .await;
     app.patch_json(
@@ -348,7 +363,7 @@ async fn test_patch_with_screen_change_replaces_params() {
     app.patch_json(
         "/api/admin/devices/AA:BB",
         &[AUTH],
-        r#"{"screen":"graytest","params":{"new":"y"}}"#,
+        &format!(r#"{{"screen":"{GREY}","params":{{"new":"y"}}}}"#),
     )
     .await;
 
@@ -377,15 +392,15 @@ async fn test_patch_settings_registration_screen_persists() {
         .patch_json(
             "/api/admin/settings",
             &[AUTH],
-            r#"{"registration_screen":"transit"}"#,
+            &format!(r#"{{"registration_screen":"{TRANSIT}"}}"#),
         )
         .await;
     assert_eq!(resp.status, StatusCode::OK);
 
     let on_disk = std::fs::read_to_string(&path).unwrap();
     assert!(
-        on_disk.contains("screen: transit"),
-        "expected 'screen: transit' in:\n{on_disk}"
+        on_disk.contains(&format!("screen: {TRANSIT}")),
+        "expected 'screen: {TRANSIT}' in:\n{on_disk}"
     );
 }
 
@@ -418,7 +433,7 @@ async fn test_patch_settings_unknown_registration_screen_returns_400() {
         .patch_json(
             "/api/admin/settings",
             &[AUTH],
-            r#"{"registration_screen":"does-not-exist"}"#,
+            &format!(r#"{{"registration_screen":"{UNKNOWN}"}}"#),
         )
         .await;
     assert_eq!(resp.status, StatusCode::BAD_REQUEST);
@@ -432,7 +447,7 @@ async fn test_patch_name_reads_back_and_clears() {
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        r#"{"key":"AA:BB","screen":"hello"}"#,
+        &format!(r#"{{"key":"AA:BB","screen":"{HELLO}"}}"#),
     )
     .await;
     app.patch_json("/api/admin/devices/AA:BB", &[AUTH], r#"{"name":"Kitchen"}"#)
@@ -470,7 +485,7 @@ async fn test_patch_refresh_reads_back() {
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        r#"{"key":"AA:BB","screen":"hello"}"#,
+        &format!(r#"{{"key":"AA:BB","screen":"{HELLO}"}}"#),
     )
     .await;
     let resp = app

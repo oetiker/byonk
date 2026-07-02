@@ -51,5 +51,6 @@ pub fn admin_router() -> Router<AppState> {
         .route("/pending", get(read::pending))
         .route("/config", get(read::get_config))
         .route("/screens", get(read::screens))
+        .route("/packages", get(read::packages))
         .route("/settings", patch(write::patch_settings))
 }

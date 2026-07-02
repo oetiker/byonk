@@ -518,7 +518,10 @@ mod tests {
     fn test_default_config() {
         let config = AppConfig::default();
 
-        assert_eq!(config.default_screen, Some("byonk-builtin/default".to_string()));
+        assert_eq!(
+            config.default_screen,
+            Some("byonk-builtin/default".to_string())
+        );
         assert!(config.screens.contains_key("default"));
         assert!(config.devices.is_empty());
 

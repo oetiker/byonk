@@ -51,8 +51,8 @@ impl TestApp {
         let mut config = AppConfig::load_from_assets(&asset_loader).expect("Failed to load config");
         config.registration.enabled = false;
 
-        let state = create_app_state_with_config(asset_loader, config)
-            .expect("Failed to create app state");
+        let state =
+            create_app_state_with_config(asset_loader, config).expect("Failed to create app state");
 
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
@@ -133,8 +133,7 @@ impl TestApp {
         let asset_loader = Arc::new(AssetLoader::new(None, None, None));
         let mut config = AppConfig::load_from_assets(&asset_loader).expect("load config");
         config.admin.token = Some(token.to_string());
-        let state =
-            create_app_state_with_config(asset_loader, config).expect("create state");
+        let state = create_app_state_with_config(asset_loader, config).expect("create state");
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
         let router = build_router(state);
@@ -148,8 +147,7 @@ impl TestApp {
     /// Build a test app from an arbitrary config (embedded assets, in-memory).
     pub fn from_config(config: AppConfig) -> Self {
         let asset_loader = Arc::new(AssetLoader::new(None, None, None));
-        let state =
-            create_app_state_with_config(asset_loader, config).expect("create state");
+        let state = create_app_state_with_config(asset_loader, config).expect("create state");
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
         let router = build_router(state);
@@ -171,8 +169,7 @@ impl TestApp {
 
         let asset_loader = Arc::new(AssetLoader::new(None, None, Some(config_path.clone())));
         let config = AppConfig::load_from_assets(&asset_loader).expect("load config");
-        let state =
-            create_app_state_with_config(asset_loader, config).expect("create state");
+        let state = create_app_state_with_config(asset_loader, config).expect("create state");
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
         let router = build_router(state);
@@ -229,8 +226,7 @@ impl TestApp {
 
         let asset_loader = Arc::new(AssetLoader::new(Some(screens_dir), None, Some(config_path)));
         let config = AppConfig::load_from_assets(&asset_loader).expect("load config");
-        let state =
-            create_app_state_with_config(asset_loader, config).expect("create state");
+        let state = create_app_state_with_config(asset_loader, config).expect("create state");
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
         let router = build_router(state);

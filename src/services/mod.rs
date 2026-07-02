@@ -5,6 +5,7 @@ pub mod device_registry;
 pub mod file_watcher;
 pub mod http_cache;
 pub mod lua_runtime;
+pub mod package_loader;
 pub mod renderer;
 pub mod template_service;
 

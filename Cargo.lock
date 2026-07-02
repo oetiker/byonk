@@ -340,6 +340,7 @@ dependencies = [
  "rustls",
  "rustls-pemfile",
  "scraper",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",

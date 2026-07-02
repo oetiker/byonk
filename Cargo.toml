@@ -53,6 +53,9 @@ yamlpatch = "1"
 # Op values are yaml_serde::Value, so a mismatched major/minor would not unify.
 yaml_serde = "0.10"
 
+# Semver compatibility checks
+semver = "1"
+
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"

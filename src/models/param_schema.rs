@@ -150,15 +150,9 @@ fn parse_options(raw: serde_yaml::Value) -> Result<Vec<EnumOption>, String> {
     Ok(out)
 }
 
-/// Parse a `@params` YAML body into a schema. Preserves field order.
-pub fn parse_schema(yaml: &str) -> Result<ParamSchema, String> {
-    // Empty body ⇒ empty schema (screen takes no params).
-    if yaml.trim().is_empty() {
-        return Ok(ParamSchema::default());
-    }
-    let mapping: serde_yaml::Mapping =
-        serde_yaml::from_str(yaml).map_err(|e| format!("invalid @params YAML: {e}"))?;
-
+/// Build `ParamField` list from a mapping. Shared by `parse_schema` and
+/// `parse_schema_from_value` to keep the field-conversion logic DRY.
+fn fields_from_mapping(mapping: serde_yaml::Mapping) -> Result<Vec<ParamField>, String> {
     let mut fields = Vec::new();
     for (k, v) in mapping {
         let name = k
@@ -195,7 +189,33 @@ pub fn parse_schema(yaml: &str) -> Result<ParamSchema, String> {
             advanced: raw.advanced,
         });
     }
-    Ok(ParamSchema { fields })
+    Ok(fields)
+}
+
+/// Parse a `@params` YAML body into a schema. Preserves field order.
+pub fn parse_schema(yaml: &str) -> Result<ParamSchema, String> {
+    // Empty body ⇒ empty schema (screen takes no params).
+    if yaml.trim().is_empty() {
+        return Ok(ParamSchema::default());
+    }
+    let mapping: serde_yaml::Mapping =
+        serde_yaml::from_str(yaml).map_err(|e| format!("invalid @params YAML: {e}"))?;
+    Ok(ParamSchema {
+        fields: fields_from_mapping(mapping)?,
+    })
+}
+
+/// Parse a `params:` mapping (as found in `meta.yaml`) into a schema.
+/// `Null` or an empty mapping yields an empty schema. Preserves field order.
+pub fn parse_schema_from_value(v: &serde_yaml::Value) -> Result<ParamSchema, String> {
+    let mapping = match v {
+        serde_yaml::Value::Null => return Ok(ParamSchema::default()),
+        serde_yaml::Value::Mapping(m) => m.clone(),
+        _ => return Err("`params` must be a mapping".to_string()),
+    };
+    Ok(ParamSchema {
+        fields: fields_from_mapping(mapping)?,
+    })
 }
 
 /// Extract + parse a screen's schema. `Ok(None)` when there is no `@params`
@@ -401,5 +421,24 @@ mod tests {
     fn test_validate_ok_when_optional_absent() {
         let schema = parse_schema("station:\n  type: string\n").unwrap();
         assert!(validate_params(&schema, &params(&[])).is_ok());
+    }
+
+    #[test]
+    fn test_parse_schema_from_value_mapping() {
+        let v: serde_yaml::Value = serde_yaml::from_str(
+            "location:\n  type: string\n  required: true\nunits:\n  type: enum\n  options: [metric, imperial]\n",
+        )
+        .unwrap();
+        let schema = parse_schema_from_value(&v).unwrap();
+        assert_eq!(schema.fields.len(), 2);
+        assert_eq!(schema.fields[0].name, "location");
+        assert!(schema.fields[0].required);
+        assert_eq!(schema.fields[1].options.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_schema_from_value_null_is_empty() {
+        let v = serde_yaml::Value::Null;
+        assert!(parse_schema_from_value(&v).unwrap().fields.is_empty());
     }
 }

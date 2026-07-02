@@ -410,7 +410,7 @@ The built-in `gphoto` screen demonstrates fetching images from a shared Google P
 # config.yaml
 devices:
   "XX:XX:XX:XX:XX:XX":
-    screen: gphoto
+    screen: byonk-builtin/useful/gphoto
     params:
       album_url: "https://photos.app.goo.gl/YOUR_ALBUM_ID"
       show_status: true      # Show battery/signal overlay
@@ -451,7 +451,7 @@ log_info("First item: " .. json_encode(items[1]))
 # config.yaml
 devices:
   "TE:ST:00:00:00:01":
-    screen: myscreen
+    screen: mypackage/myscreen
     params:
       test_mode: true
       mock_data: true
@@ -479,7 +479,7 @@ end
 This example combines many advanced techniques:
 
 ```lua
--- floerli.lua - Room booking display
+-- script.lua (byonk-builtin/example/webscrape) - Room booking display
 
 local room_name = params.room or "Rosa"
 local base_url = params.url or "https://floerli-olten.ch"

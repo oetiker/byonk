@@ -52,7 +52,7 @@ automatically, and exposes Byonk devices and settings as Home Assistant entities
 | Dither | Select | Dither algorithm override |
 | Panel | Select | Panel profile override |
 | Refresh interval | Number | Per-device refresh interval in seconds (`0` = no override). Precedence: screen's Lua `refresh_rate` > this override > screen's static default |
-| *Screen parameter* (one per param) | Text / Number / Switch / Select | Each parameter declared in the current screen's `@params` schema appears as its own entity in the **Controls** card (type mapped from the schema: string→Text, int/float→Number, bool→Switch, enum→Select). Changes apply instantly. The set of entities updates automatically when you assign a different screen to the device. |
+| *Screen parameter* (one per param) | Text / Number / Switch / Select | Each parameter declared in the current screen's parameter schema (the `params` block in its `meta.yaml`) appears as its own entity in the **Controls** card (type mapped from the schema: string→Text, int/float→Number, bool→Switch, enum→Select). Changes apply instantly. The set of entities updates automatically when you assign a different screen to the device. |
 
 ## Onboarding a New Device
 
@@ -66,7 +66,7 @@ A **Discovered** card for the new device appears automatically in
 1. Click **Configure** on the Discovered card.
 2. In the *Set up TRMNL device* form, choose the screen you want displayed on the
    device. Optionally set a dither algorithm and panel type.
-3. If the chosen screen declares parameters (via its `@params` schema), a second form
+3. If the chosen screen declares parameters (via the `params` schema in its `meta.yaml`), a second form
    appears to fill in those values.
 4. Submit — the device is now an HA device with its own config entry, and its
    screen mapping is written to Byonk. The device starts fetching its assigned screen

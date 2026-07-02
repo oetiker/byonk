@@ -51,17 +51,23 @@ Devices are mapped to screens in `config.yaml`:
 ```yaml
 devices:
   "94:A9:90:8C:6D:18":
-    screen: transit
+    screen: byonk-builtin/useful/swiss-departure-board
     params:
       station: "Olten, Bahnhof"
 
   "AA:BB:CC:DD:EE:FF":
-    screen: weather
+    screen: weather/forecast
     params:
       city: "Zurich"
 
-default_screen: default
+default_screen: byonk-builtin/default
 ```
+
+A screen is referenced by a qualified `handle/path` reference: `handle` names a
+registered package and `path` locates the screen folder within it. The bundled
+screens live in the embedded `byonk-builtin` package (for example
+`byonk-builtin/useful/swiss-departure-board`); third-party packages are
+referenced through their own handle (for example `weather/forecast`).
 
 ### Lookup Order
 
@@ -105,7 +111,7 @@ The `default_screen` provides a fallback for:
 - Backup if config is incorrect
 
 ```yaml
-default_screen: default
+default_screen: byonk-builtin/default
 ```
 
 If no `default_screen` is set and a device isn't in the config, it receives an error response.

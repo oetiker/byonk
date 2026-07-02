@@ -2,51 +2,48 @@
 
 Byonk embeds all screens, fonts, and configuration in the binary itself. This means you can run Byonk with zero configuration - it works out of the box.
 
-For customization, Byonk uses a YAML configuration file to define screens and map devices to them.
+For customization, Byonk uses a YAML configuration file to map devices to screens and to register screen packages.
+
+## Screens are packages, not config entries
+
+There is **no `screens:` block** in `config.yaml`. A screen is a **folder** inside a screen
+package — a directory tree with a `byonk-screens.yaml` manifest at its root, where every
+folder containing a `meta.yaml` is a screen. Each screen folder holds three fixed-name files:
+
+| File | Purpose |
+|------|---------|
+| `meta.yaml` | Title, description, `byonk:` engine compatibility, default `refresh:`, and the `params:` schema |
+| `script.lua` | Data-fetch logic |
+| `screen.svg` | Tera SVG template |
+
+Byonk auto-discovers these screens; you reference one by its **`handle/path`** ref (e.g.
+`byonk-builtin/useful/swiss-departure-board`). The bundled screens ship in the embedded
+`byonk-builtin` package. See [Your First Screen](../tutorial/first-screen.md) for how to
+author one, and [Admin API](../api/admin-api.md) for the package/screen listing endpoints.
 
 ## Configuration Structure
 
 ```yaml
-# Screen definitions
-screens:
-  transit:
-    script: transit.lua        # Lua script in screens/
-    template: transit.svg      # SVG template in screens/
-    default_refresh: 60        # Fallback refresh rate (seconds)
-
-  weather:
-    script: weather.lua
-    template: weather.svg
-    default_refresh: 900
-
 # Device-to-screen mapping
 devices:
-  "94:A9:90:8C:6D:18":         # Device MAC address
-    screen: transit             # Which screen to display
-    params:                     # Parameters passed to Lua script
+  "94:A9:90:8C:6D:18":                              # Device MAC address
+    screen: byonk-builtin/useful/swiss-departure-board  # handle/path screen ref
+    params:                                          # Parameters passed to script.lua
       station: "Olten, Bahnhof"
       limit: 8
 
   "AA:BB:CC:DD:EE:FF":
-    screen: weather
+    screen: byonk-builtin/example/hello
     params:
-      city: "Zurich"
+      name: "Zurich"
 
-# Default screen for unmapped devices
-default_screen: default
+# Default screen for unmapped devices (a handle/path ref)
+default_screen: byonk-builtin/default
+
+# Optional: register additional screen packages (see below)
+packages:
+  byonk-builtin: {}                                  # the embedded built-in package
 ```
-
-## Screens Section
-
-Each screen definition has three properties:
-
-| Property | Required | Description |
-|----------|----------|-------------|
-| `script` | Yes | Lua script filename (relative to `screens/`) |
-| `template` | Yes | SVG template filename (relative to `screens/`) |
-| `default_refresh` | No | Fallback refresh rate in seconds (default: 900) |
-
-The `default_refresh` is used when the Lua script returns `refresh_rate = 0` or omits it entirely.
 
 ## Devices Section
 
@@ -54,7 +51,7 @@ Each device entry maps a MAC address to a screen:
 
 | Property | Required | Description |
 |----------|----------|-------------|
-| `screen` | Yes | Name of the screen definition to use |
+| `screen` | Yes | Qualified `handle/path` reference of the screen to display |
 | `params` | No | Key-value pairs passed to the Lua script |
 | `colors` | No | Override display palette (comma-separated hex RGB, e.g. `"#000000,#FFFFFF,#FF0000"`) |
 | `dither` | No | Dithering algorithm (see [Dither Algorithms](#dither-algorithms) below) |
@@ -118,13 +115,38 @@ For most screens, the default `"atkinson"` works well. Use `"atkinson-hybrid"` f
 
 ## Default Screen
 
-The `default_screen` specifies which screen to show for devices not listed in the `devices` section:
+The `default_screen` specifies which screen to show for devices not listed in the `devices`
+section. It is a qualified `handle/path` ref:
 
 ```yaml
-default_screen: default
+default_screen: byonk-builtin/default
 ```
 
 If omitted, unknown devices receive an error response.
+
+## Packages Section
+
+Screens are distributed as packages. The `packages:` block maps a short **handle** to a
+package source. The embedded `byonk-builtin` package is always available; register additional
+packages by repo and pin:
+
+```yaml
+packages:
+  byonk-builtin: {}                                       # embedded built-in (always present)
+  weather:      { repo: github.com/acme/screens, pin: v1.4.0 }
+  weather-beta: { repo: github.com/acme/screens, pin: v2.0.0 }  # same repo, different pin
+  private:      { repo: github.com/acme/secret, pin: v1.0.0, token: ${GITHUB_TOKEN} }
+```
+
+| Property | Required | Description |
+|----------|----------|-------------|
+| `repo` | No | Source git repo. Omit for the embedded built-in. |
+| `pin` | No | Commit sha, tag, or branch to fetch. |
+| `token` | No | Auth token for private repos (redacted in read APIs). |
+
+A screen ref's first segment is the handle: `weather/forecast` resolves the `forecast` screen
+in the `weather` package. Registering the same repo under two handles at different pins lets
+you run two versions side by side.
 
 ## Device Registration
 
@@ -137,7 +159,7 @@ registration:
 devices:
   # Register using the code shown on the device screen
   "ABCDE-FGHJK":
-    screen: transit
+    screen: byonk-builtin/useful/swiss-departure-board
     params:
       station: "Olten"
 ```
@@ -180,18 +202,18 @@ registration:
 devices:
   # By registration code (read from device screen)
   "ABCDE-FGHJK":
-    screen: transit
+    screen: byonk-builtin/useful/swiss-departure-board
     params:
       station: "Olten"
 
   # By MAC address (found in logs)
   "AA:BB:CC:DD:EE:FF":
-    screen: weather
+    screen: byonk-builtin/example/hello
 ```
 
 ### Custom Registration Screen
 
-The registration code is available to your default screen as `device.registration_code` and `device.registration_code_hyphenated`. Your default.svg can conditionally show it:
+The registration code is available to your default screen as `device.registration_code` and `device.registration_code_hyphenated`. Your default screen's `screen.svg` can conditionally show it:
 
 ```svg
 {% if device.registration_code %}
@@ -226,56 +248,40 @@ The `auth_mode` setting controls what `/api/setup` tells devices. The `/api/disp
 
 ## Hot Reloading
 
-Byonk loads Lua scripts and SVG templates fresh on every request. You can edit these files without restarting the server.
+Byonk loads a screen's `script.lua` and `screen.svg` fresh on every request. You can edit
+those files without restarting the server.
 
-However, `config.yaml` is only loaded at startup. Changes to device mappings or screen definitions require a server restart.
+However, `config.yaml` is only loaded at startup. Changes to device mappings, the package
+registry, or other settings require a server restart (or use the [Admin API](../api/admin-api.md),
+which hot-reloads after writes).
 
 ## Example: Complete Configuration
 
 ```yaml
 # Byonk Configuration
 
-screens:
-  # Default screen - shows time and a message
-  default:
-    script: default.lua
-    template: default.svg
-    default_refresh: 300
-
-  # Public transport departures
-  transit:
-    script: transit.lua
-    template: transit.svg
-    default_refresh: 60
-
-  # Room booking display
-  floerli:
-    script: floerli.lua
-    template: floerli.svg
-    default_refresh: 900
-
 devices:
   # Kitchen display - bus departures
   "94:A9:90:8C:6D:18":
-    screen: transit
+    screen: byonk-builtin/useful/swiss-departure-board
     params:
       station: "Olten, Südwest"
       limit: 8
 
-  # Office display - room booking
+  # Office display - room booking (webscrape example)
   "AA:BB:CC:DD:EE:FF":
-    screen: floerli
+    screen: byonk-builtin/example/webscrape
     params:
       room: "Rosa"
 
   # Lobby display - different bus stop
   "BB:CC:DD:EE:FF:00":
-    screen: transit
+    screen: byonk-builtin/useful/swiss-departure-board
     params:
       station: "Olten, Bahnhof"
       limit: 6
 
-default_screen: default
+default_screen: byonk-builtin/default
 ```
 
 ## Panels Section
@@ -362,7 +368,7 @@ Panels are assigned to devices in three ways (highest priority first):
 ```yaml
 devices:
   "ABCDE-FGHJK":
-    screen: transit
+    screen: byonk-builtin/useful/swiss-departure-board
     panel: trmnl_og_4grey  # explicit panel assignment
 ```
 

@@ -2,6 +2,7 @@ pub mod config;
 pub mod device;
 pub mod display_spec;
 pub mod param_schema;
+pub mod screen_meta;
 
 pub use config::{
     normalize_algorithm_name, AdminConfig, AppConfig, DeviceConfig, DitherTuningValues,

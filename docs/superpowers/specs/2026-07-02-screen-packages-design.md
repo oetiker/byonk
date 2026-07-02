@@ -229,8 +229,11 @@ same rules as Cargo's `VersionReq`):
   (`byonk: ">=0.14, <0.17"`), but the bare-version caret form is the documented
   default.
 
-byonk checks the range at screen load; on mismatch it refuses the screen (or
-warns) with a clear message.
+byonk checks the range at screen load. On mismatch it **warns and still serves**
+the screen (a clear warning surfaced in logs and via the admin API — see §9a) —
+it does not refuse to render. The author's declared range is advisory: it tells
+operators a screen may not behave as intended on this engine, without breaking a
+device that is otherwise working.
 
 ## 7. Backward compatibility (legacy reader)
 
@@ -261,9 +264,13 @@ known fallback if gix's auth turns out insufficient during implementation.
 - **Full commit sha** — truly immutable. Fetched once, cached permanently, never
   re-fetched.
 - **Tag or branch** — treated as **mutable** (tags can be force-moved/re-pointed,
-  so they are not safe to cache forever). Re-fetched on demand: an admin "update
-  packages" action, and optionally on a configurable interval. **Never** silently
-  re-fetched mid-serve. A re-fetch resolves the ref to its current sha.
+  so they are not safe to cache forever). Re-fetched both on demand (an admin
+  "update packages" action) **and** on a configurable periodic interval (a global
+  setting, e.g. `package_refresh_interval`; `0`/absent disables periodic
+  refresh). **Never** silently re-fetched mid-serve — a periodic or manual
+  refresh resolves the ref to its current sha and swaps the active checkout
+  atomically at a serve boundary, so an in-flight render always sees a consistent
+  tree.
 
 ### 8.3 Cache
 
@@ -280,6 +287,94 @@ never takes down a screen that is already cached.
 - **Override:** an optional per-package `token` in the registry entry, used when
   the host is not pre-configured.
 
+## 9a. Admin API surface (control & configuration)
+
+The registry, fetch, and package status must be fully controllable over the
+existing bearer-gated admin API (`/api/admin/*`), so the Home Assistant
+integration (and any admin UI) can configure packages and offer screen choices
+without editing config files. All endpoints follow current conventions: bearer
+auth via `require_admin`, JSON bodies, and config changes persisted through the
+existing config writer.
+
+### 9a.1 Package registry (new: `/api/admin/packages`)
+
+- **`GET /api/admin/packages`** — list registered packages. Each entry:
+
+  ```jsonc
+  {
+    "handle": "weather",
+    "repo": "github.com/acme/screens",
+    "pin": "v1.4.0",
+    "pin_kind": "tag",             // "sha" | "tag" | "branch" | "embedded"
+    "resolved_sha": "a1b2c3d…",    // null until first fetch
+    "status": "ready",             // "ready" | "fetching" | "error" | "offline"
+    "last_fetched": "2026-07-02T10:00:00Z",
+    "error": null,                 // fetch/resolve error message when status=error
+    "token_set": true,             // secret redacted; never returned in clear
+    "screen_count": 3,
+    "builtin": false               // true for the embedded `official` handle
+  }
+  ```
+
+- **`POST /api/admin/packages`** — register a package
+  `{ handle, repo, pin, token? }`. Rejects a duplicate handle. Triggers an
+  initial fetch (async; `status` reflects progress).
+- **`PATCH /api/admin/packages/:handle`** — update `repo` / `pin` / `token`.
+  Changing repo or pin re-resolves and fetches. `token` is write-only.
+- **`DELETE /api/admin/packages/:handle`** — unregister. The `official` builtin
+  handle cannot be deleted. Deleting a handle still referenced by a device is
+  rejected (or reported as a dangling reference — see §9a.3).
+- **`POST /api/admin/packages/:handle/update`** — force a re-fetch of one
+  package (resolves a mutable tag/branch to its current sha).
+- **`POST /api/admin/packages/update`** — the "update all packages" action;
+  re-fetches every mutable-pinned package.
+
+Secrets: a package `token` is stored like other sensitive config and is **never**
+returned in clear by any GET; responses expose only `token_set: bool`.
+
+### 9a.2 Screens (extend existing `GET /api/admin/screens`)
+
+Screens are returned grouped by package, each addressed by its canonical
+`handle/path` reference, carrying the new metadata:
+
+```jsonc
+{
+  "packages": [
+    {
+      "handle": "weather",
+      "name": "acme-screens",           // from byonk-screens.yaml
+      "description": "Weather and transit screens for TRMNL.",
+      "author": "Acme <hi@acme.example>",
+      "license": "MIT",
+      "screens": [
+        {
+          "ref": "weather/forecast",    // handle/path — the assignable id
+          "title": "5-Day Forecast",
+          "description": "Daily high/low and conditions for a location.",
+          "params": [ /* ParamField[] — unchanged shape */ ],
+          "byonk": "0.15",
+          "compat_warning": null,       // set when the running engine is out of range
+          "schema_error": null
+        }
+      ]
+    }
+  ]
+}
+```
+
+This is the primary surface the HA integration reads to populate the per-device
+screen picker and to render each screen's params as entities (matching the
+existing "screen params as entities" work). `ref` is what a device's `screen`
+field is set to.
+
+### 9a.3 Device assignment & settings
+
+- Device write endpoints (`POST /devices`, `PATCH /devices/:key`) already carry a
+  `screen` field; it now accepts a `handle/path` reference. Assigning a screen
+  whose package handle is not registered is rejected with a clear error.
+- **`PATCH /api/admin/settings`** gains `package_refresh_interval` (seconds; `0`
+  disables periodic refresh — §8.2).
+
 ## 9. Impact on byonk internals
 
 - **`assets.rs`** — a package-aware loader: resolve `handle/path` → package (via
@@ -290,12 +385,20 @@ never takes down a screen that is already cached.
 - **`template_service.rs`** — per-repo scoped template registration plus
   `byonk-base-vN`; legacy global-namespace mode retained.
 - **`lua_runtime.rs`** — install the sandboxed `require()` searcher (§4.3).
-- **`api/admin/read.rs`** — `ScreenInfo` gains `title` and `description`; `name`
-  becomes `handle/path`; screens grouped by package.
-- **`models/config.rs`** — new `packages:` registry; device `screen` field uses
-  `handle/path`.
+- **`api/admin/read.rs`** — `ScreenInfo` gains `title` and `description` and
+  `compat_warning`; the `/screens` response groups screens by package with
+  `handle/path` refs (§9a.2).
+- **`api/admin/write.rs`** — new package registry endpoints (register / patch /
+  delete / update / update-all, §9a.1); `package_refresh_interval` added to
+  `patch_settings`; `screen` assignment validates the handle exists.
+- **`api/admin/mod.rs`** — new `/packages` and `/packages/:handle[/update]`
+  routes.
+- **`models/config.rs`** — new `packages:` registry (`handle → {repo, pin,
+  token?}`); device `screen` field uses `handle/path`; `package_refresh_interval`
+  setting.
 - **New: a package/distribution service** — registry resolution, gix
-  fetch/cache/update, pin semantics, auth.
+  fetch/cache/update, pin semantics, periodic refresh scheduler, auth, and the
+  package-status reporting that backs `GET /packages`.
 
 ## 10. Implementation phasing (for the plan, not this spec)
 

@@ -269,3 +269,31 @@ async fn test_update_package_and_update_all_return_ok() {
         .await;
     assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.text());
 }
+
+#[tokio::test]
+async fn test_packages_list_reports_real_status_for_builtin() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
+
+    let listed = app.get_with_headers("/api/admin/packages", &[AUTH]).await;
+    assert_eq!(listed.status, StatusCode::OK);
+    let text = listed.text();
+    assert!(
+        !text.contains("\"token\""),
+        "token field leaked into /packages response: {text}"
+    );
+
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let row = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["handle"] == "byonk-builtin")
+        .expect("byonk-builtin package present");
+
+    assert_eq!(row["builtin"], true);
+    assert_eq!(row["status"], "ready");
+    assert_eq!(row["pin_kind"], "embedded");
+    assert_eq!(row["token_set"], false);
+    assert!(row["resolved_sha"].is_null());
+}

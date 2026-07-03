@@ -388,14 +388,16 @@ pub async fn add_package(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     persist(&state, &path, new_yaml)?;
 
-    // Fetch asynchronously; the response reflects the registry entry as it
-    // stands right now (status enrichment lands in Task 9).
+    // Fetch asynchronously; the response reflects whatever status exists at
+    // this instant (likely no entry yet). The client polls GET /packages for
+    // the settled result rather than this handler awaiting the fetch.
     let mgr = state.package_manager.clone();
     let h = handle.clone();
     tokio::task::spawn_blocking(move || mgr.refresh_one(&h));
 
     let count = package_screen_count(&state, &handle);
-    let info = build_package_info(&state.config.load(), count, handle);
+    let statuses = state.package_manager.status_snapshot();
+    let info = build_package_info(&state.config.load(), statuses.get(&handle), count, handle);
     Ok(Json(info))
 }
 
@@ -447,7 +449,8 @@ pub async fn patch_package(
     }
 
     let count = package_screen_count(&state, &handle);
-    let info = build_package_info(&state.config.load(), count, handle);
+    let statuses = state.package_manager.status_snapshot();
+    let info = build_package_info(&state.config.load(), statuses.get(&handle), count, handle);
     Ok(Json(info))
 }
 
@@ -515,7 +518,8 @@ pub async fn update_package(
     tokio::task::spawn_blocking(move || mgr.refresh_one(&h));
 
     let count = package_screen_count(&state, &handle);
-    let info = build_package_info(&state.config.load(), count, handle);
+    let statuses = state.package_manager.status_snapshot();
+    let info = build_package_info(&state.config.load(), statuses.get(&handle), count, handle);
     Ok(Json(info))
 }
 

@@ -8,6 +8,8 @@ use crate::models::compat::{compat_warning, engine_version};
 use crate::models::config::AppConfig;
 use crate::models::param_schema::ParamField;
 use crate::server::AppState;
+use crate::services::git_fetch::PinKind;
+use crate::services::package_status::{PackageState, PackageStatus};
 use crate::services::DeviceRegistry;
 
 use super::require_admin;
@@ -227,8 +229,18 @@ pub struct PackageInfo {
     /// Whether an auth token is configured — the token itself is never serialized.
     pub token_set: bool,
     pub screen_count: usize,
-    /// Static in Plan 1 (fetch status/sha/last_fetched land in Plan 2).
+    /// `ready` | `fetching` | `error` | `offline`. Never-fetched non-builtin
+    /// handles report `error` — they are not currently serving.
     pub status: String,
+    /// How `pin` was resolved (`sha`/`tag`/`branch`), or `embedded` for the
+    /// builtin package. `None` if never successfully fetched.
+    pub pin_kind: Option<PinKind>,
+    /// The commit sha the package is currently pinned/fetched at.
+    pub resolved_sha: Option<String>,
+    /// RFC3339 timestamp of the last successful fetch.
+    pub last_fetched: Option<String>,
+    /// The last fetch error, if any.
+    pub error: Option<String>,
 }
 
 /// Canonical dither algorithm names byonk understands.
@@ -308,29 +320,144 @@ pub async fn screens(
     }))
 }
 
-/// Build the `PackageInfo` for a single handle from the live config.
+/// Build the `PackageInfo` for a single handle from the live config and its
+/// fetch status (from `PackageManager::status_snapshot()`).
 ///
 /// Shared by `packages()` (the read listing) and the package write handlers
-/// (`add`/`patch`/`update`), so both surfaces stay in sync. `status` is a
-/// placeholder (`"ready"`) in Plan 2 — real fetch-status enrichment
-/// (pin_kind/resolved_sha/last_fetched/error) is Task 9's job and should edit
-/// this one builder.
+/// (`add`/`patch`/`update`), so both surfaces stay in sync.
+///
+/// Status mapping:
+/// - builtin: always `ready` / `pin_kind: embedded`, no sha/error/timestamp
+///   (there is nothing to fetch).
+/// - non-builtin with a status entry: `status` mirrors the entry's `state`
+///   (defaulting to `"error"` if `state` is `None`); `pin_kind`/
+///   `resolved_sha`/`error` copied through; `last_fetched` rendered RFC3339.
+/// - non-builtin with no status entry (never fetched — e.g. right after
+///   registration, before the first refresh runs): `status: "error"`, all
+///   other fields `None`. It is not currently serving, so `"error"` is the
+///   honest default.
 pub(crate) fn build_package_info(
     config: &AppConfig,
+    status: Option<&PackageStatus>,
     screen_count: usize,
     handle: String,
 ) -> PackageInfo {
     let pkg = config.packages.get(&handle);
     let repo = pkg.and_then(|p| p.repo.clone());
     let builtin = handle == crate::services::package_loader::BUILTIN_HANDLE || repo.is_none();
+
+    let (status_str, pin_kind, resolved_sha, last_fetched, error) = if builtin {
+        (
+            "ready".to_string(),
+            Some(PinKind::Embedded),
+            None,
+            None,
+            None,
+        )
+    } else {
+        match status {
+            Some(s) => {
+                let state = s.state.unwrap_or(PackageState::Error);
+                let status_str = match state {
+                    PackageState::Ready => "ready",
+                    PackageState::Fetching => "fetching",
+                    PackageState::Error => "error",
+                    PackageState::Offline => "offline",
+                }
+                .to_string();
+                (
+                    status_str,
+                    s.pin_kind,
+                    s.resolved_sha.clone(),
+                    s.last_fetched.map(|dt| dt.to_rfc3339()),
+                    s.error.clone(),
+                )
+            }
+            None => ("error".to_string(), None, None, None, None),
+        }
+    };
+
     PackageInfo {
         repo,
         pin: pkg.and_then(|p| p.pin.clone()),
         builtin,
         token_set: pkg.map(|p| p.token.is_some()).unwrap_or(false),
         screen_count,
-        status: "ready".to_string(),
+        status: status_str,
+        pin_kind,
+        resolved_sha,
+        last_fetched,
+        error,
         handle,
+    }
+}
+
+#[cfg(test)]
+mod build_package_info_tests {
+    use super::*;
+    use crate::models::config::PackageRef;
+
+    #[test]
+    fn builtin_handle_is_always_ready_and_embedded() {
+        let config = AppConfig::default();
+        let info = build_package_info(
+            &config,
+            None,
+            3,
+            crate::services::package_loader::BUILTIN_HANDLE.to_string(),
+        );
+        assert!(info.builtin);
+        assert_eq!(info.status, "ready");
+        assert_eq!(info.pin_kind, Some(PinKind::Embedded));
+        assert_eq!(info.resolved_sha, None);
+        assert_eq!(info.last_fetched, None);
+        assert_eq!(info.error, None);
+    }
+
+    #[test]
+    fn non_builtin_with_error_status_reports_it() {
+        let mut config = AppConfig::default();
+        config.packages.insert(
+            "weather".to_string(),
+            PackageRef {
+                repo: Some("github.com/x/y".to_string()),
+                pin: Some("main".to_string()),
+                token: None,
+            },
+        );
+        let status = PackageStatus {
+            state: Some(PackageState::Error),
+            resolved_sha: Some("deadbeef".to_string()),
+            last_fetched: None,
+            error: Some("network unreachable".to_string()),
+            pin_kind: Some(PinKind::Branch),
+        };
+        let info = build_package_info(&config, Some(&status), 0, "weather".to_string());
+        assert!(!info.builtin);
+        assert_eq!(info.status, "error");
+        assert_eq!(info.pin_kind, Some(PinKind::Branch));
+        assert_eq!(info.resolved_sha, Some("deadbeef".to_string()));
+        assert_eq!(info.error, Some("network unreachable".to_string()));
+    }
+
+    #[test]
+    fn non_builtin_never_fetched_defaults_to_error() {
+        let mut config = AppConfig::default();
+        config.packages.insert(
+            "weather".to_string(),
+            PackageRef {
+                repo: Some("github.com/x/y".to_string()),
+                pin: Some("main".to_string()),
+                token: None,
+            },
+        );
+        let info = build_package_info(&config, None, 0, "weather".to_string());
+        assert!(!info.builtin);
+        assert_eq!(info.status, "error");
+        assert_eq!(info.pin_kind, None);
+        assert_eq!(info.resolved_sha, None);
+        assert_eq!(info.last_fetched, None);
+        assert_eq!(info.error, None);
     }
 }
 
@@ -357,11 +484,12 @@ pub async fn packages(
     let mut handles: std::collections::BTreeSet<String> = loader.handles().into_iter().collect();
     handles.extend(config.packages.keys().cloned());
 
+    let statuses = state.package_manager.status_snapshot();
     let out = handles
         .into_iter()
         .map(|handle| {
             let count = counts.get(&handle).copied().unwrap_or(0);
-            build_package_info(&config, count, handle)
+            build_package_info(&config, statuses.get(&handle), count, handle)
         })
         .collect();
 

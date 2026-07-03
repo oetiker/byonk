@@ -29,6 +29,10 @@ pub enum PinKind {
     /// by our bare clone/fetch (`refs/remotes/origin/<pin>`), not
     /// `refs/heads/<pin>` on the remote directly.
     Branch,
+    /// The embedded builtin package. This is an API-layer marker only — the
+    /// git resolver above never produces it; `read.rs` uses it to describe
+    /// `byonk-builtin` in `GET /packages` responses.
+    Embedded,
 }
 
 /// The result of a successful [`fetch`].

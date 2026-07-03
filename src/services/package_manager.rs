@@ -154,8 +154,14 @@ impl PackageManager {
                 let dest = self.cache.checkout_dir(&repo, &fetched.resolved_sha);
                 if let Err(e) = move_dir(&scratch, &dest) {
                     cleanup_scratch(&scratch);
+                    // A fetch that succeeded but couldn't be installed is
+                    // handled the same as a fetch that failed outright: keep
+                    // serving a still-cached prior checkout (Offline) rather
+                    // than erroring, since the loader isn't rebuilt on this
+                    // path and the old checkout keeps serving either way.
+                    let state = self.state_after_post_fetch_failure(handle, &repo);
                     self.update_status(handle, |st| {
-                        st.state = Some(PackageState::Error);
+                        st.state = Some(state);
                         st.error = Some(format!("installing fetched checkout: {e}"));
                     });
                     return;
@@ -172,35 +178,24 @@ impl PackageManager {
             Err(e) => {
                 cleanup_scratch(&scratch);
                 let message = fetch_error_message(&e);
-                let prior_sha = self
-                    .lock_status()
-                    .get(handle)
-                    .and_then(|s| s.resolved_sha.clone());
-                let still_cached = prior_sha
-                    .as_deref()
-                    .is_some_and(|sha| self.cache.has(&repo, sha));
-                if still_cached {
-                    // Keep serving the last-known-good checkout; the loader
-                    // already points at it, so no rebuild is needed.
-                    self.update_status(handle, |st| {
-                        st.state = Some(PackageState::Offline);
-                        st.error = Some(message);
-                    });
-                } else {
-                    self.update_status(handle, |st| {
-                        st.state = Some(PackageState::Error);
-                        st.error = Some(message);
-                    });
-                }
+                let state = self.state_after_post_fetch_failure(handle, &repo);
+                self.update_status(handle, |st| {
+                    st.state = Some(state);
+                    st.error = Some(message);
+                });
             }
         }
     }
 
     /// Fetch every registered non-builtin package that needs it, then
-    /// rebuild+swap the loader once. `force` re-fetches even packages whose
-    /// status is already `Ready` with a cached checkout (to pick up moves of
-    /// a mutable tag/branch pin); without `force`, an already-`Ready` handle
-    /// is left alone.
+    /// rebuild+swap the loader once. Skipping is keyed on **pin shape**, not
+    /// run-time state: a sha pin is immutable, so an already-cached sha is
+    /// left alone (`!force`); a tag/branch pin is mutable and must always get
+    /// a real `refresh_one` call so it re-checks upstream for moves, no
+    /// matter how recently it was last fetched. `force` skips nothing — every
+    /// non-builtin handle gets a real `refresh_one` call (which itself
+    /// already short-circuits a cached sha without a network round-trip, so
+    /// this doesn't cause needless re-fetching of immutable pins).
     pub fn refresh_all(&self, force: bool) {
         let handles: Vec<String> = self
             .config
@@ -212,7 +207,7 @@ impl PackageManager {
             .collect();
 
         for handle in handles {
-            if !force && self.is_ready_and_cached(&handle) {
+            if !force && self.pin_is_immutable_and_cached(&handle) {
                 continue;
             }
             self.refresh_one(&handle);
@@ -225,19 +220,41 @@ impl PackageManager {
         self.lock_status().clone()
     }
 
-    fn is_ready_and_cached(&self, handle: &str) -> bool {
+    /// True only when `handle`'s configured pin is a sha (immutable) *and*
+    /// that sha is already cached on disk. A tag/branch pin always returns
+    /// false, regardless of run-time `PackageStatus`, so `refresh_all(false)`
+    /// can't skip it forever once it's first fetched.
+    fn pin_is_immutable_and_cached(&self, handle: &str) -> bool {
         let config = self.config.load();
-        let Some(repo) = config.packages.get(handle).and_then(|p| p.repo.as_deref()) else {
+        let Some(pkg_ref) = config.packages.get(handle) else {
             return false;
         };
-        let status = self.lock_status();
-        status
+        let Some(repo) = pkg_ref.repo.as_deref() else {
+            return false;
+        };
+        let pin = pkg_ref.pin.as_deref().unwrap_or("main");
+        git_fetch::looks_like_sha(pin) && self.cache.has(repo, pin)
+    }
+
+    /// Whether `handle`'s last-known-good checkout for `repo` is still
+    /// present in the cache — the shared decision for both post-fetch
+    /// failure paths in `refresh_one` (fetch itself failing, and a
+    /// successful fetch failing to install): `Offline` when a prior checkout
+    /// is still cached (keep serving it), `Error` when there's nothing to
+    /// fall back to.
+    fn state_after_post_fetch_failure(&self, handle: &str, repo: &str) -> PackageState {
+        let prior_sha = self
+            .lock_status()
             .get(handle)
-            .is_some_and(|s| s.state == Some(PackageState::Ready))
-            && status
-                .get(handle)
-                .and_then(|s| s.resolved_sha.as_deref())
-                .is_some_and(|sha| self.cache.has(repo, sha))
+            .and_then(|s| s.resolved_sha.clone());
+        let still_cached = prior_sha
+            .as_deref()
+            .is_some_and(|sha| self.cache.has(repo, sha));
+        if still_cached {
+            PackageState::Offline
+        } else {
+            PackageState::Error
+        }
     }
 
     fn lock_status(&self) -> std::sync::MutexGuard<'_, HashMap<String, PackageStatus>> {
@@ -595,13 +612,201 @@ mod tests {
             Some(PackageState::Ready)
         );
 
-        // Re-running without force is a no-op (already Ready + cached);
-        // with force it re-fetches (still succeeds, still Ready).
+        // Re-running is idempotent either way: a branch pin is re-fetched
+        // every time (`force` or not — see
+        // `test_refresh_all_refetches_mutable_branch_pin_but_not_cached_sha_pin`
+        // for proof it's a *real* re-fetch, not a skip), and since upstream
+        // hasn't moved it still resolves to the same sha and stays `Ready`.
         mgr.refresh_all(false);
         mgr.refresh_all(true);
         assert_eq!(
             mgr.status_snapshot().get("weather").unwrap().state,
             Some(PackageState::Ready)
+        );
+
+        let _ = fs::remove_dir_all(&src.url);
+    }
+
+    #[test]
+    fn test_refresh_all_refetches_mutable_branch_pin_but_not_cached_sha_pin() {
+        // A branch pin must be re-fetched by every `refresh_all(false)` call
+        // so it picks up upstream moves — it must never be skipped just
+        // because the handle is already `Ready` with a cached checkout.
+        let src = make_fixture_repo();
+        let mut packages = HashMap::new();
+        packages.insert(
+            "weather".to_string(),
+            PackageRef {
+                repo: Some(src.url.clone()),
+                pin: Some(src.branch.clone()),
+                token: None,
+            },
+        );
+        let config = shared_config(packages);
+        let cache = PackageCache::new(tempdir_path("pkgmgr_cache_refresh_all_branch"));
+
+        let mgr = PackageManager::new(asset_loader(), config, cache, HashMap::new());
+        mgr.refresh_all(false);
+        let first_sha = mgr
+            .status_snapshot()
+            .get("weather")
+            .and_then(|s| s.resolved_sha.clone())
+            .expect("resolved after first refresh_all");
+        assert_eq!(first_sha, src.head_sha);
+
+        // A new commit lands on the same branch upstream (v1 -> v2 content).
+        write(
+            Path::new(&src.url),
+            "weather/forecast/script.lua",
+            "return { data = { v = 2 } }\n",
+        );
+        git(Path::new(&src.url), &["add", "-A"]);
+        git(Path::new(&src.url), &["commit", "-q", "-m", "v2"]);
+        let second_sha = String::from_utf8(
+            Command::new("git")
+                .arg("-C")
+                .arg(&src.url)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .expect("rev-parse")
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        assert_ne!(first_sha, second_sha);
+
+        // A plain refresh_all(false) on a *branch* pin must re-fetch and
+        // pick up the new commit.
+        mgr.refresh_all(false);
+        let status = mgr.status_snapshot();
+        let st = status.get("weather").unwrap();
+        assert_eq!(st.state, Some(PackageState::Ready));
+        assert_eq!(
+            st.resolved_sha.as_deref(),
+            Some(second_sha.as_str()),
+            "branch pin must be re-fetched by refresh_all(false), not skipped"
+        );
+
+        let _ = fs::remove_dir_all(&src.url);
+    }
+
+    #[test]
+    fn test_refresh_all_does_not_refetch_already_cached_sha_pin() {
+        // A sha pin is immutable: once cached, `refresh_all(false)` must
+        // leave it alone, even if upstream becomes unreachable.
+        let src = make_fixture_repo();
+        let mut packages = HashMap::new();
+        packages.insert(
+            "weather".to_string(),
+            PackageRef {
+                repo: Some(src.url.clone()),
+                pin: Some(src.head_sha.clone()),
+                token: None,
+            },
+        );
+        let config = shared_config(packages);
+        let cache = PackageCache::new(tempdir_path("pkgmgr_cache_refresh_all_sha"));
+
+        let mgr = PackageManager::new(asset_loader(), config, cache, HashMap::new());
+        mgr.refresh_all(false);
+        assert_eq!(
+            mgr.status_snapshot().get("weather").unwrap().state,
+            Some(PackageState::Ready)
+        );
+        assert_eq!(
+            mgr.status_snapshot()
+                .get("weather")
+                .unwrap()
+                .resolved_sha
+                .as_deref(),
+            Some(src.head_sha.as_str())
+        );
+
+        // Upstream disappears entirely; if the sha pin were re-fetched this
+        // would flip to Offline/Error.
+        let _ = fs::remove_dir_all(&src.url);
+
+        mgr.refresh_all(false);
+        let status = mgr.status_snapshot();
+        let st = status.get("weather").unwrap();
+        assert_eq!(st.state, Some(PackageState::Ready));
+        assert!(st.error.is_none());
+        assert_eq!(st.resolved_sha.as_deref(), Some(src.head_sha.as_str()));
+    }
+
+    #[test]
+    fn test_refresh_one_install_failure_after_fetch_honors_offline_when_prior_cached() {
+        // A `move_dir` failure right after a *successful* git fetch (e.g. a
+        // filesystem hiccup installing the new checkout) must fall back to
+        // `Offline` when a prior good checkout is still cached — the same
+        // rule the sibling `git_fetch::fetch` `Err` branch already applies —
+        // not unconditionally `Error`.
+        let src = make_fixture_repo();
+        let mut packages = HashMap::new();
+        packages.insert(
+            "weather".to_string(),
+            PackageRef {
+                repo: Some(src.url.clone()),
+                pin: Some(src.branch.clone()),
+                token: None,
+            },
+        );
+        let config = shared_config(packages);
+        let cache_root = tempdir_path("pkgmgr_cache_install_fail");
+        let cache = PackageCache::new(cache_root.clone());
+
+        let mgr = PackageManager::new(asset_loader(), config, cache, HashMap::new());
+        mgr.refresh_one("weather");
+        let sha1 = mgr
+            .status_snapshot()
+            .get("weather")
+            .and_then(|s| s.resolved_sha.clone())
+            .expect("resolved after first refresh_one");
+        assert_eq!(sha1, src.head_sha);
+
+        // A new commit lands upstream, so the next fetch resolves to a new
+        // sha — pre-sabotage *that* destination by creating a plain file
+        // where `move_dir` expects to install a directory, so the git fetch
+        // itself succeeds but the install (`move_dir`) fails.
+        write(
+            Path::new(&src.url),
+            "weather/forecast/script.lua",
+            "return { data = { v = 2 } }\n",
+        );
+        git(Path::new(&src.url), &["add", "-A"]);
+        git(Path::new(&src.url), &["commit", "-q", "-m", "v2"]);
+        let sha2 = String::from_utf8(
+            Command::new("git")
+                .arg("-C")
+                .arg(&src.url)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .expect("rev-parse")
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+
+        let probe_cache = PackageCache::new(cache_root);
+        let dest = probe_cache.checkout_dir(&src.url, &sha2);
+        fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        fs::write(&dest, b"not a directory, so move_dir's install fails").unwrap();
+
+        mgr.refresh_one("weather");
+        let status = mgr.status_snapshot();
+        let st = status.get("weather").unwrap();
+        assert_eq!(
+            st.state,
+            Some(PackageState::Offline),
+            "install failure with a prior cached checkout must report Offline, not Error"
+        );
+        assert!(st.error.is_some());
+        assert_eq!(
+            st.resolved_sha.as_deref(),
+            Some(sha1.as_str()),
+            "prior resolved sha is kept so the loader keeps serving it"
         );
 
         let _ = fs::remove_dir_all(&src.url);

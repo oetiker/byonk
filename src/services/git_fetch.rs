@@ -25,7 +25,9 @@ pub enum PinKind {
     Sha,
     /// A tag name (`refs/tags/<pin>`).
     Tag,
-    /// A branch name (`refs/heads/<pin>` on the remote).
+    /// A branch name; resolved locally against the remote-tracking ref left
+    /// by our bare clone/fetch (`refs/remotes/origin/<pin>`), not
+    /// `refs/heads/<pin>` on the remote directly.
     Branch,
 }
 
@@ -47,6 +49,45 @@ pub enum FetchError {
     /// `pin` didn't resolve to a sha, tag, or branch in `repo`.
     #[error("pin `{0}` not found in {1}")]
     PinNotFound(String, String),
+}
+
+/// Build a [`FetchError::Git`] from a message, redacting any embedded
+/// userinfo (e.g. an injected `x-access-token:<token>@`) first. gix/reqwest
+/// error `Display` impls can echo the request URL — including auth — on
+/// connection-level failures (DNS/TLS/refused/timeout), so every
+/// `FetchError::Git` construction site goes through here rather than calling
+/// `FetchError::Git(format!(...))` directly, to guarantee a token can never
+/// reach a log or error message.
+fn git_err(msg: impl Into<String>) -> FetchError {
+    FetchError::Git(redact_userinfo(msg.into()))
+}
+
+/// Strip `userinfo@` from every `scheme://userinfo@host/...` occurrence in
+/// `s`, replacing it with a fixed `***@` placeholder so no credential can
+/// survive into a displayed/logged error. Structural (scans for `://` then a
+/// following `@` before the next `/`), not a `token.is_some()` check, so it
+/// also covers ambient-cred URLs (e.g. ssh) with embedded userinfo. Strings
+/// with no `://...@` pattern pass through unchanged.
+fn redact_userinfo(s: String) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s.as_str();
+    while let Some(scheme_pos) = rest.find("://") {
+        let after_scheme = scheme_pos + 3;
+        out.push_str(&rest[..after_scheme]);
+        let tail = &rest[after_scheme..];
+        let boundary = tail.find('/').unwrap_or(tail.len());
+        match tail[..boundary].find('@') {
+            Some(at_pos) => {
+                out.push_str("***@");
+                rest = &tail[at_pos + 1..];
+            }
+            None => {
+                rest = tail;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Classify a pin without network access: 40 lowercase-or-uppercase hex
@@ -73,10 +114,10 @@ pub fn fetch(
 ) -> Result<FetchOutcome, FetchError> {
     if dest.exists() {
         std::fs::remove_dir_all(dest)
-            .map_err(|e| FetchError::Git(format!("removing existing {}: {e}", dest.display())))?;
+            .map_err(|e| git_err(format!("removing existing {}: {e}", dest.display())))?;
     }
     std::fs::create_dir_all(dest)
-        .map_err(|e| FetchError::Git(format!("creating {}: {e}", dest.display())))?;
+        .map_err(|e| git_err(format!("creating {}: {e}", dest.display())))?;
 
     let scratch = scratch_dir();
     let result = fetch_into(repo, pin, token, dest, &scratch);
@@ -105,18 +146,18 @@ fn fetch_into(
     let fetch_url = auth_url(repo, token);
 
     let mut prep = gix::prepare_clone_bare(fetch_url.as_str(), scratch)
-        .map_err(|e| FetchError::Git(format!("preparing clone of {repo}: {e}")))?;
+        .map_err(|e| git_err(format!("preparing clone of {repo}: {e}")))?;
 
     let interrupt = std::sync::atomic::AtomicBool::new(false);
     let (git_repo, _outcome) = prep
         .fetch_only(gix::progress::Discard, &interrupt)
-        .map_err(|e| FetchError::Git(format!("fetching {repo}: {e}")))?;
+        .map_err(|e| git_err(format!("fetching {repo}: {e}")))?;
 
     let (oid, pin_kind) = resolve_pin(&git_repo, pin)
         .ok_or_else(|| FetchError::PinNotFound(pin.to_string(), repo.to_string()))?;
 
     export_tree(&git_repo, oid, dest)
-        .map_err(|e| FetchError::Git(format!("checking out {pin} ({oid}): {e}")))?;
+        .map_err(|e| git_err(format!("checking out {pin} ({oid}): {e}")))?;
 
     Ok(FetchOutcome {
         resolved_sha: oid.to_string(),
@@ -215,6 +256,58 @@ fn export_tree(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_redact_userinfo_strips_token() {
+        let input = "fetching https://x-access-token:SECRET@github.com/o/r.git: connection refused"
+            .to_string();
+        let redacted = redact_userinfo(input);
+        assert!(
+            !redacted.contains("SECRET"),
+            "token leaked into redacted string: {redacted}"
+        );
+        assert_eq!(
+            redacted,
+            "fetching https://***@github.com/o/r.git: connection refused"
+        );
+    }
+
+    #[test]
+    fn test_redact_userinfo_passes_through_no_userinfo() {
+        let input = "fetching https://github.com/o/r.git: connection refused".to_string();
+        assert_eq!(redact_userinfo(input.clone()), input);
+    }
+
+    #[test]
+    fn test_auth_url_injects_token_for_https() {
+        let url = auth_url("https://host/o/r.git", Some("tok"));
+        assert!(
+            url.contains("x-access-token:tok@"),
+            "expected injected token userinfo, got: {url}"
+        );
+        assert!(url.ends_with("host/o/r.git"));
+    }
+
+    #[test]
+    fn test_auth_url_empty_token_unchanged() {
+        assert_eq!(
+            auth_url("https://host/o/r.git", Some("")),
+            "https://host/o/r.git"
+        );
+    }
+
+    #[test]
+    fn test_auth_url_non_https_unchanged() {
+        assert_eq!(
+            auth_url("ssh://git@host/o/r.git", Some("tok")),
+            "ssh://git@host/o/r.git"
+        );
+    }
+
+    #[test]
+    fn test_auth_url_local_path_unchanged() {
+        assert_eq!(auth_url("/local/path", Some("tok")), "/local/path");
+    }
 
     #[test]
     fn test_looks_like_sha() {

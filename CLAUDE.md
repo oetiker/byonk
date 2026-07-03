@@ -11,6 +11,13 @@ Byonk (Bring Your Own Ink) is a self-hosted content server for TRMNL e-ink devic
 - `fonts/` - Custom fonts
 - `docs/` - mdBook documentation
 
+## Session Handover Discipline
+
+- **`docs/HANDOVER.md` is the cross-session handover** — the single source of truth for "where are we and what's next". Read it first at the start of any session.
+- **When context grows large (roughly >25% used), at the next sensible pause point** (e.g. between reviewed tasks in a multi-task execution, never mid-task with an uncommitted tree), **rewrite `docs/HANDOVER.md` fresh and stop**, telling the user to start a new session. A fresh session with a good handover beats a long, degraded one.
+- A good handover states: the active initiative, exact branch + HEAD, what's done vs. next, how to resume (which skill/plan/ledger), key decisions, and how to build/verify. Keep it current — overwrite it, don't append.
+- **The SDD ledger `.superpowers/sdd/progress.md`** (git-ignored) records per-task review status and commit ranges during subagent-driven execution; it is the recovery map after a compaction. Trust it + `git log` over memory.
+
 ## Workflow Reminders
 
 - **Always `git pull` first** before starting work to avoid conflicts

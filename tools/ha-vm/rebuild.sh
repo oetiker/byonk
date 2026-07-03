@@ -32,7 +32,7 @@ echo "==> syncing add-on build source"
 mount -t smbfs "//${SMB_USER}:${SMB_PASS}@localhost:${SMB_PORT}/addons" "$mnt_addons"
 dst="$mnt_addons/byonk"
 mkdir -p "$dst"
-for item in src crates fonts screens static Cargo.toml Cargo.lock default-config.yaml; do
+for item in src crates fonts screens byonk-base static Cargo.toml Cargo.lock default-config.yaml; do
   [ -e "$REPO_ROOT/$item" ] || continue
   if [ -d "$REPO_ROOT/$item" ]; then
     mkdir -p "$dst/$item"

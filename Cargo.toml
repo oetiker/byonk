@@ -56,6 +56,11 @@ yaml_serde = "0.10"
 # Semver compatibility checks
 semver = "1"
 
+# Git package distribution (clone/fetch a screen-package repo at a pin).
+# We clone bare into scratch space and export the resolved tree ourselves
+# (see git_fetch.rs), so no worktree-checkout feature is needed here.
+gix = { version = "0.66", default-features = false, features = ["blocking-network-client", "blocking-http-transport-reqwest"] }
+
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"

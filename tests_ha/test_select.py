@@ -1,9 +1,18 @@
 from tests_ha.conftest import make_device_entry, make_hub_entry
 
-DEV = {"key": "AA:BB", "registered": True, "screen": "transit", "dither": "atkinson", "panel": None}
-SCREENS = {"screens": [
-        {"name": "transit", "params": [{"name": "limit", "type": "int", "default": 8}], "schema_error": None},
-        {"name": "weather", "params": [], "schema_error": None}],
+TRANSIT_REF = "byonk-builtin/useful/swiss-departure-board"
+WEATHER_REF = "byonk-builtin/useful/weather"
+DEV = {"key": "AA:BB", "registered": True, "screen": TRANSIT_REF, "dither": "atkinson", "panel": None}
+SCREENS = {
+    "packages": [{"handle": "byonk-builtin", "name": "byonk-builtin",
+                  "description": "Built-in screens", "author": "Byonk", "license": "MIT",
+                  "screens": [
+                      {"ref": TRANSIT_REF, "title": "Swiss Departure Board", "description": "",
+                       "params": [{"name": "limit", "type": "int", "default": 8}],
+                       "byonk": "0.15", "compat_warning": None},
+                      {"ref": WEATHER_REF, "title": "Weather", "description": "",
+                       "params": [], "byonk": "0.15", "compat_warning": None},
+                  ]}],
     "panels": [{"name": "trmnl_og"}], "dither_algorithms": ["atkinson", "sierra"]}
 
 
@@ -15,7 +24,7 @@ async def test_panel_select_shows_value_not_in_options(hass, byonk):
         {
             "key": "AA:BB",
             "registered": True,
-            "screen": "transit",
+            "screen": TRANSIT_REF,
             "dither": "atkinson",
             "panel": "reterminal_e1002",  # not in SCREENS["panels"]
         }
@@ -51,9 +60,9 @@ async def test_screen_select_resets_params_to_defaults(hass, byonk):
     ent = next(s for s in hass.states.async_all("select") if "trmnl" in s.entity_id and "screen" in s.entity_id)
     await hass.services.async_call(
         "select", "select_option",
-        {"entity_id": ent.entity_id, "option": "weather"}, blocking=True,
+        {"entity_id": ent.entity_id, "option": WEATHER_REF}, blocking=True,
     )
     key, payload = byonk.update_device.await_args.args
     assert key == "AA:BB"
-    assert payload["screen"] == "weather"
+    assert payload["screen"] == WEATHER_REF
     assert payload["params"] == {}  # weather has no defaults

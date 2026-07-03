@@ -1,6 +1,6 @@
 from tests_ha.conftest import make_device_entry, make_hub_entry
 
-DEV = {"key": "AA:BB", "registered": True, "screen": "transit", "refresh": 600}
+DEV = {"key": "AA:BB", "registered": True, "screen": "byonk-builtin/useful/swiss-departure-board", "refresh": 600}
 
 
 async def _setup(hass, byonk):

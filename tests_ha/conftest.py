@@ -16,7 +16,11 @@ from custom_components.byonk.const import (
 pytest_plugins = ["pytest_homeassistant_custom_component"]
 
 DEFAULT_SCREENS = {
-    "screens": [{"name": "transit", "params": [], "schema_error": None}],
+    "packages": [{"handle": "byonk-builtin", "name": "byonk-builtin",
+                  "description": "Built-in screens", "author": "Byonk", "license": "MIT",
+                  "screens": [{"ref": "byonk-builtin/useful/swiss-departure-board",
+                                "title": "Swiss Departure Board", "description": "",
+                                "params": [], "byonk": "0.15", "compat_warning": None}]}],
     "panels": [{"name": "trmnl_og"}],
     "dither_algorithms": ["atkinson"],
 }
@@ -60,7 +64,7 @@ def byonk():
         pending=[],
         screens=DEFAULT_SCREENS,
         config={},
-        add_device=AsyncMock(return_value={"key": "x", "screen": "transit"}),
+        add_device=AsyncMock(return_value={"key": "x", "screen": "byonk-builtin/useful/swiss-departure-board"}),
         update_device=AsyncMock(),
         delete_device=AsyncMock(),
         update_settings=AsyncMock(),

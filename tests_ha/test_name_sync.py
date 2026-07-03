@@ -5,7 +5,7 @@ from tests_ha.conftest import make_device_entry, make_hub_entry
 
 
 async def _setup(hass, byonk):
-    byonk.devices = [{"key": "AA:BB", "registered": True, "screen": "transit"}]
+    byonk.devices = [{"key": "AA:BB", "registered": True, "screen": "byonk-builtin/useful/swiss-departure-board"}]
     hub = make_hub_entry(hass)
     await hass.config_entries.async_setup(hub.entry_id)
     await hass.async_block_till_done()

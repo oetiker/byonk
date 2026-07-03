@@ -3,14 +3,20 @@ from homeassistant.config_entries import SOURCE_INTEGRATION_DISCOVERY
 from custom_components.byonk.const import CONF_DEVICE_KEY, DOMAIN
 from tests_ha.conftest import make_hub_entry
 
+TRANSIT_REF = "byonk-builtin/useful/swiss-departure-board"
 SCREENS_NO_PARAMS = {
-    "screens": [{"name": "transit", "params": [], "schema_error": None}],
+    "packages": [{"handle": "byonk-builtin", "name": "byonk-builtin",
+                  "description": "Built-in screens", "author": "Byonk", "license": "MIT",
+                  "screens": [{"ref": TRANSIT_REF, "title": "Swiss Departure Board", "description": "",
+                                "params": [], "byonk": "0.15", "compat_warning": None}]}],
     "panels": [{"name": "trmnl_og"}], "dither_algorithms": ["atkinson"],
 }
 SCREENS_PARAMS = {
-    "screens": [{"name": "transit",
-                 "params": [{"name": "limit", "type": "int", "default": 8}],
-                 "schema_error": None}],
+    "packages": [{"handle": "byonk-builtin", "name": "byonk-builtin",
+                  "description": "Built-in screens", "author": "Byonk", "license": "MIT",
+                  "screens": [{"ref": TRANSIT_REF, "title": "Swiss Departure Board", "description": "",
+                                "params": [{"name": "limit", "type": "int", "default": 8}],
+                                "byonk": "0.15", "compat_warning": None}]}],
     "panels": [{"name": "trmnl_og"}], "dither_algorithms": ["atkinson"],
 }
 
@@ -35,13 +41,13 @@ async def test_discovery_creates_device_entry_and_posts(hass, byonk):
     assert result["step_id"] == "configure"
 
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"screen": "transit"}
+        result["flow_id"], {"screen": TRANSIT_REF}
     )
     await hass.async_block_till_done()
 
     assert result["type"] == "create_entry"
     assert byonk.add_device.await_args.args[0]["key"] == "CC:DD"
-    assert byonk.add_device.await_args.args[0]["screen"] == "transit"
+    assert byonk.add_device.await_args.args[0]["screen"] == TRANSIT_REF
     entries = [e for e in hass.config_entries.async_entries(DOMAIN)
                if e.data.get(CONF_DEVICE_KEY) == "CC:DD"]
     assert len(entries) == 1
@@ -55,7 +61,7 @@ async def test_discovery_with_params_shows_second_form(hass, byonk):
         data={"key": "CC:DD", "code": "ABCD-1234", "model": "og"},
     )
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"screen": "transit"}
+        result["flow_id"], {"screen": TRANSIT_REF}
     )
     assert result["type"] == "form"
     assert result["step_id"] == "dev_params"

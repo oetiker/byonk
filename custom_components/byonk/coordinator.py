@@ -31,14 +31,15 @@ class ByonkData:
     config: dict
 
     def screen_names(self) -> list[str]:
-        return [s["name"] for s in self.screens]
+        # Screens are addressed by their qualified `handle/path` ref.
+        return [s["ref"] for s in self.screens]
 
     def panel_names(self) -> list[str]:
         return [p["name"] for p in self.panels]
 
-    def screen_params(self, name: str) -> list[dict]:
+    def screen_params(self, ref: str) -> list[dict]:
         for s in self.screens:
-            if s["name"] == name:
+            if s["ref"] == ref:
                 return s.get("params") or []
         return []
 
@@ -81,10 +82,17 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
             raise ConfigEntryAuthFailed(str(err)) from err
         except ByonkApiError as err:
             raise UpdateFailed(str(err)) from err
+        # The admin API now groups screens by package: {packages: [{screens: [...]}]}.
+        # Flatten to a single list; each screen carries its qualified `ref`.
+        flat_screens = [
+            screen
+            for pkg in screens.get("packages", [])
+            for screen in pkg.get("screens", [])
+        ]
         data = ByonkData(
             devices=devices,
             pending=pending,
-            screens=screens.get("screens", []),
+            screens=flat_screens,
             panels=screens.get("panels", []),
             dither=screens.get("dither_algorithms", []),
             config=config,

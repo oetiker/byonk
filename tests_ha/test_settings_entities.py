@@ -5,8 +5,13 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.byonk.const import BUILTIN_SCREEN_LABEL, CONF_ADDON_SLUG, CONF_BASE_URL, DOMAIN
 from tests_ha.conftest import make_hub_entry
 
-SCREENS = {"screens": [{"name": "transit", "params": [], "schema_error": None}],
-           "panels": [], "dither_algorithms": []}
+TRANSIT_REF = "byonk-builtin/useful/swiss-departure-board"
+SCREENS = {
+    "packages": [{"handle": "byonk-builtin", "name": "byonk-builtin",
+                  "description": "Built-in screens", "author": "Byonk", "license": "MIT",
+                  "screens": [{"ref": TRANSIT_REF, "title": "Swiss Departure Board", "description": "",
+                                "params": [], "byonk": "0.15", "compat_warning": None}]}],
+    "panels": [], "dither_algorithms": []}
 CONFIG = {"registration": {"enabled": False}, "auth_mode": "api_key"}
 
 
@@ -34,21 +39,21 @@ async def test_registration_switch_turns_on(hass):
 
 
 async def test_new_device_screen_select(hass, byonk):
-    byonk.config = {"registration": {"enabled": True, "screen": "transit"}}
+    byonk.config = {"registration": {"enabled": True, "screen": TRANSIT_REF}}
     hub = make_hub_entry(hass)
     await hass.config_entries.async_setup(hub.entry_id)
     await hass.async_block_till_done()
 
     state = hass.states.get("select.byonk_new_device_screen")
     assert state is not None
-    assert state.state == "transit"
+    assert state.state == TRANSIT_REF
 
     await hass.services.async_call(
         "select", "select_option",
-        {"entity_id": "select.byonk_new_device_screen", "option": "transit"},
+        {"entity_id": "select.byonk_new_device_screen", "option": TRANSIT_REF},
         blocking=True,
     )
-    assert byonk.update_settings.await_args.args[0] == {"registration_screen": "transit"}
+    assert byonk.update_settings.await_args.args[0] == {"registration_screen": TRANSIT_REF}
 
 
 async def test_new_device_screen_builtin(hass, byonk):

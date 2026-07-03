@@ -6,7 +6,7 @@ from tests_ha.conftest import make_device_entry, make_hub_entry
 DEV = {
     "key": "AA:BB", "registered": True, "model": "og",
     "battery_voltage": 4.1, "rssi": -58, "last_seen": "2026-06-29T10:00:00+00:00",
-    "firmware_version": "1.7.1", "screen": "transit", "dither": "atkinson", "panel": None,
+    "firmware_version": "1.7.1", "screen": "byonk-builtin/useful/swiss-departure-board", "dither": "atkinson", "panel": None,
 }
 PENDING = [{"mac": "CC:DD", "registration_code": "ABCD-1234", "model": "og",
             "last_seen": "2026-06-29T09:00:00+00:00"}]

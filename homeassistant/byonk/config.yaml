@@ -19,6 +19,7 @@ environment:
   SCREENS_DIR: /config/screens
   FONTS_DIR: /config/fonts
   BIND_ADDR: 0.0.0.0:3000
+  PACKAGES_CACHE_DIR: /data/packages
 options:
   admin_token: ""
   log_level: info

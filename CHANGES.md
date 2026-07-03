@@ -56,7 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by default, settable via `PATCH /api/admin/settings`). A failed refresh never
   takes a package offline while a cached checkout still exists — it keeps
   serving with `status: "offline"`. New package-management admin endpoints:
-  `POST`/`PATCH`/`DELETE /api/admin/packages/:handle`, plus
+  `POST /api/admin/packages` (register) and
+  `PATCH`/`DELETE /api/admin/packages/:handle` (update/remove), plus
   `POST /api/admin/packages/:handle/update` and `POST /api/admin/packages/update`
   to trigger re-fetches. `GET /api/admin/packages` is enriched with `pin_kind`,
   `resolved_sha`, `last_fetched`, and `error`; `status` now reflects

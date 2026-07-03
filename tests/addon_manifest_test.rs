@@ -74,6 +74,12 @@ fn addon_config_matches_design() {
         cfg["environment"]["BIND_ADDR"].as_str(),
         Some("0.0.0.0:3000")
     );
+    // Remote screen-package cache lives in the add-on's persistent /data so it
+    // survives restarts/rebuilds (unset would fall back to an ephemeral temp dir).
+    assert_eq!(
+        cfg["environment"]["PACKAGES_CACHE_DIR"].as_str(),
+        Some("/data/packages")
+    );
 
     // schema exposes EXACTLY the two intended options — nothing the Phase 3
     // integration owns (registration_enabled, auth_mode, default_screen, ...).

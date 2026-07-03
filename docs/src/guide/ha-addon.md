@@ -36,11 +36,15 @@ restart.
 ## Screen package cache persistence
 
 If your `packages:` config section references remote (git-backed) screen
-packages, the add-on **must** set `PACKAGES_CACHE_DIR=/data/packages` (a path
-under the add-on's persistent `/data` folder) as an environment variable in
-the add-on's own `config.yaml`. Without it, byonk falls back to a temp
-directory, so every fetched package checkout is lost — and re-fetched from
-scratch — on every add-on restart or rebuild.
+packages, their fetched git checkouts are cached on disk. The add-on ships
+with `PACKAGES_CACHE_DIR=/data/packages` set in its manifest — `/data` is the
+add-on's automatically-persistent private storage — so the cache survives
+restarts and rebuilds and packages are not re-fetched every boot. You do not
+need to configure anything.
+
+(For reference: when `PACKAGES_CACHE_DIR` is unset, byonk falls back to a
+temp directory, so every fetched checkout would be lost and re-fetched on each
+restart. The shipped add-on sets it, so this caveat does not apply here.)
 
 ## How it relates to the Byonk integration
 

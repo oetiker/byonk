@@ -258,7 +258,7 @@ pub async fn screens(
     let mut by_handle: std::collections::BTreeMap<String, PackageScreens> =
         std::collections::BTreeMap::new();
 
-    for screen in state.package_loader.list_all() {
+    for screen in state.package_manager.loader().list_all() {
         let entry = by_handle.entry(screen.handle.clone()).or_insert_with(|| {
             let m = screen.source.manifest();
             PackageScreens {
@@ -319,15 +319,15 @@ pub async fn packages(
     let config = state.config.load();
 
     // Screen counts per handle, from the source of truth (the package loader).
+    let loader = state.package_manager.loader();
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for screen in state.package_loader.list_all() {
+    for screen in loader.list_all() {
         *counts.entry(screen.handle).or_insert(0) += 1;
     }
 
     // Union of loader-registered handles and configured package handles, so the
     // always-registered builtin appears and config-only packages are not dropped.
-    let mut handles: std::collections::BTreeSet<String> =
-        state.package_loader.handles().into_iter().collect();
+    let mut handles: std::collections::BTreeSet<String> = loader.handles().into_iter().collect();
     handles.extend(config.packages.keys().cloned());
 
     let out = handles

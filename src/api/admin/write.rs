@@ -45,7 +45,8 @@ fn validate_screen_and_params(
     params: &HashMap<String, serde_yaml::Value>,
 ) -> Result<(), ApiError> {
     let resolved = state
-        .package_loader
+        .package_manager
+        .loader()
         .resolve(screen)
         .ok_or_else(|| ApiError::BadRequest(format!("unknown screen `{screen}`")))?;
     if let Err(errs) = validate_params(&resolved.meta.params, params) {
@@ -263,12 +264,12 @@ pub async fn patch_settings(
         }
     }
     if let Some(screen) = &body.default_screen {
-        if state.package_loader.resolve(screen).is_none() {
+        if state.package_manager.loader().resolve(screen).is_none() {
             return Err(ApiError::BadRequest(format!("unknown screen `{screen}`")));
         }
     }
     if let Some(screen) = &body.registration_screen {
-        if !screen.is_empty() && state.package_loader.resolve(screen).is_none() {
+        if !screen.is_empty() && state.package_manager.loader().resolve(screen).is_none() {
             return Err(ApiError::BadRequest(format!("unknown screen `{screen}`")));
         }
     }

@@ -22,7 +22,7 @@ use tokio_stream::StreamExt;
 use crate::assets::AssetLoader;
 use crate::models::{AppConfig, DisplaySpec};
 use crate::server::DevOverrides;
-use crate::services::package_loader::PackageLoader;
+use crate::services::package_manager::PackageManager;
 use crate::services::{ContentCache, ContentPipeline, DeviceContext, FileWatcher, RenderService};
 
 /// Dev mode application state
@@ -34,7 +34,7 @@ pub struct DevState {
     pub renderer: Arc<RenderService>,
     pub file_watcher: Arc<FileWatcher>,
     pub asset_loader: Arc<AssetLoader>,
-    pub package_loader: Arc<PackageLoader>,
+    pub package_manager: Arc<PackageManager>,
     pub dev_overrides: DevOverrides,
 }
 
@@ -185,7 +185,8 @@ pub async fn handle_screens(State(state): State<DevState>) -> Json<ScreensRespon
     // `name` is the qualified `handle/path` ref the dev UI feeds back into
     // `?screen=<ref>`; script/template are informational only.
     let mut screens: Vec<ScreenInfo> = state
-        .package_loader
+        .package_manager
+        .loader()
         .list_all()
         .into_iter()
         .map(|screen| {

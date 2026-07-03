@@ -4,7 +4,8 @@ use std::sync::Arc;
 use crate::assets::AssetLoader;
 use crate::error::RenderError;
 use crate::models::DisplaySpec;
-use crate::services::package_loader::{join_rel, PackageLoader, PackageSource, ResolvedScreen};
+use crate::services::package_loader::{join_rel, PackageSource, ResolvedScreen};
+use crate::services::package_manager::PackageManager;
 use crate::services::{FontFaceInfo, LuaRuntime, RenderService, TemplateService};
 
 /// Resolve the effective refresh rate.
@@ -114,7 +115,7 @@ pub struct ContentPipeline {
     lua_runtime: LuaRuntime,
     template_service: TemplateService,
     renderer: Arc<RenderService>,
-    package_loader: Arc<PackageLoader>,
+    package_manager: Arc<PackageManager>,
 }
 
 impl ContentPipeline {
@@ -122,7 +123,7 @@ impl ContentPipeline {
         config: crate::server::SharedConfig,
         asset_loader: Arc<AssetLoader>,
         renderer: Arc<RenderService>,
-        package_loader: Arc<PackageLoader>,
+        package_manager: Arc<PackageManager>,
     ) -> Result<Self, ContentError> {
         // Build font info from the renderer's fontdb
         let mut font_families: HashMap<String, Vec<FontFaceInfo>> = HashMap::new();
@@ -151,7 +152,7 @@ impl ContentPipeline {
             lua_runtime,
             template_service,
             renderer,
-            package_loader,
+            package_manager,
         })
     }
 
@@ -172,7 +173,7 @@ impl ContentPipeline {
 
         if let Some(device_config) = device_config {
             // Found device config — resolve the device's screen ref via packages.
-            if let Some(resolved) = self.package_loader.resolve(&device_config.screen) {
+            if let Some(resolved) = self.package_manager.loader().resolve(&device_config.screen) {
                 if let Some(ctx) = device_ctx.as_mut() {
                     ctx.refresh_override = device_config.refresh;
                 }
@@ -192,7 +193,8 @@ impl ContentPipeline {
             .as_deref()
             .unwrap_or("byonk-builtin/default");
         let resolved = self
-            .package_loader
+            .package_manager
+            .loader()
             .resolve(default_ref)
             .ok_or_else(|| ContentError::ScreenNotFound(device_mac.to_string()))?;
 
@@ -211,7 +213,8 @@ impl ContentPipeline {
         device_ctx: Option<DeviceContext>,
     ) -> Result<ScriptResult, ContentError> {
         let resolved = self
-            .package_loader
+            .package_manager
+            .loader()
             .resolve(screen_ref)
             .ok_or_else(|| ContentError::ScreenNotFound(screen_ref.to_string()))?;
 
@@ -565,7 +568,8 @@ impl ContentPipeline {
             .collect();
 
         let resolved = self
-            .package_loader
+            .package_manager
+            .loader()
             .resolve(screen_ref)
             .ok_or_else(|| format!("Screen '{screen_ref}' not found"))?;
 
@@ -604,9 +608,10 @@ mod refresh_tests {
 mod pipeline_tests {
     use super::*;
     use crate::assets::AssetLoader;
-    use crate::services::package_loader::PackageLoader;
+    use crate::services::package_cache::PackageCache;
     use std::collections::HashMap;
     use std::fs;
+    use std::path::PathBuf;
 
     fn write(dir: &std::path::Path, rel: &str, body: &str) {
         let p = dir.join(rel);
@@ -614,11 +619,23 @@ mod pipeline_tests {
         fs::write(p, body).unwrap();
     }
 
-    fn build_pipeline(pl: Arc<PackageLoader>, loader: Arc<AssetLoader>) -> ContentPipeline {
+    fn build_pipeline(disk: HashMap<String, PathBuf>, loader: Arc<AssetLoader>) -> ContentPipeline {
         let config = Arc::new(crate::models::AppConfig::default());
         let shared: crate::server::SharedConfig = Arc::new(arc_swap::ArcSwap::from(config));
         let renderer = Arc::new(RenderService::new(&loader).unwrap());
-        ContentPipeline::new(shared, loader, renderer, pl).unwrap()
+        let cache_root = std::env::temp_dir().join(format!(
+            "byonk_pipeline_test_cache_{}_{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let pm = PackageManager::new(
+            loader.clone(),
+            shared.clone(),
+            PackageCache::new(cache_root),
+            disk,
+        );
+        pm.rebuild_loader();
+        ContentPipeline::new(shared, loader, renderer, pm).unwrap()
     }
 
     #[test]
@@ -653,8 +670,7 @@ mod pipeline_tests {
         let loader = Arc::new(AssetLoader::new(None, None, None));
         let mut disk = HashMap::new();
         disk.insert("acme".to_string(), tmp.clone());
-        let pl = Arc::new(PackageLoader::new(loader.clone(), disk));
-        let pipeline = build_pipeline(pl, loader);
+        let pipeline = build_pipeline(disk, loader);
 
         let result = pipeline
             .run_screen_by_name("acme/weather/forecast", HashMap::new(), None)
@@ -699,8 +715,7 @@ mod pipeline_tests {
         let loader = Arc::new(AssetLoader::new(None, None, None));
         let mut disk = HashMap::new();
         disk.insert("acme".to_string(), tmp.clone());
-        let pl = Arc::new(PackageLoader::new(loader.clone(), disk));
-        let pipeline = build_pipeline(pl, loader);
+        let pipeline = build_pipeline(disk, loader);
 
         let result = pipeline
             .run_screen_by_name("acme/s", HashMap::new(), None)
@@ -735,8 +750,7 @@ mod pipeline_tests {
         let loader = Arc::new(AssetLoader::new(None, None, None));
         let mut disk = HashMap::new();
         disk.insert("acme".to_string(), tmp.clone());
-        let pl = Arc::new(PackageLoader::new(loader.clone(), disk));
-        let pipeline = build_pipeline(pl, loader);
+        let pipeline = build_pipeline(disk, loader);
 
         let result = pipeline
             .run_screen_by_name("acme/s", HashMap::new(), None)

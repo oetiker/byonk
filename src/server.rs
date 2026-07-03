@@ -22,7 +22,8 @@ use crate::api;
 use crate::assets::AssetLoader;
 use crate::error::ApiError;
 use crate::models::{config::PackageRef, AppConfig, DitherTuningValues};
-use crate::services::package_loader::PackageLoader;
+use crate::services::package_cache::PackageCache;
+use crate::services::package_manager::PackageManager;
 use crate::services::{ContentCache, ContentPipeline, InMemoryRegistry, RenderService};
 
 /// Runtime overrides set by the dev GUI and consumed by production handlers.
@@ -75,7 +76,7 @@ pub struct AppState {
     pub content_pipeline: Arc<ContentPipeline>,
     pub content_cache: Arc<ContentCache>,
     pub dev_overrides: DevOverrides,
-    pub package_loader: Arc<PackageLoader>,
+    pub package_manager: Arc<PackageManager>,
 }
 
 /// Create application state from an asset loader.
@@ -99,20 +100,6 @@ pub fn create_app_state_with_config(
 /// are placed manually under `PACKAGES_DIR` in this phase; git fetching is a
 /// later plan. `byonk-builtin` needs no disk entry — it registers embedded
 /// inside `PackageLoader`.
-/// Build a [`PackageLoader`] from the embedded builtin package plus any on-disk
-/// packages under `PACKAGES_DIR` that are declared in `config.packages`.
-pub fn build_package_loader(
-    asset_loader: Arc<AssetLoader>,
-    config: &AppConfig,
-) -> Arc<PackageLoader> {
-    let disk_packages = std::env::var("PACKAGES_DIR")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .map(|dir| collect_disk_packages(std::path::Path::new(&dir), &config.packages))
-        .unwrap_or_default();
-    Arc::new(PackageLoader::new(asset_loader, disk_packages))
-}
-
 fn collect_disk_packages(
     dir: &std::path::Path,
     registry: &HashMap<String, PackageRef>,
@@ -130,6 +117,37 @@ fn collect_disk_packages(
         .collect()
 }
 
+/// Build the [`PackageManager`] from the embedded builtin package, any
+/// on-disk packages under `PACKAGES_DIR` declared in `config.packages`, and
+/// any previously fetched checkouts under the cache root (`PACKAGES_CACHE_DIR`
+/// env, falling back to a temp dir). Rebuilds the loader once before
+/// returning so the manager is immediately usable.
+pub fn build_package_manager(
+    asset_loader: Arc<AssetLoader>,
+    config: SharedConfig,
+) -> Arc<PackageManager> {
+    let cache_root = std::env::var("PACKAGES_CACHE_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("byonk-packages"));
+
+    let extra_disk = std::env::var("PACKAGES_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(|dir| collect_disk_packages(std::path::Path::new(&dir), &config.load().packages))
+        .unwrap_or_default();
+
+    let manager = PackageManager::new(
+        asset_loader,
+        config,
+        PackageCache::new(cache_root),
+        extra_disk,
+    );
+    manager.rebuild_loader();
+    manager
+}
+
 /// Create application state with shared overrides (for dev mode).
 pub fn create_app_state_with_overrides(
     asset_loader: Arc<AssetLoader>,
@@ -143,8 +161,7 @@ pub fn create_app_state_with_overrides(
 
     let shared_config: SharedConfig = Arc::new(ArcSwap::from(config.clone()));
 
-    // Build package loader from the embedded builtin + PACKAGES_DIR env var.
-    let package_loader = build_package_loader(asset_loader.clone(), &config);
+    let package_manager = build_package_manager(asset_loader.clone(), shared_config.clone());
 
     let registry = Arc::new(InMemoryRegistry::new());
     let renderer = Arc::new(RenderService::new(&asset_loader)?);
@@ -153,7 +170,7 @@ pub fn create_app_state_with_overrides(
             shared_config.clone(),
             asset_loader.clone(),
             renderer.clone(),
-            package_loader.clone(),
+            package_manager.clone(),
         )
         .map_err(|e| anyhow::anyhow!("Failed to create content pipeline: {e}"))?,
     );
@@ -169,7 +186,7 @@ pub fn create_app_state_with_overrides(
         content_pipeline,
         content_cache,
         dev_overrides,
-        package_loader,
+        package_manager,
     })
 }
 
@@ -177,6 +194,7 @@ pub fn create_app_state_with_overrides(
 pub fn reload_config(state: &AppState) -> anyhow::Result<()> {
     let fresh = AppConfig::load_from_assets(&state.asset_loader)?;
     state.config.store(Arc::new(fresh));
+    state.package_manager.rebuild_loader();
     Ok(())
 }
 
@@ -262,17 +280,15 @@ mod reload_tests {
     use super::*;
 
     #[test]
-    fn test_appstate_has_package_loader() {
-        // Minimal smoke test: build state and resolve the builtin default screen.
-        let loader = std::sync::Arc::new(crate::assets::AssetLoader::new(None, None, None));
-        let cfg = crate::models::config::AppConfig::default();
+    fn test_appstate_has_package_manager_resolving_builtin() {
+        let loader = Arc::new(AssetLoader::new(None, None, None));
+        let cfg = AppConfig::default();
         let state = create_app_state_with_config(loader, cfg).unwrap();
-        // byonk-builtin is always registered:
         assert!(state
-            .package_loader
-            .handles()
-            .iter()
-            .any(|h| h == "byonk-builtin"));
+            .package_manager
+            .loader()
+            .resolve("byonk-builtin/default")
+            .is_some());
     }
 
     #[test]

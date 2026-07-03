@@ -205,10 +205,14 @@ fn resolve_pin(repo: &gix::Repository, pin: &str) -> Option<(gix::ObjectId, PinK
 }
 
 /// Write every blob reachable from `commit_id`'s tree into `dest`, preserving
-/// relative paths and the executable bit. Submodules (gitlink entries) are
-/// skipped — not needed for screen packages. Symlinks are written as regular
-/// files containing the link target text (best-effort; screen packages are
-/// not expected to contain symlinks).
+/// relative paths and the executable bit. Submodules (gitlink entries) and
+/// directory entries are skipped — `breadthfirst().files()` (despite its
+/// name) records every entry in the tree, including intermediate directory
+/// ("tree") entries, not blobs only; without filtering those out, writing a
+/// directory entry as a file collides with `create_dir_all` for any deeper
+/// blob under it. Symlinks are written as regular files containing the link
+/// target text (best-effort; screen packages are not expected to contain
+/// symlinks).
 fn export_tree(
     repo: &gix::Repository,
     commit_id: gix::ObjectId,
@@ -226,8 +230,8 @@ fn export_tree(
         .map_err(|e| e.to_string())?;
 
     for entry in entries {
-        if entry.mode.is_commit() {
-            continue; // submodule gitlink: not supported
+        if entry.mode.is_commit() || entry.mode.is_tree() {
+            continue; // submodule gitlink / intermediate directory: nothing to write
         }
         let rel = entry
             .filepath
@@ -402,6 +406,95 @@ mod tests {
             tag,
             head_sha,
         }
+    }
+
+    /// Regression test: a real tree with a nested directory (as every screen
+    /// package has, e.g. `weather/forecast/meta.yaml`) must export cleanly.
+    /// `breadthfirst().files()` records *every* tree entry, including
+    /// intermediate directories, not just blobs — `export_tree` must skip
+    /// those or `create_dir_all` collides with a directory entry written as
+    /// a plain file.
+    #[test]
+    fn test_fetch_exports_nested_directories() {
+        let dir = tempdir_path("git_fetch_src_nested");
+        std::fs::create_dir_all(&dir).expect("create fixture dir");
+        let mut repo = gix::init(&dir).expect("init fixture repo");
+
+        let manifest_blob = repo.write_blob(b"root: .\n".to_vec()).unwrap().detach();
+        let meta_blob = repo.write_blob(b"title: F\n".to_vec()).unwrap().detach();
+
+        let forecast_tree_id = {
+            let mut tree = gix::objs::Tree::empty();
+            tree.entries.push(gix::objs::tree::Entry {
+                mode: gix::objs::tree::EntryKind::Blob.into(),
+                filename: "meta.yaml".into(),
+                oid: meta_blob,
+            });
+            repo.write_object(&tree)
+                .expect("write forecast tree")
+                .detach()
+        };
+        let weather_tree_id = {
+            let mut tree = gix::objs::Tree::empty();
+            tree.entries.push(gix::objs::tree::Entry {
+                mode: gix::objs::tree::EntryKind::Tree.into(),
+                filename: "forecast".into(),
+                oid: forecast_tree_id,
+            });
+            repo.write_object(&tree)
+                .expect("write weather tree")
+                .detach()
+        };
+        let root_tree_id = {
+            let mut tree = gix::objs::Tree::empty();
+            tree.entries.push(gix::objs::tree::Entry {
+                mode: gix::objs::tree::EntryKind::Blob.into(),
+                filename: "byonk-screens.yaml".into(),
+                oid: manifest_blob,
+            });
+            tree.entries.push(gix::objs::tree::Entry {
+                mode: gix::objs::tree::EntryKind::Tree.into(),
+                filename: "weather".into(),
+                oid: weather_tree_id,
+            });
+            repo.write_object(&tree).expect("write root tree").detach()
+        };
+
+        let mut config = repo.config_snapshot_mut();
+        config
+            .set_raw_value(&gix::config::tree::User::NAME, "byonk-test")
+            .expect("set user.name");
+        config
+            .set_raw_value(&gix::config::tree::User::EMAIL, "byonk-test@example.com")
+            .expect("set user.email");
+        config.commit().expect("commit config");
+
+        let commit_id = repo
+            .commit(
+                "HEAD",
+                "nested",
+                root_tree_id,
+                std::iter::empty::<gix::ObjectId>(),
+            )
+            .expect("commit fixture");
+        let branch = repo
+            .head_name()
+            .expect("read head")
+            .and_then(|n| n.shorten().to_str().ok().map(|s| s.to_string()))
+            .unwrap_or_else(|| "main".to_string());
+
+        let dest = tempdir_path("git_fetch_dest_nested");
+        let out = fetch(&dir.to_string_lossy(), &branch, None, &dest).expect("fetch nested");
+
+        assert_eq!(out.resolved_sha, commit_id.to_string());
+        assert!(dest.join("weather/forecast/meta.yaml").is_file());
+        assert_eq!(
+            std::fs::read_to_string(dest.join("weather/forecast/meta.yaml")).unwrap(),
+            "title: F\n"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&dest).ok();
     }
 
     #[test]

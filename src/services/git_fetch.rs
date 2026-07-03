@@ -66,6 +66,14 @@ fn git_err(msg: impl Into<String>) -> FetchError {
     FetchError::Git(redact_userinfo(msg.into()))
 }
 
+/// Build a [`FetchError::PinNotFound`], redacting any userinfo embedded in
+/// `repo` first — same rationale as [`git_err`]: a user who hand-embeds
+/// `https://user:pass@host` in a package's `repo` config must never have
+/// that credential echoed back into `status.error` / `GET /packages`.
+fn pin_not_found(pin: &str, repo: &str) -> FetchError {
+    FetchError::PinNotFound(pin.to_string(), redact_userinfo(repo.to_string()))
+}
+
 /// Strip `userinfo@` from every `scheme://userinfo@host/...` occurrence in
 /// `s`, replacing it with a fixed `***@` placeholder so no credential can
 /// survive into a displayed/logged error. Structural (scans for `://` then a
@@ -157,8 +165,7 @@ fn fetch_into(
         .fetch_only(gix::progress::Discard, &interrupt)
         .map_err(|e| git_err(format!("fetching {repo}: {e}")))?;
 
-    let (oid, pin_kind) = resolve_pin(&git_repo, pin)
-        .ok_or_else(|| FetchError::PinNotFound(pin.to_string(), repo.to_string()))?;
+    let (oid, pin_kind) = resolve_pin(&git_repo, pin).ok_or_else(|| pin_not_found(pin, repo))?;
 
     export_tree(&git_repo, oid, dest)
         .map_err(|e| git_err(format!("checking out {pin} ({oid}): {e}")))?;
@@ -284,6 +291,22 @@ mod tests {
     fn test_redact_userinfo_passes_through_no_userinfo() {
         let input = "fetching https://github.com/o/r.git: connection refused".to_string();
         assert_eq!(redact_userinfo(input.clone()), input);
+    }
+
+    #[test]
+    fn test_pin_not_found_redacts_userinfo_in_repo() {
+        let err = pin_not_found(
+            "no-such-ref",
+            "https://x-access-token:SECRET@github.com/o/r.git",
+        );
+        match err {
+            FetchError::PinNotFound(pin, repo) => {
+                assert_eq!(pin, "no-such-ref");
+                assert!(!repo.contains("SECRET"), "token leaked into repo: {repo}");
+                assert_eq!(repo, "https://***@github.com/o/r.git");
+            }
+            other => panic!("expected PinNotFound, got {other:?}"),
+        }
     }
 
     #[test]

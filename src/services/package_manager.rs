@@ -24,7 +24,7 @@ use chrono::Utc;
 use crate::assets::AssetLoader;
 use crate::models::config::PackageRef;
 use crate::server::SharedConfig;
-use crate::services::git_fetch::{self, FetchError};
+use crate::services::git_fetch;
 use crate::services::package_cache::PackageCache;
 use crate::services::package_loader::{PackageLoader, BUILTIN_HANDLE};
 use crate::services::package_status::{PackageState, PackageStatus};
@@ -152,6 +152,23 @@ impl PackageManager {
         match outcome {
             Ok(fetched) => {
                 let dest = self.cache.checkout_dir(&repo, &fetched.resolved_sha);
+                if self.cache.has(&repo, &fetched.resolved_sha) {
+                    // The branch/tag resolved to a sha we already have on disk — the
+                    // cached tree is byte-identical (content-addressed). Discard
+                    // scratch and mark Ready WITHOUT touching the live checkout dir:
+                    // no teardown window, no needless rewrite, and a concurrent
+                    // same-handle refresh can't race the move.
+                    cleanup_scratch(&scratch);
+                    self.update_status(handle, |st| {
+                        st.state = Some(PackageState::Ready);
+                        st.resolved_sha = Some(fetched.resolved_sha.clone());
+                        st.pin_kind = Some(fetched.pin_kind);
+                        st.last_fetched = Some(Utc::now());
+                        st.error = None;
+                    });
+                    self.rebuild_loader();
+                    return;
+                }
                 if let Err(e) = move_dir(&scratch, &dest) {
                     cleanup_scratch(&scratch);
                     // A fetch that succeeded but couldn't be installed is
@@ -177,7 +194,7 @@ impl PackageManager {
             }
             Err(e) => {
                 cleanup_scratch(&scratch);
-                let message = fetch_error_message(&e);
+                let message = e.to_string();
                 let state = self.state_after_post_fetch_failure(handle, &repo);
                 self.update_status(handle, |st| {
                     st.state = Some(state);
@@ -218,6 +235,13 @@ impl PackageManager {
     /// Snapshot of per-handle status for `GET /packages`.
     pub fn status_snapshot(&self) -> HashMap<String, PackageStatus> {
         self.lock_status().clone()
+    }
+
+    /// Remove `handle`'s fetch status entry, e.g. after `delete_package` so a
+    /// later re-registration of the same handle doesn't briefly surface the
+    /// stale `resolved_sha`/`Ready` state from the deleted package.
+    pub fn forget_status(&self, handle: &str) {
+        self.lock_status().remove(handle);
     }
 
     /// True only when `handle`'s configured pin is a sha (immutable) *and*
@@ -270,19 +294,17 @@ impl PackageManager {
     }
 }
 
-/// A short-lived, process+time-unique name for a scratch checkout dir.
+/// A short-lived, process+time+random-unique name for a scratch checkout
+/// dir. The random component (matching `git_fetch::scratch_dir` and the test
+/// helper `tempdir_path`) guards against two same-nanosecond scratch dirs
+/// colliding.
 fn scratch_name() -> String {
     format!(
-        "_tmp-{}-{}",
+        "_tmp-{}-{}-{}",
         std::process::id(),
-        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+        rand::random::<u64>()
     )
-}
-
-/// Human-readable message for a `FetchError`, kept separate from `Display`
-/// only so call sites don't need to import the error type themselves.
-fn fetch_error_message(e: &FetchError) -> String {
-    e.to_string()
 }
 
 /// Move a directory tree from `from` to `to`. Tries a plain rename first
@@ -507,6 +529,59 @@ mod tests {
         assert!(st.last_fetched.is_some());
 
         assert!(mgr.loader().resolve("weather/weather/forecast").is_some());
+
+        let _ = fs::remove_dir_all(&src.url);
+    }
+
+    #[test]
+    fn test_refresh_one_does_not_tear_down_live_checkout_when_branch_resolves_to_cached_sha() {
+        // Fix: a branch/tag pin that resolves to a sha we already have on
+        // disk must NOT go through `move_dir` (remove_dir_all + rename) on
+        // the live checkout dir — that would open a window where a
+        // concurrent reader sees a vanished file, and risks losing the
+        // checkout entirely if the rename half fails. Prove it by planting a
+        // sentinel file in the live checkout dir and confirming a second
+        // `refresh_one` (branch unchanged, same resolved sha) leaves it
+        // untouched.
+        let src = make_fixture_repo();
+        let mut packages = HashMap::new();
+        packages.insert(
+            "weather".to_string(),
+            PackageRef {
+                repo: Some(src.url.clone()),
+                pin: Some(src.branch.clone()),
+                token: None,
+            },
+        );
+        let config = shared_config(packages);
+        let cache_root = tempdir_path("pkgmgr_cache_no_teardown");
+        let cache = PackageCache::new(cache_root.clone());
+
+        let mgr = PackageManager::new(asset_loader(), config, cache, HashMap::new());
+        mgr.refresh_one("weather");
+        let sha = mgr
+            .status_snapshot()
+            .get("weather")
+            .and_then(|s| s.resolved_sha.clone())
+            .expect("resolved after first refresh_one");
+        assert_eq!(sha, src.head_sha);
+
+        let probe_cache = PackageCache::new(cache_root);
+        let dest = probe_cache.checkout_dir(&src.url, &sha);
+        let sentinel = dest.join("_sentinel");
+        fs::write(&sentinel, b"x").unwrap();
+        assert!(sentinel.exists(), "sentinel written into live checkout");
+
+        // Branch hasn't moved, so this resolves to the same sha again.
+        mgr.refresh_one("weather");
+        let status = mgr.status_snapshot();
+        let st = status.get("weather").unwrap();
+        assert_eq!(st.state, Some(PackageState::Ready));
+        assert_eq!(st.resolved_sha.as_deref(), Some(src.head_sha.as_str()));
+        assert!(
+            sentinel.exists(),
+            "live checkout dir was torn down by a refresh that resolved to an already-cached sha"
+        );
 
         let _ = fs::remove_dir_all(&src.url);
     }
@@ -810,5 +885,23 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&src.url);
+    }
+
+    #[test]
+    fn test_forget_status_clears_entry() {
+        let mut packages = HashMap::new();
+        packages.insert("acme".to_string(), PackageRef::default());
+        let config = shared_config(packages);
+        let cache = PackageCache::new(tempdir_path("pkgmgr_cache_forget"));
+
+        let mgr = PackageManager::new(asset_loader(), config, cache, HashMap::new());
+        mgr.update_status("acme", |st| {
+            st.state = Some(PackageState::Ready);
+            st.resolved_sha = Some("deadbeef".to_string());
+        });
+        assert!(mgr.status_snapshot().contains_key("acme"));
+
+        mgr.forget_status("acme");
+        assert!(!mgr.status_snapshot().contains_key("acme"));
     }
 }

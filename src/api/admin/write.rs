@@ -471,9 +471,8 @@ pub async fn delete_package(
 
     // Reject if any device's screen dangles into this package's namespace.
     let prefix = format!("{handle}/");
-    if let Some((device_key, _)) = state
-        .config
-        .load()
+    let config = state.config.load();
+    if let Some((device_key, _)) = config
         .devices
         .iter()
         .find(|(_, d)| d.screen.starts_with(&prefix))
@@ -483,6 +482,28 @@ pub async fn delete_package(
             "package `{handle}` is referenced by device `{device_key}`"
         )));
     }
+    // Also reject if the global default screen or the registration screen
+    // dangles into this package's namespace.
+    if config
+        .default_screen
+        .as_deref()
+        .is_some_and(|s| s.starts_with(&prefix))
+    {
+        return Err(ApiError::Conflict(format!(
+            "cannot delete package `{handle}`: referenced by default_screen"
+        )));
+    }
+    if config
+        .registration
+        .screen
+        .as_deref()
+        .is_some_and(|s| s.starts_with(&prefix))
+    {
+        return Err(ApiError::Conflict(format!(
+            "cannot delete package `{handle}`: referenced by registration.screen"
+        )));
+    }
+    drop(config);
 
     let yaml = state
         .asset_loader
@@ -495,6 +516,10 @@ pub async fn delete_package(
     };
     persist(&state, &path, new_yaml)?;
 
+    // Forget the deleted handle's fetch status so a later re-registration of
+    // the same handle doesn't briefly surface the stale resolved_sha/Ready
+    // state left over from the deleted package.
+    state.package_manager.forget_status(&handle);
     // Rebuild the hot-swapped loader so the deleted handle's screens stop
     // resolving immediately (in-memory only; not blocking).
     state.package_manager.rebuild_loader();

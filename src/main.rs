@@ -704,7 +704,9 @@ async fn run_server() -> anyhow::Result<()> {
                 tracing::debug!("Periodic package refresh tick");
                 let m = mgr.clone();
                 // Blocking git work off the async executor.
-                let _ = tokio::task::spawn_blocking(move || m.refresh_all(false)).await;
+                if let Err(e) = tokio::task::spawn_blocking(move || m.refresh_all(false)).await {
+                    tracing::warn!(error = %e, "periodic package refresh task panicked");
+                }
             }
         });
     }

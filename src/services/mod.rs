@@ -6,6 +6,7 @@ pub mod file_watcher;
 pub mod git_fetch;
 pub mod http_cache;
 pub mod lua_runtime;
+pub mod package_cache;
 pub mod package_loader;
 pub mod renderer;
 pub mod template_service;

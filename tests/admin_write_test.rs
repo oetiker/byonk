@@ -405,6 +405,27 @@ async fn test_patch_settings_registration_screen_persists() {
 }
 
 #[tokio::test]
+async fn test_patch_settings_package_refresh_interval_persists() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
+
+    let resp = app
+        .patch_json(
+            "/api/admin/settings",
+            &[AUTH],
+            r#"{"package_refresh_interval":3600}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::OK);
+
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        on_disk.contains("package_refresh_interval: 3600"),
+        "expected 'package_refresh_interval: 3600' in:\n{on_disk}"
+    );
+}
+
+#[tokio::test]
 async fn test_patch_settings_registration_screen_empty_is_builtin_sentinel() {
     let dir = tempfile::tempdir().unwrap();
     let (app, path) = TestApp::new_admin_with_file("secret", dir.path());

@@ -244,6 +244,7 @@ pub struct SettingsWrite {
     pub(crate) auth_mode: Option<String>,
     pub(crate) default_screen: Option<String>,
     pub(crate) registration_screen: Option<String>,
+    pub(crate) package_refresh_interval: Option<u64>,
 }
 
 pub async fn patch_settings(
@@ -296,6 +297,10 @@ pub async fn patch_settings(
         yaml =
             config_writer::set_scalar(&yaml, &["registration", "screen"], screen.as_str().into())
                 .map_err(|e| ApiError::Internal(e.to_string()))?;
+    }
+    if let Some(secs) = body.package_refresh_interval {
+        yaml = config_writer::set_scalar(&yaml, &["package_refresh_interval"], secs.into())
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
 
     // 3. Persist.

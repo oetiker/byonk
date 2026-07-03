@@ -685,6 +685,30 @@ async fn run_server() -> anyhow::Result<()> {
     byonk::addon_options::apply_to_config(&addon, &mut config);
     let state = server::create_app_state_with_config(asset_loader, config)?;
 
+    // Periodic package refresh: re-fetches mutable (tag/branch) package pins
+    // on a config-driven interval. Spawned unconditionally (not gated on the
+    // interval being >0 at startup) so that enabling it later via a settings
+    // PATCH takes effect without a restart — the loop re-reads the interval
+    // from the live config each iteration.
+    {
+        let mgr = state.package_manager.clone();
+        let cfg = state.config.clone();
+        tokio::spawn(async move {
+            loop {
+                let secs = cfg.load().package_refresh_interval;
+                if secs == 0 {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    continue;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                tracing::debug!("Periodic package refresh tick");
+                let m = mgr.clone();
+                // Blocking git work off the async executor.
+                let _ = tokio::task::spawn_blocking(move || m.refresh_all(false)).await;
+            }
+        });
+    }
+
     // Build router: start with shared API routes, add production-only routes
     let app = server::build_router(state)
         // OpenAPI documentation (production only)

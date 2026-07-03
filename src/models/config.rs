@@ -192,6 +192,11 @@ pub struct AppConfig {
     /// Screen package registry
     #[serde(default)]
     pub packages: HashMap<String, PackageRef>,
+
+    /// Interval (seconds) at which mutable (tag/branch) package pins are
+    /// re-fetched by a background task. `0` disables periodic refresh.
+    #[serde(default)]
+    pub package_refresh_interval: u64,
 }
 
 /// Panel profile with official and measured display colors
@@ -396,6 +401,7 @@ impl Default for AppConfig {
             auth_mode: default_auth_mode(),
             admin: AdminConfig::default(),
             packages: HashMap::new(),
+            package_refresh_interval: 0,
         }
     }
 }
@@ -424,6 +430,12 @@ mod tests {
         );
         assert!(config.devices.is_empty());
         assert!(config.packages.is_empty());
+    }
+
+    #[test]
+    fn test_package_refresh_interval_defaults_zero() {
+        let c: AppConfig = serde_yaml::from_str("auth_mode: api_key\n").unwrap();
+        assert_eq!(c.package_refresh_interval, 0);
     }
 
     #[test]

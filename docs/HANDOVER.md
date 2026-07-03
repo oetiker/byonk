@@ -1,118 +1,104 @@
 # Handover — Byonk
 
-_Last updated: 2026-07-03 — **Screen Packages Plan 2 (distribution) is HALF DONE.** The core services layer (Tasks 1–4: git_fetch → cache → status → PackageManager) is implemented, reviewed, and green on branch `feat/screen-packages-p2-distribution`. **Tasks 5–10 remain** (AppState wiring → config_writer → refresh interval → write endpoints → GET status → docs). Everything is committed, **NOT pushed/merged**. HEAD `d9380c5`. Next session: **resume at Task 5** via subagent-driven-development. Plan 1 is done+deployed (history). HA Phase-6 findings still open, lower priority (bottom)._
+_Last updated: 2026-07-03 — **Screen Packages Plan 2 (distribution) is COMPLETE.** All 10 tasks + the final whole-branch Opus review + its fix wave are done, reviewed clean, and `make check`-green on branch `feat/screen-packages-p2-distribution` @ **`1b93e45`**. **Kept as a local branch — NOT pushed/merged** (user chose "keep as-is"). No Critical was ever found. Next session: decide integration (see "Integrating Plan 2"), and/or start **Plan 3 (HA Options Flow)**. Plan 1 is done (history on this branch). HA Phase-6 findings still open, lower priority (bottom)._
 
 ## TL;DR — resume here
 
-- **Active work: Screen Packages Plan 2 (distribution).** Being executed with `superpowers:subagent-driven-development` (fresh implementer + reviewer subagent per task, fix-wave loop, ledger-tracked).
-- **Branch `feat/screen-packages-p2-distribution`** cut from Plan 1's HEAD `9834bf7`. So it carries all Plan 1 + HA Phase 4/5 as ancestors. **HEAD `d9380c5`. Nothing pushed/merged.**
-- **DONE (Tasks 1–4, core services, all reviewed clean + `make check` green):**
-  1. `src/services/git_fetch.rs` — gix clone/fetch, resolve pin→sha, export tree to a clean dir (no `.git`). **No git2 fallback needed.**
-  2. `src/services/package_cache.rs` — checkout dirs keyed by repo+sha.
-  3. `src/services/package_status.rs` — `PackageState`/`PackageStatus` types.
-  4. `src/services/package_manager.rs` — `PackageManager`: fetch orchestration + per-handle status store + **hot-swappable `ArcSwap<PackageLoader>`** (this is the fix for Plan-1 follow-up #6).
-- **TODO (Tasks 5–10):** 5 AppState wiring · 6 config_writer upsert/remove_package · 7 package_refresh_interval + periodic tokio task · 8 package write endpoints · 9 enrich `GET /packages` · 10 docs/CHANGES/deploy.
-- **All task briefs already generated** in `.superpowers/sdd/task-{5..10}-brief.md` (the `subagent-driven-development` skill's `scripts/task-brief` regenerates them if needed).
+- **Plan 2 (git-backed screen-package distribution) shipped on `feat/screen-packages-p2-distribution` @ `1b93e45`.** Executed with `superpowers:subagent-driven-development` (fresh implementer + reviewer per task, fix waves, ledger-tracked). `make check` green, working tree clean.
+- **NOT pushed, NOT merged.** The branch's merge-base with `main` is `cfddbd4` (pre-Plan-1), so **`main` still lacks Plan 1 + HA Phase 4/5 too** — merging this branch to `main` brings in all of that plus Plan 2 (a large multi-feature merge). Reconcile that before merging.
+- **What Plan 2 added (the distribution feature):** registered packages (a package = a git repo) are fetched at a pin, cached by repo+sha, served through a hot-swappable loader, refreshed periodically, and managed over the token-gated admin API.
 
-## How to resume (do this first)
+## What shipped (Plan 2, Tasks 1–10, all reviewed clean)
 
-1. **Read the plan:** `docs/superpowers/plans/2026-07-03-screen-packages-p2-distribution.md` — 10 tasks, code-complete, TDD. Global Constraints block at top (pin semantics, cache, auth, PackageInfo shape) is the reviewer's attention lens.
-2. **Read the ledger:** `.superpowers/sdd/progress.md` — the **Plan 2 section at the bottom** has per-task review status, commit ranges, and tracked Minors. Trust it + `git log` over memory. Tasks 1–4 are marked COMPLETE — **do not re-dispatch them.**
-3. **Invoke `superpowers:subagent-driven-development`** and continue at **Task 5**. Per task: `scripts/task-brief PLAN N` → dispatch implementer (model per complexity) → `scripts/review-package BASE HEAD` (BASE = pre-task commit from ledger, never `HEAD~1`) → dispatch reviewer → fix-wave loop on Critical/Important → mark complete in ledger.
-4. After Task 10: **final whole-branch review** (opus) over `scripts/review-package 9834bf7 HEAD`, then `superpowers:finishing-a-development-branch`.
+Service layer:
+- `src/services/git_fetch.rs` — gix clone/fetch, resolve pin→sha, export tree to a clean dir (no `.git`). All git errors redacted of credentials (`redact_userinfo`, incl. `PinNotFound`). `PinKind{Sha,Tag,Branch,Embedded}` (snake_case; `Embedded` is an API-layer-only marker).
+- `src/services/package_cache.rs` — `PackageCache`, checkout dirs keyed by `repo+sha` (`checkout_dir`, `has` checks `byonk-screens.yaml`).
+- `src/services/package_status.rs` — `PackageState{Ready,Fetching,Error,Offline}`, `PackageStatus` (all-Option).
+- `src/services/package_manager.rs` — `PackageManager`: fetch orchestration, per-handle status store, hot-swappable `ArcSwap<PackageLoader>`. **All methods sync+blocking → call sites wrap in `spawn_blocking`.** Immutable-sha pins reused from disk; mutable tag/branch pins re-fetched; a fetch/install failure with a prior cached checkout → `Offline` (keeps serving). `refresh_one` **short-circuits `move_dir` when the resolved sha is already cached** (never tears down the live checkout). `forget_status(handle)` evicts on delete.
 
-## Plan 2 service interfaces (what Tasks 5–10 build on)
+Wiring & API:
+- `AppState.package_manager: Arc<PackageManager>` **replaced** `package_loader` crate-wide; all resolution via `state.package_manager.loader()` (fresh per request — no stale snapshots). `PACKAGES_CACHE_DIR` env (fallback `temp_dir()/byonk-packages`). `reload_config` calls `rebuild_loader()`. `build_package_manager` helper shared by server + CLI paths.
+- `src/services/config_writer.rs` — comment-preserving `upsert_package`/`remove_package` (device helpers generalized with a `section` param).
+- `AppConfig.package_refresh_interval: u64` (seconds; 0=disabled) + a periodic tokio task in `run_server` (spawned unconditionally; re-reads the interval each tick; `refresh_all(false)` in `spawn_blocking`; logs JoinError).
+- Admin endpoints (`src/api/admin/{write,read,mod}.rs`): `POST /packages`, `PATCH/DELETE /packages/:handle`, `POST /packages/:handle/update`, `POST /packages/update`, and enriched `GET /packages` (pin_kind/resolved_sha/status/last_fetched/error). Shared `build_package_info` builder. **Token never serialized** (only `token_set`). Delete rejects builtin + any handle referenced by a device, `default_screen`, or `registration.screen`.
+- `homeassistant/byonk/config.yaml` add-on manifest sets `PACKAGES_CACHE_DIR: /data/packages` (persistent). Docs in `docs/src/api/admin-api.md`, `docs/src/guide/ha-addon.md`, `CHANGES.md`.
 
-Verified signatures from the committed Tasks 1–4 — Task 5 wiring needs these:
+## Integrating Plan 2 (decision pending)
 
-- **git_fetch** (`src/services/git_fetch.rs`): `pub fn fetch(repo, pin, token: Option<&str>, dest: &Path) -> Result<FetchOutcome, FetchError>`; `pub fn looks_like_sha(pin) -> bool`; `PinKind{Sha,Tag,Branch}` (serde snake_case); `FetchOutcome{resolved_sha,pin_kind}`; `FetchError{Git(String),PinNotFound(String,String)}`. **All git error strings are redacted** through `git_err`/`redact_userinfo` (strips `user:pass@` userinfo) — tokens never leak into errors.
-- **package_cache**: `PackageCache::new(root: PathBuf)`, `.checkout_dir(repo,sha)->PathBuf` (= `root/<sha256(repo)[..8]>/<sha>`), `.has(repo,sha)->bool` (checks `byonk-screens.yaml` exists).
-- **package_status**: `PackageState{Ready,Fetching,Error,Offline}` (snake_case); `PackageStatus{state:Option<PackageState>, resolved_sha:Option<String>, last_fetched:Option<DateTime<Utc>>, error:Option<String>, pin_kind:Option<PinKind>}` (Default = all None).
-- **PackageManager** (`src/services/package_manager.rs`): `PackageManager::new(asset_loader: Arc<AssetLoader>, config: SharedConfig, cache: PackageCache, extra_disk: HashMap<String,PathBuf>) -> Arc<Self>`; `.loader() -> Arc<PackageLoader>` (cheap per-resolve snapshot via `ArcSwap::load_full`); `.refresh_one(&handle)`; `.refresh_all(force: bool)`; `.rebuild_loader()`; `.status_snapshot() -> HashMap<String,PackageStatus>`. **Methods are sync + blocking** — call sites (Tasks 7/8) MUST wrap in `tokio::task::spawn_blocking`. Never panic (poison-safe locking; mutex never held across the blocking fetch).
-  - Behaviors locked in by review: immutable-sha pins are reused from disk (survive restart, never re-fetched); `refresh_all(false)` skips only immutable-sha-cached handles so **tag/branch pins re-fetch every tick** (Task 7 depends on this); a fetch/install failure with a prior cached checkout → `Offline` (keeps serving), else `Error`; missing pin currently defaults to `"main"` (Minor — see below).
+The branch is kept as-is. To integrate later, use `superpowers:finishing-a-development-branch`. Options: push+PR against `main`, or merge locally. **Before either**, note the merge scope caveat above (Plan 1 + HA phases + Plan 2 all land together relative to `main`). If you want Plan 2 on `main` in isolation, you'd first need Plan 1 / HA-phase branches merged to `main` (or a rebase strategy).
 
-### Plan-1 interfaces the wiring touches (unchanged)
-- `PackageLoader::new(asset_loader: Arc<AssetLoader>, disk_packages: HashMap<String,PathBuf>) -> Self` (adds `byonk-builtin` embedded inside `new`); `.resolve(&str)`, `.list_all()`, `.handles()`. `BUILTIN_HANDLE = "byonk-builtin"`.
-- `src/server.rs`: today `AppState.package_loader: Arc<PackageLoader>`, built by `build_package_loader(asset_loader, &config)` + `collect_disk_packages(dir, &config.packages)` from `PACKAGES_DIR`; `create_app_state_with_overrides`; `reload_config`. **Task 5 replaces `package_loader` with `package_manager` crate-wide.**
-- `src/services/content_pipeline.rs` holds an `Arc<PackageLoader>` and calls `.resolve(...)` — Task 5 changes it to hold `Arc<PackageManager>` and call `.loader().resolve(...)` per request.
-- `src/models/config.rs`: `PackageRef{repo:Option<String>,pin:Option<String>,token:Option<String>}`; `AppConfig.packages: HashMap<String,PackageRef>`; `SharedConfig = Arc<ArcSwap<AppConfig>>`.
+**Post-merge live test (important):** the HA VM still runs the **Plan-1** build. After Plan 2 lands, re-run `SMB_USER=byonk SMB_PASS=byonk make ha-rebuild` (Rust change → add-on rebuild), then `ha addons start local_byonk`. Verify with `curl :3000/api/admin/packages` → **401** (proves new binary live) and byonk `/health` → 200. **Never read/print the admin token.**
 
-## Tracked Minors (non-blocking — final-review triage)
+## Deferred Minors (non-blocking fast-follow — in the SDD ledger)
 
-From Tasks 1–4 reviews, deferred not dropped (all in the ledger):
+None are Critical or Important; the final review triaged all as fast-follow:
 - **git_fetch:** symlinks written as plain files; submodule/gitlink entries skipped (documented); `dest` not cleaned on partial `fetch_into` failure (self-heals next fetch); SSH-URL auth untested.
-- **PackageManager:** missing-pin defaults to `"main"` (confirm vs Task 8 whether `pin` is required at register — could be dead default); `fetch_error_message` is a needless wrapper (its doc rationale is wrong — `FetchError` is already imported); **no same-handle concurrency guard** — a manual admin refresh racing a periodic tick could race `move_dir` on the same dest sha dir (worth a per-handle lock, likely in Task 8).
-- **CHANGES.md** entry for the whole distribution feature is deferred to **Task 10** (git_fetch/cache/manager aren't user-visible until endpoints land).
+- **config_writer:** no package test for the present-with-entries insert path (device path covers identical code); the section-absent arm now creates a missing `devices:`/`packages:` section instead of erroring (untested, benign); no package test asserts comment preservation for packages.
+- **endpoints/tests:** the `admin_packages_test` cases POST/PATCH real repo strings, firing an un-awaited `spawn_blocking(refresh_one)` → a real git fetch to a nonexistent remote (possible CI latency/flakiness — inject a fake fetcher).
+- **PackageManager:** missing-pin defaults to `"main"` (live default — pin not required at register).
 
-## Two things to eyeball during Tasks 5/10
+## Next initiative — Plan 3 (HA Options Flow), NOT WRITTEN
 
-- **`PACKAGES_CACHE_DIR`** (Task 5 env, Task 10 add-on): must point at the add-on's **persistent `/data`** (e.g. `/data/packages`), else the cache is a temp dir re-fetched after every restart. Task 5 fallback is `std::env::temp_dir().join("byonk-packages")`.
-- **`reload_config`** must call `state.package_manager.rebuild_loader()` after storing new config (Task 5) so a `packages:` edit takes effect without restart.
+Spec §9a.4. Move package config (repo/pin/token registry, default screen, auth mode) into a config-entry Options Flow; add hub-device status entities (per-package fetch-status sensors + an "Update packages" button). **Depends on Plan 2's write API (now shipped).** Start with `superpowers:brainstorming` → spec → `superpowers:writing-plans`.
 
 ---
 
 ## Screen Packages — the big picture (spec + plans)
 
 - **Spec:** `docs/superpowers/specs/2026-07-02-screen-packages-design.md` (format, sharing/resolution, registry/addressing, compat, **distribution §8**, **admin API §9a**, HA config placement §9a.4, migration §7).
-- **A package = a git repo** (atomic versioned unit); **a screen = any dir with `meta.yaml`** (+ `script.lua` + `screen.svg`), addressed **`handle/path`**. Repo root has mandatory `byonk-screens.yaml`. **`byonk-builtin`** is embedded (rust-embed), always registered, never fetched. Registry = `packages:` in config (`handle → {repo, pin, token?}`).
-- **Plan 1 (format & loader): DONE + deployed** to the HA VM (13 tasks, whole-branch opus review clean). byonk is `0.16.0-dev`; the 11 built-ins were migrated into the embedded `byonk-builtin` package. Clean break — no legacy reader, no bare names, no `@params`. This is committed history now; details in git + `.superpowers/sdd/progress.md` (Plan 1 section).
-- **Plan 2 (distribution): IN PROGRESS** (this handover) — `docs/superpowers/plans/2026-07-03-screen-packages-p2-distribution.md`.
-- **Plan 3 (HA Options Flow): NOT WRITTEN** (spec §9a.4) — move package config (repo/pin/token registry, default screen, auth mode) into a config-entry Options Flow; add hub-device status entities (per-package fetch-status sensors + "Update packages" button). Depends on Plan 2's write API.
+- **A package = a git repo** (atomic versioned unit); **a screen = any dir with `meta.yaml`** (+ `script.lua` + `screen.svg`), addressed **`handle/path`**. Repo root has mandatory `byonk-screens.yaml`. **`byonk-builtin`** is embedded (rust-embed), always registered, never fetched, cannot be deleted. Registry = `packages:` in config (`handle → {repo, pin, token?}`).
+- **Plan 1 (format & loader): DONE.** 13 tasks, whole-branch review clean; 11 built-ins migrated into the embedded `byonk-builtin` package. Clean break — no legacy reader, no bare names, no `@params`. History on this branch (details in git + `.superpowers/sdd/progress.md` Plan 1 section).
+- **Plan 2 (distribution): DONE** (this handover) — `docs/superpowers/plans/2026-07-03-screen-packages-p2-distribution.md`. Global Constraints block (pin semantics, cache, auth/redaction, `byonk-builtin`, `PackageInfo` shape) at the top.
+- **Plan 3 (HA Options Flow): NOT WRITTEN** (spec §9a.4) — see above.
 
-## The admin API the HA integration consumes (post-Plan-1; Plan 2 extends)
-
-Token-gated `/api/admin/*` (bearer; 404 when no token configured, 401 when wrong):
+## The admin API (token-gated `/api/admin/*`; bearer; 404 when no token, 401 when wrong)
 
 | Method + path | Purpose |
 |---|---|
-| `GET /api/admin/devices` | configured + seen devices, telemetry + resolved screen/dither/panel |
-| `GET /api/admin/pending` | connected-but-unregistered devices (+ code) |
-| `GET /api/admin/config` | effective config JSON (**`admin.token` + `packages.*.token` stripped**) |
-| `GET /api/admin/screens` | **package-grouped**: `{ packages:[{handle,name,description,author,license, screens:[{ref,title,description,params,byonk,compat_warning}]}], panels, dither_algorithms }` |
-| `GET /api/admin/packages` | registered packages; **Plan 2 Task 9 enriches** with `pin_kind`/`resolved_sha`/`status`/`last_fetched`/`error` (+ existing `handle,repo,pin,builtin,token_set,screen_count`) |
-| `POST/PATCH/DELETE /api/admin/devices[/:key]` | device→screen mapping (`screen` is a `handle/path` ref) |
-| `PATCH /api/admin/settings` | registration, auth_mode, default_screen, registration_screen; **Plan 2 Task 7 adds** `package_refresh_interval` |
-| **Plan 2 Task 8:** `POST/PATCH/DELETE /packages[/:handle]`, `POST /packages[/:handle]/update`, `POST /packages/update` | package management (register/patch/delete/refresh) |
+| `GET /devices` · `GET /pending` · `GET /config` (secrets stripped) | device/config reads |
+| `GET /screens` | package-grouped screens + panels + dither_algorithms |
+| `GET /packages` | registered packages; enriched with `pin_kind`/`resolved_sha`/`status`/`last_fetched`/`error` (+ `handle,repo,pin,builtin,token_set,screen_count`) |
+| `POST/PATCH/DELETE /devices[/:key]` | device→screen mapping |
+| `PATCH /settings` | registration, auth_mode, default_screen, registration_screen, **package_refresh_interval** |
+| `POST /packages` · `PATCH/DELETE /packages/:handle` · `POST /packages/:handle/update` · `POST /packages/update` | package register/patch/delete/refresh (update endpoints are fire-and-forget — client polls `GET /packages`) |
 
-Comment-preserving `config.yaml` writes via `config_writer` (device-keyed helpers; **Plan 2 Task 6 adds `upsert_package`/`remove_package`**). Hot-reload via `reload_config` (arc-swap).
+Comment-preserving `config.yaml` writes via `config_writer` (device- and package-keyed helpers). Hot-reload via `reload_config` (arc-swap) + `rebuild_loader`.
 
 ## Build / verify
 
-- `make check` — Rust fmt + clippy (`-D warnings`) + tests. **Green at HEAD `d9380c5`.**
-- `make ha-setup` (one-time: `.venv` via uv, **Py ≤ 3.13**), then `make ha-check` (ruff `custom_components/byonk` + `pytest tests_ha`, 65 tests). `tests_ha/` is not in the ruff target — run `.venv/bin/ruff check tests_ha` separately.
-- `make docs` — mdBook build. (Task 10 touches `docs/src/api/admin-api.md`.)
-- Env vars: `CONFIG_FILE`, `SCREENS_DIR`, `FONTS_DIR`, **`PACKAGES_DIR`** (Plan 1: on-disk non-builtin dev packages, `handle → <dir>/<handle>`), **`PACKAGES_CACHE_DIR`** (Plan 2: git checkout cache — wired in Task 5).
+- `make check` — Rust fmt + clippy (`-D warnings`) + tests. **Green at HEAD `1b93e45`.**
+- `make ha-setup` (one-time: `.venv` via uv, **Py ≤ 3.13**), then `make ha-check` (ruff `custom_components/byonk` + `pytest tests_ha`). `tests_ha/` isn't in the ruff target — run `.venv/bin/ruff check tests_ha` separately.
+- `make docs` — mdBook build (green).
+- Env vars: `CONFIG_FILE`, `SCREENS_DIR`, `FONTS_DIR`, **`PACKAGES_DIR`** (on-disk dev packages, `handle → <dir>/<handle>`), **`PACKAGES_CACHE_DIR`** (git checkout cache; add-on → `/data/packages`).
 
 ## Config files (important distinction)
 
 - **`config.yaml`** = developer's local test config (demo devices). Used by `make run`/`watch`.
 - **`default-config.yaml`** = shipped/embedded default (device-free; `screens: {}`; `default_screen: byonk-builtin/default`). Embedded by `src/assets.rs` + copied into Docker images.
 
-## Deploying screen-packages to the HA VM (Rust change → add-on rebuild)
+## Deploying to the HA VM (Rust change → add-on rebuild)
 
-A screen-packages change is a **Rust** change → needs an **add-on rebuild**, not just a screen-file sync.
-
-- **byonk server:** `SMB_USER=byonk SMB_PASS=byonk make ha-rebuild` (rsyncs source + `SCREENS_DIR` + `ha addons rebuild`). Gotchas fixed in the live VM: `rebuild.sh` syncs **`byonk-base/`** (embedded at compile time); the add-on **Dockerfile** needs `COPY byonk-base ./byonk-base` in the builder stage. **Durability gap: the add-on Dockerfile is NOT tracked in the repo** — a VM rebuild-from-scratch regresses it (follow-up). `ha addons …` is deprecated → `ha apps …`. A rebuild can leave the add-on stopped — `ha addons start local_byonk` after. Transient Docker Hub 500s — retry. **Plan 2 also needs `PACKAGES_CACHE_DIR=/data/packages` set in the add-on run config (Task 10).**
-- **Integration:** `SMB_USER=byonk SMB_PASS=byonk make ha-deploy`, then restart HA core (`make ha-ssh CMD="ha core restart"`).
-- **Verify without the token:** `curl :3000/api/admin/packages` → **401** proves the new binary is live; byonk `/health` → 200. **Never read/print the admin token** — verify via the HA UI / entities.
+- **byonk server:** `SMB_USER=byonk SMB_PASS=byonk make ha-rebuild` (rsyncs source + `SCREENS_DIR` + `ha addons rebuild`). Gotchas: `rebuild.sh` syncs `byonk-base/`; the add-on **Dockerfile** needs `COPY byonk-base ./byonk-base`. **Durability gap: the add-on Dockerfile is NOT tracked in the repo** — a VM rebuild-from-scratch regresses it. `ha addons …` is deprecated → `ha apps …`. A rebuild can leave the add-on stopped — `ha addons start local_byonk` after. Transient Docker Hub 500s — retry. Plan 2 add-on run config now carries `PACKAGES_CACHE_DIR=/data/packages` (tracked in `homeassistant/byonk/config.yaml`).
+- **Integration:** `SMB_USER=byonk SMB_PASS=byonk make ha-deploy`, then `make ha-ssh CMD="ha core restart"`.
+- **Verify without the token:** `curl :3000/api/admin/packages` → **401** proves the new binary is live; `/health` → 200. **Never read/print the admin token.**
 
 ## Current VM state
 
-HAOS VM (qemu detached); HA `:8123` (German UI, owner `byonk`/`byonk`). `local_byonk` add-on on `:3000` = **byonk `0.16.0-dev`, Plan-1 package format**, `state: started`. Config cleaned to `byonk-builtin/…` refs, 4 devices remapped (backup `config.yaml.bak-prepkg`). HA has the updated integration loaded. **This VM does NOT yet have Plan 2** — it runs the Plan-1 build; re-`make ha-rebuild` after Plan 2 lands to test distribution live.
+HAOS VM (qemu detached); HA `:8123` (German UI, owner `byonk`/`byonk`). `local_byonk` add-on on `:3000` = **byonk `0.16.0-dev`, Plan-1 package format**, `state: started`. **This VM does NOT yet have Plan 2** — re-`make ha-rebuild` after Plan 2 lands to test distribution live.
 
 ## Test harness (`tools/ha-vm/`)
 
 Scripted headless HAOS in QEMU on macOS (Apple Silicon). See `tools/ha-vm/README.md`.
 - **Boot:** `make ha-vm` (hostfwd 8123/3000/4445/2222). Stop `make ha-vm-stop`; reset `make ha-vm-clean`. Detached: `nohup make ha-vm > tools/ha-vm/work/boot.log 2>&1 & disown`.
-- **SSH** (key at `tools/ha-vm/ssh/` — gitignored, never commit): `make ha-ssh` / `make ha-ssh CMD="…"`. Handy: `ha addons info/logs local_byonk`, `ha supervisor logs`, `ha core restart`.
-- **Samba** (creds `byonk`/`byonk`, port 4445): `addons` (build context + Dockerfile), `addon_configs` (runtime config `addon_configs/local_byonk/config.yaml` + `screens/`), `config` (HA `/config` → `custom_components/byonk`).
-- **Driving HA from Chrome** (`mcp__claude-in-chrome` + page `hass`): `config_entries/get`, `supervisor/api`; token in add-on options usable in-page as `window.__tok`; byonk's admin API is CORS-blocked from the HA page — check host-side via `curl :3000/api/admin/…`.
+- **SSH** (key at `tools/ha-vm/ssh/` — gitignored, never commit): `make ha-ssh` / `make ha-ssh CMD="…"`.
+- **Samba** (creds `byonk`/`byonk`, port 4445): `addons` (build context + Dockerfile), `addon_configs` (runtime config + `screens/`), `config` (HA `/config`).
+- **Note:** the add-on's own `config.yaml`/Dockerfile under `tools/ha-vm/work/` is **gitignored staging** — the tracked add-on manifest is `homeassistant/byonk/config.yaml`.
 
-## Reference docs
+## Reference docs & ledger
 
 - Spec: `docs/superpowers/specs/2026-07-02-screen-packages-design.md`
-- Plans: `…/plans/2026-07-02-screen-packages-p1-format-loader.md` (done), `…/plans/2026-07-03-screen-packages-p2-distribution.md` (in progress).
-- SDD ledger (git-ignored): `.superpowers/sdd/progress.md` — Plan 1 + Plan 2 per-task reviews, commit ranges, follow-ups.
+- Plans: `…/plans/2026-07-02-screen-packages-p1-format-loader.md` (done), `…/plans/2026-07-03-screen-packages-p2-distribution.md` (done).
+- SDD ledger (git-ignored): `.superpowers/sdd/progress.md` — Plan 1 + Plan 2 per-task reviews, commit ranges, the final review + fix wave, and the consolidated deferred-Minors list.
 - HA phase specs/plans: `…/2026-06-{28,29,30}-byonk-homeassistant-phase{1..6}-*.md`; user docs `docs/src/…`; harness `tools/ha-vm/README.md`.
 
 ---
@@ -127,8 +113,8 @@ Independent of screen-packages, still unaddressed on this branch:
 
 ## Deferred / fast-follow (non-blocking)
 
-- **Plan 2 Minors** above (final-review triage).
-- **Plan 1 follow-ups:** #4 refresh precedence (new author's `meta.refresh` ignored unless Lua returns 0); #5 test-only `AssetScreensSource::read` lacks `is_safe_rel` guard. (#6 loader-rebuild-on-reload is being fixed BY Plan 2 Task 5.)
+- **Plan 2 deferred Minors** (above / in the ledger).
+- **Plan 1 follow-ups:** #4 refresh precedence (new author's `meta.refresh` ignored unless Lua returns 0); #5 test-only `AssetScreensSource::read` lacks `is_safe_rel` guard.
 - **Add-on Dockerfile not tracked in-repo** (durability) — `byonk-base` COPY lives only in the VM + gitignored staging.
 - **HA earlier-phase minors:** `require_admin` → middleware; `config_writer::set_scalar` swallows Replace error before Add; strike-dict stale-count micro-leak; `AddonOptions` redacting `Debug`.
-- **Phase 4 (not started):** add-on `version:` automation, HACS list + `home-assistant/brands` prep; a real byonk **release** so a published image exists (only then can the published-image add-on path be validated vs the from-source local build).
+- **Phase 4 (not started):** add-on `version:` automation, HACS list + `home-assistant/brands` prep; a real byonk **release** so a published image exists (only then can the published-image add-on path be validated).

@@ -459,6 +459,83 @@ mod build_package_info_tests {
         assert_eq!(info.last_fetched, None);
         assert_eq!(info.error, None);
     }
+
+    /// A `PackageRef` for a non-builtin handle, so `build_package_info`
+    /// exercises the status-mapping branch rather than the builtin shortcut.
+    fn config_with_weather() -> AppConfig {
+        let mut config = AppConfig::default();
+        config.packages.insert(
+            "weather".to_string(),
+            PackageRef {
+                repo: Some("github.com/x/y".to_string()),
+                pin: Some("main".to_string()),
+                token: None,
+            },
+        );
+        config
+    }
+
+    #[test]
+    fn entry_present_with_none_state_defaults_to_error() {
+        // The docstring's "defaulting to error if state is None" path — an
+        // entry exists but never reached a terminal state. Most likely to
+        // regress silently, so pin it down.
+        let config = config_with_weather();
+        let status = PackageStatus {
+            state: None,
+            resolved_sha: Some("abc123".to_string()),
+            last_fetched: None,
+            error: None,
+            pin_kind: Some(PinKind::Tag),
+        };
+        let info = build_package_info(&config, Some(&status), 0, "weather".to_string());
+        assert_eq!(info.status, "error");
+        // Other fields still copy through from the entry.
+        assert_eq!(info.pin_kind, Some(PinKind::Tag));
+        assert_eq!(info.resolved_sha, Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn state_serializes_to_snake_case_status_string() {
+        let config = config_with_weather();
+        for (state, expected) in [
+            (PackageState::Ready, "ready"),
+            (PackageState::Fetching, "fetching"),
+            (PackageState::Offline, "offline"),
+        ] {
+            let status = PackageStatus {
+                state: Some(state),
+                ..Default::default()
+            };
+            let info = build_package_info(&config, Some(&status), 0, "weather".to_string());
+            assert_eq!(info.status, expected, "state {state:?}");
+        }
+    }
+
+    #[test]
+    fn last_fetched_renders_as_rfc3339() {
+        use chrono::{DateTime, Utc};
+
+        let dt: DateTime<Utc> = DateTime::parse_from_rfc3339("2026-07-03T12:34:56+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        let config = config_with_weather();
+        let status = PackageStatus {
+            state: Some(PackageState::Ready),
+            last_fetched: Some(dt),
+            ..Default::default()
+        };
+        let info = build_package_info(&config, Some(&status), 0, "weather".to_string());
+
+        let rendered = info.last_fetched.expect("last_fetched present");
+        // Equals the canonical RFC3339 rendering...
+        assert_eq!(rendered, dt.to_rfc3339());
+        // ...and parses back to the same instant.
+        let reparsed = DateTime::parse_from_rfc3339(&rendered)
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(reparsed, dt);
+    }
 }
 
 /// List the registered screen packages. `byonk-builtin` is always present (it is

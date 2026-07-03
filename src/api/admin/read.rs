@@ -5,6 +5,7 @@ use serde::Serialize;
 
 use crate::error::ApiError;
 use crate::models::compat::{compat_warning, engine_version};
+use crate::models::config::AppConfig;
 use crate::models::param_schema::ParamField;
 use crate::server::AppState;
 use crate::services::DeviceRegistry;
@@ -307,6 +308,32 @@ pub async fn screens(
     }))
 }
 
+/// Build the `PackageInfo` for a single handle from the live config.
+///
+/// Shared by `packages()` (the read listing) and the package write handlers
+/// (`add`/`patch`/`update`), so both surfaces stay in sync. `status` is a
+/// placeholder (`"ready"`) in Plan 2 — real fetch-status enrichment
+/// (pin_kind/resolved_sha/last_fetched/error) is Task 9's job and should edit
+/// this one builder.
+pub(crate) fn build_package_info(
+    config: &AppConfig,
+    screen_count: usize,
+    handle: String,
+) -> PackageInfo {
+    let pkg = config.packages.get(&handle);
+    let repo = pkg.and_then(|p| p.repo.clone());
+    let builtin = handle == crate::services::package_loader::BUILTIN_HANDLE || repo.is_none();
+    PackageInfo {
+        repo,
+        pin: pkg.and_then(|p| p.pin.clone()),
+        builtin,
+        token_set: pkg.map(|p| p.token.is_some()).unwrap_or(false),
+        screen_count,
+        status: "ready".to_string(),
+        handle,
+    }
+}
+
 /// List the registered screen packages. `byonk-builtin` is always present (it is
 /// registered by the package loader even without a `packages:` config entry); any
 /// additional entries come from `config.packages`. The package `token` is never
@@ -333,19 +360,8 @@ pub async fn packages(
     let out = handles
         .into_iter()
         .map(|handle| {
-            let pkg = config.packages.get(&handle);
-            let repo = pkg.and_then(|p| p.repo.clone());
-            let builtin =
-                handle == crate::services::package_loader::BUILTIN_HANDLE || repo.is_none();
-            PackageInfo {
-                repo,
-                pin: pkg.and_then(|p| p.pin.clone()),
-                builtin,
-                token_set: pkg.map(|p| p.token.is_some()).unwrap_or(false),
-                screen_count: counts.get(&handle).copied().unwrap_or(0),
-                status: "ready".to_string(),
-                handle,
-            }
+            let count = counts.get(&handle).copied().unwrap_or(0);
+            build_package_info(&config, count, handle)
         })
         .collect();
 

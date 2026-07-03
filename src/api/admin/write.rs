@@ -12,7 +12,9 @@ use crate::error::ApiError;
 use crate::models::param_schema::validate_params;
 use crate::server::{reload_config, AppState};
 use crate::services::config_writer;
+use crate::services::package_loader::BUILTIN_HANDLE;
 
+use super::read::{build_package_info, PackageInfo};
 use super::require_admin;
 
 #[derive(Deserialize)]
@@ -305,5 +307,226 @@ pub async fn patch_settings(
 
     // 3. Persist.
     persist(&state, &path, yaml)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+pub struct PackageWrite {
+    pub handle: Option<String>,
+    pub repo: Option<String>,
+    pub pin: Option<String>,
+    pub token: Option<String>,
+}
+
+/// Number of screens currently resolved under `handle` (0 before the first
+/// successful fetch, since nothing is registered in the loader yet).
+fn package_screen_count(state: &AppState, handle: &str) -> usize {
+    state
+        .package_manager
+        .loader()
+        .list_all()
+        .into_iter()
+        .filter(|s| s.handle == handle)
+        .count()
+}
+
+/// Build a `serde_yaml::Mapping` package block from the given fields, omitting
+/// any that are `None` (so e.g. an absent `token` is never written as `null`).
+fn package_block(
+    repo: Option<&str>,
+    pin: Option<&str>,
+    token: Option<&str>,
+) -> serde_yaml::Mapping {
+    let mut m = serde_yaml::Mapping::new();
+    if let Some(r) = repo {
+        m.insert("repo".into(), r.into());
+    }
+    if let Some(p) = pin {
+        m.insert("pin".into(), p.into());
+    }
+    if let Some(t) = token {
+        m.insert("token".into(), t.into());
+    }
+    m
+}
+
+pub async fn add_package(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<PackageWrite>,
+) -> Result<Json<PackageInfo>, ApiError> {
+    require_admin(&state, &headers)?;
+    let path = require_file_config(&state)?;
+    let _guard = state.write_lock.lock().await;
+
+    let handle = body
+        .handle
+        .clone()
+        .ok_or_else(|| ApiError::BadRequest("`handle` is required".into()))?;
+
+    if handle == BUILTIN_HANDLE {
+        return Err(ApiError::Conflict(format!(
+            "`{handle}` is the reserved builtin package handle"
+        )));
+    }
+    if state.config.load().packages.contains_key(&handle) {
+        return Err(ApiError::Conflict(format!(
+            "package `{handle}` already exists"
+        )));
+    }
+
+    let block = package_block(
+        body.repo.as_deref(),
+        body.pin.as_deref(),
+        body.token.as_deref(),
+    );
+    let yaml = state
+        .asset_loader
+        .read_config_string()
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let new_yaml = config_writer::upsert_package(&yaml, &handle, &block)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    persist(&state, &path, new_yaml)?;
+
+    // Fetch asynchronously; the response reflects the registry entry as it
+    // stands right now (status enrichment lands in Task 9).
+    let mgr = state.package_manager.clone();
+    let h = handle.clone();
+    tokio::task::spawn_blocking(move || mgr.refresh_one(&h));
+
+    let count = package_screen_count(&state, &handle);
+    let info = build_package_info(&state.config.load(), count, handle);
+    Ok(Json(info))
+}
+
+pub async fn patch_package(
+    State(state): State<AppState>,
+    Path(handle): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<PackageWrite>,
+) -> Result<Json<PackageInfo>, ApiError> {
+    require_admin(&state, &headers)?;
+    let path = require_file_config(&state)?;
+    let _guard = state.write_lock.lock().await;
+
+    if handle == BUILTIN_HANDLE {
+        return Err(ApiError::Conflict(format!(
+            "`{handle}` is the reserved builtin package handle"
+        )));
+    }
+
+    let existing = state
+        .config
+        .load()
+        .packages
+        .get(&handle)
+        .cloned()
+        .ok_or(ApiError::NotFound)?;
+
+    // Overlay only the provided fields; an omitted field (incl. `token`)
+    // keeps its existing value.
+    let repo = body.repo.clone().or_else(|| existing.repo.clone());
+    let pin = body.pin.clone().or_else(|| existing.pin.clone());
+    let token = body.token.clone().or_else(|| existing.token.clone());
+    let repo_or_pin_changed = (body.repo.is_some() && body.repo != existing.repo)
+        || (body.pin.is_some() && body.pin != existing.pin);
+
+    let block = package_block(repo.as_deref(), pin.as_deref(), token.as_deref());
+    let yaml = state
+        .asset_loader
+        .read_config_string()
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let new_yaml = config_writer::upsert_package(&yaml, &handle, &block)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    persist(&state, &path, new_yaml)?;
+
+    if repo_or_pin_changed {
+        let mgr = state.package_manager.clone();
+        let h = handle.clone();
+        tokio::task::spawn_blocking(move || mgr.refresh_one(&h));
+    }
+
+    let count = package_screen_count(&state, &handle);
+    let info = build_package_info(&state.config.load(), count, handle);
+    Ok(Json(info))
+}
+
+pub async fn delete_package(
+    State(state): State<AppState>,
+    Path(handle): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&state, &headers)?;
+    let path = require_file_config(&state)?;
+    let _guard = state.write_lock.lock().await;
+
+    if handle == BUILTIN_HANDLE {
+        return Err(ApiError::Conflict(format!(
+            "`{handle}` is the reserved builtin package handle"
+        )));
+    }
+
+    // Reject if any device's screen dangles into this package's namespace.
+    let prefix = format!("{handle}/");
+    if let Some((device_key, _)) = state
+        .config
+        .load()
+        .devices
+        .iter()
+        .find(|(_, d)| d.screen.starts_with(&prefix))
+        .map(|(k, d)| (k.clone(), d.screen.clone()))
+    {
+        return Err(ApiError::Conflict(format!(
+            "package `{handle}` is referenced by device `{device_key}`"
+        )));
+    }
+
+    let yaml = state
+        .asset_loader
+        .read_config_string()
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let new_yaml = match config_writer::remove_package(&yaml, &handle) {
+        Ok(y) => y,
+        Err(config_writer::ConfigWriteError::NotFound(_)) => return Err(ApiError::NotFound),
+        Err(e) => return Err(ApiError::Internal(e.to_string())),
+    };
+    persist(&state, &path, new_yaml)?;
+
+    // Rebuild the hot-swapped loader so the deleted handle's screens stop
+    // resolving immediately (in-memory only; not blocking).
+    state.package_manager.rebuild_loader();
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+pub async fn update_package(
+    State(state): State<AppState>,
+    Path(handle): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<PackageInfo>, ApiError> {
+    require_admin(&state, &headers)?;
+
+    if handle != BUILTIN_HANDLE && !state.config.load().packages.contains_key(&handle) {
+        return Err(ApiError::NotFound);
+    }
+
+    let mgr = state.package_manager.clone();
+    let h = handle.clone();
+    tokio::task::spawn_blocking(move || mgr.refresh_one(&h));
+
+    let count = package_screen_count(&state, &handle);
+    let info = build_package_info(&state.config.load(), count, handle);
+    Ok(Json(info))
+}
+
+pub async fn update_all_packages(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&state, &headers)?;
+
+    let mgr = state.package_manager.clone();
+    tokio::task::spawn_blocking(move || mgr.refresh_all(true));
+
     Ok(Json(serde_json::json!({ "ok": true })))
 }

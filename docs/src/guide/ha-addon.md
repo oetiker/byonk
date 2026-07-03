@@ -33,6 +33,15 @@ editor** or **Studio Code Server** add-on. Empty folders are seeded with the
 embedded defaults on first start. Edits to `config.yaml` are applied without a
 restart.
 
+## Screen package cache persistence
+
+If your `packages:` config section references remote (git-backed) screen
+packages, the add-on **must** set `PACKAGES_CACHE_DIR=/data/packages` (a path
+under the add-on's persistent `/data` folder) as an environment variable in
+the add-on's own `config.yaml`. Without it, byonk falls back to a temp
+directory, so every fetched package checkout is lost — and re-fetched from
+scratch — on every add-on restart or rebuild.
+
 ## How it relates to the Byonk integration
 
 A companion Home Assistant **integration** (shipping in a later release) manages

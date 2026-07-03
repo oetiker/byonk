@@ -48,6 +48,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Per-screen parameter schemas** now live in each screen's `meta.yaml` `params:`
   block, with UI hints (label, min/max/step/unit/mode, enum options,
   sensitive/multiline/hidden/advanced). Bundled screens declare their params there.
+- **Git-backed screen-package distribution**: a `packages:` entry's `repo`/`pin`
+  is fetched from git and cached on disk, keyed by repo + resolved commit sha.
+  A full-sha pin is immutable (fetched once, cached forever); a tag or branch
+  pin is mutable and gets re-fetched on demand or automatically every
+  `package_refresh_interval` seconds (new `config.yaml` setting, `0` = disabled
+  by default, settable via `PATCH /api/admin/settings`). A failed refresh never
+  takes a package offline while a cached checkout still exists — it keeps
+  serving with `status: "offline"`. New package-management admin endpoints:
+  `POST`/`PATCH`/`DELETE /api/admin/packages/:handle`, plus
+  `POST /api/admin/packages/:handle/update` and `POST /api/admin/packages/update`
+  to trigger re-fetches. `GET /api/admin/packages` is enriched with `pin_kind`,
+  `resolved_sha`, `last_fetched`, and `error`; `status` now reflects
+  `ready`/`fetching`/`error`/`offline`. A package `token` is never serialized in
+  any response — only a `token_set` boolean is exposed. See *Admin API →
+  GET/POST/PATCH/DELETE /api/admin/packages*.
 - **Config hot-reload**: admin writes update `config.yaml` in place (preserving
   comments and formatting via targeted YAML path patching) and take effect
   without a restart.

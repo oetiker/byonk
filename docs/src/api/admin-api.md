@@ -221,7 +221,11 @@ come from the `packages:` config section.
     "builtin": true,
     "token_set": false,
     "screen_count": 11,
-    "status": "ready"
+    "status": "ready",
+    "pin_kind": "embedded",
+    "resolved_sha": null,
+    "last_fetched": null,
+    "error": null
   },
   {
     "handle": "weather",
@@ -230,7 +234,11 @@ come from the `packages:` config section.
     "builtin": false,
     "token_set": true,
     "screen_count": 3,
-    "status": "ready"
+    "status": "ready",
+    "pin_kind": "tag",
+    "resolved_sha": "13dce1d25716356cc7fc2ef7d137b8dfc3157fbf",
+    "last_fetched": "2026-07-03T12:34:56+00:00",
+    "error": null
   }
 ]
 ```
@@ -242,9 +250,141 @@ Field notes:
 - `builtin` — `true` for the embedded `byonk-builtin` handle (or any package without a remote
   repo).
 - `token_set` — whether an auth token is configured for the package. The token itself is
-  **never** serialized; only this boolean is exposed.
+  **never** serialized in any response; only this boolean is exposed.
 - `screen_count` — number of screens the loader discovered in the package.
-- `status` — package fetch status (`"ready"` for on-disk/embedded packages).
+- `status` — one of:
+  - `"ready"` — fetched (or embedded) and currently serving.
+  - `"fetching"` — a fetch is in progress right now.
+  - `"error"` — the package has never been fetched successfully (e.g. just
+    registered and the background fetch hasn't completed yet, or every fetch
+    attempt has failed and nothing is cached). It is not currently serving.
+  - `"offline"` — the most recent refresh attempt failed, but a previously
+    fetched checkout is still cached and continues to serve. A fetch failure
+    never takes down an already-cached package.
+- `pin_kind` — how `pin` was resolved: `"sha"`, `"tag"`, `"branch"`, or
+  `"embedded"` for the built-in package. `null` if the package has never been
+  successfully fetched. **A full commit `sha` pin is immutable** — it is
+  fetched once and cached forever, never re-fetched. **A `tag` or `branch`
+  pin is mutable** — it is re-fetched on demand (via the update endpoints
+  below) and automatically every `package_refresh_interval` seconds.
+- `resolved_sha` — the commit sha the package is currently pinned/fetched at,
+  or `null` if never successfully fetched. The cache is keyed by `repo` +
+  `resolved_sha`.
+- `last_fetched` — RFC3339 timestamp of the last successful fetch, or `null`
+  if never successfully fetched.
+- `error` — the most recent fetch error message, or `null` if the last fetch
+  (or the current state) has no error.
+
+---
+
+### POST /api/admin/packages
+
+Register a new remote screen package. Triggers an asynchronous background
+fetch (fire-and-forget) — the response reflects whatever status exists at
+that instant (typically no status yet, since the fetch hasn't completed).
+Poll `GET /api/admin/packages` for the settled result.
+
+**Request body**:
+
+```json
+{
+  "handle": "weather",
+  "repo": "github.com/acme/screens",
+  "pin": "v1.4.0",
+  "token": "ghp_xxxxxxxxxxxx"
+}
+```
+
+Required field: `handle`. `repo`, `pin`, and `token` are optional (though a
+package needs `repo`/`pin` to have anything to fetch). `token` is used for
+authenticating against a private repo and — like every package `token` — is
+never echoed back in any response.
+
+**Responses**:
+
+| Status | Meaning |
+|--------|---------|
+| `200` | Registered — returns the package's `PackageInfo` (same shape as `GET /api/admin/packages` entries) |
+| `400` | Validation error (missing `handle`) |
+| `409` | `handle` is `byonk-builtin` (reserved), a package with that `handle` already exists, or config is embedded/read-only (`set CONFIG_FILE`) |
+
+---
+
+### PATCH /api/admin/packages/:handle
+
+Update an existing package's `repo`, `pin`, or `token`. All fields are
+optional; an **omitted field keeps its current value** — in particular, an
+omitted `token` is never cleared.
+
+**Request body** (all fields optional):
+
+```json
+{
+  "pin": "v1.5.0"
+}
+```
+
+If `repo` or `pin` changes, a background re-fetch is triggered (same
+fire-and-forget semantics as `POST /api/admin/packages`).
+
+**Responses**:
+
+| Status | Meaning |
+|--------|---------|
+| `200` | Updated — returns the package's `PackageInfo` |
+| `404` | No package with that handle |
+| `409` | `handle` is `byonk-builtin` (reserved), or config is embedded/read-only |
+
+---
+
+### DELETE /api/admin/packages/:handle
+
+Remove a package registration. Rejected if any device's `screen` still
+references the handle (`<handle>/...`) — delete or repoint those device
+mappings first. On success, the in-memory loader is rebuilt immediately so
+the handle's screens stop resolving right away (the cached checkout on disk
+is left in place).
+
+**Responses**:
+
+| Status | Meaning |
+|--------|---------|
+| `200` | Deleted — `{"ok": true}` |
+| `404` | No package with that handle |
+| `409` | `handle` is `byonk-builtin` (reserved); a device references the handle (message names the offending device); or config is embedded/read-only |
+
+---
+
+### POST /api/admin/packages/:handle/update
+
+Trigger a re-fetch of a single package handle. Fire-and-forget: the fetch
+runs in the background, and the response reflects whatever status exists at
+that instant. Poll `GET /api/admin/packages` for the settled status. Calling
+this on `byonk-builtin` is accepted but is a no-op (the embedded package is
+never fetched).
+
+**Responses**:
+
+| Status | Meaning |
+|--------|---------|
+| `200` | Refresh triggered — returns the package's `PackageInfo` (pre-refresh snapshot) |
+| `404` | No package with that handle |
+
+---
+
+### POST /api/admin/packages/update
+
+Trigger a forced re-fetch of every registered non-builtin package
+(fire-and-forget, runs in the background). Forcing bypasses the "already
+cached and immutable" skip that a normal periodic refresh applies to sha
+pins — every handle gets a real fetch attempt. Poll `GET /api/admin/packages`
+for the settled status of each package.
+
+**Responses**:
+
+| Status | Meaning |
+|--------|---------|
+| `200` | Refresh triggered for all packages — `{"ok": true}` |
 
 ---
 
@@ -337,7 +477,9 @@ changed.
 {
   "registration_enabled": true,
   "auth_mode": "api_key",
-  "default_screen": "byonk-builtin/default"
+  "default_screen": "byonk-builtin/default",
+  "registration_screen": "byonk-builtin/useful/registration",
+  "package_refresh_interval": 3600
 }
 ```
 
@@ -346,6 +488,8 @@ changed.
 | `registration_enabled` | boolean | `true` / `false` |
 | `auth_mode` | string | `"api_key"` or `"ed25519"` |
 | `default_screen` | string | a qualified `handle/path` screen ref listed in `GET /api/admin/screens` |
+| `registration_screen` | string | a qualified `handle/path` screen ref listed in `GET /api/admin/screens`, or `""` (empty string) to fall back to the built-in registration-screen sentinel |
+| `package_refresh_interval` | integer | seconds between automatic re-fetches of mutable (tag/branch) package pins; `0` disables periodic refresh (the default) |
 
 **Responses**:
 

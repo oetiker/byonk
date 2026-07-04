@@ -255,18 +255,20 @@ byonk is a general self-hosted server, not only an HA add-on. With **no**
 full read/write config source and the admin API is fully writable. Add-on mode is
 purely additive and gated on the options file's presence.
 
-## 11. Decisions
+## 11. Decisions (all resolved 2026-07-04)
 
-**Resolved:**
 - **Default / onboarding screen → reserved DEFAULT device** (§4a). Both
   `default_screen` and `registration_screen` are removed as settings and unified into
-  a single DEFAULT device managed live in the integration. _(Decided 2026-07-04.)_
+  a single DEFAULT device managed live in the integration.
+- **`registration_enabled` → live integration switch** (not app Options). It's an
+  operational control flipped frequently during onboarding; a restart per toggle would
+  be bad UX. Stays a live admin-API write from the integration.
+- **`POST /packages/update` (content refresh) → allowed in add-on mode.** It pulls
+  latest content for already-configured pins and changes no configuration, so the
+  integration's "Update packages" button + the periodic refresh keep working live.
+  Registry *mutations* (add/remove/repin via `POST/PATCH/DELETE /packages`) remain
+  read-only in add-on mode (§5.3) — those go through the app Options form.
 
-**Still open for spec review:**
-1. **`registration_enabled` placement.** Recommendation: keep it a **live
-   integration switch** (frequently toggled; restart-per-toggle is bad UX), even
-   though it is technically "global config." Confirm, or move it into the app Options
-   (accepting restart-per-toggle).
-2. **`POST /packages/update` in add-on mode.** Recommendation: **allow** (content
-   refresh, changes no config). Confirm, or treat it as a registry mutation and reject.
+The spec has no remaining open decisions; it is ready for a final read before
+`writing-plans`.
 ```

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- Home Assistant: manage screen packages from the UI — add/edit/remove packages
+  as native config subentries, server settings (new-device screen, auth mode,
+  package refresh interval) in the Configure dialog, per-package status sensors,
+  and an "Update packages" button. The new-device-screen and auth-mode select
+  entities are replaced by the Configure dialog.
 - **Home Assistant integration** (`custom_components/byonk/`): zero-touch
   Supervised-only setup — installs and starts the Byonk add-on automatically,
   generates the admin token without any user input, and keeps it in sync.  Exposes a

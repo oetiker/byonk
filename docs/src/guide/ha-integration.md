@@ -36,8 +36,13 @@ automatically, and exposes Byonk devices and settings as Home Assistant entities
 | Entity | Type | Description |
 |--------|------|-------------|
 | Registration enabled | Switch | Allow new TRMNL devices to register |
-| Auth mode | Select | Authentication mode for device requests |
-| New device screen | Select | Screen shown on un-onboarded devices while awaiting configuration |
+| Update packages | Button | Trigger an immediate refresh of all screen packages (see below) |
+| *Package status* (one per package) | Sensor | Diagnostic sensor per non-builtin screen package — see *Managing screen packages* below |
+
+Server-wide settings — new-device screen, auth mode, and package refresh
+interval — live in the **Configure** (⚙) dialog on the *Byonk Server* hub
+device, not as separate entities. Click **Configure** on the device card to
+change them.
 
 ### Per-device entities (one device per TRMNL)
 
@@ -72,9 +77,9 @@ A **Discovered** card for the new device appears automatically in
    screen mapping is written to Byonk. The device starts fetching its assigned screen
    on the next refresh.
 
-> **Note:** The **New device screen** select on the *Byonk Server* hub device
-> controls what an un-onboarded device displays on its e-ink panel while waiting to
-> be configured in Home Assistant.
+> **Note:** The **new-device screen** setting in the *Byonk Server* hub device's
+> **Configure** dialog controls what an un-onboarded device displays on its e-ink
+> panel while waiting to be configured in Home Assistant.
 
 Removing an HA device (via **Settings → Devices & Services → Delete**) removes its
 mapping from Byonk. Byonk mappings that have no corresponding HA device are pruned
@@ -94,6 +99,42 @@ when you change the device's screen.
 **Device naming**: the device's name is owned by Home Assistant. Rename the device
 the usual way (device card → pencil icon) and byonk will mirror the name automatically
 when you rename the device in Home Assistant. No changes are needed in byonk's config directly.
+
+## Managing Screen Packages
+
+Screen packages (see [Packages Section](configuration.md#packages-section) in
+the Configuration guide) can be added, edited, and removed entirely from Home
+Assistant, as subentries of the *Byonk Server* hub device.
+
+**Add a package**: on the *Byonk Server* device card, click **Add package** (or
+**Settings → Devices & Services → Byonk → Add sub-entry**) and fill in:
+
+- **Handle** — the short name the package is referenced by (e.g. `disttest`).
+- **Repo** — the git URL to fetch the package from.
+- **Pin** — a branch, tag, or commit SHA to track (defaults to `main`).
+- **Token** — an optional git credential for private repos.
+
+The **token field is write-only**: it is sent to byonk and never stored in, or
+readable back from, Home Assistant. To rotate a token, use **Reconfigure** on
+the package subentry and enter a new one; leaving it blank keeps the existing
+token unchanged.
+
+Each package gets a diagnostic **status sensor** (e.g.
+`sensor.byonk_disttest_status`) whose state is the fetch status (`fetching`,
+`ready`, `error`, ...) and whose attributes include the resolved commit
+(`resolved_sha`), `last_fetched` time, `repo`, `pin`, and any `error`.
+
+Press the hub device's **Update packages** button to trigger an immediate
+refresh of every package (equivalent to waiting for the package refresh
+interval set in **Configure**); the status sensors update once the fetch
+completes.
+
+**Deleting a package**: removing a package's subentry deletes it from byonk.
+However, **a package still referenced by a device's screen cannot be
+deleted** — reassign that device to a different screen first. If you delete a
+still-referenced package anyway, byonk rejects the deletion and the subentry
+**reappears** on the next refresh (a warning is logged); reassign the device,
+then delete again.
 
 ## Re-authentication
 

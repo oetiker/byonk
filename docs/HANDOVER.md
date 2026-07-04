@@ -4,12 +4,9 @@ _Last updated: 2026-07-04 — **DIRECTION CHANGE.** Screen Packages **Plan 3** (
 
 ## TL;DR — resume here
 
-1. **Read the redirection spec:** `docs/superpowers/specs/2026-07-04-addon-owned-global-config-design.md` (commit `2f6e82e`). It supersedes Plan 3's config placement.
-2. **It is UNDER USER REVIEW.** Three open decisions in the spec's §11 — get the user's answers before planning:
-   - `registration_enabled` placement (recommend: keep a live integration switch, not app Options).
-   - `POST /packages/update` in add-on mode (recommend: allow — content refresh, not a registry edit).
-   - `default_screen` exposure in app Options (recommend: yes, free-text).
-3. **Then** invoke `superpowers:writing-plans` to turn the spec into an implementation plan, then execute (subagent-driven, as Plan 3 was).
+1. **Read the redirection spec:** `docs/superpowers/specs/2026-07-04-addon-owned-global-config-design.md` (@ `1d0e24a`). It supersedes Plan 3's config placement. **All §11 decisions are now RESOLVED** (see below) — the spec is complete and ready for a final read.
+2. **Decisions locked this session:** default_screen + registration_screen → **reserved DEFAULT device** (§4a: a synthetic DEFAULT TRMNL device, live per-device screen-select, unifies both); `registration_enabled` → **live integration switch** (not app Options); `POST /packages/update` content-refresh → **allowed** in add-on mode (registry edits stay read-only). App Options static config = `auth_mode` + `package_refresh_interval` + `packages[]`.
+3. **Next:** confirm the user is happy with the final spec, then invoke `superpowers:writing-plans` → execute (subagent-driven, as Plan 3 was).
 4. **Do NOT merge Plan 3** — its config-write UI is being reverted (see the spec's §9 reuse/revert matrix).
 
 ## What changed this session

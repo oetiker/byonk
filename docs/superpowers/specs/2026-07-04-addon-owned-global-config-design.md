@@ -76,16 +76,12 @@ options:
   admin_token: ""
   log_level: info
   auth_mode: api_key
-  default_screen: byonk-builtin/default
-  registration_screen: ""            # "" = built-in code screen
   package_refresh_interval: 0        # seconds; 0 = off
   packages: []
 schema:
   admin_token: "password?"
   log_level: "list(trace|debug|info|warn|error)"
   auth_mode: "list(api_key|ed25519)"
-  default_screen: "str"
-  registration_screen: "str?"
   package_refresh_interval: "int(0,)"
   packages:
     - handle: "str"
@@ -97,20 +93,50 @@ schema:
 The `packages:` list renders as repeatable rows in the HAOS Options form, exactly
 like the SSH add-on's "Authorized Keys" list.
 
-**Known UX limitation (accept):** the HAOS Options schema is static, so
-`default_screen` / `registration_screen` are **free-text screen refs** (e.g.
-`byonk-builtin/useful/swiss-departure-board`) — the form cannot offer a dynamic
-dropdown populated from `GET /screens` the way the Plan-3 Options Flow did. This is
-the cost of the app-screen location. Document the available refs in the add-on's
-Documentation tab.
+**Note:** `default_screen` and `registration_screen` are deliberately **NOT** in the
+app Options — the HAOS Options schema is static and could only offer free-text screen
+refs. Instead they collapse into a **reserved DEFAULT device** managed live in the
+integration (dynamic screen dropdown, no restart) — see §4a. That leaves the app
+Options static config as just `auth_mode` + `package_refresh_interval` + `packages[]`.
+
+## 4a. The reserved DEFAULT device (replaces `default_screen` + `registration_screen`)
+
+Today byonk has two overlapping global "what does a device show when it has no screen
+of its own" settings, resolved as a chain (`src/main.rs:261-294`,
+`src/api/display.rs`):
+- **Unregistered device:** `registration.screen` → `default_screen` → built-in
+  registration screen (renders the pairing **code**).
+- **Registered, no screen assigned:** `device.screen` → `default_screen`.
+
+**Both settings are replaced by a single reserved DEFAULT device** — a synthetic
+"DEFAULT" TRMNL device (reserved device key, no real MAC/hardware) whose **screen**
+is what **every not-yet-configured device shows**: unregistered *and*
+registered-but-unassigned. Its screen is edited through the integration's normal
+**live per-device screen-select** (dynamic dropdown from `GET /screens`, no restart),
+so it never enters the app Options.
+
+Resolution becomes: `device.screen` → **DEFAULT device.screen** → built-in fallback.
+
+**Onboarding still works:** byonk already passes `device_context` (carrying the
+`registration_code` for unregistered devices) into the screen script, so the DEFAULT
+screen is a *template* that renders the pairing code when a device is unregistered and
+renders plain content when it isn't. Byonk-side detail for the plan: the **ultimate
+built-in fallback** (when the DEFAULT device has no screen set) must render the
+**code** screen when a `registration_code` is present and a generic "unassigned"
+screen when it is not (today it always renders a code). The DEFAULT device ships with
+a sensible default screen (`byonk-builtin/default`) so this rarely triggers.
+
+The DEFAULT device may also carry default **dither/panel** the same way (they already
+have per-device fallback chains) — scope to at least the screen; the plan decides
+whether it's a full default template.
 
 ## 5. byonk server changes
 
 1. **Extend `AddonOptions`** (`src/addon_options.rs`) to also parse `auth_mode`,
-   `default_screen`, `registration_screen`, `package_refresh_interval`, and
-   `packages` (a `Vec<PackageRef>` — reuse the existing package-ref shape:
-   `handle`/`repo`/`pin?`/`token?`). Keep the module's guarantees: never writes the
-   file, never logs a token, no-op when the file is absent.
+   `package_refresh_interval`, and `packages` (a `Vec<PackageRef>` — reuse the
+   existing package-ref shape: `handle`/`repo`/`pin?`/`token?`). Keep the module's
+   guarantees: never writes the file, never logs a token, no-op when the file is
+   absent. (`default_screen`/`registration_screen` are NOT here — see change 6.)
 2. **Feed them into byonk on startup.** When the options file is present
    (`ReadResult::Parsed`), byonk is in **add-on mode**:
    - Global **settings** from `options.json` override `AppConfig`'s settings.
@@ -136,6 +162,15 @@ Documentation tab.
    supervisor-managed on disk) and are read by byonk for git auth. byonk's
    `GET /packages` continues to **redact** tokens (`PackageInfo` has no token field).
    The integration never sees a token — simpler than Plan 3's write-only-token dance.
+6. **Replace `default_screen` + `registration.screen` with a reserved DEFAULT
+   device** (§4a). Remove both settings from `AppConfig`; add a reserved device key
+   whose `screen` (dither/panel optional) drives the fallback chain
+   `device.screen → DEFAULT.screen → built-in`. The unregistered path still renders
+   the pairing code via `device_context`; the built-in ultimate fallback renders the
+   code when a `registration_code` is present and a generic screen otherwise. This
+   device is written/read over the normal per-device admin API (live, allowed in
+   add-on mode). Applies to both add-on and standalone byonk (it's a core model change,
+   not add-on-specific).
 
 ## 6. Integration changes (HA)
 
@@ -148,7 +183,13 @@ Documentation tab.
 **Kept** (they are read-only or per-device or operational):
 - **Per-package status sensors** (Task 9) — now the primary "monitoring" surface. State = fetch status; attrs = sha/last_fetched/error/repo/pin/pin_kind. Read-only.
 - **Per-device** entities + screen/dither/panel mapping + discovery/onboarding (unchanged; still writes via `PATCH /devices`).
-- The **auth-mode / new-device-screen select entities stay removed** (Task 8) — those settings now live in the app Options.
+- The **reserved DEFAULT device** (§4a): presented like a normal device with a live
+  screen-select (dynamic dropdown from `GET /screens`); written over the per-device
+  API. This is where "what unconfigured devices show" is set — replacing both the
+  old new-device-screen select and the Plan-3 Options-Flow screen field.
+- The **auth-mode select stays removed** (Task 8) — auth mode now lives in the app
+  Options. (The new-device-screen select is likewise gone; its role moves to the
+  DEFAULT device, not the app Options.)
 
 **Operational controls (live, kept in the integration — NOT static config):**
 - **Registration toggle** (`registration_enabled`): the one setting toggled
@@ -165,8 +206,9 @@ all *static* global config is read-only there.
 
 | Config | Owner / editor | Channel | Apply |
 |---|---|---|---|
-| `auth_mode`, `default_screen`, `registration_screen`, `package_refresh_interval` | App Options form | options.json → byonk | restart |
+| `auth_mode`, `package_refresh_interval` | App Options form | options.json → byonk | restart |
 | Package registry (`handle/repo/pin/token`) | App Options form | options.json → byonk | restart |
+| Default/onboarding screen (reserved DEFAULT device) | Integration screen-select | admin API (per-device) | live |
 | `registration_enabled` (toggle) | Integration switch | admin API | live |
 | Package content refresh (git pull) | Integration button / interval | admin API | live |
 | Per-device screen/dither/panel/params | Integration | admin API | live |
@@ -213,14 +255,18 @@ byonk is a general self-hosted server, not only an HA add-on. With **no**
 full read/write config source and the admin API is fully writable. Add-on mode is
 purely additive and gated on the options file's presence.
 
-## 11. Open decisions for spec review
+## 11. Decisions
 
+**Resolved:**
+- **Default / onboarding screen → reserved DEFAULT device** (§4a). Both
+  `default_screen` and `registration_screen` are removed as settings and unified into
+  a single DEFAULT device managed live in the integration. _(Decided 2026-07-04.)_
+
+**Still open for spec review:**
 1. **`registration_enabled` placement.** Recommendation: keep it a **live
    integration switch** (frequently toggled; restart-per-toggle is bad UX), even
    though it is technically "global config." Confirm, or move it into the app Options
    (accepting restart-per-toggle).
 2. **`POST /packages/update` in add-on mode.** Recommendation: **allow** (content
    refresh, changes no config). Confirm, or treat it as a registry mutation and reject.
-3. **`default_screen` exposure.** Plan 3 deliberately did not surface it; this spec
-   adds it to the app Options as free-text. Confirm it should be user-editable.
 ```

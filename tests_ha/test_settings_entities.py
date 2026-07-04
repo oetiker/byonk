@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, patch
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.byonk.const import BUILTIN_SCREEN_LABEL, CONF_ADDON_SLUG, CONF_BASE_URL, DOMAIN
+from custom_components.byonk.const import CONF_ADDON_SLUG, CONF_BASE_URL, DOMAIN
 from tests_ha.conftest import make_hub_entry
 
 TRANSIT_REF = "byonk-builtin/useful/swiss-departure-board"
@@ -39,37 +39,10 @@ async def test_registration_switch_turns_on(hass):
     assert settings.await_args.args[0] == {"registration_enabled": True}
 
 
-async def test_new_device_screen_select(hass, byonk):
-    byonk.config = {"registration": {"enabled": True, "screen": TRANSIT_REF}}
+async def test_hub_has_no_settings_selects(hass, byonk):
+    byonk.config = {"registration": {"enabled": True}, "auth_mode": "api_key"}
     hub = make_hub_entry(hass)
     await hass.config_entries.async_setup(hub.entry_id)
     await hass.async_block_till_done()
-
-    state = hass.states.get("select.byonk_new_device_screen")
-    assert state is not None
-    assert state.state == TRANSIT_REF
-
-    await hass.services.async_call(
-        "select", "select_option",
-        {"entity_id": "select.byonk_new_device_screen", "option": TRANSIT_REF},
-        blocking=True,
-    )
-    assert byonk.update_settings.await_args.args[0] == {"registration_screen": TRANSIT_REF}
-
-
-async def test_new_device_screen_builtin(hass, byonk):
-    # no registration.screen configured -> shows the built-in label
-    byonk.config = {"registration": {"enabled": True}}
-    hub = make_hub_entry(hass)
-    await hass.config_entries.async_setup(hub.entry_id)
-    await hass.async_block_till_done()
-
-    state = hass.states.get("select.byonk_new_device_screen")
-    assert state.state == BUILTIN_SCREEN_LABEL
-
-    await hass.services.async_call(
-        "select", "select_option",
-        {"entity_id": "select.byonk_new_device_screen", "option": BUILTIN_SCREEN_LABEL},
-        blocking=True,
-    )
-    assert byonk.update_settings.await_args.args[0] == {"registration_screen": ""}
+    assert hass.states.get("select.byonk_new_device_screen") is None
+    assert hass.states.get("select.byonk_auth_mode") is None

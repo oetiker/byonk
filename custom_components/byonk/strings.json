@@ -75,12 +75,6 @@
       },
       "panel": {
         "name": "Panel"
-      },
-      "new_device_screen": {
-        "name": "New device screen"
-      },
-      "auth_mode": {
-        "name": "Auth mode"
       }
     },
     "sensor": {

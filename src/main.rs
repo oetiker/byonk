@@ -683,7 +683,10 @@ async fn run_server() -> anyhow::Result<()> {
     // Explicit BYONK_ADMIN_TOKEN env still wins (server resolves env before config.admin.token).
     let mut config = byonk::models::AppConfig::load_from_assets(&asset_loader)?;
     byonk::addon_options::apply_to_config(&addon, &mut config);
-    let state = server::create_app_state_with_config(asset_loader, config)?;
+    let mut state = server::create_app_state_with_config(asset_loader, config)?;
+    // Add-on mode = the options file was present and parsed. Gates global-config
+    // admin writes to read-only (the add-on Options form is the sole editor).
+    state.addon_mode = matches!(addon, byonk::addon_options::ReadResult::Parsed(_));
 
     // Periodic package refresh: re-fetches mutable (tag/branch) package pins
     // on a config-driven interval. Spawned unconditionally (not gated on the

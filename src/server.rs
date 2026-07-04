@@ -77,6 +77,9 @@ pub struct AppState {
     pub content_cache: Arc<ContentCache>,
     pub dev_overrides: DevOverrides,
     pub package_manager: Arc<PackageManager>,
+    /// True when byonk started as an HA Supervisor add-on (i.e. `/data/options.json`
+    /// was present). In add-on mode, global-config admin writes are read-only.
+    pub addon_mode: bool,
 }
 
 /// Create application state from an asset loader.
@@ -187,6 +190,7 @@ pub fn create_app_state_with_overrides(
         content_cache,
         dev_overrides,
         package_manager,
+        addon_mode: false,
     })
 }
 

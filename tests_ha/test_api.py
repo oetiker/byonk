@@ -56,3 +56,50 @@ async def test_409_raises_readonly(mock_aioresponse):
         client = ByonkClient(session, BASE, "secret")
         with pytest.raises(ByonkReadOnlyError):
             await client.async_update_settings({"registration_enabled": True})
+
+
+async def test_get_packages(mock_aioresponse):
+    mock_aioresponse.get(
+        f"{BASE}/api/admin/packages",
+        payload=[{"handle": "weather", "builtin": False, "status": "ready"}],
+    )
+    async with aiohttp.ClientSession() as session:
+        client = ByonkClient(session, BASE, "secret")
+        result = await client.async_get_packages()
+    assert result[0]["handle"] == "weather"
+
+
+async def test_add_package_posts(mock_aioresponse):
+    mock_aioresponse.post(f"{BASE}/api/admin/packages", payload={"handle": "weather"})
+    async with aiohttp.ClientSession() as session:
+        client = ByonkClient(session, BASE, "secret")
+        await client.async_add_package({"handle": "weather", "repo": "r", "pin": "main"})
+    req = next(iter(mock_aioresponse.requests.values()))[0]
+    assert req.kwargs["json"]["handle"] == "weather"
+
+
+async def test_update_package_patches_handle(mock_aioresponse):
+    mock_aioresponse.patch(f"{BASE}/api/admin/packages/weather", payload={"handle": "weather"})
+    async with aiohttp.ClientSession() as session:
+        client = ByonkClient(session, BASE, "secret")
+        await client.async_update_package("weather", {"pin": "v2"})
+
+
+async def test_update_all_packages_posts(mock_aioresponse):
+    mock_aioresponse.post(f"{BASE}/api/admin/packages/update", payload={"ok": True})
+    async with aiohttp.ClientSession() as session:
+        client = ByonkClient(session, BASE, "secret")
+        assert await client.async_update_packages() == {"ok": True}
+
+
+async def test_delete_package_409_carries_message(mock_aioresponse):
+    mock_aioresponse.delete(
+        f"{BASE}/api/admin/packages/weather",
+        status=409,
+        payload={"error": "package `weather` is referenced by device `AA:BB`"},
+    )
+    async with aiohttp.ClientSession() as session:
+        client = ByonkClient(session, BASE, "secret")
+        with pytest.raises(ByonkReadOnlyError) as exc:
+            await client.async_delete_package("weather")
+    assert "referenced by device" in exc.value.message

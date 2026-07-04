@@ -68,6 +68,11 @@ def byonk():
         update_device=AsyncMock(),
         delete_device=AsyncMock(),
         update_settings=AsyncMock(),
+        packages=[],
+        add_package=AsyncMock(return_value={"handle": "x"}),
+        update_package=AsyncMock(return_value={"handle": "x"}),
+        delete_package=AsyncMock(return_value={"ok": True}),
+        update_packages=AsyncMock(return_value={"ok": True}),
     )
     with (
         patch("custom_components.byonk.async_read_token", new=AsyncMock(return_value="tok")),
@@ -81,6 +86,11 @@ def byonk():
             async_update_device=state.update_device,
             async_delete_device=state.delete_device,
             async_update_settings=state.update_settings,
+            async_get_packages=AsyncMock(side_effect=lambda *a, **k: list(state.packages)),
+            async_add_package=state.add_package,
+            async_update_package=state.update_package,
+            async_delete_package=state.delete_package,
+            async_update_packages=state.update_packages,
         ),
     ):
         yield state

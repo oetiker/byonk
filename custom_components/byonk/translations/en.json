@@ -29,18 +29,6 @@
       "add_failed": "Byonk rejected the device settings: {error}"
     }
   },
-  "options": {
-    "step": {
-      "init": {
-        "title": "Byonk server settings",
-        "data": {
-          "registration_screen": "New-device screen",
-          "auth_mode": "Authentication mode",
-          "package_refresh_interval": "Package refresh interval (seconds; 0 = off)"
-        }
-      }
-    }
-  },
   "entity": {
     "button": {
       "update_packages": { "name": "Update packages" }

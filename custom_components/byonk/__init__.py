@@ -9,7 +9,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .addon import async_read_token
-from .api import ByonkApiError, ByonkClient, ByonkReadOnlyError
+from .api import ByonkApiError, ByonkClient
 from .const import (
     CONF_ADDON_SLUG,
     CONF_BASE_URL,
@@ -39,10 +39,6 @@ async def _async_setup_hub_entry(hass: HomeAssistant, entry: ByonkConfigEntry) -
     coordinator = ByonkCoordinator(hass, entry, client, slug)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
-    coordinator._pkg_handles = {
-        s.unique_id for s in entry.subentries.values() if s.subentry_type == "package"
-    }
-    entry.async_on_unload(entry.add_update_listener(_async_hub_updated))
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     # Device entries that loaded before the hub raised ConfigEntryNotReady; nudge them.
@@ -54,30 +50,6 @@ async def _async_setup_hub_entry(hass: HomeAssistant, entry: ByonkConfigEntry) -
         ):
             hass.async_create_task(hass.config_entries.async_reload(dev.entry_id))
     return True
-
-
-async def _async_hub_updated(hass: HomeAssistant, entry: ByonkConfigEntry) -> None:
-    """Propagate a removed package subentry to byonk (DELETE /packages/:handle)."""
-    coordinator = entry.runtime_data
-    current = {
-        s.unique_id for s in entry.subentries.values() if s.subentry_type == "package"
-    }
-    previous = getattr(coordinator, "_pkg_handles", set())
-    coordinator._pkg_handles = current
-    removed = previous - current
-    if not removed:
-        return
-    for handle in removed:
-        try:
-            await coordinator.client.async_delete_package(handle)
-        except ByonkReadOnlyError as err:
-            _LOGGER.warning(
-                "cannot delete package %s: %s (it will reappear until the "
-                "reference is cleared)", handle, err.message,
-            )
-        except ByonkApiError as err:
-            _LOGGER.warning("delete package %s failed: %s", handle, err)
-    await coordinator.async_request_refresh()
 
 
 async def _async_setup_device_entry(hass: HomeAssistant, entry: ByonkConfigEntry) -> bool:

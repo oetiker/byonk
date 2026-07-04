@@ -9,10 +9,8 @@ import logging
 from homeassistant.config_entries import (
     SOURCE_INTEGRATION_DISCOVERY,
     ConfigEntry,
-    ConfigSubentry,
-    ConfigSubentryData,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -84,7 +82,6 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
         self.slug = slug
         self._remove_strikes: dict[str, int] = {}
         self._orphan_strikes: dict[str, int] = {}
-        self._pkg_handles: set[str] = set()
 
     async def _async_update_data(self) -> ByonkData:
         try:
@@ -120,12 +117,9 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
         # async_config_entry_first_refresh returns), so HA device-entry lookups and
         # eager task execution would race against the incomplete setup. Discovery
         # sync is still scheduled with eager_start=False so it runs on the first real
-        # event-loop yield AFTER runtime_data is set. Package-subentry reconcile has
-        # no such dependency (it only touches self.entry.subentries), so it runs on
-        # every refresh, including the first.
+        # event-loop yield AFTER runtime_data is set.
         if self.data is not None:
             await self._async_reconcile(data)
-        self._reconcile_packages(data)
         self._async_sync_discovery(data)
         return data
 
@@ -163,53 +157,6 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
                     await self.client.async_delete_device(key)
                 except ByonkApiError as err:
                     _LOGGER.warning("orphan prune failed for %s: %s", key, err)
-
-    @callback
-    def _reconcile_packages(self, data: ByonkData) -> None:
-        subs = {
-            s.unique_id: s
-            for s in self.entry.subentries.values()
-            if s.subentry_type == "package"
-        }
-        byonk = {p["handle"]: p for p in data.non_builtin_packages()}
-
-        # Remove subentries byonk no longer has.
-        #
-        # IMPORTANT ordering note: hass.async_create_task() defaults to
-        # eager_start=True, so the hub update-listener (_async_hub_updated in
-        # __init__.py) that async_remove_subentry() schedules may run
-        # SYNCHRONOUSLY, nested inside this very call, before we get back here
-        # to run any more of this loop. So self._pkg_handles must be advanced
-        # to drop `handle` BEFORE calling async_remove_subentry, not after —
-        # otherwise the listener still sees the handle as present in
-        # _pkg_handles, computes it as newly "removed", and fires a phantom
-        # DELETE /packages/:handle for a package byonk already dropped.
-        for handle, sub in subs.items():
-            if handle not in byonk:
-                self._pkg_handles.discard(handle)
-                self.hass.config_entries.async_remove_subentry(self.entry, sub.subentry_id)
-
-        for handle, pkg in byonk.items():
-            title = f'{handle} — {pkg.get("repo", "")}'
-            want = {"handle": handle, "repo": pkg.get("repo"), "pin": pkg.get("pin")}
-            sub = subs.get(handle)
-            if sub is None:
-                # Same eager-listener ordering concern as above (in reverse):
-                # advance the snapshot before the HA call that may trigger it.
-                self._pkg_handles.add(handle)
-                self.hass.config_entries.async_add_subentry(
-                    self.entry,
-                    ConfigSubentry(
-                        data=ConfigSubentryData(want),
-                        subentry_type="package",
-                        title=title,
-                        unique_id=handle,
-                    ),
-                )
-            elif dict(sub.data) != want or sub.title != title:
-                self.hass.config_entries.async_update_subentry(
-                    self.entry, sub, data=want, title=title
-                )
 
     def _async_sync_discovery(self, data: ByonkData) -> None:
         pending_macs = {p["mac"] for p in data.pending}

@@ -11,6 +11,7 @@ from homeassistant.config_entries import (
     ConfigFlow,
     ConfigFlowResult,
     ConfigSubentryFlow,
+    OptionsFlow,
     SubentryFlowResult,
 )
 from homeassistant.core import callback
@@ -26,6 +27,7 @@ from .addon import (
 )
 from .api import ByonkApiError, ByonkAuthError, ByonkClient
 from .const import (
+    BUILTIN_SCREEN_LABEL,
     CONF_ADDON_SLUG,
     CONF_BASE_URL,
     CONF_DEVICE_KEY,
@@ -84,6 +86,11 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
         if CONF_DEVICE_KEY in config_entry.data:
             return {}
         return {"package": ByonkPackageSubentryFlow}
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry) -> OptionsFlow:
+        return ByonkOptionsFlow()
 
     @callback
     def _hub_entry(self):
@@ -226,6 +233,53 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="dev_params", data_schema=build_params_schema(fields)
         )
+
+
+class ByonkOptionsFlow(OptionsFlow):
+    """Server-level settings that byonk owns (thin front over PATCH /settings)."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        coordinator = self.config_entry.runtime_data
+        if user_input is not None:
+            screen = user_input["registration_screen"]
+            await coordinator.client.async_update_settings(
+                {
+                    "registration_screen": "" if screen == BUILTIN_SCREEN_LABEL else screen,
+                    "auth_mode": user_input["auth_mode"],
+                    "package_refresh_interval": int(user_input["package_refresh_interval"]),
+                }
+            )
+            await coordinator.async_request_refresh()
+            return self.async_create_entry(title="", data={})
+
+        data = coordinator.data
+        current_screen = data.registration_screen() or BUILTIN_SCREEN_LABEL
+        interval = data.config.get("package_refresh_interval", 0)
+        schema = vol.Schema(
+            {
+                vol.Required("registration_screen", default=current_screen): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[BUILTIN_SCREEN_LABEL, *data.screen_names()],
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Required("auth_mode", default=data.auth_mode() or "api_key"): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=["api_key", "ed25519"],
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Required("package_refresh_interval", default=interval): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0, max=86400, step=1, unit_of_measurement="s",
+                        mode=selector.NumberSelectorMode.BOX,
+                    )
+                ),
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=schema)
 
 
 def _package_schema(current: dict | None = None) -> vol.Schema:

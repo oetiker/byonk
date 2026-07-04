@@ -142,25 +142,24 @@ pub fn apply_to_config(result: &ReadResult, config: &mut AppConfig) {
             config.package_refresh_interval = interval;
         }
 
-        // In add-on mode the package registry comes from options.json. An empty
-        // list means "no packages"; only replace the map when a list is present.
-        if !opts.packages.is_empty() {
-            config.packages = opts
-                .packages
-                .iter()
-                .filter(|p| !p.handle.trim().is_empty())
-                .map(|p| {
-                    (
-                        p.handle.trim().to_string(),
-                        PackageRef {
-                            repo: p.repo.clone(),
-                            pin: p.pin.clone(),
-                            token: p.token.clone(),
-                        },
-                    )
-                })
-                .collect();
-        }
+        // In add-on mode the package registry is taken authoritatively from
+        // options.json: it always replaces config.packages, so an empty list
+        // clears any pre-existing registry.
+        config.packages = opts
+            .packages
+            .iter()
+            .filter(|p| !p.handle.trim().is_empty())
+            .map(|p| {
+                (
+                    p.handle.trim().to_string(),
+                    PackageRef {
+                        repo: p.repo.clone(),
+                        pin: p.pin.clone(),
+                        token: p.token.clone(),
+                    },
+                )
+            })
+            .collect();
     }
 }
 
@@ -408,7 +407,8 @@ mod tests {
     #[test]
     fn apply_absent_settings_leave_config_defaults() {
         // A parsed options file that omits the new keys must not clobber config
-        // defaults (only admin_token is authoritative-on-absence).
+        // defaults (only admin_token and packages are authoritative-on-absence
+        // / authoritative-replace; auth_mode and interval preserve-on-absent).
         let r = ReadResult::Parsed(AddonOptions {
             admin_token: None,
             log_level: None,
@@ -419,6 +419,14 @@ mod tests {
         let mut config = embedded_config();
         config.auth_mode = "api_key".to_string();
         config.package_refresh_interval = 42;
+        config.packages.insert(
+            "stale".to_string(),
+            PackageRef {
+                repo: Some("https://example.com/stale.git".to_string()),
+                pin: None,
+                token: None,
+            },
+        );
         apply_to_config(&r, &mut config);
         assert_eq!(
             config.auth_mode, "api_key",
@@ -428,6 +436,9 @@ mod tests {
             config.package_refresh_interval, 42,
             "absent interval keeps config value"
         );
-        assert!(config.packages.is_empty());
+        assert!(
+            config.packages.is_empty(),
+            "empty packages list in Parsed options must clear a pre-existing registry"
+        );
     }
 }

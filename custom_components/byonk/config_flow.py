@@ -282,3 +282,33 @@ class ByonkPackageSubentryFlow(ConfigSubentryFlow):
             )
         return self.async_show_form(step_id="user", data_schema=_package_schema())
 
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        sub = self._get_reconfigure_subentry()
+        handle = sub.data["handle"]
+        pkg = self._coordinator.data.package(handle) or sub.data
+        if user_input is not None:
+            payload = {"repo": user_input["repo"], "pin": user_input.get("pin") or "main"}
+            if user_input.get("token"):
+                payload["token"] = user_input["token"]
+            try:
+                await self._coordinator.client.async_update_package(handle, payload)
+            except ByonkApiError as err:
+                return self.async_show_form(
+                    step_id="reconfigure",
+                    data_schema=_package_schema({"handle": handle, **user_input}),
+                    errors={"base": "add_failed"},
+                    description_placeholders={"error": str(err)},
+                )
+            await self._coordinator.async_request_refresh()
+            return self.async_update_and_abort(
+                self._get_entry(), sub,
+                title=f'{handle} — {user_input["repo"]}',
+                data={"handle": handle, "repo": user_input["repo"], "pin": payload["pin"]},
+            )
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=_package_schema({"handle": handle, "repo": pkg.get("repo", ""), "pin": pkg.get("pin", "main")}),
+        )
+

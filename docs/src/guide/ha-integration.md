@@ -110,14 +110,15 @@ Assistant, as subentries of the *Byonk Server* hub device.
 **Settings → Devices & Services → Byonk → Add sub-entry**) and fill in:
 
 - **Handle** — the short name the package is referenced by (e.g. `disttest`).
-- **Repo** — the git URL to fetch the package from.
-- **Pin** — a branch, tag, or commit SHA to track (defaults to `main`).
-- **Token** — an optional git credential for private repos.
+- **Repository URL** — the git URL to fetch the package from.
+- **Pin (branch, tag or sha)** — the branch, tag, or commit SHA to track
+  (defaults to `main`).
+- **Access token (optional)** — an optional git credential for private repos.
 
-The **token field is write-only**: it is sent to byonk and never stored in, or
-readable back from, Home Assistant. To rotate a token, use **Reconfigure** on
-the package subentry and enter a new one; leaving it blank keeps the existing
-token unchanged.
+The **access token field is write-only**: it is sent to byonk and never stored
+in, or readable back from, Home Assistant. To rotate a token, use **Edit
+package** on the package subentry and enter a new one; leaving it blank keeps
+the existing token unchanged.
 
 Each package gets a diagnostic **status sensor** (e.g.
 `sensor.byonk_disttest_status`) whose state is the fetch status (`fetching`,

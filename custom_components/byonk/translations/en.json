@@ -29,25 +29,6 @@
       "add_failed": "Byonk rejected the device settings: {error}"
     }
   },
-  "config_subentries": {
-    "package": {
-      "title": "Screen package",
-      "initiate_flow": { "user": "Add package", "reconfigure": "Edit package" },
-      "step": {
-        "user": {
-          "title": "Add a screen package",
-          "description": "Register a git-backed screen package. {error}",
-          "data": { "handle": "Handle", "repo": "Repository URL", "pin": "Pin (branch, tag or sha)", "token": "Access token (optional)" }
-        },
-        "reconfigure": {
-          "title": "Edit package {handle}",
-          "description": "Change the repository, pin, or token. Leave token blank to keep the current one. {error}",
-          "data": { "handle": "Handle", "repo": "Repository URL", "pin": "Pin (branch, tag or sha)", "token": "New access token (optional)" }
-        }
-      },
-      "error": { "add_failed": "byonk rejected the package: {error}" }
-    }
-  },
   "options": {
     "step": {
       "init": {

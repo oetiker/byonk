@@ -17,6 +17,7 @@ from homeassistant.util import dt as dt_util
 from .const import CONF_DEVICE_KEY
 from .coordinator import ByonkConfigEntry
 from .entity import ByonkDeviceEntity
+from .package_entities import setup_package_status_platform
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -73,7 +74,7 @@ async def async_setup_entry(
             ByonkDeviceSensor(coordinator, key, desc) for desc in DEVICE_SENSORS
         )
         return
-    # hub entry: no diagnostic hub sensors (pending devices surface as Discovered cards)
+    setup_package_status_platform(entry, async_add_entities)
 
 
 class ByonkDeviceSensor(ByonkDeviceEntity, SensorEntity):

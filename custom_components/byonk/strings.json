@@ -92,7 +92,8 @@
       },
       "model": {
         "name": "Model"
-      }
+      },
+      "package_status": { "name": "{handle}: status" }
     },
     "text": {
       "refresh": {

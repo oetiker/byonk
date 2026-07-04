@@ -84,6 +84,11 @@ async def test_reconfigure_patches_pin(hass, byonk):
     assert result["type"] == "abort"
     assert byonk.update_package.await_args.args[0] == "weather"
     assert byonk.update_package.await_args.args[1]["pin"] == "v2.0.0"
+    # async_update_and_abort may replace the subentry object; re-fetch it fresh.
+    sub = next(s for s in hub.subentries.values() if s.unique_id == "weather")
+    assert sub.data["pin"] == "v2.0.0"
+    assert sub.data["repo"] == PKG["repo"]
+    assert "token" not in sub.data  # HA never persists a package token
 
 
 async def test_reconfigure_blank_token_omits_token(hass, byonk):
@@ -97,3 +102,6 @@ async def test_reconfigure_blank_token_omits_token(hass, byonk):
         result["flow_id"], {"handle": "weather", "repo": PKG["repo"], "pin": "main"}
     )
     assert "token" not in byonk.update_package.await_args.args[1]
+    # HA never persists a package token: re-fetch the (possibly replaced) subentry.
+    sub = next(s for s in hub.subentries.values() if s.unique_id == "weather")
+    assert "token" not in sub.data

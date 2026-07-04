@@ -18,6 +18,7 @@ CONF_DEVICE_KEY = "device_key"
 CONF_HUB_ENTRY_ID = "hub_entry_id"
 
 PLATFORMS: list[Platform] = [
+    Platform.BUTTON,
     Platform.SENSOR,
     Platform.SELECT,
     Platform.SWITCH,

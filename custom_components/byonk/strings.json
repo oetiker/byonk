@@ -61,6 +61,9 @@
     }
   },
   "entity": {
+    "button": {
+      "update_packages": { "name": "Update packages" }
+    },
     "switch": {
       "registration_enabled": {
         "name": "Registration enabled"

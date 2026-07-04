@@ -24,5 +24,3 @@ PLATFORMS: list[Platform] = [
     Platform.SWITCH,
     Platform.TEXT,
 ]
-
-BUILTIN_SCREEN_LABEL = "(built-in)"

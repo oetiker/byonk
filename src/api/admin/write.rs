@@ -51,6 +51,21 @@ fn require_writable_global(state: &AppState) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// In add-on mode, the genuinely-global settings are read-only (edited via the
+/// add-on Options form). The operational `registration_enabled` toggle stays live.
+fn require_writable_settings(state: &AppState, body: &SettingsWrite) -> Result<(), ApiError> {
+    let touches_global = body.auth_mode.is_some()
+        || body.package_refresh_interval.is_some()
+        || body.default_screen.is_some()
+        || body.registration_screen.is_some();
+    if state.addon_mode && touches_global {
+        return Err(ApiError::Conflict(
+            "global config is read-only in add-on mode; edit it in the byonk add-on Configuration tab".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Validate the screen ref resolves to a package screen and that the provided
 /// params pass its `meta.yaml` schema. A device `screen` is always a qualified
 /// `handle/path` package ref — there is no bare-name / flat-file resolution.
@@ -267,8 +282,8 @@ pub async fn patch_settings(
     headers: HeaderMap,
     Json(body): Json<SettingsWrite>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_writable_global(&state)?;
     require_admin(&state, &headers)?;
+    require_writable_settings(&state, &body)?;
     let path = require_file_config(&state)?;
     let _guard = state.write_lock.lock().await;
 
@@ -606,5 +621,49 @@ mod tests {
     fn global_writes_allowed_standalone() {
         let state = state_with_addon_mode(false);
         assert!(require_writable_global(&state).is_ok());
+    }
+
+    fn registration_only_body() -> SettingsWrite {
+        SettingsWrite {
+            registration_enabled: Some(true),
+            auth_mode: None,
+            default_screen: None,
+            registration_screen: None,
+            package_refresh_interval: None,
+        }
+    }
+
+    #[test]
+    fn addon_mode_allows_registration_enabled_only() {
+        let state = state_with_addon_mode(true);
+        let body = registration_only_body();
+        assert!(
+            require_writable_settings(&state, &body).is_ok(),
+            "registration_enabled-only body must stay live in add-on mode"
+        );
+    }
+
+    #[test]
+    fn addon_mode_rejects_global_field() {
+        let state = state_with_addon_mode(true);
+        let mut body = registration_only_body();
+        body.auth_mode = Some("api_key".to_string());
+        match require_writable_settings(&state, &body) {
+            Err(ApiError::Conflict(_)) => {}
+            other => panic!("expected Conflict for global field in add-on mode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn standalone_allows_any_settings_body() {
+        let state = state_with_addon_mode(false);
+        let body = SettingsWrite {
+            registration_enabled: Some(false),
+            auth_mode: Some("ed25519".to_string()),
+            default_screen: Some("byonk-builtin/example/hello".to_string()),
+            registration_screen: None,
+            package_refresh_interval: Some(300),
+        };
+        assert!(require_writable_settings(&state, &body).is_ok());
     }
 }

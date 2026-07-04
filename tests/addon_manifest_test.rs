@@ -81,18 +81,29 @@ fn addon_config_matches_design() {
         Some("/data/packages")
     );
 
-    // schema exposes EXACTLY the two intended options — nothing the Phase 3
-    // integration owns (registration_enabled, auth_mode, default_screen, ...).
+    // schema exposes EXACTLY the add-on-owned options: admin_token + log_level
+    // (Phase 2) plus the genuinely-global settings and the package registry
+    // (Plan A — add-on-owned global config: auth_mode, package_refresh_interval,
+    // packages). The operational registration_enabled toggle and per-device
+    // config are NOT here — they stay live via the admin API / HA integration.
     let schema_keys: std::collections::BTreeSet<&str> = cfg["schema"]
         .as_mapping()
         .expect("schema mapping")
         .keys()
         .filter_map(Value::as_str)
         .collect();
-    let expected: std::collections::BTreeSet<&str> =
-        ["admin_token", "log_level"].into_iter().collect();
+    let expected: std::collections::BTreeSet<&str> = [
+        "admin_token",
+        "log_level",
+        "auth_mode",
+        "package_refresh_interval",
+        "packages",
+    ]
+    .into_iter()
+    .collect();
     assert_eq!(
         schema_keys, expected,
-        "add-on schema must expose exactly admin_token + log_level"
+        "add-on schema must expose exactly admin_token, log_level, auth_mode, \
+         package_refresh_interval, and packages"
     );
 }

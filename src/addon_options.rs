@@ -405,7 +405,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_absent_settings_leave_config_defaults() {
+    fn apply_preserves_absent_settings_but_clears_packages() {
         // A parsed options file that omits the new keys must not clobber config
         // defaults (only admin_token and packages are authoritative-on-absence
         // / authoritative-replace; auth_mode and interval preserve-on-absent).

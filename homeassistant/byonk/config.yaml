@@ -23,6 +23,16 @@ environment:
 options:
   admin_token: ""
   log_level: info
+  auth_mode: api_key
+  package_refresh_interval: 0
+  packages: []
 schema:
   admin_token: "password?"
   log_level: "list(trace|debug|info|warn|error)"
+  auth_mode: "list(api_key|ed25519)"
+  package_refresh_interval: "int(0,)"
+  packages:
+    - handle: "str"
+      repo: "str"
+      pin: "str?"
+      token: "password?"

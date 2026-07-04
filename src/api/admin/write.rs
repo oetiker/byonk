@@ -38,6 +38,19 @@ fn require_file_config(state: &AppState) -> Result<std::path::PathBuf, ApiError>
         .ok_or_else(|| ApiError::Conflict("config is embedded/read-only; set CONFIG_FILE".into()))
 }
 
+/// Guard: global-config registry/settings writes are read-only when byonk runs
+/// as an HA add-on. The add-on Options form (`/data/options.json`) is the sole
+/// editor for global config; per-device writes and package content-refresh are
+/// unaffected.
+fn require_writable_global(state: &AppState) -> Result<(), ApiError> {
+    if state.addon_mode {
+        return Err(ApiError::Conflict(
+            "global config is read-only in add-on mode; edit it in the byonk add-on Configuration tab".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Validate the screen ref resolves to a package screen and that the provided
 /// params pass its `meta.yaml` schema. A device `screen` is always a qualified
 /// `handle/path` package ref — there is no bare-name / flat-file resolution.
@@ -254,6 +267,7 @@ pub async fn patch_settings(
     headers: HeaderMap,
     Json(body): Json<SettingsWrite>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    require_writable_global(&state)?;
     require_admin(&state, &headers)?;
     let path = require_file_config(&state)?;
     let _guard = state.write_lock.lock().await;
@@ -355,6 +369,7 @@ pub async fn add_package(
     headers: HeaderMap,
     Json(body): Json<PackageWrite>,
 ) -> Result<Json<PackageInfo>, ApiError> {
+    require_writable_global(&state)?;
     require_admin(&state, &headers)?;
     let path = require_file_config(&state)?;
     let _guard = state.write_lock.lock().await;
@@ -407,6 +422,7 @@ pub async fn patch_package(
     headers: HeaderMap,
     Json(body): Json<PackageWrite>,
 ) -> Result<Json<PackageInfo>, ApiError> {
+    require_writable_global(&state)?;
     require_admin(&state, &headers)?;
     let path = require_file_config(&state)?;
     let _guard = state.write_lock.lock().await;
@@ -459,6 +475,7 @@ pub async fn delete_package(
     Path(handle): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    require_writable_global(&state)?;
     require_admin(&state, &headers)?;
     let path = require_file_config(&state)?;
     let _guard = state.write_lock.lock().await;
@@ -558,4 +575,36 @@ pub async fn update_all_packages(
     tokio::task::spawn_blocking(move || mgr.refresh_all(true));
 
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assets::AssetLoader;
+    use crate::models::AppConfig;
+    use crate::server::create_app_state_with_config;
+
+    fn state_with_addon_mode(addon_mode: bool) -> AppState {
+        let loader = AssetLoader::new(None, None, None);
+        let config = AppConfig::load_from_assets(&loader).expect("load embedded config");
+        let mut state = create_app_state_with_config(std::sync::Arc::new(loader), config)
+            .expect("create app state");
+        state.addon_mode = addon_mode;
+        state
+    }
+
+    #[test]
+    fn global_writes_rejected_in_addon_mode() {
+        let state = state_with_addon_mode(true);
+        match require_writable_global(&state) {
+            Err(ApiError::Conflict(_)) => {}
+            other => panic!("expected Conflict in add-on mode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn global_writes_allowed_standalone() {
+        let state = state_with_addon_mode(false);
+        assert!(require_writable_global(&state).is_ok());
+    }
 }

@@ -29,6 +29,7 @@ class ByonkData:
     panels: list[dict]
     dither: list[str]
     config: dict
+    packages: list[dict]
 
     def screen_names(self) -> list[str]:
         # Screens are addressed by their qualified `handle/path` ref.
@@ -52,6 +53,15 @@ class ByonkData:
     def auth_mode(self) -> str | None:
         return self.config.get("auth_mode")
 
+    def non_builtin_packages(self) -> list[dict]:
+        return [p for p in self.packages if not p.get("builtin")]
+
+    def package(self, handle: str) -> dict | None:
+        for p in self.packages:
+            if p.get("handle") == handle:
+                return p
+        return None
+
 
 class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
     def __init__(
@@ -72,11 +82,12 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
 
     async def _async_update_data(self) -> ByonkData:
         try:
-            devices, pending, screens, config = await asyncio.gather(
+            devices, pending, screens, config, packages = await asyncio.gather(
                 self.client.async_get_devices(),
                 self.client.async_get_pending(),
                 self.client.async_get_screens(),
                 self.client.async_get_config(),
+                self.client.async_get_packages(),
             )
         except ByonkAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
@@ -96,6 +107,7 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
             panels=screens.get("panels", []),
             dither=screens.get("dither_algorithms", []),
             config=config,
+            packages=packages,
         )
         # Skip reconcile on the very first refresh: entry.runtime_data is not yet
         # set at that point (it is set in __init__.py after async_config_entry_first_refresh

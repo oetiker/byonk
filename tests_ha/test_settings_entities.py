@@ -26,6 +26,7 @@ async def test_registration_switch_turns_on(hass):
         patch("custom_components.byonk.coordinator.ByonkClient.async_get_pending", new=AsyncMock(return_value=[])),
         patch("custom_components.byonk.coordinator.ByonkClient.async_get_screens", new=AsyncMock(return_value=SCREENS)),
         patch("custom_components.byonk.coordinator.ByonkClient.async_get_config", new=AsyncMock(return_value=CONFIG)),
+        patch("custom_components.byonk.coordinator.ByonkClient.async_get_packages", new=AsyncMock(return_value=[])),
         patch("custom_components.byonk.coordinator.ByonkClient.async_update_settings", new=settings),
     ):
         await hass.config_entries.async_setup(entry.entry_id)

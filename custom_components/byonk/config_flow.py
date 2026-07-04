@@ -10,6 +10,8 @@ from homeassistant.components.hassio import AddonError
 from homeassistant.config_entries import (
     ConfigFlow,
     ConfigFlowResult,
+    ConfigSubentryFlow,
+    SubentryFlowResult,
 )
 from homeassistant.core import callback
 from homeassistant.helpers import selector
@@ -73,6 +75,15 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
         self._key: str | None = None
         self._screen: str | None = None
         self._extra: dict[str, Any] = {}
+
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(
+        cls, config_entry
+    ) -> dict[str, type[ConfigSubentryFlow]]:
+        if CONF_DEVICE_KEY in config_entry.data:
+            return {}
+        return {"package": ByonkPackageSubentryFlow}
 
     @callback
     def _hub_entry(self):
@@ -215,4 +226,59 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="dev_params", data_schema=build_params_schema(fields)
         )
+
+
+def _package_schema(current: dict | None = None) -> vol.Schema:
+    current = current or {}
+    return vol.Schema(
+        {
+            vol.Required("handle", default=current.get("handle", "")): str,
+            vol.Required("repo", default=current.get("repo", "")): str,
+            vol.Optional("pin", default=current.get("pin", "main")): str,
+            vol.Optional("token"): selector.TextSelector(
+                selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+            ),
+        }
+    )
+
+
+class ByonkPackageSubentryFlow(ConfigSubentryFlow):
+    """Add or edit a package (handle -> {repo, pin, token})."""
+
+    @property
+    def _coordinator(self):
+        return self._get_entry().runtime_data
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            payload = {
+                "handle": user_input["handle"],
+                "repo": user_input["repo"],
+                "pin": user_input.get("pin") or "main",
+            }
+            if user_input.get("token"):
+                payload["token"] = user_input["token"]
+            try:
+                await self._coordinator.client.async_add_package(payload)
+            except ByonkApiError as err:
+                errors["base"] = "add_failed"
+                return self.async_show_form(
+                    step_id="user",
+                    data_schema=_package_schema(user_input),
+                    errors=errors,
+                    description_placeholders={"error": str(err)},
+                )
+            # Do NOT refresh the coordinator here: a refresh runs the package
+            # reconcile (Task 5), which would create this subentry itself and make
+            # async_create_entry abort "already_configured". The subentry-change
+            # listener refreshes and builds the status sensor.
+            return self.async_create_entry(
+                title=f'{user_input["handle"]} — {user_input["repo"]}',
+                data={"handle": user_input["handle"], "repo": user_input["repo"], "pin": payload["pin"]},
+                unique_id=user_input["handle"],
+            )
+        return self.async_show_form(step_id="user", data_schema=_package_schema())
 

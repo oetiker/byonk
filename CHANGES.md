@@ -9,11 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
-- Home Assistant: manage screen packages from the UI — add/edit/remove packages
-  as native config subentries, server settings (new-device screen, auth mode,
-  package refresh interval) in the Configure dialog, per-package status sensors,
-  and an "Update packages" button. The new-device-screen and auth-mode select
-  entities are replaced by the Configure dialog.
+- Home Assistant: per-package status sensors and an "Update packages" button on
+  the *Byonk Server* hub device, giving read-only visibility into screen-package
+  fetch state (see *Changed* below for where packages are configured).
 - **Home Assistant integration** (`custom_components/byonk/`): zero-touch
   Supervised-only setup — installs and starts the Byonk add-on automatically,
   generates the admin token without any user input, and keeps it in sync.  Exposes a
@@ -91,6 +89,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Home Assistant add-on now owns byonk's global configuration.** Server settings
+  (`auth_mode`, `package_refresh_interval`) and the screen-package registry are now
+  edited in the byonk add-on's Configuration tab (`options.json`); changes apply on
+  add-on restart. In add-on mode these become read-only over the admin API.
+- **HA integration is now read-only monitoring for global config.** The package
+  add/reconfigure/delete flows and the global settings Options Flow were removed;
+  package status sensors, the Update-packages button, the registration switch, and
+  per-device entities remain.
 - **Admin API is now package-aware.** `GET /api/admin/screens` returns screens
   grouped by package (`packages[]`, each with `handle`/`name`/`description`/
   `author`/`license` and a `screens[]` list of qualified `handle/path` refs
@@ -120,6 +126,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `og`/`x`. Genuine TRMNL OG/X devices are unaffected.
 - The "Device not registered" log line now includes the device's `Board`, `Model`, `Colors` headers and resolved `width`/`height`. This makes it possible to author a matching panel profile (`match:`, `colors:`) for a brand-new device directly from the server log, before it has been registered.
 - Refreshed all dependencies in `Cargo.lock` to the latest versions compatible with the existing `Cargo.toml` ranges (`cargo update`), including the `rustls-webpki` 0.103.10 → 0.103.13 security bump. No source changes required; full check suite passes.
+
+### Unchanged
+
+- Standalone byonk (no add-on `options.json`) keeps full read/write config via
+  `config.yaml` and the admin API.
 
 ### Fixed
 

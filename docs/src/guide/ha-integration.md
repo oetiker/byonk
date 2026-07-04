@@ -2,7 +2,15 @@
 
 The Byonk Home Assistant integration connects Home Assistant to a Byonk server running
 as a Supervisor add-on. It manages the add-on lifecycle, provisions authentication
-automatically, and exposes Byonk devices and settings as Home Assistant entities.
+automatically, and exposes Byonk devices as Home Assistant entities.
+
+Byonk's server-**global** configuration — `auth_mode`, `package_refresh_interval`,
+and the screen-package registry — is edited in the
+**[Byonk add-on's Configuration tab](ha-addon.md)**, not here. This integration is
+read-only monitoring for that global config (per-package status sensors), plus two
+live operational controls (a registration switch and an "Update packages" button)
+and full read/write control over **per-device** screen/dither/panel/parameter
+assignment.
 
 ## Requirements
 
@@ -37,12 +45,11 @@ automatically, and exposes Byonk devices and settings as Home Assistant entities
 |--------|------|-------------|
 | Registration enabled | Switch | Allow new TRMNL devices to register |
 | Update packages | Button | Trigger an immediate refresh of all screen packages (see below) |
-| *Package status* (one per package) | Sensor | Diagnostic sensor per non-builtin screen package — see *Managing screen packages* below |
+| *Package status* (one per package) | Sensor | Diagnostic sensor per non-builtin screen package — see *Monitoring screen packages* below |
 
-Server-wide settings — new-device screen, auth mode, and package refresh
-interval — live in the **Configure** (⚙) dialog on the *Byonk Server* hub
-device, not as separate entities. Click **Configure** on the device card to
-change them.
+The remaining server-global settings — `auth_mode` and `package_refresh_interval` —
+are **not** exposed as entities here; they're edited in the
+[Byonk add-on's Configuration tab](ha-addon.md) (changes apply on add-on restart).
 
 ### Per-device entities (one device per TRMNL)
 
@@ -77,9 +84,11 @@ A **Discovered** card for the new device appears automatically in
    screen mapping is written to Byonk. The device starts fetching its assigned screen
    on the next refresh.
 
-> **Note:** The **new-device screen** setting in the *Byonk Server* hub device's
-> **Configure** dialog controls what an un-onboarded device displays on its e-ink
-> panel while waiting to be configured in Home Assistant.
+> **Note:** What an un-onboarded (or registered-but-unassigned) device displays on
+> its e-ink panel is controlled by Byonk's `default_screen` setting, which is not
+> currently exposed anywhere in Home Assistant — edit `config.yaml` directly (see
+> [Configuration, screens, and fonts](ha-addon.md#configuration-screens-and-fonts))
+> if you need to change it from the shipped default.
 
 Removing an HA device (via **Settings → Devices & Services → Delete**) removes its
 mapping from Byonk. Byonk mappings that have no corresponding HA device are pruned
@@ -100,42 +109,25 @@ when you change the device's screen.
 the usual way (device card → pencil icon) and byonk will mirror the name automatically
 when you rename the device in Home Assistant. No changes are needed in byonk's config directly.
 
-## Managing Screen Packages
+## Monitoring Screen Packages
 
 Screen packages (see [Packages Section](configuration.md#packages-section) in
-the Configuration guide) can be added, edited, and removed entirely from Home
-Assistant, as subentries of the *Byonk Server* hub device.
-
-**Add a package**: on the *Byonk Server* device card, click **Add package** (or
-**Settings → Devices & Services → Byonk → Add sub-entry**) and fill in:
-
-- **Handle** — the short name the package is referenced by (e.g. `disttest`).
-- **Repository URL** — the git URL to fetch the package from.
-- **Pin (branch, tag or sha)** — the branch, tag, or commit SHA to track
-  (defaults to `main`).
-- **Access token (optional)** — an optional git credential for private repos.
-
-The **access token field is write-only**: it is sent to byonk and never stored
-in, or readable back from, Home Assistant. To rotate a token, use **Edit
-package** on the package subentry and enter a new one; leaving it blank keeps
-the existing token unchanged.
+the Configuration guide) are **added, edited, and removed in the
+[Byonk add-on's Configuration tab](ha-addon.md)** — not here. This integration
+gives you read-only monitoring and one operational control:
 
 Each package gets a diagnostic **status sensor** (e.g.
-`sensor.byonk_disttest_status`) whose state is the fetch status (`fetching`,
-`ready`, `error`, ...) and whose attributes include the resolved commit
-(`resolved_sha`), `last_fetched` time, `repo`, `pin`, and any `error`.
+`sensor.byonk_disttest_status`) on the *Byonk Server* hub device, whose state is
+the fetch status (`fetching`, `ready`, `error`, ...) and whose attributes include
+the resolved commit (`resolved_sha`), `last_fetched` time, `repo`, `pin`, and any
+`error`.
 
 Press the hub device's **Update packages** button to trigger an immediate
-refresh of every package (equivalent to waiting for the package refresh
-interval set in **Configure**); the status sensors update once the fetch
-completes.
-
-**Deleting a package**: removing a package's subentry deletes it from byonk.
-However, **a package still referenced by a device's screen cannot be
-deleted** — reassign that device to a different screen first. If you delete a
-still-referenced package anyway, byonk rejects the deletion and the subentry
-**reappears** on the next refresh (a warning is logged); reassign the device,
-then delete again.
+content refresh of every already-configured package (a git pull on the existing
+pin — equivalent to waiting for the `package_refresh_interval` set in the add-on's
+Configuration tab); the status sensors update once the fetch completes. This
+button does not add, remove, or repin packages — only the add-on Configuration
+tab does that.
 
 ## Re-authentication
 

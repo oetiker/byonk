@@ -38,3 +38,20 @@ async def test_delete_409_logs_and_self_heals(hass, byonk, caplog):
     await hub.runtime_data.async_refresh()
     await hass.async_block_till_done()
     assert any(s.unique_id == "weather" for s in hub.subentries.values())
+
+
+async def test_out_of_band_removal_does_not_phantom_delete(hass, byonk, caplog):
+    hub = await _hub(hass, byonk)
+    assert any(s.unique_id == "weather" for s in hub.subentries.values())
+
+    # byonk drops the package out-of-band; reconcile will remove the subentry itself.
+    byonk.packages = []
+    with caplog.at_level(logging.WARNING):
+        await hub.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+
+    # subentry gone (reconcile removed it) ...
+    assert not any(s.unique_id == "weather" for s in hub.subentries.values())
+    # ... but NO phantom DELETE to byonk, and NO misleading "failed" warning.
+    assert byonk.delete_package.await_count == 0
+    assert "delete package" not in caplog.text.lower()

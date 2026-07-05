@@ -2,6 +2,11 @@ use crate::assets::AssetLoader;
 use serde::Deserialize;
 use std::collections::HashMap;
 
+/// Reserved device key whose `screen` is shown by every not-yet-configured
+/// device (unregistered, or registered without its own screen). Replaces the
+/// former `default_screen` + `registration.screen` settings.
+pub const RESERVED_DEFAULT_KEY: &str = "DEFAULT";
+
 /// Dither tuning values for error_clamp, noise_scale, chroma_clamp, strength.
 ///
 /// Used at every level of the tuning priority chain:
@@ -389,6 +394,15 @@ impl AppConfig {
             })
             .map(|(name, panel)| (name.as_str(), panel))
     }
+
+    /// Screen ref of the reserved DEFAULT device, if one is configured.
+    ///
+    /// This is the fallback for any device without its own screen mapping.
+    pub fn default_device_screen(&self) -> Option<&str> {
+        self.devices
+            .get(RESERVED_DEFAULT_KEY)
+            .map(|d| d.screen.as_str())
+    }
 }
 
 impl Default for AppConfig {
@@ -739,5 +753,23 @@ colors: "#000000,#FFFFFF"
     #[test]
     fn test_default_screen_is_builtin() {
         assert_eq!(default_screen(), Some("byonk-builtin/default".to_string()));
+    }
+
+    #[test]
+    fn test_default_device_screen_accessor() {
+        let mut config = AppConfig::default();
+        assert_eq!(config.default_device_screen(), None);
+
+        config.devices.insert(
+            RESERVED_DEFAULT_KEY.to_string(),
+            DeviceConfig {
+                screen: "byonk-builtin/default".to_string(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            config.default_device_screen(),
+            Some("byonk-builtin/default")
+        );
     }
 }

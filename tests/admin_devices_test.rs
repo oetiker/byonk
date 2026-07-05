@@ -48,6 +48,35 @@ async fn test_admin_devices_lists_seen_device() {
 }
 
 #[tokio::test]
+async fn test_list_devices_flags_reserved_default() {
+    let app = TestApp::new_admin("secret");
+    // Also register a real (non-reserved) device so we can assert the
+    // contrast: a physical device must report reserved:false.
+    app.register_device("AA:BB:CC:DD:EE:FF").await;
+
+    let resp = app
+        .get_with_headers("/api/admin/devices", &[("Authorization", "Bearer secret")])
+        .await;
+    assert_eq!(resp.status, StatusCode::OK);
+
+    let json: serde_json::Value = resp.json();
+    let devices = json.as_array().expect("array");
+
+    let default = devices
+        .iter()
+        .find(|d| d["key"] == "DEFAULT")
+        .expect("DEFAULT device present");
+    assert!(default.get("reserved").is_some());
+    assert_eq!(default["reserved"], true);
+
+    let seen = devices
+        .iter()
+        .find(|d| d["mac"] == "AA:BB:CC:DD:EE:FF")
+        .expect("seen device present");
+    assert_eq!(seen["reserved"], false);
+}
+
+#[tokio::test]
 async fn test_custom_model_header_is_stored_verbatim() {
     let dir = tempfile::tempdir().unwrap();
     let (app, _) = TestApp::new_admin_with_file("secret", dir.path());

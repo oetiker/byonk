@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::error::ApiError;
 use crate::models::compat::{compat_warning, engine_version};
-use crate::models::config::AppConfig;
+use crate::models::config::{AppConfig, RESERVED_DEFAULT_KEY};
 use crate::models::param_schema::ParamField;
 use crate::server::AppState;
 use crate::services::git_fetch::PinKind;
@@ -95,6 +95,9 @@ pub struct AdminDevice {
     pub mac: String,
     pub registration_code: String,
     pub registered: bool,
+    /// `true` for the reserved DEFAULT device (byonk-managed fallback, not a
+    /// physical device). The integration presents it specially.
+    pub reserved: bool,
     // telemetry (None when never seen)
     pub model: Option<String>,
     pub firmware_version: Option<String>,
@@ -130,11 +133,13 @@ pub async fn list_devices(
             .get_device_config(&mac)
             .or_else(|| config.get_device_config_for_code(&code));
         let registered = config.is_device_registered(&mac, Some(&code));
+        let reserved = mac == RESERVED_DEFAULT_KEY;
         out.push(AdminDevice {
             key: mac.clone(),
             mac,
             registration_code: code,
             registered,
+            reserved,
             model: Some(d.model.to_string()),
             firmware_version: Some(d.firmware_version.clone()),
             last_seen: Some(d.last_seen.to_rfc3339()),
@@ -165,6 +170,7 @@ pub async fn list_devices(
             mac: key.clone(),
             registration_code: String::new(),
             registered: true,
+            reserved: key == RESERVED_DEFAULT_KEY,
             model: None,
             firmware_version: None,
             last_seen: None,

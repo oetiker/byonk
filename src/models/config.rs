@@ -176,10 +176,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub panels: HashMap<String, PanelConfig>,
 
-    /// Default screen for unknown devices
-    #[serde(default = "default_screen")]
-    pub default_screen: Option<String>,
-
     /// Device registration settings
     #[serde(default)]
     pub registration: RegistrationConfig,
@@ -222,10 +218,6 @@ pub struct PanelConfig {
     /// Per-panel dither tuning defaults
     #[serde(default)]
     pub dither: Option<PanelDitherConfig>,
-}
-
-fn default_screen() -> Option<String> {
-    Some("byonk-builtin/default".to_string())
 }
 
 /// Configuration for a specific device
@@ -287,13 +279,6 @@ pub struct RegistrationConfig {
     /// Default: true
     #[serde(default = "default_registration_enabled")]
     pub enabled: bool,
-
-    /// Custom screen to use for registration (optional)
-    ///
-    /// If specified, this screen will be used instead of the built-in registration screen.
-    /// The screen's Lua script receives `params.code` with the registration code.
-    #[serde(default)]
-    pub screen: Option<String>,
 }
 
 fn default_registration_enabled() -> bool {
@@ -306,10 +291,7 @@ fn default_auth_mode() -> String {
 
 impl Default for RegistrationConfig {
     fn default() -> Self {
-        Self {
-            enabled: true,
-            screen: None,
-        }
+        Self { enabled: true }
     }
 }
 
@@ -410,7 +392,6 @@ impl Default for AppConfig {
         Self {
             devices: HashMap::new(),
             panels: HashMap::new(),
-            default_screen: default_screen(),
             registration: RegistrationConfig::default(),
             auth_mode: default_auth_mode(),
             admin: AdminConfig::default(),
@@ -438,10 +419,6 @@ mod tests {
     fn test_default_config() {
         let config = AppConfig::default();
 
-        assert_eq!(
-            config.default_screen,
-            Some("byonk-builtin/default".to_string())
-        );
         assert!(config.devices.is_empty());
         assert!(config.packages.is_empty());
     }
@@ -453,12 +430,6 @@ mod tests {
     }
 
     #[test]
-    fn test_default_screen_function() {
-        // Test that default_screen function returns Some("byonk-builtin/default")
-        assert_eq!(default_screen(), Some("byonk-builtin/default".to_string()));
-    }
-
-    #[test]
     fn test_deserialize_config() {
         let yaml = r#"
 devices:
@@ -466,15 +437,10 @@ devices:
     screen: byonk-builtin/example/hello
     params:
       name: "Test User"
-default_screen: byonk-builtin/example/hello
 "#;
 
         let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
 
-        assert_eq!(
-            config.default_screen,
-            Some("byonk-builtin/example/hello".to_string())
-        );
         assert!(config.devices.contains_key("AA:BB:CC:DD:EE:FF"));
 
         let device = config.devices.get("AA:BB:CC:DD:EE:FF").unwrap();
@@ -485,7 +451,6 @@ default_screen: byonk-builtin/example/hello
     fn test_registration_config_default() {
         let reg = RegistrationConfig::default();
         assert!(reg.enabled); // Registration is enabled by default
-        assert!(reg.screen.is_none());
     }
 
     #[test]
@@ -497,23 +462,6 @@ registration:
 
         let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(config.registration.enabled);
-        assert!(config.registration.screen.is_none());
-    }
-
-    #[test]
-    fn test_deserialize_config_with_custom_registration_screen() {
-        let yaml = r#"
-registration:
-  enabled: true
-  screen: byonk-builtin/example/hello
-"#;
-
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
-        assert!(config.registration.enabled);
-        assert_eq!(
-            config.registration.screen,
-            Some("byonk-builtin/example/hello".to_string())
-        );
     }
 
     #[test]
@@ -748,11 +696,6 @@ colors: "#000000,#FFFFFF"
         assert!(cfg.packages.contains_key("byonk-builtin"));
         assert_eq!(cfg.packages["weather"].pin.as_deref(), Some("v1.4.0"));
         assert!(cfg.packages["byonk-builtin"].repo.is_none());
-    }
-
-    #[test]
-    fn test_default_screen_is_builtin() {
-        assert_eq!(default_screen(), Some("byonk-builtin/default".to_string()));
     }
 
     #[test]

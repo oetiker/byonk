@@ -54,10 +54,7 @@ fn require_writable_global(state: &AppState) -> Result<(), ApiError> {
 /// In add-on mode, the genuinely-global settings are read-only (edited via the
 /// add-on Options form). The operational `registration_enabled` toggle stays live.
 fn require_writable_settings(state: &AppState, body: &SettingsWrite) -> Result<(), ApiError> {
-    let touches_global = body.auth_mode.is_some()
-        || body.package_refresh_interval.is_some()
-        || body.default_screen.is_some()
-        || body.registration_screen.is_some();
+    let touches_global = body.auth_mode.is_some() || body.package_refresh_interval.is_some();
     if state.addon_mode && touches_global {
         return Err(ApiError::Conflict(
             "global config is read-only in add-on mode; edit it in the byonk add-on Configuration tab".into(),
@@ -272,8 +269,6 @@ pub async fn delete_device(
 pub struct SettingsWrite {
     pub(crate) registration_enabled: Option<bool>,
     pub(crate) auth_mode: Option<String>,
-    pub(crate) default_screen: Option<String>,
-    pub(crate) registration_screen: Option<String>,
     pub(crate) package_refresh_interval: Option<u64>,
 }
 
@@ -295,17 +290,6 @@ pub async fn patch_settings(
             ));
         }
     }
-    if let Some(screen) = &body.default_screen {
-        if state.package_manager.loader().resolve(screen).is_none() {
-            return Err(ApiError::BadRequest(format!("unknown screen `{screen}`")));
-        }
-    }
-    if let Some(screen) = &body.registration_screen {
-        if !screen.is_empty() && state.package_manager.loader().resolve(screen).is_none() {
-            return Err(ApiError::BadRequest(format!("unknown screen `{screen}`")));
-        }
-    }
-
     // 2. Apply all mutations.
     let mut yaml = state
         .asset_loader
@@ -319,15 +303,6 @@ pub async fn patch_settings(
     if let Some(mode) = &body.auth_mode {
         yaml = config_writer::set_scalar(&yaml, &["auth_mode"], mode.as_str().into())
             .map_err(|e| ApiError::Internal(e.to_string()))?;
-    }
-    if let Some(screen) = &body.default_screen {
-        yaml = config_writer::set_scalar(&yaml, &["default_screen"], screen.as_str().into())
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
-    }
-    if let Some(screen) = &body.registration_screen {
-        yaml =
-            config_writer::set_scalar(&yaml, &["registration", "screen"], screen.as_str().into())
-                .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
     if let Some(secs) = body.package_refresh_interval {
         yaml = config_writer::set_scalar(&yaml, &["package_refresh_interval"], secs.into())
@@ -514,27 +489,6 @@ pub async fn delete_package(
             "package `{handle}` is referenced by device `{device_key}`"
         )));
     }
-    // Also reject if the global default screen or the registration screen
-    // dangles into this package's namespace.
-    if config
-        .default_screen
-        .as_deref()
-        .is_some_and(|s| s.starts_with(&prefix))
-    {
-        return Err(ApiError::Conflict(format!(
-            "cannot delete package `{handle}`: referenced by default_screen"
-        )));
-    }
-    if config
-        .registration
-        .screen
-        .as_deref()
-        .is_some_and(|s| s.starts_with(&prefix))
-    {
-        return Err(ApiError::Conflict(format!(
-            "cannot delete package `{handle}`: referenced by registration.screen"
-        )));
-    }
     drop(config);
 
     let yaml = state
@@ -627,8 +581,6 @@ mod tests {
         SettingsWrite {
             registration_enabled: Some(true),
             auth_mode: None,
-            default_screen: None,
-            registration_screen: None,
             package_refresh_interval: None,
         }
     }
@@ -660,8 +612,6 @@ mod tests {
         let body = SettingsWrite {
             registration_enabled: Some(false),
             auth_mode: Some("ed25519".to_string()),
-            default_screen: Some("byonk-builtin/example/hello".to_string()),
-            registration_screen: None,
             package_refresh_interval: Some(300),
         };
         assert!(require_writable_settings(&state, &body).is_ok());

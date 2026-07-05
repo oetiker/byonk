@@ -144,7 +144,6 @@ pub struct ScreensResponse {
     pub screens: Vec<ScreenInfo>,
     pub devices: Vec<DeviceInfo>,
     pub panels: Vec<PanelInfo>,
-    pub default_screen: Option<String>,
 }
 
 /// Response from /dev/render when there's an error
@@ -233,7 +232,6 @@ pub async fn handle_screens(State(state): State<DevState>) -> Json<ScreensRespon
         screens,
         devices,
         panels,
-        default_screen: state.config.default_screen.clone(),
     })
 }
 

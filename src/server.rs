@@ -297,21 +297,25 @@ mod reload_tests {
 
     #[test]
     fn test_config_swap_is_visible() {
+        use crate::models::config::{DeviceConfig, RESERVED_DEFAULT_KEY};
         let loader = Arc::new(AssetLoader::new(None, None, None));
         let state = create_app_state(loader).unwrap();
-        // Screens are auto-discovered from packages now; the embedded config
-        // points the default screen at the builtin package.
-        assert_eq!(
-            state.config.load().default_screen.as_deref(),
-            Some("byonk-builtin/default")
-        );
+        // Embedded config ships no devices (HA owns device registration), so
+        // no DEFAULT device is configured yet.
+        assert_eq!(state.config.load().default_device_screen(), None);
 
-        // Swap in a config with a sentinel screen and confirm the snapshot updates.
+        // Swap in a config whose DEFAULT device screen is a sentinel.
         let mut cfg = (**state.config.load()).clone();
-        cfg.default_screen = Some("sentinel".to_string());
+        cfg.devices.insert(
+            RESERVED_DEFAULT_KEY.to_string(),
+            DeviceConfig {
+                screen: "sentinel".to_string(),
+                ..Default::default()
+            },
+        );
         state.config.store(Arc::new(cfg));
         assert_eq!(
-            state.config.load().default_screen.as_deref(),
+            state.config.load().default_device_screen(),
             Some("sentinel")
         );
     }

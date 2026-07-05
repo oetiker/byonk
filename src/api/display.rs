@@ -253,7 +253,6 @@ pub async fn handle_display<R: DeviceRegistry>(
             tracing::info!(
                 device_id = device_id_str,
                 registration_code = %registration_code,
-                custom_screen = config.registration.screen.as_deref(),
                 board = ?headers.get_str("Board"),
                 model = ?headers.get_str("Model"),
                 colors = ?headers.get_str("Colors"),
@@ -282,15 +281,9 @@ pub async fn handle_display<R: DeviceRegistry>(
                 ..Default::default()
             };
 
-            // Use the custom registration screen if configured, otherwise the
-            // built-in registration screen. We deliberately do NOT fall back to
-            // default_screen here: an unregistered device must show its
-            // registration code so it can be onboarded (e.g. in Home Assistant).
-            let screen_to_use = config
-                .registration
-                .screen
-                .as_deref()
-                .filter(|s| !s.is_empty());
+            // The reserved DEFAULT device's screen (registration-aware via
+            // device_context.registration_code). No DEFAULT screen -> built-in.
+            let screen_to_use = config.default_device_screen().filter(|s| !s.is_empty());
 
             let (registration_svg, screen_name, refresh_rate) = if let Some(screen_name) =
                 screen_to_use
@@ -311,8 +304,11 @@ pub async fn handle_display<R: DeviceRegistry>(
                                     "Registration screen template failed, using built-in"
                                 );
                                 (
-                                    content_pipeline
-                                        .render_registration_screen(code, width, height),
+                                    content_pipeline.render_builtin_fallback(
+                                        Some(code),
+                                        width,
+                                        height,
+                                    ),
                                     "_registration".to_string(),
                                     300,
                                 )
@@ -326,16 +322,16 @@ pub async fn handle_display<R: DeviceRegistry>(
                             "Registration screen failed, using built-in"
                         );
                         (
-                            content_pipeline.render_registration_screen(code, width, height),
+                            content_pipeline.render_builtin_fallback(Some(code), width, height),
                             "_registration".to_string(),
                             300,
                         )
                     }
                 }
             } else {
-                // No default screen configured, use built-in registration screen
+                // No DEFAULT device screen configured, use built-in fallback
                 (
-                    content_pipeline.render_registration_screen(code, width, height),
+                    content_pipeline.render_builtin_fallback(Some(code), width, height),
                     "_registration".to_string(),
                     300,
                 )

@@ -257,12 +257,9 @@ fn run_render_command(
     ) = if is_unregistered {
         let code = device_context.registration_code.as_deref().unwrap();
 
-        // Use registration screen if configured, otherwise default screen, otherwise built-in
-        let screen_to_use = config
-            .registration
-            .screen
-            .as_deref()
-            .or(config.default_screen.as_deref());
+        // The reserved DEFAULT device's screen (registration-aware). No
+        // DEFAULT screen configured -> built-in fallback.
+        let screen_to_use = config.default_device_screen();
 
         let svg = if let Some(screen_name) = screen_to_use {
             match content_pipeline.run_screen_by_name(
@@ -273,21 +270,21 @@ fn run_render_command(
                 Ok(result) => content_pipeline
                     .render_svg_from_script(&result, Some(&device_context))
                     .unwrap_or_else(|_| {
-                        content_pipeline.render_registration_screen(
-                            code,
+                        content_pipeline.render_builtin_fallback(
+                            Some(code),
                             display_spec.width,
                             display_spec.height,
                         )
                     }),
-                Err(_) => content_pipeline.render_registration_screen(
-                    code,
+                Err(_) => content_pipeline.render_builtin_fallback(
+                    Some(code),
                     display_spec.width,
                     display_spec.height,
                 ),
             }
         } else {
-            content_pipeline.render_registration_screen(
-                code,
+            content_pipeline.render_builtin_fallback(
+                Some(code),
                 display_spec.width,
                 display_spec.height,
             )

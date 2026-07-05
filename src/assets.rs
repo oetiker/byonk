@@ -886,7 +886,7 @@ mod tests {
 
         // Content should be overwritten with embedded
         let content = std::fs::read_to_string(&config_path).unwrap();
-        assert!(content.contains("default_screen:"));
+        assert!(content.contains("DEFAULT:"));
     }
 
     #[test]
@@ -975,16 +975,21 @@ mod tests {
     }
 
     #[test]
-    fn test_embedded_default_has_no_devices() {
+    fn test_embedded_default_ships_only_reserved_default_device() {
         // AssetLoader::new(screens_dir, fonts_dir, config_path) — all None = embedded-only.
         let loader = AssetLoader::new(None, None, None);
         let text = loader.read_config_string().expect("read embedded config");
         let cfg: serde_yaml::Value = serde_yaml::from_str(&text).expect("parse embedded config");
         let devices = cfg.get("devices").expect("devices key present");
         let map = devices.as_mapping().expect("devices is a mapping");
+        assert_eq!(
+            map.len(),
+            1,
+            "embedded default config must ship exactly the reserved DEFAULT device"
+        );
         assert!(
-            map.is_empty(),
-            "embedded default config must ship zero devices"
+            map.contains_key(serde_yaml::Value::String("DEFAULT".to_string())),
+            "embedded default config's only device must be the reserved DEFAULT key"
         );
     }
 

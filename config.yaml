@@ -7,9 +7,6 @@
 # Set enabled: false to allow any device to connect.
 registration:
   enabled: true
-  # screen: my_screen  # Optional: custom registration screen. Default: the built-in
-  #                    # registration screen, which shows the 10-char code so the
-  #                    # device can be onboarded (e.g. in Home Assistant).
 
 # Authentication mode advertised to devices via /api/setup
 # "api_key" (default) - devices send Access-Token header
@@ -178,6 +175,9 @@ screens:
 # Map devices to screens
 # Use MAC address (e.g., "94:A9:90:8C:6D:18") or registration code (e.g., "ABCDE-FGHJK")
 devices:
+  # Reserved: the screen shown by un-onboarded / unassigned devices.
+  DEFAULT:
+    screen: byonk-builtin/default
   # Example using registration code (read from device screen):
   # "ABCDE-FGHJK":
   #   screen: transit
@@ -283,6 +283,3 @@ devices:
       album_url: "https://photos.app.goo.gl/xS9tWGRShAzf3YCg6"
       show_status: false
       refresh_rate: 300
-      
-# Default screen for devices not in the devices list
-default_screen: default

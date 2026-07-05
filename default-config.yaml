@@ -1,12 +1,9 @@
 # Byonk default configuration (shipped / embedded).
 # Home Assistant owns devices: this file intentionally has none.
-# New (un-onboarded) devices show registration.screen (or the built-in code screen).
+# New (un-onboarded) and unassigned devices show the reserved DEFAULT device's screen.
 registration:
   enabled: true
 auth_mode: api_key
-
-# Screen shown to un-onboarded / unassigned devices.
-default_screen: byonk-builtin/default
 
 # Panel profiles with measured display colors
 # Each panel maps official (ideal) colors to measured (actual) colors.
@@ -114,5 +111,9 @@ panels:
 # Screens are auto-discovered from the embedded `byonk-builtin` package
 # (the `screens/` tree) and any on-disk packages; no per-screen map is needed.
 
-# Devices are owned by Home Assistant; none ship by default.
-devices: {}
+# Home Assistant owns real devices; only the reserved DEFAULT device ships.
+# Its screen is what every un-onboarded / unassigned device shows (the built-in
+# screen is registration-aware and renders the pairing code for new devices).
+devices:
+  DEFAULT:
+    screen: byonk-builtin/default

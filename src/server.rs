@@ -300,9 +300,12 @@ mod reload_tests {
         use crate::models::config::{DeviceConfig, RESERVED_DEFAULT_KEY};
         let loader = Arc::new(AssetLoader::new(None, None, None));
         let state = create_app_state(loader).unwrap();
-        // Embedded config ships no devices (HA owns device registration), so
-        // no DEFAULT device is configured yet.
-        assert_eq!(state.config.load().default_device_screen(), None);
+        // Embedded config ships the reserved DEFAULT device (HA owns all
+        // other device registration).
+        assert_eq!(
+            state.config.load().default_device_screen(),
+            Some("byonk-builtin/default")
+        );
 
         // Swap in a config whose DEFAULT device screen is a sentinel.
         let mut cfg = (**state.config.load()).clone();

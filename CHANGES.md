@@ -34,8 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Admin/management API** (`/api/admin/*`), gated by a bearer token
   (`BYONK_ADMIN_TOKEN` env or `admin.token` in config; disabled = returns 404):
   read device telemetry, pending/unregistered devices, effective config, and
-  screen param schemas; create/update/delete device mappings and update global
-  settings (`registration_enabled`, `auth_mode`, `default_screen`).
+  screen param schemas; create/update/delete device mappings (including the
+  reserved `DEFAULT` device, see *Changed* below) and update global settings
+  (`registration_enabled`, `auth_mode`).
 - **Screen packages**: screens are now distributed as packages. A package is a
   directory tree with a `byonk-screens.yaml` manifest (`name`/`description`/
   `author`/`license`); every folder inside it that contains a `meta.yaml` is a
@@ -71,8 +72,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Config hot-reload**: admin writes update `config.yaml` in place (preserving
   comments and formatting via targeted YAML path patching) and take effect
   without a restart.
-- Admin settings API accepts `registration_screen` to set the screen shown to
-  new (un-onboarded) devices.
 - **Per-device refresh interval (Home Assistant)**: each TRMNL device now has a
   *Refresh interval* Number entity. The value (seconds) overrides the screen's
   static default; a screen's own Lua `refresh_rate` still takes precedence, and
@@ -104,10 +103,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carrying `title`, `description`, `params`, `byonk` and a `compat_warning`).
   A new `GET /api/admin/packages` lists the registered packages
   (`builtin`/`token_set`/`screen_count`/`status`; the package `token` is never
-  serialized). Device `screen` values and the `default_screen`/
-  `registration.screen` settings must now be qualified `handle/path` refs
-  (e.g. `byonk-builtin/example/hello`); bare names and flat-file `@params`
-  discovery are no longer accepted.
+  serialized). Every device's `screen` value (including the reserved `DEFAULT`
+  device, see below) must now be a qualified `handle/path` ref (e.g.
+  `byonk-builtin/example/hello`); bare names and flat-file `@params` discovery
+  are no longer accepted.
+- Replaced the `default_screen` and custom `registration.screen` settings with a
+  single reserved `DEFAULT` device. The screen assigned to `devices.DEFAULT` is
+  shown by every un-onboarded or unassigned device; the built-in default screen
+  renders the pairing code for new devices. In Home Assistant this is set live via
+  the **Byonk Default** device's screen-select.
 - The Home Assistant device **Reconfigure** dialog has been removed; screen
   parameters are edited via the live device-page entities instead. (Onboarding
   still prompts for a screen's parameters.)
@@ -140,8 +144,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with their parsed `@params`. This matches how the content pipeline already resolves a
   device's screen by filename, so filesystem-only screens (e.g. `gphoto`) now appear in
   the Home Assistant screen picker instead of being silently omitted.
-- **Assigning a disk-only screen**: the admin write endpoints (device `screen`,
-  `default_screen`, `registration_screen`) now accept auto-discovered screens too, so
+- **Assigning a disk-only screen**: the admin write endpoints for a device's `screen`
+  (including the reserved `DEFAULT` device) now accept auto-discovered screens too, so
   selecting one (e.g. `gphoto`) no longer fails with `unknown screen`. Previously only
   the listing was fixed, and the write still rejected the very screens it offered.
 - **`gphoto` screen**: `album_url` is no longer marked `required`, matching the script's
@@ -153,10 +157,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hit `/api/display` was shown a registration screen but never tracked, so it never
   surfaced as pending. The pending entry's registration code now matches the code
   shown on the device.
-- **Registration screen**: an unregistered device is now always shown its registration
-  code — the built-in registration screen — even when a `default_screen` is configured.
-  Previously `default_screen` took precedence and hid the code, blocking code-matched
-  onboarding. Set `registration.screen` to override with a custom registration screen.
+- **Registration screen**: an unregistered device's registration code is now always
+  passed to the reserved `DEFAULT` device's screen as `device.registration_code`; the
+  built-in `byonk-builtin/default` screen renders it automatically. Previously the code
+  could be hidden entirely, blocking code-matched onboarding. Assign your own screen to
+  `devices.DEFAULT` if you want custom rendering — include
+  `{% if device.registration_code %}` in its `screen.svg` to keep the code visible (see
+  *Changed* above for the reserved `DEFAULT` device model).
 - **Home Assistant device Panel/Dither selects** no longer show "unknown" when the
   device's stored value is not one of the offered options (e.g. a panel profile that
   isn't in the running config). Home Assistant blanks a select whose current value is

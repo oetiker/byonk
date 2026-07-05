@@ -37,8 +37,9 @@ devices:
     params:
       name: "Zurich"
 
-# Default screen for unmapped devices (a handle/path ref)
-default_screen: byonk-builtin/default
+  # Reserved key: shown to every un-onboarded or unassigned device
+  DEFAULT:
+    screen: byonk-builtin/default
 
 # Optional: register additional screen packages (see below)
 packages:
@@ -113,16 +114,23 @@ The `dither` option selects which dithering algorithm to use. All algorithms per
 
 For most screens, the default `"atkinson"` works well. Use `"atkinson-hybrid"` for chromatic palettes where Atkinson shows color drift. Use `"floyd-steinberg"` for photographic content. For sparse chromatic palettes (e.g. black/white/red/yellow), try `"jarvis-judice-ninke"` or `"sierra"` to reduce oscillation artifacts.
 
-## Default Screen
+## The Reserved DEFAULT Device
 
-The `default_screen` specifies which screen to show for devices not listed in the `devices`
-section. It is a qualified `handle/path` ref:
+`devices` reserves one key, `DEFAULT`, whose `screen` is shown to any device that
+isn't listed elsewhere in `devices` — either because it hasn't been onboarded yet
+(new devices show their registration code on this screen while waiting to be
+claimed) or because it's registered but has no screen assigned. It's a qualified
+`handle/path` ref, set the same way as any other device's `screen`:
 
 ```yaml
-default_screen: byonk-builtin/default
+devices:
+  DEFAULT:
+    screen: byonk-builtin/default
 ```
 
-If omitted, unknown devices receive an error response.
+If `devices.DEFAULT` is omitted, byonk falls back to its embedded
+`byonk-builtin/default` screen — a code-level fallback that always resolves, so
+there's no configuration state that leaves a device with nothing to show.
 
 ## Packages Section
 
@@ -166,7 +174,7 @@ devices:
 
 ### How It Works
 
-1. **New device connects** - Shows the default screen with a 10-character registration code
+1. **New device connects** - Shows the `devices.DEFAULT` screen with a 10-character registration code
 2. **Admin reads code** - The code is displayed in 2x5 format on the e-ink screen
 3. **Admin adds code to devices** - Add the code (hyphenated format) to the `devices` section
 4. **Device refreshes** - Now shows the configured screen
@@ -183,7 +191,10 @@ devices:
 | Property | Required | Description |
 |----------|----------|-------------|
 | `enabled` | No | Enable device registration (default: true) |
-| `screen` | No | Custom screen for registration (default: uses default_screen) |
+
+There is no separate registration screen setting — the screen shown to a new,
+unregistered device is the same `devices.DEFAULT` screen described in
+[The Reserved DEFAULT Device](#the-reserved-default-device) above.
 
 ### Registration Code Format
 
@@ -213,7 +224,7 @@ devices:
 
 ### Custom Registration Screen
 
-The registration code is available to your default screen as `device.registration_code` and `device.registration_code_hyphenated`. Your default screen's `screen.svg` can conditionally show it:
+The registration code is available to the `devices.DEFAULT` screen as `device.registration_code` and `device.registration_code_hyphenated`. That screen's `screen.svg` can conditionally show it:
 
 ```svg
 {% if device.registration_code %}
@@ -281,7 +292,9 @@ devices:
       station: "Olten, Bahnhof"
       limit: 6
 
-default_screen: byonk-builtin/default
+  # Reserved key: shown to every un-onboarded or unassigned device
+  DEFAULT:
+    screen: byonk-builtin/default
 ```
 
 ## Panels Section

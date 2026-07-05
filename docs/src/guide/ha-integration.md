@@ -51,6 +51,14 @@ The remaining server-global settings — `auth_mode` and `package_refresh_interv
 are **not** exposed as entities here; they're edited in the
 [Byonk add-on's Configuration tab](ha-addon.md) (changes apply on add-on restart).
 
+### Byonk Default device
+
+Alongside the hub, the integration automatically creates a **Byonk Default**
+device — no setup step needed. Its single **Screen** select entity sets the
+screen assigned to byonk's reserved `devices.DEFAULT` entry: the screen shown by
+every un-onboarded device (with its pairing code) and by any registered device
+with no screen of its own. Changes apply live, no restart required.
+
 ### Per-device entities (one device per TRMNL)
 
 | Entity | Type | Description |
@@ -85,10 +93,9 @@ A **Discovered** card for the new device appears automatically in
    on the next refresh.
 
 > **Note:** What an un-onboarded (or registered-but-unassigned) device displays on
-> its e-ink panel is controlled by Byonk's `default_screen` setting, which is not
-> currently exposed anywhere in Home Assistant — edit `config.yaml` directly (see
-> [Configuration, screens, and fonts](ha-addon.md#configuration-screens-and-fonts))
-> if you need to change it from the shipped default.
+> its e-ink panel is controlled by the **Byonk Default** device's Screen select
+> (see [Entities](#entities) above) — change it there any time, live, no restart
+> needed.
 
 Removing an HA device (via **Settings → Devices & Services → Delete**) removes its
 mapping from Byonk. Byonk mappings that have no corresponding HA device are pruned

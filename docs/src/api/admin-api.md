@@ -477,8 +477,6 @@ changed.
 {
   "registration_enabled": true,
   "auth_mode": "api_key",
-  "default_screen": "byonk-builtin/default",
-  "registration_screen": "byonk-builtin/useful/registration",
   "package_refresh_interval": 3600
 }
 ```
@@ -487,9 +485,12 @@ changed.
 |-------|------|---------------|
 | `registration_enabled` | boolean | `true` / `false` |
 | `auth_mode` | string | `"api_key"` or `"ed25519"` |
-| `default_screen` | string | a qualified `handle/path` screen ref listed in `GET /api/admin/screens` |
-| `registration_screen` | string | a qualified `handle/path` screen ref listed in `GET /api/admin/screens`, or `""` (empty string) to fall back to the built-in registration-screen sentinel |
 | `package_refresh_interval` | integer | seconds between automatic re-fetches of mutable (tag/branch) package pins; `0` disables periodic refresh (the default) |
+
+There is no `default_screen` or `registration_screen` field here — the screen
+shown to un-onboarded or unassigned devices is the reserved `DEFAULT` device,
+set like any other device via `POST` / `PATCH /api/admin/devices/DEFAULT`
+(see above).
 
 **Responses**:
 

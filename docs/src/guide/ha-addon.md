@@ -60,9 +60,10 @@ restart.
 > `auth_mode` / `package_refresh_interval` settings in `config.yaml` are
 > **ignored** — those come from the Configuration tab above instead. `config.yaml`
 > still supplies everything else: per-device mappings (`devices:`, normally
-> managed by the [Byonk integration](ha-integration.md)) and any other settings
-> not listed in the Options table (for example `default_screen`, which controls
-> what an un-onboarded or unassigned device displays).
+> managed by the [Byonk integration](ha-integration.md)), including the reserved
+> `devices.DEFAULT` entry that controls what an un-onboarded or unassigned device
+> displays — set live from the **Byonk Default** device's Screen select in the
+> [Byonk integration](ha-integration.md), no restart needed.
 
 ## Screen package cache persistence
 

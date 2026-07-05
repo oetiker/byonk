@@ -28,6 +28,7 @@ from .const import (
     CONF_BASE_URL,
     CONF_DEVICE_KEY,
     CONF_HUB_ENTRY_ID,
+    DEFAULT_DEVICE_KEY,
     DOMAIN,
 )
 from .param_form import build_params_schema, coerce_params
@@ -133,6 +134,14 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
         mac = discovery_info["key"]
         await self.async_set_unique_id(mac)
         self._abort_if_unique_id_configured()
+        if mac == DEFAULT_DEVICE_KEY:
+            hub = self._hub_entry()
+            if hub is None:
+                return self.async_abort(reason="no_hub")
+            return self.async_create_entry(
+                title="Byonk Default",
+                data={CONF_DEVICE_KEY: DEFAULT_DEVICE_KEY, CONF_HUB_ENTRY_ID: hub.entry_id},
+            )
         self._discovery = discovery_info
         self.context["title_placeholders"] = {
             "name": f"TRMNL {mac}",

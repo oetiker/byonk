@@ -4,7 +4,7 @@ from __future__ import annotations
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ADDON_NAME, CONF_BASE_URL, DOMAIN
+from .const import ADDON_NAME, CONF_BASE_URL, DEFAULT_DEVICE_KEY, DOMAIN
 from .coordinator import ByonkCoordinator
 
 
@@ -31,12 +31,20 @@ class ByonkDeviceEntity(CoordinatorEntity[ByonkCoordinator]):
     def __init__(self, coordinator: ByonkCoordinator, key: str) -> None:
         super().__init__(coordinator)
         self._key = key
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, key)},
-            name=f"TRMNL {key}",
-            manufacturer="TRMNL",
-            via_device=(DOMAIN, coordinator.entry.entry_id),
-        )
+        if key == DEFAULT_DEVICE_KEY:
+            self._attr_device_info = DeviceInfo(
+                identifiers={(DOMAIN, key)},
+                name="Byonk Default",
+                manufacturer="Byonk",
+                via_device=(DOMAIN, coordinator.entry.entry_id),
+            )
+        else:
+            self._attr_device_info = DeviceInfo(
+                identifiers={(DOMAIN, key)},
+                name=f"TRMNL {key}",
+                manufacturer="TRMNL",
+                via_device=(DOMAIN, coordinator.entry.entry_id),
+            )
 
     @property
     def device(self) -> dict | None:

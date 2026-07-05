@@ -17,6 +17,10 @@ CONF_BASE_URL = "base_url"
 CONF_DEVICE_KEY = "device_key"
 CONF_HUB_ENTRY_ID = "hub_entry_id"
 
+# Reserved device key whose screen every un-onboarded / unassigned device shows.
+# Mirrors byonk's RESERVED_DEFAULT_KEY.
+DEFAULT_DEVICE_KEY = "DEFAULT"
+
 PLATFORMS: list[Platform] = [
     Platform.BUTTON,
     Platform.SENSOR,

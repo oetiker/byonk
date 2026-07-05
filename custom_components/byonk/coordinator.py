@@ -15,7 +15,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import ByonkApiError, ByonkAuthError, ByonkClient
-from .const import CONF_DEVICE_KEY, DOMAIN, UPDATE_INTERVAL_SECONDS
+from .const import CONF_DEVICE_KEY, DEFAULT_DEVICE_KEY, DOMAIN, UPDATE_INTERVAL_SECONDS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,9 +46,6 @@ class ByonkData:
             if s["ref"] == ref:
                 return s.get("params") or []
         return []
-
-    def registration_screen(self) -> str | None:
-        return self.config.get("registration", {}).get("screen")
 
     def registration_enabled(self) -> bool:
         return bool(self.config.get("registration", {}).get("enabled", False))
@@ -121,6 +118,7 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
         if self.data is not None:
             await self._async_reconcile(data)
         self._async_sync_discovery(data)
+        self._async_provision_default(data)
         return data
 
     def _device_entries(self) -> dict[str, ConfigEntry]:
@@ -132,8 +130,9 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
 
     async def _async_reconcile(self, data: ByonkData) -> None:
         device_entries = self._device_entries()
-        ha_keys = set(device_entries)
+        ha_keys = set(device_entries) - {DEFAULT_DEVICE_KEY}  # never auto-remove
         byonk_registered = {d["key"] for d in data.devices if d.get("registered")}
+        byonk_registered.discard(DEFAULT_DEVICE_KEY)  # reserved: never orphan-prune
 
         for key in ha_keys & byonk_registered:
             self._remove_strikes.pop(key, None)
@@ -157,6 +156,30 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
                     await self.client.async_delete_device(key)
                 except ByonkApiError as err:
                     _LOGGER.warning("orphan prune failed for %s: %s", key, err)
+
+    def _async_provision_default(self, data: ByonkData) -> None:
+        has_default = any(
+            d.get("key") == DEFAULT_DEVICE_KEY and d.get("reserved")
+            for d in data.devices
+        )
+        if not has_default:
+            return
+        configured = {e.unique_id for e in self.hass.config_entries.async_entries(DOMAIN)}
+        if DEFAULT_DEVICE_KEY in configured:
+            return
+        flows = self.hass.config_entries.flow.async_progress_by_handler(
+            DOMAIN, include_uninitialized=True
+        )
+        if any(f["context"].get("unique_id") == DEFAULT_DEVICE_KEY for f in flows):
+            return
+        self.hass.async_create_task(
+            self.hass.config_entries.flow.async_init(
+                DOMAIN,
+                context={"source": SOURCE_INTEGRATION_DISCOVERY},
+                data={"key": DEFAULT_DEVICE_KEY, "code": None, "model": None},
+            ),
+            eager_start=False,
+        )
 
     def _async_sync_discovery(self, data: ByonkData) -> None:
         pending_macs = {p["mac"] for p in data.pending}

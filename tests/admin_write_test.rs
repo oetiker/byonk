@@ -102,6 +102,30 @@ async fn test_patch_default_device_screen_persists() {
 }
 
 #[tokio::test]
+async fn test_patch_default_device_bad_screen_returns_400() {
+    // The reserved DEFAULT device goes through the same per-device screen
+    // validation as any other device — an unknown ref must be rejected.
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+    let body = format!(r#"{{"screen":"{UNKNOWN}"}}"#);
+    let resp = app
+        .patch_json("/api/admin/devices/DEFAULT", &[AUTH], &body)
+        .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_delete_default_device_returns_409() {
+    // The reserved DEFAULT device can never be deleted: HA's manual
+    // config-entry removal must be harmless, and this 409 is the
+    // defense-in-depth backstop.
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+    let resp = app.delete("/api/admin/devices/DEFAULT", &[AUTH]).await;
+    assert_eq!(resp.status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn test_patch_settings_toggles_registration() {
     let dir = tempfile::tempdir().unwrap();
     let (app, path) = TestApp::new_admin_with_file("secret", dir.path());

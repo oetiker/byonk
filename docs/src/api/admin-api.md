@@ -57,6 +57,7 @@ config mapping, plus any configured devices that have never connected yet.
     "mac": "AA:BB:CC:DD:EE:FF",
     "registration_code": "ABCD-1234",
     "registered": true,
+    "reserved": false,
     "model": "og",
     "firmware_version": "1.7.1",
     "last_seen": "2026-06-28T10:15:00+00:00",
@@ -74,6 +75,8 @@ config mapping, plus any configured devices that have never connected yet.
 Field notes:
 - `key` — the config map key for this device (MAC or registration code).
 - `registered` — `true` if the device appears in the `devices:` config section.
+- `reserved` — `true` for the reserved `DEFAULT` device (byonk-managed fallback), `false`
+  for physical devices.
 - `registration_code` is an empty string for devices that appear in config but have never
   connected (it is never `null`).
 - Telemetry fields (`model`, `firmware_version`, `last_seen`, `battery_voltage`, `rssi`) are
@@ -462,7 +465,7 @@ Remove a device mapping from `config.yaml`.
 |--------|---------|
 | `200` | Deleted — `{"deleted": "AA:BB:CC:DD:EE:FF"}` |
 | `404` | No device with that key |
-| `409` | Config is embedded/read-only |
+| `409` | `:key` is the reserved `DEFAULT` device (it cannot be deleted), or config is embedded/read-only |
 
 ---
 

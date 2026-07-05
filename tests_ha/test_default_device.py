@@ -1,10 +1,12 @@
 """Tests for the reserved DEFAULT device: auto-provision, orphan-prune exemption,
 and the screen-only select surface."""
+from unittest.mock import patch
+
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.byonk.const import CONF_DEVICE_KEY, DEFAULT_DEVICE_KEY, DOMAIN
 from custom_components.byonk.coordinator import ByonkData
-from tests_ha.conftest import make_hub_entry
+from tests_ha.conftest import make_device_entry, make_hub_entry
 
 TRANSIT_REF = "byonk-builtin/useful/swiss-departure-board"
 DEFAULT_SCREEN = "byonk-builtin/default"
@@ -106,6 +108,25 @@ async def test_default_device_exempt_from_orphan_prune(hass, byonk):
     # pruned by now, but DEFAULT never is.
     await coordinator._async_reconcile(data)
     await coordinator._async_reconcile(data)
+    assert not byonk.delete_device.called
+
+
+async def test_removing_default_entry_does_not_delete_byonk_mapping(hass, byonk):
+    # A manual "Delete device" from Settings -> Devices & Services on the
+    # reserved DEFAULT entry must be harmless: byonk never loses the DEFAULT
+    # mapping, so the next coordinator refresh can re-provision the entry.
+    hub = make_hub_entry(hass)
+    await hass.config_entries.async_setup(hub.entry_id)
+    await hass.async_block_till_done()
+    dev_entry = make_device_entry(hass, hub, DEFAULT_DEVICE_KEY)
+    await hass.config_entries.async_setup(dev_entry.entry_id)
+    await hass.async_block_till_done()
+
+    with patch(
+        "custom_components.byonk.ByonkClient.async_delete_device", new=byonk.delete_device
+    ):
+        await hass.config_entries.async_remove(dev_entry.entry_id)
+        await hass.async_block_till_done()
     assert not byonk.delete_device.called
 
 

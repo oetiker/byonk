@@ -15,6 +15,7 @@ from .const import (
     CONF_BASE_URL,
     CONF_DEVICE_KEY,
     CONF_HUB_ENTRY_ID,
+    DEFAULT_DEVICE_KEY,
     DOMAIN,
     PLATFORMS,
 )
@@ -73,6 +74,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ByonkConfigEntry) -> bo
 async def async_remove_entry(hass: HomeAssistant, entry: ByonkConfigEntry) -> None:
     """When a device entry is removed, delete its mapping from byonk (best-effort)."""
     if CONF_DEVICE_KEY not in entry.data:
+        return
+    if entry.data.get(CONF_DEVICE_KEY) == DEFAULT_DEVICE_KEY:
+        # The DEFAULT device is byonk-managed and reserved: a manual delete of
+        # this config entry must not delete it from byonk (byonk itself
+        # rejects that with 409). Leaving it in place lets the next
+        # coordinator refresh re-provision the entry via
+        # _async_provision_default; deleting it would report DEFAULT as
+        # missing from GET /devices forever, since byonk never lets it go.
         return
     hub = hass.config_entries.async_get_entry(entry.data[CONF_HUB_ENTRY_ID])
     if hub is None:

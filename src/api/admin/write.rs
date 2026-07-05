@@ -9,6 +9,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use crate::error::ApiError;
+use crate::models::config::RESERVED_DEFAULT_KEY;
 use crate::models::param_schema::validate_params;
 use crate::server::{reload_config, AppState};
 use crate::services::config_writer;
@@ -248,6 +249,11 @@ pub async fn delete_device(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&state, &headers)?;
+    if key == RESERVED_DEFAULT_KEY {
+        return Err(ApiError::Conflict(
+            "the reserved DEFAULT device cannot be deleted".into(),
+        ));
+    }
     let path = require_file_config(&state)?;
     let _guard = state.write_lock.lock().await;
 

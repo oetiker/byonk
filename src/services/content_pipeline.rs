@@ -547,6 +547,52 @@ impl ContentPipeline {
         )
     }
 
+    /// Render a generic "device not assigned" screen for the ultimate fallback
+    /// when no registration code is available (a registered device whose DEFAULT
+    /// screen is unset/unresolvable). Unregistered devices get the code screen
+    /// via `render_builtin_fallback(Some(code), ..)` instead.
+    pub fn render_unassigned_screen(&self, width: u32, height: u32) -> String {
+        let scale = (width as f32 / 800.0).min(height as f32 / 480.0);
+        let title_font_size = (32.0 * scale).round() as u32;
+        let subtitle_font_size = (18.0 * scale).round() as u32;
+        let center_x = width / 2;
+        let title_y = height / 2 - (title_font_size / 2);
+        let subtitle_y = title_y + (title_font_size as f32 * 1.6).round() as u32;
+        format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="{width}" height="{height}">
+  <defs>
+    <style>
+      text {{ text-anchor: middle; font-family: Outfit, sans-serif; }}
+      .title {{ font-weight: 700; }}
+      .subtitle {{ font-weight: 400; }}
+    </style>
+  </defs>
+  <rect width="{width}" height="{height}" fill="#ffffff"/>
+  <rect x="10" y="10" width="{border_width}" height="{border_height}" fill="none" stroke="#000000" stroke-width="4" rx="8"/>
+  <text x="{center_x}" y="{title_y}" font-size="{title_font_size}" class="title" fill="#000000">DEVICE NOT ASSIGNED</text>
+  <text x="{center_x}" y="{subtitle_y}" font-size="{subtitle_font_size}" class="subtitle" fill="#666666">Assign a screen to the DEFAULT device in byonk.</text>
+</svg>"##,
+            width = width,
+            height = height,
+            border_width = width.saturating_sub(20),
+            border_height = height.saturating_sub(20),
+            center_x = center_x,
+            title_y = title_y,
+            subtitle_y = subtitle_y,
+            title_font_size = title_font_size,
+            subtitle_font_size = subtitle_font_size,
+        )
+    }
+
+    /// Ultimate built-in fallback: show the pairing code when we have one
+    /// (unregistered device), otherwise a generic "not assigned" screen.
+    pub fn render_builtin_fallback(&self, code: Option<&str>, width: u32, height: u32) -> String {
+        match code {
+            Some(code) => self.render_registration_screen(code, width, height),
+            None => self.render_unassigned_screen(width, height),
+        }
+    }
+
     /// Run a screen directly by its `handle/path` ref (for dev mode — no device
     /// config consulted). Params come in as JSON and are converted to YAML.
     pub fn run_script_direct(
@@ -758,5 +804,24 @@ mod pipeline_tests {
         assert_eq!(result.data["c"], serde_json::json!("hello-asset"));
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn render_builtin_fallback_with_code_shows_code() {
+        let loader = Arc::new(AssetLoader::new(None, None, None));
+        let pipeline = build_pipeline(HashMap::new(), loader);
+        let svg = pipeline.render_builtin_fallback(Some("ABCDEFGHJK"), 800, 480);
+        assert!(svg.contains("A B C D E"), "code row should be rendered");
+        assert!(svg.contains("DEVICE REGISTRATION"));
+    }
+
+    #[test]
+    fn render_builtin_fallback_without_code_is_generic() {
+        let loader = Arc::new(AssetLoader::new(None, None, None));
+        let pipeline = build_pipeline(HashMap::new(), loader);
+        let svg = pipeline.render_builtin_fallback(None, 800, 480);
+        assert!(svg.contains("<svg"));
+        assert!(!svg.contains("DEVICE REGISTRATION"));
+        assert!(svg.to_lowercase().contains("not assigned"));
     }
 }

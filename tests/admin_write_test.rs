@@ -83,12 +83,22 @@ async fn test_add_builtin_ref_screen_is_accepted() {
 }
 
 #[tokio::test]
-async fn test_builtin_ref_as_default_is_accepted() {
+async fn test_patch_default_device_screen_persists() {
+    // Setting the DEFAULT device's screen is now done via the per-device
+    // endpoint (the reserved DEFAULT device ships in the embedded config).
     let dir = tempfile::tempdir().unwrap();
-    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
-    let body = format!(r#"{{"default_screen":"{GPHOTO}"}}"#);
-    let resp = app.patch_json("/api/admin/settings", &[AUTH], &body).await;
+    let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
+    let body = format!(r#"{{"screen":"{GPHOTO}"}}"#);
+    let resp = app
+        .patch_json("/api/admin/devices/DEFAULT", &[AUTH], &body)
+        .await;
     assert_eq!(resp.status, StatusCode::OK);
+
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        on_disk.contains(GPHOTO),
+        "expected '{GPHOTO}' on disk:\n{on_disk}"
+    );
 }
 
 #[tokio::test]
@@ -116,15 +126,6 @@ async fn test_patch_settings_bogus_auth_mode_returns_400() {
     let resp = app
         .patch_json("/api/admin/settings", &[AUTH], r#"{"auth_mode":"bogus"}"#)
         .await;
-    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn test_patch_settings_unknown_default_screen_returns_400() {
-    let dir = tempfile::tempdir().unwrap();
-    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
-    let body = format!(r#"{{"default_screen":"{UNKNOWN}"}}"#);
-    let resp = app.patch_json("/api/admin/settings", &[AUTH], &body).await;
     assert_eq!(resp.status, StatusCode::BAD_REQUEST);
 }
 
@@ -384,27 +385,6 @@ async fn test_patch_with_screen_change_replaces_params() {
 }
 
 #[tokio::test]
-async fn test_patch_settings_registration_screen_persists() {
-    let dir = tempfile::tempdir().unwrap();
-    let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
-
-    let resp = app
-        .patch_json(
-            "/api/admin/settings",
-            &[AUTH],
-            &format!(r#"{{"registration_screen":"{TRANSIT}"}}"#),
-        )
-        .await;
-    assert_eq!(resp.status, StatusCode::OK);
-
-    let on_disk = std::fs::read_to_string(&path).unwrap();
-    assert!(
-        on_disk.contains(&format!("screen: {TRANSIT}")),
-        "expected 'screen: {TRANSIT}' in:\n{on_disk}"
-    );
-}
-
-#[tokio::test]
 async fn test_patch_settings_package_refresh_interval_persists() {
     let dir = tempfile::tempdir().unwrap();
     let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
@@ -423,41 +403,6 @@ async fn test_patch_settings_package_refresh_interval_persists() {
         on_disk.contains("package_refresh_interval: 3600"),
         "expected 'package_refresh_interval: 3600' in:\n{on_disk}"
     );
-}
-
-#[tokio::test]
-async fn test_patch_settings_registration_screen_empty_is_builtin_sentinel() {
-    let dir = tempfile::tempdir().unwrap();
-    let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
-
-    let resp = app
-        .patch_json(
-            "/api/admin/settings",
-            &[AUTH],
-            r#"{"registration_screen":""}"#,
-        )
-        .await;
-    assert_eq!(resp.status, StatusCode::OK);
-
-    let on_disk = std::fs::read_to_string(&path).unwrap();
-    assert!(
-        on_disk.contains("screen: ''") || on_disk.contains("screen: \"\""),
-        "expected empty screen sentinel in:\n{on_disk}"
-    );
-}
-
-#[tokio::test]
-async fn test_patch_settings_unknown_registration_screen_returns_400() {
-    let dir = tempfile::tempdir().unwrap();
-    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
-    let resp = app
-        .patch_json(
-            "/api/admin/settings",
-            &[AUTH],
-            &format!(r#"{{"registration_screen":"{UNKNOWN}"}}"#),
-        )
-        .await;
-    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

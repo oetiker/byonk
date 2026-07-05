@@ -241,7 +241,7 @@ impl TestApp {
         // Write a minimal config.yaml pointing at the broken screen
         let config_path = dir.join("config.yaml");
         let yaml = format!(
-            "admin:\n  token: {token}\ndefault_screen: broken\nscreens:\n  broken:\n    script: broken.lua\n    template: broken.svg\n"
+            "admin:\n  token: {token}\ndevices:\n  DEFAULT:\n    screen: broken\nscreens:\n  broken:\n    script: broken.lua\n    template: broken.svg\n"
         );
         std::fs::write(&config_path, yaml).expect("write config.yaml");
 

@@ -174,7 +174,7 @@ async fn test_delete_package_referenced_by_device_is_conflict() {
 }
 
 #[tokio::test]
-async fn test_delete_package_referenced_by_default_screen_is_conflict() {
+async fn test_delete_package_referenced_by_default_device_is_conflict() {
     let dir = tempfile::tempdir().unwrap();
     let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
 
@@ -188,15 +188,23 @@ async fn test_delete_package_referenced_by_default_screen_is_conflict() {
         .await;
     assert_eq!(resp.status, StatusCode::OK);
 
-    // Directly inject `default_screen: weather/forecast` into the config
-    // file (bypassing `PATCH /settings`, which validates screen resolution
-    // against the loader — the package was never actually fetched here).
+    // Point the reserved DEFAULT device at a screen inside the `weather`
+    // package's namespace by directly injecting `devices.DEFAULT.screen`
+    // into the config file (bypassing `PATCH /devices/DEFAULT`, which
+    // validates screen resolution against the loader — the package was
+    // never actually fetched here).
     let yaml = std::fs::read_to_string(&path).unwrap();
     let mut value: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+    let mut device = serde_yaml::Mapping::new();
+    device.insert("screen".into(), "weather/forecast".into());
     value
         .as_mapping_mut()
         .unwrap()
-        .insert("default_screen".into(), "weather/forecast".into());
+        .entry("devices".into())
+        .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()))
+        .as_mapping_mut()
+        .unwrap()
+        .insert("DEFAULT".into(), serde_yaml::Value::Mapping(device));
     std::fs::write(&path, serde_yaml::to_string(&value).unwrap()).unwrap();
 
     // Force a reload via a harmless settings patch.
@@ -212,8 +220,8 @@ async fn test_delete_package_referenced_by_default_screen_is_conflict() {
     let del = app.delete("/api/admin/packages/weather", &[AUTH]).await;
     assert_eq!(del.status, StatusCode::CONFLICT, "body: {}", del.text());
     assert!(
-        del.text().contains("default_screen"),
-        "conflict message should name default_screen: {}",
+        del.text().contains("DEFAULT"),
+        "conflict message should name the referencing device: {}",
         del.text()
     );
 }

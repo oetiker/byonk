@@ -187,10 +187,9 @@ impl ContentPipeline {
             // Device config exists but screen not found — fall through to default
         }
 
-        // Fall back to the default screen ref with empty params.
+        // Fall back to the reserved DEFAULT device's screen with empty params.
         let default_ref = config
-            .default_screen
-            .as_deref()
+            .default_device_screen()
             .unwrap_or("byonk-builtin/default");
         let resolved = self
             .package_manager
@@ -666,8 +665,16 @@ mod pipeline_tests {
     }
 
     fn build_pipeline(disk: HashMap<String, PathBuf>, loader: Arc<AssetLoader>) -> ContentPipeline {
-        let config = Arc::new(crate::models::AppConfig::default());
-        let shared: crate::server::SharedConfig = Arc::new(arc_swap::ArcSwap::from(config));
+        build_pipeline_with_config(crate::models::AppConfig::default(), disk, loader)
+    }
+
+    fn build_pipeline_with_config(
+        config: crate::models::AppConfig,
+        disk: HashMap<String, PathBuf>,
+        loader: Arc<AssetLoader>,
+    ) -> ContentPipeline {
+        let shared: crate::server::SharedConfig =
+            Arc::new(arc_swap::ArcSwap::from(Arc::new(config)));
         let renderer = Arc::new(RenderService::new(&loader).unwrap());
         let cache_root = std::env::temp_dir().join(format!(
             "byonk_pipeline_test_cache_{}_{}",
@@ -682,6 +689,33 @@ mod pipeline_tests {
         );
         pm.rebuild_loader();
         ContentPipeline::new(shared, loader, renderer, pm).unwrap()
+    }
+
+    #[test]
+    fn run_script_for_device_falls_back_to_default_device_screen() {
+        use crate::models::config::{DeviceConfig, RESERVED_DEFAULT_KEY};
+        let mut config = crate::models::AppConfig::default();
+        config.devices.insert(
+            RESERVED_DEFAULT_KEY.to_string(),
+            DeviceConfig {
+                screen: "byonk-builtin/example/hello".to_string(),
+                ..Default::default()
+            },
+        );
+        let loader = Arc::new(AssetLoader::new(None, None, None));
+        let pipeline = build_pipeline_with_config(config, HashMap::new(), loader);
+        // A device with no mapping of its own resolves through devices["DEFAULT"],
+        // which is set here to a screen distinct from AppConfig::default()'s
+        // `default_screen` (byonk-builtin/default) so the test only passes once
+        // the fallback actually consults the DEFAULT device.
+        let result = pipeline
+            .run_script_for_device("00:11:22:33:44:55", None)
+            .expect("default device screen should run");
+        assert!(
+            result.screen_name.contains("hello"),
+            "expected fallback to resolve through devices[\"DEFAULT\"] (byonk-builtin/example/hello), got {}",
+            result.screen_name
+        );
     }
 
     #[test]

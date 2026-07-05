@@ -1,73 +1,57 @@
 # Handover — Byonk
 
-_Last updated: 2026-07-05 — **Plan A (add-on-owned global config) is now LIVE-VM-VERIFIED on the byonk side.** All 409-gate cases, the registration-toggle Critical fix, and the options.json→effective-config round-trip (package registry authoritative from the add-on Options form, restart-to-apply) were confirmed on the HAOS VM. Branch `feat/screen-packages-p2-distribution` @ `9932719`, tree clean — **no repo code changed this session** (all changes were VM-side). **Plan B (reserved DEFAULT device) is still unwritten.** Two follow-ups surfaced: a VM test-tooling gap (below) and a user-side HA-UI eyeball._
+_Last updated: 2026-07-05 — **Plan B (reserved DEFAULT device) is now WRITTEN and committed.** The full 10-task implementation plan is at `docs/superpowers/plans/2026-07-05-reserved-default-device.md`, grounded against this HEAD with the real test harnesses verified. Branch `feat/screen-packages-p2-distribution` @ `cff3b8f`, tree clean. **Nothing implemented yet — the next session EXECUTES the plan.** Plan A stays live-VM-verified (byonk side). Do execution in a FRESH session (this one spent its context on the deep ground-truth read + plan authoring)._
 
 ## TL;DR — resume here
 
-1. **Plan-A VM verification: DONE on the byonk side** (details in §"Plan A VM verification — RESULTS"). Remaining slice is **user-side**: eyeball the integration **entities** in the HA UI (package status sensors update, registration switch toggles, Update-packages button) — needs HA UI login creds this agent doesn't have. The byonk APIs those entities call are all verified green.
-2. **Write + execute Plan B** (reserved DEFAULT device) — `superpowers:writing-plans` then subagent-driven, after the short ground-truth read (§"Plan B"). **This is the main remaining work; do it in a FRESH session** (this one spent heavy context debugging the VM supervisor).
-3. **Then decide branch finishing** (`superpowers:finishing-a-development-branch`): branch carries Plan 1 + 2 + 3 + A; Plan B is the remaining part of the same redirection. Recommendation: hold the merge until Plan B lands so the whole redirection merges together.
-4. **New follow-up (VM tooling):** `make ha-rebuild` does NOT sync the add-on manifest, so Plan-A's options-schema never reached the VM until patched by hand this session. See §"VM tooling gap" + memory `ha-vm-addon-manifest-sync-gap`. Worth fixing before the next VM verification.
+1. **Execute Plan B** — `docs/superpowers/plans/2026-07-05-reserved-default-device.md`. Use `superpowers:subagent-driven-development` (recommended: fresh subagent per task + two-stage review) or `superpowers:executing-plans`. The plan is self-contained (exact paths, full code, TDD steps, exact commands); it does NOT require re-reading the whole codebase first.
+2. **Part A (Tasks 1-8, Rust)** is standalone-shippable on its own: byonk resolves screens via the reserved DEFAULT device in both standalone and add-on mode, settable over `PATCH /devices/DEFAULT`. Run `make check` at the Part-A checkpoint. **Part B (Tasks 9-10, HA integration + docs)** presents the DEFAULT device with a live screen-select; run `.venv/bin/pytest tests_ha -q` (baseline 69 passing).
+3. **Then finish the branch** (`superpowers:finishing-a-development-branch`): branch carries Plan 1 + 2 + 3 + A (code) + A/B specs+plans. Plan B is the last part of the same redirection — **hold the merge until Plan B lands**, then the whole redirection merges together.
+4. **Before merge (still open):** VM-verify Plan B (set the DEFAULT device screen via admin API / the Byonk Default card; confirm an unregistered device shows the code and a registered-unassigned device shows the DEFAULT screen) + the user-side HA-UI eyeball of Plan-A monitoring entities. Both need the VM (mind the `ha-vm-addon-manifest-sync-gap` — but Plan B touches NO add-on manifest, so `make ha-rebuild` alone suffices for the byonk-side; no schema dance).
 
-## Plan A VM verification — RESULTS (2026-07-05, on the HAOS VM)
+## Plan B in one paragraph (what it does)
 
-Rebuilt the add-on (`make ha-rebuild`), patched the VM manifest schema (see gap below), set options via the Supervisor API, restarted, and probed byonk's `/api/admin/*` from the Mac host (`:3000`). All green:
+Removes byonk's two overlapping "what does an unconfigured device show" settings — `AppConfig.default_screen` and `RegistrationConfig.screen` — and replaces them with a single reserved `DEFAULT` device (`devices["DEFAULT"]`). Resolution becomes `device.screen → DEFAULT.screen → built-in fallback`. The shipped `byonk-builtin/default` screen is **already registration-aware** (`screens/default/screen.svg` renders `device.registration_code_hyphenated` under `{% if device.registration_code %}`), so the DEFAULT screen shows the pairing code for un-onboarded devices and normal content otherwise. New built-in ultimate fallback: code screen when a `registration_code` is present, generic "unassigned" screen otherwise. `registration.enabled` is KEPT. The DEFAULT device is written/read over the per-device admin API (live, allowed in add-on mode) — so it needs **no add-on manifest / options.json change**, and the integration presents it as a normal device with a screen-select. Core model change → applies to standalone byonk too.
 
-- **409 gate (add-on mode active, field-aware):** `PATCH /settings` with `auth_mode` / `default_screen` / `package_refresh_interval` / `registration_screen` → **409**. `POST`/`PATCH`/`DELETE /packages` (registry) → **409**.
-- **Registration-toggle Critical fix:** `PATCH /settings {"registration_enabled":true}` (only) → **200** (stays live in add-on mode).
-- **Not gated:** `PATCH /devices/:key` (per-device) → **200**; `POST /packages/update` (content refresh) → **200**.
-- **Options form drives effective config (round-trip, restart-to-apply):** set add-on option `packages:[{handle:"optonly",…}]` → after add-on restart, byonk's **`/packages` registry = [byonk-builtin, optonly]** — i.e. it follows **options.json authoritatively**, NOT the byonk-owned `config.yaml` (which has `disttest`). An **empty** options `packages:[]` clears the registry to just `byonk-builtin`. Confirmed both directions.
-- **Design note (not a bug):** `GET /config` (`read.rs::get_config`) serves the **raw `config.yaml` file from disk**, not the options-overlaid in-memory config — so it echoes the file's `package_refresh_interval`/`auth_mode`, not the effective options values. The overlay's real effect is observed via `/packages` (registry) and the running behavior. `apply_to_config` (auth_mode / package_refresh_interval / packages) is unit-tested (`src/addon_options.rs`). ⇒ **If any consumer needs the *effective* global settings in add-on mode, `/config` is the wrong source for the 3 options-managed fields; packages have the accurate `/packages` endpoint.**
+## Plan B blast radius (verified — larger than the earlier sketch)
 
-VM left **clean**: add-on options reset (`packages:[]`, `package_refresh_interval:0`, `auth_mode:api_key`); registry = `byonk-builtin` only; reverted Plan-A integration deployed (`make ha-deploy`) + HA core restarted (loads without the old Plan-3 `config_subentries.package` errors).
+Beyond the files the previous handover named, the plan accounts for all of these (already written into the tasks):
+- **Rust removal (Task 5) also touches:** `src/api/dev.rs` (`ScreensResponse.default_screen` field + assignment), `src/server.rs` (`test_config_swap_is_visible`), `src/assets.rs` (test asserting `default_screen:` in embedded config), plus `src/api/display.rs` logging line referencing `registration.screen`.
+- **Test migration (Task 7):** `tests/admin_write_test.rs` (5 patch tests for default_screen/registration_screen), `tests/admin_packages_test.rs` (dangling-ref test → now via the DEFAULT device), `tests/common/app.rs:244` (broken-config fixture embeds `default_screen: broken`).
+- **`GET /devices` already surfaces `config.devices` entries with `registered:true`** (`read.rs::list_devices` step 2) — so a DEFAULT device auto-appears. Task 8 adds a `reserved` flag to `AdminDevice` so the integration can special-case it.
+- **Integration reconcile hazard (Task 9):** `coordinator.py::_async_reconcile` **orphan-prunes** byonk devices HA has no entry for — it would `DELETE /devices/DEFAULT` during the startup window. The plan exempts `DEFAULT_DEVICE_KEY` from both reconcile branches and auto-provisions the DEFAULT config entry (dedicated discovery short-circuit in `config_flow.py`, no screen-picker since the device already exists in byonk). `coordinator.registration_screen()` is dead (Plan-3 Options-Flow reverted) → removed.
+- **DEFAULT device scoped to `screen` only** (not dither/panel) per spec §4a + YAGNI; `select.py` special-cases the DEFAULT entry to show just `ByonkScreenSelect`.
 
-## VM tooling gap (found 2026-07-05 — worth fixing)
+## Test harnesses (verified to exist — the plan mirrors them)
 
-`make ha-rebuild` (`tools/ha-vm/rebuild.sh`) syncs only build inputs, **never the add-on manifest `config.yaml`**. So Plan-A's schema additions (`auth_mode`/`package_refresh_interval`/`packages` in `homeassistant/byonk/config.yaml`) never reached the VM add-on — supervisor silently **stripped** the unknown options keys. The VM's local-build manifest is a **separate hand-maintained file** (no `image:`, aarch64, `name: Byonk (dev build)`) with **no tracked source** in the repo.
+- **Rust pipeline:** `src/services/content_pipeline.rs` → `#[cfg(test)] mod pipeline_tests`, helper `build_pipeline(disk, loader)` over `AppConfig::default()`. Task 3 adds `build_pipeline_with_config` to inject the DEFAULT device.
+- **Rust admin/integration tests:** `tests/` with `tests/common/app.rs` harness (`TestApp`).
+- **HA integration:** `tests_ha/` has `conftest.py`, `test_reconcile.py`, `test_device_flow.py`, `test_device_entry.py`, `test_select.py`, `test_settings_entities.py` — Task 9's `test_default_device.py` mirrors these fakes (fake client `async_get_devices` returning a `{"key":"DEFAULT","reserved":True,...}` entry).
 
-**Manual fix applied this session (repeatable procedure in memory `ha-vm-addon-manifest-sync-gap`):** edit `/addons/byonk/config.yaml` + **bump `version:`** → `POST http://supervisor/store/reload` (from SSH) → `ha addons update local_byonk`. `ha addons reload`/`rebuild`/`ha supervisor restart` alone do **not** refresh a local add-on's cached options schema. The VM manifest is now at `0.16.1-dev` with the full Plan-A schema.
+## Plan A — status (unchanged, DONE + VM-verified byonk-side)
 
-**Suggested real fix:** track the local-build manifest as a template under `tools/ha-vm/` and have setup/rebuild sync it (with local-build overrides), so schema changes propagate automatically.
-
-## Plan B — to write (design + ground truth already gathered)
-
-**Goal:** replace `AppConfig.default_screen` + `AppConfig.registration.screen` with a single reserved DEFAULT device (`devices["DEFAULT"]`). Resolution becomes `device.screen → DEFAULT.screen → built-in fallback`. Keep `registration.enabled`. Core model change — applies to standalone byonk too.
-
-**Ground truth (verified earlier; Plan A did NOT touch these files except `write.rs`/`addon_options.rs`, so line numbers may have shifted ±):**
-- `AppConfig` @ `src/models/config.rs`: `default_screen: Option<String>` (~176; `default_screen()` fn ~222-224), `registration: RegistrationConfig` (~180); `RegistrationConfig { enabled (~284), screen (~291) }`; `devices: HashMap<String, DeviceConfig>` (~168); `DeviceConfig { screen: String (~230), … }` (~227-264).
-- **Two resolution paths differ (load-bearing):**
-  - **Registered-unassigned** — `content_pipeline::run_script_for_device` @ `src/services/content_pipeline.rs:190-194`: `device.screen → config.default_screen → "byonk-builtin/default"`.
-  - **Server unregistered** — `src/api/display.rs:285-342`: `registration.screen → render_registration_screen(code)` (**deliberately NO default_screen** — unregistered must show the code).
-  - **CLI unregistered** — `src/main.rs:260-294`: `registration.screen → default_screen → render_registration_screen(code)`.
-- Built-in code renderer `content_pipeline::render_registration_screen(code,w,h)` @ ~464 — **today always renders code**. Spec §4a wants: code when `registration_code` present, generic "unassigned" otherwise (add `render_unassigned_screen`).
-- `device_context.registration_code` → Lua `device.registration_code` (`src/services/lua_runtime.rs:329-336`).
-- **`SettingsWrite` @ `src/api/admin/write.rs` (~272) still has `default_screen` + `registration_screen`** and drives the field-aware gate (`touches_global`, ~57-60). Plan B removes both fields (and their gate entries + the Rust tests + `patch_settings` YAML writes). Keep `registration_enabled`/`auth_mode`/`package_refresh_interval`.
-- YAML: `default-config.yaml` `default_screen: byonk-builtin/default` (~9), `devices: {}` (~118); `config.yaml` (dev) `default_screen: default` (~288). Both should ship `devices: { DEFAULT: { screen: byonk-builtin/default } }` instead. **Note:** the byonk-owned VM config at `/addon_configs/local_byonk/config.yaml` also has `default_screen`/`packages`/`package_refresh_interval` — it's a "dirty" test config; not a repo file.
-
-**Still to read before writing Plan B:** exact body of `display.rs:285-342`; the shipped `byonk-builtin/default` screen template (registration-aware?); `read.rs::get_config` (serializes `default_screen`/`registration.screen`? — it reads the raw file and strips `admin.token` + per-package `token`); `select.py::ByonkScreenSelect` (present a DEFAULT-device screen-select).
-
-**Sketch of Plan B tasks:** (1) `RESERVED_DEFAULT_KEY="DEFAULT"` const + `AppConfig::default_device_screen()->Option<&str>` + tests. (2) route `run_script_for_device` fallback through it. (3) route display.rs + CLI unregistered branches through it. (4) `render_unassigned_screen` for the code-vs-generic ultimate fallback. (5) remove `default_screen` + `registration.screen` fields + their SettingsWrite/gate/patch_settings handling; migrate both YAMLs to ship the DEFAULT device; fix `get_config` if needed. (6) make `byonk-builtin/default` registration-aware. (7) integration: present DEFAULT device with a live screen-select. (8) docs.
+Add-on-owned global config: options.json → byonk (settings + package registry, restart-to-apply), global-config admin writes 409 in add-on mode, `registration_enabled` stays live, per-device writes + content refresh allowed. All verified on the HAOS VM (byonk side). Remaining Plan-A slice = user-side HA-UI eyeball of monitoring entities. Plan-A plan: `docs/superpowers/plans/2026-07-04-addon-owned-global-config.md` (range `8b7c7fe..dbf4613`).
 
 ## Branch / merge state
 
-- **Branch `feat/screen-packages-p2-distribution` @ `9932719`** (tree clean). Carries Plan 1 + 2 + 3 + A (code) + both specs + Plan-A plan doc. **This session made NO repo commits** — only VM-side changes.
-- **Not merged.** No push yet.
+- **Branch `feat/screen-packages-p2-distribution` @ `cff3b8f`** (tree clean). Carries Plan 1 + 2 + 3 + A (code) + both specs + Plan-A plan + **Plan-B plan (new, this session)**. This session made ONE commit: the Plan-B plan doc (`cff3b8f`). No code changed.
+- **Not merged. No push yet** (branch has no upstream — `git pull` needs an explicit remote/branch; it's local-only).
 
 ## Build / verify
 
-- **byonk (Rust):** `make check` (fmt + clippy `-D warnings` + tests), `make docs`. **Any change to `homeassistant/byonk/config.yaml` must run `make check`** (Plan-A process lesson: `tests/addon_manifest_test.rs` asserts the exact schema key set).
-- **HA integration (Python):** `.venv/bin/ruff check custom_components/byonk tests_ha && .venv/bin/pytest tests_ha -q` (**69 passing** after Plan A). Deploy: `SMB_USER=byonk SMB_PASS=byonk make ha-deploy` + `make ha-ssh CMD="ha core restart"`.
-- **VM add-on rebuild (Rust change):** `SMB_USER=byonk SMB_PASS=byonk make ha-rebuild`. **Manifest/schema change also needs the manual dance** in §"VM tooling gap".
-- **Admin-API check without printing the token** (memory `ha-vm-admin-api-testing`): fetch `admin_token` into a shell var via `bash tools/ha-vm/ssh.sh 'ha addons info local_byonk --raw-json' | jq -r .data.options.admin_token`, then `curl localhost:3000/api/admin/*` from the **Mac host**. The Supervisor API is reachable from an SSH session as `http://supervisor` with `$SUPERVISOR_TOKEN` (present there).
+- **byonk (Rust):** `make check` (fmt + clippy `-D warnings` + tests), `make docs`. Plan B does NOT touch `homeassistant/byonk/config.yaml` (the add-on manifest), so no `addon_manifest_test` schema concern and no VM schema dance.
+- **HA integration (Python):** `.venv/bin/ruff check custom_components/byonk tests_ha && .venv/bin/pytest tests_ha -q` (baseline 69). Deploy: `SMB_USER=byonk SMB_PASS=byonk make ha-deploy` + `make ha-ssh CMD="ha core restart"`.
+- **VM add-on rebuild (Rust change):** `SMB_USER=byonk SMB_PASS=byonk make ha-rebuild` (no manifest change in Plan B → no manual dance needed).
+- **Admin-API check without printing the token** (memory `ha-vm-admin-api-testing`): fetch `admin_token` into a shell var via `bash tools/ha-vm/ssh.sh 'ha addons info local_byonk --raw-json' | jq -r .data.options.admin_token`, then `curl localhost:3000/api/admin/*` from the **Mac host** (`:3000`).
 
 ## Reference
 
-- **Spec:** `docs/superpowers/specs/2026-07-04-addon-owned-global-config-design.md` (all §11 decisions resolved; source of Plan A + Plan B).
-- **Plan A (done + VM-verified):** `docs/superpowers/plans/2026-07-04-addon-owned-global-config.md`. Range `8b7c7fe..dbf4613`.
-- **Plan B:** not yet written — §"Plan B" above.
-- **SDD ledger:** `.superpowers/sdd/progress.md` (Plan 1+2+3 + full Plan-A record incl. final review + fix wave).
-- **Memories:** `ha-addon-owned-global-config`, `ha-vm-addon-manifest-sync-gap` (new), `ha-vm-admin-api-testing`, `ha-addon-phase2`, `byonk-is-ours-change-apis-freely`, `no-git-add-all`.
+- **Plan B (WRITTEN, next to execute):** `docs/superpowers/plans/2026-07-05-reserved-default-device.md`.
+- **Spec (source of Plan A + Plan B):** `docs/superpowers/specs/2026-07-04-addon-owned-global-config-design.md` (§4a + §5.6 + §6 = Plan B; all §11 decisions resolved).
+- **Plan A (done + VM-verified):** `docs/superpowers/plans/2026-07-04-addon-owned-global-config.md`.
+- **SDD ledger:** `.superpowers/sdd/progress.md` (Plan 1+2+3+A record). The Plan-B execution session should append its per-task review status here.
+- **Memories:** `ha-addon-owned-global-config`, `ha-vm-addon-manifest-sync-gap`, `ha-vm-admin-api-testing`, `ha-addon-phase2`, `byonk-is-ours-change-apis-freely`, `no-git-add-all`.
 
 ## Admin API (token-gated `/api/admin/*`) — verified behavior
 
-`GET /devices|pending|config|screens|packages` (reads; `/config` = raw file, `/packages` = effective registry) · `POST/PATCH/DELETE /devices[/:key]` (per-device — writable in add-on mode) · `PATCH /settings` (field-aware: global fields 409 in add-on mode, `registration_enabled` stays live) · `POST/PATCH/DELETE /packages/:handle` (registry — 409 in add-on mode) · `POST /packages[/:handle]/update` (content refresh — always allowed).
+`GET /devices|pending|config|screens|packages` (reads; `/config` = raw file, `/packages` = effective registry) · `POST/PATCH/DELETE /devices[/:key]` (per-device — writable in add-on mode; **this is how the DEFAULT device is set**) · `PATCH /settings` (field-aware: global fields 409 in add-on mode, `registration_enabled` stays live) · `POST/PATCH/DELETE /packages/:handle` (registry — 409 in add-on mode) · `POST /packages[/:handle]/update` (content refresh — always allowed).

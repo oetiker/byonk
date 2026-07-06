@@ -33,6 +33,13 @@ fn addon_config_matches_design() {
         "version must be a non-empty string"
     );
 
+    // version must look like X.Y.Z (a valid image tag / add-on version)
+    let ver = cfg["version"].as_str().unwrap_or("");
+    assert!(
+        ver.split('.').count() == 3 && ver.split('.').all(|p| p.parse::<u32>().is_ok()),
+        "version must be semver X.Y.Z, got {ver:?}"
+    );
+
     // arch includes amd64 + aarch64
     let arch: Vec<&str> = cfg["arch"]
         .as_sequence()

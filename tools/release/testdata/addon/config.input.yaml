@@ -1,0 +1,7 @@
+name: Byonk
+version: "0.15.0"
+slug: byonk
+image: ghcr.io/oetiker/byonk
+arch:
+  - amd64
+  - aarch64

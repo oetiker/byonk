@@ -83,3 +83,31 @@ jobs:
 
       - name: Build
         run: cargo build
+
+  home-assistant:
+    name: HA Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Hassfest
+        uses: home-assistant/actions/hassfest@master
+
+      - name: HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration
+          # TODO: remove `ignore: brands` once the home-assistant/brands pr is
+          # merged (see docs/superpowers/ha-publishing.md).
+          ignore: brands
+
+  release-scripts:
+    name: Release Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test bump scripts
+        run: |
+          chmod +x tools/release/*.sh
+          tools/release/test-bump-addon-version.sh
+          tools/release/test-bump-integration-version.sh

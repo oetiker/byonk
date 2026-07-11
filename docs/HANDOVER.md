@@ -1,60 +1,50 @@
 # Handover — Byonk
 
-_Last updated: 2026-07-05 — **Plan B (reserved DEFAULT device) is IMPLEMENTED, fully reviewed, and LOCAL-verified.** All 10 tasks + a final-review fix wave landed via subagent-driven execution; the whole-branch review (opus) plus the fix re-review are clean with no open Critical/Important. Branch `feat/screen-packages-p2-distribution` @ `236583a`, tree clean. Rust `make check` GREEN, HA `ruff` clean + `pytest tests_ha` 74 passing, `make docs` clean. **Not yet VM-verified; not merged.** Two things remain: (1) VM verification, (2) finish the branch._
+_Last updated: 2026-07-11 — **HA Distribution Readiness: all code/doc tasks (1–8) implemented, per-task-reviewed, and whole-branch-reviewed clean (opus: READY TO MERGE).** Branch `feat/ha-distribution-readiness` @ `2667b89`, tree clean. Bump-script bash tests + `cargo test --test addon_manifest_test` + `make docs` all GREEN locally. **Not yet VM-verified end-to-end; not merged.** The three remaining tasks are all MANUAL/human (drive the QEMU VM, merge, file external PRs)._
 
 ## TL;DR — resume here
 
-1. **VM-verify Plan B** (the one thing not yet done). Deploy to the HAOS test VM and eyeball the DEFAULT-device behavior — see §"VM verification" for exact commands + checks. **Plan B touches NO add-on manifest, so a plain `make ha-rebuild` suffices — no `store/reload`+`ha addons update` schema dance** (contrast the `ha-vm-addon-manifest-sync-gap` that bit the Plan-A session).
-2. **Finish the branch** (`superpowers:finishing-a-development-branch`). The branch carries Plan 1 + 2 + 3 + A + B — the entire add-on-owned-global-config redirection. Merge it all together once VM-verify passes.
-3. **Optional fast-follow polish** (non-blocking Minors, listed in §"Fast-follow"). None gate the merge.
+The distribution plan `docs/superpowers/plans/2026-07-06-ha-distribution-readiness.md` has 11 tasks. **Tasks 1–8 (all automatable code/doc work) are DONE + reviewed.** What remains is manual:
 
-## What Plan B did (shipped)
+1. **Task 9 — VM validation (do first).** Deploy the whole stack to the HAOS test VM and work the refreshed 10-item checklist now in `tools/ha-vm/README.md` (§"Validation Checklist"). This is the pre-publish gate and also subsumes the old "VM-verify Plan B" step (no runtime changed since). Commands: `SMB_USER=byonk SMB_PASS=byonk make ha-rebuild` (add-on), `SMB_USER=byonk SMB_PASS=byonk make ha-deploy` + `make ha-ssh CMD="ha core restart"` (integration). Probe the admin API from the Mac host (`curl localhost:3000/...`), never printing the token (memory `ha-vm-admin-api-testing`).
+2. **Task 10 — Merge** (`superpowers:finishing-a-development-branch`). This branch is stacked on Plan B, so the PR carries Plan 1+2+3+A+B **and** the distribution work — it all merges to `main` together. **On the PR run, confirm the new `home-assistant` (hassfest + HACS) and `release-scripts` CI jobs go green** — that's the first real exercise of hassfest/HACS (they can't run locally).
+3. **Task 11 — External PRs (post-first-release), maintainer-filed.** Follow `docs/superpowers/ha-publishing.md`: file the `home-assistant/brands` PR, then the `hacs/default` PR, then remove `ignore: brands` from `ci.yml` and switch `ha-integration.md` to default-store wording.
 
-Replaced byonk's `AppConfig.default_screen` + `RegistrationConfig.screen` with a single reserved `DEFAULT` device (`config.devices["DEFAULT"]`, key `"DEFAULT"`). Resolution for every not-yet-configured device is now `device.screen → devices["DEFAULT"].screen → built-in fallback`. The shipped `byonk-builtin/default` screen is registration-aware (renders the pairing code for unregistered devices). `registration.enabled` kept. The DEFAULT device is read/written over the per-device admin API (live, allowed in add-on mode). In HA it auto-provisions a **"Byonk Default"** device entry with a live screen-select, exempt from reconcile/orphan-prune, and protected against manual deletion (both an HA-side no-op guard and a byonk-side 409 on `DELETE /devices/DEFAULT`). Core model change → standalone byonk and the add-on both use it.
+## What the distribution work shipped (Tasks 1–8, range `586e3d3..2667b89`)
 
-## VM verification (the remaining pre-merge step)
+- **Version automation (4b):** two tested bash scripts — `tools/release/bump-addon-version.sh` and `bump-integration-version.sh` — wired into `release.yml`. The integration `manifest.json` bumps in the `version` job **before the tag** (HACS installs from the tag); the add-on `config.yaml` bumps in a new `update-addon-version` job `needs:[version,build-container]`, committing to `main` **after** the image publishes (so the add-on `version:` always equals a published `ghcr.io/oetiker/byonk` tag). All three versions now track the byonk release version.
+- **Validation CI (4c):** new `ci.yml` jobs — `home-assistant` (hassfest + `hacs/action`, with `ignore: brands` until the brands PR merges + `GITHUB_TOKEN` passed) and `release-scripts` (runs both bump-script test harnesses). The add-on `config.yaml` is already validated by the existing `tests/addon_manifest_test.rs` (extended with a semver guard).
+- **Brand assets (4c):** `homeassistant/brands/` — **user-supplied pixel-art** (a shinkansen departure board with the green **BYONK** sign), committed as `*.src.png` masters (1024px) + `rasterize.sh` (sips resize) → brands `icon.png`/`icon@2x`/`logo`/`logo@2x` + add-on `icon.png`/`logo.png`.
+- **Runbook + docs (4c/4d):** `docs/superpowers/ha-publishing.md` (brands + hacs/default PR steps); `ha-integration.md` HACS custom-repo install note; `CHANGES.md` Unreleased bullet; refreshed 10-item VM checklist.
 
-Commands (creds `byonk`/`byonk`):
-- **byonk add-on:** `SMB_USER=byonk SMB_PASS=byonk make ha-rebuild` (syncs source + rebuilds; no manifest change → no schema dance).
-- **integration:** `SMB_USER=byonk SMB_PASS=byonk make ha-deploy` then `make ha-ssh CMD="ha core restart"`.
-- **admin-API probe without printing the token** (memory `ha-vm-admin-api-testing`): `bash tools/ha-vm/ssh.sh 'ha addons info local_byonk --raw-json' | jq -r .data.options.admin_token` into a shell var, then `curl localhost:3000/api/admin/*` from the **Mac host** (`:3000`).
+## Verification status (local, all GREEN at `2667b89`)
 
-Checks (byonk side is API-verifiable from the host; the e-ink visual + HA-UI card are the user's eyeball):
-- `GET /api/admin/devices` includes a `{"key":"DEFAULT","reserved":true,...}` entry.
-- `PATCH /api/admin/devices/DEFAULT {"screen":"<known>"}` → 200 live in add-on mode (no restart); `DELETE /api/admin/devices/DEFAULT` → 409.
-- An **unregistered** device shows its pairing **code** (DEFAULT screen is registration-aware); a **registered-but-unassigned** device shows the DEFAULT screen.
-- **HA UI:** the **Byonk Default** device card exposes a Screen select (no dither/panel); changing it writes live. Deleting the Byonk Default device must NOT lose `devices.DEFAULT` in byonk, and HA must re-provision the entry on the next refresh (~60s).
+- Bump scripts: `tools/release/test-bump-addon-version.sh` + `test-bump-integration-version.sh` pass.
+- Rust: `cargo test --test addon_manifest_test` passes (2/2). Full `make check` not re-run this session (no `src/` change — only a test file); known pre-existing flaky `tests/e2e_flow_test.rs::test_content_cache_reuse` is unrelated.
+- Docs: `make docs` clean.
+- **Whole-branch review (opus, `8ddba14..2667b89`): READY TO MERGE**, no Critical/Important; release timing verified sound.
 
-## Verification status (local, all GREEN at `236583a`)
+## Deferred Minors (fast-follow — do NOT gate the merge)
 
-- **Rust:** `make check` (fmt + clippy `-D warnings` + tests) green. Known PRE-EXISTING flaky test `tests/e2e_flow_test.rs::test_content_cache_reuse` (reproduced on the pre-Plan-B HEAD — NOT a Plan B defect).
-- **HA integration:** `ruff check custom_components/byonk tests_ha` clean; `pytest tests_ha -q` 74 passing.
-- **Docs:** `make docs` clean.
+- **M1 (most useful):** `update-addon-version` is a leaf job. If it FAILS, the release still tags/publishes/creates the GitHub release, but the add-on `config.yaml` on `main` stays at the old version — silently re-introducing the exact "add-on never offers the update" rot this work fixes. Recoverable (re-run from clean `main`, idempotent). **Fix:** a runbook line that a red `update-addon-version` must be re-run before a release counts as done.
+- **M2:** `bump-addon-version.sh` major-bump EOF append (`printf >> config.yaml`) is newline-fragile if `config.yaml` ever loses its trailing newline (safe today). Fix: guarded newline / perl append.
+- **M3:** hassfest + `hacs/action` are first exercised only on the Task-10 PR run (unverifiable locally).
 
 ## Branch / merge state
 
-- **Branch `feat/screen-packages-p2-distribution` @ `236583a`** (tree clean). **Local-only — no upstream** (`git pull` needs an explicit remote/branch). Not merged, not pushed.
-- **Plan-B range `746efdd..236583a`** = 11 commits (10 tasks + 1 fix wave). Plan-A range `8b7c7fe..dbf4613`. Plan-B plan doc + prior handover at `cff3b8f`/`746efdd`.
-
-## Fast-follow (non-blocking Minors — do NOT gate the merge)
-
-From the final review + carried per-task Minors (full detail in the SDD ledger):
-- `render_unassigned_screen` is unreachable in production (registered-unassigned-with-unresolvable-DEFAULT returns a typed `_error` instead of the friendly screen). Near-impossible case since `byonk-builtin/default` always resolves. Optionally wire the registered-unassigned error path through `render_builtin_fallback(None, …)`.
-- `_async_sync_discovery`'s abort loop could transiently abort the DEFAULT provision flow (self-heals next refresh); optionally exclude `DEFAULT_DEVICE_KEY` from the abort predicate.
-- `entity.py` DEFAULT/non-DEFAULT `DeviceInfo` branch duplication; coordinator `_async_provision_default`/`_async_sync_discovery` share a 3-line lookup — readability only.
-- `display.rs` keeps `.filter(|s| !s.is_empty())` after `default_device_screen()` but `main.rs` does not (cosmetic; both converge on the fallback for an empty string).
-- CHANGES.md was not touched by the fix commit (pre-release bug-squash on an already-documented unreleased feature).
+- **Branch `feat/ha-distribution-readiness` @ `2667b89`** (tree clean). Stacked on `feat/screen-packages-p2-distribution` (Plan B). Local-only, not pushed, not merged.
+- Distribution range **`586e3d3..2667b89`** = 11 commits (spec + plan + 8 tasks + 1 fix). Fork point from Plan B = `8ddba14`.
 
 ## Reference
 
-- **Plan B (executed):** `docs/superpowers/plans/2026-07-05-reserved-default-device.md`.
-- **Spec:** `docs/superpowers/specs/2026-07-04-addon-owned-global-config-design.md` (§4a/§5.6/§6 = Plan B).
-- **Plan A (done + VM-verified byonk-side):** `docs/superpowers/plans/2026-07-04-addon-owned-global-config.md`.
-- **SDD ledger:** `.superpowers/sdd/progress.md` — full Plan-A + Plan-B per-task record incl. the final review, fix wave, and re-review. Trust it + `git log` over memory after a compaction.
-- **Memories:** `ha-addon-owned-global-config` (updated: Plan B written+executed), `ha-vm-addon-manifest-sync-gap`, `ha-vm-admin-api-testing`, `ha-addon-phase2`, `byonk-is-ours-change-apis-freely`, `no-git-add-all`.
+- **Plan (executed 1–8):** `docs/superpowers/plans/2026-07-06-ha-distribution-readiness.md`.
+- **Spec:** `docs/superpowers/specs/2026-07-06-ha-distribution-readiness-design.md` (revised Phase 4; §4a = the VM checklist).
+- **SDD ledger:** `.superpowers/sdd/progress.md` — per-task review record + the deferred-Minor detail. Trust it + `git log` over memory after a compaction.
+- **Publishing runbook (Task 11):** `docs/superpowers/ha-publishing.md`.
+- **Memories:** `ha-addon-owned-global-config`, `ha-addon-phase2`, `ha-vm-admin-api-testing`, `ha-vm-addon-manifest-sync-gap`, `byonk-is-ours-change-apis-freely`, `no-git-add-all`.
 
 ## Build / verify quick ref
 
-- byonk: `make check`, `make docs`. Plan B touches no add-on manifest.
-- HA: `.venv/bin/ruff check custom_components/byonk tests_ha && .venv/bin/pytest tests_ha -q` (74). Deploy: `SMB_USER=byonk SMB_PASS=byonk make ha-deploy` + `make ha-ssh CMD="ha core restart"`.
-- VM add-on rebuild: `SMB_USER=byonk SMB_PASS=byonk make ha-rebuild` (no manifest dance for Plan B).
+- Bump scripts: `tools/release/test-bump-addon-version.sh && tools/release/test-bump-integration-version.sh`.
+- Rust test: `cargo test --test addon_manifest_test`. Docs: `make docs`. Brand assets: `homeassistant/brands/rasterize.sh` (needs `sips`).
+- VM deploy: `SMB_USER=byonk SMB_PASS=byonk make ha-rebuild` (add-on) / `make ha-deploy` (integration).

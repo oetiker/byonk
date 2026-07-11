@@ -27,6 +27,10 @@ assignment.
 4. Search for *Byonk* in HACS and install it.
 5. Restart Home Assistant.
 
+> **Note:** Once byonk is accepted into the HACS default store, you'll be able to
+> find it directly by searching *Byonk* — until then, use the custom-repository
+> step above.
+
 ## Adding the Integration
 
 1. Go to **Settings → Devices & Services → Add Integration** and search for *Byonk*.

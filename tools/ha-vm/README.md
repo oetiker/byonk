@@ -130,11 +130,13 @@ This deletes the downloaded HAOS image, VM disk, and varstore. You can then `mak
 
 The integration is ready for release when all of the following pass:
 
-- [ ] **Add-on store**: Add the `https://github.com/oetiker/byonk` repository to Add-on stores → Install and start the *Byonk* add-on → Port 3000 serves a screen
-- [ ] **Integration install**: Run `make ha-deploy` → Restart Home Assistant → *Byonk* is discoverable in "Add Integration"
-- [ ] **Zero-touch trust** (add-on NOT pre-installed): Adding the integration auto-installs and starts the add-on, provisions the admin token into the add-on options, reads it back; integration entry stores no token; *Byonk Server* hub device appears
-- [ ] **Hub entities**: Registration switch, auth-mode select, default-screen select, and pending-devices sensor are present and reflect `config.yaml`
-- [ ] **Onboarding**: Pending device → *Pending Byonk device* repairs issue → **Add device** lists the pairing code → Device registers by MAC → Per-TRMNL device created with documented sensors and selects
-- [ ] **Subentry mirror and edit**: Changing screen and parameters via **Configure** writes through to `config.yaml` and back to entities; `@params` render as selectors
-- [ ] **Re-authentication**: Blank or invalid token raises *Re-authentication required*, resolved by re-provisioning; transient connection errors do NOT loop indefinitely
-- [ ] **Removal grace**: A disappeared device survives one poll cycle before its subentry is removed
+- [ ] **Add-on store**: Add the `https://github.com/oetiker/byonk` repository to Add-on stores → the *Byonk* add-on shows up, installs (pulls the published `ghcr.io/oetiker/byonk` image), and starts → Port 3000 serves a screen
+- [ ] **Integration discovery**: `custom_components/byonk` deployed → Restart Home Assistant → *Byonk* is discoverable in "Add Integration"
+- [ ] **Zero-touch trust** (add-on NOT pre-installed): Adding the integration auto-adds the repo, installs and starts the add-on, provisions the admin token into the add-on options, and reads it back; the config entry stores no token
+- [ ] **Add-on-owned global config**: `auth_mode`, `package_refresh_interval`, and the `packages` registry are edited on the **add-on Options tab** and applied on restart; the integration presents them read-only/monitoring; an admin-API write to any of them returns **409** pointing back to the Options tab
+- [ ] **Reserved `DEFAULT` device**: `GET /api/admin/devices` includes a `{"key":"DEFAULT","reserved":true,…}` entry; the integration auto-provisions a **"Byonk Default"** device with a live **Screen select** (no dither/panel), exempt from reconcile/orphan-prune. `PATCH /api/admin/devices/DEFAULT {"screen":…}` → 200 live (no restart); `DELETE /api/admin/devices/DEFAULT` → **409**. Deleting the HA "Byonk Default" device does not lose `devices.DEFAULT`, and HA re-provisions the entry on the next refresh (~60s)
+- [ ] **Screen resolution**: an unregistered device shows its pairing **code** (the `byonk-builtin/default` screen is registration-aware); a registered-but-unassigned device shows the `DEFAULT` device's screen
+- [ ] **HA-owned per-device flow**: a pending device raises the onboarding path; adding it creates a per-device HA config entry (keyed by MAC) with a **Discovered** card; its screen/param/dither/panel entities write through live to the admin API and back; per-screen `@params` render as HA selectors
+- [ ] **Screen packages**: a configured package `handle`/`repo`/`pin` is fetched; its screens are selectable per device; the integration's **Update packages** button triggers a live refresh
+- [ ] **Re-authentication**: Blanking/invalidating the add-on token raises *Re-authentication required* and resolving re-provisions without manual input; a transient connection error does NOT trigger a reauth loop
+- [ ] **Removal grace**: A device that disappears survives the documented grace window before its HA entry is pruned

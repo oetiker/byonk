@@ -65,6 +65,33 @@ impl TestApp {
         }
     }
 
+    /// Create a test app whose reserved DEFAULT device renders `screen`.
+    /// Pass a static screen (e.g. `byonk-builtin/calibration/grey`) when a test
+    /// needs deterministic, time-independent content — the embedded default
+    /// screen renders the wall-clock time and is therefore not reproducible.
+    pub fn new_with_default_screen(screen: &str) -> Self {
+        let asset_loader = Arc::new(AssetLoader::new(None, None, None));
+        let mut config = AppConfig::load_from_assets(&asset_loader).expect("Failed to load config");
+        config
+            .devices
+            .get_mut("DEFAULT")
+            .expect("embedded config has a reserved DEFAULT device")
+            .screen = screen.to_string();
+
+        let state =
+            create_app_state_with_config(asset_loader, config).expect("Failed to create app state");
+
+        let registry = state.registry.clone();
+        let content_cache = state.content_cache.clone();
+        let router = build_router(state);
+
+        Self {
+            router,
+            registry,
+            content_cache,
+        }
+    }
+
     /// Create a test app and return the state for custom router configuration
     pub fn create_state() -> AppState {
         let asset_loader = Arc::new(AssetLoader::new(None, None, None));

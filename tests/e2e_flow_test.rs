@@ -114,7 +114,11 @@ async fn test_device_metadata_persists() {
 
 #[tokio::test]
 async fn test_content_cache_reuse() {
-    let app = TestApp::new();
+    // Use a static screen: the embedded default screen renders the wall-clock
+    // time (%H:%M), so two /api/display calls that straddle a minute boundary
+    // would render different SVG and produce different content hashes — a flaky
+    // failure. calibration/grey is a pure function of the (fixed) device headers.
+    let app = TestApp::new_with_default_screen("byonk-builtin/calibration/grey");
 
     let api_key = app.register_device(macs::GRAY_DEVICE).await;
     let headers = fixtures::display_headers(macs::GRAY_DEVICE, &api_key);
@@ -140,7 +144,7 @@ async fn test_content_cache_reuse() {
     let json2: serde_json::Value = response2.json();
     let hash2 = json2["filename"].as_str().unwrap();
 
-    // graytest is static so hash should be same
+    // calibration/grey renders static content, so the hash must be identical
     assert_eq!(hash1, hash2);
 
     // Image should still be retrievable from cache

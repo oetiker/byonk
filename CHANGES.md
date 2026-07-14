@@ -86,9 +86,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   numeric values validated on save), a Switch (booleans), or a Select (enums) —
   and applies instantly. The controls update automatically when you change the
   device's screen. This replaces the per-device Reconfigure dialog.
-- Home Assistant: the add-on and integration are now HACS-ready — brand icon,
-  hassfest + HACS validation in CI, and automated version coupling so the
-  add-on and integration track each byonk release.
+- **Home Assistant: install via HACS.** The Byonk integration can be added through
+  HACS as a custom repository (and via the default-store search once byonk is
+  accepted). The Byonk add-on and integration now show a Byonk icon in their stores.
 
 ### Changed
 

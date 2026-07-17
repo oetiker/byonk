@@ -685,6 +685,23 @@ async fn run_server() -> anyhow::Result<()> {
     // admin writes to read-only (the add-on Options form is the sole editor).
     state.addon_mode = matches!(addon, byonk::addon_options::ReadResult::Parsed(_));
 
+    // Startup package fetch: bring every configured package up to date once at
+    // boot, independent of the periodic interval. Without this, packages are
+    // not fetched on startup and — because the periodic loop below never
+    // refreshes when `package_refresh_interval == 0` (manual mode) — a restart
+    // (add-on update, HA reboot, options change, re-auth) would leave package
+    // screens missing until the user manually pressed "Update packages".
+    // `refresh_all(false)` reuses the on-disk cache for immutable pins, so this
+    // is cheap when nothing changed. Spawned so it never delays the listener.
+    {
+        let mgr = state.package_manager.clone();
+        tokio::spawn(async move {
+            if let Err(e) = tokio::task::spawn_blocking(move || mgr.refresh_all(false)).await {
+                tracing::warn!(error = %e, "startup package refresh task panicked");
+            }
+        });
+    }
+
     // Periodic package refresh: re-fetches mutable (tag/branch) package pins
     // on a config-driven interval. Spawned unconditionally (not gated on the
     // interval being >0 at startup) so that enabling it later via a settings

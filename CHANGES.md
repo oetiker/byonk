@@ -9,12 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.17.0 - 2026-07-17
+
+### New
+
 - **Failing screen repos are now visible in Home Assistant.** When Byonk cannot
   fetch a screen repo, the integration raises a Home Assistant *Repair* issue
   showing the repo and the actual error, and clears it automatically once the
   repo updates successfully. Previously the error was only visible as an
   attribute on a diagnostic sensor.
-
 ### Changed
 
 - **"Packages" are now called "screen repos".** A screen repo is a git

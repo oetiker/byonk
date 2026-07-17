@@ -9,7 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- **Failing screen repos are now visible in Home Assistant.** When Byonk cannot
+  fetch a screen repo, the integration raises a Home Assistant *Repair* issue
+  showing the repo and the actual error, and clears it automatically once the
+  repo updates successfully. Previously the error was only visible as an
+  attribute on a diagnostic sensor.
+
 ### Changed
+
+- **"Packages" are now called "screen repos".** A screen repo is a git
+  repository of screens, so the clearer name is used everywhere: the admin API
+  (`/api/admin/screen-repos`), the `config.yaml` keys (`screen_repos:`,
+  `screen_repo_refresh_interval:`), the Home Assistant add-on options, and the
+  integration UI (the "Update screen repos" button and per-repo status sensors).
+  Existing add-on options set under `packages` / `package_refresh_interval` must
+  be re-entered under the new `screen_repos` / `screen_repo_refresh_interval`
+  keys.
 
 ### Fixed
 

@@ -2,12 +2,12 @@
 
 Byonk embeds all screens, fonts, and configuration in the binary itself. This means you can run Byonk with zero configuration - it works out of the box.
 
-For customization, Byonk uses a YAML configuration file to map devices to screens and to register screen packages.
+For customization, Byonk uses a YAML configuration file to map devices to screens and to register screen repos.
 
-## Screens are packages, not config entries
+## Screens live in screen repos, not config entries
 
 There is **no `screens:` block** in `config.yaml`. A screen is a **folder** inside a screen
-package — a directory tree with a `byonk-screens.yaml` manifest at its root, where every
+repo — a directory tree with a `byonk-screens.yaml` manifest at its root, where every
 folder containing a `meta.yaml` is a screen. Each screen folder holds three fixed-name files:
 
 | File | Purpose |
@@ -18,8 +18,8 @@ folder containing a `meta.yaml` is a screen. Each screen folder holds three fixe
 
 Byonk auto-discovers these screens; you reference one by its **`handle/path`** ref (e.g.
 `byonk-builtin/useful/swiss-departure-board`). The bundled screens ship in the embedded
-`byonk-builtin` package. See [Your First Screen](../tutorial/first-screen.md) for how to
-author one, and [Admin API](../api/admin-api.md) for the package/screen listing endpoints.
+`byonk-builtin` screen repo. See [Your First Screen](../tutorial/first-screen.md) for how to
+author one, and [Admin API](../api/admin-api.md) for the screen repo/screen listing endpoints.
 
 ## Configuration Structure
 
@@ -41,9 +41,9 @@ devices:
   DEFAULT:
     screen: byonk-builtin/default
 
-# Optional: register additional screen packages (see below)
-packages:
-  byonk-builtin: {}                                  # the embedded built-in package
+# Optional: register additional screen repos (see below)
+screen_repos:
+  byonk-builtin: {}                                  # the embedded built-in screen repo
 ```
 
 ## Devices Section
@@ -132,14 +132,14 @@ If `devices.DEFAULT` is omitted, byonk falls back to its embedded
 `byonk-builtin/default` screen — a code-level fallback that always resolves, so
 there's no configuration state that leaves a device with nothing to show.
 
-## Packages Section
+## Screen Repos Section
 
-Screens are distributed as packages. The `packages:` block maps a short **handle** to a
-package source. The embedded `byonk-builtin` package is always available; register additional
-packages by repo and pin:
+Screens are distributed as screen repos. The `screen_repos:` block maps a short **handle** to
+a screen repo source. The embedded `byonk-builtin` screen repo is always available; register
+additional screen repos by repo and pin:
 
 ```yaml
-packages:
+screen_repos:
   byonk-builtin: {}                                       # embedded built-in (always present)
   weather:      { repo: https://github.com/acme/screens, pin: v1.4.0 }
   weather-beta: { repo: https://github.com/acme/screens, pin: v2.0.0 }  # same repo, different pin
@@ -153,8 +153,8 @@ packages:
 | `token` | No | Auth token for private repos (redacted in read APIs). |
 
 A screen ref's first segment is the handle: `weather/forecast` resolves the `forecast` screen
-in the `weather` package. Registering the same repo under two handles at different pins lets
-you run two versions side by side.
+in the `weather` screen repo. Registering the same repo under two handles at different pins
+lets you run two versions side by side.
 
 ## Device Registration
 
@@ -262,7 +262,7 @@ The `auth_mode` setting controls what `/api/setup` tells devices. The `/api/disp
 Byonk loads a screen's `script.lua` and `screen.svg` fresh on every request. You can edit
 those files without restarting the server.
 
-However, `config.yaml` is only loaded at startup. Changes to device mappings, the package
+However, `config.yaml` is only loaded at startup. Changes to device mappings, the screen repo
 registry, or other settings require a server restart (or use the [Admin API](../api/admin-api.md),
 which hot-reloads after writes).
 

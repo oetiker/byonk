@@ -4,11 +4,11 @@ The Byonk Home Assistant integration connects Home Assistant to a Byonk server r
 as a Supervisor add-on. It manages the add-on lifecycle, provisions authentication
 automatically, and exposes Byonk devices as Home Assistant entities.
 
-Byonk's server-**global** configuration — `auth_mode`, `package_refresh_interval`,
-and the screen-package registry — is edited in the
+Byonk's server-**global** configuration — `auth_mode`, `screen_repo_refresh_interval`,
+and the screen repo registry — is edited in the
 **[Byonk add-on's Configuration tab](ha-addon.md)**, not here. This integration is
-read-only monitoring for that global config (per-package status sensors), plus two
-live operational controls (a registration switch and an "Update packages" button)
+read-only monitoring for that global config (per-screen-repo status sensors), plus two
+live operational controls (a registration switch and an "Update screen repos" button)
 and full read/write control over **per-device** screen/dither/panel/parameter
 assignment.
 
@@ -48,10 +48,10 @@ assignment.
 | Entity | Type | Description |
 |--------|------|-------------|
 | Registration enabled | Switch | Allow new TRMNL devices to register |
-| Update packages | Button | Trigger an immediate refresh of all screen packages (see below) |
-| *Package status* (one per package) | Sensor | Diagnostic sensor per non-builtin screen package — see *Monitoring screen packages* below |
+| Update screen repos | Button | Trigger an immediate refresh of all screen repos (see below) |
+| *Screen repo status* (one per screen repo) | Sensor | Diagnostic sensor per non-builtin screen repo — see *Monitoring screen repos* below |
 
-The remaining server-global settings — `auth_mode` and `package_refresh_interval` —
+The remaining server-global settings — `auth_mode` and `screen_repo_refresh_interval` —
 are **not** exposed as entities here; they're edited in the
 [Byonk add-on's Configuration tab](ha-addon.md) (changes apply on add-on restart).
 
@@ -120,24 +120,30 @@ when you change the device's screen.
 the usual way (device card → pencil icon) and byonk will mirror the name automatically
 when you rename the device in Home Assistant. No changes are needed in byonk's config directly.
 
-## Monitoring Screen Packages
+## Monitoring Screen Repos
 
-Screen packages (see [Packages Section](configuration.md#packages-section) in
+Screen repos (see [Screen Repos Section](configuration.md#screen-repos-section) in
 the Configuration guide) are **added, edited, and removed in the
 [Byonk add-on's Configuration tab](ha-addon.md)** — not here. This integration
 gives you read-only monitoring and one operational control:
 
-Each package gets a diagnostic **status sensor** (e.g.
+Each screen repo gets a diagnostic **status sensor** (e.g.
 `sensor.byonk_disttest_status`) on the *Byonk Server* hub device, whose state is
 the fetch status (`fetching`, `ready`, `error`, ...) and whose attributes include
 the resolved commit (`resolved_sha`), `last_fetched` time, `repo`, `pin`, and any
 `error`.
 
-Press the hub device's **Update packages** button to trigger an immediate
-content refresh of every already-configured package (a git pull on the existing
-pin — equivalent to waiting for the `package_refresh_interval` set in the add-on's
+When a screen repo fails to fetch, the integration raises a Home Assistant
+**Repair** issue (**Settings → System → Repairs**) carrying the fetch error, so a
+broken screen repo surfaces visibly rather than only in the status sensor's
+attributes. The issue clears automatically once the screen repo fetches
+successfully again.
+
+Press the hub device's **Update screen repos** button to trigger an immediate
+content refresh of every already-configured screen repo (a git pull on the existing
+pin — equivalent to waiting for the `screen_repo_refresh_interval` set in the add-on's
 Configuration tab); the status sensors update once the fetch completes. This
-button does not add, remove, or repin packages — only the add-on Configuration
+button does not add, remove, or repin screen repos — only the add-on Configuration
 tab does that.
 
 ## Re-authentication

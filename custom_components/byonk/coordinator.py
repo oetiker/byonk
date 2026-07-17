@@ -12,6 +12,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import ByonkApiError, ByonkAuthError, ByonkClient
@@ -32,7 +33,7 @@ class ByonkData:
     panels: list[dict]
     dither: list[str]
     config: dict
-    packages: list[dict]
+    screen_repos: list[dict]
 
     def screen_names(self) -> list[str]:
         # Screens are addressed by their qualified `handle/path` ref.
@@ -53,13 +54,13 @@ class ByonkData:
     def auth_mode(self) -> str | None:
         return self.config.get("auth_mode")
 
-    def non_builtin_packages(self) -> list[dict]:
-        return [p for p in self.packages if not p.get("builtin")]
+    def non_builtin_screen_repos(self) -> list[dict]:
+        return [r for r in self.screen_repos if not r.get("builtin")]
 
-    def package(self, handle: str) -> dict | None:
-        for p in self.packages:
-            if p.get("handle") == handle:
-                return p
+    def screen_repo(self, handle: str) -> dict | None:
+        for r in self.screen_repos:
+            if r.get("handle") == handle:
+                return r
         return None
 
 
@@ -82,23 +83,23 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
 
     async def _async_update_data(self) -> ByonkData:
         try:
-            devices, pending, screens, config, packages = await asyncio.gather(
+            devices, pending, screens, config, screen_repos = await asyncio.gather(
                 self.client.async_get_devices(),
                 self.client.async_get_pending(),
                 self.client.async_get_screens(),
                 self.client.async_get_config(),
-                self.client.async_get_packages(),
+                self.client.async_get_screen_repos(),
             )
         except ByonkAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         except ByonkApiError as err:
             raise UpdateFailed(str(err)) from err
-        # The admin API now groups screens by package: {packages: [{screens: [...]}]}.
+        # The admin API groups screens by screen repo: {screen_repos: [{screens: [...]}]}.
         # Flatten to a single list; each screen carries its qualified `ref`.
         flat_screens = [
             screen
-            for pkg in screens.get("packages", [])
-            for screen in pkg.get("screens", [])
+            for repo in screens.get("screen_repos", [])
+            for screen in repo.get("screens", [])
         ]
         data = ByonkData(
             devices=devices,
@@ -107,7 +108,7 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
             panels=screens.get("panels", []),
             dither=screens.get("dither_algorithms", []),
             config=config,
-            packages=packages,
+            screen_repos=screen_repos,
         )
         # Skip device reconcile on the very first refresh: entry.runtime_data is not
         # yet set at that point (it is set in __init__.py after
@@ -119,7 +120,43 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
             await self._async_reconcile(data)
         self._async_sync_discovery(data)
         self._async_provision_default(data)
+        self._async_reconcile_repo_issues(data)
         return data
+
+    def _async_reconcile_repo_issues(self, data: ByonkData) -> None:
+        """Raise a repair issue for every screen repo currently in `error`, and
+        clear it once the repo recovers. The per-repo status sensor still carries
+        the detail, but a failing fetch is easy to miss there — a repair surfaces
+        it prominently in Settings > Repairs with the actual error message."""
+        active = set()
+        for repo in data.non_builtin_screen_repos():
+            if repo.get("status") != "error":
+                continue
+            handle = repo.get("handle") or "?"
+            issue_id = f"screen_repo_error_{handle}"
+            active.add(issue_id)
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="screen_repo_error",
+                translation_placeholders={
+                    "handle": handle,
+                    "repo": repo.get("repo") or "",
+                    "error": repo.get("error") or "unknown error",
+                },
+            )
+        # Delete issues for repos that recovered or are no longer registered.
+        registry = ir.async_get(self.hass)
+        for domain, issue_id_str in list(registry.issues):
+            if (
+                domain == DOMAIN
+                and issue_id_str.startswith("screen_repo_error_")
+                and issue_id_str not in active
+            ):
+                ir.async_delete_issue(self.hass, DOMAIN, issue_id_str)
 
     def _device_entries(self) -> dict[str, ConfigEntry]:
         return {

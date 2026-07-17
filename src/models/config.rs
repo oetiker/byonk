@@ -151,11 +151,11 @@ pub fn normalize_algorithm_name(name: &str) -> String {
     }
 }
 
-/// Reference to a named screen package.
+/// Reference to a named screen screen repo.
 ///
-/// `repo == None` means the embedded byonk-builtin package.
+/// `repo == None` means the embedded byonk-builtin screen repo.
 #[derive(Debug, Deserialize, Clone, Default)]
-pub struct PackageRef {
+pub struct ScreenRepoRef {
     #[serde(default)]
     pub repo: Option<String>,
     #[serde(default)]
@@ -190,14 +190,14 @@ pub struct AppConfig {
     #[serde(default)]
     pub admin: AdminConfig,
 
-    /// Screen package registry
+    /// Screen screen repo registry
     #[serde(default)]
-    pub packages: HashMap<String, PackageRef>,
+    pub screen_repos: HashMap<String, ScreenRepoRef>,
 
-    /// Interval (seconds) at which mutable (tag/branch) package pins are
+    /// Interval (seconds) at which mutable (tag/branch) screen repo pins are
     /// re-fetched by a background task. `0` disables periodic refresh.
     #[serde(default)]
-    pub package_refresh_interval: u64,
+    pub screen_repo_refresh_interval: u64,
 }
 
 /// Panel profile with official and measured display colors
@@ -317,7 +317,7 @@ impl AppConfig {
     /// Check if a device is registered (by MAC or by registration code)
     ///
     /// This only checks whether a device config entry exists. Screen resolution
-    /// happens separately via the package loader (`handle/path` refs), so a
+    /// happens separately via the screen repo loader (`handle/path` refs), so a
     /// registered device does not require any embedded screen definition.
     pub fn is_device_registered(&self, mac: &str, code: Option<&str>) -> bool {
         // Check by MAC first
@@ -395,8 +395,8 @@ impl Default for AppConfig {
             registration: RegistrationConfig::default(),
             auth_mode: default_auth_mode(),
             admin: AdminConfig::default(),
-            packages: HashMap::new(),
-            package_refresh_interval: 0,
+            screen_repos: HashMap::new(),
+            screen_repo_refresh_interval: 0,
         }
     }
 }
@@ -420,13 +420,13 @@ mod tests {
         let config = AppConfig::default();
 
         assert!(config.devices.is_empty());
-        assert!(config.packages.is_empty());
+        assert!(config.screen_repos.is_empty());
     }
 
     #[test]
     fn test_package_refresh_interval_defaults_zero() {
         let c: AppConfig = serde_yaml::from_str("auth_mode: api_key\n").unwrap();
-        assert_eq!(c.package_refresh_interval, 0);
+        assert_eq!(c.screen_repo_refresh_interval, 0);
     }
 
     #[test]
@@ -691,11 +691,11 @@ colors: "#000000,#FFFFFF"
 
     #[test]
     fn test_packages_registry_parses() {
-        let yaml = "packages:\n  byonk-builtin: {}\n  weather:\n    repo: github.com/acme/screens\n    pin: v1.4.0\n";
+        let yaml = "screen_repos:\n  byonk-builtin: {}\n  weather:\n    repo: github.com/acme/screens\n    pin: v1.4.0\n";
         let cfg: AppConfig = serde_yaml::from_str(yaml).unwrap();
-        assert!(cfg.packages.contains_key("byonk-builtin"));
-        assert_eq!(cfg.packages["weather"].pin.as_deref(), Some("v1.4.0"));
-        assert!(cfg.packages["byonk-builtin"].repo.is_none());
+        assert!(cfg.screen_repos.contains_key("byonk-builtin"));
+        assert_eq!(cfg.screen_repos["weather"].pin.as_deref(), Some("v1.4.0"));
+        assert!(cfg.screen_repos["byonk-builtin"].repo.is_none());
     }
 
     #[test]

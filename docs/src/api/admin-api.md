@@ -120,7 +120,7 @@ Return the effective configuration as JSON, parsed from the on-disk `config.yaml
 
 ### GET /api/admin/screens
 
-Return the available screens **grouped by package**, plus panel profiles and supported
+Return the available screens **grouped by screen repo**, plus panel profiles and supported
 dither algorithms. Every screen is addressed by its canonical `handle/path` reference — the
 value a device's `screen` field is set to.
 
@@ -128,7 +128,7 @@ value a device's `screen` field is set to.
 
 ```json
 {
-  "packages": [
+  "screen_repos": [
     {
       "handle": "byonk-builtin",
       "name": "byonk-builtin",
@@ -191,8 +191,8 @@ value a device's `screen` field is set to.
 ```
 
 Field notes:
-- Screens are grouped under the package that provides them. The package-level `name`,
-  `description`, `author`, and `license` come from that package's `byonk-screens.yaml`
+- Screens are grouped under the screen repo that provides them. The repo-level `name`,
+  `description`, `author`, and `license` come from that screen repo's `byonk-screens.yaml`
   manifest.
 - `ref` is the canonical `handle/path` reference (e.g. `byonk-builtin/useful/gphoto`) — the
   assignable screen id, and what `screen` is set to on a device.
@@ -207,13 +207,13 @@ Field notes:
 
 ---
 
-### GET /api/admin/packages
+### GET /api/admin/screen-repos
 
-List the registered screen packages. `byonk-builtin` is always present (it is the embedded
-built-in package, registered even without a `packages:` config entry); any additional entries
-come from the `packages:` config section.
+List the registered screen repos. `byonk-builtin` is always present (it is the embedded
+built-in screen repo, registered even without a `screen_repos:` config entry); any additional
+entries come from the `screen_repos:` config section.
 
-**Response 200** — array of package objects:
+**Response 200** — array of screen repo objects:
 
 ```json
 [
@@ -248,29 +248,29 @@ come from the `packages:` config section.
 
 Field notes:
 - `handle` — the short registry key; also the first segment of every `handle/path` screen ref.
-- `repo` / `pin` — the source repo and pin for remote packages; both `null` for the embedded
-  built-in.
-- `builtin` — `true` for the embedded `byonk-builtin` handle (or any package without a remote
-  repo).
-- `token_set` — whether an auth token is configured for the package. The token itself is
+- `repo` / `pin` — the source repo and pin for remote screen repos; both `null` for the
+  embedded built-in.
+- `builtin` — `true` for the embedded `byonk-builtin` handle (or any screen repo without a
+  remote repo).
+- `token_set` — whether an auth token is configured for the screen repo. The token itself is
   **never** serialized in any response; only this boolean is exposed.
-- `screen_count` — number of screens the loader discovered in the package.
+- `screen_count` — number of screens the loader discovered in the screen repo.
 - `status` — one of:
   - `"ready"` — fetched (or embedded) and currently serving.
   - `"fetching"` — a fetch is in progress right now.
-  - `"error"` — the package has never been fetched successfully (e.g. just
+  - `"error"` — the screen repo has never been fetched successfully (e.g. just
     registered and the background fetch hasn't completed yet, or every fetch
     attempt has failed and nothing is cached). It is not currently serving.
   - `"offline"` — the most recent refresh attempt failed, but a previously
     fetched checkout is still cached and continues to serve. A fetch failure
-    never takes down an already-cached package.
+    never takes down an already-cached screen repo.
 - `pin_kind` — how `pin` was resolved: `"sha"`, `"tag"`, `"branch"`, or
-  `"embedded"` for the built-in package. `null` if the package has never been
+  `"embedded"` for the built-in screen repo. `null` if the screen repo has never been
   successfully fetched. **A full commit `sha` pin is immutable** — it is
   fetched once and cached forever, never re-fetched. **A `tag` or `branch`
   pin is mutable** — it is re-fetched on demand (via the update endpoints
-  below) and automatically every `package_refresh_interval` seconds.
-- `resolved_sha` — the commit sha the package is currently pinned/fetched at,
+  below) and automatically every `screen_repo_refresh_interval` seconds.
+- `resolved_sha` — the commit sha the screen repo is currently pinned/fetched at,
   or `null` if never successfully fetched. The cache is keyed by `repo` +
   `resolved_sha`.
 - `last_fetched` — RFC3339 timestamp of the last successful fetch, or `null`
@@ -280,12 +280,12 @@ Field notes:
 
 ---
 
-### POST /api/admin/packages
+### POST /api/admin/screen-repos
 
-Register a new remote screen package. Triggers an asynchronous background
+Register a new remote screen repo. Triggers an asynchronous background
 fetch (fire-and-forget) — the response reflects whatever status exists at
 that instant (typically no status yet, since the fetch hasn't completed).
-Poll `GET /api/admin/packages` for the settled result.
+Poll `GET /api/admin/screen-repos` for the settled result.
 
 **Request body**:
 
@@ -299,23 +299,23 @@ Poll `GET /api/admin/packages` for the settled result.
 ```
 
 Required field: `handle`. `repo`, `pin`, and `token` are optional (though a
-package needs `repo`/`pin` to have anything to fetch). `token` is used for
-authenticating against a private repo and — like every package `token` — is
+screen repo needs `repo`/`pin` to have anything to fetch). `token` is used for
+authenticating against a private repo and — like every screen repo `token` — is
 never echoed back in any response.
 
 **Responses**:
 
 | Status | Meaning |
 |--------|---------|
-| `200` | Registered — returns the package's `PackageInfo` (same shape as `GET /api/admin/packages` entries) |
+| `200` | Registered — returns the screen repo's `ScreenRepoInfo` (same shape as `GET /api/admin/screen-repos` entries) |
 | `400` | Validation error (missing `handle`) |
-| `409` | `handle` is `byonk-builtin` (reserved), a package with that `handle` already exists, or config is embedded/read-only (`set CONFIG_FILE`) |
+| `409` | `handle` is `byonk-builtin` (reserved), a screen repo with that `handle` already exists, or config is embedded/read-only (`set CONFIG_FILE`) |
 
 ---
 
-### PATCH /api/admin/packages/:handle
+### PATCH /api/admin/screen-repos/:handle
 
-Update an existing package's `repo`, `pin`, or `token`. All fields are
+Update an existing screen repo's `repo`, `pin`, or `token`. All fields are
 optional; an **omitted field keeps its current value** — in particular, an
 omitted `token` is never cleared.
 
@@ -328,21 +328,21 @@ omitted `token` is never cleared.
 ```
 
 If `repo` or `pin` changes, a background re-fetch is triggered (same
-fire-and-forget semantics as `POST /api/admin/packages`).
+fire-and-forget semantics as `POST /api/admin/screen-repos`).
 
 **Responses**:
 
 | Status | Meaning |
 |--------|---------|
-| `200` | Updated — returns the package's `PackageInfo` |
-| `404` | No package with that handle |
+| `200` | Updated — returns the screen repo's `ScreenRepoInfo` |
+| `404` | No screen repo with that handle |
 | `409` | `handle` is `byonk-builtin` (reserved), or config is embedded/read-only |
 
 ---
 
-### DELETE /api/admin/packages/:handle
+### DELETE /api/admin/screen-repos/:handle
 
-Remove a package registration. Rejected if any device's `screen` still
+Remove a screen repo registration. Rejected if any device's `screen` still
 references the handle (`<handle>/...`) — delete or repoint those device
 mappings first. On success, the in-memory loader is rebuilt immediately so
 the handle's screens stop resolving right away (the cached checkout on disk
@@ -353,41 +353,41 @@ is left in place).
 | Status | Meaning |
 |--------|---------|
 | `200` | Deleted — `{"ok": true}` |
-| `404` | No package with that handle |
+| `404` | No screen repo with that handle |
 | `409` | `handle` is `byonk-builtin` (reserved); a device references the handle (message names the offending device); or config is embedded/read-only |
 
 ---
 
-### POST /api/admin/packages/:handle/update
+### POST /api/admin/screen-repos/:handle/update
 
-Trigger a re-fetch of a single package handle. Fire-and-forget: the fetch
+Trigger a re-fetch of a single screen repo handle. Fire-and-forget: the fetch
 runs in the background, and the response reflects whatever status exists at
-that instant. Poll `GET /api/admin/packages` for the settled status. Calling
-this on `byonk-builtin` is accepted but is a no-op (the embedded package is
+that instant. Poll `GET /api/admin/screen-repos` for the settled status. Calling
+this on `byonk-builtin` is accepted but is a no-op (the embedded screen repo is
 never fetched).
 
 **Responses**:
 
 | Status | Meaning |
 |--------|---------|
-| `200` | Refresh triggered — returns the package's `PackageInfo` (pre-refresh snapshot) |
-| `404` | No package with that handle |
+| `200` | Refresh triggered — returns the screen repo's `ScreenRepoInfo` (pre-refresh snapshot) |
+| `404` | No screen repo with that handle |
 
 ---
 
-### POST /api/admin/packages/update
+### POST /api/admin/screen-repos/update
 
-Trigger a forced re-fetch of every registered non-builtin package
+Trigger a forced re-fetch of every registered non-builtin screen repo
 (fire-and-forget, runs in the background). Forcing bypasses the "already
 cached and immutable" skip that a normal periodic refresh applies to sha
-pins — every handle gets a real fetch attempt. Poll `GET /api/admin/packages`
-for the settled status of each package.
+pins — every handle gets a real fetch attempt. Poll `GET /api/admin/screen-repos`
+for the settled status of each screen repo.
 
 **Responses**:
 
 | Status | Meaning |
 |--------|---------|
-| `200` | Refresh triggered for all packages — `{"ok": true}` |
+| `200` | Refresh triggered for all screen repos — `{"ok": true}` |
 
 ---
 
@@ -480,7 +480,7 @@ changed.
 {
   "registration_enabled": true,
   "auth_mode": "api_key",
-  "package_refresh_interval": 3600
+  "screen_repo_refresh_interval": 3600
 }
 ```
 
@@ -488,7 +488,7 @@ changed.
 |-------|------|---------------|
 | `registration_enabled` | boolean | `true` / `false` |
 | `auth_mode` | string | `"api_key"` or `"ed25519"` |
-| `package_refresh_interval` | integer | seconds between automatic re-fetches of mutable (tag/branch) package pins; `0` disables periodic refresh (the default) |
+| `screen_repo_refresh_interval` | integer | seconds between automatic re-fetches of mutable (tag/branch) screen repo pins; `0` disables periodic refresh (the default) |
 
 There is no `default_screen` or `registration_screen` field here — the screen
 shown to un-onboarded or unassigned devices is the reserved `DEFAULT` device,

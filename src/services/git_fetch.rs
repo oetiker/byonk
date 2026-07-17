@@ -1,12 +1,12 @@
-//! Low-level git primitive for screen-package distribution.
+//! Low-level git primitive for screen repo distribution.
 //!
-//! [`fetch`] clones/fetches a package repo at a *pin* (a full sha, tag, or
+//! [`fetch`] clones/fetches a screen repo repo at a *pin* (a full sha, tag, or
 //! branch name) and materializes the pinned tree into a plain directory —
 //! not a git working tree. We clone bare into scratch space, resolve `pin`
 //! against the fetched refs/objects, then export the resolved tree's blobs
 //! directly into `dest`. That keeps `dest` a clean content directory with no
-//! `.git` folder mixed in, which matters because later code (`PackageSource`
-//! disk-walking in `package_loader.rs`) walks `dest` for package files and
+//! `.git` folder mixed in, which matters because later code (`ScreenRepoSource`
+//! disk-walking in `screen_repo_loader.rs`) walks `dest` for screen repo files and
 //! shouldn't have to know about, or skip over, git internals.
 //!
 //! This interface is deliberately engine-agnostic (no `gix` types appear in
@@ -29,9 +29,9 @@ pub enum PinKind {
     /// by our bare clone/fetch (`refs/remotes/origin/<pin>`), not
     /// `refs/heads/<pin>` on the remote directly.
     Branch,
-    /// The embedded builtin package. This is an API-layer marker only — the
+    /// The embedded builtin screen repo. This is an API-layer marker only — the
     /// git resolver above never produces it; `read.rs` uses it to describe
-    /// `byonk-builtin` in `GET /packages` responses.
+    /// `byonk-builtin` in `GET /screen-repos` responses.
     Embedded,
 }
 
@@ -61,7 +61,7 @@ pub enum FetchError {
     InvalidRepo(String),
 }
 
-/// Transport schemes we accept verbatim for a package `repo`.
+/// Transport schemes we accept verbatim for a screen repo `repo`.
 const REPO_SCHEMES: &[&str] = &["https://", "http://", "git://", "ssh://", "file://"];
 
 /// Validate that `repo` carries an explicit transport, so it is never
@@ -78,7 +78,7 @@ fn validate_repo(repo: &str) -> Result<(), FetchError> {
         return Ok(());
     }
     Err(FetchError::InvalidRepo(redact_userinfo(format!(
-        "invalid package repo `{repo}`: add an explicit scheme \
+        "invalid screen repo repo `{repo}`: add an explicit scheme \
          (https://, git://, ssh:// or file://). A remote like \
          `github.com/owner/repo` must be written `https://github.com/owner/repo`; \
          a local repository must be `file:///path/to/repo`."
@@ -98,8 +98,8 @@ fn git_err(msg: impl Into<String>) -> FetchError {
 
 /// Build a [`FetchError::PinNotFound`], redacting any userinfo embedded in
 /// `repo` first — same rationale as [`git_err`]: a user who hand-embeds
-/// `https://user:pass@host` in a package's `repo` config must never have
-/// that credential echoed back into `status.error` / `GET /packages`.
+/// `https://user:pass@host` in a screen repo's `repo` config must never have
+/// that credential echoed back into `status.error` / `GET /screen-repos`.
 fn pin_not_found(pin: &str, repo: &str) -> FetchError {
     FetchError::PinNotFound(pin.to_string(), redact_userinfo(repo.to_string()))
 }
@@ -162,21 +162,36 @@ pub fn fetch(
     std::fs::create_dir_all(dest)
         .map_err(|e| git_err(format!("creating {}: {e}", dest.display())))?;
 
-    let scratch = scratch_dir();
+    let scratch = scratch_for(dest);
     let result = fetch_into(repo, pin, token, dest, &scratch);
     // Always clean up scratch, regardless of outcome.
     let _ = std::fs::remove_dir_all(&scratch);
     result
 }
 
-fn scratch_dir() -> PathBuf {
+/// Directory for the intermediate bare clone. It MUST live on the same
+/// filesystem as `dest` (a sibling of it), NOT in `std::env::temp_dir()`.
+///
+/// The published container image is built `FROM scratch` (see
+/// `Dockerfile.release`) and has no `/tmp` directory, so `std::env::temp_dir()`
+/// resolves to a `/tmp/…` path whose parent does not exist — gix then fails the
+/// bare clone with `Could not open data at '/tmp/byonk-git-fetch-…'` and every
+/// screen repo fetch errors. `dest` is the caller's screen-repo-cache checkout dir
+/// (under `/data`, just created via `create_dir_all`), so its parent is
+/// guaranteed to exist and be writable; cloning beside it also makes the final
+/// export a same-filesystem operation. Fall back to the system temp dir only
+/// when `dest` has no parent (not reachable for real cache paths).
+fn scratch_for(dest: &Path) -> PathBuf {
     let unique = format!(
         "byonk-git-fetch-{}-{}-{}",
         std::process::id(),
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
         rand::random::<u64>()
     );
-    std::env::temp_dir().join(unique)
+    match dest.parent() {
+        Some(parent) => parent.join(unique),
+        None => std::env::temp_dir().join(unique),
+    }
 }
 
 fn fetch_into(
@@ -253,7 +268,7 @@ fn resolve_pin(repo: &gix::Repository, pin: &str) -> Option<(gix::ObjectId, PinK
 /// ("tree") entries, not blobs only; without filtering those out, writing a
 /// directory entry as a file collides with `create_dir_all` for any deeper
 /// blob under it. Symlinks are written as regular files containing the link
-/// target text (best-effort; screen packages are not expected to contain
+/// target text (best-effort; screen repos are not expected to contain
 /// symlinks).
 fn export_tree(
     repo: &gix::Repository,
@@ -372,6 +387,29 @@ mod tests {
     }
 
     #[test]
+    fn test_scratch_is_sibling_of_dest_not_system_temp() {
+        // Regression: the release image is `FROM scratch` and has no /tmp, so
+        // the intermediate bare clone must live beside `dest` (on the writable
+        // screen-repo-cache filesystem under /data), never in std::env::temp_dir()
+        // — otherwise gix fails with "Could not open data at '/tmp/…'".
+        let dest = Path::new("/data/packages/repohash/scratch-checkout");
+        let scratch = scratch_for(dest);
+        assert_eq!(
+            scratch.parent(),
+            Some(Path::new("/data/packages/repohash")),
+            "scratch must be a sibling of dest"
+        );
+        assert!(
+            !scratch.starts_with(std::env::temp_dir()),
+            "scratch must not live in the system temp dir (release image has no /tmp)"
+        );
+        assert!(scratch
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("byonk-git-fetch-")));
+    }
+
+    #[test]
     fn test_looks_like_sha() {
         assert!(looks_like_sha("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"));
         assert!(!looks_like_sha("v1.0.0"));
@@ -434,7 +472,7 @@ mod tests {
     struct FixtureRepo {
         /// On-disk path (for fs cleanup / mutation in tests).
         dir: PathBuf,
-        /// `file://` URL of `dir` (a package `repo:` must carry a scheme).
+        /// `file://` URL of `dir` (a screen repo `repo:` must carry a scheme).
         url: String,
         branch: String,
         tag: String,
@@ -520,7 +558,7 @@ mod tests {
     }
 
     /// Regression test: a real tree with a nested directory (as every screen
-    /// package has, e.g. `weather/forecast/meta.yaml`) must export cleanly.
+    /// screen repo has, e.g. `weather/forecast/meta.yaml`) must export cleanly.
     /// `breadthfirst().files()` records *every* tree entry, including
     /// intermediate directories, not just blobs — `export_tree` must skip
     /// those or `create_dir_all` collides with a directory entry written as

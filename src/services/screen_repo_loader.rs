@@ -1,9 +1,9 @@
-//! Screen-package registry: resolve a `handle/path` reference to a `ResolvedScreen`.
+//! Screen-screen repo registry: resolve a `handle/path` reference to a `ResolvedScreen`.
 //!
-//! A *package* is a collection of screens plus shared library/part files, described
+//! A *screen repo* is a collection of screens plus shared library/part files, described
 //! by a `byonk-screens.yaml` manifest at its root. Each screen lives in a directory
-//! that contains a `meta.yaml`. This module abstracts *where* a package's bytes come
-//! from (`PackageSource`) so screens can be served identically whether they are
+//! that contains a `meta.yaml`. This module abstracts *where* a screen repo's bytes come
+//! from (`ScreenRepoSource`) so screens can be served identically whether they are
 //! embedded in the binary (`byonk-builtin`) or dropped on disk.
 
 use std::collections::HashMap;
@@ -11,52 +11,52 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::assets::AssetLoader;
-use crate::models::package_manifest::PackageManifest;
 use crate::models::screen_meta::ScreenMeta;
+use crate::models::screen_repo_manifest::ScreenRepoManifest;
 
-/// The handle under which the built-in (embedded + `SCREENS_DIR`) package is registered.
+/// The handle under which the built-in (embedded + `SCREENS_DIR`) screen repo is registered.
 pub const BUILTIN_HANDLE: &str = "byonk-builtin";
 
-/// Reads any file within a package by package-root-relative (manifest-`root`-relative)
+/// Reads any file within a screen repo by screen-repo-root-relative (manifest-`root`-relative)
 /// path, using forward slashes. Implementations must be cheap to share across threads.
-pub trait PackageSource: Send + Sync {
-    /// Read a package file's raw bytes, or `None` if it does not exist.
+pub trait ScreenRepoSource: Send + Sync {
+    /// Read a screen repo file's raw bytes, or `None` if it does not exist.
     fn read(&self, rel: &str) -> Option<Vec<u8>>;
 
-    /// Read a package file as a UTF-8 string, or `None` if missing / not valid UTF-8.
+    /// Read a screen repo file as a UTF-8 string, or `None` if missing / not valid UTF-8.
     fn read_string(&self, rel: &str) -> Option<String> {
         self.read(rel).and_then(|b| String::from_utf8(b).ok())
     }
 
-    /// All screen directories in this package (dirs containing a `meta.yaml`),
-    /// relative to the manifest `root` (or the package root if no `root`).
+    /// All screen directories in this screen repo (dirs containing a `meta.yaml`),
+    /// relative to the manifest `root` (or the screen repo root if no `root`).
     fn screen_paths(&self) -> Vec<String>;
 
-    /// Package-relative paths of every `.svg` file in the package. Used to scope
-    /// Tera template registration to one package (screens + shared parts).
+    /// ScreenRepo-relative paths of every `.svg` file in the screen repo. Used to scope
+    /// Tera template registration to one screen repo (screens + shared parts).
     fn svg_files(&self) -> Vec<String>;
 
-    /// The parsed package manifest.
-    fn manifest(&self) -> &PackageManifest;
+    /// The parsed screen repo manifest.
+    fn manifest(&self) -> &ScreenRepoManifest;
 }
 
-/// A fully resolved screen: its parsed metadata plus a handle back to its package
+/// A fully resolved screen: its parsed metadata plus a handle back to its screen repo
 /// so siblings (`lib/*.lua` for `require`, `parts/*.svg` for includes) can be read.
 pub struct ResolvedScreen {
-    /// Package handle, e.g. `"byonk-builtin"` or `"acme"`.
+    /// ScreenRepo handle, e.g. `"byonk-builtin"` or `"acme"`.
     pub handle: String,
-    /// Screen path within the package, e.g. `"useful/gphoto"`.
+    /// Screen path within the screen repo, e.g. `"useful/gphoto"`.
     pub path: String,
     /// Parsed `meta.yaml`.
     pub meta: ScreenMeta,
-    /// The screen's package source, for reading sibling files.
-    pub source: Arc<dyn PackageSource>,
+    /// The screen's screen repo source, for reading sibling files.
+    pub source: Arc<dyn ScreenRepoSource>,
     /// Manifest-root-relative directory of the screen (same as `path`).
     pub screen_dir: String,
 }
 
-/// Join a manifest-`root` (or screen-dir) prefix with a package-relative path,
-/// using forward slashes. Shared by every read path (packages, includes,
+/// Join a manifest-`root` (or screen-dir) prefix with a screen-repo-relative path,
+/// using forward slashes. Shared by every read path (screen repos, includes,
 /// image-refs, `read_asset`).
 pub fn join_rel(prefix: &str, rel: &str) -> String {
     if prefix.is_empty() || prefix == "." {
@@ -66,12 +66,12 @@ pub fn join_rel(prefix: &str, rel: &str) -> String {
     }
 }
 
-/// True if `rel` is a safe package-relative path that stays inside the package.
+/// True if `rel` is a safe screen-repo-relative path that stays inside the screen repo.
 ///
 /// Rejects paths that are empty, absolute (`/…`), Windows drive/UNC-style
 /// (`C:\…`, leading `\`), or that contain any `..` path component (split on both
 /// `/` and `\`). This is the sandbox guard applied before every filesystem read
-/// so a screen can never escape its package via `require("../../etc/passwd")` or
+/// so a screen can never escape its screen repo via `require("../../etc/passwd")` or
 /// an SVG `href="../../secret"`.
 pub fn is_safe_rel(rel: &str) -> bool {
     if rel.is_empty() {
@@ -100,27 +100,27 @@ fn split_ref(screen_ref: &str) -> Option<(&str, &str)> {
     }
 }
 
-/// A package that lives in an on-disk directory. Files are read with `fs::read`;
+/// A screen repo that lives in an on-disk directory. Files are read with `fs::read`;
 /// screens are discovered by walking the manifest root for `meta.yaml` files.
-pub struct DiskPackageSource {
-    manifest: PackageManifest,
+pub struct DiskScreenRepoSource {
+    manifest: ScreenRepoManifest,
     /// Directory the manifest-relative paths resolve against (`root.join(manifest.root)`).
     manifest_root: PathBuf,
 }
 
-impl DiskPackageSource {
-    /// Load a disk package rooted at `root`. Returns `Err` (skip) if the
+impl DiskScreenRepoSource {
+    /// Load a disk screen repo rooted at `root`. Returns `Err` (skip) if the
     /// `byonk-screens.yaml` manifest is missing or invalid.
-    pub fn load(root: &Path) -> Result<DiskPackageSource, String> {
+    pub fn load(root: &Path) -> Result<DiskScreenRepoSource, String> {
         let manifest_path = root.join("byonk-screens.yaml");
         let src = std::fs::read_to_string(&manifest_path)
             .map_err(|e| format!("cannot read {}: {e}", manifest_path.display()))?;
-        let manifest = PackageManifest::from_yaml(&src)?;
+        let manifest = ScreenRepoManifest::from_yaml(&src)?;
         let manifest_root = match manifest.root.as_deref() {
             Some(r) if !r.is_empty() && r != "." => root.join(r),
             _ => root.to_path_buf(),
         };
-        Ok(DiskPackageSource {
+        Ok(DiskScreenRepoSource {
             manifest,
             manifest_root,
         })
@@ -166,7 +166,7 @@ impl DiskPackageSource {
     }
 }
 
-impl PackageSource for DiskPackageSource {
+impl ScreenRepoSource for DiskScreenRepoSource {
     fn read(&self, rel: &str) -> Option<Vec<u8>> {
         if !is_safe_rel(rel) {
             return None;
@@ -188,28 +188,28 @@ impl PackageSource for DiskPackageSource {
         out
     }
 
-    fn manifest(&self) -> &PackageManifest {
+    fn manifest(&self) -> &ScreenRepoManifest {
         &self.manifest
     }
 }
 
-/// The built-in package, backed by the embedded `screens/` tree (optionally
+/// The built-in screen repo, backed by the embedded `screens/` tree (optionally
 /// overlaid by `SCREENS_DIR`) via `AssetLoader`.
 pub struct EmbeddedBuiltinSource {
     loader: Arc<AssetLoader>,
-    manifest: PackageManifest,
+    manifest: ScreenRepoManifest,
     /// Manifest-`root` prefix within the screens tree (empty when no `root`).
     root_prefix: String,
 }
 
 impl EmbeddedBuiltinSource {
-    /// Load the built-in package. Returns `Err` (skip) if `byonk-screens.yaml`
+    /// Load the built-in screen repo. Returns `Err` (skip) if `byonk-screens.yaml`
     /// is missing or invalid.
     pub fn load(loader: Arc<AssetLoader>) -> Result<EmbeddedBuiltinSource, String> {
         let src = loader
             .read_screen_string(Path::new("byonk-screens.yaml"))
             .map_err(|e| format!("cannot read embedded byonk-screens.yaml: {e}"))?;
-        let manifest = PackageManifest::from_yaml(&src)?;
+        let manifest = ScreenRepoManifest::from_yaml(&src)?;
         let root_prefix = match manifest.root.as_deref() {
             Some(r) if !r.is_empty() && r != "." => r.trim_end_matches('/').to_string(),
             _ => String::new(),
@@ -222,7 +222,7 @@ impl EmbeddedBuiltinSource {
     }
 }
 
-impl PackageSource for EmbeddedBuiltinSource {
+impl ScreenRepoSource for EmbeddedBuiltinSource {
     fn read(&self, rel: &str) -> Option<Vec<u8>> {
         if !is_safe_rel(rel) {
             return None;
@@ -285,45 +285,45 @@ impl PackageSource for EmbeddedBuiltinSource {
         out
     }
 
-    fn manifest(&self) -> &PackageManifest {
+    fn manifest(&self) -> &ScreenRepoManifest {
         &self.manifest
     }
 }
 
-/// Resolves screen references against a registry of packages keyed by handle.
-pub struct PackageLoader {
-    registry: HashMap<String, Arc<dyn PackageSource>>,
+/// Resolves screen references against a registry of screen repos keyed by handle.
+pub struct ScreenRepoLoader {
+    registry: HashMap<String, Arc<dyn ScreenRepoSource>>,
 }
 
-impl PackageLoader {
+impl ScreenRepoLoader {
     /// Build a loader. The `byonk-builtin` handle is always registered (backed by
     /// the embedded tree + `SCREENS_DIR` overlay). Each `disk_packages` entry maps
-    /// a handle to a package root directory. Packages whose manifest is
+    /// a handle to a screen repo root directory. ScreenRepos whose manifest is
     /// missing/invalid are skipped with a warning.
     pub fn new(asset_loader: Arc<AssetLoader>, disk_packages: HashMap<String, PathBuf>) -> Self {
-        let mut registry: HashMap<String, Arc<dyn PackageSource>> = HashMap::new();
+        let mut registry: HashMap<String, Arc<dyn ScreenRepoSource>> = HashMap::new();
 
         match EmbeddedBuiltinSource::load(asset_loader) {
             Ok(src) => {
                 registry.insert(BUILTIN_HANDLE.to_string(), Arc::new(src));
             }
             Err(e) => {
-                tracing::warn!(error = %e, "skipping byonk-builtin package: unreadable manifest");
+                tracing::warn!(error = %e, "skipping byonk-builtin screen repo: unreadable manifest");
             }
         }
 
         for (handle, root) in disk_packages {
-            match DiskPackageSource::load(&root) {
+            match DiskScreenRepoSource::load(&root) {
                 Ok(src) => {
                     registry.insert(handle, Arc::new(src));
                 }
                 Err(e) => {
-                    tracing::warn!(handle = %handle, root = %root.display(), error = %e, "skipping disk package: invalid manifest");
+                    tracing::warn!(handle = %handle, root = %root.display(), error = %e, "skipping disk screen repo: invalid manifest");
                 }
             }
         }
 
-        PackageLoader { registry }
+        ScreenRepoLoader { registry }
     }
 
     /// Resolve `"handle/path"` to a screen. `None` if the handle is unknown, the
@@ -346,7 +346,7 @@ impl PackageLoader {
         })
     }
 
-    /// Resolve every screen in every registered package.
+    /// Resolve every screen in every registered screen repo.
     pub fn list_all(&self) -> Vec<ResolvedScreen> {
         let mut out = Vec::new();
         for (handle, source) in &self.registry {
@@ -359,7 +359,7 @@ impl PackageLoader {
         out
     }
 
-    /// All registered package handles.
+    /// All registered screen repo handles.
     pub fn handles(&self) -> Vec<String> {
         let mut h: Vec<String> = self.registry.keys().cloned().collect();
         h.sort();
@@ -404,7 +404,7 @@ mod tests {
         let loader = std::sync::Arc::new(crate::assets::AssetLoader::new(None, None, None));
         let mut disk = HashMap::new();
         disk.insert("acme".to_string(), tmp.clone());
-        let pl = PackageLoader::new(loader, disk);
+        let pl = ScreenRepoLoader::new(loader, disk);
 
         let r = pl.resolve("acme/weather/forecast").expect("resolve");
         assert_eq!(r.handle, "acme");
@@ -449,11 +449,11 @@ mod tests {
             "name: t\ndescription: d\nauthor: a\nlicense: MIT\n",
         );
         write(&tmp, "lib/util.lua", "return {}\n");
-        // A secret file OUTSIDE the package root (sibling of tmp).
+        // A secret file OUTSIDE the screen repo root (sibling of tmp).
         let secret = tmp.parent().unwrap().join("byonk_secret_marker.txt");
         fs::write(&secret, "TOP SECRET").unwrap();
 
-        let src = DiskPackageSource::load(&tmp).expect("load");
+        let src = DiskScreenRepoSource::load(&tmp).expect("load");
         // Legitimate read works.
         assert_eq!(
             src.read_string("lib/util.lua").as_deref(),
@@ -472,7 +472,7 @@ mod tests {
     #[test]
     fn test_builtin_always_registered() {
         let loader = std::sync::Arc::new(crate::assets::AssetLoader::new(None, None, None));
-        let pl = PackageLoader::new(loader, HashMap::new());
+        let pl = ScreenRepoLoader::new(loader, HashMap::new());
         assert!(pl.handles().contains(&"byonk-builtin".to_string()));
     }
 }

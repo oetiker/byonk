@@ -1,18 +1,18 @@
-//! Orchestrates screen-package fetch/cache/refresh and serves a
-//! hot-swappable [`PackageLoader`] snapshot.
+//! Orchestrates screen repo fetch/cache/refresh and serves a
+//! hot-swappable [`ScreenRepoLoader`] snapshot.
 //!
-//! `PackageManager` is the single owner of "what package handles resolve to
-//! what bytes right now": it holds the [`PackageCache`] (fetched checkouts on
-//! disk), a per-handle [`PackageStatus`] store (fetch/error/offline state for
-//! `GET /packages`), and an [`ArcSwap`]-backed [`PackageLoader`] snapshot that
-//! call sites resolve screens against. Fetching a package never blocks
-//! readers: `refresh_one`/`refresh_all` build a brand new `PackageLoader` and
+//! `ScreenRepoManager` is the single owner of "what screen repo handles resolve to
+//! what bytes right now": it holds the [`ScreenRepoCache`] (fetched checkouts on
+//! disk), a per-handle [`ScreenRepoStatus`] store (fetch/error/offline state for
+//! `GET /screen-repos`), and an [`ArcSwap`]-backed [`ScreenRepoLoader`] snapshot that
+//! call sites resolve screens against. Fetching a screen repo never blocks
+//! readers: `refresh_one`/`refresh_all` build a brand new `ScreenRepoLoader` and
 //! atomically swap it in; in-flight `resolve()` calls against the old
 //! snapshot keep working against the old (still-valid) checkout until they
 //! naturally pick up the new one on their next call.
 //!
 //! This fixes Plan-1 follow-up #6: previously the loader was built once at
-//! startup and never rebuilt when `config.packages` changed.
+//! startup and never rebuilt when `config.screen_repos` changed.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -22,39 +22,39 @@ use arc_swap::ArcSwap;
 use chrono::Utc;
 
 use crate::assets::AssetLoader;
-use crate::models::config::PackageRef;
+use crate::models::config::ScreenRepoRef;
 use crate::server::SharedConfig;
 use crate::services::git_fetch;
-use crate::services::package_cache::PackageCache;
-use crate::services::package_loader::{PackageLoader, BUILTIN_HANDLE};
-use crate::services::package_status::{PackageState, PackageStatus};
+use crate::services::screen_repo_cache::ScreenRepoCache;
+use crate::services::screen_repo_loader::{ScreenRepoLoader, BUILTIN_HANDLE};
+use crate::services::screen_repo_status::{ScreenRepoState, ScreenRepoStatus};
 
-/// Owns package fetch orchestration + the live, hot-swappable [`PackageLoader`].
-pub struct PackageManager {
+/// Owns screen repo fetch orchestration + the live, hot-swappable [`ScreenRepoLoader`].
+pub struct ScreenRepoManager {
     asset_loader: Arc<AssetLoader>,
-    /// Reads `config.packages` fresh on every refresh (config can change
+    /// Reads `config.screen_repos` fresh on every refresh (config can change
     /// underneath us via the admin API).
     config: SharedConfig,
-    cache: PackageCache,
-    /// Per-handle fetch state, surfaced via `status_snapshot` for `GET /packages`.
-    status: Mutex<HashMap<String, PackageStatus>>,
+    cache: ScreenRepoCache,
+    /// Per-handle fetch state, surfaced via `status_snapshot` for `GET /screen-repos`.
+    status: Mutex<HashMap<String, ScreenRepoStatus>>,
     /// The live snapshot readers resolve screens against.
-    loader: ArcSwap<PackageLoader>,
-    /// `PACKAGES_DIR`-style dev packages that are always disk-backed, never fetched.
+    loader: ArcSwap<ScreenRepoLoader>,
+    /// `SCREEN_REPOS_DIR`-style dev screen repos that are always disk-backed, never fetched.
     extra_disk: HashMap<String, PathBuf>,
 }
 
-impl PackageManager {
+impl ScreenRepoManager {
     /// Build a manager and its initial loader snapshot (embedded builtin +
     /// `extra_disk` only — cache checkouts are added once `rebuild_loader`
     /// runs after a successful fetch).
     pub fn new(
         asset_loader: Arc<AssetLoader>,
         config: SharedConfig,
-        cache: PackageCache,
+        cache: ScreenRepoCache,
         extra_disk: HashMap<String, PathBuf>,
     ) -> Arc<Self> {
-        let initial = PackageLoader::new(asset_loader.clone(), extra_disk.clone());
+        let initial = ScreenRepoLoader::new(asset_loader.clone(), extra_disk.clone());
         Arc::new(Self {
             asset_loader,
             config,
@@ -66,11 +66,11 @@ impl PackageManager {
     }
 
     /// Current loader snapshot (cheap; call once per resolve, not once per file read).
-    pub fn loader(&self) -> Arc<PackageLoader> {
+    pub fn loader(&self) -> Arc<ScreenRepoLoader> {
         self.loader.load_full()
     }
 
-    /// Rebuild the loader from the embedded builtin (added by `PackageLoader::new`
+    /// Rebuild the loader from the embedded builtin (added by `ScreenRepoLoader::new`
     /// itself) + `extra_disk` + every registered handle whose status has a
     /// `resolved_sha` that's actually present in the cache, then swap it in.
     pub fn rebuild_loader(&self) {
@@ -78,7 +78,7 @@ impl PackageManager {
 
         let config = self.config.load();
         let status = self.lock_status();
-        for (handle, pkg_ref) in config.packages.iter() {
+        for (handle, pkg_ref) in config.screen_repos.iter() {
             if handle == BUILTIN_HANDLE {
                 continue;
             }
@@ -97,7 +97,7 @@ impl PackageManager {
         }
         drop(status);
 
-        let fresh = PackageLoader::new(self.asset_loader.clone(), disk_map);
+        let fresh = ScreenRepoLoader::new(self.asset_loader.clone(), disk_map);
         self.loader.store(Arc::new(fresh));
     }
 
@@ -109,7 +109,7 @@ impl PackageManager {
         if handle == BUILTIN_HANDLE {
             return;
         }
-        let pkg_ref: PackageRef = match self.config.load().packages.get(handle) {
+        let pkg_ref: ScreenRepoRef = match self.config.load().screen_repos.get(handle) {
             Some(p) => p.clone(),
             None => return,
         };
@@ -120,14 +120,14 @@ impl PackageManager {
         let token = pkg_ref.token.clone();
 
         self.update_status(handle, |st| {
-            st.state = Some(PackageState::Fetching);
+            st.state = Some(ScreenRepoState::Fetching);
         });
 
         // Immutable pin whose tree we already have on disk: reuse without a
         // network round-trip. A sha's content can never change underneath us.
         if git_fetch::looks_like_sha(&pin) && self.cache.has(&repo, &pin) {
             self.update_status(handle, |st| {
-                st.state = Some(PackageState::Ready);
+                st.state = Some(ScreenRepoState::Ready);
                 st.resolved_sha = Some(pin.clone());
                 st.pin_kind = Some(git_fetch::PinKind::Sha);
                 st.error = None;
@@ -160,7 +160,7 @@ impl PackageManager {
                     // same-handle refresh can't race the move.
                     cleanup_scratch(&scratch);
                     self.update_status(handle, |st| {
-                        st.state = Some(PackageState::Ready);
+                        st.state = Some(ScreenRepoState::Ready);
                         st.resolved_sha = Some(fetched.resolved_sha.clone());
                         st.pin_kind = Some(fetched.pin_kind);
                         st.last_fetched = Some(Utc::now());
@@ -183,8 +183,13 @@ impl PackageManager {
                     });
                     return;
                 }
+                tracing::info!(
+                    handle = %handle,
+                    sha = %fetched.resolved_sha,
+                    "screen repo refreshed"
+                );
                 self.update_status(handle, |st| {
-                    st.state = Some(PackageState::Ready);
+                    st.state = Some(ScreenRepoState::Ready);
                     st.resolved_sha = Some(fetched.resolved_sha.clone());
                     st.pin_kind = Some(fetched.pin_kind);
                     st.last_fetched = Some(Utc::now());
@@ -194,8 +199,13 @@ impl PackageManager {
             }
             Err(e) => {
                 cleanup_scratch(&scratch);
+                // `e`/`message` is already userinfo-redacted by git_fetch; the
+                // handle is operator-chosen. Log it so a failing screen repo fetch
+                // is visible in the add-on log, not only in the per-screen repo
+                // status surfaced by `GET /screen-repos`.
                 let message = e.to_string();
                 let state = self.state_after_post_fetch_failure(handle, &repo);
+                tracing::warn!(handle = %handle, state = ?state, "screen repo fetch failed: {message}");
                 self.update_status(handle, |st| {
                     st.state = Some(state);
                     st.error = Some(message);
@@ -204,7 +214,7 @@ impl PackageManager {
         }
     }
 
-    /// Fetch every registered non-builtin package that needs it, then
+    /// Fetch every registered non-builtin screen repo that needs it, then
     /// rebuild+swap the loader once. Skipping is keyed on **pin shape**, not
     /// run-time state: a sha pin is immutable, so an already-cached sha is
     /// left alone (`!force`); a tag/branch pin is mutable and must always get
@@ -217,7 +227,7 @@ impl PackageManager {
         let handles: Vec<String> = self
             .config
             .load()
-            .packages
+            .screen_repos
             .iter()
             .filter(|(handle, pkg_ref)| handle.as_str() != BUILTIN_HANDLE && pkg_ref.repo.is_some())
             .map(|(handle, _)| handle.clone())
@@ -232,25 +242,25 @@ impl PackageManager {
         self.rebuild_loader();
     }
 
-    /// Snapshot of per-handle status for `GET /packages`.
-    pub fn status_snapshot(&self) -> HashMap<String, PackageStatus> {
+    /// Snapshot of per-handle status for `GET /screen-repos`.
+    pub fn status_snapshot(&self) -> HashMap<String, ScreenRepoStatus> {
         self.lock_status().clone()
     }
 
-    /// Remove `handle`'s fetch status entry, e.g. after `delete_package` so a
+    /// Remove `handle`'s fetch status entry, e.g. after `delete_screen_repo` so a
     /// later re-registration of the same handle doesn't briefly surface the
-    /// stale `resolved_sha`/`Ready` state from the deleted package.
+    /// stale `resolved_sha`/`Ready` state from the deleted screen repo.
     pub fn forget_status(&self, handle: &str) {
         self.lock_status().remove(handle);
     }
 
     /// True only when `handle`'s configured pin is a sha (immutable) *and*
     /// that sha is already cached on disk. A tag/branch pin always returns
-    /// false, regardless of run-time `PackageStatus`, so `refresh_all(false)`
+    /// false, regardless of run-time `ScreenRepoStatus`, so `refresh_all(false)`
     /// can't skip it forever once it's first fetched.
     fn pin_is_immutable_and_cached(&self, handle: &str) -> bool {
         let config = self.config.load();
-        let Some(pkg_ref) = config.packages.get(handle) else {
+        let Some(pkg_ref) = config.screen_repos.get(handle) else {
             return false;
         };
         let Some(repo) = pkg_ref.repo.as_deref() else {
@@ -266,7 +276,7 @@ impl PackageManager {
     /// successful fetch failing to install): `Offline` when a prior checkout
     /// is still cached (keep serving it), `Error` when there's nothing to
     /// fall back to.
-    fn state_after_post_fetch_failure(&self, handle: &str, repo: &str) -> PackageState {
+    fn state_after_post_fetch_failure(&self, handle: &str, repo: &str) -> ScreenRepoState {
         let prior_sha = self
             .lock_status()
             .get(handle)
@@ -275,19 +285,19 @@ impl PackageManager {
             .as_deref()
             .is_some_and(|sha| self.cache.has(repo, sha));
         if still_cached {
-            PackageState::Offline
+            ScreenRepoState::Offline
         } else {
-            PackageState::Error
+            ScreenRepoState::Error
         }
     }
 
-    fn lock_status(&self) -> std::sync::MutexGuard<'_, HashMap<String, PackageStatus>> {
+    fn lock_status(&self) -> std::sync::MutexGuard<'_, HashMap<String, ScreenRepoStatus>> {
         self.status
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn update_status(&self, handle: &str, f: impl FnOnce(&mut PackageStatus)) {
+    fn update_status(&self, handle: &str, f: impl FnOnce(&mut ScreenRepoStatus)) {
         let mut guard = self.lock_status();
         let entry = guard.entry(handle.to_string()).or_default();
         f(entry);
@@ -362,9 +372,9 @@ mod tests {
         ))
     }
 
-    fn shared_config(packages: HashMap<String, PackageRef>) -> SharedConfig {
+    fn shared_config(screen_repos: HashMap<String, ScreenRepoRef>) -> SharedConfig {
         let mut config = AppConfig::default();
-        config.packages = packages;
+        config.screen_repos = screen_repos;
         Arc::new(ArcSwap::from_pointee(config))
     }
 
@@ -372,9 +382,9 @@ mod tests {
         Arc::new(AssetLoader::new(None, None, None))
     }
 
-    /// Build a fixture package dir with one screen (`weather/forecast`) plus
-    /// a root `byonk-screens.yaml`, mirroring the Plan-1 `PackageLoader`
-    /// fixture pattern (see `package_loader.rs` tests).
+    /// Build a fixture screen repo dir with one screen (`weather/forecast`) plus
+    /// a root `byonk-screens.yaml`, mirroring the Plan-1 `ScreenRepoLoader`
+    /// fixture pattern (see `screen_repo_loader.rs` tests).
     fn make_disk_package(name_prefix: &str) -> PathBuf {
         let tmp = tempdir_path(name_prefix);
         write(
@@ -400,20 +410,20 @@ mod tests {
     fn test_manager_serves_extra_disk_package_and_reports_builtin() {
         let tmp = make_disk_package("pkgmgr_disk");
 
-        let mut packages = HashMap::new();
-        packages.insert("acme".to_string(), PackageRef::default());
-        let config = shared_config(packages);
+        let mut screen_repos = HashMap::new();
+        screen_repos.insert("acme".to_string(), ScreenRepoRef::default());
+        let config = shared_config(screen_repos);
 
-        let cache = PackageCache::new(tempdir_path("pkgmgr_cache"));
+        let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache"));
         let mut extra_disk = HashMap::new();
         extra_disk.insert("acme".to_string(), tmp.clone());
 
-        let mgr = PackageManager::new(asset_loader(), config, cache, extra_disk);
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, extra_disk);
         mgr.rebuild_loader();
 
         assert!(mgr.loader().resolve("acme/weather/forecast").is_some());
         assert!(mgr.loader().handles().iter().any(|h| h == "byonk-builtin"));
-        // A disk-only package (no `repo`) never gets fetch state.
+        // A disk-only screen repo (no `repo`) never gets fetch state.
         assert!(mgr
             .status_snapshot()
             .get("acme")
@@ -424,13 +434,13 @@ mod tests {
     }
 
     /// A source fixture git repo built on disk with the system `git` binary
-    /// (a valid screen package committed on its default branch), used as a
+    /// (a valid screen screen repo committed on its default branch), used as a
     /// hermetic `refresh_one`/`refresh_all` source via a plain filesystem
     /// path — no network involved.
     struct FixtureRepo {
         /// On-disk path (for fs cleanup / upstream mutation in tests).
         dir: PathBuf,
-        /// `file://` URL of `dir` (a package `repo:` must carry a scheme).
+        /// `file://` URL of `dir` (a screen repo `repo:` must carry a scheme).
         url: String,
         branch: String,
         head_sha: String,
@@ -511,24 +521,24 @@ mod tests {
     #[test]
     fn test_refresh_one_fetches_and_serves_from_local_repo() {
         let src = make_fixture_repo();
-        let mut packages = HashMap::new();
-        packages.insert(
+        let mut screen_repos = HashMap::new();
+        screen_repos.insert(
             "weather".to_string(),
-            PackageRef {
+            ScreenRepoRef {
                 repo: Some(src.url.clone()),
                 pin: Some(src.branch.clone()),
                 token: None,
             },
         );
-        let config = shared_config(packages);
-        let cache = PackageCache::new(tempdir_path("pkgmgr_cache_fetch"));
+        let config = shared_config(screen_repos);
+        let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_fetch"));
 
-        let mgr = PackageManager::new(asset_loader(), config, cache, HashMap::new());
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new());
         mgr.refresh_one("weather");
 
         let status = mgr.status_snapshot();
         let st = status.get("weather").expect("status recorded");
-        assert_eq!(st.state, Some(PackageState::Ready));
+        assert_eq!(st.state, Some(ScreenRepoState::Ready));
         assert_eq!(st.resolved_sha.as_deref(), Some(src.head_sha.as_str()));
         assert!(st.last_fetched.is_some());
 
@@ -548,20 +558,20 @@ mod tests {
         // `refresh_one` (branch unchanged, same resolved sha) leaves it
         // untouched.
         let src = make_fixture_repo();
-        let mut packages = HashMap::new();
-        packages.insert(
+        let mut screen_repos = HashMap::new();
+        screen_repos.insert(
             "weather".to_string(),
-            PackageRef {
+            ScreenRepoRef {
                 repo: Some(src.url.clone()),
                 pin: Some(src.branch.clone()),
                 token: None,
             },
         );
-        let config = shared_config(packages);
+        let config = shared_config(screen_repos);
         let cache_root = tempdir_path("pkgmgr_cache_no_teardown");
-        let cache = PackageCache::new(cache_root.clone());
+        let cache = ScreenRepoCache::new(cache_root.clone());
 
-        let mgr = PackageManager::new(asset_loader(), config, cache, HashMap::new());
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new());
         mgr.refresh_one("weather");
         let sha = mgr
             .status_snapshot()
@@ -570,7 +580,7 @@ mod tests {
             .expect("resolved after first refresh_one");
         assert_eq!(sha, src.head_sha);
 
-        let probe_cache = PackageCache::new(cache_root);
+        let probe_cache = ScreenRepoCache::new(cache_root);
         let dest = probe_cache.checkout_dir(&src.url, &sha);
         let sentinel = dest.join("_sentinel");
         fs::write(&sentinel, b"x").unwrap();
@@ -580,7 +590,7 @@ mod tests {
         mgr.refresh_one("weather");
         let status = mgr.status_snapshot();
         let st = status.get("weather").unwrap();
-        assert_eq!(st.state, Some(PackageState::Ready));
+        assert_eq!(st.state, Some(ScreenRepoState::Ready));
         assert_eq!(st.resolved_sha.as_deref(), Some(src.head_sha.as_str()));
         assert!(
             sentinel.exists(),
@@ -592,24 +602,24 @@ mod tests {
 
     #[test]
     fn test_refresh_one_error_when_repo_missing_and_never_cached() {
-        let mut packages = HashMap::new();
-        packages.insert(
+        let mut screen_repos = HashMap::new();
+        screen_repos.insert(
             "ghost".to_string(),
-            PackageRef {
+            ScreenRepoRef {
                 repo: Some("file:///no/such/repo/on/disk".to_string()),
                 pin: Some("main".to_string()),
                 token: None,
             },
         );
-        let config = shared_config(packages);
-        let cache = PackageCache::new(tempdir_path("pkgmgr_cache_err"));
+        let config = shared_config(screen_repos);
+        let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_err"));
 
-        let mgr = PackageManager::new(asset_loader(), config, cache, HashMap::new());
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new());
         mgr.refresh_one("ghost");
 
         let status = mgr.status_snapshot();
         let st = status.get("ghost").expect("status recorded");
-        assert_eq!(st.state, Some(PackageState::Error));
+        assert_eq!(st.state, Some(ScreenRepoState::Error));
         assert!(st.error.is_some());
         assert!(st.resolved_sha.is_none());
     }
@@ -617,23 +627,23 @@ mod tests {
     #[test]
     fn test_refresh_one_goes_offline_when_fetch_fails_but_prior_checkout_cached() {
         let src = make_fixture_repo();
-        let mut packages = HashMap::new();
-        packages.insert(
+        let mut screen_repos = HashMap::new();
+        screen_repos.insert(
             "weather".to_string(),
-            PackageRef {
+            ScreenRepoRef {
                 repo: Some(src.url.clone()),
                 pin: Some(src.branch.clone()),
                 token: None,
             },
         );
-        let config = shared_config(packages);
-        let cache = PackageCache::new(tempdir_path("pkgmgr_cache_offline"));
+        let config = shared_config(screen_repos);
+        let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_offline"));
 
-        let mgr = PackageManager::new(asset_loader(), config, cache, HashMap::new());
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new());
         mgr.refresh_one("weather");
         assert_eq!(
             mgr.status_snapshot().get("weather").unwrap().state,
-            Some(PackageState::Ready)
+            Some(ScreenRepoState::Ready)
         );
 
         // Repo host goes away (deleted/unreachable) — same `repo` string
@@ -645,7 +655,7 @@ mod tests {
         mgr.refresh_one("weather");
         let status = mgr.status_snapshot();
         let st = status.get("weather").unwrap();
-        assert_eq!(st.state, Some(PackageState::Offline));
+        assert_eq!(st.state, Some(ScreenRepoState::Offline));
         // Old resolved sha is preserved so the loader keeps serving it.
         assert_eq!(st.resolved_sha.as_deref(), Some(src.head_sha.as_str()));
         assert!(mgr.loader().resolve("weather/weather/forecast").is_some());
@@ -655,13 +665,13 @@ mod tests {
 
     #[test]
     fn test_refresh_one_noop_for_builtin_and_disk_only_handles() {
-        let mut packages = HashMap::new();
-        packages.insert(BUILTIN_HANDLE.to_string(), PackageRef::default());
-        packages.insert("acme".to_string(), PackageRef::default()); // no repo
-        let config = shared_config(packages);
-        let cache = PackageCache::new(tempdir_path("pkgmgr_cache_noop"));
+        let mut screen_repos = HashMap::new();
+        screen_repos.insert(BUILTIN_HANDLE.to_string(), ScreenRepoRef::default());
+        screen_repos.insert("acme".to_string(), ScreenRepoRef::default()); // no repo
+        let config = shared_config(screen_repos);
+        let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_noop"));
 
-        let mgr = PackageManager::new(asset_loader(), config, cache, HashMap::new());
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new());
         mgr.refresh_one(BUILTIN_HANDLE);
         mgr.refresh_one("acme");
         mgr.refresh_one("unknown-handle");
@@ -672,23 +682,23 @@ mod tests {
     #[test]
     fn test_refresh_all_skips_already_ready_unless_forced() {
         let src = make_fixture_repo();
-        let mut packages = HashMap::new();
-        packages.insert(
+        let mut screen_repos = HashMap::new();
+        screen_repos.insert(
             "weather".to_string(),
-            PackageRef {
+            ScreenRepoRef {
                 repo: Some(src.url.clone()),
                 pin: Some(src.branch.clone()),
                 token: None,
             },
         );
-        let config = shared_config(packages);
-        let cache = PackageCache::new(tempdir_path("pkgmgr_cache_refresh_all"));
+        let config = shared_config(screen_repos);
+        let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_refresh_all"));
 
-        let mgr = PackageManager::new(asset_loader(), config, cache, HashMap::new());
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new());
         mgr.refresh_all(false);
         assert_eq!(
             mgr.status_snapshot().get("weather").unwrap().state,
-            Some(PackageState::Ready)
+            Some(ScreenRepoState::Ready)
         );
 
         // Re-running is idempotent either way: a branch pin is re-fetched
@@ -700,7 +710,7 @@ mod tests {
         mgr.refresh_all(true);
         assert_eq!(
             mgr.status_snapshot().get("weather").unwrap().state,
-            Some(PackageState::Ready)
+            Some(ScreenRepoState::Ready)
         );
 
         let _ = fs::remove_dir_all(&src.dir);
@@ -712,19 +722,19 @@ mod tests {
         // so it picks up upstream moves — it must never be skipped just
         // because the handle is already `Ready` with a cached checkout.
         let src = make_fixture_repo();
-        let mut packages = HashMap::new();
-        packages.insert(
+        let mut screen_repos = HashMap::new();
+        screen_repos.insert(
             "weather".to_string(),
-            PackageRef {
+            ScreenRepoRef {
                 repo: Some(src.url.clone()),
                 pin: Some(src.branch.clone()),
                 token: None,
             },
         );
-        let config = shared_config(packages);
-        let cache = PackageCache::new(tempdir_path("pkgmgr_cache_refresh_all_branch"));
+        let config = shared_config(screen_repos);
+        let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_refresh_all_branch"));
 
-        let mgr = PackageManager::new(asset_loader(), config, cache, HashMap::new());
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new());
         mgr.refresh_all(false);
         let first_sha = mgr
             .status_snapshot()
@@ -760,7 +770,7 @@ mod tests {
         mgr.refresh_all(false);
         let status = mgr.status_snapshot();
         let st = status.get("weather").unwrap();
-        assert_eq!(st.state, Some(PackageState::Ready));
+        assert_eq!(st.state, Some(ScreenRepoState::Ready));
         assert_eq!(
             st.resolved_sha.as_deref(),
             Some(second_sha.as_str()),
@@ -775,23 +785,23 @@ mod tests {
         // A sha pin is immutable: once cached, `refresh_all(false)` must
         // leave it alone, even if upstream becomes unreachable.
         let src = make_fixture_repo();
-        let mut packages = HashMap::new();
-        packages.insert(
+        let mut screen_repos = HashMap::new();
+        screen_repos.insert(
             "weather".to_string(),
-            PackageRef {
+            ScreenRepoRef {
                 repo: Some(src.url.clone()),
                 pin: Some(src.head_sha.clone()),
                 token: None,
             },
         );
-        let config = shared_config(packages);
-        let cache = PackageCache::new(tempdir_path("pkgmgr_cache_refresh_all_sha"));
+        let config = shared_config(screen_repos);
+        let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_refresh_all_sha"));
 
-        let mgr = PackageManager::new(asset_loader(), config, cache, HashMap::new());
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new());
         mgr.refresh_all(false);
         assert_eq!(
             mgr.status_snapshot().get("weather").unwrap().state,
-            Some(PackageState::Ready)
+            Some(ScreenRepoState::Ready)
         );
         assert_eq!(
             mgr.status_snapshot()
@@ -809,7 +819,7 @@ mod tests {
         mgr.refresh_all(false);
         let status = mgr.status_snapshot();
         let st = status.get("weather").unwrap();
-        assert_eq!(st.state, Some(PackageState::Ready));
+        assert_eq!(st.state, Some(ScreenRepoState::Ready));
         assert!(st.error.is_none());
         assert_eq!(st.resolved_sha.as_deref(), Some(src.head_sha.as_str()));
     }
@@ -822,20 +832,20 @@ mod tests {
         // rule the sibling `git_fetch::fetch` `Err` branch already applies —
         // not unconditionally `Error`.
         let src = make_fixture_repo();
-        let mut packages = HashMap::new();
-        packages.insert(
+        let mut screen_repos = HashMap::new();
+        screen_repos.insert(
             "weather".to_string(),
-            PackageRef {
+            ScreenRepoRef {
                 repo: Some(src.url.clone()),
                 pin: Some(src.branch.clone()),
                 token: None,
             },
         );
-        let config = shared_config(packages);
+        let config = shared_config(screen_repos);
         let cache_root = tempdir_path("pkgmgr_cache_install_fail");
-        let cache = PackageCache::new(cache_root.clone());
+        let cache = ScreenRepoCache::new(cache_root.clone());
 
-        let mgr = PackageManager::new(asset_loader(), config, cache, HashMap::new());
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new());
         mgr.refresh_one("weather");
         let sha1 = mgr
             .status_snapshot()
@@ -868,7 +878,7 @@ mod tests {
         .trim()
         .to_string();
 
-        let probe_cache = PackageCache::new(cache_root);
+        let probe_cache = ScreenRepoCache::new(cache_root);
         let dest = probe_cache.checkout_dir(&src.url, &sha2);
         fs::create_dir_all(dest.parent().unwrap()).unwrap();
         fs::write(&dest, b"not a directory, so move_dir's install fails").unwrap();
@@ -878,7 +888,7 @@ mod tests {
         let st = status.get("weather").unwrap();
         assert_eq!(
             st.state,
-            Some(PackageState::Offline),
+            Some(ScreenRepoState::Offline),
             "install failure with a prior cached checkout must report Offline, not Error"
         );
         assert!(st.error.is_some());
@@ -893,14 +903,14 @@ mod tests {
 
     #[test]
     fn test_forget_status_clears_entry() {
-        let mut packages = HashMap::new();
-        packages.insert("acme".to_string(), PackageRef::default());
-        let config = shared_config(packages);
-        let cache = PackageCache::new(tempdir_path("pkgmgr_cache_forget"));
+        let mut screen_repos = HashMap::new();
+        screen_repos.insert("acme".to_string(), ScreenRepoRef::default());
+        let config = shared_config(screen_repos);
+        let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_forget"));
 
-        let mgr = PackageManager::new(asset_loader(), config, cache, HashMap::new());
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new());
         mgr.update_status("acme", |st| {
-            st.state = Some(PackageState::Ready);
+            st.state = Some(ScreenRepoState::Ready);
             st.resolved_sha = Some("deadbeef".to_string());
         });
         assert!(mgr.status_snapshot().contains_key("acme"));

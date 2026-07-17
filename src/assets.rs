@@ -552,7 +552,7 @@ mod tests {
         let screens = loader.list_screens();
         assert!(!screens.is_empty());
 
-        // Should include the migrated hello screen's package files
+        // Should include the migrated hello screen's screen repo files
         assert!(screens.iter().any(|s| s == "example/hello/script.lua"));
         assert!(screens.iter().any(|s| s == "example/hello/screen.svg"));
     }

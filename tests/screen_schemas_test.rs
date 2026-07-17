@@ -2,11 +2,11 @@
 //! known screens expose their documented params through the package loader.
 
 use byonk::assets::AssetLoader;
-use byonk::services::package_loader::PackageLoader;
+use byonk::services::screen_repo_loader::ScreenRepoLoader;
 use std::sync::Arc;
 
-fn loader() -> PackageLoader {
-    PackageLoader::new(
+fn loader() -> ScreenRepoLoader {
+    ScreenRepoLoader::new(
         Arc::new(AssetLoader::new(None, None, None)),
         Default::default(),
     )

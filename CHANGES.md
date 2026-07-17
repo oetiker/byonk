@@ -9,9 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- **Failing screen repos are now visible in Home Assistant.** When Byonk cannot
+  fetch a screen repo, the integration raises a Home Assistant *Repair* issue
+  showing the repo and the actual error, and clears it automatically once the
+  repo updates successfully. Previously the error was only visible as an
+  attribute on a diagnostic sensor.
+
 ### Changed
 
+- **"Packages" are now called "screen repos".** A screen repo is a git
+  repository of screens, so the clearer name is used everywhere: the admin API
+  (`/api/admin/screen-repos`), the `config.yaml` keys (`screen_repos:`,
+  `screen_repo_refresh_interval:`), the Home Assistant add-on options, and the
+  integration UI (the "Update screen repos" button and per-repo status sensors).
+  Existing add-on options set under `packages` / `package_refresh_interval` must
+  be re-entered under the new `screen_repos` / `screen_repo_refresh_interval`
+  keys.
+
 ### Fixed
+
+- **Screen packages could never be fetched from the published container image.**
+  The release image is built `FROM scratch` and has no `/tmp` directory, so the
+  intermediate git clone (which used the system temp dir) failed with an opaque
+  `Could not open data at '/tmp/…'` and every package showed status `error`. The
+  clone now runs beside the package cache under the persistent data directory, so
+  fetching works in the container. Fetch failures are also written to the log now,
+  instead of only appearing in the per-package status.
 
 ## 0.16.0 - 2026-07-17
 

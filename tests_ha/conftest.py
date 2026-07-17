@@ -16,7 +16,7 @@ from custom_components.byonk.const import (
 pytest_plugins = ["pytest_homeassistant_custom_component"]
 
 DEFAULT_SCREENS = {
-    "packages": [{"handle": "byonk-builtin", "name": "byonk-builtin",
+    "screen_repos": [{"handle": "byonk-builtin", "name": "byonk-builtin",
                   "description": "Built-in screens", "author": "Byonk", "license": "MIT",
                   "screens": [{"ref": "byonk-builtin/useful/swiss-departure-board",
                                 "title": "Swiss Departure Board", "description": "",
@@ -68,11 +68,11 @@ def byonk():
         update_device=AsyncMock(),
         delete_device=AsyncMock(),
         update_settings=AsyncMock(),
-        packages=[],
-        add_package=AsyncMock(return_value={"handle": "x"}),
-        update_package=AsyncMock(return_value={"handle": "x"}),
-        delete_package=AsyncMock(return_value={"ok": True}),
-        update_packages=AsyncMock(return_value={"ok": True}),
+        screen_repos=[],
+        add_screen_repo=AsyncMock(return_value={"handle": "x"}),
+        update_screen_repo=AsyncMock(return_value={"handle": "x"}),
+        delete_screen_repo=AsyncMock(return_value={"ok": True}),
+        update_screen_repos=AsyncMock(return_value={"ok": True}),
     )
     with (
         patch("custom_components.byonk.async_read_token", new=AsyncMock(return_value="tok")),
@@ -86,11 +86,11 @@ def byonk():
             async_update_device=state.update_device,
             async_delete_device=state.delete_device,
             async_update_settings=state.update_settings,
-            async_get_packages=AsyncMock(side_effect=lambda *a, **k: list(state.packages)),
-            async_add_package=state.add_package,
-            async_update_package=state.update_package,
-            async_delete_package=state.delete_package,
-            async_update_packages=state.update_packages,
+            async_get_screen_repos=AsyncMock(side_effect=lambda *a, **k: list(state.screen_repos)),
+            async_add_screen_repo=state.add_screen_repo,
+            async_update_screen_repo=state.update_screen_repo,
+            async_delete_screen_repo=state.delete_screen_repo,
+            async_update_screen_repos=state.update_screen_repos,
         ),
     ):
         yield state

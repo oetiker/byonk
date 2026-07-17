@@ -31,7 +31,7 @@
   },
   "entity": {
     "button": {
-      "update_packages": { "name": "Update packages" }
+      "update_screen_repos": { "name": "Update screen repos" }
     },
     "switch": {
       "registration_enabled": {
@@ -65,12 +65,18 @@
       "model": {
         "name": "Model"
       },
-      "package_status": { "name": "{handle}: status" }
+      "screen_repo_status": { "name": "{handle}: status" }
     },
     "text": {
       "refresh": {
         "name": "Refresh"
       }
+    }
+  },
+  "issues": {
+    "screen_repo_error": {
+      "title": "Screen repo \"{handle}\" failed to update",
+      "description": "Byonk could not fetch the screen repo \"{handle}\" ({repo}).\n\nError: {error}\n\nCheck the repo URL, pin (branch/tag/commit) and access token in the Byonk add-on configuration, then use the \"Update screen repos\" button to retry."
     }
   }
 }

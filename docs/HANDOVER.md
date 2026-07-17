@@ -1,82 +1,39 @@
 # Handover — Byonk
 
-_Last updated: 2026-07-17 — **HA Distribution Readiness: code/doc tasks 1–8 DONE + reviewed clean, AND Task 9 (fresh-VM end-to-end validation) DONE — 9/10 checklist items PASS on a clean HAOS build-from-source; item 1 (published image) is inherently post-release.** Branch `feat/ha-distribution-readiness` @ `01d8d1c` (pushed, PR #23 OPEN, CI green), tree clean, not merged. Remaining: Task 10 (merge → release 0.16.0) and Task 11 (external brands/HACS PRs, post-release). Two findings surfaced during validation — see below._
+_Last updated: 2026-07-17 — **Fetch bug fix + "packages" → "screen repos" rename (everything incl. API) + HA error-visibility feature. VM-verified live; PR #27 OPEN.** Branch `fix/screen-repos-and-fetch-scratch` (off `main` `e61658d`), pushed. All local gates green; VM live-verify passed via the from-source add-on. Remaining: PR #27 CI + review → squash-merge → release 0.16.1._
 
-## TL;DR — resume here
+## Status: PR #27 open, VM-verified
+- **PR:** https://github.com/oetiker/byonk/pull/27 — CI running at hand-off.
+- **VM live-verify (from-source `local_byonk`):** Supervisor accepted the new `screen_repos` schema; `GET /api/admin/screen-repos` serves the `tobitest` repo (`https://github.com/oetiker/byonk-dist-test.git`) at `status: ready`, sha `97578c5f`, serving `tobitest/hello`; old `/api/admin/packages` → 404; `GET /screens` wrapper field is `screen_repos`. The `/tmp` fetch error is gone. **VM state now:** `local_byonk` running (my branch, throwaway admin_token `verifytoken123` + tobitest), published `43664941_byonk` **stopped**, the existing integration entry still points at the stopped published add-on (in error) — re-onboard the integration (needs HA UI login) to see the renamed entities/button/repair issue, or restore by `ha addons stop local_byonk && ha addons start 43664941_byonk`.
+- Integration UI not verified live (HA login = password entry, disallowed) but covered by 77 pytest + the API wire check.
 
-The distribution plan `docs/superpowers/plans/2026-07-06-ha-distribution-readiness.md` has 11 tasks. **Tasks 1–9 are DONE.** What remains is manual:
+## TL;DR — what happened this session
 
-1. ~~**Task 9 — VM validation.**~~ **DONE 2026-07-17** on a wiped/fresh HAOS VM, byonk built from current source as a local add-on (see "VM validation results" below). Zero-touch install→trust→device-discovery→reauth→removal-grace all validated end-to-end.
-2. **Task 10 — Merge + release (do next).** `superpowers:finishing-a-development-branch`. PR #23 carries Plan 1+2+3+A+B + distribution work; merges to `main` together. Confirm the `home-assistant` (hassfest+HACS) and `release-scripts` CI jobs stay green on the merge. Then trigger the release (`workflow_dispatch` on `release.yml`, minor → **0.16.0**) for the first (non-publicised) release.
-3. **Task 11 — External PRs (post-first-release), maintainer-filed.** Follow `docs/superpowers/ha-publishing.md`: file `home-assistant/brands` PR (this is what lights up the currently-missing integration icon — see finding B), then `hacs/default`, then remove `ignore: brands` from `ci.yml` and switch `ha-integration.md` to default-store wording.
+User reported: added a screen-repo (their `byonk-dist-test` repo) in the add-on, clicked refresh, got "an error but no further information." Root-caused and fixed, then did a full user-requested rename.
 
-## VM validation results (2026-07-17, fresh HAOS + from-source add-on)
+1. **Bug fix (`1b2ed93`)** — screen-repo fetch was **completely broken in the published container**: the release image is `FROM scratch` (no `/tmp`), and `git_fetch.rs` cloned the intermediate bare repo into `std::env::temp_dir()` (`/tmp/…`), which gix can't create there → `Could not open data at '/tmp/byonk-git-fetch-…'`, status `error`. Fix: clone into a **sibling of `dest`** (under the package cache on `/data`, guaranteed to exist). Also added `tracing` warn/info so fetch failures hit the add-on log, not only `GET`.
+   - **Proven**: identical fetch succeeded on Mac; and with `TMPDIR=/no/such/tmp` (simulating the scratch container) the fixed fetch returns `PROBE_OK`. Unit test `test_scratch_is_sibling_of_dest_not_system_temp`.
 
-Method: `make ha-vm-clean` + fresh boot; onboarded via Chrome; Samba + Terminal&SSH add-ons installed; byonk built **from current source** as local add-on `local_byonk` (published-image path is post-release only). Checklist (`tools/ha-vm/README.md`):
+2. **Rename "packages" → "screen repos" (`ae57f43`, `f685be9`, `5b9fec7`)** — user chose: term **"Screen Repos"**, scope **everything incl. the HTTP API**, and **surface errors visibly**. A screen repo = a git repository of screens.
+   - **API**: `/api/admin/packages*` → `/api/admin/screen-repos*`; `GET /screens` grouping wrapper field `packages` → `screen_repos`; settings field `package_refresh_interval` → `screen_repo_refresh_interval`. Per-repo fields (handle, repo, pin, builtin, status, error, …) unchanged.
+   - **config.yaml / add-on options + schema**: `packages` → `screen_repos`, `package_refresh_interval` → `screen_repo_refresh_interval`; env `PACKAGES_CACHE_DIR` → `SCREEN_REPOS_CACHE_DIR` (value `/data/packages` kept).
+   - **Rust internals**: `Package{Manager,Loader,Cache,Status,State,Ref,Manifest,Info,Source}` → `ScreenRepo*`; files `src/services/screen_repo_*.rs`, `src/models/screen_repo_manifest.rs`; `config_writer` upsert/remove fns renamed.
+   - **HA integration**: API client, coordinator (`screen_repos`, `non_builtin_screen_repos`, `screen_repo()`), `screen_repo_entities.py` / `ByonkScreenRepoStatusSensor`, button "Update screen repos", strings/translations.
+   - **KEPT**: `byonk-builtin` handle value, `byonk-screens.yaml` filename, `/data/packages` path value — so device screen paths and on-disk layout are unaffected.
 
-| # | Item | Result |
-|---|------|--------|
-| 1 | Add-on store / published image | ⏭️ deferred — post-release only (built from source) |
-| 2 | Integration discovery | ✅ |
-| 3 | Zero-touch trust (no token entry) | ✅ token auto-provisioned into add-on options |
-| 4 | Add-on-owned global config | ✅ settings/packages writes → **409** "edit in add-on Configuration tab" |
-| 5 | Reserved DEFAULT device | ✅ `reserved:true`, PATCH→200, DELETE→**409**, "Byonk Default" auto-provisioned |
-| 6 | Screen resolution (unregistered) | ✅ device shows pairing code; display→200 |
-| 7 | HA-owned per-device flow | ✅ Discovered card → Add → per-device entry (9 entities), code-labeled onboarding |
-| 8 | Screen packages | ✅ external git package fetched (`disttest` ready, screen served) — **see finding A** |
-| 9 | Re-authentication | ✅ blanked token → integration **auto-re-provisioned** (self-heal, no manual input) |
-| 10 | Removal grace | ✅ device disappeared → HA entry survived 1 cycle, pruned at strike 2 (`REMOVE_STRIKES=2`×60s) |
+3. **Error-visibility feature (`f685be9`)** — a screen repo in `error` state now raises a **HA Repair issue** ("Screen repo X failed to update") carrying the real fetch error, auto-cleared on recovery. Translation `issues.screen_repo_error` in strings.json/en.json. Tests: `tests_ha/test_screen_repo_issues.py`.
 
-### Findings (not merge-blockers for a non-publicised release; consider fast-follow)
+## Verification status (all GREEN at `5b9fec7`)
+- Rust: `cargo build`, `cargo clippy -- -D warnings`, `cargo fmt --check`, `cargo test` (73/5/2/… all ok) — green.
+- HA: `make ha-check` (ruff + **77 pytest**) — green.
+- Docs: `make docs` (mdbook) — clean (only harmless mermaid version warning).
+- Fetch fix functionally proven via `TMPDIR=/no/such/tmp` probe (`PROBE_OK`).
 
-- **Finding A — schemeless package `repo:` URLs — FIXED (validate, not normalize).** `repo: github.com/…` used to be handed to gix as a **local path** (`/app/github.com/…`) → obscure `status:error`. Now `git_fetch::fetch` calls `validate_repo()` up front: a `repo:` must carry an explicit scheme (`https://`/`http://`/`git://`/`ssh://`/`file://`) or be scp-like (`git@host:owner/repo`); schemeless values and bare paths are rejected with a clear message ("…must be `https://…`; a local repository must be `file:///path`"). Local repos now require `file:///` (per user direction — no normalization). Docs (`configuration.md`) updated; unit tests added; `make check` green. **Not yet committed** (working tree on `feat/ha-distribution-readiness`).
-- **Finding B — integration icon missing until brands PR.** Fresh integration shows "icon not available" because HA fetches integration icons from `brands.home-assistant.io/byonk/` (populated by the Task-11 `home-assistant/brands` PR). The **add-on** icon renders fine (ships locally). Expected; not a blocker; assets are staged in `homeassistant/brands/`.
-- **Finding D — packages not fetched on startup — FIXED.** byonk's package refresh ran only on the periodic loop, which `sleep`s first and is a **no-op when `package_refresh_interval == 0`** (manual mode, the default). There was **no startup fetch**, and boot leaves package status empty (the on-disk cache isn't loaded into a "ready" state), so *any* restart (add-on update, HA reboot, Options change, re-auth) dropped external package screens until the user pressed "Update packages". Fix (`src/main.rs`, production `serve` path): run `refresh_all(false)` once at startup in a spawned blocking task (reuses the cache for immutable pins). Verified live: after a fresh dev5 boot, `disttest` reached `ready` in ~5s with no manual trigger. (Edge case not addressed: network down *at boot* still errors, since a fresh start has no cached status to fall back on.)
-- **Finding C — device entries stuck "unavailable" after a hub reload — FIXED.** Device entries (incl. the reserved DEFAULT) share the hub's coordinator (`entry.runtime_data = hass.data[DOMAIN][hub_id]`). A hub reload (e.g. re-auth token re-provision from the item-9 flow) builds a NEW coordinator, but LOADED device entries kept a stale reference to the old/dead one → their entities were unavailable forever until a manual reload. Fix (`__init__.py` `_async_setup_hub_entry`): the hub now reloads dependent device entries in **LOADED** state too (previously only `SETUP_RETRY`), so they rebind to the live coordinator. Regression test added (`test_device_entry_rebinds_after_hub_reload`); `make ha-check` green; verified live on the VM (token-blank → DEFAULT device auto-recovered in ~1s). **This is the device-side half of item 9 that the first validation pass missed.**
-
-### From-source add-on build notes (for repeatable fresh-VM validation)
-
-The local-add-on build-from-source path is **not committed** and had to be authored this session (scaffold in scratch: `config.yaml` sans `image:` + a Dockerfile). Key requirements discovered:
-- Build context = the full source tree byonk embeds at compile time via rust-embed (`screens/ fonts/ byonk-base/ static/` + `src crates Cargo.toml Cargo.lock default-config.yaml`) — exactly what `rebuild.sh` syncs.
-- Use a **Debian** rust base (`rust:1.88-slim-bookworm` + `apt install curl gcc libc6-dev`): `utoipa-swagger-ui`'s build script downloads Swagger UI via **`curl`** (Alpine attempts failed / were cache-replayed).
-- BuildKit **replays cached failed layers** across Dockerfile edits — bump the add-on `version:` (changes the `BUILD_VERSION` build-arg referenced before `cargo build`) to force a real rebuild; a bare `ha store reload` won't re-read the manifest, need `ha supervisor restart` (see `ha-vm-addon-manifest-sync-gap`).
-- **Consider committing** a `homeassistant/byonk/` local-build variant + wiring `make ha-rebuild` to scaffold it, so Task-9-style validation is one command next time.
-
-## What the distribution work shipped (Tasks 1–8, range `586e3d3..2667b89`)
-
-- **Version automation (4b):** two tested bash scripts — `tools/release/bump-addon-version.sh` and `bump-integration-version.sh` — wired into `release.yml`. The integration `manifest.json` bumps in the `version` job **before the tag** (HACS installs from the tag); the add-on `config.yaml` bumps in a new `update-addon-version` job `needs:[version,build-container]`, committing to `main` **after** the image publishes (so the add-on `version:` always equals a published `ghcr.io/oetiker/byonk` tag). All three versions now track the byonk release version.
-- **Validation CI (4c):** new `ci.yml` jobs — `home-assistant` (hassfest + `hacs/action`, with `ignore: brands` until the brands PR merges + `GITHUB_TOKEN` passed) and `release-scripts` (runs both bump-script test harnesses). The add-on `config.yaml` is already validated by the existing `tests/addon_manifest_test.rs` (extended with a semver guard).
-- **Brand assets (4c):** `homeassistant/brands/` — **user-supplied pixel-art** (a shinkansen departure board with the green **BYONK** sign), committed as `*.src.png` masters (1024px) + `rasterize.sh` (sips resize) → brands `icon.png`/`icon@2x`/`logo`/`logo@2x` + add-on `icon.png`/`logo.png`.
-- **Runbook + docs (4c/4d):** `docs/superpowers/ha-publishing.md` (brands + hacs/default PR steps); `ha-integration.md` HACS custom-repo install note; `CHANGES.md` Unreleased bullet; refreshed 10-item VM checklist.
-
-## Verification status (local, all GREEN at `2667b89`)
-
-- Bump scripts: `tools/release/test-bump-addon-version.sh` + `test-bump-integration-version.sh` pass.
-- Rust: `cargo test --test addon_manifest_test` passes (2/2). Full `make check` not re-run this session (no `src/` change — only a test file); known pre-existing flaky `tests/e2e_flow_test.rs::test_content_cache_reuse` is unrelated.
-- Docs: `make docs` clean.
-- **Whole-branch review (opus, `8ddba14..2667b89`): READY TO MERGE**, no Critical/Important; release timing verified sound.
-
-## Deferred Minors (fast-follow — do NOT gate the merge)
-
-- **M1 (most useful):** `update-addon-version` is a leaf job. If it FAILS, the release still tags/publishes/creates the GitHub release, but the add-on `config.yaml` on `main` stays at the old version — silently re-introducing the exact "add-on never offers the update" rot this work fixes. Recoverable (re-run from clean `main`, idempotent). **Fix:** a runbook line that a red `update-addon-version` must be re-run before a release counts as done.
-- **M2:** `bump-addon-version.sh` major-bump EOF append (`printf >> config.yaml`) is newline-fragile if `config.yaml` ever loses its trailing newline (safe today). Fix: guarded newline / perl append.
-- **M3:** hassfest + `hacs/action` are first exercised only on the Task-10 PR run (unverifiable locally).
-
-## Branch / merge state
-
-- **Branch `feat/ha-distribution-readiness` @ `2667b89`** (tree clean). Stacked on `feat/screen-packages-p2-distribution` (Plan B). Local-only, not pushed, not merged.
-- Distribution range **`586e3d3..2667b89`** = 11 commits (spec + plan + 8 tasks + 1 fix). Fork point from Plan B = `8ddba14`.
+## Remaining
+1. **(optional) VM live-verify** — needs the **from-source** local add-on (`local_byonk`) rebuilt on the QEMU VM (the VM currently runs the *published* 0.16.0 scratch image with the OLD naming + the bug). Recipe: memory `ha-vm-from-source-addon-build` + `tools/ha-vm/README.md`; re-scaffold `local_byonk` (config.yaml sans `image:` + Debian Dockerfile), `SMB_USER=byonk SMB_PASS=byonk make ha-rebuild`, `make ha-deploy`. Then in the add-on Config tab add a `screen_repos:` entry for `https://github.com/oetiker/byonk-dist-test.git` and confirm it fetches + shows as a screen repo + the button works; point at a bad repo to see the Repair issue. NOTE: the Debian from-source image HAS `/tmp`, so it validates the **rename/boundary**, not the scratch `/tmp` fix (already proven by the probe). The scratch fix is confirmed in production only at the 0.16.1 release image.
+2. **Push + PR + release 0.16.1** — not started; user not yet asked. Branch is off `main`; `main-protect` ruleset blocks direct pushes (use PR; release uses `RELEASE_TOKEN` + admin bypass, per the 0.16.0 memory).
 
 ## Reference
-
-- **Plan (executed 1–8):** `docs/superpowers/plans/2026-07-06-ha-distribution-readiness.md`.
-- **Spec:** `docs/superpowers/specs/2026-07-06-ha-distribution-readiness-design.md` (revised Phase 4; §4a = the VM checklist).
-- **SDD ledger:** `.superpowers/sdd/progress.md` — per-task review record + the deferred-Minor detail. Trust it + `git log` over memory after a compaction.
-- **Publishing runbook (Task 11):** `docs/superpowers/ha-publishing.md`.
-- **Memories:** `ha-addon-owned-global-config`, `ha-addon-phase2`, `ha-vm-admin-api-testing`, `ha-vm-addon-manifest-sync-gap`, `byonk-is-ours-change-apis-freely`, `no-git-add-all`.
-
-## Build / verify quick ref
-
-- Bump scripts: `tools/release/test-bump-addon-version.sh && tools/release/test-bump-integration-version.sh`.
-- Rust test: `cargo test --test addon_manifest_test`. Docs: `make docs`. Brand assets: `homeassistant/brands/rasterize.sh` (needs `sips`).
-- VM deploy: `SMB_USER=byonk SMB_PASS=byonk make ha-rebuild` (add-on) / `make ha-deploy` (integration).
+- Rename mapping spec (durable): `…/scratchpad/rename-spec.md` (session scratch).
+- Memories: `ha-vm-from-source-addon-build`, `ha-vm-addon-manifest-sync-gap`, `ha-addon-owned-global-config`, `ha-vm-admin-api-testing`, `changelog-user-facing-only`, `no-git-add-all`, `byonk-is-ours-change-apis-freely`.
+- Build/verify: `make check` (Rust), `make ha-check` (Python), `make docs`.

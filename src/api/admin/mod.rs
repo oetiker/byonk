@@ -51,12 +51,18 @@ pub fn admin_router() -> Router<AppState> {
         .route("/pending", get(read::pending))
         .route("/config", get(read::get_config))
         .route("/screens", get(read::screens))
-        .route("/packages", get(read::packages).post(write::add_package))
         .route(
-            "/packages/:handle",
-            patch(write::patch_package).delete(write::delete_package),
+            "/screen-repos",
+            get(read::screen_repos).post(write::add_screen_repo),
         )
-        .route("/packages/:handle/update", post(write::update_package))
-        .route("/packages/update", post(write::update_all_packages))
+        .route(
+            "/screen-repos/:handle",
+            patch(write::patch_screen_repo).delete(write::delete_screen_repo),
+        )
+        .route(
+            "/screen-repos/:handle/update",
+            post(write::update_screen_repo),
+        )
+        .route("/screen-repos/update", post(write::update_all_screen_repos))
         .route("/settings", patch(write::patch_settings))
 }

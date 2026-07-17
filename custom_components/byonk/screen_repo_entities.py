@@ -1,4 +1,4 @@
-"""Dynamic per-package status sensors on the hub device."""
+"""Dynamic per-screen-repo status sensors on the hub device."""
 from __future__ import annotations
 
 from homeassistant.components.sensor import SensorEntity
@@ -11,59 +11,59 @@ from .coordinator import ByonkConfigEntry, ByonkCoordinator
 from .entity import ByonkHubEntity
 
 
-class ByonkPackageStatusSensor(ByonkHubEntity, SensorEntity):
-    """One sensor per non-builtin package: state = fetch status."""
+class ByonkScreenRepoStatusSensor(ByonkHubEntity, SensorEntity):
+    """One sensor per non-builtin screen repo: state = fetch status."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_translation_key = "package_status"
+    _attr_translation_key = "screen_repo_status"
 
     def __init__(self, coordinator: ByonkCoordinator, handle: str) -> None:
         super().__init__(coordinator)
         self._handle = handle
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_pkg_{handle}_status"
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_repo_{handle}_status"
         self._attr_translation_placeholders = {"handle": handle}
         self._attr_name = f"{handle}: status"
 
     @property
-    def _pkg(self) -> dict | None:
-        return self.coordinator.data.package(self._handle)
+    def _repo(self) -> dict | None:
+        return self.coordinator.data.screen_repo(self._handle)
 
     @property
     def available(self) -> bool:
-        return super().available and self._pkg is not None
+        return super().available and self._repo is not None
 
     @property
     def native_value(self) -> str | None:
-        pkg = self._pkg
-        return pkg.get("status") if pkg else None
+        repo = self._repo
+        return repo.get("status") if repo else None
 
     @property
     def extra_state_attributes(self) -> dict:
-        pkg = self._pkg or {}
-        lf = pkg.get("last_fetched")
+        repo = self._repo or {}
+        lf = repo.get("last_fetched")
         return {
-            "resolved_sha": pkg.get("resolved_sha"),
+            "resolved_sha": repo.get("resolved_sha"),
             "last_fetched": dt_util.parse_datetime(lf) if lf else None,
-            "error": pkg.get("error"),
-            "repo": pkg.get("repo"),
-            "pin": pkg.get("pin"),
-            "pin_kind": pkg.get("pin_kind"),
+            "error": repo.get("error"),
+            "repo": repo.get("repo"),
+            "pin": repo.get("pin"),
+            "pin_kind": repo.get("pin_kind"),
         }
 
 
-class PackageStatusManager:
-    """Add/remove a status sensor per non-builtin package as the registry changes."""
+class ScreenRepoStatusManager:
+    """Add/remove a status sensor per non-builtin screen repo as the registry changes."""
 
     def __init__(self, coordinator: ByonkCoordinator, async_add_entities) -> None:
         self._coordinator = coordinator
         self._async_add_entities = async_add_entities
-        self._entities: dict[str, ByonkPackageStatusSensor] = {}
+        self._entities: dict[str, ByonkScreenRepoStatusSensor] = {}
 
     @callback
     def reconcile(self) -> None:
-        desired = {p["handle"] for p in self._coordinator.data.non_builtin_packages()}
+        desired = {r["handle"] for r in self._coordinator.data.non_builtin_screen_repos()}
         new = {
-            h: ByonkPackageStatusSensor(self._coordinator, h)
+            h: ByonkScreenRepoStatusSensor(self._coordinator, h)
             for h in desired
             if h not in self._entities
         }
@@ -75,7 +75,7 @@ class PackageStatusManager:
             if h not in desired:
                 self._remove(self._entities.pop(h))
 
-    def _remove(self, entity: ByonkPackageStatusSensor) -> None:
+    def _remove(self, entity: ByonkScreenRepoStatusSensor) -> None:
         registry = er.async_get(self._coordinator.hass)
         if entity.entity_id and registry.async_get(entity.entity_id):
             registry.async_remove(entity.entity_id)
@@ -85,8 +85,8 @@ class PackageStatusManager:
             )
 
 
-def setup_package_status_platform(entry: ByonkConfigEntry, async_add_entities) -> None:
+def setup_screen_repo_status_platform(entry: ByonkConfigEntry, async_add_entities) -> None:
     coordinator = entry.runtime_data
-    manager = PackageStatusManager(coordinator, async_add_entities)
+    manager = ScreenRepoStatusManager(coordinator, async_add_entities)
     manager.reconcile()
     entry.async_on_unload(coordinator.async_add_listener(manager.reconcile))

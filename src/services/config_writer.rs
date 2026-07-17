@@ -2,9 +2,9 @@
 //!
 //! Strategy (avoids yamlpatch's weak spots on sequences/flow lists):
 //! - global scalar settings → in-place scalar replace
-//! - device / package add/edit/remove → remove the entry's subtree + append a
+//! - device / screen repo add/edit/remove → remove the entry's subtree + append a
 //!   freshly block-serialized subtree (entries are machine-managed, so no user
-//!   comments live inside them). Both `devices:` and `packages:` share the
+//!   comments live inside them). Both `devices:` and `screen_repos:` share the
 //!   same section-generic helpers.
 
 use yamlpatch::{apply_yaml_patches, Op, Patch};
@@ -144,7 +144,7 @@ fn block_range(yaml: &str, section: &str, key: &str) -> Result<(usize, usize), C
 
 /// Remove `<section>.<key>` entirely. Returns [`ConfigWriteError::NotFound`] if
 /// the entry does not exist. `label` is the singular noun used in the
-/// [`ConfigWriteError::NotFound`] message (e.g. `"device"`, `"package"`).
+/// [`ConfigWriteError::NotFound`] message (e.g. `"device"`, `"screen repo"`).
 fn remove_from_section(
     yaml: &str,
     section: &str,
@@ -166,7 +166,7 @@ fn remove_from_section(
 }
 
 /// Add a new entry or replace an existing one with `block` under `section`
-/// (e.g. `devices` or `packages`). `label` is the singular noun used in the
+/// (e.g. `devices` or `screen repos`). `label` is the singular noun used in the
 /// [`ConfigWriteError::NotFound`] message.
 ///
 /// Editing is implemented as remove-then-add so it is robust against odd
@@ -324,19 +324,19 @@ pub fn upsert_device(
     upsert_in_section(yaml, "devices", "device", key, block)
 }
 
-/// Remove `packages.<handle>` entirely. Returns [`ConfigWriteError::NotFound`]
-/// if the package does not exist.
-pub fn remove_package(yaml: &str, handle: &str) -> Result<String, ConfigWriteError> {
-    remove_from_section(yaml, "packages", "package", handle)
+/// Remove `screen_repos.<handle>` entirely. Returns [`ConfigWriteError::NotFound`]
+/// if the screen repo does not exist.
+pub fn remove_screen_repo(yaml: &str, handle: &str) -> Result<String, ConfigWriteError> {
+    remove_from_section(yaml, "screen_repos", "screen repo", handle)
 }
 
-/// Add a new package or replace an existing one with `block`.
-pub fn upsert_package(
+/// Add a new screen repo or replace an existing one with `block`.
+pub fn upsert_screen_repo(
     yaml: &str,
     handle: &str,
     block: &serde_yaml::Mapping,
 ) -> Result<String, ConfigWriteError> {
-    upsert_in_section(yaml, "packages", "package", handle, block)
+    upsert_in_section(yaml, "screen_repos", "screen repo", handle, block)
 }
 
 #[cfg(test)]
@@ -479,10 +479,10 @@ devices: {}
         let mut block = serde_yaml::Mapping::new();
         block.insert("repo".into(), "github.com/acme/x".into());
         block.insert("pin".into(), "v1.0.0".into());
-        let out = upsert_package(yaml, "weather", &block).unwrap();
+        let out = upsert_screen_repo(yaml, "weather", &block).unwrap();
         let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
         assert_eq!(
-            v["packages"]["weather"]["repo"],
+            v["screen_repos"]["weather"]["repo"],
             serde_yaml::Value::from("github.com/acme/x")
         );
 
@@ -490,21 +490,21 @@ devices: {}
         let mut b2 = serde_yaml::Mapping::new();
         b2.insert("repo".into(), "github.com/acme/x".into());
         b2.insert("pin".into(), "v2.0.0".into());
-        let out2 = upsert_package(&out, "weather", &b2).unwrap();
+        let out2 = upsert_screen_repo(&out, "weather", &b2).unwrap();
         let v2: serde_yaml::Value = serde_yaml::from_str(&out2).unwrap();
         assert_eq!(
-            v2["packages"]["weather"]["pin"],
+            v2["screen_repos"]["weather"]["pin"],
             serde_yaml::Value::from("v2.0.0")
         );
     }
 
     #[test]
     fn test_remove_package() {
-        let yaml = "packages:\n  weather:\n    repo: github.com/acme/x\n    pin: v1\n";
-        let out = remove_package(yaml, "weather").unwrap();
+        let yaml = "screen_repos:\n  weather:\n    repo: github.com/acme/x\n    pin: v1\n";
+        let out = remove_screen_repo(yaml, "weather").unwrap();
         let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
         assert!(v
-            .get("packages")
+            .get("screen_repos")
             .map(|p| p.get("weather").is_none())
             .unwrap_or(true));
     }
@@ -512,7 +512,7 @@ devices: {}
     #[test]
     fn test_remove_missing_package_is_notfound() {
         assert!(matches!(
-            remove_package("packages: {}\n", "nope"),
+            remove_screen_repo("screen_repos: {}\n", "nope"),
             Err(ConfigWriteError::NotFound(_))
         ));
     }

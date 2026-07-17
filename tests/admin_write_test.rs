@@ -409,7 +409,7 @@ async fn test_patch_with_screen_change_replaces_params() {
 }
 
 #[tokio::test]
-async fn test_patch_settings_package_refresh_interval_persists() {
+async fn test_patch_settings_screen_repo_refresh_interval_persists() {
     let dir = tempfile::tempdir().unwrap();
     let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
 
@@ -417,15 +417,15 @@ async fn test_patch_settings_package_refresh_interval_persists() {
         .patch_json(
             "/api/admin/settings",
             &[AUTH],
-            r#"{"package_refresh_interval":3600}"#,
+            r#"{"screen_repo_refresh_interval":3600}"#,
         )
         .await;
     assert_eq!(resp.status, StatusCode::OK);
 
     let on_disk = std::fs::read_to_string(&path).unwrap();
     assert!(
-        on_disk.contains("package_refresh_interval: 3600"),
-        "expected 'package_refresh_interval: 3600' in:\n{on_disk}"
+        on_disk.contains("screen_repo_refresh_interval: 3600"),
+        "expected 'screen_repo_refresh_interval: 3600' in:\n{on_disk}"
     );
 }
 

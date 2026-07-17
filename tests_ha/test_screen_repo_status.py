@@ -1,6 +1,6 @@
 from tests_ha.conftest import make_hub_entry
 
-PKGS = [
+REPOS = [
     {"handle": "byonk-builtin", "builtin": True, "status": "ready"},
     {"handle": "weather", "builtin": False, "repo": "r", "pin": "main",
      "pin_kind": "branch", "resolved_sha": "abc123", "status": "ready",
@@ -8,8 +8,8 @@ PKGS = [
 ]
 
 
-async def test_status_sensor_reflects_package(hass, byonk):
-    byonk.packages = PKGS
+async def test_status_sensor_reflects_screen_repo(hass, byonk):
+    byonk.screen_repos = REPOS
     hub = make_hub_entry(hass)
     await hass.config_entries.async_setup(hub.entry_id)
     await hass.async_block_till_done()
@@ -22,12 +22,12 @@ async def test_status_sensor_reflects_package(hass, byonk):
 
 
 async def test_status_sensor_added_and_removed(hass, byonk):
-    byonk.packages = [PKGS[0]]
+    byonk.screen_repos = [REPOS[0]]
     hub = make_hub_entry(hass)
     await hass.config_entries.async_setup(hub.entry_id)
     await hass.async_block_till_done()
     assert hass.states.get("sensor.byonk_weather_status") is None
-    byonk.packages = PKGS
+    byonk.screen_repos = REPOS
     await hub.runtime_data.async_refresh()
     await hass.async_block_till_done()
     assert hass.states.get("sensor.byonk_weather_status") is not None

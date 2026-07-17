@@ -76,18 +76,18 @@ async fn test_config_requires_auth() {
 }
 
 /// Security: package tokens must NOT appear in GET /api/admin/config.
-/// `PackageRef.token` is documented "Secret token; redacted in read APIs".
+/// `ScreenRepoRef.token` is documented "Secret token; redacted in read APIs".
 #[tokio::test]
 async fn test_config_redacts_package_token() {
     let dir = tempfile::tempdir().unwrap();
-    let yaml = "admin:\n  token: secret\npackages:\n  mypkg:\n    repo: https://github.com/example/screens\n    pin: v1.0.0\n    token: pkg-secret-abc\n";
+    let yaml = "admin:\n  token: secret\nscreen_repos:\n  mypkg:\n    repo: https://github.com/example/screens\n    pin: v1.0.0\n    token: pkg-secret-abc\n";
     let (app, _) = TestApp::new_with_config_yaml(yaml, dir.path());
     let resp = app.get_with_headers("/api/admin/config", &[AUTH]).await;
     assert_eq!(resp.status, StatusCode::OK);
     let json: serde_json::Value = resp.json();
 
     // The package entry should be present with repo and pin intact.
-    let pkg = &json["packages"]["mypkg"];
+    let pkg = &json["screen_repos"]["mypkg"];
     assert_eq!(
         pkg["repo"].as_str(),
         Some("https://github.com/example/screens"),

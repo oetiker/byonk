@@ -9,10 +9,13 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use crate::error::ApiError;
-use crate::models::param_schema::{schema_for_script, validate_params};
+use crate::models::config::RESERVED_DEFAULT_KEY;
+use crate::models::param_schema::validate_params;
 use crate::server::{reload_config, AppState};
 use crate::services::config_writer;
+use crate::services::package_loader::BUILTIN_HANDLE;
 
+use super::read::{build_package_info, PackageInfo};
 use super::require_admin;
 
 #[derive(Deserialize)]
@@ -23,6 +26,8 @@ pub struct DeviceWrite {
     pub dither: Option<String>,
     pub colors: Option<String>,
     pub params: Option<HashMap<String, serde_yaml::Value>>,
+    pub refresh: Option<u32>,
+    pub name: Option<String>,
 }
 
 /// Guard: writes require a file-backed config.
@@ -34,26 +39,46 @@ fn require_file_config(state: &AppState) -> Result<std::path::PathBuf, ApiError>
         .ok_or_else(|| ApiError::Conflict("config is embedded/read-only; set CONFIG_FILE".into()))
 }
 
-/// Validate the screen exists and (if it has a schema) the params pass it.
+/// Guard: global-config registry/settings writes are read-only when byonk runs
+/// as an HA add-on. The add-on Options form (`/data/options.json`) is the sole
+/// editor for global config; per-device writes and package content-refresh are
+/// unaffected.
+fn require_writable_global(state: &AppState) -> Result<(), ApiError> {
+    if state.addon_mode {
+        return Err(ApiError::Conflict(
+            "global config is read-only in add-on mode; edit it in the byonk add-on Configuration tab".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// In add-on mode, the genuinely-global settings are read-only (edited via the
+/// add-on Options form). The operational `registration_enabled` toggle stays live.
+fn require_writable_settings(state: &AppState, body: &SettingsWrite) -> Result<(), ApiError> {
+    let touches_global = body.auth_mode.is_some() || body.package_refresh_interval.is_some();
+    if state.addon_mode && touches_global {
+        return Err(ApiError::Conflict(
+            "global config is read-only in add-on mode; edit it in the byonk add-on Configuration tab".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Validate the screen ref resolves to a package screen and that the provided
+/// params pass its `meta.yaml` schema. A device `screen` is always a qualified
+/// `handle/path` package ref — there is no bare-name / flat-file resolution.
 fn validate_screen_and_params(
     state: &AppState,
     screen: &str,
     params: &HashMap<String, serde_yaml::Value>,
 ) -> Result<(), ApiError> {
-    let config = state.config.load();
-    let sc = config
-        .screens
-        .get(screen)
+    let resolved = state
+        .package_manager
+        .loader()
+        .resolve(screen)
         .ok_or_else(|| ApiError::BadRequest(format!("unknown screen `{screen}`")))?;
-    if let Ok(src) = state
-        .asset_loader
-        .read_screen_string(std::path::Path::new(&sc.script))
-    {
-        if let Ok(Some(schema)) = schema_for_script(&src) {
-            if let Err(errs) = validate_params(&schema, params) {
-                return Err(ApiError::BadRequest(errs.join("; ")));
-            }
-        }
+    if let Err(errs) = validate_params(&resolved.meta.params, params) {
+        return Err(ApiError::BadRequest(errs.join("; ")));
     }
     Ok(())
 }
@@ -70,6 +95,16 @@ fn device_block(w: &DeviceWrite, screen: &str) -> serde_yaml::Mapping {
     }
     if let Some(c) = &w.colors {
         m.insert("colors".into(), c.as_str().into());
+    }
+    if let Some(r) = w.refresh {
+        if r > 0 {
+            m.insert("refresh".into(), serde_yaml::Value::from(r));
+        }
+    }
+    if let Some(n) = &w.name {
+        if !n.is_empty() {
+            m.insert("name".into(), n.as_str().into());
+        }
     }
     if let Some(params) = &w.params {
         let mut pm = serde_yaml::Mapping::new();
@@ -161,13 +196,36 @@ pub async fn patch_device(
 
     // Merge: start from existing, override provided fields.
     let screen = body.screen.clone().unwrap_or(existing.screen.clone());
+
+    // Params: a screen change replaces params wholesale (the new screen's
+    // defaults). Without a screen change, provided params are merged key-by-key
+    // into the existing set, so editing one parameter never drops the others.
+    let params = if body.screen.is_none() {
+        match &body.params {
+            Some(p) => {
+                let mut merged = existing.params.clone();
+                for (k, v) in p {
+                    merged.insert(k.clone(), v.clone());
+                }
+                merged
+            }
+            None => existing.params.clone(),
+        }
+    } else {
+        body.params
+            .clone()
+            .unwrap_or_else(|| existing.params.clone())
+    };
+
     let merged = DeviceWrite {
         key: Some(key.clone()),
         screen: Some(screen.clone()),
         panel: body.panel.clone().or(existing.panel.clone()),
         dither: body.dither.clone().or(existing.dither.clone()),
         colors: body.colors.clone().or(existing.colors.clone()),
-        params: Some(body.params.clone().unwrap_or(existing.params.clone())),
+        params: Some(params),
+        refresh: body.refresh.or(existing.refresh),
+        name: body.name.clone().or(existing.name.clone()),
     };
 
     let empty = HashMap::new();
@@ -191,6 +249,11 @@ pub async fn delete_device(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&state, &headers)?;
+    if key == RESERVED_DEFAULT_KEY {
+        return Err(ApiError::Conflict(
+            "the reserved DEFAULT device cannot be deleted".into(),
+        ));
+    }
     let path = require_file_config(&state)?;
     let _guard = state.write_lock.lock().await;
 
@@ -212,7 +275,7 @@ pub async fn delete_device(
 pub struct SettingsWrite {
     pub(crate) registration_enabled: Option<bool>,
     pub(crate) auth_mode: Option<String>,
-    pub(crate) default_screen: Option<String>,
+    pub(crate) package_refresh_interval: Option<u64>,
 }
 
 pub async fn patch_settings(
@@ -221,6 +284,7 @@ pub async fn patch_settings(
     Json(body): Json<SettingsWrite>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&state, &headers)?;
+    require_writable_settings(&state, &body)?;
     let path = require_file_config(&state)?;
     let _guard = state.write_lock.lock().await;
 
@@ -232,12 +296,6 @@ pub async fn patch_settings(
             ));
         }
     }
-    if let Some(screen) = &body.default_screen {
-        if !state.config.load().screens.contains_key(screen) {
-            return Err(ApiError::BadRequest(format!("unknown screen `{screen}`")));
-        }
-    }
-
     // 2. Apply all mutations.
     let mut yaml = state
         .asset_loader
@@ -252,12 +310,316 @@ pub async fn patch_settings(
         yaml = config_writer::set_scalar(&yaml, &["auth_mode"], mode.as_str().into())
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
-    if let Some(screen) = &body.default_screen {
-        yaml = config_writer::set_scalar(&yaml, &["default_screen"], screen.as_str().into())
+    if let Some(secs) = body.package_refresh_interval {
+        yaml = config_writer::set_scalar(&yaml, &["package_refresh_interval"], secs.into())
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
 
     // 3. Persist.
     persist(&state, &path, yaml)?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+pub struct PackageWrite {
+    pub handle: Option<String>,
+    pub repo: Option<String>,
+    pub pin: Option<String>,
+    pub token: Option<String>,
+}
+
+/// Number of screens currently resolved under `handle` (0 before the first
+/// successful fetch, since nothing is registered in the loader yet).
+fn package_screen_count(state: &AppState, handle: &str) -> usize {
+    state
+        .package_manager
+        .loader()
+        .list_all()
+        .into_iter()
+        .filter(|s| s.handle == handle)
+        .count()
+}
+
+/// Build a `serde_yaml::Mapping` package block from the given fields, omitting
+/// any that are `None` (so e.g. an absent `token` is never written as `null`).
+fn package_block(
+    repo: Option<&str>,
+    pin: Option<&str>,
+    token: Option<&str>,
+) -> serde_yaml::Mapping {
+    let mut m = serde_yaml::Mapping::new();
+    if let Some(r) = repo {
+        m.insert("repo".into(), r.into());
+    }
+    if let Some(p) = pin {
+        m.insert("pin".into(), p.into());
+    }
+    if let Some(t) = token {
+        m.insert("token".into(), t.into());
+    }
+    m
+}
+
+pub async fn add_package(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<PackageWrite>,
+) -> Result<Json<PackageInfo>, ApiError> {
+    require_writable_global(&state)?;
+    require_admin(&state, &headers)?;
+    let path = require_file_config(&state)?;
+    let _guard = state.write_lock.lock().await;
+
+    let handle = body
+        .handle
+        .clone()
+        .ok_or_else(|| ApiError::BadRequest("`handle` is required".into()))?;
+
+    if handle == BUILTIN_HANDLE {
+        return Err(ApiError::Conflict(format!(
+            "`{handle}` is the reserved builtin package handle"
+        )));
+    }
+    if state.config.load().packages.contains_key(&handle) {
+        return Err(ApiError::Conflict(format!(
+            "package `{handle}` already exists"
+        )));
+    }
+
+    let block = package_block(
+        body.repo.as_deref(),
+        body.pin.as_deref(),
+        body.token.as_deref(),
+    );
+    let yaml = state
+        .asset_loader
+        .read_config_string()
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let new_yaml = config_writer::upsert_package(&yaml, &handle, &block)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    persist(&state, &path, new_yaml)?;
+
+    // Fetch asynchronously; the response reflects whatever status exists at
+    // this instant (likely no entry yet). The client polls GET /packages for
+    // the settled result rather than this handler awaiting the fetch.
+    let mgr = state.package_manager.clone();
+    let h = handle.clone();
+    tokio::task::spawn_blocking(move || mgr.refresh_one(&h));
+
+    let count = package_screen_count(&state, &handle);
+    let statuses = state.package_manager.status_snapshot();
+    let info = build_package_info(&state.config.load(), statuses.get(&handle), count, handle);
+    Ok(Json(info))
+}
+
+pub async fn patch_package(
+    State(state): State<AppState>,
+    Path(handle): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<PackageWrite>,
+) -> Result<Json<PackageInfo>, ApiError> {
+    require_writable_global(&state)?;
+    require_admin(&state, &headers)?;
+    let path = require_file_config(&state)?;
+    let _guard = state.write_lock.lock().await;
+
+    if handle == BUILTIN_HANDLE {
+        return Err(ApiError::Conflict(format!(
+            "`{handle}` is the reserved builtin package handle"
+        )));
+    }
+
+    let existing = state
+        .config
+        .load()
+        .packages
+        .get(&handle)
+        .cloned()
+        .ok_or(ApiError::NotFound)?;
+
+    // Overlay only the provided fields; an omitted field (incl. `token`)
+    // keeps its existing value.
+    let repo = body.repo.clone().or_else(|| existing.repo.clone());
+    let pin = body.pin.clone().or_else(|| existing.pin.clone());
+    let token = body.token.clone().or_else(|| existing.token.clone());
+    let repo_or_pin_changed = (body.repo.is_some() && body.repo != existing.repo)
+        || (body.pin.is_some() && body.pin != existing.pin);
+
+    let block = package_block(repo.as_deref(), pin.as_deref(), token.as_deref());
+    let yaml = state
+        .asset_loader
+        .read_config_string()
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let new_yaml = config_writer::upsert_package(&yaml, &handle, &block)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    persist(&state, &path, new_yaml)?;
+
+    if repo_or_pin_changed {
+        let mgr = state.package_manager.clone();
+        let h = handle.clone();
+        tokio::task::spawn_blocking(move || mgr.refresh_one(&h));
+    }
+
+    let count = package_screen_count(&state, &handle);
+    let statuses = state.package_manager.status_snapshot();
+    let info = build_package_info(&state.config.load(), statuses.get(&handle), count, handle);
+    Ok(Json(info))
+}
+
+pub async fn delete_package(
+    State(state): State<AppState>,
+    Path(handle): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_writable_global(&state)?;
+    require_admin(&state, &headers)?;
+    let path = require_file_config(&state)?;
+    let _guard = state.write_lock.lock().await;
+
+    if handle == BUILTIN_HANDLE {
+        return Err(ApiError::Conflict(format!(
+            "`{handle}` is the reserved builtin package handle"
+        )));
+    }
+
+    // Reject if any device's screen dangles into this package's namespace.
+    let prefix = format!("{handle}/");
+    let config = state.config.load();
+    if let Some((device_key, _)) = config
+        .devices
+        .iter()
+        .find(|(_, d)| d.screen.starts_with(&prefix))
+        .map(|(k, d)| (k.clone(), d.screen.clone()))
+    {
+        return Err(ApiError::Conflict(format!(
+            "package `{handle}` is referenced by device `{device_key}`"
+        )));
+    }
+    drop(config);
+
+    let yaml = state
+        .asset_loader
+        .read_config_string()
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let new_yaml = match config_writer::remove_package(&yaml, &handle) {
+        Ok(y) => y,
+        Err(config_writer::ConfigWriteError::NotFound(_)) => return Err(ApiError::NotFound),
+        Err(e) => return Err(ApiError::Internal(e.to_string())),
+    };
+    persist(&state, &path, new_yaml)?;
+
+    // Forget the deleted handle's fetch status so a later re-registration of
+    // the same handle doesn't briefly surface the stale resolved_sha/Ready
+    // state left over from the deleted package.
+    state.package_manager.forget_status(&handle);
+    // Rebuild the hot-swapped loader so the deleted handle's screens stop
+    // resolving immediately (in-memory only; not blocking).
+    state.package_manager.rebuild_loader();
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+pub async fn update_package(
+    State(state): State<AppState>,
+    Path(handle): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<PackageInfo>, ApiError> {
+    require_admin(&state, &headers)?;
+
+    if handle != BUILTIN_HANDLE && !state.config.load().packages.contains_key(&handle) {
+        return Err(ApiError::NotFound);
+    }
+
+    let mgr = state.package_manager.clone();
+    let h = handle.clone();
+    tokio::task::spawn_blocking(move || mgr.refresh_one(&h));
+
+    let count = package_screen_count(&state, &handle);
+    let statuses = state.package_manager.status_snapshot();
+    let info = build_package_info(&state.config.load(), statuses.get(&handle), count, handle);
+    Ok(Json(info))
+}
+
+pub async fn update_all_packages(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&state, &headers)?;
+
+    let mgr = state.package_manager.clone();
+    tokio::task::spawn_blocking(move || mgr.refresh_all(true));
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assets::AssetLoader;
+    use crate::models::AppConfig;
+    use crate::server::create_app_state_with_config;
+
+    fn state_with_addon_mode(addon_mode: bool) -> AppState {
+        let loader = AssetLoader::new(None, None, None);
+        let config = AppConfig::load_from_assets(&loader).expect("load embedded config");
+        let mut state = create_app_state_with_config(std::sync::Arc::new(loader), config)
+            .expect("create app state");
+        state.addon_mode = addon_mode;
+        state
+    }
+
+    #[test]
+    fn global_writes_rejected_in_addon_mode() {
+        let state = state_with_addon_mode(true);
+        match require_writable_global(&state) {
+            Err(ApiError::Conflict(_)) => {}
+            other => panic!("expected Conflict in add-on mode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn global_writes_allowed_standalone() {
+        let state = state_with_addon_mode(false);
+        assert!(require_writable_global(&state).is_ok());
+    }
+
+    fn registration_only_body() -> SettingsWrite {
+        SettingsWrite {
+            registration_enabled: Some(true),
+            auth_mode: None,
+            package_refresh_interval: None,
+        }
+    }
+
+    #[test]
+    fn addon_mode_allows_registration_enabled_only() {
+        let state = state_with_addon_mode(true);
+        let body = registration_only_body();
+        assert!(
+            require_writable_settings(&state, &body).is_ok(),
+            "registration_enabled-only body must stay live in add-on mode"
+        );
+    }
+
+    #[test]
+    fn addon_mode_rejects_global_field() {
+        let state = state_with_addon_mode(true);
+        let mut body = registration_only_body();
+        body.auth_mode = Some("api_key".to_string());
+        match require_writable_settings(&state, &body) {
+            Err(ApiError::Conflict(_)) => {}
+            other => panic!("expected Conflict for global field in add-on mode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn standalone_allows_any_settings_body() {
+        let state = state_with_addon_mode(false);
+        let body = SettingsWrite {
+            registration_enabled: Some(false),
+            auth_mode: Some("ed25519".to_string()),
+            package_refresh_interval: Some(300),
+        };
+        assert!(require_writable_settings(&state, &body).is_ok());
+    }
 }

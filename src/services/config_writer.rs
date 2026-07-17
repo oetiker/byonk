@@ -2,9 +2,10 @@
 //!
 //! Strategy (avoids yamlpatch's weak spots on sequences/flow lists):
 //! - global scalar settings → in-place scalar replace
-//! - device add/edit/remove → remove the device subtree + append a freshly
-//!   block-serialized subtree (device blocks are machine-managed, so no user
-//!   comments live inside them).
+//! - device / package add/edit/remove → remove the entry's subtree + append a
+//!   freshly block-serialized subtree (entries are machine-managed, so no user
+//!   comments live inside them). Both `devices:` and `packages:` share the
+//!   same section-generic helpers.
 
 use yamlpatch::{apply_yaml_patches, Op, Patch};
 use yamlpath::Document;
@@ -45,27 +46,52 @@ fn render(doc: Document) -> String {
     doc.source().to_string()
 }
 
-/// Replace a scalar value at `path` (e.g. `["registration","enabled"]`),
+/// Set a scalar value at `path` (e.g. `["registration","enabled"]`),
 /// preserving all surrounding comments and formatting.
+///
+/// If the key already exists it is replaced in place; if it is absent it is
+/// added to its parent mapping (which must exist). This covers the common case
+/// where a key is optional in config and may not be present yet.
 pub fn set_scalar(
     yaml: &str,
     path: &[&str],
     value: serde_yaml::Value,
 ) -> Result<String, ConfigWriteError> {
+    assert!(!path.is_empty(), "set_scalar: path must not be empty");
+
     let doc = document(yaml)?;
 
+    // Build the full route to the target key.
     let mut route = yamlpath::Route::default();
     for key in path {
         route = route.with_key(*key);
     }
 
-    let patch = Patch {
-        route,
+    // Try Replace first (key already exists). On failure, fall back to Add
+    // at the parent route (adds the key to an existing mapping).
+    let replace_patch = Patch {
+        route: route.clone(),
         operation: Op::Replace(to_patch_value(&value)?),
     };
+    if let Ok(new_doc) = apply_yaml_patches(&doc, &[replace_patch]) {
+        return Ok(render(new_doc));
+    }
 
-    let new_doc =
-        apply_yaml_patches(&doc, &[patch]).map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
+    // Key doesn't exist yet — add it to the parent mapping.
+    let last_key = path.last().expect("non-empty path");
+    let mut parent_route = yamlpath::Route::default();
+    for key in &path[..path.len() - 1] {
+        parent_route = parent_route.with_key(*key);
+    }
+    let add_patch = Patch {
+        route: parent_route,
+        operation: Op::Add {
+            key: last_key.to_string(),
+            value: to_patch_value(&value)?,
+        },
+    };
+    let new_doc = apply_yaml_patches(&doc, &[add_patch])
+        .map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
     Ok(render(new_doc))
 }
 
@@ -82,23 +108,23 @@ fn indent_of(line: &str) -> usize {
     line.bytes().take_while(|b| *b == b' ').count()
 }
 
-/// Compute the byte range covering `devices.<key>` *and only* its own block,
-/// starting at the device key line and extending over the deeper-indented body
+/// Compute the byte range covering `<section>.<key>` *and only* its own block,
+/// starting at the key line and extending over the deeper-indented body
 /// lines that belong to it.
 ///
 /// This is done manually instead of via `yamlpatch::Op::Remove` because
 /// tree-sitter attaches any following less-indented comment (e.g. a trailing
 /// top-level `# comment`) to the last block node, which would make `Op::Remove`
 /// delete that comment too. Scanning by indentation keeps such comments intact.
-fn device_block_range(yaml: &str, key: &str) -> Result<(usize, usize), ConfigWriteError> {
+fn block_range(yaml: &str, section: &str, key: &str) -> Result<(usize, usize), ConfigWriteError> {
     let doc = document(yaml)?;
-    let route = yamlpath::Route::default().with_key("devices").with_key(key);
+    let route = yamlpath::Route::default().with_key(section).with_key(key);
     let feature = doc
         .query_pretty(&route)
         .map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
     let key_byte = feature.location.byte_span.0;
 
-    // Start of the device key line.
+    // Start of the key line.
     let line_start = yaml[..key_byte].rfind('\n').map(|i| i + 1).unwrap_or(0);
     let key_indent = indent_of(&yaml[line_start..]);
 
@@ -116,92 +142,79 @@ fn device_block_range(yaml: &str, key: &str) -> Result<(usize, usize), ConfigWri
     Ok((line_start, end))
 }
 
-/// Remove `devices.<key>` entirely. Returns [`ConfigWriteError::NotFound`] if
-/// the device does not exist.
-pub fn remove_device(yaml: &str, key: &str) -> Result<String, ConfigWriteError> {
+/// Remove `<section>.<key>` entirely. Returns [`ConfigWriteError::NotFound`] if
+/// the entry does not exist. `label` is the singular noun used in the
+/// [`ConfigWriteError::NotFound`] message (e.g. `"device"`, `"package"`).
+fn remove_from_section(
+    yaml: &str,
+    section: &str,
+    label: &str,
+    key: &str,
+) -> Result<String, ConfigWriteError> {
     // Confirm presence first for a clean NotFound error.
     let parsed: serde_yaml::Value =
         serde_yaml::from_str(yaml).map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
-    let exists = parsed.get("devices").and_then(|d| d.get(key)).is_some();
+    let exists = parsed.get(section).and_then(|d| d.get(key)).is_some();
     if !exists {
-        return Err(ConfigWriteError::NotFound(format!("device {key}")));
+        return Err(ConfigWriteError::NotFound(format!("{label} {key}")));
     }
 
-    let (start, end) = device_block_range(yaml, key)?;
+    let (start, end) = block_range(yaml, section, key)?;
     let mut out = yaml.to_string();
     out.replace_range(start..end, "");
     Ok(out)
 }
 
-/// Add a new device or replace an existing one with `block`.
+/// Add a new entry or replace an existing one with `block` under `section`
+/// (e.g. `devices` or `packages`). `label` is the singular noun used in the
+/// [`ConfigWriteError::NotFound`] message.
 ///
 /// Editing is implemented as remove-then-add so it is robust against odd
 /// existing layouts (flow lists / sequence params) inside the old block.
-pub fn upsert_device(
+fn upsert_in_section(
     yaml: &str,
+    section: &str,
+    label: &str,
     key: &str,
     block: &serde_yaml::Mapping,
 ) -> Result<String, ConfigWriteError> {
     let parsed: serde_yaml::Value =
         serde_yaml::from_str(yaml).map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
-    let exists = parsed.get("devices").and_then(|d| d.get(key)).is_some();
+    let exists = parsed.get(section).and_then(|d| d.get(key)).is_some();
 
     // Edit = remove then add (robust against sequence/flow-list params).
     let base = if exists {
-        remove_device(yaml, key)?
+        remove_from_section(yaml, section, label, key)?
     } else {
         yaml.to_string()
     };
 
-    // If `devices` already holds at least one entry, `yamlpatch`'s block-mapping
-    // addition handles indentation and trailing-comment placement correctly.
     let base_parsed: serde_yaml::Value =
         serde_yaml::from_str(&base).map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
-    let devices_nonempty = base_parsed
-        .get("devices")
-        .and_then(|d| d.as_mapping())
-        .map(|m| !m.is_empty())
-        .unwrap_or(false);
 
-    if devices_nonempty {
-        let doc = document(&base)?;
-        let route = yamlpath::Route::default().with_key("devices");
-        let value = to_patch_value(&serde_yaml::Value::Mapping(block.clone()))?;
-        let patch = Patch {
-            route,
-            operation: Op::Add {
-                key: key.to_string(),
-                value,
-            },
-        };
-        let new_doc = apply_yaml_patches(&doc, &[patch])
-            .map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
-        Ok(render(new_doc))
-    } else {
-        // `devices:` is empty/null (e.g. after editing the only device).
-        // `yamlpatch` can't add into an empty mapping, so insert the block
-        // manually right after the `devices:` header line, indented two spaces.
-        insert_into_empty_devices(&base, key, block)
+    // Serialize the entry as a block and insert it manually. We do NOT use
+    // `yamlpatch`'s Op::Add here: it mis-indents nested sub-maps (e.g. `params`),
+    // writing the sub-keys as siblings of `params:` instead of children.
+    // serde_yaml serializes nested maps correctly, and a uniform two-space indent
+    // preserves that nesting.
+    let indented = serialize_indented(key, block)?;
+
+    match base_parsed.get(section) {
+        // Section present with at least one entry: insert right after the header.
+        Some(v) if v.as_mapping().map(|m| !m.is_empty()).unwrap_or(false) => {
+            insert_after_header(&base, section, &indented)
+        }
+        // Section present but empty (`section:` null, or `section: {}`).
+        Some(_) => insert_into_empty_section(&base, section, &indented),
+        // Section absent entirely: append a brand-new section.
+        None => Ok(insert_new_section(&base, section, &indented)),
     }
 }
 
-/// Insert a freshly block-serialized device under an empty `devices:` header,
-/// preserving everything else (including trailing comments).
-fn insert_into_empty_devices(
-    base: &str,
-    key: &str,
-    block: &serde_yaml::Mapping,
-) -> Result<String, ConfigWriteError> {
-    let doc = document(base)?;
-    let route = yamlpath::Route::default().with_key("devices");
-    let feature = doc
-        .query_pretty(&route)
-        .map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
-    let header_byte = feature.location.byte_span.0;
-    let header_line_end = next_line_start(base, header_byte);
-
-    // Serialize `{ key: block }` then indent every line by two spaces so the
-    // device key sits one level under `devices:`.
+/// Serialize `{ key: block }` and indent every line two spaces so the key
+/// sits one level under the section header, with nested sub-maps (e.g.
+/// `params`) nested correctly.
+fn serialize_indented(key: &str, block: &serde_yaml::Mapping) -> Result<String, ConfigWriteError> {
     let mut outer = serde_yaml::Mapping::new();
     outer.insert(
         serde_yaml::Value::from(key),
@@ -219,10 +232,111 @@ fn insert_into_empty_devices(
             indented.push('\n');
         }
     }
+    Ok(indented)
+}
 
+/// Byte offset just after the `<section>:` header line (searching
+/// `\n<section>:`, with a fallback for a document that starts with
+/// `<section>:`).
+fn header_bounds(base: &str, section: &str) -> Result<(usize, usize), ConfigWriteError> {
+    let needle = format!("\n{section}:");
+    let prefix = format!("{section}:");
+    let after_colon = base
+        .find(&needle)
+        .map(|i| i + needle.len())
+        .or_else(|| {
+            if base.starts_with(&prefix) {
+                Some(prefix.len())
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| ConfigWriteError::Patch(format!("`{section}:` not found in config")))?;
+    Ok((after_colon, next_line_start(base, after_colon)))
+}
+
+/// Insert a serialized block immediately after the `<section>:` header line,
+/// among existing block-form entries. The new entry becomes the first one;
+/// existing entries (and any trailing comments) follow unchanged.
+fn insert_after_header(
+    base: &str,
+    section: &str,
+    indented: &str,
+) -> Result<String, ConfigWriteError> {
+    let (_, line_end) = header_bounds(base, section)?;
     let mut out = base.to_string();
-    out.insert_str(header_line_end, &indented);
+    out.insert_str(line_end, indented);
     Ok(out)
+}
+
+/// Insert a serialized block under an empty `<section>:` header, preserving
+/// everything else (including trailing comments).
+///
+/// Handles two forms of an empty section:
+/// - `<section>:` — null / empty block (e.g. after the last entry was removed)
+/// - `<section>: {}` — empty flow mapping (e.g. the shipped default config)
+///
+/// In both cases we replace whatever follows `<section>:` on that line with
+/// `\n<indented block>`, producing a valid block mapping.
+fn insert_into_empty_section(
+    base: &str,
+    section: &str,
+    indented: &str,
+) -> Result<String, ConfigWriteError> {
+    // Confirm the section key is present (clean error if malformed/missing).
+    let doc = document(base)?;
+    let route = yamlpath::Route::default().with_key(section);
+    doc.query_pretty(&route)
+        .map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
+
+    let (after_colon, header_line_end) = header_bounds(base, section)?;
+    let mut out = base.to_string();
+    out.replace_range(after_colon..header_line_end, &format!("\n{indented}"));
+    Ok(out)
+}
+
+/// Append a brand-new `<section>:` header (with the given entry already
+/// nested under it) to the end of the document. Used when the section is
+/// entirely absent from the config.
+fn insert_new_section(base: &str, section: &str, indented: &str) -> String {
+    let mut out = base.to_string();
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(section);
+    out.push_str(":\n");
+    out.push_str(indented);
+    out
+}
+
+/// Remove `devices.<key>` entirely. Returns [`ConfigWriteError::NotFound`] if
+/// the device does not exist.
+pub fn remove_device(yaml: &str, key: &str) -> Result<String, ConfigWriteError> {
+    remove_from_section(yaml, "devices", "device", key)
+}
+
+/// Add a new device or replace an existing one with `block`.
+pub fn upsert_device(
+    yaml: &str,
+    key: &str,
+    block: &serde_yaml::Mapping,
+) -> Result<String, ConfigWriteError> {
+    upsert_in_section(yaml, "devices", "device", key, block)
+}
+
+/// Remove `packages.<handle>` entirely. Returns [`ConfigWriteError::NotFound`]
+/// if the package does not exist.
+pub fn remove_package(yaml: &str, handle: &str) -> Result<String, ConfigWriteError> {
+    remove_from_section(yaml, "packages", "package", handle)
+}
+
+/// Add a new package or replace an existing one with `block`.
+pub fn upsert_package(
+    yaml: &str,
+    handle: &str,
+    block: &serde_yaml::Mapping,
+) -> Result<String, ConfigWriteError> {
+    upsert_in_section(yaml, "packages", "package", handle, block)
 }
 
 #[cfg(test)]
@@ -332,5 +446,97 @@ devices:
             remove_device(SAMPLE, "ZZ:ZZ"),
             Err(ConfigWriteError::NotFound(_))
         ));
+    }
+
+    #[test]
+    fn test_upsert_into_empty_flow_mapping() {
+        // `devices: {}` is the shipped default config format; ensure a device
+        // can be added to it without producing invalid YAML.
+        let yaml = "\
+# top comment
+registration:
+  enabled: true
+auth_mode: api_key
+# Devices are owned by Home Assistant; none ship by default.
+devices: {}
+";
+        let mut block = serde_yaml::Mapping::new();
+        block.insert("screen".into(), "hello".into());
+        let out = upsert_device(yaml, "CC:DD:EE:FF:00:11", &block).unwrap();
+        let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            v["devices"]["CC:DD:EE:FF:00:11"]["screen"],
+            serde_yaml::Value::from("hello")
+        );
+        // Comments must survive.
+        assert!(out.contains("# top comment"));
+        assert!(out.contains("# Devices are owned by Home Assistant"));
+    }
+
+    #[test]
+    fn test_upsert_package_adds_and_updates() {
+        let yaml = "auth_mode: api_key\n";
+        let mut block = serde_yaml::Mapping::new();
+        block.insert("repo".into(), "github.com/acme/x".into());
+        block.insert("pin".into(), "v1.0.0".into());
+        let out = upsert_package(yaml, "weather", &block).unwrap();
+        let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            v["packages"]["weather"]["repo"],
+            serde_yaml::Value::from("github.com/acme/x")
+        );
+
+        // update in place
+        let mut b2 = serde_yaml::Mapping::new();
+        b2.insert("repo".into(), "github.com/acme/x".into());
+        b2.insert("pin".into(), "v2.0.0".into());
+        let out2 = upsert_package(&out, "weather", &b2).unwrap();
+        let v2: serde_yaml::Value = serde_yaml::from_str(&out2).unwrap();
+        assert_eq!(
+            v2["packages"]["weather"]["pin"],
+            serde_yaml::Value::from("v2.0.0")
+        );
+    }
+
+    #[test]
+    fn test_remove_package() {
+        let yaml = "packages:\n  weather:\n    repo: github.com/acme/x\n    pin: v1\n";
+        let out = remove_package(yaml, "weather").unwrap();
+        let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert!(v
+            .get("packages")
+            .map(|p| p.get("weather").is_none())
+            .unwrap_or(true));
+    }
+
+    #[test]
+    fn test_remove_missing_package_is_notfound() {
+        assert!(matches!(
+            remove_package("packages: {}\n", "nope"),
+            Err(ConfigWriteError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn test_upsert_device_with_params_submap_populated() {
+        let yaml = "\
+devices:
+  \"AA:BB\":
+    screen: transit
+  \"CC:DD\":
+    screen: clock
+";
+        let mut block = serde_yaml::Mapping::new();
+        block.insert("screen".into(), "transit".into());
+        let mut pm = serde_yaml::Mapping::new();
+        pm.insert("station".into(), "Olten".into());
+        block.insert("params".into(), serde_yaml::Value::Mapping(pm));
+        let out = upsert_device(yaml, "AA:BB", &block).unwrap();
+        let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            v["devices"]["AA:BB"]["params"]["station"],
+            serde_yaml::Value::from("Olten"),
+            "params sub-map mis-nested:\n{out}"
+        );
     }
 }

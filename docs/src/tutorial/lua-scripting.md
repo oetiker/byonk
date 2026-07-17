@@ -30,7 +30,7 @@ Device-specific parameters are available via the global `params` table:
 # config.yaml
 devices:
   "94:A9:90:8C:6D:18":
-    screen: weather
+    screen: byonk-builtin/useful/swiss-departure-board
     params:
       city: "Zurich"
       units: "metric"
@@ -279,7 +279,7 @@ ERROR script=true: Failed to parse JSON: unexpected token
 Here's a real-world example fetching transit data:
 
 ```lua
--- transit.lua - Fetch public transport departures
+-- swiss-departure-board script.lua - Fetch public transport departures
 
 local station = params.station or "Olten"
 local limit = params.limit or 8

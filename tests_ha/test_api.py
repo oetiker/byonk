@@ -56,3 +56,21 @@ async def test_409_raises_readonly(mock_aioresponse):
         client = ByonkClient(session, BASE, "secret")
         with pytest.raises(ByonkReadOnlyError):
             await client.async_update_settings({"registration_enabled": True})
+
+
+async def test_get_packages(mock_aioresponse):
+    mock_aioresponse.get(
+        f"{BASE}/api/admin/packages",
+        payload=[{"handle": "weather", "builtin": False, "status": "ready"}],
+    )
+    async with aiohttp.ClientSession() as session:
+        client = ByonkClient(session, BASE, "secret")
+        result = await client.async_get_packages()
+    assert result[0]["handle"] == "weather"
+
+
+async def test_update_all_packages_posts(mock_aioresponse):
+    mock_aioresponse.post(f"{BASE}/api/admin/packages/update", payload={"ok": True})
+    async with aiohttp.ClientSession() as session:
+        client = ByonkClient(session, BASE, "secret")
+        assert await client.async_update_packages() == {"ok": True}

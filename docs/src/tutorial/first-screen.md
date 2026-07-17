@@ -23,13 +23,57 @@ docker run -d --pull always -p 3000:3000 \
   ghcr.io/oetiker/byonk
 ```
 
-On first run, empty directories are automatically populated with defaults. You can then edit the files in `screens/` and `config.yaml`.
+On first run, empty directories are automatically populated with defaults. You can then edit the screen files under `screens/` and `config.yaml`.
 
 > **Tip:** Keep the server running in a terminal. Lua scripts and SVG templates are reloaded on every request - just save and refresh!
 
-## Step 1: Create the Lua Script
+## How screens are organized
 
-Create a new file `screens/hello.lua`:
+A screen is a **folder** inside a screen package. Each screen folder holds three
+fixed-name files:
+
+| File | Purpose |
+|------|---------|
+| `meta.yaml` | Title, description, engine compatibility, and the parameter schema |
+| `script.lua` | Data-fetch logic; returns a `data` table and optional `refresh_rate` |
+| `screen.svg` | Tera SVG template rendered with that `data` |
+
+A **package** is a directory tree with a `byonk-screens.yaml` manifest at its root; every
+folder inside it that contains a `meta.yaml` is a screen. The bundled screens ship in the
+embedded `byonk-builtin` package, whose folder layout looks like this:
+
+```
+screens/                       # the byonk-builtin package root
+  byonk-screens.yaml           # package manifest (name, description, author, license)
+  example/
+    hello/                     # screen ref: byonk-builtin/example/hello
+      meta.yaml
+      script.lua
+      screen.svg
+```
+
+A screen is referenced by `handle/path` — here `byonk-builtin/example/hello` — and that is the
+value a device's `screen` field is set to. In this tutorial we build a screen at
+`example/hello`.
+
+## Step 1: Create the meta.yaml
+
+Create `screens/example/hello/meta.yaml`. It describes the screen and (later) its parameters:
+
+```yaml
+title: Hello World
+description: Displays a greeting with the current time.
+byonk: "0.15"       # minimum byonk engine version this screen targets
+refresh: 60         # default refresh in seconds (script.lua may override)
+```
+
+- `title` and `description` are shown by the admin API and the Home Assistant integration.
+- `byonk` declares engine compatibility (bare version = caret range; see the design docs).
+- `refresh` is an optional default; the Lua script's returned `refresh_rate` still overrides.
+
+## Step 2: Create the Lua Script
+
+Create `screens/example/hello/script.lua`:
 
 ```lua
 -- Hello World screen
@@ -53,37 +97,22 @@ return {
 - The returned `data` table is passed to the template
 - `refresh_rate` tells the device to check back in 60 seconds
 
-## Step 2: Create the SVG Template
+## Step 3: Create the SVG Template
 
-Create a new file `screens/hello.svg`:
+Create `screens/example/hello/screen.svg`:
 
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
   <style>
-    .greeting {
+    text {
       font-family: Outfit, sans-serif;
-      font-size: 48px;
-      font-weight: 700;
       fill: black;
+      {% include "byonk-base-v1/hinting.svg" %}
     }
-    .time {
-      font-family: Outfit, sans-serif;
-      font-size: 72px;
-      font-weight: 700;
-      fill: black;
-    }
-    .date {
-      font-family: Outfit, sans-serif;
-      font-size: 24px;
-      font-weight: 400;
-      fill: #555;
-    }
-    .footer {
-      font-family: Outfit, sans-serif;
-      font-size: 14px;
-      font-weight: 400;
-      fill: #999;
-    }
+    .greeting { font-size: 48px; font-weight: 700; }
+    .time { font-size: 72px; font-weight: 700; }
+    .date { font-size: 24px; font-weight: 400; fill: #555; }
+    .footer { font-size: 14px; font-weight: 400; fill: #999; }
   </style>
 
   <!-- White background -->
@@ -113,31 +142,20 @@ Create a new file `screens/hello.svg`:
 
 **Template features used:**
 - `{{ data.variable }}` - Inserts values from the Lua script's `data` table
+- `{% include "byonk-base-v1/hinting.svg" %}` - Pulls in byonk's shared e-ink font hinting
+  from the `byonk-base-v1` standard library (see [SVG Templates](svg-templates.md))
 - CSS styling for fonts and colors
 - `text-anchor="middle"` for centered text
 
-## Step 3: Add the Screen to Configuration
-
-Edit `config.yaml` to add your new screen:
-
-```yaml
-screens:
-  # ... existing screens ...
-
-  hello:
-    script: hello.lua
-    template: hello.svg
-    default_refresh: 60
-```
-
 ## Step 4: Assign to a Device
 
-Still in `config.yaml`, assign the screen to your device:
+Edit `config.yaml` and assign the screen to your device by its `handle/path` reference. There
+is no separate `screens:` block — screens are auto-discovered from their package folders:
 
 ```yaml
 devices:
   "YOUR:MAC:AD:DR:ES:S0":
-    screen: hello
+    screen: byonk-builtin/example/hello
     params: {}
 ```
 
@@ -158,9 +176,24 @@ Replace `YOUR:MAC:AD:DR:ES:S0` with your device's actual MAC address.
 
 ## Adding Parameters
 
-Let's make the greeting customizable. Update your files:
+Let's make the greeting customizable. First declare the parameter in the screen's
+`meta.yaml` so the admin API and Home Assistant know about it:
 
-**screens/hello.lua:**
+**screens/example/hello/meta.yaml:**
+```yaml
+title: Hello World
+description: Displays a greeting with the current time.
+byonk: "0.15"
+refresh: 60
+params:
+  name:
+    type: string
+    label: "Name"
+    default: "World"
+    description: "Who to greet"
+```
+
+**screens/example/hello/script.lua:**
 ```lua
 local now = time_now()
 
@@ -181,7 +214,7 @@ return {
 ```yaml
 devices:
   "YOUR:MAC:AD:DR:ES:S0":
-    screen: hello
+    screen: byonk-builtin/example/hello
     params:
       name: "Alice"
 ```
@@ -192,7 +225,7 @@ Now your screen will say "Hello, Alice!" instead of "Hello, World!".
 
 Let's add a QR code to the screen that links to documentation. QR codes are useful for providing quick access to related content.
 
-**Update screens/hello.lua:**
+**Update screens/example/hello/script.lua:**
 ```lua
 local now = time_now()
 local name = params.name or "World"
@@ -214,7 +247,7 @@ return {
 }
 ```
 
-**Update screens/hello.svg** to include the QR code:
+**Update screens/example/hello/screen.svg** to include the QR code:
 ```svg
 <!-- Add before the closing </svg> tag -->
 
@@ -284,7 +317,7 @@ return {
 
 ## Real-World Example: Transit Departures
 
-Here's what a more complex screen looks like - the built-in transit departure display:
+Here's what a more complex screen looks like - the built-in Swiss departure board display:
 
 ![Transit departures screen](../images/transit.png)
 
@@ -295,7 +328,9 @@ This screen demonstrates:
 - Styled table layout with alternating rows
 - Color-coded line badges
 
-Check out `screens/transit.lua` and `screens/transit.svg` in the Byonk source for the complete implementation.
+Check out the `screens/useful/swiss-departure-board/` folder
+(`byonk-builtin/useful/swiss-departure-board`) in the Byonk source for the complete
+implementation.
 
 ## What's Next?
 

@@ -1,0 +1,9 @@
+{
+  "domain": "byonk",
+  "name": "Byonk",
+  "version": "0.16.0",
+  "documentation": "https://github.com/oetiker/byonk",
+  "codeowners": ["@oetiker"],
+  "config_flow": true,
+  "iot_class": "local_polling"
+}

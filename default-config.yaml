@@ -1,0 +1,119 @@
+# Byonk default configuration (shipped / embedded).
+# Home Assistant owns devices: this file intentionally has none.
+# New (un-onboarded) and unassigned devices show the reserved DEFAULT device's screen.
+registration:
+  enabled: true
+auth_mode: api_key
+
+# Panel profiles with measured display colors
+# Each panel maps official (ideal) colors to measured (actual) colors.
+# Dev mode uses measured colors to preview what the panel really shows.
+# colors: official palette sent to device
+# colors_actual: measured colors as they appear on the physical display
+# match: exact match against firmware Board header for auto-detection
+panels:
+  trmnl_og:
+    name: "TRMNL OG (4-grey)"
+    match: "trmnl_og"
+    width: 800
+    height: 480
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#6E6E6E,#9C9C9C,#B8B8B0"
+  trmnl_og_4clr:
+    name: "TRMNL OG (4-color)"
+    match: "trmnl_og_4clr"
+    width: 800
+    height: 480
+    colors: "#000000,#FFFFFF,#FF0000,#FFFF00"
+    colors_actual: "#383038,#B8B8B0,#9C484B,#D0BE47"
+  trmnl_x:
+    name: "TRMNL X (16-grey)"
+    match: "trmnl_x"
+    width: 1872
+    height: 1404
+    colors: "#000000,#111111,#222222,#333333,#444444,#555555,#666666,#777777,#888888,#999999,#AAAAAA,#BBBBBB,#CCCCCC,#DDDDDD,#EEEEEE,#FFFFFF"
+    colors_actual: "#383838,#434343,#4E4E4E,#595959,#646464,#6E6E6E,#787878,#828282,#8B8B8B,#949494,#9C9C9C,#A3A3A3,#AAAAAA,#B0B0B0,#B5B5B2,#B8B8B0"
+  xteink_x4:
+    name: "XTEink X4 (4-grey)"
+    match: "xteink_x4"
+    width: 800
+    height: 480
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#6E6E6E,#9C9C9C,#B8B8B0"
+  waveshare:
+    name: "Waveshare (4-grey)"
+    match: "waveshare"
+    width: 800
+    height: 480
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#6E6E6E,#9C9C9C,#B8B8B0"
+  seeed_xiao_c3:
+    name: "Seeed Xiao C3 (4-grey)"
+    match: "seeed_xiao_c3"
+    width: 296
+    height: 128
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#6E6E6E,#9C9C9C,#B8B8B0"
+  seeed_xiao_s3:
+    name: "Seeed Xiao S3 (4-grey)"
+    match: "seeed_xiao_s3"
+    width: 296
+    height: 128
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#6E6E6E,#9C9C9C,#B8B8B0"
+  xiao_epaper:
+    name: "Seeed Xiao ePaper (4-grey)"
+    match: "xiao_epaper"
+    width: 296
+    height: 128
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#6E6E6E,#9C9C9C,#B8B8B0"
+  xiao_epaper_3clr:
+    name: "Seeed Xiao 3-Color"
+    match: "xiao_epaper_3clr"
+    width: 296
+    height: 128
+    colors: "#000000,#FFFFFF,#FF0000"
+    colors_actual: "#383038,#B8B8B0,#9C484B"
+  reterminal_e1001:
+    name: "reTerminal E1001 (4-grey)"
+    match: "reterminal_e1001"
+    width: 800
+    height: 480
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#000000,#2A2A2A,#676767,#FFFFFF"
+  reterminal_e1002:
+    name: "reTerminal E1002 (6-color)"
+    match: "reterminal_e1002"
+    width: 800
+    height: 480
+    colors: "#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00"
+    colors_actual: "#000000,#FFFFFF,#B50303,#FFEE00,#205497,#0D876B"
+    dither:
+      sierra-light:
+        error_clamp: 0.11
+        noise_scale: 5
+  reterminal_e1004:
+    name: "reTerminal E1004 (6-color, 13.3\")"
+    # E1004 firmware reports its identity in the `Model` header (not `Board`),
+    # which the panel matcher now also checks.
+    match: "reterminal_e1004"
+    width: 1200
+    height: 1600
+    colors: "#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00"
+    # Measured on the physical E1004 panel via the dev-mode calibrator.
+    colors_actual: "#000000,#FFFFFF,#C20000,#FFE042,#2160C4,#00994D"
+    dither:
+      sierra-light:
+        error_clamp: 0.11
+        noise_scale: 5
+
+# Screens are auto-discovered from the embedded `byonk-builtin` package
+# (the `screens/` tree) and any on-disk packages; no per-screen map is needed.
+
+# Home Assistant owns real devices; only the reserved DEFAULT device ships.
+# Its screen is what every un-onboarded / unassigned device shows (the built-in
+# screen is registration-aware and renders the pairing code for new devices).
+devices:
+  DEFAULT:
+    screen: byonk-builtin/default

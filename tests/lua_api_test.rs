@@ -238,7 +238,7 @@ mod lua_unit_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 std::path::Path::new("test_json.lua"),
                 &HashMap::new(),
                 None,
@@ -269,7 +269,7 @@ mod lua_unit_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 std::path::Path::new("test_array.lua"),
                 &HashMap::new(),
                 None,
@@ -301,7 +301,7 @@ mod lua_unit_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 std::path::Path::new("test_base64.lua"),
                 &HashMap::new(),
                 None,
@@ -331,7 +331,7 @@ mod lua_unit_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 std::path::Path::new("test_time.lua"),
                 &HashMap::new(),
                 None,
@@ -363,7 +363,7 @@ mod lua_unit_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 std::path::Path::new("test_format.lua"),
                 &HashMap::new(),
                 None,
@@ -392,7 +392,7 @@ mod lua_unit_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 std::path::Path::new("test_parse.lua"),
                 &HashMap::new(),
                 None,
@@ -432,7 +432,7 @@ mod lua_unit_tests {
         };
 
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 std::path::Path::new("test_qr.lua"),
                 &HashMap::new(),
                 Some(&ctx),
@@ -478,7 +478,7 @@ mod lua_unit_tests {
                 ..Default::default()
             };
 
-            let result = runtime.run_script(
+            let result = runtime.run_script_from_asset(
                 std::path::Path::new("test_anchor.lua"),
                 &HashMap::new(),
                 Some(&ctx),
@@ -522,7 +522,7 @@ mod lua_unit_tests {
         };
 
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 std::path::Path::new("test_device.lua"),
                 &HashMap::new(),
                 Some(&ctx),
@@ -573,7 +573,7 @@ mod lua_unit_tests {
         params.insert("enabled".to_string(), serde_yaml::Value::Bool(true));
 
         let result = runtime
-            .run_script(std::path::Path::new("test_params.lua"), &params, None, None)
+            .run_script_from_asset(std::path::Path::new("test_params.lua"), &params, None, None)
             .expect("Script should run");
 
         assert_eq!(result.data["station"], "Central Station");
@@ -617,7 +617,7 @@ mod lua_unit_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 std::path::Path::new("test_html.lua"),
                 &HashMap::new(),
                 None,
@@ -660,7 +660,7 @@ mod lua_unit_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 std::path::Path::new("test_chain.lua"),
                 &HashMap::new(),
                 None,
@@ -689,7 +689,7 @@ mod lua_unit_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 std::path::Path::new("test_skip.lua"),
                 &HashMap::new(),
                 None,
@@ -714,7 +714,7 @@ mod lua_unit_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 std::path::Path::new("test_refresh.lua"),
                 &HashMap::new(),
                 None,
@@ -772,7 +772,7 @@ mod lua_unit_tests {
 
         let runtime = LuaRuntime::with_fonts(asset_loader, font_families);
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 std::path::Path::new("fonts_test.lua"),
                 &HashMap::new(),
                 None,
@@ -804,7 +804,7 @@ mod lua_error_tests {
         let asset_loader = Arc::new(AssetLoader::new(None, None, None));
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(
+        let result = runtime.run_script_from_asset(
             Path::new("nonexistent_script.lua"),
             &HashMap::new(),
             None,
@@ -829,7 +829,8 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("bad_syntax.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("bad_syntax.lua"), &HashMap::new(), None, None);
+        let result =
+            runtime.run_script_from_asset(Path::new("bad_syntax.lua"), &HashMap::new(), None, None);
 
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -848,8 +849,12 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("runtime_error.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result =
-            runtime.run_script(Path::new("runtime_error.lua"), &HashMap::new(), None, None);
+        let result = runtime.run_script_from_asset(
+            Path::new("runtime_error.lua"),
+            &HashMap::new(),
+            None,
+            None,
+        );
 
         assert!(result.is_err());
     }
@@ -866,7 +871,8 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("no_data.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("no_data.lua"), &HashMap::new(), None, None);
+        let result =
+            runtime.run_script_from_asset(Path::new("no_data.lua"), &HashMap::new(), None, None);
 
         assert!(result.is_err());
     }
@@ -880,7 +886,8 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("bad_return.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("bad_return.lua"), &HashMap::new(), None, None);
+        let result =
+            runtime.run_script_from_asset(Path::new("bad_return.lua"), &HashMap::new(), None, None);
 
         assert!(result.is_err());
     }
@@ -898,7 +905,8 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("bad_json.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("bad_json.lua"), &HashMap::new(), None, None);
+        let result =
+            runtime.run_script_from_asset(Path::new("bad_json.lua"), &HashMap::new(), None, None);
 
         // json_decode raises an error for invalid JSON
         assert!(result.is_err());
@@ -918,7 +926,12 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("bad_selector.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("bad_selector.lua"), &HashMap::new(), None, None);
+        let result = runtime.run_script_from_asset(
+            Path::new("bad_selector.lua"),
+            &HashMap::new(),
+            None,
+            None,
+        );
 
         // Should handle gracefully (returns nil or error)
         // Either outcome is acceptable for error handling test
@@ -938,7 +951,8 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("bad_time.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("bad_time.lua"), &HashMap::new(), None, None);
+        let result =
+            runtime.run_script_from_asset(Path::new("bad_time.lua"), &HashMap::new(), None, None);
 
         // time_parse raises an error for invalid input
         assert!(result.is_err());
@@ -957,7 +971,8 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("bad_b64.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("bad_b64.lua"), &HashMap::new(), None, None);
+        let result =
+            runtime.run_script_from_asset(Path::new("bad_b64.lua"), &HashMap::new(), None, None);
 
         // base64_decode raises an error for invalid input
         assert!(result.is_err());
@@ -976,7 +991,8 @@ mod lua_error_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("empty.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("empty.lua"), &HashMap::new(), None, None);
+        let result =
+            runtime.run_script_from_asset(Path::new("empty.lua"), &HashMap::new(), None, None);
 
         // Empty script returns nil, which is an error
         assert!(result.is_err());
@@ -1014,7 +1030,8 @@ mod lua_error_tests {
         );
         params.insert("config".to_string(), serde_yaml::Value::Mapping(nested));
 
-        let result = runtime.run_script(Path::new("params_test.lua"), &params, None, None);
+        let result =
+            runtime.run_script_from_asset(Path::new("params_test.lua"), &params, None, None);
 
         assert!(result.is_ok());
         let data = result.unwrap();
@@ -1050,7 +1067,8 @@ mod lua_additional_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("test_asset.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("test_asset.lua"), &HashMap::new(), None, None);
+        let result =
+            runtime.run_script_from_asset(Path::new("test_asset.lua"), &HashMap::new(), None, None);
 
         // This might fail if hello.svg isn't accessible from the test context
         // Either outcome is fine for coverage
@@ -1073,7 +1091,8 @@ mod lua_additional_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("test_log.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("test_log.lua"), &HashMap::new(), None, None);
+        let result =
+            runtime.run_script_from_asset(Path::new("test_log.lua"), &HashMap::new(), None, None);
 
         assert!(result.is_ok());
     }
@@ -1096,7 +1115,8 @@ mod lua_additional_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("test_table.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("test_table.lua"), &HashMap::new(), None, None);
+        let result =
+            runtime.run_script_from_asset(Path::new("test_table.lua"), &HashMap::new(), None, None);
 
         assert!(result.is_ok());
         let data = result.unwrap();
@@ -1126,7 +1146,7 @@ mod lua_additional_tests {
         ]);
         params.insert("items".to_string(), items);
 
-        let result = runtime.run_script(Path::new("test_seq.lua"), &params, None, None);
+        let result = runtime.run_script_from_asset(Path::new("test_seq.lua"), &params, None, None);
 
         assert!(result.is_ok());
     }
@@ -1148,7 +1168,7 @@ mod lua_additional_tests {
         let mut params = HashMap::new();
         params.insert("nothing".to_string(), serde_yaml::Value::Null);
 
-        let result = runtime.run_script(Path::new("test_nil.lua"), &params, None, None);
+        let result = runtime.run_script_from_asset(Path::new("test_nil.lua"), &params, None, None);
 
         assert!(result.is_ok());
     }
@@ -1181,8 +1201,12 @@ mod lua_additional_tests {
             ..Default::default()
         };
 
-        let result =
-            runtime.run_script(Path::new("test_qr.lua"), &HashMap::new(), Some(&ctx), None);
+        let result = runtime.run_script_from_asset(
+            Path::new("test_qr.lua"),
+            &HashMap::new(),
+            Some(&ctx),
+            None,
+        );
 
         assert!(result.is_ok());
         let data = result.unwrap();
@@ -1217,7 +1241,8 @@ mod lua_additional_tests {
         let (_temp_dir, asset_loader) = setup_test_env(&[("test_html.lua", script)]);
         let runtime = LuaRuntime::new(asset_loader);
 
-        let result = runtime.run_script(Path::new("test_html.lua"), &HashMap::new(), None, None);
+        let result =
+            runtime.run_script_from_asset(Path::new("test_html.lua"), &HashMap::new(), None, None);
 
         assert!(result.is_ok());
         let data = result.unwrap();
@@ -1244,7 +1269,7 @@ mod lua_http_tests {
         tokio::task::spawn_blocking(move || {
             let runtime = LuaRuntime::new(asset_loader);
             runtime
-                .run_script(&script_path, &HashMap::new(), None, None)
+                .run_script_from_asset(&script_path, &HashMap::new(), None, None)
                 .expect("Script should run")
         })
         .await
@@ -1720,7 +1745,7 @@ mod lua_layout_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(Path::new("test_layout.lua"), &HashMap::new(), None, None)
+            .run_script_from_asset(Path::new("test_layout.lua"), &HashMap::new(), None, None)
             .expect("Script should run");
 
         assert_eq!(result.data["width"], 800);
@@ -1769,7 +1794,7 @@ mod lua_layout_tests {
         };
 
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 Path::new("test_layout_x.lua"),
                 &HashMap::new(),
                 Some(&ctx),
@@ -1815,7 +1840,7 @@ mod lua_layout_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 Path::new("test_scale_font.lua"),
                 &HashMap::new(),
                 None,
@@ -1854,7 +1879,7 @@ mod lua_layout_tests {
         };
 
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 Path::new("test_scale_font_x.lua"),
                 &HashMap::new(),
                 Some(&ctx),
@@ -1889,7 +1914,7 @@ mod lua_layout_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 Path::new("test_scale_pixel.lua"),
                 &HashMap::new(),
                 None,
@@ -1923,7 +1948,7 @@ mod lua_layout_tests {
         };
 
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 Path::new("test_scale_pixel_x.lua"),
                 &HashMap::new(),
                 Some(&ctx),
@@ -1960,7 +1985,7 @@ mod lua_layout_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(Path::new("test_greys_4.lua"), &HashMap::new(), None, None)
+            .run_script_from_asset(Path::new("test_greys_4.lua"), &HashMap::new(), None, None)
             .expect("Script should run");
 
         assert_eq!(result.data["count"], 4);
@@ -2002,7 +2027,7 @@ mod lua_layout_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(Path::new("test_greys_16.lua"), &HashMap::new(), None, None)
+            .run_script_from_asset(Path::new("test_greys_16.lua"), &HashMap::new(), None, None)
             .expect("Script should run");
 
         assert_eq!(result.data["count"], 16);
@@ -2031,7 +2056,7 @@ mod lua_layout_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(Path::new("test_greys_2.lua"), &HashMap::new(), None, None)
+            .run_script_from_asset(Path::new("test_greys_2.lua"), &HashMap::new(), None, None)
             .expect("Script should run");
 
         assert_eq!(result.data["count"], 2);
@@ -2064,7 +2089,7 @@ mod lua_layout_tests {
         let runtime = LuaRuntime::new(asset_loader);
 
         let result = runtime
-            .run_script(
+            .run_script_from_asset(
                 Path::new("test_layout_integration.lua"),
                 &HashMap::new(),
                 None,
@@ -2100,7 +2125,7 @@ mod lua_https_tests {
         tokio::task::spawn_blocking(move || {
             let runtime = LuaRuntime::new(asset_loader);
             runtime
-                .run_script(Path::new(&script_path), &HashMap::new(), None, None)
+                .run_script_from_asset(Path::new(&script_path), &HashMap::new(), None, None)
                 .expect("Script execution failed")
         })
         .await
@@ -2115,7 +2140,12 @@ mod lua_https_tests {
         let script_path = script_name.to_string();
         tokio::task::spawn_blocking(move || {
             let runtime = LuaRuntime::new(asset_loader);
-            match runtime.run_script(Path::new(&script_path), &HashMap::new(), None, None) {
+            match runtime.run_script_from_asset(
+                Path::new(&script_path),
+                &HashMap::new(),
+                None,
+                None,
+            ) {
                 Ok(_) => panic!("Expected script to fail"),
                 Err(e) => e.to_string(),
             }

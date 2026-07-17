@@ -128,12 +128,15 @@ When using external files (via env vars), Byonk expects:
 
 ```
 data/
-├── config.yaml          # Device and screen configuration
-├── screens/             # Lua scripts and SVG templates
-│   ├── default.lua
-│   ├── default.svg
+├── config.yaml              # Device and screen configuration
+├── screens/                 # A screen package (tree of screen folders)
+│   ├── byonk-screens.yaml   # Package manifest (name, description, author, license)
+│   ├── default/             # One screen = one folder
+│   │   ├── meta.yaml        # Title, description, params schema
+│   │   ├── script.lua       # Data-fetch logic
+│   │   └── screen.svg       # Tera template
 │   └── ...
-└── fonts/               # Custom fonts (optional)
+└── fonts/                   # Custom fonts (optional)
     └── Outfit-Variable.ttf
 ```
 

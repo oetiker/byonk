@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
+  <defs>
+    <style>
+      /* Text base */
+    text { text-anchor: middle; font-family: Outfit; font-weight: 500; }
+    text {
+    {% include "byonk-base-v1/hinting.svg" %}
+    }
+       /* Text weights */
+      .font-bold { font-weight: 700 }
+      .font-black { font-weight: 900 }
+      .font-semibold { font-weight: 600 }
+    </style>
+    <linearGradient id="vGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#000000"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="8"/>
+      <feOffset dx="0" dy="0"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="1.5"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Full background image -->
+  <image x="0" y="0" width="{{ data.width }}" height="{{ data.height }}" href="background.jpg" preserveAspectRatio="xMidYMid slice"/>
+
+  <!-- Hero title - semi-transparent white text with shadow -->
+  <text x="{{ data.center_x }}" y="{{ data.title_y }}" font-size="{{ data.font_hero }}" class="font-black" fill="#ffffff" opacity="0.8"
+filter="url(#shadow)">BYONK</text>
+  <text x="{{ data.center_x }}" y="{{ data.tagline_y }}" font-size="{{ data.font_tagline }}" class="font-semibold" fill="#ffffff" opacity="0.8" filter="url(#shadow)">Bring Your Own Ink</text>
+
+  <!-- Registration code box (only shown when device needs registration) 
+  {% if device.registration_code %}
+  <rect x="{{ data.reg_box_x }}" y="{{ data.reg_box_y }}" width="{{ data.reg_box_width }}" height="{{ data.reg_box_height }}" fill="#000000" opacity="0.75"/>
+  <text x="{{ data.center_x }}" y="{{ data.reg_text_y }}" font-size="{{ data.font_reg_code }}" class="font-bold" fill="#ffffff">{{ device.registration_code_hyphenated }}</text>
+  {% endif %} -->
+
+  <!-- Display palette color swatches -->
+  {% for swatch in data.swatches %}
+  <rect x="{{ data.swatch_x }}" y="{{ swatch.y }}" width="{{ data.swatch_width }}" height="{{ swatch.height }}" fill="{{ swatch.color }}"/>
+  {% endfor %}
+  {% for swatch in data.swatches %}
+  <text x="{{ data.swatch_center_x }}" y="{{ swatch.text_y }}" font-size="{{ data.font_swatch }}" fill="{{ swatch.text_color }}">{{ swatch.label }}</text>
+  {% endfor %}
+
+  <!-- Vertical smooth gradient bar - demonstrates dithering -->
+  <rect x="{{ data.gradient_x }}" y="{{ data.gradient_y }}" width="{{ data.gradient_width }}" height="{{ data.gradient_height }}" fill="url(#vGradient)"/>
+
+  <!-- Info bar - bottom -->
+  <rect x="0" y="{{ data.info_bar_y }}" width="{{ data.width }}" height="{{ data.info_bar_height }}" fill="#ffffff"/>
+  <text x="{{ data.info_battery_x }}" y="{{ data.info_text_y }}" font-size="{{ data.font_lg }}" fill="#000000">{% if device.battery_voltage %}{{ device.battery_voltage | round(precision=2) }}V{% else %}--{% endif %}</text>
+  <text x="{{ data.info_mac_x }}" y="{{ data.info_text_y }}" font-size="{{ data.font_lg }}" fill="#000000">{{ device.mac | default(value="00:00:00:00:00:00") }}</text>
+  <text x="{{ data.info_time_x }}" y="{{ data.info_text_y }}" font-size="{{ data.font_lg }}" fill="#000000">{{ data.time }}   {{ data.date }}</text>
+  <text x="{{ data.info_rssi_x }}" y="{{ data.info_text_y }}" font-size="{{ data.font_lg }}" fill="#000000">{% if device.rssi %}{{ device.rssi }}dBm{% else %}--{% endif %}</text>
+</svg>

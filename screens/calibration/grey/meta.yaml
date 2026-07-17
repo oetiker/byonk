@@ -1,0 +1,4 @@
+title: Grey Test Pattern
+description: E-ink grey-level test pattern that adapts to device dimensions and display palette.
+byonk: "0.15"
+refresh: 3600

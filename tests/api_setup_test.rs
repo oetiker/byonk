@@ -104,7 +104,7 @@ async fn test_setup_device_x_model() {
         .unwrap()
         .expect("Device should be registered");
 
-    assert_eq!(device.model, byonk::models::DeviceModel::X);
+    assert_eq!(device.model, "x");
 }
 
 #[tokio::test]

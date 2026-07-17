@@ -29,12 +29,20 @@
         });
 
         select.addEventListener('change', function() {
-            const newPath = this.value;
-            // Try to preserve the current page path
+            // Preserve the current sub-page path when switching versions.
             const currentPath = window.location.pathname;
             const pageMatch = currentPath.match(/\/byonk\/(?:v[\d.]+|dev)\/(.*)$/);
             const page = pageMatch ? pageMatch[1] : '';
-            window.location.href = newPath + page;
+            // Both the option value and `page` originate from the DOM/URL, so
+            // navigate only when the whole target is a plain root-relative path:
+            // a leading '/', not protocol-relative '//', and only word chars,
+            // '.', '/' or '-'. This rejects any scheme, host or HTML/URL
+            // meta-character, so it can never become an off-site or javascript:
+            // navigation (CodeQL js/xss-through-dom).
+            const target = this.value + page;
+            if (/^\/(?!\/)[\w./-]*$/.test(target)) {
+                window.location.href = target;
+            }
         });
 
         const label = document.createElement('span');

@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 #[folder = "screens/"]
 #[include = "*.lua"]
 #[include = "*.svg"]
+#[include = "*.yaml"]
 #[include = "*.png"]
 #[include = "*.jpg"]
 #[include = "*.jpeg"]
@@ -26,6 +27,7 @@ use std::path::{Path, PathBuf};
 #[include = "*.webp"]
 #[include = "**/*.lua"]
 #[include = "**/*.svg"]
+#[include = "**/*.yaml"]
 #[include = "**/*.png"]
 #[include = "**/*.jpg"]
 #[include = "**/*.jpeg"]
@@ -41,8 +43,15 @@ struct EmbeddedFonts;
 /// Embedded default config
 #[derive(RustEmbed)]
 #[folder = "."]
-#[include = "config.yaml"]
+#[include = "default-config.yaml"]
 struct EmbeddedConfig;
+
+/// Embedded byonk-base std assets (versioned: v1/, v2/, ...).
+#[derive(RustEmbed)]
+#[folder = "byonk-base/"]
+#[include = "**/*.svg"]
+#[include = "**/*.lua"]
+struct EmbeddedBase;
 
 /// Asset category for selective operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,7 +174,7 @@ impl AssetLoader {
                     // Recurse into subdirectories
                     Self::collect_screen_files(base_dir, &path, files);
                 } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.ends_with(".lua") || name.ends_with(".svg") {
+                    if name.ends_with(".lua") || name.ends_with(".svg") || name.ends_with(".yaml") {
                         // Get relative path from base_dir
                         if let Ok(relative) = path.strip_prefix(base_dir) {
                             if let Some(relative_str) = relative.to_str() {
@@ -238,13 +247,16 @@ impl AssetLoader {
         }
 
         // Fall back to embedded
-        EmbeddedConfig::get("config.yaml")
+        EmbeddedConfig::get("default-config.yaml")
             .map(|f| {
                 tracing::trace!("Loading config from embedded assets");
                 f.data
             })
             .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotFound, "Embedded config.yaml not found")
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "Embedded default-config.yaml not found",
+                )
             })
     }
 
@@ -331,7 +343,7 @@ impl AssetLoader {
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                if let Some(data) = EmbeddedConfig::get("config.yaml") {
+                if let Some(data) = EmbeddedConfig::get("default-config.yaml") {
                     fs::write(path, &*data.data)?;
                     report.config_seeded = true;
                     tracing::info!(path = %path.display(), "Seeded config file with embedded default");
@@ -405,7 +417,7 @@ impl AssetLoader {
                     if let Some(parent) = path.parent() {
                         fs::create_dir_all(parent)?;
                     }
-                    if let Some(data) = EmbeddedConfig::get("config.yaml") {
+                    if let Some(data) = EmbeddedConfig::get("default-config.yaml") {
                         fs::write(&path, &*data.data)?;
                         report.written.push(path.display().to_string());
                     }
@@ -416,12 +428,27 @@ impl AssetLoader {
         Ok(report)
     }
 
+    /// Read a byonk-base asset by version-relative path, e.g. "v1/hinting.svg".
+    pub fn read_base(&self, rel: &str) -> Option<Cow<'static, [u8]>> {
+        EmbeddedBase::get(rel).map(|f| f.data)
+    }
+
+    pub fn read_base_string(&self, rel: &str) -> Option<String> {
+        self.read_base(rel)
+            .and_then(|b| String::from_utf8(b.into_owned()).ok())
+    }
+
+    /// List embedded base asset paths (e.g. ["v1/base.svg", ...]).
+    pub fn list_base(&self) -> Vec<String> {
+        EmbeddedBase::iter().map(|s| s.to_string()).collect()
+    }
+
     /// List embedded assets by category (for display)
     pub fn list_embedded(category: AssetCategory) -> Vec<String> {
         match category {
             AssetCategory::Screens => EmbeddedScreens::iter().map(|s| s.to_string()).collect(),
             AssetCategory::Fonts => EmbeddedFonts::iter().map(|s| s.to_string()).collect(),
-            AssetCategory::Config => vec!["config.yaml".to_string()],
+            AssetCategory::Config => vec!["default-config.yaml".to_string()],
         }
     }
 }
@@ -488,8 +515,8 @@ mod tests {
     fn test_read_screen_embedded() {
         let loader = AssetLoader::new(None, None, None);
 
-        // Should find embedded hello.lua
-        let result = loader.read_screen(Path::new("hello.lua"));
+        // Should find embedded example/hello/script.lua
+        let result = loader.read_screen(Path::new("example/hello/script.lua"));
         assert!(result.is_ok());
 
         let content = result.unwrap();
@@ -511,7 +538,7 @@ mod tests {
     fn test_read_screen_string() {
         let loader = AssetLoader::new(None, None, None);
 
-        let result = loader.read_screen_string(Path::new("hello.lua"));
+        let result = loader.read_screen_string(Path::new("example/hello/script.lua"));
         assert!(result.is_ok());
 
         let content = result.unwrap();
@@ -525,9 +552,9 @@ mod tests {
         let screens = loader.list_screens();
         assert!(!screens.is_empty());
 
-        // Should include hello.lua and hello.svg
-        assert!(screens.iter().any(|s| s == "hello.lua"));
-        assert!(screens.iter().any(|s| s == "hello.svg"));
+        // Should include the migrated hello screen's package files
+        assert!(screens.iter().any(|s| s == "example/hello/script.lua"));
+        assert!(screens.iter().any(|s| s == "example/hello/screen.svg"));
     }
 
     #[test]
@@ -584,7 +611,7 @@ mod tests {
     fn test_list_embedded_config() {
         let config = AssetLoader::list_embedded(AssetCategory::Config);
         assert_eq!(config.len(), 1);
-        assert_eq!(config[0], "config.yaml");
+        assert_eq!(config[0], "default-config.yaml");
     }
 
     #[test]
@@ -627,6 +654,14 @@ mod tests {
     }
 
     #[test]
+    fn test_read_base_asset() {
+        let loader = AssetLoader::new(None, None, None);
+        assert!(loader.read_base_string("v1/hinting.svg").is_some());
+        assert!(loader.list_base().iter().any(|p| p == "v1/base.svg"));
+        assert!(loader.read_base_string("v1/does-not-exist.svg").is_none());
+    }
+
+    #[test]
     fn test_is_empty_dir_with_file_not_dir() {
         let temp_dir = tempfile::tempdir().unwrap();
         let file_path = temp_dir.path().join("file.txt");
@@ -651,10 +686,10 @@ mod tests {
     #[test]
     fn test_read_screen_filesystem_fallback_to_embedded() {
         let temp_dir = tempfile::tempdir().unwrap();
-        // Don't create hello.lua in temp dir, should fall back to embedded
+        // Don't create the screen in temp dir, should fall back to embedded
 
         let loader = AssetLoader::new(Some(temp_dir.path().to_path_buf()), None, None);
-        let result = loader.read_screen(Path::new("hello.lua"));
+        let result = loader.read_screen(Path::new("example/hello/script.lua"));
 
         assert!(result.is_ok());
     }
@@ -673,7 +708,7 @@ mod tests {
         assert!(screens.contains(&"custom.svg".to_string()));
         assert!(!screens.contains(&"readme.txt".to_string()));
         // Also includes embedded
-        assert!(screens.contains(&"hello.lua".to_string()));
+        assert!(screens.contains(&"example/hello/script.lua".to_string()));
     }
 
     #[test]
@@ -729,7 +764,7 @@ mod tests {
         let report = result.unwrap();
         assert!(!report.screens_seeded.is_empty());
         assert!(screens_dir.exists());
-        assert!(screens_dir.join("hello.lua").exists());
+        assert!(screens_dir.join("example/hello/script.lua").exists());
     }
 
     #[test]
@@ -787,7 +822,7 @@ mod tests {
         assert!(result.is_ok());
         let report = result.unwrap();
         assert!(!report.written.is_empty());
-        assert!(screens_dir.join("hello.lua").exists());
+        assert!(screens_dir.join("example/hello/script.lua").exists());
     }
 
     #[test]
@@ -851,7 +886,7 @@ mod tests {
 
         // Content should be overwritten with embedded
         let content = std::fs::read_to_string(&config_path).unwrap();
-        assert!(content.contains("screens:"));
+        assert!(content.contains("DEFAULT:"));
     }
 
     #[test]
@@ -937,6 +972,25 @@ mod tests {
         assert!(screens.contains(&"subdir/valid.lua".to_string()));
         assert!(!screens.contains(&"subdir/invalid.txt".to_string()));
         // Note: png files are handled differently - they're for images, not templates
+    }
+
+    #[test]
+    fn test_embedded_default_ships_only_reserved_default_device() {
+        // AssetLoader::new(screens_dir, fonts_dir, config_path) — all None = embedded-only.
+        let loader = AssetLoader::new(None, None, None);
+        let text = loader.read_config_string().expect("read embedded config");
+        let cfg: serde_yaml::Value = serde_yaml::from_str(&text).expect("parse embedded config");
+        let devices = cfg.get("devices").expect("devices key present");
+        let map = devices.as_mapping().expect("devices is a mapping");
+        assert_eq!(
+            map.len(),
+            1,
+            "embedded default config must ship exactly the reserved DEFAULT device"
+        );
+        assert!(
+            map.contains_key(serde_yaml::Value::String("DEFAULT".to_string())),
+            "embedded default config's only device must be the reserved DEFAULT key"
+        );
     }
 
     #[test]

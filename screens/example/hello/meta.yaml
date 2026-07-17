@@ -1,0 +1,4 @@
+title: Hello World
+description: Displays a greeting with the current time and a QR code.
+byonk: "0.15"
+refresh: 60

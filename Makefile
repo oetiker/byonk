@@ -23,17 +23,22 @@ debug: fmt lint
 # Alias for debug build
 build: debug
 
+# Local-testing env: use the developer's config.yaml + live screens/fonts.
+# The shipped/embedded default (default-config.yaml) stays device-free; this
+# only affects local `make run`/`watch`, not what byonk ships with.
+DEV_RUN_ENV = CONFIG_FILE=config.yaml SCREENS_DIR=screens FONTS_DIR=fonts
+
 # Run the server (debug mode)
 run: fmt lint
-	cargo run
+	$(DEV_RUN_ENV) cargo run
 
 # Run the server (release mode)
 run-release: release
-	./target/release/byonk
+	$(DEV_RUN_ENV) ./target/release/byonk
 
 # Run with auto-reload (requires cargo-watch)
 watch:
-	cargo watch -x run
+	$(DEV_RUN_ENV) cargo watch -x run
 
 # Format code
 fmt:
@@ -139,4 +144,32 @@ help:
 	@echo "  make docs-dev     Start docs dev server"
 	@echo "  make docs-samples Generate sample images (auto-starts server)"
 	@echo ""
+	@echo "Home Assistant VM:"
+	@echo "  make ha-vm        Boot the Home Assistant OS test VM (headless)"
+	@echo "  make ha-vm-stop   Stop a running test VM"
+	@echo "  make ha-vm-clean  Delete the test VM disk + varstore (full reset)"
+	@echo "  make ha-deploy    Sync the integration into the VM (needs SMB_USER/SMB_PASS)"
+	@echo "  make ha-ssh       Open an SSH shell in the VM (needs Terminal & SSH add-on)"
+	@echo "  make ha-rebuild   Sync server source + rebuild the add-on (SMB + SSH)"
+	@echo ""
 	@echo "  make help         Show this help"
+
+.PHONY: ha-vm ha-vm-stop ha-vm-clean ha-deploy ha-ssh ha-rebuild
+
+ha-vm: ## Boot the Home Assistant OS test VM (headless)
+	bash tools/ha-vm/run.sh
+
+ha-vm-stop: ## Stop a running test VM
+	-pkill -f 'name byonk-haos'
+
+ha-vm-clean: ## Delete the test VM disk + varstore (full reset)
+	rm -rf tools/ha-vm/work
+
+ha-deploy: ## Sync custom_components/byonk into the running test VM (needs SMB_USER/SMB_PASS)
+	bash tools/ha-vm/deploy.sh
+
+ha-ssh: ## Open an SSH shell in the test VM, or run a command: make ha-ssh CMD="ha addons info local_byonk"
+	bash tools/ha-vm/ssh.sh $(CMD)
+
+ha-rebuild: ## Sync server source + rebuild the byonk add-on (needs SMB_USER/SMB_PASS + SSH setup)
+	bash tools/ha-vm/rebuild.sh

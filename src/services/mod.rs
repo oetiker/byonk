@@ -3,8 +3,13 @@ pub mod content_cache;
 pub mod content_pipeline;
 pub mod device_registry;
 pub mod file_watcher;
+pub mod git_fetch;
 pub mod http_cache;
 pub mod lua_runtime;
+pub mod package_cache;
+pub mod package_loader;
+pub mod package_manager;
+pub mod package_status;
 pub mod renderer;
 pub mod template_service;
 

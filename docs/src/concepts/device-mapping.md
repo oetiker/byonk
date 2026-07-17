@@ -51,25 +51,33 @@ Devices are mapped to screens in `config.yaml`:
 ```yaml
 devices:
   "94:A9:90:8C:6D:18":
-    screen: transit
+    screen: byonk-builtin/useful/swiss-departure-board
     params:
       station: "Olten, Bahnhof"
 
   "AA:BB:CC:DD:EE:FF":
-    screen: weather
+    screen: weather/forecast
     params:
       city: "Zurich"
 
-default_screen: default
+  # Reserved key: shown to every un-onboarded or unassigned device
+  DEFAULT:
+    screen: byonk-builtin/default
 ```
+
+A screen is referenced by a qualified `handle/path` reference: `handle` names a
+registered package and `path` locates the screen folder within it. The bundled
+screens live in the embedded `byonk-builtin` package (for example
+`byonk-builtin/useful/swiss-departure-board`); third-party packages are
+referenced through their own handle (for example `weather/forecast`).
 
 ### Lookup Order
 
 When a device requests content:
 
 1. **Exact MAC match** - Check if MAC is in `devices` section
-2. **Default screen** - Use `default_screen` if no match
-3. **Error** - Return error if no default configured
+2. **Reserved DEFAULT device** - Use the screen assigned to `devices.DEFAULT` if no match
+3. **Built-in fallback** - If `devices.DEFAULT` isn't set, use the embedded `byonk-builtin/default` screen (this always resolves)
 
 ### MAC Address Format
 
@@ -96,19 +104,22 @@ The MAC address is shown:
 
 3. **In your router's** connected devices list
 
-## Default Screen
+## The Reserved DEFAULT Device
 
-The `default_screen` provides a fallback for:
+`devices` reserves one key, `DEFAULT`, whose screen provides a fallback for:
 
-- Devices not yet configured
+- Devices not yet onboarded (shows the registration code)
+- Devices registered but with no screen assigned
 - New devices during testing
-- Backup if config is incorrect
 
 ```yaml
-default_screen: default
+devices:
+  DEFAULT:
+    screen: byonk-builtin/default
 ```
 
-If no `default_screen` is set and a device isn't in the config, it receives an error response.
+If `devices.DEFAULT` isn't set, byonk falls back to its embedded
+`byonk-builtin/default` screen, so there's always something to show.
 
 ## Auto-Registration
 

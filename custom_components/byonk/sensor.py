@@ -14,8 +14,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
+from .const import CONF_DEVICE_KEY
 from .coordinator import ByonkConfigEntry
-from .entity import ByonkDeviceEntity, ByonkHubEntity
+from .entity import ByonkDeviceEntity
+from .package_entities import setup_package_status_platform
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -38,7 +40,6 @@ DEVICE_SENSORS: tuple[ByonkSensorDesc, ...] = (
         device_class=SensorDeviceClass.SIGNAL_STRENGTH,
         native_unit_of_measurement="dBm",
         entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
         value=lambda d: d.get("rssi"),
     ),
     ByonkSensorDesc(
@@ -67,41 +68,13 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ByonkConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator = entry.runtime_data
-    async_add_entities([ByonkPendingSensor(coordinator)])
-    for sub_id, sub in entry.subentries.items():
-        if sub.subentry_type != "device":
-            continue
-        key = sub.data["key"]
+    if CONF_DEVICE_KEY in entry.data:
+        key = entry.data[CONF_DEVICE_KEY]
         async_add_entities(
-            (ByonkDeviceSensor(coordinator, key, desc) for desc in DEVICE_SENSORS),
-            config_subentry_id=sub_id,
+            ByonkDeviceSensor(coordinator, key, desc) for desc in DEVICE_SENSORS
         )
-
-
-class ByonkPendingSensor(ByonkHubEntity, SensorEntity):
-    _attr_translation_key = "pending_devices"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    def __init__(self, coordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_pending_devices"
-
-    @property
-    def native_value(self) -> int:
-        return len(self.coordinator.data.pending)
-
-    @property
-    def extra_state_attributes(self) -> dict:
-        return {
-            "devices": [
-                {
-                    "registration_code": p.get("registration_code"),
-                    "model": p.get("model"),
-                    "last_seen": p.get("last_seen"),
-                }
-                for p in self.coordinator.data.pending
-            ]
-        }
+        return
+    setup_package_status_platform(entry, async_add_entities)
 
 
 class ByonkDeviceSensor(ByonkDeviceEntity, SensorEntity):

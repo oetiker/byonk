@@ -293,3 +293,70 @@ async fn test_display_fallback_to_api_key() {
     common::assert_ok(&response);
     common::assert_valid_display_response(&response);
 }
+
+/// Reserved-DEFAULT-device regression test: an unregistered device must be
+/// shown the screen configured on the reserved `devices.DEFAULT` entry
+/// (screen_name="byonk-builtin/default" here), and that screen must still be
+/// registration-aware, i.e. it renders the device's registration code.
+#[tokio::test]
+async fn test_unregistered_device_shows_default_device_screen_with_code() {
+    use byonk::assets::AssetLoader;
+    use byonk::models::{ApiKey, AppConfig, DeviceConfig};
+
+    let asset_loader = AssetLoader::new(None, None, None);
+    let mut config = AppConfig::load_from_assets(&asset_loader).expect("load config");
+    config.registration.enabled = true;
+    config.devices.insert(
+        "DEFAULT".to_string(),
+        DeviceConfig {
+            screen: "byonk-builtin/default".to_string(),
+            ..Default::default()
+        },
+    );
+
+    let app = TestApp::from_config(config);
+
+    // Use a MAC that is NOT in config.devices so the unregistered branch is taken.
+    let mac = macs::UNKNOWN_DEVICE;
+    let api_key = "reg-screen-bug-b-test-key";
+    let headers = [
+        ("ID", mac),
+        ("Access-Token", api_key),
+        ("Width", "800"),
+        ("Height", "480"),
+        ("FW-Version", "1.7.1"),
+        ("Model", "og"),
+        ("Host", "localhost:3000"),
+    ];
+
+    let response = app.get_with_headers("/api/display", &headers).await;
+    common::assert_ok(&response);
+
+    let json: serde_json::Value = response.json();
+    let filename = json["filename"].as_str().unwrap();
+
+    // Verify the cached content is the DEFAULT device's screen, not the
+    // hardcoded built-in registration fallback.
+    let cached = app
+        .content_cache
+        .get(filename)
+        .expect("Content should be cached after /api/display");
+
+    assert_eq!(
+        cached.screen_name, "byonk-builtin/default",
+        "Unregistered device must be served the reserved DEFAULT device's \
+         screen (screen_name='byonk-builtin/default'). \
+         Got screen_name='{}' instead",
+        cached.screen_name
+    );
+
+    // The DEFAULT screen is registration-aware: it must still show the code
+    // so the device can be onboarded (e.g. in Home Assistant).
+    let expected_code = ApiKey::new(api_key).registration_code();
+    let hyphenated = format!("{}-{}", &expected_code[..5], &expected_code[5..]);
+    assert!(
+        cached.rendered_svg.contains(&hyphenated),
+        "Rendered content should contain the registration code '{hyphenated}', got:\n{}",
+        cached.rendered_svg
+    );
+}

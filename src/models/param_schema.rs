@@ -73,18 +73,6 @@ pub struct ParamSchema {
     pub fields: Vec<ParamField>,
 }
 
-/// Extract the YAML text inside a `--[[ @params ... ]]` block. Returns `None`
-/// if no `@params` marker is present.
-pub fn extract_params_block(lua_source: &str) -> Option<String> {
-    let marker = lua_source.find("@params")?;
-    // Start after the rest of the marker line.
-    let after_marker = &lua_source[marker + "@params".len()..];
-    let body_start = after_marker.find('\n').map(|i| i + 1).unwrap_or(0);
-    let body = &after_marker[body_start..];
-    let end = body.find("]]")?;
-    Some(body[..end].to_string())
-}
-
 /// Raw descriptor as written in YAML (without the `name`, which is the map key).
 #[derive(Deserialize)]
 struct RawField {
@@ -150,15 +138,9 @@ fn parse_options(raw: serde_yaml::Value) -> Result<Vec<EnumOption>, String> {
     Ok(out)
 }
 
-/// Parse a `@params` YAML body into a schema. Preserves field order.
-pub fn parse_schema(yaml: &str) -> Result<ParamSchema, String> {
-    // Empty body ⇒ empty schema (screen takes no params).
-    if yaml.trim().is_empty() {
-        return Ok(ParamSchema::default());
-    }
-    let mapping: serde_yaml::Mapping =
-        serde_yaml::from_str(yaml).map_err(|e| format!("invalid @params YAML: {e}"))?;
-
+/// Build `ParamField` list from a mapping. Shared by `parse_schema` and
+/// `parse_schema_from_value` to keep the field-conversion logic DRY.
+fn fields_from_mapping(mapping: serde_yaml::Mapping) -> Result<Vec<ParamField>, String> {
     let mut fields = Vec::new();
     for (k, v) in mapping {
         let name = k
@@ -195,16 +177,33 @@ pub fn parse_schema(yaml: &str) -> Result<ParamSchema, String> {
             advanced: raw.advanced,
         });
     }
-    Ok(ParamSchema { fields })
+    Ok(fields)
 }
 
-/// Extract + parse a screen's schema. `Ok(None)` when there is no `@params`
-/// block; `Err` when a block is present but malformed.
-pub fn schema_for_script(lua_source: &str) -> Result<Option<ParamSchema>, String> {
-    match extract_params_block(lua_source) {
-        None => Ok(None),
-        Some(body) => parse_schema(&body).map(Some),
+/// Parse a `@params` YAML body into a schema. Preserves field order.
+pub fn parse_schema(yaml: &str) -> Result<ParamSchema, String> {
+    // Empty body ⇒ empty schema (screen takes no params).
+    if yaml.trim().is_empty() {
+        return Ok(ParamSchema::default());
     }
+    let mapping: serde_yaml::Mapping =
+        serde_yaml::from_str(yaml).map_err(|e| format!("invalid @params YAML: {e}"))?;
+    Ok(ParamSchema {
+        fields: fields_from_mapping(mapping)?,
+    })
+}
+
+/// Parse a `params:` mapping (as found in `meta.yaml`) into a schema.
+/// `Null` or an empty mapping yields an empty schema. Preserves field order.
+pub fn parse_schema_from_value(v: &serde_yaml::Value) -> Result<ParamSchema, String> {
+    let mapping = match v {
+        serde_yaml::Value::Null => return Ok(ParamSchema::default()),
+        serde_yaml::Value::Mapping(m) => m.clone(),
+        _ => return Err("`params` must be a mapping".to_string()),
+    };
+    Ok(ParamSchema {
+        fields: fields_from_mapping(mapping)?,
+    })
 }
 
 /// Validate a params map against a schema. Returns all problems found (not just
@@ -295,20 +294,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_block_present() {
-        let lua = "--[[ @params\nstation:\n  type: string\n]]\nlocal x = 1\n";
-        let block = extract_params_block(lua).unwrap();
-        assert!(block.contains("station:"));
-        assert!(block.contains("type: string"));
-        assert!(!block.contains("local x"));
-    }
-
-    #[test]
-    fn test_extract_block_absent() {
-        assert!(extract_params_block("local x = 1\n").is_none());
-    }
-
-    #[test]
     fn test_parse_minimal_field() {
         let schema = parse_schema("station:\n  type: string\n  required: true\n").unwrap();
         assert_eq!(schema.fields.len(), 1);
@@ -347,17 +332,6 @@ mod tests {
     #[test]
     fn test_parse_unknown_type_is_error() {
         assert!(parse_schema("k:\n  type: banana\n").is_err());
-    }
-
-    #[test]
-    fn test_schema_for_script_none_when_no_block() {
-        assert!(schema_for_script("local x = 1\n").unwrap().is_none());
-    }
-
-    #[test]
-    fn test_schema_for_script_err_when_malformed() {
-        let lua = "--[[ @params\nk:\n  type: banana\n]]\n";
-        assert!(schema_for_script(lua).is_err());
     }
 
     use std::collections::HashMap;
@@ -401,5 +375,24 @@ mod tests {
     fn test_validate_ok_when_optional_absent() {
         let schema = parse_schema("station:\n  type: string\n").unwrap();
         assert!(validate_params(&schema, &params(&[])).is_ok());
+    }
+
+    #[test]
+    fn test_parse_schema_from_value_mapping() {
+        let v: serde_yaml::Value = serde_yaml::from_str(
+            "location:\n  type: string\n  required: true\nunits:\n  type: enum\n  options: [metric, imperial]\n",
+        )
+        .unwrap();
+        let schema = parse_schema_from_value(&v).unwrap();
+        assert_eq!(schema.fields.len(), 2);
+        assert_eq!(schema.fields[0].name, "location");
+        assert!(schema.fields[0].required);
+        assert_eq!(schema.fields[1].options.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_schema_from_value_null_is_empty() {
+        let v = serde_yaml::Value::Null;
+        assert!(parse_schema_from_value(&v).unwrap().fields.is_empty());
     }
 }

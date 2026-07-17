@@ -17,38 +17,54 @@ Before starting, make sure you have:
 
 ## Example Screens
 
-Byonk comes with several example screens you can learn from:
+Byonk comes with several example screens you can learn from. Each screen is a
+**folder** containing three fixed-name files — `meta.yaml` (title, description,
+and its `params:` schema), `script.lua` (the data-fetch logic), and `screen.svg`
+(the Tera template). Those folders live inside a **package**, and each screen is
+referenced by its qualified `handle/path`. The bundled screens ship in the
+embedded `byonk-builtin` package:
 
 ### Default Screen
-A simple clock display showing time and date.
+A simple clock display showing time and date. Referenced as `byonk-builtin/default`.
 
 ```
-screens/default.lua   - Script
-screens/default.svg   - Template
+screens/default/
+├── meta.yaml     - Title, description, params
+├── script.lua    - Script
+└── screen.svg    - Template
 ```
 
 ### Transit Departures
-Real-time public transport departures from Swiss OpenData.
+Real-time public transport departures from Swiss OpenData. Referenced as
+`byonk-builtin/useful/swiss-departure-board`.
 
 ```
-screens/transit.lua   - Fetches from transport.opendata.ch API
-screens/transit.svg   - Displays departure list with colors
+screens/useful/swiss-departure-board/
+├── meta.yaml     - Title, description, params
+├── script.lua    - Fetches from transport.opendata.ch API
+└── screen.svg    - Displays departure list with colors
 ```
 
-### Room Booking (Floerli)
-Scrapes a web page to show room availability.
+### Room Booking (Web Scrape)
+Scrapes a web page to show room availability. Referenced as
+`byonk-builtin/example/webscrape`.
 
 ```
-screens/floerli.lua   - HTML scraping example
-screens/floerli.svg   - Shows current/upcoming bookings
+screens/example/webscrape/
+├── meta.yaml     - Title, description, params
+├── script.lua    - HTML scraping example
+└── screen.svg    - Shows current/upcoming bookings
 ```
 
 ### Display Color Test
-Demonstrates the display palette colors available on e-ink.
+Demonstrates the display palette colors available on e-ink. Referenced as
+`byonk-builtin/calibration/grey`.
 
 ```
-screens/graytest.lua  - Adapts to device palette
-screens/graytest.svg  - Shows palette color swatches and dithering test
+screens/calibration/grey/
+├── meta.yaml     - Title, description, params
+├── script.lua    - Adapts to device palette
+└── screen.svg    - Shows palette color swatches and dithering test
 ```
 
 ## Quick Reference
@@ -57,19 +73,18 @@ screens/graytest.svg  - Shows palette color swatches and dithering test
 
 | Type | Location |
 |------|----------|
-| Lua scripts | `screens/*.lua` |
-| SVG templates | `screens/*.svg` |
+| Package manifest | `screens/byonk-screens.yaml` |
+| Screen folder | `screens/<path>/` (each with `meta.yaml`, `script.lua`, `screen.svg`) |
 | Configuration | `config.yaml` |
 | Custom fonts | `fonts/` |
 
 ### Workflow
 
-1. **Create** a Lua script and SVG template in `screens/`
-2. **Define** a screen in `config.yaml`
-3. **Assign** the screen to a device
-4. **Test** by refreshing your device or checking `/swagger-ui`
+1. **Create** a screen folder (`meta.yaml` + `script.lua` + `screen.svg`) inside a package
+2. **Assign** the screen to a device by its `handle/path` reference in `config.yaml`
+3. **Test** by refreshing your device or checking `/swagger-ui`
 
-> **Tip:** Lua scripts and SVG templates are loaded fresh on every request. Just save your changes and refresh!
+> **Tip:** `script.lua` and `screen.svg` are loaded fresh on every request. Just save your changes and refresh!
 
 ## Ready to Start?
 

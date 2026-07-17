@@ -51,8 +51,35 @@ impl TestApp {
         let mut config = AppConfig::load_from_assets(&asset_loader).expect("Failed to load config");
         config.registration.enabled = false;
 
-        let state = create_app_state_with_config(asset_loader, Arc::new(config))
-            .expect("Failed to create app state");
+        let state =
+            create_app_state_with_config(asset_loader, config).expect("Failed to create app state");
+
+        let registry = state.registry.clone();
+        let content_cache = state.content_cache.clone();
+        let router = build_router(state);
+
+        Self {
+            router,
+            registry,
+            content_cache,
+        }
+    }
+
+    /// Create a test app whose reserved DEFAULT device renders `screen`.
+    /// Pass a static screen (e.g. `byonk-builtin/calibration/grey`) when a test
+    /// needs deterministic, time-independent content — the embedded default
+    /// screen renders the wall-clock time and is therefore not reproducible.
+    pub fn new_with_default_screen(screen: &str) -> Self {
+        let asset_loader = Arc::new(AssetLoader::new(None, None, None));
+        let mut config = AppConfig::load_from_assets(&asset_loader).expect("Failed to load config");
+        config
+            .devices
+            .get_mut("DEFAULT")
+            .expect("embedded config has a reserved DEFAULT device")
+            .screen = screen.to_string();
+
+        let state =
+            create_app_state_with_config(asset_loader, config).expect("Failed to create app state");
 
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
@@ -133,8 +160,7 @@ impl TestApp {
         let asset_loader = Arc::new(AssetLoader::new(None, None, None));
         let mut config = AppConfig::load_from_assets(&asset_loader).expect("load config");
         config.admin.token = Some(token.to_string());
-        let state =
-            create_app_state_with_config(asset_loader, Arc::new(config)).expect("create state");
+        let state = create_app_state_with_config(asset_loader, config).expect("create state");
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
         let router = build_router(state);
@@ -148,8 +174,7 @@ impl TestApp {
     /// Build a test app from an arbitrary config (embedded assets, in-memory).
     pub fn from_config(config: AppConfig) -> Self {
         let asset_loader = Arc::new(AssetLoader::new(None, None, None));
-        let state =
-            create_app_state_with_config(asset_loader, Arc::new(config)).expect("create state");
+        let state = create_app_state_with_config(asset_loader, config).expect("create state");
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
         let router = build_router(state);
@@ -158,6 +183,27 @@ impl TestApp {
             registry,
             content_cache,
         }
+    }
+
+    /// Build a test app backed by an arbitrary config YAML string written to a file.
+    /// Returns `(app, config_path)`. `dir` must outlive the app.
+    pub fn new_with_config_yaml(yaml: &str, dir: &std::path::Path) -> (Self, std::path::PathBuf) {
+        let config_path = dir.join("config.yaml");
+        std::fs::write(&config_path, yaml).expect("write config file");
+        let asset_loader = Arc::new(AssetLoader::new(None, None, Some(config_path.clone())));
+        let config = AppConfig::load_from_assets(&asset_loader).expect("load config");
+        let state = create_app_state_with_config(asset_loader, config).expect("create state");
+        let registry = state.registry.clone();
+        let content_cache = state.content_cache.clone();
+        let router = build_router(state);
+        (
+            Self {
+                router,
+                registry,
+                content_cache,
+            },
+            config_path,
+        )
     }
 
     /// Admin app backed by a real config FILE seeded from the embedded default
@@ -171,8 +217,7 @@ impl TestApp {
 
         let asset_loader = Arc::new(AssetLoader::new(None, None, Some(config_path.clone())));
         let config = AppConfig::load_from_assets(&asset_loader).expect("load config");
-        let state =
-            create_app_state_with_config(asset_loader, Arc::new(config)).expect("create state");
+        let state = create_app_state_with_config(asset_loader, config).expect("create state");
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
         let router = build_router(state);
@@ -207,17 +252,29 @@ impl TestApp {
         )
         .expect("write broken.svg");
 
+        // A valid screen present on disk but NOT declared in config.yaml.
+        // Exercises filesystem auto-discovery in the /api/admin/screens list.
+        std::fs::write(
+            screens_dir.join("extra.lua"),
+            "--[[ @params\ncolor:\n  type: string\n  label: \"Color\"\n]]\nreturn { data = {} }\n",
+        )
+        .expect("write extra.lua");
+        std::fs::write(
+            screens_dir.join("extra.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg"></svg>"#,
+        )
+        .expect("write extra.svg");
+
         // Write a minimal config.yaml pointing at the broken screen
         let config_path = dir.join("config.yaml");
         let yaml = format!(
-            "admin:\n  token: {token}\ndefault_screen: broken\nscreens:\n  broken:\n    script: broken.lua\n    template: broken.svg\n"
+            "admin:\n  token: {token}\ndevices:\n  DEFAULT:\n    screen: broken\nscreens:\n  broken:\n    script: broken.lua\n    template: broken.svg\n"
         );
         std::fs::write(&config_path, yaml).expect("write config.yaml");
 
         let asset_loader = Arc::new(AssetLoader::new(Some(screens_dir), None, Some(config_path)));
         let config = AppConfig::load_from_assets(&asset_loader).expect("load config");
-        let state =
-            create_app_state_with_config(asset_loader, Arc::new(config)).expect("create state");
+        let state = create_app_state_with_config(asset_loader, config).expect("create state");
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
         let router = build_router(state);

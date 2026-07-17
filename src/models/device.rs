@@ -69,39 +69,13 @@ impl ApiKey {
     }
 }
 
-/// Device model type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DeviceModel {
-    /// Original TRMNL: 800x480, max 90KB
-    OG,
-    /// TRMNL X: 1872x1404, max 750KB
-    X,
-}
-
-impl DeviceModel {
-    pub fn parse(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "x" => DeviceModel::X,
-            _ => DeviceModel::OG,
-        }
-    }
-}
-
-impl fmt::Display for DeviceModel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DeviceModel::OG => write!(f, "og"),
-            DeviceModel::X => write!(f, "x"),
-        }
-    }
-}
-
 /// Device runtime metadata (tracked in memory)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
     pub device_id: DeviceId,
     pub api_key: ApiKey,
-    pub model: DeviceModel,
+    /// Verbatim `Model` header the device reported (e.g. "og", "x", "reterminal_e1002").
+    pub model: String,
     pub firmware_version: String,
     pub last_seen: chrono::DateTime<chrono::Utc>,
     pub battery_voltage: Option<f32>,
@@ -109,7 +83,7 @@ pub struct Device {
 }
 
 impl Device {
-    pub fn new(device_id: DeviceId, model: DeviceModel, fw_version: String) -> Self {
+    pub fn new(device_id: DeviceId, model: String, fw_version: String) -> Self {
         Self {
             device_id,
             api_key: ApiKey::generate(),

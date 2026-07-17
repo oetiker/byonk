@@ -16,6 +16,14 @@ env:
   CARGO_TERM_COLOR: always
   PAGES_URL: "https://oetiker.github.io/byonk"
 
+# Least-privilege default. Jobs that need more (write/push, publish container,
+# create release, deploy pages) declare their own block below, which fully
+# overrides this default for that job — so this only tightens the two jobs that
+# otherwise ran with broad scopes: build-binaries and build-docs (checkout +
+# build + upload-artifact, all read-only).
+permissions:
+  contents: read
+
 jobs:
   version:
     name: Bump Version
@@ -88,11 +96,16 @@ jobs:
               "\n"
             /se' CHANGES.md
 
+      - name: Update integration manifest version
+        run: |
+          chmod +x tools/release/bump-integration-version.sh
+          tools/release/bump-integration-version.sh "${{ steps.version.outputs.version }}"
+
       - name: Commit and tag
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml CHANGES.md
+          git add Cargo.toml CHANGES.md custom_components/byonk/manifest.json
           git commit -m "Release ${{ steps.version.outputs.tag }}"
           git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
           git push origin main --tags
@@ -256,6 +269,33 @@ jobs:
             ghcr.io/${{ github.repository }}:${{ steps.tags.outputs.major }}
           build-args: |
             BINARY_DIR=binaries
+
+  update-addon-version:
+    name: Bump Add-on Version
+    needs: [version, build-container]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Bump add-on config + changelog
+        run: |
+          chmod +x tools/release/bump-addon-version.sh
+          tools/release/bump-addon-version.sh \
+            "${{ needs.version.outputs.version }}" \
+            "${{ inputs.release_type }}"
+
+      - name: Commit and push to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add homeassistant/byonk/config.yaml homeassistant/byonk/CHANGELOG.md
+          git commit -m "Bump add-on to ${{ needs.version.outputs.version }}"
+          git pull --rebase origin main
+          git push origin main
 
   create-release:
     name: Create GitHub Release

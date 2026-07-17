@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
+  <style>
+    text {
+      font-family: Outfit, sans-serif;
+      fill: black;
+      {% include "byonk-base-v1/hinting.svg" %}
+    }
+    .greeting { font-weight: 700; }
+    .time { font-weight: 700; }
+    .date { font-weight: 400; fill: #555555; }
+    .footer { font-weight: 400; fill: #999999; }
+  </style>
+
+  <!-- White background -->
+  <rect width="{{ data.width }}" height="{{ data.height }}" fill="#ffffff"/>
+
+  <!-- Greeting -->
+  <text class="greeting" x="{{ data.center_x }}" y="{{ data.greeting_y }}" font-size="{{ data.font_greeting }}" text-anchor="middle">
+    {{ data.greeting }}
+  </text>
+
+  <!-- Large time display -->
+  <text class="time" x="{{ data.center_x }}" y="{{ data.time_y }}" font-size="{{ data.font_time }}" text-anchor="middle">
+    {{ data.time }}
+  </text>
+
+  <!-- Date below -->
+  <text class="date" x="{{ data.center_x }}" y="{{ data.date_y }}" font-size="{{ data.font_date }}" text-anchor="middle">
+    {{ data.date }}
+  </text>
+
+  <!-- Footer -->
+  <text class="footer" x="{{ data.center_x }}" y="{{ data.footer_y }}" font-size="{{ data.font_footer }}" text-anchor="middle">
+    My first Byonk screen!
+  </text>
+
+  <!-- QR Code - use 'safe' filter to render SVG -->
+  {{ data.qr_code | safe }}
+</svg>

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use super::DeviceContext;
 use crate::assets::AssetLoader;
+use crate::services::package_loader::PackageSource;
 
 /// Result from running a Lua script
 #[derive(Debug)]
@@ -55,6 +56,34 @@ pub struct FontFaceInfo {
     pub bitmap_strikes: Vec<u16>,
 }
 
+/// A [`PackageSource`] backed by the flat screens directory of an `AssetLoader`.
+/// Used by [`LuaRuntime::run_script_from_asset`] for tests/dev where scripts live
+/// directly under `SCREENS_DIR` rather than inside a package.
+struct AssetScreensSource {
+    loader: Arc<AssetLoader>,
+}
+
+impl PackageSource for AssetScreensSource {
+    fn read(&self, rel: &str) -> Option<Vec<u8>> {
+        self.loader
+            .read_screen(std::path::Path::new(rel))
+            .ok()
+            .map(|b| b.into_owned())
+    }
+
+    fn screen_paths(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn svg_files(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn manifest(&self) -> &crate::models::package_manifest::PackageManifest {
+        unreachable!("AssetScreensSource::manifest() is not used")
+    }
+}
+
 /// Lua runtime for executing screen scripts
 pub struct LuaRuntime {
     asset_loader: Arc<AssetLoader>,
@@ -80,33 +109,42 @@ impl LuaRuntime {
         }
     }
 
-    /// Run a Lua script with the given parameters
+    /// Run a Lua script with the given parameters.
+    ///
+    /// `script_src` is the already-read `script.lua` contents. `source` is the
+    /// screen's package source, used to resolve `require()` for package-relative
+    /// modules and `read_asset()` for sibling files. `screen_name` (a `handle/path`
+    /// ref) is used for logging. `screen_dir` is the screen's package-relative
+    /// directory, against which `read_asset(path)` reads through `source`.
+    #[allow(clippy::too_many_arguments)]
     pub fn run_script(
         &self,
-        script_path: &std::path::Path,
+        script_src: &str,
+        source: &Arc<dyn PackageSource>,
+        screen_name: &str,
+        screen_dir: &str,
         params: &HashMap<String, serde_yaml::Value>,
         device_ctx: Option<&DeviceContext>,
         timestamp_override: Option<i64>,
     ) -> Result<ScriptResult, ScriptError> {
-        let script_content = self
-            .asset_loader
-            .read_screen_string(script_path)
-            .map_err(|e| ScriptError::NotFound(e.to_string()))?;
-
         let lua = Lua::new();
 
-        // Derive screen name from script path (e.g., "transit.lua" -> "transit")
-        let screen_name = script_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("default")
-            .to_string();
-
         // Set up the Lua environment
-        self.setup_globals(&lua, params, device_ctx, &screen_name, timestamp_override)?;
+        self.setup_globals(
+            &lua,
+            params,
+            device_ctx,
+            screen_name,
+            source,
+            screen_dir,
+            timestamp_override,
+        )?;
+
+        // Install the sandboxed `require()` scoped to this package + byonk-base.
+        self.install_require(&lua, source)?;
 
         // Execute the script
-        let result: Table = lua.load(&script_content).eval()?;
+        let result: Table = lua.load(script_src).eval()?;
 
         // Extract data, refresh_rate, skip_update, and colors
         let data = self.table_to_json(&lua, result.get::<Table>("data")?)?;
@@ -154,13 +192,107 @@ impl LuaRuntime {
         })
     }
 
+    /// Test/dev convenience: read a screen script from the `AssetLoader` by path
+    /// and run it with a screens-dir-backed package source (no package manifest
+    /// required). `require()` resolves sibling files under the screens dir.
+    pub fn run_script_from_asset(
+        &self,
+        script_path: &std::path::Path,
+        params: &HashMap<String, serde_yaml::Value>,
+        device_ctx: Option<&DeviceContext>,
+        timestamp_override: Option<i64>,
+    ) -> Result<ScriptResult, ScriptError> {
+        let script_src = self
+            .asset_loader
+            .read_screen_string(script_path)
+            .map_err(|e| ScriptError::NotFound(e.to_string()))?;
+        let source: Arc<dyn PackageSource> = Arc::new(AssetScreensSource {
+            loader: self.asset_loader.clone(),
+        });
+        let screen_name = script_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("default");
+        // Screen dir is the script's parent directory (siblings resolve through it).
+        let screen_dir = script_path
+            .parent()
+            .and_then(|p| p.to_str())
+            .unwrap_or("")
+            .replace('\\', "/");
+        self.run_script(
+            &script_src,
+            &source,
+            screen_name,
+            &screen_dir,
+            params,
+            device_ctx,
+            timestamp_override,
+        )
+    }
+
+    /// Install a sandboxed `require(name)` global that can only reach two places:
+    /// the screen's own package (package-relative modules like `require("lib/x")`)
+    /// and the embedded `byonk-base` std library (`require("byonk-base-v1/std")`).
+    ///
+    /// A `package.loaded`-style cache in the Lua registry ensures each module is
+    /// evaluated at most once per run and returns the same value on repeat calls.
+    fn install_require(&self, lua: &Lua, source: &Arc<dyn PackageSource>) -> LuaResult<()> {
+        // Module cache (package.loaded-style), keyed by the require name.
+        let cache = lua.create_table()?;
+        lua.set_named_registry_value("__require_cache", cache)?;
+
+        let require_source = source.clone();
+        let require_assets = self.asset_loader.clone();
+        let require_fn = lua.create_function(move |lua, name: String| -> LuaResult<Value> {
+            // 1. Return cached module if already loaded.
+            let cache: Table = lua.named_registry_value("__require_cache")?;
+            let cached: Value = cache.get(name.clone())?;
+            if !matches!(cached, Value::Nil) {
+                return Ok(cached);
+            }
+
+            // 2/3. Resolve the module source.
+            let code = if let Some(base_rel) = name.strip_prefix("byonk-base-") {
+                // byonk-base-v1/std -> read_base_string("v1/std.lua")
+                let rel = if base_rel.ends_with(".lua") {
+                    base_rel.to_string()
+                } else {
+                    format!("{base_rel}.lua")
+                };
+                require_assets.read_base_string(&rel)
+            } else {
+                // package-relative: lib/util -> read_string("lib/util.lua")
+                let rel = if name.ends_with(".lua") {
+                    name.clone()
+                } else {
+                    format!("{name}.lua")
+                };
+                require_source.read_string(&rel)
+            };
+
+            // 4. Miss -> Lua error.
+            let code =
+                code.ok_or_else(|| mlua::Error::external(format!("module '{name}' not found")))?;
+
+            // 5. Evaluate, cache, return.
+            let value: Value = lua.load(&code).set_name(&name).eval()?;
+            cache.set(name.clone(), value.clone())?;
+            Ok(value)
+        })?;
+        lua.globals().set("require", require_fn)?;
+        Ok(())
+    }
+
     /// Set up Lua global functions and variables
+    #[allow(clippy::too_many_arguments)]
     fn setup_globals(
         &self,
         lua: &Lua,
         params: &HashMap<String, serde_yaml::Value>,
         device_ctx: Option<&DeviceContext>,
-        screen_name: &str,
+        _screen_name: &str,
+        source: &Arc<dyn PackageSource>,
+        screen_dir: &str,
         timestamp_override: Option<i64>,
     ) -> LuaResult<()> {
         let globals = lua.globals();
@@ -375,19 +507,21 @@ impl LuaRuntime {
         globals.set("url_decode", url_decode)?;
 
         // read_asset(path) -> string (binary data)
-        // Reads from screens/<screen_name>/<path>
-        let asset_loader = self.asset_loader.clone();
-        let screen_prefix = screen_name.to_string();
+        // Reads a file sibling to the screen's `script.lua`, package-relative to
+        // `screen_dir`, through the screen's package source. The source applies the
+        // `is_safe_rel` sandbox guard, so `..` traversal is rejected.
+        let asset_source = source.clone();
+        let asset_dir = screen_dir.to_string();
         let read_asset = lua.create_function(move |lua, path: String| {
-            let full_path = format!("{screen_prefix}/{path}");
-            let asset_path = std::path::Path::new(&full_path);
-
-            match asset_loader.read_screen(asset_path) {
-                Ok(data) => {
+            let rel = crate::services::package_loader::join_rel(&asset_dir, &path);
+            match asset_source.read(&rel) {
+                Some(data) => {
                     // Return as Lua string (which can contain binary data)
-                    lua.create_string(&*data)
+                    lua.create_string(&data)
                 }
-                Err(e) => Err(mlua::Error::external(format!("Failed to read asset: {e}"))),
+                None => Err(mlua::Error::external(format!(
+                    "Failed to read asset: {rel}"
+                ))),
             }
         })?;
         globals.set("read_asset", read_asset)?;
@@ -1182,5 +1316,149 @@ fn lua_to_json_inner(value: Value) -> LuaResult<serde_json::Value> {
             Ok(serde_json::Value::Object(map))
         }
         _ => Ok(serde_json::Value::Null),
+    }
+}
+
+#[cfg(test)]
+mod require_tests {
+    use super::*;
+    use crate::services::package_loader::PackageSource;
+    use std::sync::Arc;
+
+    /// Minimal in-memory package source for exercising `require()`.
+    struct MockSource;
+    impl PackageSource for MockSource {
+        fn read(&self, rel: &str) -> Option<Vec<u8>> {
+            match rel {
+                "lib/util.lua" => Some(b"return { greet = function() return 'hi' end }".to_vec()),
+                _ => None,
+            }
+        }
+        fn screen_paths(&self) -> Vec<String> {
+            vec![]
+        }
+        fn svg_files(&self) -> Vec<String> {
+            vec![]
+        }
+        fn manifest(&self) -> &crate::models::package_manifest::PackageManifest {
+            unreachable!("manifest() not used by require()")
+        }
+    }
+
+    #[test]
+    fn test_require_resolves_package_relative_module() {
+        let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
+        let src: Arc<dyn PackageSource> = Arc::new(MockSource);
+        let script = "local u = require('lib/util'); return { data = { m = u.greet() } }";
+        let res = rt
+            .run_script(script, &src, "t", "", &Default::default(), None, None)
+            .unwrap();
+        assert_eq!(res.data["m"], serde_json::json!("hi"));
+    }
+
+    #[test]
+    fn test_require_caches_module() {
+        // A module with a side-effecting counter must only evaluate once.
+        struct CounterSource;
+        impl PackageSource for CounterSource {
+            fn read(&self, rel: &str) -> Option<Vec<u8>> {
+                match rel {
+                    "lib/c.lua" => Some(b"COUNT = (COUNT or 0) + 1; return COUNT".to_vec()),
+                    _ => None,
+                }
+            }
+            fn screen_paths(&self) -> Vec<String> {
+                vec![]
+            }
+            fn svg_files(&self) -> Vec<String> {
+                vec![]
+            }
+            fn manifest(&self) -> &crate::models::package_manifest::PackageManifest {
+                unreachable!()
+            }
+        }
+        let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
+        let src: Arc<dyn PackageSource> = Arc::new(CounterSource);
+        let script =
+            "local a = require('lib/c'); local b = require('lib/c'); return { data = { a = a, b = b } }";
+        let res = rt
+            .run_script(script, &src, "t", "", &Default::default(), None, None)
+            .unwrap();
+        assert_eq!(res.data["a"], serde_json::json!(1));
+        assert_eq!(res.data["b"], serde_json::json!(1));
+    }
+
+    #[test]
+    fn test_require_missing_module_errors() {
+        let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
+        let src: Arc<dyn PackageSource> = Arc::new(MockSource);
+        let script = "local x = require('nope/missing'); return { data = {} }";
+        let err = rt
+            .run_script(script, &src, "t", "", &Default::default(), None, None)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("module 'nope/missing' not found"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_require_traversal_is_blocked() {
+        // A malicious `require("../escape")` must not read host files; the package
+        // source rejects the `..` path, so `require` reports "module not found".
+        let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
+        let src: Arc<dyn PackageSource> = Arc::new(MockSource);
+        let script = "local x = require('../escape'); return { data = {} }";
+        let err = rt
+            .run_script(script, &src, "t", "", &Default::default(), None, None)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("module '../escape' not found"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_read_asset_reads_sibling_via_source() {
+        // read_asset resolves package-relative to screen_dir through the source.
+        struct AssetSource;
+        impl PackageSource for AssetSource {
+            fn read(&self, rel: &str) -> Option<Vec<u8>> {
+                match rel {
+                    "s/data.txt" => Some(b"hello-asset".to_vec()),
+                    _ => None,
+                }
+            }
+            fn screen_paths(&self) -> Vec<String> {
+                vec![]
+            }
+            fn svg_files(&self) -> Vec<String> {
+                vec![]
+            }
+            fn manifest(&self) -> &crate::models::package_manifest::PackageManifest {
+                unreachable!()
+            }
+        }
+        let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
+        let src: Arc<dyn PackageSource> = Arc::new(AssetSource);
+        let script = "return { data = { c = read_asset('data.txt') } }";
+        let res = rt
+            .run_script(script, &src, "acme/s", "s", &Default::default(), None, None)
+            .unwrap();
+        assert_eq!(res.data["c"], serde_json::json!("hello-asset"));
+    }
+
+    #[test]
+    fn test_read_asset_traversal_is_blocked() {
+        let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
+        let src: Arc<dyn PackageSource> = Arc::new(MockSource);
+        let script = "return { data = { c = read_asset('../../etc/passwd') } }";
+        let err = rt
+            .run_script(script, &src, "t", "s", &Default::default(), None, None)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to read asset"),
+            "unexpected error: {err}"
+        );
     }
 }

@@ -79,12 +79,12 @@ When you select a device entry and adjust dither algorithm, tuning parameters, o
 
 ### Calibrator Screen
 
-Byonk ships a built-in `calibrator` screen designed specifically for display calibration. Assign it to your device temporarily while tuning:
+Byonk ships a built-in calibration screen (`byonk-builtin/calibration/color`) designed specifically for display calibration. Assign it to your device temporarily while tuning:
 
 ```yaml
 devices:
   "ABCDE-FGHJK":
-    screen: calibrator
+    screen: byonk-builtin/calibration/color
     panel: my_panel
     dither: atkinson
 ```
@@ -100,7 +100,7 @@ Use the calibrator on your physical device while adjusting tuning in dev mode â€
 
 ### Calibration Workflow
 
-1. **Assign the `calibrator` screen** to your device in `config.yaml`
+1. **Assign the `byonk-builtin/calibration/color` screen** to your device in `config.yaml`
 2. **Select your device** in dev mode â€” this loads its screen, panel, and dither settings
 3. **Choose a dither algorithm** that works well for your content type
 4. **Adjust tuning parameters** (error_clamp, noise_scale, chroma_clamp, strength) until the preview looks good
@@ -117,7 +117,7 @@ panels:
 
 devices:
   "ABCDE-FGHJK":
-    screen: gphoto
+    screen: byonk-builtin/useful/gphoto
     panel: my_panel
     dither: floyd-steinberg
     error_clamp: 0.08   # from dev mode tuning

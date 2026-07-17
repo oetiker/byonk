@@ -33,6 +33,13 @@ fn addon_config_matches_design() {
         "version must be a non-empty string"
     );
 
+    // version must look like X.Y.Z (a valid image tag / add-on version)
+    let ver = cfg["version"].as_str().unwrap_or("");
+    assert!(
+        ver.split('.').count() == 3 && ver.split('.').all(|p| p.parse::<u32>().is_ok()),
+        "version must be semver X.Y.Z, got {ver:?}"
+    );
+
     // arch includes amd64 + aarch64
     let arch: Vec<&str> = cfg["arch"]
         .as_sequence()
@@ -74,19 +81,36 @@ fn addon_config_matches_design() {
         cfg["environment"]["BIND_ADDR"].as_str(),
         Some("0.0.0.0:3000")
     );
+    // Remote screen-package cache lives in the add-on's persistent /data so it
+    // survives restarts/rebuilds (unset would fall back to an ephemeral temp dir).
+    assert_eq!(
+        cfg["environment"]["PACKAGES_CACHE_DIR"].as_str(),
+        Some("/data/packages")
+    );
 
-    // schema exposes EXACTLY the two intended options — nothing the Phase 3
-    // integration owns (registration_enabled, auth_mode, default_screen, ...).
+    // schema exposes EXACTLY the add-on-owned options: admin_token + log_level
+    // (Phase 2) plus the genuinely-global settings and the package registry
+    // (Plan A — add-on-owned global config: auth_mode, package_refresh_interval,
+    // packages). The operational registration_enabled toggle and per-device
+    // config are NOT here — they stay live via the admin API / HA integration.
     let schema_keys: std::collections::BTreeSet<&str> = cfg["schema"]
         .as_mapping()
         .expect("schema mapping")
         .keys()
         .filter_map(Value::as_str)
         .collect();
-    let expected: std::collections::BTreeSet<&str> =
-        ["admin_token", "log_level"].into_iter().collect();
+    let expected: std::collections::BTreeSet<&str> = [
+        "admin_token",
+        "log_level",
+        "auth_mode",
+        "package_refresh_interval",
+        "packages",
+    ]
+    .into_iter()
+    .collect();
     assert_eq!(
         schema_keys, expected,
-        "add-on schema must expose exactly admin_token + log_level"
+        "add-on schema must expose exactly admin_token, log_level, auth_mode, \
+         package_refresh_interval, and packages"
     );
 }

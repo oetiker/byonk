@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
+  <style>
+    text {
+      font-family: Outfit;
+      {% include "byonk-base-v1/hinting.svg" %}
+    }
+  </style>
+
+  <rect width="{{ data.width }}" height="{{ data.height }}" fill="#ffffff"/>
+
+  <!-- Header -->
+  <rect x="0" y="0" width="{{ data.width }}" height="{{ data.header_height }}" fill="#000000"/>
+  <text x="{{ data.margin + 10 }}" y="{{ data.header_text_y }}" font-size="{{ data.font_title }}" font-weight="700" fill="#ffffff">{{ data.station }}</text>
+  <text x="{{ data.right_margin }}" y="{{ data.header_text_y }}" font-size="{{ data.font_time }}" font-weight="400" fill="#ffffff" text-anchor="end">{% if device.battery_voltage %}{{ device.battery_voltage | round(method="ceil", precision=2) }}V  {% endif %}{{ data.updated_at }}</text>
+
+  <!-- Column Headers -->
+  <rect x="0" y="{{ data.header_height }}" width="{{ data.width }}" height="{{ data.col_header_height }}" fill="rgb(240,240,240)"/>
+  {% if data.use_two_columns %}
+  <!-- Left column header -->
+  <text x="{{ data.margin + 10 }}" y="{{ data.col_header_y }}" font-size="{{ data.font_col_header }}" font-weight="600" fill="rgb(85,85,85)">LINIE</text>
+  <text x="{{ data.left_dest_x }}" y="{{ data.col_header_y }}" font-size="{{ data.font_col_header }}" font-weight="600" fill="rgb(85,85,85)">RICHTUNG</text>
+  <text x="{{ data.left_time_x }}" y="{{ data.col_header_y }}" font-size="{{ data.font_col_header }}" font-weight="600" fill="rgb(85,85,85)" text-anchor="end">ABFAHRT</text>
+  <!-- Right column header -->
+  <text x="{{ data.right_badge_x + 10 }}" y="{{ data.col_header_y }}" font-size="{{ data.font_col_header }}" font-weight="600" fill="rgb(85,85,85)">LINIE</text>
+  <text x="{{ data.right_dest_x }}" y="{{ data.col_header_y }}" font-size="{{ data.font_col_header }}" font-weight="600" fill="rgb(85,85,85)">RICHTUNG</text>
+  <text x="{{ data.right_time_x }}" y="{{ data.col_header_y }}" font-size="{{ data.font_col_header }}" font-weight="600" fill="rgb(85,85,85)" text-anchor="end">ABFAHRT</text>
+  <!-- Column divider -->
+  <line x1="{{ data.column_width }}" y1="{{ data.header_height }}" x2="{{ data.column_width }}" y2="{{ data.height - 40 }}" stroke="rgb(200,200,200)" stroke-width="1"/>
+  {% else %}
+  <text x="{{ data.margin + 10 }}" y="{{ data.col_header_y }}" font-size="{{ data.font_col_header }}" font-weight="600" fill="rgb(85,85,85)">LINIE</text>
+  <text x="{{ data.left_dest_x }}" y="{{ data.col_header_y }}" font-size="{{ data.font_col_header }}" font-weight="600" fill="rgb(85,85,85)">RICHTUNG</text>
+  <text x="{{ data.left_time_x }}" y="{{ data.col_header_y }}" font-size="{{ data.font_col_header }}" font-weight="600" fill="rgb(85,85,85)" text-anchor="end">ABFAHRT</text>
+  {% endif %}
+
+  <!-- Departures -->
+  {% if data.departures | length > 0 %}
+
+  {% if data.use_two_columns %}
+  <!-- Two-column layout -->
+  <!-- Left column -->
+  {% for dep in data.left_departures %}
+  {% if loop.index0 is odd %}
+  <rect x="0" y="{{ data.row_start_y + loop.index0 * data.row_height }}" width="{{ data.column_width }}" height="{{ data.row_height }}" fill="rgb(240,240,240)"/>
+  {% endif %}
+  <rect x="{{ data.left_badge_x }}" y="{{ data.row_start_y + loop.index0 * data.row_height + data.badge_y_offset }}" width="{{ data.badge_width }}" height="{{ data.badge_height }}" rx="5"
+        fill="{% if dep.category == 'S' %}rgb(85,85,85){% elif dep.category == 'B' or dep.category == 'BN' %}rgb(85,85,85){% elif dep.category == 'T' %}rgb(50,150,50){% else %}rgb(85,85,85){% endif %}"/>
+  <text x="{{ data.left_badge_center_x }}" y="{{ data.row_start_y + loop.index0 * data.row_height + data.text_y_offset }}" font-size="{{ data.font_line }}" font-weight="700" fill="#ffffff" text-anchor="middle">{{ dep.line }}</text>
+  <text x="{{ data.left_dest_x }}" y="{{ data.row_start_y + loop.index0 * data.row_height + data.text_y_offset }}" font-size="{{ data.font_dest }}" font-weight="500" fill="#000000">{{ dep.destination }}</text>
+  <text x="{{ data.left_time_x }}" y="{{ data.row_start_y + loop.index0 * data.row_height + data.text_y_offset }}" font-size="{{ data.font_dep_time }}" font-weight="700" fill="#000000" text-anchor="end">{{ dep.time }}{% if dep.delay %} <tspan font-size="{{ data.font_delay }}">{{ dep.delay }}</tspan>{% endif %}</text>
+  {% endfor %}
+
+  <!-- Right column -->
+  {% for dep in data.right_departures %}
+  {% if loop.index0 is odd %}
+  <rect x="{{ data.column_width }}" y="{{ data.row_start_y + loop.index0 * data.row_height }}" width="{{ data.column_width }}" height="{{ data.row_height }}" fill="rgb(240,240,240)"/>
+  {% endif %}
+  <rect x="{{ data.right_badge_x }}" y="{{ data.row_start_y + loop.index0 * data.row_height + data.badge_y_offset }}" width="{{ data.badge_width }}" height="{{ data.badge_height }}" rx="5"
+        fill="{% if dep.category == 'S' %}rgb(85,85,85){% elif dep.category == 'B' or dep.category == 'BN' %}rgb(85,85,85){% elif dep.category == 'T' %}rgb(50,150,50){% else %}rgb(85,85,85){% endif %}"/>
+  <text x="{{ data.right_badge_center_x }}" y="{{ data.row_start_y + loop.index0 * data.row_height + data.text_y_offset }}" font-size="{{ data.font_line }}" font-weight="700" fill="#ffffff" text-anchor="middle">{{ dep.line }}</text>
+  <text x="{{ data.right_dest_x }}" y="{{ data.row_start_y + loop.index0 * data.row_height + data.text_y_offset }}" font-size="{{ data.font_dest }}" font-weight="500" fill="#000000">{{ dep.destination }}</text>
+  <text x="{{ data.right_time_x }}" y="{{ data.row_start_y + loop.index0 * data.row_height + data.text_y_offset }}" font-size="{{ data.font_dep_time }}" font-weight="700" fill="#000000" text-anchor="end">{{ dep.time }}{% if dep.delay %} <tspan font-size="{{ data.font_delay }}">{{ dep.delay }}</tspan>{% endif %}</text>
+  {% endfor %}
+
+  {% else %}
+  <!-- Single column layout -->
+  {% for dep in data.departures %}
+  {% if loop.index0 is odd %}
+  <rect x="0" y="{{ data.row_start_y + loop.index0 * data.row_height }}" width="{{ data.width }}" height="{{ data.row_height }}" fill="rgb(240,240,240)"/>
+  {% endif %}
+  <rect x="{{ data.left_badge_x }}" y="{{ data.row_start_y + loop.index0 * data.row_height + data.badge_y_offset }}" width="{{ data.badge_width }}" height="{{ data.badge_height }}" rx="5"
+        fill="{% if dep.category == 'S' %}rgb(85,85,85){% elif dep.category == 'B' or dep.category == 'BN' %}rgb(85,85,85){% elif dep.category == 'T' %}rgb(50,150,50){% else %}rgb(85,85,85){% endif %}"/>
+  <text x="{{ data.left_badge_center_x }}" y="{{ data.row_start_y + loop.index0 * data.row_height + data.text_y_offset }}" font-size="{{ data.font_line }}" font-weight="700" fill="#ffffff" text-anchor="middle">{{ dep.line }}</text>
+  <text x="{{ data.left_dest_x }}" y="{{ data.row_start_y + loop.index0 * data.row_height + data.text_y_offset }}" font-size="{{ data.font_dest }}" font-weight="500" fill="#000000">{{ dep.destination }}</text>
+  <text x="{{ data.left_time_x }}" y="{{ data.row_start_y + loop.index0 * data.row_height + data.text_y_offset }}" font-size="{{ data.font_dep_time }}" font-weight="700" fill="#000000" text-anchor="end">{{ dep.time }}{% if dep.delay %} <tspan font-size="{{ data.font_delay }}">{{ dep.delay }}</tspan>{% endif %}</text>
+  {% endfor %}
+  {% endif %}
+
+  {% else %}
+  <text x="{{ data.center_x }}" y="{{ data.muted_y }}" font-size="{{ data.font_muted }}" font-weight="400" fill="rgb(170,170,170)" text-anchor="middle">Keine Abfahrten gefunden</text>
+  {% endif %}
+
+  <!-- Footer -->
+  <text x="{{ data.center_x }}" y="{{ data.footer_y }}" font-size="{{ data.font_footer }}" font-weight="400" fill="rgb(85,85,85)" text-anchor="middle">Daten: transport.opendata.ch</text>
+</svg>

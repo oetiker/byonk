@@ -1,0 +1,15 @@
+title: Bitmap Font Demo
+description: Showcase of embedded bitmap fonts rendered at their native sizes.
+byonk: "0.15"
+refresh: 3600
+params:
+  font_prefix:
+    type: enum
+    label: "Font family"
+    default: "X11Helv"
+    options:
+      - {value: X11Helv, label: "X11 Helvetica"}
+      - {value: X11LuSans, label: "X11 Lucida Sans"}
+      - {value: X11LuType, label: "X11 Lucida Typewriter"}
+      - {value: X11Term, label: "X11 Terminal"}
+      - {value: X11Misc, label: "X11 Misc"}

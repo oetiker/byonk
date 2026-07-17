@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
+  <defs>
+    <style>
+      text {
+        {% include "byonk-base-v1/hinting.svg" %}
+      }
+    </style>
+    <!-- Horizontal gradient for dithering test -->
+    <linearGradient id="hGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:rgb(0,0,0)"/>
+      <stop offset="100%" style="stop-color:rgb(255,255,255)"/>
+    </linearGradient>
+    <!-- Vertical gradient -->
+    <linearGradient id="vGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:rgb(0,0,0)"/>
+      <stop offset="100%" style="stop-color:rgb(255,255,255)"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="{{ data.width }}" height="{{ data.height }}" fill="rgb(170,170,170)"/>
+
+  <!-- Top section: Gray level bars -->
+  {% for bar in data.bars %}
+  <rect x="{{ bar.x }}" y="0" width="{{ bar.width }}" height="{{ data.bar_height }}" fill="{{ bar.color }}"/>
+  {% endfor %}
+
+  <!-- Labels on bars -->
+  {% for bar in data.bars %}
+  <text x="{{ bar.center_x }}" y="{{ data.label_y }}" text-anchor="middle" fill="{{ bar.text_color }}" font-family="Outfit" font-size="{{ data.font_label }}" font-weight="600">{{ bar.label }}</text>
+  <text x="{{ bar.center_x }}" y="{{ data.value_y }}" text-anchor="middle" fill="{{ bar.text_color }}" font-family="Outfit" font-size="{{ data.font_value }}">{{ bar.value }}</text>
+  {% endfor %}
+
+  <!-- Center circle pattern on bars -->
+  {% for bar in data.bars %}
+  <circle cx="{{ bar.center_x }}" cy="{{ data.circle_y }}" r="{{ data.circle_r }}" fill="none" stroke="{{ bar.text_color }}" stroke-width="3"/>
+  <line x1="{{ bar.center_x - data.circle_r }}" y1="{{ data.circle_y }}" x2="{{ bar.center_x + data.circle_r }}" y2="{{ data.circle_y }}" stroke="{{ bar.text_color }}" stroke-width="1"/>
+  <line x1="{{ bar.center_x }}" y1="{{ data.circle_y - data.circle_r }}" x2="{{ bar.center_x }}" y2="{{ data.circle_y + data.circle_r }}" stroke="{{ bar.text_color }}" stroke-width="1"/>
+  {% endfor %}
+
+  <!-- Horizontal gradient for dithering demo -->
+  <rect x="0" y="{{ data.gradient_y }}" width="{{ data.width }}" height="{{ data.gradient_height }}" fill="url(#hGradient)"/>
+  <text x="{{ data.center_x }}" y="{{ data.gradient_text_y }}" text-anchor="middle" fill="white" font-family="Outfit" font-size="{{ data.font_gradient }}" font-weight="600"
+        style="text-shadow: 1px 1px 0 black, -1px -1px 0 black, 1px -1px 0 black, -1px 1px 0 black;">
+    HORIZONTAL GRADIENT (DITHERING TEST)
+  </text>
+
+  <!-- Alternating black/white bars for resolution test -->
+  {% for bar in data.res_bars %}
+  <rect x="{{ bar.x }}" y="{{ data.pattern_y }}" width="{{ bar.width }}" height="{{ data.pattern_height }}" fill="{{ bar.color }}"/>
+  {% endfor %}
+
+  <!-- Vertical gradient strip -->
+  <rect x="{{ data.vgradient_x }}" y="{{ data.pattern_y }}" width="{{ data.vgradient_width }}" height="{{ data.vgradient_height }}" fill="url(#vGradient)"/>
+
+  <!-- Step wedge -->
+  {% for step in data.steps %}
+  <rect x="{{ step.x }}" y="{{ data.pattern_y }}" width="{{ step.width }}" height="{{ data.pattern_height }}" fill="{{ step.color }}"{% if loop.last %} stroke="rgb(170,170,170)"{% endif %}/>
+  {% endfor %}
+
+  <!-- Bottom info bar -->
+  <rect x="0" y="{{ data.info_bar_y }}" width="{{ data.width }}" height="{{ data.info_bar_height }}" fill="rgb(0,0,0)"/>
+
+  <!-- Byonk branding -->
+  <text x="{{ data.center_x }}" y="{{ data.title_y }}" text-anchor="middle" fill="white" font-family="Outfit" font-size="{{ data.font_title }}" font-weight="700">BYONK E-INK TEST PATTERN</text>
+  <text x="{{ data.center_x }}" y="{{ data.subtitle_y }}" text-anchor="middle" fill="rgb(170,170,170)" font-family="Outfit" font-size="{{ data.font_subtitle }}">{{ data.width }} x {{ data.height }} | {{ data.color_count }} Colors | Blue-Noise Dithering</text>
+
+  <!-- Corner markers -->
+  <rect x="0" y="{{ data.info_bar_y }}" width="{{ data.corner_size }}" height="{{ data.corner_size }}" fill="white"/>
+  <rect x="{{ data.width - data.corner_size }}" y="{{ data.info_bar_y }}" width="{{ data.corner_size }}" height="{{ data.corner_size }}" fill="white"/>
+  <rect x="0" y="{{ data.height - data.corner_size }}" width="{{ data.corner_size }}" height="{{ data.corner_size }}" fill="white"/>
+  <rect x="{{ data.width - data.corner_size }}" y="{{ data.height - data.corner_size }}" width="{{ data.corner_size }}" height="{{ data.corner_size }}" fill="white"/>
+</svg>

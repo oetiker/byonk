@@ -1,85 +1,82 @@
-# Handover — Byonk ↔ Home Assistant
+# Handover — Byonk
 
-_Last updated: 2026-06-29 (Phase 3 complete, PR #22)_
+_Last updated: 2026-07-17 — **HA Distribution Readiness: code/doc tasks 1–8 DONE + reviewed clean, AND Task 9 (fresh-VM end-to-end validation) DONE — 9/10 checklist items PASS on a clean HAOS build-from-source; item 1 (published image) is inherently post-release.** Branch `feat/ha-distribution-readiness` @ `01d8d1c` (pushed, PR #23 OPEN, CI green), tree clean, not merged. Remaining: Task 10 (merge → release 0.16.0) and Task 11 (external brands/HACS PRs, post-release). Two findings surfaced during validation — see below._
 
-## Goal (the whole effort)
+## TL;DR — resume here
 
-Make byonk runnable and **fully manageable from Home Assistant**, in two user-facing deliverables:
-- **HA Add-on** — runs byonk as a Supervisor container (reuses the prebuilt `ghcr.io/oetiker/byonk` multi-arch image) with persistent config.
-- **HA Integration** (`custom_components/byonk/`) — manages byonk via **HA-idiomatic UI** (select/switch/number/text entities + native config forms): device telemetry, full read-write of device→screen mappings and global settings, and device onboarding.
+The distribution plan `docs/superpowers/plans/2026-07-06-ha-distribution-readiness.md` has 11 tasks. **Tasks 1–9 are DONE.** What remains is manual:
 
-Both live as folders in this repo and talk to a byonk **admin API**. Byonk stays the source of truth and persists everything to `config.yaml`.
+1. ~~**Task 9 — VM validation.**~~ **DONE 2026-07-17** on a wiped/fresh HAOS VM, byonk built from current source as a local add-on (see "VM validation results" below). Zero-touch install→trust→device-discovery→reauth→removal-grace all validated end-to-end.
+2. **Task 10 — Merge + release (do next).** `superpowers:finishing-a-development-branch`. PR #23 carries Plan 1+2+3+A+B + distribution work; merges to `main` together. Confirm the `home-assistant` (hassfest+HACS) and `release-scripts` CI jobs stay green on the merge. Then trigger the release (`workflow_dispatch` on `release.yml`, minor → **0.16.0**) for the first (non-publicised) release.
+3. **Task 11 — External PRs (post-first-release), maintainer-filed.** Follow `docs/superpowers/ha-publishing.md`: file `home-assistant/brands` PR (this is what lights up the currently-missing integration icon — see finding B), then `hacs/default`, then remove `ignore: brands` from `ci.yml` and switch `ha-integration.md` to default-store wording.
 
-### Phase plan (each phase = its own spec → plan → implementation)
-1. **Phase 1 — Byonk admin/management API. ✅ DONE** (see below).
-2. **Phase 2 — HA Add-on** packaging. ✅ DONE (PR **#20**). Direct prebuilt-image add-on (`repository.yaml` at repo root + `homeassistant/byonk/`), static `environment:` for paths/bind, editable persistent `/config` via `map: addon_config:rw`, host port 3000 for LAN devices. byonk reads `admin_token`+`log_level` from `/data/options.json` (read-only; no token gen/persist/log). No Ingress (out of scope).
-3. **Phase 3 — HA Integration** (`custom_components/byonk/`). ✅ DONE (PR **#22**). Python custom integration; zero-touch **Supervised/HAOS-only** trust (auto-installs the add-on via the Supervisor store API, provisions the admin token into the add-on option, reads it back — entry stores NO token); one *Byonk Server* hub device (registration switch, default-screen/auth-mode selects, pending-devices sensor) + one HA device per TRMNL (battery/signal/last-seen/firmware/model sensors + screen/dither/panel selects); coordinator mirrors `config.yaml` into config **subentries** (devices keyed by MAC); subentry add/edit form renders per-screen `@params` as HA selectors; Repairs-based onboarding matched by registration code. Consumes the Phase 1 API only; **no Rust changes**.
-4. **Phase 4 — Release & docs** (multi-arch publishing aligned to add-on versions, mdBook docs, HACS default-list + brands metadata, add-on `version:` automation).
+## VM validation results (2026-07-17, fresh HAOS + from-source add-on)
 
-## Current status
+Method: `make ha-vm-clean` + fresh boot; onboarded via Chrome; Samba + Terminal&SSH add-ons installed; byonk built **from current source** as local add-on `local_byonk` (published-image path is post-release only). Checklist (`tools/ha-vm/README.md`):
 
-- **Phase 1 is merged** into `main` (PR #19, commit `33ed51f`).
-- **Phase 2 is merged** into `main` (PR #20, commit `ca367b2`).
-- **Phase 3 is complete and in review:** PR **#22** → https://github.com/oetiker/byonk/pull/22
-  - Branch: `feat/homeassistant-integration` (cut from `main`; base of the PR is `main`).
-  - Built task-by-task with TDD (14 tasks) via subagent-driven development; every task individually reviewed + a final whole-branch review (opus). The final review caught + fixed two cross-cutting bugs before the PR: (1) missing entry **reload listener** → runtime-added subentries had no entities; (2) onboarding by **registration code** → duplicate HA devices (byonk `/devices` emits a seen device by MAC *and* the config entry by code) — now keyed by **MAC**, code as label.
-  - Verification: `tests_ha/` **26 passing** (`pytest-homeassistant-custom-component`, HA 2026.2.3, Py 3.13); `ruff` + `mdbook` clean; Rust untouched. Python env is an isolated `.venv` (uv, Py 3.13) — HA Core does not support 3.14.
-  - SDD ledger: `.superpowers/sdd/progress.md` (git-ignored) has per-task commits + the deferred fast-follow list.
-  - **Non-blocking fast-follows** (from the final review): secondary-branch test gaps (subentry remove, 4 untested device sensors, several selector cases, Repairs delete/mac-fallback, "token already valid" reauth); minor hardening (tear down a device only on *sustained* `registered:false`; `addon.py` `getattr(...,"installed",False)` default; add a `base_url` property vs `client._base`; `make ha-setup`/README note for the `.venv`).
-- **Phase 4 (Release & docs) is NEXT.**
+| # | Item | Result |
+|---|------|--------|
+| 1 | Add-on store / published image | ⏭️ deferred — post-release only (built from source) |
+| 2 | Integration discovery | ✅ |
+| 3 | Zero-touch trust (no token entry) | ✅ token auto-provisioned into add-on options |
+| 4 | Add-on-owned global config | ✅ settings/packages writes → **409** "edit in add-on Configuration tab" |
+| 5 | Reserved DEFAULT device | ✅ `reserved:true`, PATCH→200, DELETE→**409**, "Byonk Default" auto-provisioned |
+| 6 | Screen resolution (unregistered) | ✅ device shows pairing code; display→200 |
+| 7 | HA-owned per-device flow | ✅ Discovered card → Add → per-device entry (9 entities), code-labeled onboarding |
+| 8 | Screen packages | ✅ external git package fetched (`disttest` ready, screen served) — **see finding A** |
+| 9 | Re-authentication | ✅ blanked token → integration **auto-re-provisioned** (self-heal, no manual input) |
+| 10 | Removal grace | ✅ device disappeared → HA entry survived 1 cycle, pruned at strike 2 (`REMOVE_STRIKES=2`×60s) |
 
-## What Phase 1 delivered (the API Phase 3 will consume)
+### Findings (not merge-blockers for a non-publicised release; consider fast-follow)
 
-Token-gated `/api/admin/*` (bearer token from `BYONK_ADMIN_TOKEN` env or `admin.token` in config; **404 when no token configured**, 401 when wrong):
+- **Finding A — schemeless package `repo:` URLs — FIXED (validate, not normalize).** `repo: github.com/…` used to be handed to gix as a **local path** (`/app/github.com/…`) → obscure `status:error`. Now `git_fetch::fetch` calls `validate_repo()` up front: a `repo:` must carry an explicit scheme (`https://`/`http://`/`git://`/`ssh://`/`file://`) or be scp-like (`git@host:owner/repo`); schemeless values and bare paths are rejected with a clear message ("…must be `https://…`; a local repository must be `file:///path`"). Local repos now require `file:///` (per user direction — no normalization). Docs (`configuration.md`) updated; unit tests added; `make check` green. **Not yet committed** (working tree on `feat/ha-distribution-readiness`).
+- **Finding B — integration icon missing until brands PR.** Fresh integration shows "icon not available" because HA fetches integration icons from `brands.home-assistant.io/byonk/` (populated by the Task-11 `home-assistant/brands` PR). The **add-on** icon renders fine (ships locally). Expected; not a blocker; assets are staged in `homeassistant/brands/`.
+- **Finding D — packages not fetched on startup — FIXED.** byonk's package refresh ran only on the periodic loop, which `sleep`s first and is a **no-op when `package_refresh_interval == 0`** (manual mode, the default). There was **no startup fetch**, and boot leaves package status empty (the on-disk cache isn't loaded into a "ready" state), so *any* restart (add-on update, HA reboot, Options change, re-auth) dropped external package screens until the user pressed "Update packages". Fix (`src/main.rs`, production `serve` path): run `refresh_all(false)` once at startup in a spawned blocking task (reuses the cache for immutable pins). Verified live: after a fresh dev5 boot, `disttest` reached `ready` in ~5s with no manual trigger. (Edge case not addressed: network down *at boot* still errors, since a fresh start has no cached status to fall back on.)
+- **Finding C — device entries stuck "unavailable" after a hub reload — FIXED.** Device entries (incl. the reserved DEFAULT) share the hub's coordinator (`entry.runtime_data = hass.data[DOMAIN][hub_id]`). A hub reload (e.g. re-auth token re-provision from the item-9 flow) builds a NEW coordinator, but LOADED device entries kept a stale reference to the old/dead one → their entities were unavailable forever until a manual reload. Fix (`__init__.py` `_async_setup_hub_entry`): the hub now reloads dependent device entries in **LOADED** state too (previously only `SETUP_RETRY`), so they rebind to the live coordinator. Regression test added (`test_device_entry_rebinds_after_hub_reload`); `make ha-check` green; verified live on the VM (token-blank → DEFAULT device auto-recovered in ~1s). **This is the device-side half of item 9 that the first validation pass missed.**
 
-| Method + path | Purpose |
-|---|---|
-| `GET /api/admin/devices` | configured + seen devices, telemetry + resolved active screen |
-| `GET /api/admin/pending` | connected-but-unregistered devices (+ registration code) |
-| `GET /api/admin/config` | effective config as JSON (admin token stripped) |
-| `GET /api/admin/screens` | screens + per-screen param schemas + panels + dither algorithms |
-| `POST /api/admin/devices` | add a device→screen mapping |
-| `PATCH /api/admin/devices/:key` | update mapping (top-level fields merge; **`params` is a full replacement**) |
-| `DELETE /api/admin/devices/:key` | remove a mapping |
-| `PATCH /api/admin/settings` | registration on/off, auth_mode, default_screen |
+### From-source add-on build notes (for repeatable fresh-VM validation)
 
-Supporting features: per-screen **`@params`** schema (parsed-not-executed YAML header in each screen `.lua`), **comment-preserving** `config.yaml` writes (yamlpath/yamlpatch), **config hot-reload** (arc-swap; atomic write + reparse + rollback; writes serialized by a mutex).
+The local-add-on build-from-source path is **not committed** and had to be authored this session (scaffold in scratch: `config.yaml` sans `image:` + a Dockerfile). Key requirements discovered:
+- Build context = the full source tree byonk embeds at compile time via rust-embed (`screens/ fonts/ byonk-base/ static/` + `src crates Cargo.toml Cargo.lock default-config.yaml`) — exactly what `rebuild.sh` syncs.
+- Use a **Debian** rust base (`rust:1.88-slim-bookworm` + `apt install curl gcc libc6-dev`): `utoipa-swagger-ui`'s build script downloads Swagger UI via **`curl`** (Alpine attempts failed / were cache-replayed).
+- BuildKit **replays cached failed layers** across Dockerfile edits — bump the add-on `version:` (changes the `BUILD_VERSION` build-arg referenced before `cargo build`) to force a real rebuild; a bare `ha store reload` won't re-read the manifest, need `ha supervisor restart` (see `ha-vm-addon-manifest-sync-gap`).
+- **Consider committing** a `homeassistant/byonk/` local-build variant + wiring `make ha-rebuild` to scaffold it, so Task-9-style validation is one command next time.
 
-Key source: `src/api/admin/{mod,read,write}.rs`, `src/models/param_schema.rs`, `src/services/config_writer.rs`, `src/server.rs` (`SharedConfig`, `AppState`, `reload_config`). User docs: `docs/src/api/admin-api.md`.
+## What the distribution work shipped (Tasks 1–8, range `586e3d3..2667b89`)
 
-## Where to pick up next
+- **Version automation (4b):** two tested bash scripts — `tools/release/bump-addon-version.sh` and `bump-integration-version.sh` — wired into `release.yml`. The integration `manifest.json` bumps in the `version` job **before the tag** (HACS installs from the tag); the add-on `config.yaml` bumps in a new `update-addon-version` job `needs:[version,build-container]`, committing to `main` **after** the image publishes (so the add-on `version:` always equals a published `ghcr.io/oetiker/byonk` tag). All three versions now track the byonk release version.
+- **Validation CI (4c):** new `ci.yml` jobs — `home-assistant` (hassfest + `hacs/action`, with `ignore: brands` until the brands PR merges + `GITHUB_TOKEN` passed) and `release-scripts` (runs both bump-script test harnesses). The add-on `config.yaml` is already validated by the existing `tests/addon_manifest_test.rs` (extended with a semver guard).
+- **Brand assets (4c):** `homeassistant/brands/` — **user-supplied pixel-art** (a shinkansen departure board with the green **BYONK** sign), committed as `*.src.png` masters (1024px) + `rasterize.sh` (sips resize) → brands `icon.png`/`icon@2x`/`logo`/`logo@2x` + add-on `icon.png`/`logo.png`.
+- **Runbook + docs (4c/4d):** `docs/superpowers/ha-publishing.md` (brands + hacs/default PR steps); `ha-integration.md` HACS custom-repo install note; `CHANGES.md` Unreleased bullet; refreshed 10-item VM checklist.
 
-**Start Phase 3 (HA Integration, `custom_components/byonk/`).** Run `brainstorming` → `writing-plans` → execute (subagent-driven-development). Key contract already established by Phase 2 and **must stay zero-touch / no-redundancy**:
-- **Trust is automatic** — the integration generates the admin token, writes it into the byonk add-on's options via the Supervisor API (`AddonManager.async_set_addon_options` + `async_restart_addon`, the `zwave_js` pattern; needs `after_dependencies: ["hassio"]`, guard with `is_hassio`), then reads it back. The **user never sets or copies a token.** The add-on option is the token's single source of truth; the integration must not cache its own copy.
-- byonk reads `admin_token`/`log_level` from `/data/options.json` (Phase 2); a blank token leaves the admin API dormant (404) until the integration provisions it.
-- The integration manages device→screen mappings and global settings **only** via the Phase 1 admin API — never duplicate settings the add-on/`config.yaml` already own.
-- Likely contents: config flow + Supervisor add-on discovery, HA Device per TRMNL, sensors/diagnostics, select/number/switch/text controls, subentry-based device add/edit, registration onboarding.
+## Verification status (local, all GREEN at `2667b89`)
 
-## Reference docs (read these before continuing)
+- Bump scripts: `tools/release/test-bump-addon-version.sh` + `test-bump-integration-version.sh` pass.
+- Rust: `cargo test --test addon_manifest_test` passes (2/2). Full `make check` not re-run this session (no `src/` change — only a test file); known pre-existing flaky `tests/e2e_flow_test.rs::test_content_cache_reuse` is unrelated.
+- Docs: `make docs` clean.
+- **Whole-branch review (opus, `8ddba14..2667b89`): READY TO MERGE**, no Critical/Important; release timing verified sound.
 
-- Phase 1 spec: `docs/superpowers/specs/2026-06-28-byonk-homeassistant-phase1-admin-api-design.md` (also contains the umbrella vision + phase summaries)
-- Phase 1 plan: `docs/superpowers/plans/2026-06-28-byonk-homeassistant-phase1-admin-api.md`
-- **Phase 2 spec:** `docs/superpowers/specs/2026-06-28-byonk-homeassistant-phase2-addon-design.md` (§5 zero-touch trust model — the Phase 3 contract)
-- **Phase 2 plan:** `docs/superpowers/plans/2026-06-28-byonk-homeassistant-phase2-addon.md`
-- SDD progress ledger (git-ignored): `.superpowers/sdd/progress.md` — per-task commit ranges + deferred findings.
+## Deferred Minors (fast-follow — do NOT gate the merge)
 
-## Deferred / fast-follow items (non-blocking, from the final review)
+- **M1 (most useful):** `update-addon-version` is a leaf job. If it FAILS, the release still tags/publishes/creates the GitHub release, but the add-on `config.yaml` on `main` stays at the old version — silently re-introducing the exact "add-on never offers the update" rot this work fixes. Recoverable (re-run from clean `main`, idempotent). **Fix:** a runbook line that a red `update-addon-version` must be re-run before a release counts as done.
+- **M2:** `bump-addon-version.sh` major-bump EOF append (`printf >> config.yaml`) is newline-fragile if `config.yaml` ever loses its trailing newline (safe today). Fix: guarded newline / perl append.
+- **M3:** hassfest + `hacs/action` are first exercised only on the Task-10 PR run (unverifiable locally).
 
-### Phase 1 deferred
+## Branch / merge state
 
-1. Convert the per-handler `require_admin` call into a nested-router **middleware layer** so a future admin endpoint can't silently skip auth.
-2. Reconcile write-path screen validation (config-only) with `ContentPipeline::resolve_screen`'s filesystem auto-discovery — or document that admin writes require a configured `screens:` entry.
-3. Minor hardening: `extract_params_block` should require the `@params` marker inside a `--[[ ]]` comment; surface `persist` rollback-write failures; `config_writer` insert assumes 2-space indent and a non-flow `devices:` map.
-4. Test coverage gaps (all behavior is integration-tested, but some unit gaps): per-screen `@params` parse tests (floerli), more no-param screens, more device-write branch unit tests.
+- **Branch `feat/ha-distribution-readiness` @ `2667b89`** (tree clean). Stacked on `feat/screen-packages-p2-distribution` (Plan B). Local-only, not pushed, not merged.
+- Distribution range **`586e3d3..2667b89`** = 11 commits (spec + plan + 8 tasks + 1 fix). Fork point from Plan B = `8ddba14`.
 
-### Phase 2 deferred (non-blocking, from the final review)
+## Reference
 
-1. `AddonOptions` derives `Debug` (plan-mandated) → the token *could* leak via `{:?}` if future code debug-prints it (no current path does). Consider a redacting `Debug` impl.
-2. Integration test `addon_options_test` assumes `BYONK_ADMIN_TOKEN` is unset (same harness-wide assumption as all `new_admin` tests) — could false-fail in a CI env that sets it.
-3. Minor test gaps: no `Malformed`/`Missing`-path integration test (both verified no-op via unit tests); manifest test doesn't assert `init: true`.
+- **Plan (executed 1–8):** `docs/superpowers/plans/2026-07-06-ha-distribution-readiness.md`.
+- **Spec:** `docs/superpowers/specs/2026-07-06-ha-distribution-readiness-design.md` (revised Phase 4; §4a = the VM checklist).
+- **SDD ledger:** `.superpowers/sdd/progress.md` — per-task review record + the deferred-Minor detail. Trust it + `git log` over memory after a compaction.
+- **Publishing runbook (Task 11):** `docs/superpowers/ha-publishing.md`.
+- **Memories:** `ha-addon-owned-global-config`, `ha-addon-phase2`, `ha-vm-admin-api-testing`, `ha-vm-addon-manifest-sync-gap`, `byonk-is-ours-change-apis-freely`, `no-git-add-all`.
 
-## Build / verify
+## Build / verify quick ref
 
-- `make check` — fmt + clippy + tests (all green as of Phase 2).
-- `make docs` — mdBook build (clean).
-- `make build` / `make release`.
+- Bump scripts: `tools/release/test-bump-addon-version.sh && tools/release/test-bump-integration-version.sh`.
+- Rust test: `cargo test --test addon_manifest_test`. Docs: `make docs`. Brand assets: `homeassistant/brands/rasterize.sh` (needs `sips`).
+- VM deploy: `SMB_USER=byonk SMB_PASS=byonk make ha-rebuild` (add-on) / `make ha-deploy` (integration).

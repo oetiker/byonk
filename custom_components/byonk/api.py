@@ -27,7 +27,11 @@ class ByonkValidationError(ByonkApiError):
 
 
 class ByonkReadOnlyError(ByonkApiError):
-    """Config is embedded/read-only (409)."""
+    """Config is embedded/read-only, or a delete is blocked by a reference (409)."""
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__(message)
+        self.message = message
 
 
 class ByonkClient:
@@ -52,7 +56,10 @@ class ByonkClient:
                 if resp.status in (401, 404):
                     raise ByonkAuthError(f"{method} {path} -> {resp.status}")
                 if resp.status == 409:
-                    raise ByonkReadOnlyError(f"{method} {path} -> 409")
+                    body = await _safe_json(resp)
+                    raise ByonkReadOnlyError(
+                        body.get("error") or body.get("message") or ""
+                    )
                 if resp.status == 400:
                     body = await _safe_json(resp)
                     raise ByonkValidationError(
@@ -88,6 +95,21 @@ class ByonkClient:
 
     async def async_update_settings(self, payload: dict) -> dict:
         return await self._request("PATCH", "/api/admin/settings", json=payload)
+
+    async def async_get_packages(self) -> list[dict]:
+        return await self._request("GET", "/api/admin/packages")
+
+    async def async_add_package(self, payload: dict) -> dict:
+        return await self._request("POST", "/api/admin/packages", json=payload)
+
+    async def async_update_package(self, handle: str, payload: dict) -> dict:
+        return await self._request("PATCH", f"/api/admin/packages/{handle}", json=payload)
+
+    async def async_delete_package(self, handle: str) -> dict:
+        return await self._request("DELETE", f"/api/admin/packages/{handle}")
+
+    async def async_update_packages(self) -> dict:
+        return await self._request("POST", "/api/admin/packages/update")
 
 
 async def _safe_json(resp: aiohttp.ClientResponse) -> dict:

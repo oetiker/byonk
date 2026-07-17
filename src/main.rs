@@ -199,8 +199,10 @@ fn run_render_command(
     let renderer = Arc::new(RenderService::new(&asset_loader)?);
     let shared: byonk::server::SharedConfig =
         std::sync::Arc::new(arc_swap::ArcSwap::from(config.clone()));
+    let package_manager =
+        byonk::server::build_package_manager(asset_loader.clone(), shared.clone());
     let content_pipeline = Arc::new(
-        ContentPipeline::new(shared, asset_loader, renderer.clone())
+        ContentPipeline::new(shared, asset_loader, renderer.clone(), package_manager)
             .expect("Failed to initialize content pipeline"),
     );
 
@@ -255,12 +257,9 @@ fn run_render_command(
     ) = if is_unregistered {
         let code = device_context.registration_code.as_deref().unwrap();
 
-        // Use registration screen if configured, otherwise default screen, otherwise built-in
-        let screen_to_use = config
-            .registration
-            .screen
-            .as_deref()
-            .or(config.default_screen.as_deref());
+        // The reserved DEFAULT device's screen (registration-aware). No
+        // DEFAULT screen configured -> built-in fallback.
+        let screen_to_use = config.default_device_screen();
 
         let svg = if let Some(screen_name) = screen_to_use {
             match content_pipeline.run_screen_by_name(
@@ -271,21 +270,21 @@ fn run_render_command(
                 Ok(result) => content_pipeline
                     .render_svg_from_script(&result, Some(&device_context))
                     .unwrap_or_else(|_| {
-                        content_pipeline.render_registration_screen(
-                            code,
+                        content_pipeline.render_builtin_fallback(
+                            Some(code),
                             display_spec.width,
                             display_spec.height,
                         )
                     }),
-                Err(_) => content_pipeline.render_registration_screen(
-                    code,
+                Err(_) => content_pipeline.render_builtin_fallback(
+                    Some(code),
                     display_spec.width,
                     display_spec.height,
                 ),
             }
         } else {
-            content_pipeline.render_registration_screen(
-                code,
+            content_pipeline.render_builtin_fallback(
+                Some(code),
                 display_spec.width,
                 display_spec.height,
             )
@@ -681,7 +680,53 @@ async fn run_server() -> anyhow::Result<()> {
     // Explicit BYONK_ADMIN_TOKEN env still wins (server resolves env before config.admin.token).
     let mut config = byonk::models::AppConfig::load_from_assets(&asset_loader)?;
     byonk::addon_options::apply_to_config(&addon, &mut config);
-    let state = server::create_app_state_with_config(asset_loader, std::sync::Arc::new(config))?;
+    let mut state = server::create_app_state_with_config(asset_loader, config)?;
+    // Add-on mode = the options file was present and parsed. Gates global-config
+    // admin writes to read-only (the add-on Options form is the sole editor).
+    state.addon_mode = matches!(addon, byonk::addon_options::ReadResult::Parsed(_));
+
+    // Startup package fetch: bring every configured package up to date once at
+    // boot, independent of the periodic interval. Without this, packages are
+    // not fetched on startup and — because the periodic loop below never
+    // refreshes when `package_refresh_interval == 0` (manual mode) — a restart
+    // (add-on update, HA reboot, options change, re-auth) would leave package
+    // screens missing until the user manually pressed "Update packages".
+    // `refresh_all(false)` reuses the on-disk cache for immutable pins, so this
+    // is cheap when nothing changed. Spawned so it never delays the listener.
+    {
+        let mgr = state.package_manager.clone();
+        tokio::spawn(async move {
+            if let Err(e) = tokio::task::spawn_blocking(move || mgr.refresh_all(false)).await {
+                tracing::warn!(error = %e, "startup package refresh task panicked");
+            }
+        });
+    }
+
+    // Periodic package refresh: re-fetches mutable (tag/branch) package pins
+    // on a config-driven interval. Spawned unconditionally (not gated on the
+    // interval being >0 at startup) so that enabling it later via a settings
+    // PATCH takes effect without a restart — the loop re-reads the interval
+    // from the live config each iteration.
+    {
+        let mgr = state.package_manager.clone();
+        let cfg = state.config.clone();
+        tokio::spawn(async move {
+            loop {
+                let secs = cfg.load().package_refresh_interval;
+                if secs == 0 {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    continue;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                tracing::debug!("Periodic package refresh tick");
+                let m = mgr.clone();
+                // Blocking git work off the async executor.
+                if let Err(e) = tokio::task::spawn_blocking(move || m.refresh_all(false)).await {
+                    tracing::warn!(error = %e, "periodic package refresh task panicked");
+                }
+            }
+        });
+    }
 
     // Build router: start with shared API routes, add production-only routes
     let app = server::build_router(state)
@@ -783,6 +828,7 @@ async fn run_dev_server() -> anyhow::Result<()> {
         renderer: state.renderer.clone(),
         file_watcher,
         asset_loader,
+        package_manager: state.package_manager.clone(),
         dev_overrides,
     };
 

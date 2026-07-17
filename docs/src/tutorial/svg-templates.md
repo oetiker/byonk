@@ -92,7 +92,7 @@ Pre-computed layout values are available under `layout.*`. These mirror the `lay
 | `layout.color_count` | integer | Number of colors in palette (default 4) |
 | `layout.grey_count` | integer | Number of grey levels in palette (default 4) |
 
-This is useful for conditional logic in SVG templates without needing Lua to pass the values through — for example, the `components/hinting.svg` include uses `layout.grey_count` to switch between mono and smooth font hinting.
+This is useful for conditional logic in SVG templates without needing Lua to pass the values through — for example, the `byonk-base-v1/hinting.svg` include uses `layout.grey_count` to switch between mono and smooth font hinting.
 
 ### Basic Interpolation
 
@@ -270,7 +270,7 @@ The palette follows a priority chain: **Lua script `colors` return** > **device 
 ```yaml
 devices:
   "ABCDE-FGHJK":
-    screen: transit
+    screen: byonk-builtin/useful/swiss-departure-board
     colors: "#000000,#FFFFFF,#FF0000"
 ```
 
@@ -377,17 +377,17 @@ text {
 
 ### Adaptive Hinting
 
-The `components/hinting.svg` include automatically applies the right hinting settings based on the display's grey levels:
+The `byonk-base-v1/hinting.svg` include automatically applies the right hinting settings based on the display's grey levels:
 
 ```svg
 <style>
   text {
-    {% include "components/hinting.svg" %}
+    {% include "byonk-base-v1/hinting.svg" %}
   }
 </style>
 ```
 
-On black-and-white displays (`grey_count <= 2`) it enables mono hinting with `crispEdges`; on displays with more grey levels it uses smooth hinting. All built-in screens use this component.
+On black-and-white displays (`grey_count <= 2`) it enables mono hinting with `crispEdges`; on displays with more grey levels it uses smooth hinting. All built-in screens use this include from the `byonk-base-v1` standard library.
 
 ### Hinting Demo Screen
 
@@ -449,11 +449,12 @@ For sizes without an exact bitmap strike, autotraced scalable outlines are used 
 
 ### Bitmap Font Demo Screen
 
-The built-in `fontdemo-bitmap` screen showcases all sizes and styles for a given font family. Configure it with the `font_prefix` parameter:
+The built-in `byonk-builtin/demo/font/bitmap` screen showcases all sizes and styles for a given font family. Assign it to a device and configure it with the `font_prefix` parameter:
 
 ```yaml
-screens:
-  fontdemo-bitmap:
+devices:
+  "YOUR:MAC:AD:DR:ES:S0":
+    screen: byonk-builtin/demo/font/bitmap
     params:
       font_prefix: X11Helv   # or X11LuSans, X11LuType, X11Term, X11Misc
 ```
@@ -614,25 +615,28 @@ Byonk supports embedding images in your SVG templates. You can include PNG, JPEG
 
 ### Asset Directory Structure
 
-Place your screen assets in a subdirectory matching your screen name:
+Place image assets inside the screen's own folder, alongside its `script.lua`, `screen.svg`,
+and `meta.yaml`:
 
 ```
 screens/
-├── hello.lua         # Script at top level
-├── hello.svg         # Template at top level
-└── hello/            # Assets for "hello" screen
-    ├── logo.png
-    ├── icon.svg
-    └── background.jpg
+└── example/
+    └── hello/            # screen ref: byonk-builtin/example/hello
+        ├── meta.yaml
+        ├── script.lua
+        ├── screen.svg
+        ├── logo.png
+        ├── icon.svg
+        └── background.jpg
 ```
 
 ### Method 1: Direct in SVG (Automatic Resolution)
 
-Simply reference images by filename in your SVG template. Byonk automatically resolves relative paths to the screen's asset directory and embeds them as data URIs:
+Simply reference images by filename in your SVG template. Byonk automatically resolves relative paths to the screen's own folder and embeds them as data URIs:
 
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480">
-  <!-- This automatically loads screens/hello/logo.png -->
+  <!-- This automatically loads the screen folder's logo.png -->
   <image x="10" y="10" width="64" height="64" href="logo.png"/>
 
   <text x="100" y="50">{{ data.greeting }}</text>
@@ -655,7 +659,7 @@ Simply reference images by filename in your SVG template. Byonk automatically re
 
 For more control, use `read_asset()` and `base64_encode()` in your Lua script:
 
-**screens/hello.lua:**
+**screens/example/hello/script.lua:**
 ```lua
 local icon = read_asset("icon.png")
 
@@ -668,7 +672,7 @@ return {
 }
 ```
 
-**screens/hello.svg:**
+**screens/example/hello/screen.svg:**
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480">
   <image x="10" y="10" width="64" height="64" href="{{ data.icon_src }}"/>
@@ -704,53 +708,40 @@ To use a full-screen background image:
 
 ## Template Reusability
 
-Byonk supports Tera's template inheritance and includes for reusable components.
+Byonk supports Tera's template inheritance and includes for reusable components. Shared SVG
+comes from two places:
 
-### Directory Structure
+- **`byonk-base-v1/…`** — byonk's built-in standard library of shared layouts and components
+  (the base layout, `hinting.svg`, `header.svg`, `footer.svg`, `status_bar.svg`), versioned
+  by the `-vN` suffix so a future `byonk-base-v2` can change the contract without breaking
+  existing screens.
+- **Repo-relative paths** — any `.svg` file inside your own screen package, referenced by its
+  path relative to the package root (e.g. `parts/panel.svg`). Because a package is one
+  atomic, versioned unit, a screen and the shared SVG it uses can never drift out of sync.
 
-Place reusable templates in special directories:
+### Package Structure
+
+A package is a directory with a `byonk-screens.yaml` manifest at its root; shared SVG lives
+alongside the screen folders:
 
 ```
-screens/
-├── layouts/              # Base templates for {% extends %}
-│   └── base.svg
-├── components/           # Reusable snippets for {% include %}
-│   ├── header.svg
-│   ├── footer.svg
-│   ├── hinting.svg
-│   └── status_bar.svg
-├── myscreen.lua
-└── myscreen.svg
+my-screens/                  # a package (its own repo, or the embedded byonk-builtin tree)
+├── byonk-screens.yaml       # package manifest
+├── parts/
+│   └── panel.svg            # shared SVG, referenced as "parts/panel.svg"
+└── dashboard/               # a screen folder
+    ├── meta.yaml
+    ├── script.lua
+    └── screen.svg
 ```
 
 ### Template Inheritance (extends)
 
-Create base layouts that define the overall structure with replaceable blocks:
+Use byonk's base layout, which defines the overall structure with replaceable blocks:
 
-**screens/layouts/base.svg:**
+**dashboard/screen.svg:**
 ```svg
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
-  <rect width="100%" height="100%" fill="white"/>
-
-  <!-- Header -->
-  <rect x="0" y="0" width="100%" height="60" fill="black"/>
-  <text x="20" y="40" fill="white" font-size="24" font-weight="bold">
-    {% block title %}BYONK{% endblock %}
-  </text>
-  {% block header_extra %}{% endblock %}
-
-  <!-- Content area -->
-  <g transform="translate(0, 60)">
-    {% block content %}{% endblock %}
-  </g>
-
-  {% block footer %}{% endblock %}
-</svg>
-```
-
-**screens/myscreen.svg:**
-```svg
-{% extends "layouts/base.svg" %}
+{% extends "byonk-base-v1/base.svg" %}
 
 {% block title %}My Screen{% endblock %}
 
@@ -768,73 +759,65 @@ Create base layouts that define the overall structure with replaceable blocks:
 ```
 
 **Key points:**
-- Use `{% extends "layouts/filename.svg" %}` at the start of your template
+- Use `{% extends "byonk-base-v1/base.svg" %}` at the start of your template (or a
+  repo-relative base of your own, e.g. `{% extends "layouts/base.svg" %}` where that path is
+  inside your package)
 - Define blocks with `{% block name %}...{% endblock %}`
 - Child templates override parent blocks
 - Unoverridden blocks use the parent's default content
 
 ### Template Includes
 
-Include reusable components in your templates:
+Include reusable components in your templates. Reference byonk's standard components by their
+`byonk-base-v1/…` path, or your own shared SVG by a repo-relative path:
 
-**screens/components/header.svg:**
-```svg
-<rect x="0" y="0" width="100%" height="60" fill="black"/>
-<text x="20" y="40" fill="white" font-size="24" font-weight="bold">
-  {{ title | default(value="BYONK") }}
-</text>
-{% if updated_at %}
-<text x="780" y="40" text-anchor="end" fill="#aaa" font-size="16">
-  {{ updated_at }}
-</text>
-{% endif %}
-```
-
-**screens/myscreen.svg:**
+**dashboard/screen.svg:**
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
   <rect width="800" height="480" fill="white"/>
 
-  <!-- Include the header component -->
-  {% include "components/header.svg" %}
+  <!-- Include a standard-library component -->
+  {% include "byonk-base-v1/header.svg" %}
 
   <!-- Main content -->
   <g transform="translate(0, 60)">
     <text x="400" y="200" text-anchor="middle">{{ data.message }}</text>
   </g>
 
-  <!-- Include the footer component -->
-  {% include "components/footer.svg" %}
+  <!-- Include your own shared SVG (repo-relative) -->
+  {% include "parts/panel.svg" %}
 </svg>
 ```
 
 **Key points:**
-- Use `{% include "components/filename.svg" %}` to insert a component
+- Use `{% include "byonk-base-v1/filename.svg" %}` for standard-library components, or a
+  repo-relative path for your package's own shared SVG
 - Included templates have access to all variables in the current context
 - Components work well for headers, footers, status bars, and other repeated elements
 
-### Built-in Components
+### Standard-Library Components
 
-Byonk includes several ready-to-use components:
+Byonk's `byonk-base-v1` package ships several ready-to-use components:
 
 | Component | Description |
 |-----------|-------------|
-| `components/header.svg` | Header bar with title and optional timestamp |
-| `components/footer.svg` | Footer with timestamp and optional text |
-| `components/hinting.svg` | Adaptive font hinting (mono for BW, smooth for greyscale) |
-| `components/status_bar.svg` | WiFi and battery indicators |
+| `byonk-base-v1/base.svg` | Base layout with title/content/footer blocks (for `{% extends %}`) |
+| `byonk-base-v1/header.svg` | Header bar with title and optional timestamp |
+| `byonk-base-v1/footer.svg` | Footer with timestamp and optional text |
+| `byonk-base-v1/hinting.svg` | Adaptive font hinting (mono for BW, smooth for greyscale) |
+| `byonk-base-v1/status_bar.svg` | WiFi and battery indicators |
 
 ### Combining Extends and Includes
 
 You can use both in the same template:
 
 ```svg
-{% extends "layouts/base.svg" %}
+{% extends "byonk-base-v1/base.svg" %}
 
 {% block title %}Dashboard{% endblock %}
 
 {% block header_extra %}
-{% include "components/status_bar.svg" %}
+{% include "byonk-base-v1/status_bar.svg" %}
 {% endblock %}
 
 {% block content %}

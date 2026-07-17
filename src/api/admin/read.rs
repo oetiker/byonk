@@ -4,8 +4,12 @@ use axum::{extract::State, http::HeaderMap, Json};
 use serde::Serialize;
 
 use crate::error::ApiError;
-use crate::models::param_schema::{schema_for_script, ParamField};
+use crate::models::compat::{compat_warning, engine_version};
+use crate::models::config::{AppConfig, RESERVED_DEFAULT_KEY};
+use crate::models::param_schema::ParamField;
 use crate::server::AppState;
+use crate::services::git_fetch::PinKind;
+use crate::services::package_status::{PackageState, PackageStatus};
 use crate::services::DeviceRegistry;
 
 use super::require_admin;
@@ -65,6 +69,18 @@ pub async fn get_config(
         {
             admin.remove(serde_yaml::Value::from("token"));
         }
+        // Strip package tokens — `PackageRef.token` is documented as
+        // "Secret token; redacted in read APIs".
+        if let Some(packages) = map
+            .get_mut(serde_yaml::Value::from("packages"))
+            .and_then(|p| p.as_mapping_mut())
+        {
+            for (_, pkg) in packages.iter_mut() {
+                if let Some(pkg_map) = pkg.as_mapping_mut() {
+                    pkg_map.remove(serde_yaml::Value::from("token"));
+                }
+            }
+        }
     }
 
     let json =
@@ -79,6 +95,9 @@ pub struct AdminDevice {
     pub mac: String,
     pub registration_code: String,
     pub registered: bool,
+    /// `true` for the reserved DEFAULT device (byonk-managed fallback, not a
+    /// physical device). The integration presents it specially.
+    pub reserved: bool,
     // telemetry (None when never seen)
     pub model: Option<String>,
     pub firmware_version: Option<String>,
@@ -91,6 +110,8 @@ pub struct AdminDevice {
     pub panel: Option<String>,
     pub colors: Option<String>,
     pub params: serde_json::Value,
+    pub refresh: Option<u32>,
+    pub name: Option<String>,
 }
 
 pub async fn list_devices(
@@ -112,11 +133,13 @@ pub async fn list_devices(
             .get_device_config(&mac)
             .or_else(|| config.get_device_config_for_code(&code));
         let registered = config.is_device_registered(&mac, Some(&code));
+        let reserved = mac == RESERVED_DEFAULT_KEY;
         out.push(AdminDevice {
             key: mac.clone(),
             mac,
             registration_code: code,
             registered,
+            reserved,
             model: Some(d.model.to_string()),
             firmware_version: Some(d.firmware_version.clone()),
             last_seen: Some(d.last_seen.to_rfc3339()),
@@ -129,6 +152,8 @@ pub async fn list_devices(
             params: dc
                 .map(|c| serde_json::to_value(&c.params).unwrap_or(serde_json::Value::Null))
                 .unwrap_or(serde_json::Value::Null),
+            refresh: dc.and_then(|c| c.refresh),
+            name: dc.and_then(|c| c.name.clone()),
         });
     }
 
@@ -145,6 +170,7 @@ pub async fn list_devices(
             mac: key.clone(),
             registration_code: String::new(),
             registered: true,
+            reserved: key == RESERVED_DEFAULT_KEY,
             model: None,
             firmware_version: None,
             last_seen: None,
@@ -155,6 +181,8 @@ pub async fn list_devices(
             panel: dc.panel.clone(),
             colors: dc.colors.clone(),
             params: serde_json::to_value(&dc.params).unwrap_or(serde_json::Value::Null),
+            refresh: dc.refresh,
+            name: dc.name.clone(),
         });
     }
 
@@ -163,9 +191,22 @@ pub async fn list_devices(
 
 #[derive(Serialize)]
 pub struct ScreenInfo {
-    pub name: String,
+    pub r#ref: String,
+    pub title: String,
+    pub description: String,
     pub params: Vec<ParamField>,
-    pub schema_error: Option<String>,
+    pub byonk: String,
+    pub compat_warning: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct PackageScreens {
+    pub handle: String,
+    pub name: String,
+    pub description: String,
+    pub author: String,
+    pub license: String,
+    pub screens: Vec<ScreenInfo>,
 }
 
 #[derive(Serialize)]
@@ -178,9 +219,34 @@ pub struct PanelInfo {
 
 #[derive(Serialize)]
 pub struct ScreensResponse {
-    pub screens: Vec<ScreenInfo>,
+    pub packages: Vec<PackageScreens>,
     pub panels: Vec<PanelInfo>,
     pub dither_algorithms: Vec<String>,
+}
+
+/// One entry in the package registry listing (`GET /packages`).
+#[derive(Serialize)]
+pub struct PackageInfo {
+    pub handle: String,
+    pub repo: Option<String>,
+    pub pin: Option<String>,
+    /// `true` for the embedded builtin or any package without a remote repo.
+    pub builtin: bool,
+    /// Whether an auth token is configured — the token itself is never serialized.
+    pub token_set: bool,
+    pub screen_count: usize,
+    /// `ready` | `fetching` | `error` | `offline`. Never-fetched non-builtin
+    /// handles report `error` — they are not currently serving.
+    pub status: String,
+    /// How `pin` was resolved (`sha`/`tag`/`branch`), or `embedded` for the
+    /// builtin package. `None` if never successfully fetched.
+    pub pin_kind: Option<PinKind>,
+    /// The commit sha the package is currently pinned/fetched at.
+    pub resolved_sha: Option<String>,
+    /// RFC3339 timestamp of the last successful fetch.
+    pub last_fetched: Option<String>,
+    /// The last fetch error, if any.
+    pub error: Option<String>,
 }
 
 /// Canonical dither algorithm names byonk understands.
@@ -204,25 +270,43 @@ pub async fn screens(
     require_admin(&state, &headers)?;
     let config = state.config.load();
 
-    let mut screens = Vec::new();
-    for (name, sc) in &config.screens {
-        let (params, schema_error) = match state.asset_loader.read_screen_string(&sc.script) {
-            Err(e) => (Vec::new(), Some(format!("cannot read script: {e}"))),
-            Ok(src) => match schema_for_script(&src) {
-                Ok(Some(schema)) => (schema.fields, None),
-                Ok(None) => (Vec::new(), None),
-                Err(e) => {
-                    tracing::warn!(screen = %name, error = %e, "invalid @params schema");
-                    (Vec::new(), Some(e))
-                }
-            },
-        };
-        screens.push(ScreenInfo {
-            name: name.clone(),
-            params,
-            schema_error,
+    // Group every resolved screen by its package handle. The package-level
+    // metadata (name/description/author/license) comes from that package's
+    // manifest, read off the first screen encountered for the handle.
+    let engine = engine_version();
+    let mut by_handle: std::collections::BTreeMap<String, PackageScreens> =
+        std::collections::BTreeMap::new();
+
+    for screen in state.package_manager.loader().list_all() {
+        let entry = by_handle.entry(screen.handle.clone()).or_insert_with(|| {
+            let m = screen.source.manifest();
+            PackageScreens {
+                handle: screen.handle.clone(),
+                name: m.name.clone(),
+                description: m.description.clone(),
+                author: m.author.clone(),
+                license: m.license.clone(),
+                screens: Vec::new(),
+            }
+        });
+        entry.screens.push(ScreenInfo {
+            r#ref: format!("{}/{}", screen.handle, screen.path),
+            title: screen.meta.title.clone(),
+            description: screen.meta.description.clone(),
+            params: screen.meta.params.fields.clone(),
+            byonk: screen.meta.byonk.clone(),
+            compat_warning: compat_warning(engine, &screen.meta.byonk),
         });
     }
+
+    // Deterministic order: screens within each package sorted by ref.
+    let packages: Vec<PackageScreens> = by_handle
+        .into_values()
+        .map(|mut p| {
+            p.screens.sort_by(|a, b| a.r#ref.cmp(&b.r#ref));
+            p
+        })
+        .collect();
 
     let panels = config
         .panels
@@ -236,8 +320,261 @@ pub async fn screens(
         .collect();
 
     Ok(Json(ScreensResponse {
-        screens,
+        packages,
         panels,
         dither_algorithms: DITHER_ALGORITHMS.iter().map(|s| s.to_string()).collect(),
     }))
+}
+
+/// Build the `PackageInfo` for a single handle from the live config and its
+/// fetch status (from `PackageManager::status_snapshot()`).
+///
+/// Shared by `packages()` (the read listing) and the package write handlers
+/// (`add`/`patch`/`update`), so both surfaces stay in sync.
+///
+/// Status mapping:
+/// - builtin: always `ready` / `pin_kind: embedded`, no sha/error/timestamp
+///   (there is nothing to fetch).
+/// - non-builtin with a status entry: `status` mirrors the entry's `state`
+///   (defaulting to `"error"` if `state` is `None`); `pin_kind`/
+///   `resolved_sha`/`error` copied through; `last_fetched` rendered RFC3339.
+/// - non-builtin with no status entry (never fetched — e.g. right after
+///   registration, before the first refresh runs): `status: "error"`, all
+///   other fields `None`. It is not currently serving, so `"error"` is the
+///   honest default.
+pub(crate) fn build_package_info(
+    config: &AppConfig,
+    status: Option<&PackageStatus>,
+    screen_count: usize,
+    handle: String,
+) -> PackageInfo {
+    let pkg = config.packages.get(&handle);
+    let repo = pkg.and_then(|p| p.repo.clone());
+    let builtin = handle == crate::services::package_loader::BUILTIN_HANDLE || repo.is_none();
+
+    let (status_str, pin_kind, resolved_sha, last_fetched, error) = if builtin {
+        (
+            "ready".to_string(),
+            Some(PinKind::Embedded),
+            None,
+            None,
+            None,
+        )
+    } else {
+        match status {
+            Some(s) => {
+                let state = s.state.unwrap_or(PackageState::Error);
+                let status_str = match state {
+                    PackageState::Ready => "ready",
+                    PackageState::Fetching => "fetching",
+                    PackageState::Error => "error",
+                    PackageState::Offline => "offline",
+                }
+                .to_string();
+                (
+                    status_str,
+                    s.pin_kind,
+                    s.resolved_sha.clone(),
+                    s.last_fetched.map(|dt| dt.to_rfc3339()),
+                    s.error.clone(),
+                )
+            }
+            None => ("error".to_string(), None, None, None, None),
+        }
+    };
+
+    PackageInfo {
+        repo,
+        pin: pkg.and_then(|p| p.pin.clone()),
+        builtin,
+        token_set: pkg.map(|p| p.token.is_some()).unwrap_or(false),
+        screen_count,
+        status: status_str,
+        pin_kind,
+        resolved_sha,
+        last_fetched,
+        error,
+        handle,
+    }
+}
+
+#[cfg(test)]
+mod build_package_info_tests {
+    use super::*;
+    use crate::models::config::PackageRef;
+
+    #[test]
+    fn builtin_handle_is_always_ready_and_embedded() {
+        let config = AppConfig::default();
+        let info = build_package_info(
+            &config,
+            None,
+            3,
+            crate::services::package_loader::BUILTIN_HANDLE.to_string(),
+        );
+        assert!(info.builtin);
+        assert_eq!(info.status, "ready");
+        assert_eq!(info.pin_kind, Some(PinKind::Embedded));
+        assert_eq!(info.resolved_sha, None);
+        assert_eq!(info.last_fetched, None);
+        assert_eq!(info.error, None);
+    }
+
+    #[test]
+    fn non_builtin_with_error_status_reports_it() {
+        let mut config = AppConfig::default();
+        config.packages.insert(
+            "weather".to_string(),
+            PackageRef {
+                repo: Some("github.com/x/y".to_string()),
+                pin: Some("main".to_string()),
+                token: None,
+            },
+        );
+        let status = PackageStatus {
+            state: Some(PackageState::Error),
+            resolved_sha: Some("deadbeef".to_string()),
+            last_fetched: None,
+            error: Some("network unreachable".to_string()),
+            pin_kind: Some(PinKind::Branch),
+        };
+        let info = build_package_info(&config, Some(&status), 0, "weather".to_string());
+        assert!(!info.builtin);
+        assert_eq!(info.status, "error");
+        assert_eq!(info.pin_kind, Some(PinKind::Branch));
+        assert_eq!(info.resolved_sha, Some("deadbeef".to_string()));
+        assert_eq!(info.error, Some("network unreachable".to_string()));
+    }
+
+    #[test]
+    fn non_builtin_never_fetched_defaults_to_error() {
+        let mut config = AppConfig::default();
+        config.packages.insert(
+            "weather".to_string(),
+            PackageRef {
+                repo: Some("github.com/x/y".to_string()),
+                pin: Some("main".to_string()),
+                token: None,
+            },
+        );
+        let info = build_package_info(&config, None, 0, "weather".to_string());
+        assert!(!info.builtin);
+        assert_eq!(info.status, "error");
+        assert_eq!(info.pin_kind, None);
+        assert_eq!(info.resolved_sha, None);
+        assert_eq!(info.last_fetched, None);
+        assert_eq!(info.error, None);
+    }
+
+    /// A `PackageRef` for a non-builtin handle, so `build_package_info`
+    /// exercises the status-mapping branch rather than the builtin shortcut.
+    fn config_with_weather() -> AppConfig {
+        let mut config = AppConfig::default();
+        config.packages.insert(
+            "weather".to_string(),
+            PackageRef {
+                repo: Some("github.com/x/y".to_string()),
+                pin: Some("main".to_string()),
+                token: None,
+            },
+        );
+        config
+    }
+
+    #[test]
+    fn entry_present_with_none_state_defaults_to_error() {
+        // The docstring's "defaulting to error if state is None" path — an
+        // entry exists but never reached a terminal state. Most likely to
+        // regress silently, so pin it down.
+        let config = config_with_weather();
+        let status = PackageStatus {
+            state: None,
+            resolved_sha: Some("abc123".to_string()),
+            last_fetched: None,
+            error: None,
+            pin_kind: Some(PinKind::Tag),
+        };
+        let info = build_package_info(&config, Some(&status), 0, "weather".to_string());
+        assert_eq!(info.status, "error");
+        // Other fields still copy through from the entry.
+        assert_eq!(info.pin_kind, Some(PinKind::Tag));
+        assert_eq!(info.resolved_sha, Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn state_serializes_to_snake_case_status_string() {
+        let config = config_with_weather();
+        for (state, expected) in [
+            (PackageState::Ready, "ready"),
+            (PackageState::Fetching, "fetching"),
+            (PackageState::Offline, "offline"),
+        ] {
+            let status = PackageStatus {
+                state: Some(state),
+                ..Default::default()
+            };
+            let info = build_package_info(&config, Some(&status), 0, "weather".to_string());
+            assert_eq!(info.status, expected, "state {state:?}");
+        }
+    }
+
+    #[test]
+    fn last_fetched_renders_as_rfc3339() {
+        use chrono::{DateTime, Utc};
+
+        let dt: DateTime<Utc> = DateTime::parse_from_rfc3339("2026-07-03T12:34:56+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        let config = config_with_weather();
+        let status = PackageStatus {
+            state: Some(PackageState::Ready),
+            last_fetched: Some(dt),
+            ..Default::default()
+        };
+        let info = build_package_info(&config, Some(&status), 0, "weather".to_string());
+
+        let rendered = info.last_fetched.expect("last_fetched present");
+        // Equals the canonical RFC3339 rendering...
+        assert_eq!(rendered, dt.to_rfc3339());
+        // ...and parses back to the same instant.
+        let reparsed = DateTime::parse_from_rfc3339(&rendered)
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(reparsed, dt);
+    }
+}
+
+/// List the registered screen packages. `byonk-builtin` is always present (it is
+/// registered by the package loader even without a `packages:` config entry); any
+/// additional entries come from `config.packages`. The package `token` is never
+/// serialized — only whether one is set (`token_set`).
+pub async fn packages(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<PackageInfo>>, ApiError> {
+    require_admin(&state, &headers)?;
+    let config = state.config.load();
+
+    // Screen counts per handle, from the source of truth (the package loader).
+    let loader = state.package_manager.loader();
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for screen in loader.list_all() {
+        *counts.entry(screen.handle).or_insert(0) += 1;
+    }
+
+    // Union of loader-registered handles and configured package handles, so the
+    // always-registered builtin appears and config-only packages are not dropped.
+    let mut handles: std::collections::BTreeSet<String> = loader.handles().into_iter().collect();
+    handles.extend(config.packages.keys().cloned());
+
+    let statuses = state.package_manager.status_snapshot();
+    let out = handles
+        .into_iter()
+        .map(|handle| {
+            let count = counts.get(&handle).copied().unwrap_or(0);
+            build_package_info(&config, statuses.get(&handle), count, handle)
+        })
+        .collect();
+
+    Ok(Json(out))
 }

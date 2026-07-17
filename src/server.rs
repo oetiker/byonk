@@ -21,7 +21,9 @@ use tracing::{Level, Span};
 use crate::api;
 use crate::assets::AssetLoader;
 use crate::error::ApiError;
-use crate::models::{AppConfig, DitherTuningValues};
+use crate::models::{config::PackageRef, AppConfig, DitherTuningValues};
+use crate::services::package_cache::PackageCache;
+use crate::services::package_manager::PackageManager;
 use crate::services::{ContentCache, ContentPipeline, InMemoryRegistry, RenderService};
 
 /// Runtime overrides set by the dev GUI and consumed by production handlers.
@@ -74,20 +76,79 @@ pub struct AppState {
     pub content_pipeline: Arc<ContentPipeline>,
     pub content_cache: Arc<ContentCache>,
     pub dev_overrides: DevOverrides,
+    pub package_manager: Arc<PackageManager>,
+    /// True when byonk started as an HA Supervisor add-on (i.e. `/data/options.json`
+    /// was present). In add-on mode, global-config admin writes are read-only.
+    pub addon_mode: bool,
 }
 
 /// Create application state from an asset loader.
 pub fn create_app_state(asset_loader: Arc<AssetLoader>) -> anyhow::Result<AppState> {
     let config = AppConfig::load_from_assets(&asset_loader)?;
-    create_app_state_with_config(asset_loader, Arc::new(config))
+    create_app_state_with_config(asset_loader, config)
 }
 
 /// Create application state with a custom config.
 pub fn create_app_state_with_config(
     asset_loader: Arc<AssetLoader>,
-    config: Arc<AppConfig>,
+    config: AppConfig,
 ) -> anyhow::Result<AppState> {
-    create_app_state_with_overrides(asset_loader, config, DevOverrides::default())
+    create_app_state_with_overrides(asset_loader, Arc::new(config), DevOverrides::default())
+}
+
+/// Build the set of on-disk packages from `PACKAGES_DIR`.
+///
+/// Only handles that appear in `registry` (i.e. `config.packages`) AND whose
+/// directory `dir/<handle>` exists on disk are included. Non-builtin packages
+/// are placed manually under `PACKAGES_DIR` in this phase; git fetching is a
+/// later plan. `byonk-builtin` needs no disk entry — it registers embedded
+/// inside `PackageLoader`.
+fn collect_disk_packages(
+    dir: &std::path::Path,
+    registry: &HashMap<String, PackageRef>,
+) -> HashMap<String, std::path::PathBuf> {
+    registry
+        .keys()
+        .filter_map(|handle| {
+            let path = dir.join(handle);
+            if path.is_dir() {
+                Some((handle.clone(), path))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Build the [`PackageManager`] from the embedded builtin package, any
+/// on-disk packages under `PACKAGES_DIR` declared in `config.packages`, and
+/// any previously fetched checkouts under the cache root (`PACKAGES_CACHE_DIR`
+/// env, falling back to a temp dir). Rebuilds the loader once before
+/// returning so the manager is immediately usable.
+pub fn build_package_manager(
+    asset_loader: Arc<AssetLoader>,
+    config: SharedConfig,
+) -> Arc<PackageManager> {
+    let cache_root = std::env::var("PACKAGES_CACHE_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("byonk-packages"));
+
+    let extra_disk = std::env::var("PACKAGES_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(|dir| collect_disk_packages(std::path::Path::new(&dir), &config.load().packages))
+        .unwrap_or_default();
+
+    let manager = PackageManager::new(
+        asset_loader,
+        config,
+        PackageCache::new(cache_root),
+        extra_disk,
+    );
+    manager.rebuild_loader();
+    manager
 }
 
 /// Create application state with shared overrides (for dev mode).
@@ -101,7 +162,9 @@ pub fn create_app_state_with_overrides(
         .filter(|s| !s.is_empty())
         .or_else(|| config.admin.token.clone());
 
-    let shared_config: SharedConfig = Arc::new(ArcSwap::from(config));
+    let shared_config: SharedConfig = Arc::new(ArcSwap::from(config.clone()));
+
+    let package_manager = build_package_manager(asset_loader.clone(), shared_config.clone());
 
     let registry = Arc::new(InMemoryRegistry::new());
     let renderer = Arc::new(RenderService::new(&asset_loader)?);
@@ -110,6 +173,7 @@ pub fn create_app_state_with_overrides(
             shared_config.clone(),
             asset_loader.clone(),
             renderer.clone(),
+            package_manager.clone(),
         )
         .map_err(|e| anyhow::anyhow!("Failed to create content pipeline: {e}"))?,
     );
@@ -125,6 +189,8 @@ pub fn create_app_state_with_overrides(
         content_pipeline,
         content_cache,
         dev_overrides,
+        package_manager,
+        addon_mode: false,
     })
 }
 
@@ -132,6 +198,7 @@ pub fn create_app_state_with_overrides(
 pub fn reload_config(state: &AppState) -> anyhow::Result<()> {
     let fresh = AppConfig::load_from_assets(&state.asset_loader)?;
     state.config.store(Arc::new(fresh));
+    state.package_manager.rebuild_loader();
     Ok(())
 }
 
@@ -217,17 +284,41 @@ mod reload_tests {
     use super::*;
 
     #[test]
+    fn test_appstate_has_package_manager_resolving_builtin() {
+        let loader = Arc::new(AssetLoader::new(None, None, None));
+        let cfg = AppConfig::default();
+        let state = create_app_state_with_config(loader, cfg).unwrap();
+        assert!(state
+            .package_manager
+            .loader()
+            .resolve("byonk-builtin/default")
+            .is_some());
+    }
+
+    #[test]
     fn test_config_swap_is_visible() {
+        use crate::models::config::{DeviceConfig, RESERVED_DEFAULT_KEY};
         let loader = Arc::new(AssetLoader::new(None, None, None));
         let state = create_app_state(loader).unwrap();
-        assert!(state.config.load().screens.contains_key("default"));
+        // Embedded config ships the reserved DEFAULT device (HA owns all
+        // other device registration).
+        assert_eq!(
+            state.config.load().default_device_screen(),
+            Some("byonk-builtin/default")
+        );
 
-        // Swap in a config with a sentinel screen and confirm the snapshot updates.
+        // Swap in a config whose DEFAULT device screen is a sentinel.
         let mut cfg = (**state.config.load()).clone();
-        cfg.default_screen = Some("sentinel".to_string());
+        cfg.devices.insert(
+            RESERVED_DEFAULT_KEY.to_string(),
+            DeviceConfig {
+                screen: "sentinel".to_string(),
+                ..Default::default()
+            },
+        );
         state.config.store(Arc::new(cfg));
         assert_eq!(
-            state.config.load().default_screen.as_deref(),
+            state.config.load().default_device_screen(),
             Some("sentinel")
         );
     }

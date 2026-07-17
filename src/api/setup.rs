@@ -9,7 +9,7 @@ use utoipa::ToSchema;
 
 use super::headers::HeaderMapExt;
 use crate::error::ApiError;
-use crate::models::{AppConfig, Device, DeviceId, DeviceModel};
+use crate::models::{AppConfig, Device, DeviceId};
 use crate::services::DeviceRegistry;
 
 /// Response from the /api/setup endpoint
@@ -46,7 +46,7 @@ pub struct SetupResponse {
     params(
         ("ID" = String, Header, description = "Device MAC address (e.g., 'AA:BB:CC:DD:EE:FF')"),
         ("FW-Version" = String, Header, description = "Firmware version (e.g., '1.7.1')"),
-        ("Model" = String, Header, description = "Device model ('og' or 'x')"),
+        ("Model" = String, Header, description = "Device model string reported by the device"),
     ),
     tag = "Device"
 )]
@@ -58,15 +58,13 @@ pub async fn handle_setup<R: DeviceRegistry>(
     // Extract headers
     let device_id_str = headers.require_str("ID")?;
     let fw_version = headers.get_str("FW-Version").unwrap_or("unknown");
-    let model_str = headers.get_str("Model").unwrap_or("og");
-
-    let model = DeviceModel::parse(model_str);
+    let model = headers.get_str("Model").unwrap_or("og").to_string();
     let device_id = DeviceId::new(device_id_str);
 
     tracing::info!(
         device_id = %device_id,
         fw_version = fw_version,
-        model = ?model,
+        model = %model,
         "Setup request received"
     );
 

@@ -5,7 +5,7 @@ pub mod write;
 
 use axum::{
     http::HeaderMap,
-    routing::{get, patch},
+    routing::{get, patch, post},
     Router,
 };
 
@@ -51,5 +51,12 @@ pub fn admin_router() -> Router<AppState> {
         .route("/pending", get(read::pending))
         .route("/config", get(read::get_config))
         .route("/screens", get(read::screens))
+        .route("/packages", get(read::packages).post(write::add_package))
+        .route(
+            "/packages/:handle",
+            patch(write::patch_package).delete(write::delete_package),
+        )
+        .route("/packages/:handle/update", post(write::update_package))
+        .route("/packages/update", post(write::update_all_packages))
         .route("/settings", patch(write::patch_settings))
 }

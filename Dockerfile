@@ -33,7 +33,8 @@ COPY --from=builder /app/target/release/byonk /app/byonk
 # Copy static assets
 COPY fonts ./fonts
 COPY screens ./screens
-COPY config.yaml ./config.yaml
+# Ship the device-free default; config.yaml is the developer's local test config.
+COPY default-config.yaml ./config.yaml
 
 EXPOSE 3000
 

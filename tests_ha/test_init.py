@@ -6,11 +6,15 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.byonk.const import CONF_ADDON_SLUG, CONF_BASE_URL, DOMAIN
 
 SCREENS = {
-    "screens": [{"name": "transit", "params": [], "schema_error": None}],
+    "packages": [{"handle": "byonk-builtin", "name": "byonk-builtin",
+                  "description": "Built-in screens", "author": "Byonk", "license": "MIT",
+                  "screens": [{"ref": "byonk-builtin/useful/swiss-departure-board",
+                                "title": "Swiss Departure Board", "description": "",
+                                "params": [], "byonk": "0.15", "compat_warning": None}]}],
     "panels": [{"name": "trmnl_og", "width": 800, "height": 480, "colors": "bw"}],
     "dither_algorithms": ["atkinson"],
 }
-CONFIG = {"registration": {"enabled": True}, "default_screen": "transit", "auth_mode": "api_key"}
+CONFIG = {"registration": {"enabled": True}, "auth_mode": "api_key"}
 
 
 def _entry():
@@ -30,8 +34,9 @@ async def test_setup_entry_creates_hub_and_loads(hass):
         patch("custom_components.byonk.coordinator.ByonkClient.async_get_pending", new=AsyncMock(return_value=[])),
         patch("custom_components.byonk.coordinator.ByonkClient.async_get_screens", new=AsyncMock(return_value=SCREENS)),
         patch("custom_components.byonk.coordinator.ByonkClient.async_get_config", new=AsyncMock(return_value=CONFIG)),
+        patch("custom_components.byonk.coordinator.ByonkClient.async_get_packages", new=AsyncMock(return_value=[])),
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.LOADED
-    assert entry.runtime_data.data.default_screen() == "transit"
+    assert entry.runtime_data.data.auth_mode() == "api_key"

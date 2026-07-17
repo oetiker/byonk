@@ -12,7 +12,7 @@ use super::headers::HeaderMapExt;
 use crate::error::ApiError;
 use crate::models::{
     normalize_algorithm_name, verify_ed25519_signature, ApiKey, AppConfig, Device, DeviceId,
-    DeviceModel, DisplaySpec, DitherTuningValues,
+    DisplaySpec, DitherTuningValues,
 };
 use crate::server::DevOverrides;
 use crate::services::{
@@ -161,7 +161,7 @@ pub fn resolve_render_params(
         ("Battery-Voltage" = Option<f32>, Header, description = "Battery voltage"),
         ("RSSI" = Option<i32>, Header, description = "WiFi signal strength"),
         ("FW-Version" = Option<String>, Header, description = "Firmware version"),
-        ("Model" = Option<String>, Header, description = "Device model ('og' or 'x')"),
+        ("Model" = Option<String>, Header, description = "Device model string reported by the device"),
     ),
     tag = "Display"
 )]
@@ -253,7 +253,6 @@ pub async fn handle_display<R: DeviceRegistry>(
             tracing::info!(
                 device_id = device_id_str,
                 registration_code = %registration_code,
-                custom_screen = config.registration.screen.as_deref(),
                 board = ?headers.get_str("Board"),
                 model = ?headers.get_str("Model"),
                 colors = ?headers.get_str("Colors"),
@@ -282,13 +281,9 @@ pub async fn handle_display<R: DeviceRegistry>(
                 ..Default::default()
             };
 
-            // Use registration screen if configured, otherwise use default screen
-            // Both have device.registration_code available for display
-            let screen_to_use = config
-                .registration
-                .screen
-                .as_deref()
-                .or(config.default_screen.as_deref());
+            // The reserved DEFAULT device's screen (registration-aware via
+            // device_context.registration_code). No DEFAULT screen -> built-in.
+            let screen_to_use = config.default_device_screen().filter(|s| !s.is_empty());
 
             let (registration_svg, screen_name, refresh_rate) = if let Some(screen_name) =
                 screen_to_use
@@ -309,8 +304,11 @@ pub async fn handle_display<R: DeviceRegistry>(
                                     "Registration screen template failed, using built-in"
                                 );
                                 (
-                                    content_pipeline
-                                        .render_registration_screen(code, width, height),
+                                    content_pipeline.render_builtin_fallback(
+                                        Some(code),
+                                        width,
+                                        height,
+                                    ),
                                     "_registration".to_string(),
                                     300,
                                 )
@@ -324,16 +322,16 @@ pub async fn handle_display<R: DeviceRegistry>(
                             "Registration screen failed, using built-in"
                         );
                         (
-                            content_pipeline.render_registration_screen(code, width, height),
+                            content_pipeline.render_builtin_fallback(Some(code), width, height),
                             "_registration".to_string(),
                             300,
                         )
                     }
                 }
             } else {
-                // No default screen configured, use built-in registration screen
+                // No DEFAULT device screen configured, use built-in fallback
                 (
-                    content_pipeline.render_registration_screen(code, width, height),
+                    content_pipeline.render_builtin_fallback(Some(code), width, height),
                     "_registration".to_string(),
                     300,
                 )
@@ -343,6 +341,36 @@ pub async fn handle_display<R: DeviceRegistry>(
                 .with_colors(Some(palette));
             let hash = cached.content_hash.clone();
             content_cache.store(cached);
+
+            // Record the unregistered device in the registry so it surfaces in
+            // /api/admin/pending for onboarding. Store the identity key so the
+            // pending registration_code matches the code shown on this screen
+            // (Device::new() would otherwise assign a random api_key).
+            let pending_id = DeviceId::new(device_id_str);
+            let mut pending_device = registry.find_by_id(&pending_id).await?.unwrap_or_else(|| {
+                Device::new(
+                    pending_id.clone(),
+                    model_str.to_string(),
+                    headers
+                        .get_str("FW-Version")
+                        .unwrap_or("unknown")
+                        .to_string(),
+                )
+            });
+            pending_device.api_key = identity_key.clone();
+            pending_device.model = model_str.to_string();
+            pending_device.firmware_version = headers
+                .get_str("FW-Version")
+                .unwrap_or("unknown")
+                .to_string();
+            if let Some(battery) = headers.get_parsed::<f32>("Battery-Voltage") {
+                pending_device.battery_voltage = Some(battery);
+            }
+            if let Some(rssi) = headers.get_parsed::<i32>("RSSI") {
+                pending_device.rssi = Some(rssi);
+            }
+            pending_device.last_seen = chrono::Utc::now();
+            registry.upsert(pending_device).await?;
 
             // Build image URL
             let host = headers.get_str("Host").unwrap_or("localhost:3000");
@@ -367,7 +395,7 @@ pub async fn handle_display<R: DeviceRegistry>(
     // Get or create device metadata
     let device_id = DeviceId::new(device_id_str);
     let model_str = headers.get_str("Model").unwrap_or("og");
-    let model = DeviceModel::parse(model_str);
+    let model = model_str.to_string();
     let fw_version = headers
         .get_str("FW-Version")
         .unwrap_or("unknown")
@@ -376,7 +404,7 @@ pub async fn handle_display<R: DeviceRegistry>(
     let mut device = registry
         .find_by_id(&device_id)
         .await?
-        .unwrap_or_else(|| Device::new(device_id.clone(), model, fw_version.clone()));
+        .unwrap_or_else(|| Device::new(device_id.clone(), model.clone(), fw_version.clone()));
 
     tracing::info!(
         device_id = %device_id,
@@ -495,6 +523,7 @@ pub async fn handle_display<R: DeviceRegistry>(
         registration_code = %registration_code,
         device_entry_key = ?device_entry_key,
         device_config_screen = ?device_config.map(|dc| &dc.screen),
+        device_name = ?device_config.and_then(|dc| dc.name.as_deref()),
         panel_source = ?panel_source,
         panel_colors = ?panel_colors_for_chain,
         panel_colors_actual = ?panel.and_then(|p| p.colors_actual.as_deref()),
@@ -566,6 +595,7 @@ pub async fn handle_display<R: DeviceRegistry>(
         dither_noise_scale: pre_script_tuning.noise_scale,
         dither_chroma_clamp: pre_script_tuning.chroma_clamp,
         dither_strength: pre_script_tuning.strength,
+        refresh_override: None,
     };
 
     // Run script, render SVG, and cache the result (PNG rendering happens in /api/image)

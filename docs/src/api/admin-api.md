@@ -57,12 +57,13 @@ config mapping, plus any configured devices that have never connected yet.
     "mac": "AA:BB:CC:DD:EE:FF",
     "registration_code": "ABCD-1234",
     "registered": true,
+    "reserved": false,
     "model": "og",
     "firmware_version": "1.7.1",
     "last_seen": "2026-06-28T10:15:00+00:00",
     "battery_voltage": 4.12,
     "rssi": -58,
-    "screen": "transit",
+    "screen": "byonk-builtin/useful/swiss-departure-board",
     "dither": "atkinson",
     "panel": null,
     "colors": null,
@@ -74,6 +75,8 @@ config mapping, plus any configured devices that have never connected yet.
 Field notes:
 - `key` — the config map key for this device (MAC or registration code).
 - `registered` — `true` if the device appears in the `devices:` config section.
+- `reserved` — `true` for the reserved `DEFAULT` device (byonk-managed fallback), `false`
+  for physical devices.
 - `registration_code` is an empty string for devices that appear in config but have never
   connected (it is never `null`).
 - Telemetry fields (`model`, `firmware_version`, `last_seen`, `battery_voltage`, `rssi`) are
@@ -117,38 +120,51 @@ Return the effective configuration as JSON, parsed from the on-disk `config.yaml
 
 ### GET /api/admin/screens
 
-Return the list of known screens (with their parameter schemas), panel profiles, and
-supported dither algorithms.
+Return the available screens **grouped by package**, plus panel profiles and supported
+dither algorithms. Every screen is addressed by its canonical `handle/path` reference — the
+value a device's `screen` field is set to.
 
 **Response 200**:
 
 ```json
 {
-  "screens": [
+  "packages": [
     {
-      "name": "transit",
-      "params": [
+      "handle": "byonk-builtin",
+      "name": "byonk-builtin",
+      "description": "Screens bundled with byonk.",
+      "author": "Byonk",
+      "license": "MIT",
+      "screens": [
         {
-          "name": "station",
-          "type": "string",
-          "required": false,
-          "default": "Olten, Südwest",
-          "label": "Stop name",
-          "description": "Stop name as used by the transport API"
-        },
-        {
-          "name": "limit",
-          "type": "int",
-          "required": false,
-          "default": 8,
-          "label": "Departures",
-          "description": "Number of departures to show",
-          "min": 1.0,
-          "max": 30.0,
-          "mode": "box"
+          "ref": "byonk-builtin/useful/swiss-departure-board",
+          "title": "Swiss Departure Board",
+          "description": "Live public-transport departures for a Swiss stop.",
+          "params": [
+            {
+              "name": "station",
+              "type": "string",
+              "required": false,
+              "default": "Olten, Südwest",
+              "label": "Stop name",
+              "description": "Stop name as used by the transport API"
+            },
+            {
+              "name": "limit",
+              "type": "int",
+              "required": false,
+              "default": 8,
+              "label": "Departures",
+              "description": "Number of departures to show",
+              "min": 1.0,
+              "max": 30.0,
+              "mode": "box"
+            }
+          ],
+          "byonk": "0.15",
+          "compat_warning": null
         }
-      ],
-      "schema_error": null
+      ]
     }
   ],
   "panels": [
@@ -156,7 +172,7 @@ supported dither algorithms.
       "name": "trmnl_og",
       "width": 800,
       "height": 480,
-      "colors": "bw"
+      "colors": "#000000,#555555,#AAAAAA,#FFFFFF"
     }
   ],
   "dither_algorithms": [
@@ -175,11 +191,203 @@ supported dither algorithms.
 ```
 
 Field notes:
-- `schema_error` is `null` when the schema parsed successfully, or a string describing the
-  error when the `@params` block is malformed or the script file cannot be read.
+- Screens are grouped under the package that provides them. The package-level `name`,
+  `description`, `author`, and `license` come from that package's `byonk-screens.yaml`
+  manifest.
+- `ref` is the canonical `handle/path` reference (e.g. `byonk-builtin/useful/gphoto`) — the
+  assignable screen id, and what `screen` is set to on a device.
+- `title` and `description` come from the screen's `meta.yaml`.
+- `params` is the screen's parameter schema (`ParamField[]`), sourced from `meta.yaml`.
+- `byonk` is the engine-compatibility requirement declared in `meta.yaml`.
+- `compat_warning` is `null` when the running engine satisfies the screen's `byonk`
+  requirement, or a human-readable string when it does not (the screen is still served).
 - `width` and `height` may be `null` for panels without explicit dimensions.
 - Optional `ParamField` keys (`label`, `description`, `min`, `max`, `step`, `unit`, `mode`,
   `options`) are omitted from the JSON when not set.
+
+---
+
+### GET /api/admin/packages
+
+List the registered screen packages. `byonk-builtin` is always present (it is the embedded
+built-in package, registered even without a `packages:` config entry); any additional entries
+come from the `packages:` config section.
+
+**Response 200** — array of package objects:
+
+```json
+[
+  {
+    "handle": "byonk-builtin",
+    "repo": null,
+    "pin": null,
+    "builtin": true,
+    "token_set": false,
+    "screen_count": 11,
+    "status": "ready",
+    "pin_kind": "embedded",
+    "resolved_sha": null,
+    "last_fetched": null,
+    "error": null
+  },
+  {
+    "handle": "weather",
+    "repo": "github.com/acme/screens",
+    "pin": "v1.4.0",
+    "builtin": false,
+    "token_set": true,
+    "screen_count": 3,
+    "status": "ready",
+    "pin_kind": "tag",
+    "resolved_sha": "13dce1d25716356cc7fc2ef7d137b8dfc3157fbf",
+    "last_fetched": "2026-07-03T12:34:56+00:00",
+    "error": null
+  }
+]
+```
+
+Field notes:
+- `handle` — the short registry key; also the first segment of every `handle/path` screen ref.
+- `repo` / `pin` — the source repo and pin for remote packages; both `null` for the embedded
+  built-in.
+- `builtin` — `true` for the embedded `byonk-builtin` handle (or any package without a remote
+  repo).
+- `token_set` — whether an auth token is configured for the package. The token itself is
+  **never** serialized in any response; only this boolean is exposed.
+- `screen_count` — number of screens the loader discovered in the package.
+- `status` — one of:
+  - `"ready"` — fetched (or embedded) and currently serving.
+  - `"fetching"` — a fetch is in progress right now.
+  - `"error"` — the package has never been fetched successfully (e.g. just
+    registered and the background fetch hasn't completed yet, or every fetch
+    attempt has failed and nothing is cached). It is not currently serving.
+  - `"offline"` — the most recent refresh attempt failed, but a previously
+    fetched checkout is still cached and continues to serve. A fetch failure
+    never takes down an already-cached package.
+- `pin_kind` — how `pin` was resolved: `"sha"`, `"tag"`, `"branch"`, or
+  `"embedded"` for the built-in package. `null` if the package has never been
+  successfully fetched. **A full commit `sha` pin is immutable** — it is
+  fetched once and cached forever, never re-fetched. **A `tag` or `branch`
+  pin is mutable** — it is re-fetched on demand (via the update endpoints
+  below) and automatically every `package_refresh_interval` seconds.
+- `resolved_sha` — the commit sha the package is currently pinned/fetched at,
+  or `null` if never successfully fetched. The cache is keyed by `repo` +
+  `resolved_sha`.
+- `last_fetched` — RFC3339 timestamp of the last successful fetch, or `null`
+  if never successfully fetched.
+- `error` — the most recent fetch error message, or `null` if the last fetch
+  (or the current state) has no error.
+
+---
+
+### POST /api/admin/packages
+
+Register a new remote screen package. Triggers an asynchronous background
+fetch (fire-and-forget) — the response reflects whatever status exists at
+that instant (typically no status yet, since the fetch hasn't completed).
+Poll `GET /api/admin/packages` for the settled result.
+
+**Request body**:
+
+```json
+{
+  "handle": "weather",
+  "repo": "github.com/acme/screens",
+  "pin": "v1.4.0",
+  "token": "ghp_xxxxxxxxxxxx"
+}
+```
+
+Required field: `handle`. `repo`, `pin`, and `token` are optional (though a
+package needs `repo`/`pin` to have anything to fetch). `token` is used for
+authenticating against a private repo and — like every package `token` — is
+never echoed back in any response.
+
+**Responses**:
+
+| Status | Meaning |
+|--------|---------|
+| `200` | Registered — returns the package's `PackageInfo` (same shape as `GET /api/admin/packages` entries) |
+| `400` | Validation error (missing `handle`) |
+| `409` | `handle` is `byonk-builtin` (reserved), a package with that `handle` already exists, or config is embedded/read-only (`set CONFIG_FILE`) |
+
+---
+
+### PATCH /api/admin/packages/:handle
+
+Update an existing package's `repo`, `pin`, or `token`. All fields are
+optional; an **omitted field keeps its current value** — in particular, an
+omitted `token` is never cleared.
+
+**Request body** (all fields optional):
+
+```json
+{
+  "pin": "v1.5.0"
+}
+```
+
+If `repo` or `pin` changes, a background re-fetch is triggered (same
+fire-and-forget semantics as `POST /api/admin/packages`).
+
+**Responses**:
+
+| Status | Meaning |
+|--------|---------|
+| `200` | Updated — returns the package's `PackageInfo` |
+| `404` | No package with that handle |
+| `409` | `handle` is `byonk-builtin` (reserved), or config is embedded/read-only |
+
+---
+
+### DELETE /api/admin/packages/:handle
+
+Remove a package registration. Rejected if any device's `screen` still
+references the handle (`<handle>/...`) — delete or repoint those device
+mappings first. On success, the in-memory loader is rebuilt immediately so
+the handle's screens stop resolving right away (the cached checkout on disk
+is left in place).
+
+**Responses**:
+
+| Status | Meaning |
+|--------|---------|
+| `200` | Deleted — `{"ok": true}` |
+| `404` | No package with that handle |
+| `409` | `handle` is `byonk-builtin` (reserved); a device references the handle (message names the offending device); or config is embedded/read-only |
+
+---
+
+### POST /api/admin/packages/:handle/update
+
+Trigger a re-fetch of a single package handle. Fire-and-forget: the fetch
+runs in the background, and the response reflects whatever status exists at
+that instant. Poll `GET /api/admin/packages` for the settled status. Calling
+this on `byonk-builtin` is accepted but is a no-op (the embedded package is
+never fetched).
+
+**Responses**:
+
+| Status | Meaning |
+|--------|---------|
+| `200` | Refresh triggered — returns the package's `PackageInfo` (pre-refresh snapshot) |
+| `404` | No package with that handle |
+
+---
+
+### POST /api/admin/packages/update
+
+Trigger a forced re-fetch of every registered non-builtin package
+(fire-and-forget, runs in the background). Forcing bypasses the "already
+cached and immutable" skip that a normal periodic refresh applies to sha
+pins — every handle gets a real fetch attempt. Poll `GET /api/admin/packages`
+for the settled status of each package.
+
+**Responses**:
+
+| Status | Meaning |
+|--------|---------|
+| `200` | Refresh triggered for all packages — `{"ok": true}` |
 
 ---
 
@@ -192,7 +400,7 @@ Create a new device mapping in `config.yaml`.
 ```json
 {
   "key": "AA:BB:CC:DD:EE:FF",
-  "screen": "transit",
+  "screen": "byonk-builtin/useful/swiss-departure-board",
   "panel": null,
   "dither": "atkinson",
   "colors": null,
@@ -200,13 +408,14 @@ Create a new device mapping in `config.yaml`.
 }
 ```
 
-Required fields: `key`, `screen`. All other fields are optional.
+Required fields: `key`, `screen`. `screen` must be a qualified `handle/path` reference (as
+listed by `GET /api/admin/screens`). All other fields are optional.
 
 **Responses**:
 
 | Status | Meaning |
 |--------|---------|
-| `200` | Created — `{"key": "AA:BB:CC:DD:EE:FF", "screen": "transit"}` |
+| `200` | Created — `{"key": "AA:BB:CC:DD:EE:FF", "screen": "byonk-builtin/useful/swiss-departure-board"}` |
 | `400` | Validation error (missing `key`/`screen`, unknown screen, param type mismatch, out-of-range value) |
 | `409` | Device key already exists, or config is embedded/read-only (`set CONFIG_FILE` env var) |
 
@@ -229,7 +438,7 @@ untouched.
 
 ```json
 {
-  "screen": "transit",
+  "screen": "byonk-builtin/useful/swiss-departure-board",
   "dither": "floyd-steinberg",
   "params": { "station": "Bern, Bahnhof", "limit": 5 }
 }
@@ -239,7 +448,7 @@ untouched.
 
 | Status | Meaning |
 |--------|---------|
-| `200` | Updated — `{"key": "AA:BB:CC:DD:EE:FF", "screen": "transit"}` |
+| `200` | Updated — `{"key": "AA:BB:CC:DD:EE:FF", "screen": "byonk-builtin/useful/swiss-departure-board"}` |
 | `400` | Validation error |
 | `404` | No device with that key |
 | `409` | Config is embedded/read-only |
@@ -256,7 +465,7 @@ Remove a device mapping from `config.yaml`.
 |--------|---------|
 | `200` | Deleted — `{"deleted": "AA:BB:CC:DD:EE:FF"}` |
 | `404` | No device with that key |
-| `409` | Config is embedded/read-only |
+| `409` | `:key` is the reserved `DEFAULT` device (it cannot be deleted), or config is embedded/read-only |
 
 ---
 
@@ -271,7 +480,7 @@ changed.
 {
   "registration_enabled": true,
   "auth_mode": "api_key",
-  "default_screen": "transit"
+  "package_refresh_interval": 3600
 }
 ```
 
@@ -279,7 +488,12 @@ changed.
 |-------|------|---------------|
 | `registration_enabled` | boolean | `true` / `false` |
 | `auth_mode` | string | `"api_key"` or `"ed25519"` |
-| `default_screen` | string | any screen name listed in `GET /api/admin/screens` |
+| `package_refresh_interval` | integer | seconds between automatic re-fetches of mutable (tag/branch) package pins; `0` disables periodic refresh (the default) |
+
+There is no `default_screen` or `registration_screen` field here — the screen
+shown to un-onboarded or unassigned devices is the reserved `DEFAULT` device,
+set like any other device via `POST` / `PATCH /api/admin/devices/DEFAULT`
+(see above).
 
 **Responses**:
 
@@ -308,24 +522,24 @@ the message `"config is embedded/read-only; set CONFIG_FILE"`.
 
 ---
 
-## @params schema format
+## Parameter schema format
 
-Screens can declare their accepted parameters in a Lua block comment at the top of the
-`.lua` file. Byonk parses this block as YAML — it is never executed. The result is returned
-by `GET /api/admin/screens` and validated on every write.
+Each screen declares its accepted parameters in the `params:` block of its `meta.yaml`.
+Byonk parses this as YAML. The result is returned by `GET /api/admin/screens` and validated
+on every device write.
 
 ### Syntax
 
-```lua
---[[ @params
-<param-name>:
-  type: <type>
-  # … other keys …
-]]
+```yaml
+# <screen>/meta.yaml
+title: My Screen
+description: What this screen shows.
+byonk: "0.15"
+params:
+  <param-name>:
+    type: <type>
+    # … other keys …
 ```
-
-The block must appear before the first `]]` that follows `@params`. Everything else in the
-file is ignored for schema purposes.
 
 ### Field reference
 
@@ -347,30 +561,34 @@ file is ignored for schema purposes.
 | `hidden` | bool | `false` | Do not show in UI (still accepted in API). |
 | `advanced` | bool | `false` | Collapse into an "advanced" section in UI. |
 
-### Example — transit screen
+### Example — Swiss departure board screen
 
-The bundled `transit` screen uses this `@params` block:
+The bundled `byonk-builtin/useful/swiss-departure-board` screen declares its params in
+`meta.yaml`:
 
-```lua
---[[ @params
-station:
-  type: string
-  label: "Stop name"
-  default: "Olten, Südwest"
-  description: "Stop name as used by the transport API"
-limit:
-  type: int
-  label: "Departures"
-  default: 8
-  min: 1
-  max: 30
-  mode: box
-  description: "Number of departures to show"
-]]
+```yaml
+# useful/swiss-departure-board/meta.yaml
+title: Swiss Departure Board
+description: Live public-transport departures for a Swiss stop.
+byonk: "0.15"
+params:
+  station:
+    type: string
+    label: "Stop name"
+    default: "Olten, Südwest"
+    description: "Stop name as used by the transport API"
+  limit:
+    type: int
+    label: "Departures"
+    default: 8
+    min: 1
+    max: 30
+    mode: box
+    description: "Number of departures to show"
 ```
 
-Field order is preserved in the schema response. The script accesses these values via the
-`params` Lua table (`params.station`, `params.limit`).
+Field order is preserved in the schema response. The `script.lua` accesses these values via
+the `params` Lua table (`params.station`, `params.limit`).
 
 ### Enum options
 

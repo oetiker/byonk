@@ -5,6 +5,28 @@ import voluptuous as vol
 from homeassistant.helpers import selector
 
 
+def coerce_params(param_fields: list[dict], values: dict) -> dict:
+    """Cast submitted form values to their declared @params types.
+
+    Home Assistant's NumberSelector always returns floats, but byonk requires a
+    real integer for ``int`` fields. Coerce whole-number floats back to int;
+    leave everything else (including non-whole floats, so byonk can report the
+    validation error) untouched.
+    """
+    types = {f["name"]: f.get("type", "string") for f in param_fields}
+    out: dict = {}
+    for name, value in values.items():
+        if (
+            types.get(name) == "int"
+            and isinstance(value, float)
+            and value.is_integer()
+        ):
+            out[name] = int(value)
+        else:
+            out[name] = value
+    return out
+
+
 def default_params(param_fields: list[dict]) -> dict:
     """Return {name: default} for fields that declare a default."""
     return {

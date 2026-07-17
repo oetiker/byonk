@@ -9,48 +9,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
-- **Home Assistant integration** (`custom_components/byonk/`): zero-touch
-  Supervised-only setup — installs and starts the Byonk add-on automatically,
-  generates the admin token without any user input, and keeps it in sync.  Exposes a
-  *Byonk Server* hub device (registration toggle, auth-mode and default-screen
-  selects, pending-devices sensor) and per-TRMNL device entities (battery, signal,
-  last-seen, firmware, model sensors; screen, dither, and panel selects).  New TRMNL
-  devices are onboarded via a Home Assistant Repairs issue; device→screen mappings and
-  per-screen parameters are managed through subentry forms.  Re-authentication
-  re-provisions the token automatically if it becomes invalid.  See *Getting Started →
-  Home Assistant Integration*.
-- **Home Assistant add-on**: run Byonk as a Supervisor add-on (references the
-  prebuilt `ghcr.io/oetiker/byonk` image) with persistent, editable
-  config/screens/fonts and a host port for TRMNL devices. Byonk reads
-  `admin_token` and `log_level` from the add-on options (`/data/options.json`);
-  the admin token stays the single source of truth, dormant until provisioned by
-  the forthcoming Byonk integration. See *Getting Started → Home Assistant Add-on*.
-- **Mandelbrot screen** (`mandelbrot`): Renders a random, aesthetically-pleasing region of the Mandelbrot set on each refresh. Picks from a curated list of well-known locations (Seahorse Valley, Elephant Valley, Mini Mandelbrot, Feigenbaum Point, ...), jitters the centre and zoom, computes escape-time in Lua with smooth iteration count, run-length encodes horizontal pixel runs for compact SVG output, and labels the view with location name, zoom factor, and complex centre coordinates. Builds the escape-time gradient from the panel's own `layout.colors` (sorted by Rec. 709 luminance), so greyscale panels get a black→white ramp and colour panels get a natural through-the-palette ramp (e.g. black→red→yellow→white on a 4-colour TRMNL OG).
-- **reTerminal E1004 panel profile** (`reterminal_e1004`): 1200×1600, 6-color Spectra 6 palette. Added to the bundled `config.yaml`.
+- **Home Assistant integration** (`custom_components/byonk/`): run Byonk from Home
+  Assistant with a zero-touch, Supervised/HAOS-only setup — it installs and starts the
+  Byonk add-on for you, provisions the add-on's admin token with no user input, and
+  keeps it in sync (re-provisioning automatically if it becomes invalid). New TRMNL
+  devices appear as native Home Assistant **Discovered** cards; configuring one creates
+  a per-device entry and writes its screen mapping to Byonk — Home Assistant is the
+  source of truth. Each device exposes battery, signal, last-seen, firmware, and model
+  sensors; screen, dither, panel, and refresh-interval controls; and a live control for
+  every parameter of its current screen (text, switch, or select, applied instantly).
+  Renaming a device in Home Assistant mirrors the name down to Byonk. A *Byonk Server*
+  hub device carries a registration switch, an "Update packages" button, and per-package
+  status sensors. Install through HACS as a custom repository (and via the default-store
+  search once accepted). See *Getting Started → Home Assistant Integration*.
+- **Home Assistant add-on**: run Byonk as a Home Assistant Supervisor add-on (references
+  the prebuilt `ghcr.io/oetiker/byonk` image) with persistent, editable
+  config/screens/fonts and a host port for TRMNL devices. The add-on's Configuration tab
+  is the source of truth for Byonk's global settings (`auth_mode`,
+  `package_refresh_interval`) and the screen-package registry; the integration shows
+  these read-only. See *Getting Started → Home Assistant Add-on*.
 - **Admin/management API** (`/api/admin/*`), gated by a bearer token
-  (`BYONK_ADMIN_TOKEN` env or `admin.token` in config; disabled = returns 404):
-  read device telemetry, pending/unregistered devices, effective config, and
-  screen param schemas; create/update/delete device mappings and update global
-  settings (`registration_enabled`, `auth_mode`, `default_screen`).
-- **Per-screen parameter schemas** via a parsed (not executed) `@params` header in
-  each screen's `.lua`, with UI hints (label, min/max/step/unit/mode, enum
-  options, sensitive/multiline/hidden/advanced). Bundled screens now declare
-  their params.
-- **Config hot-reload**: admin writes update `config.yaml` in place (preserving
-  comments and formatting via targeted YAML path patching) and take effect
-  without a restart.
+  (`BYONK_ADMIN_TOKEN` env or `admin.token` in config; disabled = returns 404): read
+  device telemetry, pending/unregistered devices, effective config, screen lists
+  (grouped by package), and screen parameter schemas; create/update/delete device
+  mappings (including the reserved `DEFAULT` device); register/update/remove screen
+  packages and trigger re-fetches; and update global settings. Admin writes patch
+  `config.yaml` in place — preserving comments and formatting — and take effect without
+  a restart.
+- **Screen packages**: screens are now distributed as packages instead of loose files.
+  A package is a directory tree with a `byonk-screens.yaml` manifest; every folder
+  containing a `meta.yaml` is a screen, made of `meta.yaml` (title, description, `byonk:`
+  engine compatibility, default `refresh:`, and a `params:` schema with UI hints),
+  `script.lua`, and `screen.svg`. Screens are referenced by a qualified `handle/path`
+  ref; the bundled screens ship in the embedded `byonk-builtin` package, and shared SVG
+  comes from the versioned `byonk-base-v1` standard library. A `packages:` registry maps
+  handles to git sources (`{ repo, pin, token? }`): a full-sha pin is immutable and
+  cached forever, while a tag/branch pin is re-fetched on demand or every
+  `package_refresh_interval` seconds; a failed refresh keeps serving the cached checkout
+  rather than taking the package offline. Package tokens are never exposed in API
+  responses.
+- **Mandelbrot screen** (`mandelbrot`): renders a random, aesthetically-pleasing region
+  of the Mandelbrot set on each refresh, chosen from curated locations (Seahorse Valley,
+  Elephant Valley, …), with escape-time computed in Lua and the gradient built from the
+  panel's own palette (greyscale panels get a black→white ramp, colour panels a natural
+  through-the-palette ramp).
+- **reTerminal E1004 panel profile** (`reterminal_e1004`): 1200×1600, 6-color Spectra 6
+  palette. Added to the bundled `config.yaml`.
 
 ### Changed
 
-- **Google Photos screen now displays photos in album order** instead of picking
-  a random one each refresh. The position advances by one per refresh interval and
-  is derived statelessly from the clock (no persistent state needed), so it
-  survives server restarts and wraps around at the end of the album.
-- **Panel auto-detection now also matches the `Model` header.** Previously a panel's `match:` was only compared against the firmware `Board` header. The reTerminal E1004 reports its panel identity in `Model` (and sends no `Board` header), so it could never auto-detect a panel and fell back to the greyscale default. Matching now tries `Board` first, then `Model`.
-- The "Device not registered" log line now includes the device's `Board`, `Model`, `Colors` headers and resolved `width`/`height`. This makes it possible to author a matching panel profile (`match:`, `colors:`) for a brand-new device directly from the server log, before it has been registered.
-- Refreshed all dependencies in `Cargo.lock` to the latest versions compatible with the existing `Cargo.toml` ranges (`cargo update`), including the `rustls-webpki` 0.103.10 → 0.103.13 security bump. No source changes required; full check suite passes.
+- **Breaking — screens are now packages.** The old flat `<name>.lua` + `<name>.svg`
+  screens, the `screens:` config block, and the `@params` Lua-comment schema are gone (a
+  clean break — no legacy reader). Existing screens must be migrated to the package
+  format, and every device's `screen` value must be a qualified `handle/path` ref (e.g.
+  `byonk-builtin/example/hello`). See *Screen Packages*.
+- **Reserved `DEFAULT` device replaces `default_screen` and `registration.screen`.** The
+  screen assigned to `devices.DEFAULT` is shown by every un-onboarded or unassigned
+  device, and the built-in default screen renders the pairing code for new devices. (In
+  Home Assistant this is the **Byonk Default** device's screen-select.)
+- **Google Photos screen now displays photos in album order** instead of picking a random
+  one each refresh. The position advances by one per refresh interval and is derived
+  statelessly from the clock, so it survives restarts and wraps at the end of the album.
+- **Panel auto-detection now also matches the `Model` header**, not just `Board`, so
+  panels that report their identity in `Model` (e.g. the reTerminal E1004) auto-detect
+  correctly instead of falling back to greyscale.
+- **Reported device model** is now the verbatim `Model` header the device sends, instead
+  of being collapsed to `og`/`x`. Genuine TRMNL OG/X devices are unaffected.
+- The **"device not registered" log line** now includes the device's `Board`, `Model`,
+  and `Colors` headers and the resolved `width`/`height`, so you can author a matching
+  panel profile straight from the log.
 
 ### Fixed
+
+- **`gphoto` screen**: `album_url` is no longer marked `required`, so the screen can be
+  selected (and used as the default) before an album URL is configured — it shows its
+  registration code until one is set.
 
 ## 0.15.0 - 2026-04-28
 

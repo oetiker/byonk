@@ -707,34 +707,36 @@ local ts = time_parse("2024-12-27 14:30", "%Y-%m-%d %H:%M")
 
 ### read_asset(path)
 
-Reads a file from the current screen's asset directory.
+Reads a file from the current screen's own folder.
 
 ```lua
--- From hello.lua, reads screens/hello/logo.png
+-- From screens/example/hello/script.lua, reads screens/example/hello/logo.png
 local logo_bytes = read_asset("logo.png")
 ```
 
 **Parameters:**
 | Name | Type | Description |
 |------|------|-------------|
-| `path` | string | Relative path within the screen's asset directory |
+| `path` | string | Relative path within the screen's folder |
 
 **Returns:** `string` - Binary file contents
 
 **Throws:** Error if the file cannot be read
 
-**Asset directory convention:**
+**Asset location convention:**
 
 ```
-screens/
-├── hello.lua         # Script at top level
-├── hello.svg         # Template at top level
-└── hello/            # Assets for "hello" screen
-    ├── logo.png
-    └── icon.svg
+screens/example/hello/     # The "hello" screen folder
+├── meta.yaml              # Title, description, params
+├── script.lua             # Data-fetch logic
+├── screen.svg             # Template
+├── logo.png               # Asset
+└── icon.svg               # Asset
 ```
 
-When `read_asset("logo.png")` is called from `hello.lua`, it reads `screens/hello/logo.png`.
+When `read_asset("logo.png")` is called from this screen's `script.lua`, it reads
+`screens/example/hello/logo.png` — a file sitting alongside `script.lua` in the
+screen's own folder.
 
 **Example: Embedding an image in data:**
 
@@ -895,7 +897,7 @@ local qr = qr_svg("https://example.com", {
 **Example in template:**
 
 ```lua
--- hello.lua
+-- script.lua
 return {
   data = {
     -- QR code anchored to bottom-right with 10px margin
@@ -911,7 +913,7 @@ return {
 ```
 
 ```svg
-<!-- hello.svg -->
+<!-- screen.svg -->
 {{ data.qr_code | safe }}
 ```
 

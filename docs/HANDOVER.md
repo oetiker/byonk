@@ -1,6 +1,11 @@
 # Handover — Byonk
 
-_Last updated: 2026-07-17 — **Fetch bug fix + "packages" → "screen repos" rename (everything incl. API) + HA error-visibility feature.** Branch `fix/screen-repos-and-fetch-scratch` @ `5b9fec7`, off `main` (`e61658d`). Tree clean. All local gates green. NOT pushed, NOT merged. Remaining: optional VM live-verify, then push/PR/release 0.16.1._
+_Last updated: 2026-07-17 — **Fetch bug fix + "packages" → "screen repos" rename (everything incl. API) + HA error-visibility feature. VM-verified live; PR #27 OPEN.** Branch `fix/screen-repos-and-fetch-scratch` (off `main` `e61658d`), pushed. All local gates green; VM live-verify passed via the from-source add-on. Remaining: PR #27 CI + review → squash-merge → release 0.16.1._
+
+## Status: PR #27 open, VM-verified
+- **PR:** https://github.com/oetiker/byonk/pull/27 — CI running at hand-off.
+- **VM live-verify (from-source `local_byonk`):** Supervisor accepted the new `screen_repos` schema; `GET /api/admin/screen-repos` serves the `tobitest` repo (`https://github.com/oetiker/byonk-dist-test.git`) at `status: ready`, sha `97578c5f`, serving `tobitest/hello`; old `/api/admin/packages` → 404; `GET /screens` wrapper field is `screen_repos`. The `/tmp` fetch error is gone. **VM state now:** `local_byonk` running (my branch, throwaway admin_token `verifytoken123` + tobitest), published `43664941_byonk` **stopped**, the existing integration entry still points at the stopped published add-on (in error) — re-onboard the integration (needs HA UI login) to see the renamed entities/button/repair issue, or restore by `ha addons stop local_byonk && ha addons start 43664941_byonk`.
+- Integration UI not verified live (HA login = password entry, disallowed) but covered by 77 pytest + the API wire check.
 
 ## TL;DR — what happened this session
 

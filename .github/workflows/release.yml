@@ -16,6 +16,14 @@ env:
   CARGO_TERM_COLOR: always
   PAGES_URL: "https://oetiker.github.io/byonk"
 
+# Least-privilege default. Jobs that need more (write/push, publish container,
+# create release, deploy pages) declare their own block below, which fully
+# overrides this default for that job — so this only tightens the two jobs that
+# otherwise ran with broad scopes: build-binaries and build-docs (checkout +
+# build + upload-artifact, all read-only).
+permissions:
+  contents: read
+
 jobs:
   version:
     name: Bump Version

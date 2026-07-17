@@ -34,7 +34,14 @@
             const currentPath = window.location.pathname;
             const pageMatch = currentPath.match(/\/byonk\/(?:v[\d.]+|dev)\/(.*)$/);
             const page = pageMatch ? pageMatch[1] : '';
-            window.location.href = newPath + page;
+            // `page` comes from the URL and is attacker-controllable, so resolve
+            // the target against our own origin and only navigate to a plain
+            // same-origin path — never an off-site or javascript: URL
+            // (CodeQL js/xss-through-dom).
+            const target = new URL(newPath + page, window.location.origin);
+            if (target.origin === window.location.origin) {
+                window.location.href = target.pathname + target.search + target.hash;
+            }
         });
 
         const label = document.createElement('span');

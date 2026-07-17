@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+# Least-privilege default for GITHUB_TOKEN: every job here only reads the repo
+# (build/test/lint, hassfest, and hacs/action's API reads). No job writes.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 

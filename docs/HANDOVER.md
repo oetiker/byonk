@@ -1,14 +1,44 @@
 # Handover — Byonk
 
-_Last updated: 2026-07-11 — **HA Distribution Readiness: all code/doc tasks (1–8) implemented, per-task-reviewed, and whole-branch-reviewed clean (opus: READY TO MERGE).** Branch `feat/ha-distribution-readiness` @ `2667b89`, tree clean. Bump-script bash tests + `cargo test --test addon_manifest_test` + `make docs` all GREEN locally. **Not yet VM-verified end-to-end; not merged.** The three remaining tasks are all MANUAL/human (drive the QEMU VM, merge, file external PRs)._
+_Last updated: 2026-07-17 — **HA Distribution Readiness: code/doc tasks 1–8 DONE + reviewed clean, AND Task 9 (fresh-VM end-to-end validation) DONE — 9/10 checklist items PASS on a clean HAOS build-from-source; item 1 (published image) is inherently post-release.** Branch `feat/ha-distribution-readiness` @ `01d8d1c` (pushed, PR #23 OPEN, CI green), tree clean, not merged. Remaining: Task 10 (merge → release 0.16.0) and Task 11 (external brands/HACS PRs, post-release). Two findings surfaced during validation — see below._
 
 ## TL;DR — resume here
 
-The distribution plan `docs/superpowers/plans/2026-07-06-ha-distribution-readiness.md` has 11 tasks. **Tasks 1–8 (all automatable code/doc work) are DONE + reviewed.** What remains is manual:
+The distribution plan `docs/superpowers/plans/2026-07-06-ha-distribution-readiness.md` has 11 tasks. **Tasks 1–9 are DONE.** What remains is manual:
 
-1. **Task 9 — VM validation (do first).** Deploy the whole stack to the HAOS test VM and work the refreshed 10-item checklist now in `tools/ha-vm/README.md` (§"Validation Checklist"). This is the pre-publish gate and also subsumes the old "VM-verify Plan B" step (no runtime changed since). Commands: `SMB_USER=byonk SMB_PASS=byonk make ha-rebuild` (add-on), `SMB_USER=byonk SMB_PASS=byonk make ha-deploy` + `make ha-ssh CMD="ha core restart"` (integration). Probe the admin API from the Mac host (`curl localhost:3000/...`), never printing the token (memory `ha-vm-admin-api-testing`).
-2. **Task 10 — Merge** (`superpowers:finishing-a-development-branch`). This branch is stacked on Plan B, so the PR carries Plan 1+2+3+A+B **and** the distribution work — it all merges to `main` together. **On the PR run, confirm the new `home-assistant` (hassfest + HACS) and `release-scripts` CI jobs go green** — that's the first real exercise of hassfest/HACS (they can't run locally).
-3. **Task 11 — External PRs (post-first-release), maintainer-filed.** Follow `docs/superpowers/ha-publishing.md`: file the `home-assistant/brands` PR, then the `hacs/default` PR, then remove `ignore: brands` from `ci.yml` and switch `ha-integration.md` to default-store wording.
+1. ~~**Task 9 — VM validation.**~~ **DONE 2026-07-17** on a wiped/fresh HAOS VM, byonk built from current source as a local add-on (see "VM validation results" below). Zero-touch install→trust→device-discovery→reauth→removal-grace all validated end-to-end.
+2. **Task 10 — Merge + release (do next).** `superpowers:finishing-a-development-branch`. PR #23 carries Plan 1+2+3+A+B + distribution work; merges to `main` together. Confirm the `home-assistant` (hassfest+HACS) and `release-scripts` CI jobs stay green on the merge. Then trigger the release (`workflow_dispatch` on `release.yml`, minor → **0.16.0**) for the first (non-publicised) release.
+3. **Task 11 — External PRs (post-first-release), maintainer-filed.** Follow `docs/superpowers/ha-publishing.md`: file `home-assistant/brands` PR (this is what lights up the currently-missing integration icon — see finding B), then `hacs/default`, then remove `ignore: brands` from `ci.yml` and switch `ha-integration.md` to default-store wording.
+
+## VM validation results (2026-07-17, fresh HAOS + from-source add-on)
+
+Method: `make ha-vm-clean` + fresh boot; onboarded via Chrome; Samba + Terminal&SSH add-ons installed; byonk built **from current source** as local add-on `local_byonk` (published-image path is post-release only). Checklist (`tools/ha-vm/README.md`):
+
+| # | Item | Result |
+|---|------|--------|
+| 1 | Add-on store / published image | ⏭️ deferred — post-release only (built from source) |
+| 2 | Integration discovery | ✅ |
+| 3 | Zero-touch trust (no token entry) | ✅ token auto-provisioned into add-on options |
+| 4 | Add-on-owned global config | ✅ settings/packages writes → **409** "edit in add-on Configuration tab" |
+| 5 | Reserved DEFAULT device | ✅ `reserved:true`, PATCH→200, DELETE→**409**, "Byonk Default" auto-provisioned |
+| 6 | Screen resolution (unregistered) | ✅ device shows pairing code; display→200 |
+| 7 | HA-owned per-device flow | ✅ Discovered card → Add → per-device entry (9 entities), code-labeled onboarding |
+| 8 | Screen packages | ✅ external git package fetched (`disttest` ready, screen served) — **see finding A** |
+| 9 | Re-authentication | ✅ blanked token → integration **auto-re-provisioned** (self-heal, no manual input) |
+| 10 | Removal grace | ✅ device disappeared → HA entry survived 1 cycle, pruned at strike 2 (`REMOVE_STRIKES=2`×60s) |
+
+### Findings (not merge-blockers for a non-publicised release; consider fast-follow)
+
+- **Finding A — schemeless package `repo:` URLs — FIXED (validate, not normalize).** `repo: github.com/…` used to be handed to gix as a **local path** (`/app/github.com/…`) → obscure `status:error`. Now `git_fetch::fetch` calls `validate_repo()` up front: a `repo:` must carry an explicit scheme (`https://`/`http://`/`git://`/`ssh://`/`file://`) or be scp-like (`git@host:owner/repo`); schemeless values and bare paths are rejected with a clear message ("…must be `https://…`; a local repository must be `file:///path`"). Local repos now require `file:///` (per user direction — no normalization). Docs (`configuration.md`) updated; unit tests added; `make check` green. **Not yet committed** (working tree on `feat/ha-distribution-readiness`).
+- **Finding B — integration icon missing until brands PR.** Fresh integration shows "icon not available" because HA fetches integration icons from `brands.home-assistant.io/byonk/` (populated by the Task-11 `home-assistant/brands` PR). The **add-on** icon renders fine (ships locally). Expected; not a blocker; assets are staged in `homeassistant/brands/`.
+
+### From-source add-on build notes (for repeatable fresh-VM validation)
+
+The local-add-on build-from-source path is **not committed** and had to be authored this session (scaffold in scratch: `config.yaml` sans `image:` + a Dockerfile). Key requirements discovered:
+- Build context = the full source tree byonk embeds at compile time via rust-embed (`screens/ fonts/ byonk-base/ static/` + `src crates Cargo.toml Cargo.lock default-config.yaml`) — exactly what `rebuild.sh` syncs.
+- Use a **Debian** rust base (`rust:1.88-slim-bookworm` + `apt install curl gcc libc6-dev`): `utoipa-swagger-ui`'s build script downloads Swagger UI via **`curl`** (Alpine attempts failed / were cache-replayed).
+- BuildKit **replays cached failed layers** across Dockerfile edits — bump the add-on `version:` (changes the `BUILD_VERSION` build-arg referenced before `cargo build`) to force a real rebuild; a bare `ha store reload` won't re-read the manifest, need `ha supervisor restart` (see `ha-vm-addon-manifest-sync-gap`).
+- **Consider committing** a `homeassistant/byonk/` local-build variant + wiring `make ha-rebuild` to scaffold it, so Task-9-style validation is one command next time.
 
 ## What the distribution work shipped (Tasks 1–8, range `586e3d3..2667b89`)
 

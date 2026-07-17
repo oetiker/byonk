@@ -428,6 +428,9 @@ mod tests {
     /// hermetic `refresh_one`/`refresh_all` source via a plain filesystem
     /// path — no network involved.
     struct FixtureRepo {
+        /// On-disk path (for fs cleanup / upstream mutation in tests).
+        dir: PathBuf,
+        /// `file://` URL of `dir` (a package `repo:` must carry a scheme).
         url: String,
         branch: String,
         head_sha: String,
@@ -498,7 +501,8 @@ mod tests {
         .to_string();
 
         FixtureRepo {
-            url: dir.to_string_lossy().to_string(),
+            url: format!("file://{}", dir.display()),
+            dir,
             branch,
             head_sha,
         }
@@ -530,7 +534,7 @@ mod tests {
 
         assert!(mgr.loader().resolve("weather/weather/forecast").is_some());
 
-        let _ = fs::remove_dir_all(&src.url);
+        let _ = fs::remove_dir_all(&src.dir);
     }
 
     #[test]
@@ -583,7 +587,7 @@ mod tests {
             "live checkout dir was torn down by a refresh that resolved to an already-cached sha"
         );
 
-        let _ = fs::remove_dir_all(&src.url);
+        let _ = fs::remove_dir_all(&src.dir);
     }
 
     #[test]
@@ -592,7 +596,7 @@ mod tests {
         packages.insert(
             "ghost".to_string(),
             PackageRef {
-                repo: Some("/no/such/repo/on/disk".to_string()),
+                repo: Some("file:///no/such/repo/on/disk".to_string()),
                 pin: Some("main".to_string()),
                 token: None,
             },
@@ -636,7 +640,7 @@ mod tests {
         // (so the cache key is unchanged), but the fetch itself now fails.
         // Its cached checkout from the successful fetch above is still on
         // disk under that same cache key.
-        let _ = fs::remove_dir_all(&src.url);
+        let _ = fs::remove_dir_all(&src.dir);
 
         mgr.refresh_one("weather");
         let status = mgr.status_snapshot();
@@ -646,7 +650,7 @@ mod tests {
         assert_eq!(st.resolved_sha.as_deref(), Some(src.head_sha.as_str()));
         assert!(mgr.loader().resolve("weather/weather/forecast").is_some());
 
-        let _ = fs::remove_dir_all(&src.url);
+        let _ = fs::remove_dir_all(&src.dir);
     }
 
     #[test]
@@ -699,7 +703,7 @@ mod tests {
             Some(PackageState::Ready)
         );
 
-        let _ = fs::remove_dir_all(&src.url);
+        let _ = fs::remove_dir_all(&src.dir);
     }
 
     #[test]
@@ -731,16 +735,16 @@ mod tests {
 
         // A new commit lands on the same branch upstream (v1 -> v2 content).
         write(
-            Path::new(&src.url),
+            &src.dir,
             "weather/forecast/script.lua",
             "return { data = { v = 2 } }\n",
         );
-        git(Path::new(&src.url), &["add", "-A"]);
-        git(Path::new(&src.url), &["commit", "-q", "-m", "v2"]);
+        git(&src.dir, &["add", "-A"]);
+        git(&src.dir, &["commit", "-q", "-m", "v2"]);
         let second_sha = String::from_utf8(
             Command::new("git")
                 .arg("-C")
-                .arg(&src.url)
+                .arg(&src.dir)
                 .args(["rev-parse", "HEAD"])
                 .output()
                 .expect("rev-parse")
@@ -763,7 +767,7 @@ mod tests {
             "branch pin must be re-fetched by refresh_all(false), not skipped"
         );
 
-        let _ = fs::remove_dir_all(&src.url);
+        let _ = fs::remove_dir_all(&src.dir);
     }
 
     #[test]
@@ -800,7 +804,7 @@ mod tests {
 
         // Upstream disappears entirely; if the sha pin were re-fetched this
         // would flip to Offline/Error.
-        let _ = fs::remove_dir_all(&src.url);
+        let _ = fs::remove_dir_all(&src.dir);
 
         mgr.refresh_all(false);
         let status = mgr.status_snapshot();
@@ -845,16 +849,16 @@ mod tests {
         // where `move_dir` expects to install a directory, so the git fetch
         // itself succeeds but the install (`move_dir`) fails.
         write(
-            Path::new(&src.url),
+            &src.dir,
             "weather/forecast/script.lua",
             "return { data = { v = 2 } }\n",
         );
-        git(Path::new(&src.url), &["add", "-A"]);
-        git(Path::new(&src.url), &["commit", "-q", "-m", "v2"]);
+        git(&src.dir, &["add", "-A"]);
+        git(&src.dir, &["commit", "-q", "-m", "v2"]);
         let sha2 = String::from_utf8(
             Command::new("git")
                 .arg("-C")
-                .arg(&src.url)
+                .arg(&src.dir)
                 .args(["rev-parse", "HEAD"])
                 .output()
                 .expect("rev-parse")
@@ -884,7 +888,7 @@ mod tests {
             "prior resolved sha is kept so the loader keeps serving it"
         );
 
-        let _ = fs::remove_dir_all(&src.url);
+        let _ = fs::remove_dir_all(&src.dir);
     }
 
     #[test]

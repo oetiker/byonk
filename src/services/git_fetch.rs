@@ -53,6 +53,36 @@ pub enum FetchError {
     /// `pin` didn't resolve to a sha, tag, or branch in `repo`.
     #[error("pin `{0}` not found in {1}")]
     PinNotFound(String, String),
+    /// `repo` has no usable transport scheme. We never guess: a schemeless
+    /// value like `github.com/owner/repo` would otherwise be handed to git as
+    /// a *local path* and fail obscurely, so we reject it up front with
+    /// guidance instead of normalizing it.
+    #[error("{0}")]
+    InvalidRepo(String),
+}
+
+/// Transport schemes we accept verbatim for a package `repo`.
+const REPO_SCHEMES: &[&str] = &["https://", "http://", "git://", "ssh://", "file://"];
+
+/// Validate that `repo` carries an explicit transport, so it is never
+/// silently treated as a local filesystem path. Accepts the `REPO_SCHEMES`
+/// URL forms and scp-like `user@host:path` (e.g. `git@github.com:o/r.git`).
+/// Rejects schemeless values (`github.com/o/r`) and bare paths (`/srv/x`,
+/// `./x`): a local repository must be given explicitly as `file:///path`.
+fn validate_repo(repo: &str) -> Result<(), FetchError> {
+    if REPO_SCHEMES.iter().any(|s| repo.starts_with(s)) {
+        return Ok(());
+    }
+    // scp-like: the segment before the first '/' carries a ':' (host:path).
+    if repo.split('/').next().unwrap_or(repo).contains(':') {
+        return Ok(());
+    }
+    Err(FetchError::InvalidRepo(redact_userinfo(format!(
+        "invalid package repo `{repo}`: add an explicit scheme \
+         (https://, git://, ssh:// or file://). A remote like \
+         `github.com/owner/repo` must be written `https://github.com/owner/repo`; \
+         a local repository must be `file:///path/to/repo`."
+    ))))
 }
 
 /// Build a [`FetchError::Git`] from a message, redacting any embedded
@@ -124,6 +154,7 @@ pub fn fetch(
     token: Option<&str>,
     dest: &Path,
 ) -> Result<FetchOutcome, FetchError> {
+    validate_repo(repo)?;
     if dest.exists() {
         std::fs::remove_dir_all(dest)
             .map_err(|e| git_err(format!("removing existing {}: {e}", dest.display())))?;
@@ -348,10 +379,62 @@ mod tests {
         assert!(!looks_like_sha("a1b2c3d")); // short sha not treated as full sha
     }
 
+    #[test]
+    fn test_validate_repo_accepts_explicit_schemes() {
+        for ok in [
+            "https://github.com/owner/repo",
+            "http://example.com/x.git",
+            "git://example.com/x.git",
+            "ssh://git@example.com/x.git",
+            "file:///srv/screens",
+            "git@github.com:owner/repo.git", // scp-like
+        ] {
+            assert!(validate_repo(ok).is_ok(), "should accept {ok}");
+        }
+    }
+
+    #[test]
+    fn test_validate_repo_rejects_schemeless_and_bare_paths() {
+        for bad in [
+            "github.com/owner/repo", // the trap: would be read as a local path
+            "/srv/screens",          // bare absolute path
+            "./screens",             // bare relative path
+            "screens",
+        ] {
+            let err = validate_repo(bad).expect_err("should reject {bad}");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("file:///"),
+                "guidance missing for {bad}: {msg}"
+            );
+            assert!(
+                msg.contains("https://"),
+                "guidance missing for {bad}: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_fetch_rejects_schemeless_repo() {
+        // A schemeless repo never touches the filesystem/network: it fails
+        // validation with InvalidRepo, not an obscure git "not a git dir".
+        let err = fetch(
+            "github.com/owner/repo",
+            "main",
+            None,
+            Path::new("/tmp/unused"),
+        )
+        .expect_err("schemeless repo must be rejected");
+        assert!(matches!(err, FetchError::InvalidRepo(_)), "got {err:?}");
+    }
+
     /// A source fixture repo built on disk with `gix` (init + one commit on
     /// the default branch + a tag), used as a hermetic `fetch()` source via
     /// a plain filesystem path (no network).
     struct FixtureRepo {
+        /// On-disk path (for fs cleanup / mutation in tests).
+        dir: PathBuf,
+        /// `file://` URL of `dir` (a package `repo:` must carry a scheme).
         url: String,
         branch: String,
         tag: String,
@@ -428,7 +511,8 @@ mod tests {
         .expect("create tag");
 
         FixtureRepo {
-            url: dir.to_string_lossy().to_string(),
+            url: format!("file://{}", dir.display()),
+            dir,
             branch,
             tag,
             head_sha,
@@ -511,7 +595,8 @@ mod tests {
             .unwrap_or_else(|| "main".to_string());
 
         let dest = tempdir_path("git_fetch_dest_nested");
-        let out = fetch(&dir.to_string_lossy(), &branch, None, &dest).expect("fetch nested");
+        let out = fetch(&format!("file://{}", dir.display()), &branch, None, &dest)
+            .expect("fetch nested");
 
         assert_eq!(out.resolved_sha, commit_id.to_string());
         assert!(dest.join("weather/forecast/meta.yaml").is_file());
@@ -535,7 +620,7 @@ mod tests {
         assert_eq!(out.pin_kind, PinKind::Branch);
         assert!(dest.join("byonk-screens.yaml").exists());
 
-        std::fs::remove_dir_all(&src.url).ok();
+        std::fs::remove_dir_all(&src.dir).ok();
         std::fs::remove_dir_all(&dest).ok();
     }
 
@@ -550,7 +635,7 @@ mod tests {
         assert_eq!(out.pin_kind, PinKind::Tag);
         assert!(dest.join("byonk-screens.yaml").exists());
 
-        std::fs::remove_dir_all(&src.url).ok();
+        std::fs::remove_dir_all(&src.dir).ok();
         std::fs::remove_dir_all(&dest).ok();
     }
 
@@ -565,7 +650,7 @@ mod tests {
         assert_eq!(out.pin_kind, PinKind::Sha);
         assert!(dest.join("byonk-screens.yaml").exists());
 
-        std::fs::remove_dir_all(&src.url).ok();
+        std::fs::remove_dir_all(&src.dir).ok();
         std::fs::remove_dir_all(&dest).ok();
     }
 
@@ -577,7 +662,7 @@ mod tests {
         let err = fetch(&src.url, "no-such-ref", None, &dest).unwrap_err();
         assert!(matches!(err, FetchError::PinNotFound(_, _)));
 
-        std::fs::remove_dir_all(&src.url).ok();
+        std::fs::remove_dir_all(&src.dir).ok();
     }
 
     /// Network path against a real, small, stable public repo. Not run by

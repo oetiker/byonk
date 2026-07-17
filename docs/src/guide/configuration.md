@@ -141,14 +141,14 @@ packages by repo and pin:
 ```yaml
 packages:
   byonk-builtin: {}                                       # embedded built-in (always present)
-  weather:      { repo: github.com/acme/screens, pin: v1.4.0 }
-  weather-beta: { repo: github.com/acme/screens, pin: v2.0.0 }  # same repo, different pin
-  private:      { repo: github.com/acme/secret, pin: v1.0.0, token: ${GITHUB_TOKEN} }
+  weather:      { repo: https://github.com/acme/screens, pin: v1.4.0 }
+  weather-beta: { repo: https://github.com/acme/screens, pin: v2.0.0 }  # same repo, different pin
+  private:      { repo: https://github.com/acme/secret, pin: v1.0.0, token: ${GITHUB_TOKEN} }
 ```
 
 | Property | Required | Description |
 |----------|----------|-------------|
-| `repo` | No | Source git repo. Omit for the embedded built-in. |
+| `repo` | No | Source git repo, as a full URL **with a scheme** — `https://…`, `git://…`, `ssh://…`, scp-style `git@host:owner/repo`, or `file:///path` for a local repo. A schemeless value like `github.com/acme/screens` is rejected (it would otherwise be read as a local path). Omit for the embedded built-in. |
 | `pin` | No | Commit sha, tag, or branch to fetch. |
 | `token` | No | Auth token for private repos (redacted in read APIs). |
 

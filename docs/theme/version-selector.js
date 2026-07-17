@@ -29,20 +29,19 @@
         });
 
         select.addEventListener('change', function() {
-            const newPath = this.value;
-            // Try to preserve the current sub-page path.
+            // Preserve the current sub-page path when switching versions.
             const currentPath = window.location.pathname;
             const pageMatch = currentPath.match(/\/byonk\/(?:v[\d.]+|dev)\/(.*)$/);
             const page = pageMatch ? pageMatch[1] : '';
-            // `page` is taken from the URL and is attacker-controllable, so only
-            // append it when it is a plain relative doc path (word chars, '.',
-            // '/', '-'). This rejects anything with a scheme or HTML/URL
-            // meta-character, so the navigation can never become an off-site or
-            // javascript: URL (CodeQL js/xss-through-dom).
-            if (/^[\w./-]*$/.test(page)) {
-                window.location.href = newPath + page;
-            } else {
-                window.location.href = newPath;
+            // Both the option value and `page` originate from the DOM/URL, so
+            // navigate only when the whole target is a plain root-relative path:
+            // a leading '/', not protocol-relative '//', and only word chars,
+            // '.', '/' or '-'. This rejects any scheme, host or HTML/URL
+            // meta-character, so it can never become an off-site or javascript:
+            // navigation (CodeQL js/xss-through-dom).
+            const target = this.value + page;
+            if (/^\/(?!\/)[\w./-]*$/.test(target)) {
+                window.location.href = target;
             }
         });
 

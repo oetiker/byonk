@@ -42,12 +42,17 @@ async def _async_setup_hub_entry(hass: HomeAssistant, entry: ByonkConfigEntry) -
     entry.runtime_data = coordinator
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    # Device entries that loaded before the hub raised ConfigEntryNotReady; nudge them.
+    # Reload dependent device entries so they (re)bind to *this* coordinator:
+    #  - SETUP_RETRY: they loaded before the hub and raised ConfigEntryNotReady.
+    #  - LOADED: the hub itself just reloaded (e.g. after a re-auth token
+    #    re-provision), which built a brand-new coordinator; a device entry that
+    #    stayed LOADED still points at the old, now-dead coordinator via its
+    #    runtime_data and would be stuck "unavailable" forever without a reload.
     for dev in hass.config_entries.async_entries(DOMAIN):
         if (
             CONF_DEVICE_KEY in dev.data
             and dev.data.get(CONF_HUB_ENTRY_ID) == entry.entry_id
-            and dev.state is ConfigEntryState.SETUP_RETRY
+            and dev.state in (ConfigEntryState.SETUP_RETRY, ConfigEntryState.LOADED)
         ):
             hass.async_create_task(hass.config_entries.async_reload(dev.entry_id))
     return True

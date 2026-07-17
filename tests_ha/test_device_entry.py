@@ -46,6 +46,32 @@ async def test_device_entry_not_ready_without_hub(hass, byonk):
     assert dev_entry.state is ConfigEntryState.SETUP_RETRY
 
 
+async def test_device_entry_rebinds_after_hub_reload(hass, byonk):
+    """Regression: a hub reload (e.g. after a re-auth token re-provision) builds a
+    brand-new coordinator. A device entry that stayed LOADED must be reloaded so it
+    rebinds to the live coordinator; otherwise its entities are stuck unavailable."""
+    byonk.devices = [DEV]
+    hub = make_hub_entry(hass)
+    await hass.config_entries.async_setup(hub.entry_id)
+    await hass.async_block_till_done()
+    dev_entry = make_device_entry(hass, hub, "AA:BB")
+    await hass.config_entries.async_setup(dev_entry.entry_id)
+    await hass.async_block_till_done()
+    assert dev_entry.state is ConfigEntryState.LOADED
+    old_coord = dev_entry.runtime_data
+
+    # Reload the hub -> a new coordinator object replaces the old one.
+    await hass.config_entries.async_reload(hub.entry_id)
+    await hass.async_block_till_done()
+
+    new_coord = hass.data[DOMAIN][hub.entry_id]
+    assert new_coord is not old_coord, "hub reload should build a fresh coordinator"
+    assert dev_entry.state is ConfigEntryState.LOADED
+    assert dev_entry.runtime_data is new_coord, "device entry must rebind to the live coordinator"
+    state = hass.states.get("sensor.trmnl_aa_bb_battery_voltage")
+    assert state is not None and state.state != "unavailable"
+
+
 async def test_remove_device_entry_deletes_byonk_mapping(hass, byonk):
     byonk.devices = [DEV]
     hub = make_hub_entry(hass)

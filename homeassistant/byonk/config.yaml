@@ -1,5 +1,5 @@
 name: Byonk
-version: "0.16.0"
+version: "0.17.0"
 slug: byonk
 description: Self-hosted content server for TRMNL e-ink devices
 url: https://github.com/oetiker/byonk/tree/main/homeassistant/byonk

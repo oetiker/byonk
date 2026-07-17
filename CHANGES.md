@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- **The Home Assistant integration now ships its own icon and logo.** On Home
+  Assistant 2026.3 and later the Byonk integration shows its proper brand icon
+  (bundled in the integration), instead of the generic placeholder.
+
 ### Changed
 
 ### Fixed

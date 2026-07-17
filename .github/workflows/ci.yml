@@ -102,9 +102,6 @@ jobs:
         uses: hacs/action@main
         with:
           category: integration
-          # TODO: remove `ignore: brands` once the home-assistant/brands pr is
-          # merged (see docs/superpowers/ha-publishing.md).
-          ignore: brands
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

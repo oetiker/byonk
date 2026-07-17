@@ -1,37 +1,42 @@
 # Byonk — Home Assistant Publishing (maintainer runbook)
 
-Two external PRs make byonk installable from the HACS default store with a
-proper icon. **File them in order** — HACS validation checks brands. Both
-require a published GitHub release whose tag contains `custom_components/byonk/`.
+Getting byonk into the HACS default store, with a proper icon.
 
-## 1. home-assistant/brands PR (do first)
+> **2026-07 update — the home-assistant/brands PR is obsolete.** Since Home
+> Assistant **2026.3**, custom integrations ship their **own** brand images in a
+> `brand/` directory, which take priority over the CDN. `home-assistant/brands`
+> **no longer accepts** custom-integration icons (PRs are auto-closed). HACS
+> likewise now accepts a local `brand/` directory instead of a brands entry.
+> See https://developers.home-assistant.io/blog/2026/02/24/brands-proxy-api
 
-1. Fork `https://github.com/home-assistant/brands`.
-2. Add these files (produced by `homeassistant/brands/rasterize.sh` in this repo):
-   - `custom_integrations/byonk/icon.png`     ← `homeassistant/brands/icon.png` (256×256)
-   - `custom_integrations/byonk/icon@2x.png`  ← `homeassistant/brands/icon@2x.png` (512×512)
-   - `custom_integrations/byonk/logo.png`     ← `homeassistant/brands/logo.png`
-   - `custom_integrations/byonk/logo@2x.png`  ← `homeassistant/brands/logo@2x.png`
-3. Open the PR; the domain `byonk` must match `manifest.json`'s `domain`.
+## 1. Brand images — shipped in-repo (done)
 
-### Caveat: Icon design feedback
+`custom_components/byonk/brand/` contains the integration's brand assets
+(produced by `homeassistant/brands/rasterize.sh`):
 
-The home-assistant/brands review prefers icons trimmed to the artwork with a
-transparent background. Byonk's icon is an intentional framed pixel-art scene
-on a solid background. Expect possible reviewer feedback requesting a
-trimmed/transparent variant — decide at PR time whether to trim or defend the
-framed design.
+- `icon.png` (256×256), `icon@2x.png` (512×512)
+- `logo.png` (512×253), `logo@2x.png` (1024×506)
+- optional dark variants: `dark_icon.png`, `dark_logo.png`, `dark_icon@2x.png`,
+  `dark_logo@2x.png`
 
-## 2. hacs/default PR (after brands merges)
+No `manifest.json` change is needed — HA auto-detects the directory. The icon
+renders on HA **2026.3+**; on older cores it falls back to the CDN (generic
+icon, since byonk is intentionally not in `home-assistant/brands`).
+
+## 2. hacs/default PR (default-store inclusion)
+
+Prerequisites, all met: `custom_components/byonk/` (single integration),
+`hacs.json`, `manifest.json` with `domain`/`name`/`version`/`documentation`/
+`issue_tracker`/`codeowners`, a published release, and the local `brand/` dir
+(HACS requires at least `brand/icon.png`).
 
 1. Fork `https://github.com/hacs/default`.
 2. In the `integration` file, add `oetiker/byonk` on its own line, keeping the
    list alphabetically sorted.
 3. Open the PR. The HACS bot validates the repo (release present, `hacs.json`,
-   `manifest.json`, brands icon reachable).
+   `manifest.json`, local brand icon reachable).
 
-## 3. After both merge
+## 3. After the hacs/default PR merges
 
-- Remove `ignore: brands` from the `hacs/action` step in `.github/workflows/ci.yml`.
-- Update `docs/src/guide/ha-integration.md` install steps from the custom-repo URL
-  flow to the default-store search flow.
+- Switch `docs/src/guide/ha-integration.md` install steps from the custom-repo
+  URL flow to the default-store search flow.

@@ -30,17 +30,19 @@
 
         select.addEventListener('change', function() {
             const newPath = this.value;
-            // Try to preserve the current page path
+            // Try to preserve the current sub-page path.
             const currentPath = window.location.pathname;
             const pageMatch = currentPath.match(/\/byonk\/(?:v[\d.]+|dev)\/(.*)$/);
             const page = pageMatch ? pageMatch[1] : '';
-            // `page` comes from the URL and is attacker-controllable, so resolve
-            // the target against our own origin and only navigate to a plain
-            // same-origin path — never an off-site or javascript: URL
-            // (CodeQL js/xss-through-dom).
-            const target = new URL(newPath + page, window.location.origin);
-            if (target.origin === window.location.origin) {
-                window.location.href = target.pathname + target.search + target.hash;
+            // `page` is taken from the URL and is attacker-controllable, so only
+            // append it when it is a plain relative doc path (word chars, '.',
+            // '/', '-'). This rejects anything with a scheme or HTML/URL
+            // meta-character, so the navigation can never become an off-site or
+            // javascript: URL (CodeQL js/xss-through-dom).
+            if (/^[\w./-]*$/.test(page)) {
+                window.location.href = newPath + page;
+            } else {
+                window.location.href = newPath;
             }
         });
 

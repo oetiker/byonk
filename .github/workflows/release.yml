@@ -37,6 +37,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # This job pushes the version-bump commit + tag to the protected
+          # `main` branch. The default GITHUB_TOKEN cannot push under the
+          # `main-protect` ruleset, so use RELEASE_TOKEN — a PAT whose owner is
+          # on the ruleset's bypass list. See docs/superpowers/ha-publishing.md.
+          token: ${{ secrets.RELEASE_TOKEN }}
 
       - name: Verify main branch
         run: |
@@ -280,6 +285,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
+          # Pushes the add-on version bump to protected `main`; needs the
+          # bypass PAT, same as the version job above.
+          token: ${{ secrets.RELEASE_TOKEN }}
 
       - name: Bump add-on config + changelog
         run: |

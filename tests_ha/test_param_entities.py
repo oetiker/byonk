@@ -8,7 +8,7 @@ CALIBRATOR_REF = "byonk-builtin/utils/calibrator"
 GPHOTO_REF = "byonk-builtin/demos/gphoto"
 
 SCREENS = {
-    "packages": [{"handle": "byonk-builtin", "name": "byonk-builtin",
+    "screen_repos": [{"handle": "byonk-builtin", "name": "byonk-builtin",
                   "description": "Built-in screens", "author": "Byonk", "license": "MIT",
                   "screens": [
                       {"ref": TRANSIT_REF, "title": "Swiss Departure Board", "description": "",
@@ -80,7 +80,7 @@ async def test_param_entities_reconcile_on_screen_change(hass, byonk):
 
 
 NUM_SCREENS = {
-    "packages": [{"handle": "byonk-builtin", "name": "byonk-builtin",
+    "screen_repos": [{"handle": "byonk-builtin", "name": "byonk-builtin",
                   "description": "Built-in screens", "author": "Byonk", "license": "MIT",
                   "screens": [
                       {"ref": TRANSIT_REF, "title": "Swiss Departure Board", "description": "",

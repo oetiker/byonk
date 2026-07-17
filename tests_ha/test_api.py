@@ -58,19 +58,19 @@ async def test_409_raises_readonly(mock_aioresponse):
             await client.async_update_settings({"registration_enabled": True})
 
 
-async def test_get_packages(mock_aioresponse):
+async def test_get_screen_repos(mock_aioresponse):
     mock_aioresponse.get(
-        f"{BASE}/api/admin/packages",
+        f"{BASE}/api/admin/screen-repos",
         payload=[{"handle": "weather", "builtin": False, "status": "ready"}],
     )
     async with aiohttp.ClientSession() as session:
         client = ByonkClient(session, BASE, "secret")
-        result = await client.async_get_packages()
+        result = await client.async_get_screen_repos()
     assert result[0]["handle"] == "weather"
 
 
-async def test_update_all_packages_posts(mock_aioresponse):
-    mock_aioresponse.post(f"{BASE}/api/admin/packages/update", payload={"ok": True})
+async def test_update_all_screen_repos_posts(mock_aioresponse):
+    mock_aioresponse.post(f"{BASE}/api/admin/screen-repos/update", payload={"ok": True})
     async with aiohttp.ClientSession() as session:
         client = ByonkClient(session, BASE, "secret")
-        assert await client.async_update_packages() == {"ok": True}
+        assert await client.async_update_screen_repos() == {"ok": True}

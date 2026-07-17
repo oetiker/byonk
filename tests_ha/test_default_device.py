@@ -30,7 +30,7 @@ DEFAULT_DEV = {
 }
 
 SCREENS = {
-    "packages": [{"handle": "byonk-builtin", "name": "byonk-builtin",
+    "screen_repos": [{"handle": "byonk-builtin", "name": "byonk-builtin",
                   "description": "Built-in screens", "author": "Byonk", "license": "MIT",
                   "screens": [
                       {"ref": DEFAULT_SCREEN, "title": "Default", "description": "",
@@ -102,7 +102,7 @@ async def test_default_device_exempt_from_orphan_prune(hass, byonk):
         panels=[],
         dither=[],
         config={},
-        packages=[],
+        screen_repos=[],
     )
     # REMOVE_STRIKES is 2; call twice to make sure a real orphan would have been
     # pruned by now, but DEFAULT never is.

@@ -20,20 +20,20 @@ async def async_setup_entry(
 ) -> None:
     if CONF_DEVICE_KEY in entry.data:
         return  # device entries have no hub buttons
-    async_add_entities([ByonkUpdatePackagesButton(entry.runtime_data)])
+    async_add_entities([ByonkUpdateScreenReposButton(entry.runtime_data)])
 
 
-class ByonkUpdatePackagesButton(ByonkHubEntity, ButtonEntity):
-    _attr_translation_key = "update_packages"
+class ByonkUpdateScreenReposButton(ByonkHubEntity, ButtonEntity):
+    _attr_translation_key = "update_screen_repos"
 
     def __init__(self, coordinator) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_update_packages"
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_update_screen_repos"
 
     async def async_press(self) -> None:
         try:
-            await self.coordinator.client.async_update_packages()
+            await self.coordinator.client.async_update_screen_repos()
         except ByonkApiError as err:
-            _LOGGER.warning("update packages failed: %s", err)
+            _LOGGER.warning("update screen repos failed: %s", err)
             return
         await self.coordinator.async_request_refresh()

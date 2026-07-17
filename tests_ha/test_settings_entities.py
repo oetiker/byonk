@@ -7,7 +7,7 @@ from tests_ha.conftest import make_hub_entry
 
 TRANSIT_REF = "byonk-builtin/useful/swiss-departure-board"
 SCREENS = {
-    "packages": [{"handle": "byonk-builtin", "name": "byonk-builtin",
+    "screen_repos": [{"handle": "byonk-builtin", "name": "byonk-builtin",
                   "description": "Built-in screens", "author": "Byonk", "license": "MIT",
                   "screens": [{"ref": TRANSIT_REF, "title": "Swiss Departure Board", "description": "",
                                 "params": [], "byonk": "0.15", "compat_warning": None}]}],
@@ -26,7 +26,7 @@ async def test_registration_switch_turns_on(hass):
         patch("custom_components.byonk.coordinator.ByonkClient.async_get_pending", new=AsyncMock(return_value=[])),
         patch("custom_components.byonk.coordinator.ByonkClient.async_get_screens", new=AsyncMock(return_value=SCREENS)),
         patch("custom_components.byonk.coordinator.ByonkClient.async_get_config", new=AsyncMock(return_value=CONFIG)),
-        patch("custom_components.byonk.coordinator.ByonkClient.async_get_packages", new=AsyncMock(return_value=[])),
+        patch("custom_components.byonk.coordinator.ByonkClient.async_get_screen_repos", new=AsyncMock(return_value=[])),
         patch("custom_components.byonk.coordinator.ByonkClient.async_update_settings", new=settings),
     ):
         await hass.config_entries.async_setup(entry.entry_id)

@@ -5,14 +5,14 @@ from tests_ha.conftest import make_hub_entry
 
 TRANSIT_REF = "byonk-builtin/useful/swiss-departure-board"
 SCREENS_NO_PARAMS = {
-    "packages": [{"handle": "byonk-builtin", "name": "byonk-builtin",
+    "screen_repos": [{"handle": "byonk-builtin", "name": "byonk-builtin",
                   "description": "Built-in screens", "author": "Byonk", "license": "MIT",
                   "screens": [{"ref": TRANSIT_REF, "title": "Swiss Departure Board", "description": "",
                                 "params": [], "byonk": "0.15", "compat_warning": None}]}],
     "panels": [{"name": "trmnl_og"}], "dither_algorithms": ["atkinson"],
 }
 SCREENS_PARAMS = {
-    "packages": [{"handle": "byonk-builtin", "name": "byonk-builtin",
+    "screen_repos": [{"handle": "byonk-builtin", "name": "byonk-builtin",
                   "description": "Built-in screens", "author": "Byonk", "license": "MIT",
                   "screens": [{"ref": TRANSIT_REF, "title": "Swiss Departure Board", "description": "",
                                 "params": [{"name": "limit", "type": "int", "default": 8}],

@@ -96,20 +96,20 @@ class ByonkClient:
     async def async_update_settings(self, payload: dict) -> dict:
         return await self._request("PATCH", "/api/admin/settings", json=payload)
 
-    async def async_get_packages(self) -> list[dict]:
-        return await self._request("GET", "/api/admin/packages")
+    async def async_get_screen_repos(self) -> list[dict]:
+        return await self._request("GET", "/api/admin/screen-repos")
 
-    async def async_add_package(self, payload: dict) -> dict:
-        return await self._request("POST", "/api/admin/packages", json=payload)
+    async def async_add_screen_repo(self, payload: dict) -> dict:
+        return await self._request("POST", "/api/admin/screen-repos", json=payload)
 
-    async def async_update_package(self, handle: str, payload: dict) -> dict:
-        return await self._request("PATCH", f"/api/admin/packages/{handle}", json=payload)
+    async def async_update_screen_repo(self, handle: str, payload: dict) -> dict:
+        return await self._request("PATCH", f"/api/admin/screen-repos/{handle}", json=payload)
 
-    async def async_delete_package(self, handle: str) -> dict:
-        return await self._request("DELETE", f"/api/admin/packages/{handle}")
+    async def async_delete_screen_repo(self, handle: str) -> dict:
+        return await self._request("DELETE", f"/api/admin/screen-repos/{handle}")
 
-    async def async_update_packages(self) -> dict:
-        return await self._request("POST", "/api/admin/packages/update")
+    async def async_update_screen_repos(self) -> dict:
+        return await self._request("POST", "/api/admin/screen-repos/update")
 
 
 async def _safe_json(resp: aiohttp.ClientResponse) -> dict:

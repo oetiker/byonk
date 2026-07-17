@@ -4,7 +4,7 @@ TRANSIT_REF = "byonk-builtin/useful/swiss-departure-board"
 WEATHER_REF = "byonk-builtin/useful/weather"
 DEV = {"key": "AA:BB", "registered": True, "screen": TRANSIT_REF, "dither": "atkinson", "panel": None}
 SCREENS = {
-    "packages": [{"handle": "byonk-builtin", "name": "byonk-builtin",
+    "screen_repos": [{"handle": "byonk-builtin", "name": "byonk-builtin",
                   "description": "Built-in screens", "author": "Byonk", "license": "MIT",
                   "screens": [
                       {"ref": TRANSIT_REF, "title": "Swiss Departure Board", "description": "",

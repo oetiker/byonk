@@ -10,14 +10,14 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::models::config::PackageRef;
+use crate::models::config::ScreenRepoRef;
 use crate::models::AppConfig;
 
-/// One package entry as it appears in the add-on options `packages:` list.
+/// One screen repo entry as it appears in the add-on options `screen_repos:` list.
 /// The handle is a field here (HAOS list rows are flat objects); byonk stores
-/// packages keyed by handle, so `apply_to_config` folds these into a map.
+/// screen repos keyed by handle, so `apply_to_config` folds these into a map.
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct AddonPackage {
+pub struct AddonScreenRepo {
     #[serde(default)]
     pub handle: String,
     #[serde(default)]
@@ -38,9 +38,9 @@ pub struct AddonOptions {
     #[serde(default)]
     pub auth_mode: Option<String>,
     #[serde(default)]
-    pub package_refresh_interval: Option<u64>,
+    pub screen_repo_refresh_interval: Option<u64>,
     #[serde(default)]
-    pub packages: Vec<AddonPackage>,
+    pub screen_repos: Vec<AddonScreenRepo>,
 }
 
 /// Outcome of attempting to read the options file.
@@ -138,21 +138,21 @@ pub fn apply_to_config(result: &ReadResult, config: &mut AppConfig) {
                 config.auth_mode = mode.to_string();
             }
         }
-        if let Some(interval) = opts.package_refresh_interval {
-            config.package_refresh_interval = interval;
+        if let Some(interval) = opts.screen_repo_refresh_interval {
+            config.screen_repo_refresh_interval = interval;
         }
 
-        // In add-on mode the package registry is taken authoritatively from
-        // options.json: it always replaces config.packages, so an empty list
+        // In add-on mode the screen repo registry is taken authoritatively from
+        // options.json: it always replaces config.screen_repos, so an empty list
         // clears any pre-existing registry.
-        config.packages = opts
-            .packages
+        config.screen_repos = opts
+            .screen_repos
             .iter()
             .filter(|p| !p.handle.trim().is_empty())
             .map(|p| {
                 (
                     p.handle.trim().to_string(),
-                    PackageRef {
+                    ScreenRepoRef {
                         repo: p.repo.clone(),
                         pin: p.pin.clone(),
                         token: p.token.clone(),
@@ -222,8 +222,8 @@ mod tests {
             admin_token: None,
             log_level: Some("info".to_string()),
             auth_mode: None,
-            package_refresh_interval: None,
-            packages: vec![],
+            screen_repo_refresh_interval: None,
+            screen_repos: vec![],
         });
         assert_eq!(
             log_filter(&r).as_deref(),
@@ -237,8 +237,8 @@ mod tests {
             admin_token: None,
             log_level: Some("verbose".to_string()),
             auth_mode: None,
-            package_refresh_interval: None,
-            packages: vec![],
+            screen_repo_refresh_interval: None,
+            screen_repos: vec![],
         });
         assert_eq!(log_filter(&unknown), None);
         assert_eq!(log_filter(&ReadResult::Missing), None);
@@ -250,8 +250,8 @@ mod tests {
             admin_token: Some("secret".to_string()),
             log_level: None,
             auth_mode: None,
-            package_refresh_interval: None,
-            packages: vec![],
+            screen_repo_refresh_interval: None,
+            screen_repos: vec![],
         });
         let mut config = embedded_config();
         config.admin.token = None;
@@ -268,8 +268,8 @@ mod tests {
             admin_token: Some("   ".to_string()),
             log_level: None,
             auth_mode: None,
-            package_refresh_interval: None,
-            packages: vec![],
+            screen_repo_refresh_interval: None,
+            screen_repos: vec![],
         });
         let mut config = embedded_config();
         config.admin.token = Some("stale".to_string());
@@ -283,8 +283,8 @@ mod tests {
             admin_token: None,
             log_level: Some("info".to_string()),
             auth_mode: None,
-            package_refresh_interval: None,
-            packages: vec![],
+            screen_repo_refresh_interval: None,
+            screen_repos: vec![],
         });
         let mut config = embedded_config();
         config.admin.token = Some("stale".to_string());
@@ -315,8 +315,8 @@ mod tests {
             admin_token: None,
             log_level: Some("verbose".to_string()),
             auth_mode: None,
-            package_refresh_interval: None,
-            packages: vec![],
+            screen_repo_refresh_interval: None,
+            screen_repos: vec![],
         });
         assert_eq!(invalid_log_level(&unknown).as_deref(), Some("verbose"));
 
@@ -324,8 +324,8 @@ mod tests {
             admin_token: None,
             log_level: Some("info".to_string()),
             auth_mode: None,
-            package_refresh_interval: None,
-            packages: vec![],
+            screen_repo_refresh_interval: None,
+            screen_repos: vec![],
         });
         assert_eq!(invalid_log_level(&valid), None);
 
@@ -333,8 +333,8 @@ mod tests {
             admin_token: None,
             log_level: Some("  ".to_string()),
             auth_mode: None,
-            package_refresh_interval: None,
-            packages: vec![],
+            screen_repo_refresh_interval: None,
+            screen_repos: vec![],
         });
         assert_eq!(invalid_log_level(&blank), None);
 
@@ -342,8 +342,8 @@ mod tests {
             admin_token: None,
             log_level: None,
             auth_mode: None,
-            package_refresh_interval: None,
-            packages: vec![],
+            screen_repo_refresh_interval: None,
+            screen_repos: vec![],
         });
         assert_eq!(invalid_log_level(&absent), None);
         assert_eq!(invalid_log_level(&ReadResult::Missing), None);
@@ -358,8 +358,8 @@ mod tests {
             r#"{
                 "admin_token":"secret",
                 "auth_mode":"ed25519",
-                "package_refresh_interval":900,
-                "packages":[
+                "screen_repo_refresh_interval":900,
+                "screen_repos":[
                     {"handle":"disttest","repo":"https://example.com/x.git","pin":"main","token":"gh_x"},
                     {"handle":"nopin","repo":"https://example.com/y.git"}
                 ]
@@ -369,12 +369,12 @@ mod tests {
         match read_options(&path) {
             ReadResult::Parsed(opts) => {
                 assert_eq!(opts.auth_mode.as_deref(), Some("ed25519"));
-                assert_eq!(opts.package_refresh_interval, Some(900));
-                assert_eq!(opts.packages.len(), 2);
-                assert_eq!(opts.packages[0].handle, "disttest");
-                assert_eq!(opts.packages[0].pin.as_deref(), Some("main"));
-                assert_eq!(opts.packages[1].pin, None);
-                assert_eq!(opts.packages[1].token, None);
+                assert_eq!(opts.screen_repo_refresh_interval, Some(900));
+                assert_eq!(opts.screen_repos.len(), 2);
+                assert_eq!(opts.screen_repos[0].handle, "disttest");
+                assert_eq!(opts.screen_repos[0].pin.as_deref(), Some("main"));
+                assert_eq!(opts.screen_repos[1].pin, None);
+                assert_eq!(opts.screen_repos[1].token, None);
             }
             other => panic!("expected Parsed, got {other:?}"),
         }
@@ -386,8 +386,8 @@ mod tests {
             admin_token: Some("t".to_string()),
             log_level: None,
             auth_mode: Some("ed25519".to_string()),
-            package_refresh_interval: Some(600),
-            packages: vec![AddonPackage {
+            screen_repo_refresh_interval: Some(600),
+            screen_repos: vec![AddonScreenRepo {
                 handle: "disttest".to_string(),
                 repo: Some("https://example.com/x.git".to_string()),
                 pin: Some("main".to_string()),
@@ -397,8 +397,11 @@ mod tests {
         let mut config = embedded_config();
         apply_to_config(&r, &mut config);
         assert_eq!(config.auth_mode, "ed25519");
-        assert_eq!(config.package_refresh_interval, 600);
-        let pkg = config.packages.get("disttest").expect("package present");
+        assert_eq!(config.screen_repo_refresh_interval, 600);
+        let pkg = config
+            .screen_repos
+            .get("disttest")
+            .expect("screen repo present");
         assert_eq!(pkg.repo.as_deref(), Some("https://example.com/x.git"));
         assert_eq!(pkg.pin.as_deref(), Some("main"));
         assert_eq!(pkg.token.as_deref(), Some("gh_x"));
@@ -407,21 +410,21 @@ mod tests {
     #[test]
     fn apply_preserves_absent_settings_but_clears_packages() {
         // A parsed options file that omits the new keys must not clobber config
-        // defaults (only admin_token and packages are authoritative-on-absence
+        // defaults (only admin_token and screen repos are authoritative-on-absence
         // / authoritative-replace; auth_mode and interval preserve-on-absent).
         let r = ReadResult::Parsed(AddonOptions {
             admin_token: None,
             log_level: None,
             auth_mode: None,
-            package_refresh_interval: None,
-            packages: vec![],
+            screen_repo_refresh_interval: None,
+            screen_repos: vec![],
         });
         let mut config = embedded_config();
         config.auth_mode = "api_key".to_string();
-        config.package_refresh_interval = 42;
-        config.packages.insert(
+        config.screen_repo_refresh_interval = 42;
+        config.screen_repos.insert(
             "stale".to_string(),
-            PackageRef {
+            ScreenRepoRef {
                 repo: Some("https://example.com/stale.git".to_string()),
                 pin: None,
                 token: None,
@@ -433,12 +436,12 @@ mod tests {
             "absent auth_mode keeps config value"
         );
         assert_eq!(
-            config.package_refresh_interval, 42,
+            config.screen_repo_refresh_interval, 42,
             "absent interval keeps config value"
         );
         assert!(
-            config.packages.is_empty(),
-            "empty packages list in Parsed options must clear a pre-existing registry"
+            config.screen_repos.is_empty(),
+            "empty screen repos list in Parsed options must clear a pre-existing registry"
         );
     }
 }

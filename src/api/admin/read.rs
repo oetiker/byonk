@@ -9,7 +9,7 @@ use crate::models::config::{AppConfig, RESERVED_DEFAULT_KEY};
 use crate::models::param_schema::ParamField;
 use crate::server::AppState;
 use crate::services::git_fetch::PinKind;
-use crate::services::package_status::{PackageState, PackageStatus};
+use crate::services::screen_repo_status::{ScreenRepoState, ScreenRepoStatus};
 use crate::services::DeviceRegistry;
 
 use super::require_admin;
@@ -69,13 +69,13 @@ pub async fn get_config(
         {
             admin.remove(serde_yaml::Value::from("token"));
         }
-        // Strip package tokens — `PackageRef.token` is documented as
+        // Strip screen repo tokens — `ScreenRepoRef.token` is documented as
         // "Secret token; redacted in read APIs".
-        if let Some(packages) = map
-            .get_mut(serde_yaml::Value::from("packages"))
+        if let Some(screen_repos) = map
+            .get_mut(serde_yaml::Value::from("screen_repos"))
             .and_then(|p| p.as_mapping_mut())
         {
-            for (_, pkg) in packages.iter_mut() {
+            for (_, pkg) in screen_repos.iter_mut() {
                 if let Some(pkg_map) = pkg.as_mapping_mut() {
                     pkg_map.remove(serde_yaml::Value::from("token"));
                 }
@@ -200,7 +200,7 @@ pub struct ScreenInfo {
 }
 
 #[derive(Serialize)]
-pub struct PackageScreens {
+pub struct ScreenRepoScreens {
     pub handle: String,
     pub name: String,
     pub description: String,
@@ -219,18 +219,18 @@ pub struct PanelInfo {
 
 #[derive(Serialize)]
 pub struct ScreensResponse {
-    pub packages: Vec<PackageScreens>,
+    pub screen_repos: Vec<ScreenRepoScreens>,
     pub panels: Vec<PanelInfo>,
     pub dither_algorithms: Vec<String>,
 }
 
-/// One entry in the package registry listing (`GET /packages`).
+/// One entry in the screen repo registry listing (`GET /screen-repos`).
 #[derive(Serialize)]
-pub struct PackageInfo {
+pub struct ScreenRepoInfo {
     pub handle: String,
     pub repo: Option<String>,
     pub pin: Option<String>,
-    /// `true` for the embedded builtin or any package without a remote repo.
+    /// `true` for the embedded builtin or any screen repo without a remote repo.
     pub builtin: bool,
     /// Whether an auth token is configured — the token itself is never serialized.
     pub token_set: bool,
@@ -239,9 +239,9 @@ pub struct PackageInfo {
     /// handles report `error` — they are not currently serving.
     pub status: String,
     /// How `pin` was resolved (`sha`/`tag`/`branch`), or `embedded` for the
-    /// builtin package. `None` if never successfully fetched.
+    /// builtin screen repo. `None` if never successfully fetched.
     pub pin_kind: Option<PinKind>,
-    /// The commit sha the package is currently pinned/fetched at.
+    /// The commit sha the screen repo is currently pinned/fetched at.
     pub resolved_sha: Option<String>,
     /// RFC3339 timestamp of the last successful fetch.
     pub last_fetched: Option<String>,
@@ -270,17 +270,17 @@ pub async fn screens(
     require_admin(&state, &headers)?;
     let config = state.config.load();
 
-    // Group every resolved screen by its package handle. The package-level
-    // metadata (name/description/author/license) comes from that package's
+    // Group every resolved screen by its screen repo handle. The screen-repo-level
+    // metadata (name/description/author/license) comes from that screen repo's
     // manifest, read off the first screen encountered for the handle.
     let engine = engine_version();
-    let mut by_handle: std::collections::BTreeMap<String, PackageScreens> =
+    let mut by_handle: std::collections::BTreeMap<String, ScreenRepoScreens> =
         std::collections::BTreeMap::new();
 
-    for screen in state.package_manager.loader().list_all() {
+    for screen in state.screen_repo_manager.loader().list_all() {
         let entry = by_handle.entry(screen.handle.clone()).or_insert_with(|| {
             let m = screen.source.manifest();
-            PackageScreens {
+            ScreenRepoScreens {
                 handle: screen.handle.clone(),
                 name: m.name.clone(),
                 description: m.description.clone(),
@@ -299,8 +299,8 @@ pub async fn screens(
         });
     }
 
-    // Deterministic order: screens within each package sorted by ref.
-    let packages: Vec<PackageScreens> = by_handle
+    // Deterministic order: screens within each screen repo sorted by ref.
+    let screen_repos: Vec<ScreenRepoScreens> = by_handle
         .into_values()
         .map(|mut p| {
             p.screens.sort_by(|a, b| a.r#ref.cmp(&b.r#ref));
@@ -320,16 +320,16 @@ pub async fn screens(
         .collect();
 
     Ok(Json(ScreensResponse {
-        packages,
+        screen_repos,
         panels,
         dither_algorithms: DITHER_ALGORITHMS.iter().map(|s| s.to_string()).collect(),
     }))
 }
 
-/// Build the `PackageInfo` for a single handle from the live config and its
-/// fetch status (from `PackageManager::status_snapshot()`).
+/// Build the `ScreenRepoInfo` for a single handle from the live config and its
+/// fetch status (from `ScreenRepoManager::status_snapshot()`).
 ///
-/// Shared by `packages()` (the read listing) and the package write handlers
+/// Shared by `screen_repos()` (the read listing) and the screen repo write handlers
 /// (`add`/`patch`/`update`), so both surfaces stay in sync.
 ///
 /// Status mapping:
@@ -342,15 +342,15 @@ pub async fn screens(
 ///   registration, before the first refresh runs): `status: "error"`, all
 ///   other fields `None`. It is not currently serving, so `"error"` is the
 ///   honest default.
-pub(crate) fn build_package_info(
+pub(crate) fn build_screen_repo_info(
     config: &AppConfig,
-    status: Option<&PackageStatus>,
+    status: Option<&ScreenRepoStatus>,
     screen_count: usize,
     handle: String,
-) -> PackageInfo {
-    let pkg = config.packages.get(&handle);
+) -> ScreenRepoInfo {
+    let pkg = config.screen_repos.get(&handle);
     let repo = pkg.and_then(|p| p.repo.clone());
-    let builtin = handle == crate::services::package_loader::BUILTIN_HANDLE || repo.is_none();
+    let builtin = handle == crate::services::screen_repo_loader::BUILTIN_HANDLE || repo.is_none();
 
     let (status_str, pin_kind, resolved_sha, last_fetched, error) = if builtin {
         (
@@ -363,12 +363,12 @@ pub(crate) fn build_package_info(
     } else {
         match status {
             Some(s) => {
-                let state = s.state.unwrap_or(PackageState::Error);
+                let state = s.state.unwrap_or(ScreenRepoState::Error);
                 let status_str = match state {
-                    PackageState::Ready => "ready",
-                    PackageState::Fetching => "fetching",
-                    PackageState::Error => "error",
-                    PackageState::Offline => "offline",
+                    ScreenRepoState::Ready => "ready",
+                    ScreenRepoState::Fetching => "fetching",
+                    ScreenRepoState::Error => "error",
+                    ScreenRepoState::Offline => "offline",
                 }
                 .to_string();
                 (
@@ -383,7 +383,7 @@ pub(crate) fn build_package_info(
         }
     };
 
-    PackageInfo {
+    ScreenRepoInfo {
         repo,
         pin: pkg.and_then(|p| p.pin.clone()),
         builtin,
@@ -401,16 +401,16 @@ pub(crate) fn build_package_info(
 #[cfg(test)]
 mod build_package_info_tests {
     use super::*;
-    use crate::models::config::PackageRef;
+    use crate::models::config::ScreenRepoRef;
 
     #[test]
     fn builtin_handle_is_always_ready_and_embedded() {
         let config = AppConfig::default();
-        let info = build_package_info(
+        let info = build_screen_repo_info(
             &config,
             None,
             3,
-            crate::services::package_loader::BUILTIN_HANDLE.to_string(),
+            crate::services::screen_repo_loader::BUILTIN_HANDLE.to_string(),
         );
         assert!(info.builtin);
         assert_eq!(info.status, "ready");
@@ -423,22 +423,22 @@ mod build_package_info_tests {
     #[test]
     fn non_builtin_with_error_status_reports_it() {
         let mut config = AppConfig::default();
-        config.packages.insert(
+        config.screen_repos.insert(
             "weather".to_string(),
-            PackageRef {
+            ScreenRepoRef {
                 repo: Some("github.com/x/y".to_string()),
                 pin: Some("main".to_string()),
                 token: None,
             },
         );
-        let status = PackageStatus {
-            state: Some(PackageState::Error),
+        let status = ScreenRepoStatus {
+            state: Some(ScreenRepoState::Error),
             resolved_sha: Some("deadbeef".to_string()),
             last_fetched: None,
             error: Some("network unreachable".to_string()),
             pin_kind: Some(PinKind::Branch),
         };
-        let info = build_package_info(&config, Some(&status), 0, "weather".to_string());
+        let info = build_screen_repo_info(&config, Some(&status), 0, "weather".to_string());
         assert!(!info.builtin);
         assert_eq!(info.status, "error");
         assert_eq!(info.pin_kind, Some(PinKind::Branch));
@@ -449,15 +449,15 @@ mod build_package_info_tests {
     #[test]
     fn non_builtin_never_fetched_defaults_to_error() {
         let mut config = AppConfig::default();
-        config.packages.insert(
+        config.screen_repos.insert(
             "weather".to_string(),
-            PackageRef {
+            ScreenRepoRef {
                 repo: Some("github.com/x/y".to_string()),
                 pin: Some("main".to_string()),
                 token: None,
             },
         );
-        let info = build_package_info(&config, None, 0, "weather".to_string());
+        let info = build_screen_repo_info(&config, None, 0, "weather".to_string());
         assert!(!info.builtin);
         assert_eq!(info.status, "error");
         assert_eq!(info.pin_kind, None);
@@ -466,13 +466,13 @@ mod build_package_info_tests {
         assert_eq!(info.error, None);
     }
 
-    /// A `PackageRef` for a non-builtin handle, so `build_package_info`
+    /// A `ScreenRepoRef` for a non-builtin handle, so `build_screen_repo_info`
     /// exercises the status-mapping branch rather than the builtin shortcut.
     fn config_with_weather() -> AppConfig {
         let mut config = AppConfig::default();
-        config.packages.insert(
+        config.screen_repos.insert(
             "weather".to_string(),
-            PackageRef {
+            ScreenRepoRef {
                 repo: Some("github.com/x/y".to_string()),
                 pin: Some("main".to_string()),
                 token: None,
@@ -487,14 +487,14 @@ mod build_package_info_tests {
         // entry exists but never reached a terminal state. Most likely to
         // regress silently, so pin it down.
         let config = config_with_weather();
-        let status = PackageStatus {
+        let status = ScreenRepoStatus {
             state: None,
             resolved_sha: Some("abc123".to_string()),
             last_fetched: None,
             error: None,
             pin_kind: Some(PinKind::Tag),
         };
-        let info = build_package_info(&config, Some(&status), 0, "weather".to_string());
+        let info = build_screen_repo_info(&config, Some(&status), 0, "weather".to_string());
         assert_eq!(info.status, "error");
         // Other fields still copy through from the entry.
         assert_eq!(info.pin_kind, Some(PinKind::Tag));
@@ -505,15 +505,15 @@ mod build_package_info_tests {
     fn state_serializes_to_snake_case_status_string() {
         let config = config_with_weather();
         for (state, expected) in [
-            (PackageState::Ready, "ready"),
-            (PackageState::Fetching, "fetching"),
-            (PackageState::Offline, "offline"),
+            (ScreenRepoState::Ready, "ready"),
+            (ScreenRepoState::Fetching, "fetching"),
+            (ScreenRepoState::Offline, "offline"),
         ] {
-            let status = PackageStatus {
+            let status = ScreenRepoStatus {
                 state: Some(state),
                 ..Default::default()
             };
-            let info = build_package_info(&config, Some(&status), 0, "weather".to_string());
+            let info = build_screen_repo_info(&config, Some(&status), 0, "weather".to_string());
             assert_eq!(info.status, expected, "state {state:?}");
         }
     }
@@ -526,12 +526,12 @@ mod build_package_info_tests {
             .unwrap()
             .with_timezone(&Utc);
         let config = config_with_weather();
-        let status = PackageStatus {
-            state: Some(PackageState::Ready),
+        let status = ScreenRepoStatus {
+            state: Some(ScreenRepoState::Ready),
             last_fetched: Some(dt),
             ..Default::default()
         };
-        let info = build_package_info(&config, Some(&status), 0, "weather".to_string());
+        let info = build_screen_repo_info(&config, Some(&status), 0, "weather".to_string());
 
         let rendered = info.last_fetched.expect("last_fetched present");
         // Equals the canonical RFC3339 rendering...
@@ -544,35 +544,35 @@ mod build_package_info_tests {
     }
 }
 
-/// List the registered screen packages. `byonk-builtin` is always present (it is
-/// registered by the package loader even without a `packages:` config entry); any
-/// additional entries come from `config.packages`. The package `token` is never
+/// List the registered screen repos. `byonk-builtin` is always present (it is
+/// registered by the screen repo loader even without a `screen_repos:` config entry); any
+/// additional entries come from `config.screen_repos`. The screen repo `token` is never
 /// serialized — only whether one is set (`token_set`).
-pub async fn packages(
+pub async fn screen_repos(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<Vec<PackageInfo>>, ApiError> {
+) -> Result<Json<Vec<ScreenRepoInfo>>, ApiError> {
     require_admin(&state, &headers)?;
     let config = state.config.load();
 
-    // Screen counts per handle, from the source of truth (the package loader).
-    let loader = state.package_manager.loader();
+    // Screen counts per handle, from the source of truth (the screen repo loader).
+    let loader = state.screen_repo_manager.loader();
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for screen in loader.list_all() {
         *counts.entry(screen.handle).or_insert(0) += 1;
     }
 
-    // Union of loader-registered handles and configured package handles, so the
-    // always-registered builtin appears and config-only packages are not dropped.
+    // Union of loader-registered handles and configured screen repo handles, so the
+    // always-registered builtin appears and config-only screen repos are not dropped.
     let mut handles: std::collections::BTreeSet<String> = loader.handles().into_iter().collect();
-    handles.extend(config.packages.keys().cloned());
+    handles.extend(config.screen_repos.keys().cloned());
 
-    let statuses = state.package_manager.status_snapshot();
+    let statuses = state.screen_repo_manager.status_snapshot();
     let out = handles
         .into_iter()
         .map(|handle| {
             let count = counts.get(&handle).copied().unwrap_or(0);
-            build_package_info(&config, statuses.get(&handle), count, handle)
+            build_screen_repo_info(&config, statuses.get(&handle), count, handle)
         })
         .collect();
 

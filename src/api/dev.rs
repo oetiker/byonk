@@ -22,7 +22,7 @@ use tokio_stream::StreamExt;
 use crate::assets::AssetLoader;
 use crate::models::{AppConfig, DisplaySpec};
 use crate::server::DevOverrides;
-use crate::services::package_manager::PackageManager;
+use crate::services::screen_repo_manager::ScreenRepoManager;
 use crate::services::{ContentCache, ContentPipeline, DeviceContext, FileWatcher, RenderService};
 
 /// Dev mode application state
@@ -34,7 +34,7 @@ pub struct DevState {
     pub renderer: Arc<RenderService>,
     pub file_watcher: Arc<FileWatcher>,
     pub asset_loader: Arc<AssetLoader>,
-    pub package_manager: Arc<PackageManager>,
+    pub screen_repo_manager: Arc<ScreenRepoManager>,
     pub dev_overrides: DevOverrides,
 }
 
@@ -180,11 +180,11 @@ pub async fn handle_dev_js() -> impl IntoResponse {
 /// Config-defined screens are included first, then any filesystem screens not in config
 /// are auto-discovered. This allows new screens to appear without restarting the server.
 pub async fn handle_screens(State(state): State<DevState>) -> Json<ScreensResponse> {
-    // Every screen comes from the package loader (the source of truth). The
+    // Every screen comes from the screen repo loader (the source of truth). The
     // `name` is the qualified `handle/path` ref the dev UI feeds back into
     // `?screen=<ref>`; script/template are informational only.
     let mut screens: Vec<ScreenInfo> = state
-        .package_manager
+        .screen_repo_manager
         .loader()
         .list_all()
         .into_iter()
@@ -358,7 +358,7 @@ pub async fn handle_render(
             .or_else(|| state.config.get_device_config_for_code(mac))
         {
             Some(dc) => {
-                // The device's `screen` is a `handle/path` package ref.
+                // The device's `screen` is a `handle/path` screen repo ref.
                 // Convert device params to JSON
                 let params: HashMap<String, serde_json::Value> = yaml_params_to_json(&dc.params);
                 (
@@ -385,7 +385,7 @@ pub async fn handle_render(
             }
         }
     } else if let Some(ref screen_name) = query.screen {
-        // `screen_name` is a `handle/path` package ref; validity is checked when
+        // `screen_name` is a `handle/path` screen repo ref; validity is checked when
         // the pipeline resolves it below.
         (
             screen_name.clone(),

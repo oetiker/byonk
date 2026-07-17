@@ -2,12 +2,12 @@
 //! migrated built-in screens through the package loader.
 
 use byonk::assets::AssetLoader;
-use byonk::services::package_loader::PackageLoader;
+use byonk::services::screen_repo_loader::ScreenRepoLoader;
 
 #[test]
 fn test_builtin_default_resolves() {
     let loader = std::sync::Arc::new(AssetLoader::new(None, None, None));
-    let pl = PackageLoader::new(loader, Default::default());
+    let pl = ScreenRepoLoader::new(loader, Default::default());
     let r = pl
         .resolve("byonk-builtin/default")
         .expect("default screen resolves");
@@ -17,7 +17,7 @@ fn test_builtin_default_resolves() {
 #[test]
 fn test_builtin_list_all_includes_migrated_screens() {
     let loader = std::sync::Arc::new(AssetLoader::new(None, None, None));
-    let pl = PackageLoader::new(loader, Default::default());
+    let pl = ScreenRepoLoader::new(loader, Default::default());
 
     let refs: Vec<String> = pl
         .list_all()

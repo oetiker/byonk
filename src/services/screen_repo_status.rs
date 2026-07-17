@@ -1,6 +1,6 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum PackageState {
+pub enum ScreenRepoState {
     Ready,
     Fetching,
     Error,
@@ -8,8 +8,8 @@ pub enum PackageState {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct PackageStatus {
-    pub state: Option<PackageState>,
+pub struct ScreenRepoStatus {
+    pub state: Option<ScreenRepoState>,
     pub resolved_sha: Option<String>,
     pub last_fetched: Option<chrono::DateTime<chrono::Utc>>,
     pub error: Option<String>,
@@ -23,18 +23,18 @@ mod tests {
     #[test]
     fn test_state_serializes_snake_case() {
         assert_eq!(
-            serde_json::to_string(&PackageState::Offline).unwrap(),
+            serde_json::to_string(&ScreenRepoState::Offline).unwrap(),
             "\"offline\""
         );
         assert_eq!(
-            serde_json::to_string(&PackageState::Fetching).unwrap(),
+            serde_json::to_string(&ScreenRepoState::Fetching).unwrap(),
             "\"fetching\""
         );
     }
 
     #[test]
     fn test_default_status_is_empty() {
-        let s = PackageStatus::default();
+        let s = ScreenRepoStatus::default();
         assert!(s.state.is_none() && s.resolved_sha.is_none() && s.error.is_none());
     }
 }

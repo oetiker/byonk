@@ -21,9 +21,9 @@ use tracing::{Level, Span};
 use crate::api;
 use crate::assets::AssetLoader;
 use crate::error::ApiError;
-use crate::models::{config::PackageRef, AppConfig, DitherTuningValues};
-use crate::services::package_cache::PackageCache;
-use crate::services::package_manager::PackageManager;
+use crate::models::{config::ScreenRepoRef, AppConfig, DitherTuningValues};
+use crate::services::screen_repo_cache::ScreenRepoCache;
+use crate::services::screen_repo_manager::ScreenRepoManager;
 use crate::services::{ContentCache, ContentPipeline, InMemoryRegistry, RenderService};
 
 /// Runtime overrides set by the dev GUI and consumed by production handlers.
@@ -76,7 +76,7 @@ pub struct AppState {
     pub content_pipeline: Arc<ContentPipeline>,
     pub content_cache: Arc<ContentCache>,
     pub dev_overrides: DevOverrides,
-    pub package_manager: Arc<PackageManager>,
+    pub screen_repo_manager: Arc<ScreenRepoManager>,
     /// True when byonk started as an HA Supervisor add-on (i.e. `/data/options.json`
     /// was present). In add-on mode, global-config admin writes are read-only.
     pub addon_mode: bool,
@@ -96,16 +96,16 @@ pub fn create_app_state_with_config(
     create_app_state_with_overrides(asset_loader, Arc::new(config), DevOverrides::default())
 }
 
-/// Build the set of on-disk packages from `PACKAGES_DIR`.
+/// Build the set of on-disk screen repos from `SCREEN_REPOS_DIR`.
 ///
-/// Only handles that appear in `registry` (i.e. `config.packages`) AND whose
-/// directory `dir/<handle>` exists on disk are included. Non-builtin packages
-/// are placed manually under `PACKAGES_DIR` in this phase; git fetching is a
+/// Only handles that appear in `registry` (i.e. `config.screen_repos`) AND whose
+/// directory `dir/<handle>` exists on disk are included. Non-builtin screen repos
+/// are placed manually under `SCREEN_REPOS_DIR` in this phase; git fetching is a
 /// later plan. `byonk-builtin` needs no disk entry — it registers embedded
-/// inside `PackageLoader`.
+/// inside `ScreenRepoLoader`.
 fn collect_disk_packages(
     dir: &std::path::Path,
-    registry: &HashMap<String, PackageRef>,
+    registry: &HashMap<String, ScreenRepoRef>,
 ) -> HashMap<String, std::path::PathBuf> {
     registry
         .keys()
@@ -120,31 +120,31 @@ fn collect_disk_packages(
         .collect()
 }
 
-/// Build the [`PackageManager`] from the embedded builtin package, any
-/// on-disk packages under `PACKAGES_DIR` declared in `config.packages`, and
-/// any previously fetched checkouts under the cache root (`PACKAGES_CACHE_DIR`
+/// Build the [`ScreenRepoManager`] from the embedded builtin screen repo, any
+/// on-disk screen repos under `SCREEN_REPOS_DIR` declared in `config.screen_repos`, and
+/// any previously fetched checkouts under the cache root (`SCREEN_REPOS_CACHE_DIR`
 /// env, falling back to a temp dir). Rebuilds the loader once before
 /// returning so the manager is immediately usable.
-pub fn build_package_manager(
+pub fn build_screen_repo_manager(
     asset_loader: Arc<AssetLoader>,
     config: SharedConfig,
-) -> Arc<PackageManager> {
-    let cache_root = std::env::var("PACKAGES_CACHE_DIR")
+) -> Arc<ScreenRepoManager> {
+    let cache_root = std::env::var("SCREEN_REPOS_CACHE_DIR")
         .ok()
         .filter(|s| !s.is_empty())
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir().join("byonk-packages"));
 
-    let extra_disk = std::env::var("PACKAGES_DIR")
+    let extra_disk = std::env::var("SCREEN_REPOS_DIR")
         .ok()
         .filter(|s| !s.is_empty())
-        .map(|dir| collect_disk_packages(std::path::Path::new(&dir), &config.load().packages))
+        .map(|dir| collect_disk_packages(std::path::Path::new(&dir), &config.load().screen_repos))
         .unwrap_or_default();
 
-    let manager = PackageManager::new(
+    let manager = ScreenRepoManager::new(
         asset_loader,
         config,
-        PackageCache::new(cache_root),
+        ScreenRepoCache::new(cache_root),
         extra_disk,
     );
     manager.rebuild_loader();
@@ -164,7 +164,8 @@ pub fn create_app_state_with_overrides(
 
     let shared_config: SharedConfig = Arc::new(ArcSwap::from(config.clone()));
 
-    let package_manager = build_package_manager(asset_loader.clone(), shared_config.clone());
+    let screen_repo_manager =
+        build_screen_repo_manager(asset_loader.clone(), shared_config.clone());
 
     let registry = Arc::new(InMemoryRegistry::new());
     let renderer = Arc::new(RenderService::new(&asset_loader)?);
@@ -173,7 +174,7 @@ pub fn create_app_state_with_overrides(
             shared_config.clone(),
             asset_loader.clone(),
             renderer.clone(),
-            package_manager.clone(),
+            screen_repo_manager.clone(),
         )
         .map_err(|e| anyhow::anyhow!("Failed to create content pipeline: {e}"))?,
     );
@@ -189,7 +190,7 @@ pub fn create_app_state_with_overrides(
         content_pipeline,
         content_cache,
         dev_overrides,
-        package_manager,
+        screen_repo_manager,
         addon_mode: false,
     })
 }
@@ -198,7 +199,7 @@ pub fn create_app_state_with_overrides(
 pub fn reload_config(state: &AppState) -> anyhow::Result<()> {
     let fresh = AppConfig::load_from_assets(&state.asset_loader)?;
     state.config.store(Arc::new(fresh));
-    state.package_manager.rebuild_loader();
+    state.screen_repo_manager.rebuild_loader();
     Ok(())
 }
 
@@ -289,7 +290,7 @@ mod reload_tests {
         let cfg = AppConfig::default();
         let state = create_app_state_with_config(loader, cfg).unwrap();
         assert!(state
-            .package_manager
+            .screen_repo_manager
             .loader()
             .resolve("byonk-builtin/default")
             .is_some());

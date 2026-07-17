@@ -84,13 +84,13 @@ fn addon_config_matches_design() {
     // Remote screen-package cache lives in the add-on's persistent /data so it
     // survives restarts/rebuilds (unset would fall back to an ephemeral temp dir).
     assert_eq!(
-        cfg["environment"]["PACKAGES_CACHE_DIR"].as_str(),
+        cfg["environment"]["SCREEN_REPOS_CACHE_DIR"].as_str(),
         Some("/data/packages")
     );
 
     // schema exposes EXACTLY the add-on-owned options: admin_token + log_level
     // (Phase 2) plus the genuinely-global settings and the package registry
-    // (Plan A — add-on-owned global config: auth_mode, package_refresh_interval,
+    // (Plan A — add-on-owned global config: auth_mode, screen_repo_refresh_interval,
     // packages). The operational registration_enabled toggle and per-device
     // config are NOT here — they stay live via the admin API / HA integration.
     let schema_keys: std::collections::BTreeSet<&str> = cfg["schema"]
@@ -103,14 +103,14 @@ fn addon_config_matches_design() {
         "admin_token",
         "log_level",
         "auth_mode",
-        "package_refresh_interval",
-        "packages",
+        "screen_repo_refresh_interval",
+        "screen_repos",
     ]
     .into_iter()
     .collect();
     assert_eq!(
         schema_keys, expected,
         "add-on schema must expose exactly admin_token, log_level, auth_mode, \
-         package_refresh_interval, and packages"
+         screen_repo_refresh_interval, and packages"
     );
 }

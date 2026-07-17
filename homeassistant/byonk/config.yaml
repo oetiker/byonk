@@ -19,19 +19,19 @@ environment:
   SCREENS_DIR: /config/screens
   FONTS_DIR: /config/fonts
   BIND_ADDR: 0.0.0.0:3000
-  PACKAGES_CACHE_DIR: /data/packages
+  SCREEN_REPOS_CACHE_DIR: /data/packages
 options:
   admin_token: ""
   log_level: info
   auth_mode: api_key
-  package_refresh_interval: 0
-  packages: []
+  screen_repo_refresh_interval: 0
+  screen_repos: []
 schema:
   admin_token: "password?"
   log_level: "list(trace|debug|info|warn|error)"
   auth_mode: "list(api_key|ed25519)"
-  package_refresh_interval: "int(0,)"
-  packages:
+  screen_repo_refresh_interval: "int(0,)"
+  screen_repos:
     - handle: "str"
       repo: "str"
       pin: "str?"

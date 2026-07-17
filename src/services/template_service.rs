@@ -3,7 +3,7 @@ use std::sync::{Arc, OnceLock};
 use tera::{Context, Tera};
 
 use crate::assets::AssetLoader;
-use crate::services::package_loader::{join_rel, PackageSource};
+use crate::services::screen_repo_loader::{join_rel, ScreenRepoSource};
 
 /// Compiled regex for matching image href attributes in SVG.
 /// Uses OnceLock to compile once and reuse across all render calls.
@@ -96,21 +96,21 @@ impl TemplateService {
         );
     }
 
-    /// Render a screen template with the given data, scoped to one package.
+    /// Render a screen template with the given data, scoped to one screen repo.
     ///
     /// Templates are always loaded fresh (to support live editing). Every base
-    /// asset is registered under `byonk-base-<v>/…` and every package `.svg` under
-    /// its package-relative name, so `{% include %}`/`{% extends %}` can only reach
-    /// the screen's own package plus the embedded `byonk-base` library.
+    /// asset is registered under `byonk-base-<v>/…` and every screen repo `.svg` under
+    /// its screen-repo-relative name, so `{% include %}`/`{% extends %}` can only reach
+    /// the screen's own screen repo plus the embedded `byonk-base` library.
     ///
     /// * `template_src` — the resolved `screen.svg` contents.
-    /// * `source` — the screen's package source (for sibling includes/parts).
-    /// * `screen_path` — the screen's package-relative directory (for image refs
+    /// * `source` — the screen's screen repo source (for sibling includes/parts).
+    /// * `screen_path` — the screen's screen-repo-relative directory (for image refs
     ///   and the main template name).
     pub fn render(
         &self,
         template_src: &str,
-        source: &Arc<dyn PackageSource>,
+        source: &Arc<dyn ScreenRepoSource>,
         screen_path: &str,
         data: &serde_json::Value,
     ) -> Result<String, TemplateError> {
@@ -127,11 +127,11 @@ impl TemplateService {
             }
         }
 
-        // Register every package `.svg` under its package-relative name.
+        // Register every screen repo `.svg` under its screen-repo-relative name.
         for p in source.svg_files() {
             if let Some(content) = source.read_string(&p) {
                 if let Err(e) = tera.add_raw_template(&p, &content) {
-                    tracing::trace!(template = %p, error = %e, "Skipped package template");
+                    tracing::trace!(template = %p, error = %e, "Skipped screen repo template");
                 }
             }
         }
@@ -146,7 +146,7 @@ impl TemplateService {
         let context = Context::from_serialize(data)?;
         let svg = tera.render(&main_name, &context)?;
 
-        // Resolve relative image references to data URIs (package-relative to the
+        // Resolve relative image references to data URIs (screen-repo-relative to the
         // screen directory).
         let svg = self.resolve_image_refs(&svg, source, screen_path)?;
 
@@ -157,11 +157,11 @@ impl TemplateService {
     ///
     /// Scans for `<image ... href="..."/>` elements and replaces relative paths
     /// with base64-encoded data URIs. Paths like `logo.png` are resolved to the
-    /// package file at `<screen_dir>/logo.png`.
+    /// screen repo file at `<screen_dir>/logo.png`.
     fn resolve_image_refs(
         &self,
         svg: &str,
-        source: &Arc<dyn PackageSource>,
+        source: &Arc<dyn ScreenRepoSource>,
         screen_dir: &str,
     ) -> Result<String, TemplateError> {
         use base64::Engine;
@@ -188,10 +188,10 @@ impl TemplateService {
                 continue;
             }
 
-            // Build the package-relative asset path: <screen_dir>/<href>
+            // Build the screen-repo-relative asset path: <screen_dir>/<href>
             let asset_rel = join_rel(screen_dir, href);
 
-            // Try to read the asset from the package
+            // Try to read the asset from the screen repo
             match source.read(&asset_rel) {
                 Some(data) => {
                     // Determine MIME type from extension
@@ -352,7 +352,7 @@ mod tests {
         assert!(base.iter().any(|s| s == "v1/status_bar.svg"));
     }
 
-    /// In-memory package source for render tests.
+    /// In-memory screen repo source for render tests.
     struct TestSource {
         files: std::collections::HashMap<String, Vec<u8>>,
     }
@@ -366,7 +366,7 @@ mod tests {
             }
         }
     }
-    impl PackageSource for TestSource {
+    impl ScreenRepoSource for TestSource {
         fn read(&self, rel: &str) -> Option<Vec<u8>> {
             self.files.get(rel).cloned()
         }
@@ -383,7 +383,7 @@ mod tests {
             v.sort();
             v
         }
-        fn manifest(&self) -> &crate::models::package_manifest::PackageManifest {
+        fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
             unreachable!("manifest() not used by render()")
         }
     }
@@ -394,9 +394,9 @@ mod tests {
 
     #[test]
     fn test_render_uses_byonk_base_include() {
-        // screen.svg includes a base asset AND a package-relative part, and
+        // screen.svg includes a base asset AND a screen-repo-relative part, and
         // interpolates a data value.
-        let src: Arc<dyn PackageSource> = Arc::new(TestSource::new(&[(
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[(
             "weather/parts/x.svg",
             "<rect id=\"part\"/>",
         )]));
@@ -404,10 +404,10 @@ mod tests {
         let data = serde_json::json!({ "data": { "n": 42 }, "layout": { "grey_count": 4 } });
         let out = svc().render(template, &src, "weather", &data).unwrap();
 
-        // The package part and the interpolated value both appear.
+        // The screen repo part and the interpolated value both appear.
         assert!(
             out.contains("<rect id=\"part\"/>"),
-            "missing package part: {out}"
+            "missing screen repo part: {out}"
         );
         assert!(out.contains("<t>42</t>"), "missing interpolation: {out}");
         // The base include resolved to some content from v1/hinting.svg (non-empty
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn test_render_package_extends() {
-        let src: Arc<dyn PackageSource> = Arc::new(TestSource::new(&[(
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[(
             "weather/base.svg",
             "<svg><g>{% block content %}{% endblock %}</g></svg>",
         )]));
@@ -429,7 +429,7 @@ mod tests {
 
     #[test]
     fn test_render_missing_include_fails() {
-        let src: Arc<dyn PackageSource> = Arc::new(TestSource::new(&[]));
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[]));
         let template = r#"<svg>{% include "weather/nope.svg" %}</svg>"#;
         let data = serde_json::json!({});
         assert!(svc().render(template, &src, "weather", &data).is_err());
@@ -437,11 +437,11 @@ mod tests {
 
     #[test]
     fn test_render_resolves_image_ref_from_package() {
-        // A 1x1 PNG in the package, referenced relatively from the screen dir.
+        // A 1x1 PNG in the screen repo, referenced relatively from the screen dir.
         let png = b"\x89PNG\r\n\x1a\n";
         let mut files = std::collections::HashMap::new();
         files.insert("weather/logo.png".to_string(), png.to_vec());
-        let src: Arc<dyn PackageSource> = Arc::new(TestSource { files });
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource { files });
         let template = r#"<svg><image href="logo.png"/></svg>"#;
         let data = serde_json::json!({});
         let out = svc().render(template, &src, "weather", &data).unwrap();

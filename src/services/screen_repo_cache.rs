@@ -1,7 +1,7 @@
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
-pub struct PackageCache {
+pub struct ScreenRepoCache {
     root: PathBuf,
 }
 
@@ -11,7 +11,7 @@ fn repo_key(repo: &str) -> String {
     hex::encode(&h.finalize()[..8]) // 16 hex chars — enough to avoid collisions
 }
 
-impl PackageCache {
+impl ScreenRepoCache {
     pub fn new(root: PathBuf) -> Self {
         Self { root }
     }
@@ -35,7 +35,7 @@ mod tests {
 
     #[test]
     fn test_checkout_dir_is_stable_and_scoped() {
-        let c = PackageCache::new(std::path::PathBuf::from("/tmp/byonk-cache"));
+        let c = ScreenRepoCache::new(std::path::PathBuf::from("/tmp/byonk-cache"));
         let a = c.checkout_dir("github.com/acme/x", "deadbeef");
         let b = c.checkout_dir("github.com/acme/x", "deadbeef");
         let d = c.checkout_dir("github.com/acme/y", "deadbeef");
@@ -47,7 +47,7 @@ mod tests {
 
     #[test]
     fn test_has_false_when_absent() {
-        let c = PackageCache::new(std::env::temp_dir().join("byonk-cache-none"));
+        let c = ScreenRepoCache::new(std::env::temp_dir().join("byonk-cache-none"));
         assert!(!c.has("github.com/acme/x", "deadbeef"));
     }
 }

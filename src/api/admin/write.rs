@@ -13,9 +13,9 @@ use crate::models::config::RESERVED_DEFAULT_KEY;
 use crate::models::param_schema::validate_params;
 use crate::server::{reload_config, AppState};
 use crate::services::config_writer;
-use crate::services::package_loader::BUILTIN_HANDLE;
+use crate::services::screen_repo_loader::BUILTIN_HANDLE;
 
-use super::read::{build_package_info, PackageInfo};
+use super::read::{build_screen_repo_info, ScreenRepoInfo};
 use super::require_admin;
 
 #[derive(Deserialize)]
@@ -41,7 +41,7 @@ fn require_file_config(state: &AppState) -> Result<std::path::PathBuf, ApiError>
 
 /// Guard: global-config registry/settings writes are read-only when byonk runs
 /// as an HA add-on. The add-on Options form (`/data/options.json`) is the sole
-/// editor for global config; per-device writes and package content-refresh are
+/// editor for global config; per-device writes and screen repo content-refresh are
 /// unaffected.
 fn require_writable_global(state: &AppState) -> Result<(), ApiError> {
     if state.addon_mode {
@@ -55,7 +55,7 @@ fn require_writable_global(state: &AppState) -> Result<(), ApiError> {
 /// In add-on mode, the genuinely-global settings are read-only (edited via the
 /// add-on Options form). The operational `registration_enabled` toggle stays live.
 fn require_writable_settings(state: &AppState, body: &SettingsWrite) -> Result<(), ApiError> {
-    let touches_global = body.auth_mode.is_some() || body.package_refresh_interval.is_some();
+    let touches_global = body.auth_mode.is_some() || body.screen_repo_refresh_interval.is_some();
     if state.addon_mode && touches_global {
         return Err(ApiError::Conflict(
             "global config is read-only in add-on mode; edit it in the byonk add-on Configuration tab".into(),
@@ -64,16 +64,16 @@ fn require_writable_settings(state: &AppState, body: &SettingsWrite) -> Result<(
     Ok(())
 }
 
-/// Validate the screen ref resolves to a package screen and that the provided
+/// Validate the screen ref resolves to a screen repo screen and that the provided
 /// params pass its `meta.yaml` schema. A device `screen` is always a qualified
-/// `handle/path` package ref — there is no bare-name / flat-file resolution.
+/// `handle/path` screen repo ref — there is no bare-name / flat-file resolution.
 fn validate_screen_and_params(
     state: &AppState,
     screen: &str,
     params: &HashMap<String, serde_yaml::Value>,
 ) -> Result<(), ApiError> {
     let resolved = state
-        .package_manager
+        .screen_repo_manager
         .loader()
         .resolve(screen)
         .ok_or_else(|| ApiError::BadRequest(format!("unknown screen `{screen}`")))?;
@@ -275,7 +275,7 @@ pub async fn delete_device(
 pub struct SettingsWrite {
     pub(crate) registration_enabled: Option<bool>,
     pub(crate) auth_mode: Option<String>,
-    pub(crate) package_refresh_interval: Option<u64>,
+    pub(crate) screen_repo_refresh_interval: Option<u64>,
 }
 
 pub async fn patch_settings(
@@ -310,8 +310,8 @@ pub async fn patch_settings(
         yaml = config_writer::set_scalar(&yaml, &["auth_mode"], mode.as_str().into())
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
-    if let Some(secs) = body.package_refresh_interval {
-        yaml = config_writer::set_scalar(&yaml, &["package_refresh_interval"], secs.into())
+    if let Some(secs) = body.screen_repo_refresh_interval {
+        yaml = config_writer::set_scalar(&yaml, &["screen_repo_refresh_interval"], secs.into())
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
 
@@ -321,7 +321,7 @@ pub async fn patch_settings(
 }
 
 #[derive(Deserialize)]
-pub struct PackageWrite {
+pub struct ScreenRepoWrite {
     pub handle: Option<String>,
     pub repo: Option<String>,
     pub pin: Option<String>,
@@ -330,9 +330,9 @@ pub struct PackageWrite {
 
 /// Number of screens currently resolved under `handle` (0 before the first
 /// successful fetch, since nothing is registered in the loader yet).
-fn package_screen_count(state: &AppState, handle: &str) -> usize {
+fn screen_repo_screen_count(state: &AppState, handle: &str) -> usize {
     state
-        .package_manager
+        .screen_repo_manager
         .loader()
         .list_all()
         .into_iter()
@@ -340,9 +340,9 @@ fn package_screen_count(state: &AppState, handle: &str) -> usize {
         .count()
 }
 
-/// Build a `serde_yaml::Mapping` package block from the given fields, omitting
+/// Build a `serde_yaml::Mapping` screen repo block from the given fields, omitting
 /// any that are `None` (so e.g. an absent `token` is never written as `null`).
-fn package_block(
+fn screen_repo_block(
     repo: Option<&str>,
     pin: Option<&str>,
     token: Option<&str>,
@@ -360,11 +360,11 @@ fn package_block(
     m
 }
 
-pub async fn add_package(
+pub async fn add_screen_repo(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<PackageWrite>,
-) -> Result<Json<PackageInfo>, ApiError> {
+    Json(body): Json<ScreenRepoWrite>,
+) -> Result<Json<ScreenRepoInfo>, ApiError> {
     require_writable_global(&state)?;
     require_admin(&state, &headers)?;
     let path = require_file_config(&state)?;
@@ -377,16 +377,16 @@ pub async fn add_package(
 
     if handle == BUILTIN_HANDLE {
         return Err(ApiError::Conflict(format!(
-            "`{handle}` is the reserved builtin package handle"
+            "`{handle}` is the reserved builtin screen repo handle"
         )));
     }
-    if state.config.load().packages.contains_key(&handle) {
+    if state.config.load().screen_repos.contains_key(&handle) {
         return Err(ApiError::Conflict(format!(
-            "package `{handle}` already exists"
+            "screen repo `{handle}` already exists"
         )));
     }
 
-    let block = package_block(
+    let block = screen_repo_block(
         body.repo.as_deref(),
         body.pin.as_deref(),
         body.token.as_deref(),
@@ -395,29 +395,29 @@ pub async fn add_package(
         .asset_loader
         .read_config_string()
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let new_yaml = config_writer::upsert_package(&yaml, &handle, &block)
+    let new_yaml = config_writer::upsert_screen_repo(&yaml, &handle, &block)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     persist(&state, &path, new_yaml)?;
 
     // Fetch asynchronously; the response reflects whatever status exists at
-    // this instant (likely no entry yet). The client polls GET /packages for
+    // this instant (likely no entry yet). The client polls GET /screen-repos for
     // the settled result rather than this handler awaiting the fetch.
-    let mgr = state.package_manager.clone();
+    let mgr = state.screen_repo_manager.clone();
     let h = handle.clone();
     tokio::task::spawn_blocking(move || mgr.refresh_one(&h));
 
-    let count = package_screen_count(&state, &handle);
-    let statuses = state.package_manager.status_snapshot();
-    let info = build_package_info(&state.config.load(), statuses.get(&handle), count, handle);
+    let count = screen_repo_screen_count(&state, &handle);
+    let statuses = state.screen_repo_manager.status_snapshot();
+    let info = build_screen_repo_info(&state.config.load(), statuses.get(&handle), count, handle);
     Ok(Json(info))
 }
 
-pub async fn patch_package(
+pub async fn patch_screen_repo(
     State(state): State<AppState>,
     Path(handle): Path<String>,
     headers: HeaderMap,
-    Json(body): Json<PackageWrite>,
-) -> Result<Json<PackageInfo>, ApiError> {
+    Json(body): Json<ScreenRepoWrite>,
+) -> Result<Json<ScreenRepoInfo>, ApiError> {
     require_writable_global(&state)?;
     require_admin(&state, &headers)?;
     let path = require_file_config(&state)?;
@@ -425,14 +425,14 @@ pub async fn patch_package(
 
     if handle == BUILTIN_HANDLE {
         return Err(ApiError::Conflict(format!(
-            "`{handle}` is the reserved builtin package handle"
+            "`{handle}` is the reserved builtin screen repo handle"
         )));
     }
 
     let existing = state
         .config
         .load()
-        .packages
+        .screen_repos
         .get(&handle)
         .cloned()
         .ok_or(ApiError::NotFound)?;
@@ -445,28 +445,28 @@ pub async fn patch_package(
     let repo_or_pin_changed = (body.repo.is_some() && body.repo != existing.repo)
         || (body.pin.is_some() && body.pin != existing.pin);
 
-    let block = package_block(repo.as_deref(), pin.as_deref(), token.as_deref());
+    let block = screen_repo_block(repo.as_deref(), pin.as_deref(), token.as_deref());
     let yaml = state
         .asset_loader
         .read_config_string()
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let new_yaml = config_writer::upsert_package(&yaml, &handle, &block)
+    let new_yaml = config_writer::upsert_screen_repo(&yaml, &handle, &block)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     persist(&state, &path, new_yaml)?;
 
     if repo_or_pin_changed {
-        let mgr = state.package_manager.clone();
+        let mgr = state.screen_repo_manager.clone();
         let h = handle.clone();
         tokio::task::spawn_blocking(move || mgr.refresh_one(&h));
     }
 
-    let count = package_screen_count(&state, &handle);
-    let statuses = state.package_manager.status_snapshot();
-    let info = build_package_info(&state.config.load(), statuses.get(&handle), count, handle);
+    let count = screen_repo_screen_count(&state, &handle);
+    let statuses = state.screen_repo_manager.status_snapshot();
+    let info = build_screen_repo_info(&state.config.load(), statuses.get(&handle), count, handle);
     Ok(Json(info))
 }
 
-pub async fn delete_package(
+pub async fn delete_screen_repo(
     State(state): State<AppState>,
     Path(handle): Path<String>,
     headers: HeaderMap,
@@ -478,11 +478,11 @@ pub async fn delete_package(
 
     if handle == BUILTIN_HANDLE {
         return Err(ApiError::Conflict(format!(
-            "`{handle}` is the reserved builtin package handle"
+            "`{handle}` is the reserved builtin screen repo handle"
         )));
     }
 
-    // Reject if any device's screen dangles into this package's namespace.
+    // Reject if any device's screen dangles into this screen repo's namespace.
     let prefix = format!("{handle}/");
     let config = state.config.load();
     if let Some((device_key, _)) = config
@@ -492,7 +492,7 @@ pub async fn delete_package(
         .map(|(k, d)| (k.clone(), d.screen.clone()))
     {
         return Err(ApiError::Conflict(format!(
-            "package `{handle}` is referenced by device `{device_key}`"
+            "screen repo `{handle}` is referenced by device `{device_key}`"
         )));
     }
     drop(config);
@@ -501,7 +501,7 @@ pub async fn delete_package(
         .asset_loader
         .read_config_string()
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let new_yaml = match config_writer::remove_package(&yaml, &handle) {
+    let new_yaml = match config_writer::remove_screen_repo(&yaml, &handle) {
         Ok(y) => y,
         Err(config_writer::ConfigWriteError::NotFound(_)) => return Err(ApiError::NotFound),
         Err(e) => return Err(ApiError::Internal(e.to_string())),
@@ -510,43 +510,43 @@ pub async fn delete_package(
 
     // Forget the deleted handle's fetch status so a later re-registration of
     // the same handle doesn't briefly surface the stale resolved_sha/Ready
-    // state left over from the deleted package.
-    state.package_manager.forget_status(&handle);
+    // state left over from the deleted screen repo.
+    state.screen_repo_manager.forget_status(&handle);
     // Rebuild the hot-swapped loader so the deleted handle's screens stop
     // resolving immediately (in-memory only; not blocking).
-    state.package_manager.rebuild_loader();
+    state.screen_repo_manager.rebuild_loader();
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-pub async fn update_package(
+pub async fn update_screen_repo(
     State(state): State<AppState>,
     Path(handle): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<PackageInfo>, ApiError> {
+) -> Result<Json<ScreenRepoInfo>, ApiError> {
     require_admin(&state, &headers)?;
 
-    if handle != BUILTIN_HANDLE && !state.config.load().packages.contains_key(&handle) {
+    if handle != BUILTIN_HANDLE && !state.config.load().screen_repos.contains_key(&handle) {
         return Err(ApiError::NotFound);
     }
 
-    let mgr = state.package_manager.clone();
+    let mgr = state.screen_repo_manager.clone();
     let h = handle.clone();
     tokio::task::spawn_blocking(move || mgr.refresh_one(&h));
 
-    let count = package_screen_count(&state, &handle);
-    let statuses = state.package_manager.status_snapshot();
-    let info = build_package_info(&state.config.load(), statuses.get(&handle), count, handle);
+    let count = screen_repo_screen_count(&state, &handle);
+    let statuses = state.screen_repo_manager.status_snapshot();
+    let info = build_screen_repo_info(&state.config.load(), statuses.get(&handle), count, handle);
     Ok(Json(info))
 }
 
-pub async fn update_all_packages(
+pub async fn update_all_screen_repos(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&state, &headers)?;
 
-    let mgr = state.package_manager.clone();
+    let mgr = state.screen_repo_manager.clone();
     tokio::task::spawn_blocking(move || mgr.refresh_all(true));
 
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -587,7 +587,7 @@ mod tests {
         SettingsWrite {
             registration_enabled: Some(true),
             auth_mode: None,
-            package_refresh_interval: None,
+            screen_repo_refresh_interval: None,
         }
     }
 
@@ -618,7 +618,7 @@ mod tests {
         let body = SettingsWrite {
             registration_enabled: Some(false),
             auth_mode: Some("ed25519".to_string()),
-            package_refresh_interval: Some(300),
+            screen_repo_refresh_interval: Some(300),
         };
         assert!(require_writable_settings(&state, &body).is_ok());
     }

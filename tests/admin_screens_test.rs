@@ -7,7 +7,7 @@ const AUTH: (&str, &str) = ("Authorization", "Bearer secret");
 
 /// Find a screen by its `handle/path` ref across all package groups.
 fn find_screen<'a>(json: &'a serde_json::Value, r#ref: &str) -> Option<&'a serde_json::Value> {
-    json["packages"]
+    json["screen_repos"]
         .as_array()?
         .iter()
         .flat_map(|p| p["screens"].as_array().into_iter().flatten())
@@ -21,7 +21,7 @@ async fn test_screens_grouped_includes_builtin_with_titles() {
     assert_eq!(resp.status, StatusCode::OK);
     let json: serde_json::Value = resp.json();
 
-    let packages = json["packages"].as_array().expect("packages array");
+    let packages = json["screen_repos"].as_array().expect("packages array");
     let builtin = packages
         .iter()
         .find(|p| p["handle"] == "byonk-builtin")
@@ -105,7 +105,9 @@ async fn test_swiss_departure_board_has_station_param() {
 #[tokio::test]
 async fn test_packages_lists_builtin_with_redaction() {
     let app = TestApp::new_admin("secret");
-    let resp = app.get_with_headers("/api/admin/packages", &[AUTH]).await;
+    let resp = app
+        .get_with_headers("/api/admin/screen-repos", &[AUTH])
+        .await;
     assert_eq!(resp.status, StatusCode::OK);
     let json: serde_json::Value = resp.json();
 
@@ -136,6 +138,6 @@ async fn test_packages_lists_builtin_with_redaction() {
 #[tokio::test]
 async fn test_packages_unauthorized() {
     let app = TestApp::new_admin("secret");
-    let resp = app.get("/api/admin/packages").await;
+    let resp = app.get("/api/admin/screen-repos").await;
     assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
 }

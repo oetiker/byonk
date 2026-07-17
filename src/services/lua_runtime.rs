@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::DeviceContext;
 use crate::assets::AssetLoader;
-use crate::services::package_loader::PackageSource;
+use crate::services::screen_repo_loader::ScreenRepoSource;
 
 /// Result from running a Lua script
 #[derive(Debug)]
@@ -56,14 +56,14 @@ pub struct FontFaceInfo {
     pub bitmap_strikes: Vec<u16>,
 }
 
-/// A [`PackageSource`] backed by the flat screens directory of an `AssetLoader`.
+/// A [`ScreenRepoSource`] backed by the flat screens directory of an `AssetLoader`.
 /// Used by [`LuaRuntime::run_script_from_asset`] for tests/dev where scripts live
-/// directly under `SCREENS_DIR` rather than inside a package.
+/// directly under `SCREENS_DIR` rather than inside a screen repo.
 struct AssetScreensSource {
     loader: Arc<AssetLoader>,
 }
 
-impl PackageSource for AssetScreensSource {
+impl ScreenRepoSource for AssetScreensSource {
     fn read(&self, rel: &str) -> Option<Vec<u8>> {
         self.loader
             .read_screen(std::path::Path::new(rel))
@@ -79,7 +79,7 @@ impl PackageSource for AssetScreensSource {
         Vec::new()
     }
 
-    fn manifest(&self) -> &crate::models::package_manifest::PackageManifest {
+    fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
         unreachable!("AssetScreensSource::manifest() is not used")
     }
 }
@@ -112,15 +112,15 @@ impl LuaRuntime {
     /// Run a Lua script with the given parameters.
     ///
     /// `script_src` is the already-read `script.lua` contents. `source` is the
-    /// screen's package source, used to resolve `require()` for package-relative
+    /// screen's screen repo source, used to resolve `require()` for screen-repo-relative
     /// modules and `read_asset()` for sibling files. `screen_name` (a `handle/path`
-    /// ref) is used for logging. `screen_dir` is the screen's package-relative
+    /// ref) is used for logging. `screen_dir` is the screen's screen-repo-relative
     /// directory, against which `read_asset(path)` reads through `source`.
     #[allow(clippy::too_many_arguments)]
     pub fn run_script(
         &self,
         script_src: &str,
-        source: &Arc<dyn PackageSource>,
+        source: &Arc<dyn ScreenRepoSource>,
         screen_name: &str,
         screen_dir: &str,
         params: &HashMap<String, serde_yaml::Value>,
@@ -140,7 +140,7 @@ impl LuaRuntime {
             timestamp_override,
         )?;
 
-        // Install the sandboxed `require()` scoped to this package + byonk-base.
+        // Install the sandboxed `require()` scoped to this screen repo + byonk-base.
         self.install_require(&lua, source)?;
 
         // Execute the script
@@ -193,7 +193,7 @@ impl LuaRuntime {
     }
 
     /// Test/dev convenience: read a screen script from the `AssetLoader` by path
-    /// and run it with a screens-dir-backed package source (no package manifest
+    /// and run it with a screens-dir-backed screen repo source (no screen repo manifest
     /// required). `require()` resolves sibling files under the screens dir.
     pub fn run_script_from_asset(
         &self,
@@ -206,7 +206,7 @@ impl LuaRuntime {
             .asset_loader
             .read_screen_string(script_path)
             .map_err(|e| ScriptError::NotFound(e.to_string()))?;
-        let source: Arc<dyn PackageSource> = Arc::new(AssetScreensSource {
+        let source: Arc<dyn ScreenRepoSource> = Arc::new(AssetScreensSource {
             loader: self.asset_loader.clone(),
         });
         let screen_name = script_path
@@ -231,12 +231,12 @@ impl LuaRuntime {
     }
 
     /// Install a sandboxed `require(name)` global that can only reach two places:
-    /// the screen's own package (package-relative modules like `require("lib/x")`)
+    /// the screen's own screen repo (screen-repo-relative modules like `require("lib/x")`)
     /// and the embedded `byonk-base` std library (`require("byonk-base-v1/std")`).
     ///
     /// A `package.loaded`-style cache in the Lua registry ensures each module is
     /// evaluated at most once per run and returns the same value on repeat calls.
-    fn install_require(&self, lua: &Lua, source: &Arc<dyn PackageSource>) -> LuaResult<()> {
+    fn install_require(&self, lua: &Lua, source: &Arc<dyn ScreenRepoSource>) -> LuaResult<()> {
         // Module cache (package.loaded-style), keyed by the require name.
         let cache = lua.create_table()?;
         lua.set_named_registry_value("__require_cache", cache)?;
@@ -261,7 +261,7 @@ impl LuaRuntime {
                 };
                 require_assets.read_base_string(&rel)
             } else {
-                // package-relative: lib/util -> read_string("lib/util.lua")
+                // screen-repo-relative: lib/util -> read_string("lib/util.lua")
                 let rel = if name.ends_with(".lua") {
                     name.clone()
                 } else {
@@ -291,7 +291,7 @@ impl LuaRuntime {
         params: &HashMap<String, serde_yaml::Value>,
         device_ctx: Option<&DeviceContext>,
         _screen_name: &str,
-        source: &Arc<dyn PackageSource>,
+        source: &Arc<dyn ScreenRepoSource>,
         screen_dir: &str,
         timestamp_override: Option<i64>,
     ) -> LuaResult<()> {
@@ -507,13 +507,13 @@ impl LuaRuntime {
         globals.set("url_decode", url_decode)?;
 
         // read_asset(path) -> string (binary data)
-        // Reads a file sibling to the screen's `script.lua`, package-relative to
-        // `screen_dir`, through the screen's package source. The source applies the
+        // Reads a file sibling to the screen's `script.lua`, screen-repo-relative to
+        // `screen_dir`, through the screen's screen repo source. The source applies the
         // `is_safe_rel` sandbox guard, so `..` traversal is rejected.
         let asset_source = source.clone();
         let asset_dir = screen_dir.to_string();
         let read_asset = lua.create_function(move |lua, path: String| {
-            let rel = crate::services::package_loader::join_rel(&asset_dir, &path);
+            let rel = crate::services::screen_repo_loader::join_rel(&asset_dir, &path);
             match asset_source.read(&rel) {
                 Some(data) => {
                     // Return as Lua string (which can contain binary data)
@@ -1322,12 +1322,12 @@ fn lua_to_json_inner(value: Value) -> LuaResult<serde_json::Value> {
 #[cfg(test)]
 mod require_tests {
     use super::*;
-    use crate::services::package_loader::PackageSource;
+    use crate::services::screen_repo_loader::ScreenRepoSource;
     use std::sync::Arc;
 
-    /// Minimal in-memory package source for exercising `require()`.
+    /// Minimal in-memory screen repo source for exercising `require()`.
     struct MockSource;
-    impl PackageSource for MockSource {
+    impl ScreenRepoSource for MockSource {
         fn read(&self, rel: &str) -> Option<Vec<u8>> {
             match rel {
                 "lib/util.lua" => Some(b"return { greet = function() return 'hi' end }".to_vec()),
@@ -1340,7 +1340,7 @@ mod require_tests {
         fn svg_files(&self) -> Vec<String> {
             vec![]
         }
-        fn manifest(&self) -> &crate::models::package_manifest::PackageManifest {
+        fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
             unreachable!("manifest() not used by require()")
         }
     }
@@ -1348,7 +1348,7 @@ mod require_tests {
     #[test]
     fn test_require_resolves_package_relative_module() {
         let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
-        let src: Arc<dyn PackageSource> = Arc::new(MockSource);
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(MockSource);
         let script = "local u = require('lib/util'); return { data = { m = u.greet() } }";
         let res = rt
             .run_script(script, &src, "t", "", &Default::default(), None, None)
@@ -1360,7 +1360,7 @@ mod require_tests {
     fn test_require_caches_module() {
         // A module with a side-effecting counter must only evaluate once.
         struct CounterSource;
-        impl PackageSource for CounterSource {
+        impl ScreenRepoSource for CounterSource {
             fn read(&self, rel: &str) -> Option<Vec<u8>> {
                 match rel {
                     "lib/c.lua" => Some(b"COUNT = (COUNT or 0) + 1; return COUNT".to_vec()),
@@ -1373,12 +1373,12 @@ mod require_tests {
             fn svg_files(&self) -> Vec<String> {
                 vec![]
             }
-            fn manifest(&self) -> &crate::models::package_manifest::PackageManifest {
+            fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
                 unreachable!()
             }
         }
         let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
-        let src: Arc<dyn PackageSource> = Arc::new(CounterSource);
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(CounterSource);
         let script =
             "local a = require('lib/c'); local b = require('lib/c'); return { data = { a = a, b = b } }";
         let res = rt
@@ -1391,7 +1391,7 @@ mod require_tests {
     #[test]
     fn test_require_missing_module_errors() {
         let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
-        let src: Arc<dyn PackageSource> = Arc::new(MockSource);
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(MockSource);
         let script = "local x = require('nope/missing'); return { data = {} }";
         let err = rt
             .run_script(script, &src, "t", "", &Default::default(), None, None)
@@ -1404,10 +1404,10 @@ mod require_tests {
 
     #[test]
     fn test_require_traversal_is_blocked() {
-        // A malicious `require("../escape")` must not read host files; the package
+        // A malicious `require("../escape")` must not read host files; the screen repo
         // source rejects the `..` path, so `require` reports "module not found".
         let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
-        let src: Arc<dyn PackageSource> = Arc::new(MockSource);
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(MockSource);
         let script = "local x = require('../escape'); return { data = {} }";
         let err = rt
             .run_script(script, &src, "t", "", &Default::default(), None, None)
@@ -1420,9 +1420,9 @@ mod require_tests {
 
     #[test]
     fn test_read_asset_reads_sibling_via_source() {
-        // read_asset resolves package-relative to screen_dir through the source.
+        // read_asset resolves screen-repo-relative to screen_dir through the source.
         struct AssetSource;
-        impl PackageSource for AssetSource {
+        impl ScreenRepoSource for AssetSource {
             fn read(&self, rel: &str) -> Option<Vec<u8>> {
                 match rel {
                     "s/data.txt" => Some(b"hello-asset".to_vec()),
@@ -1435,12 +1435,12 @@ mod require_tests {
             fn svg_files(&self) -> Vec<String> {
                 vec![]
             }
-            fn manifest(&self) -> &crate::models::package_manifest::PackageManifest {
+            fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
                 unreachable!()
             }
         }
         let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
-        let src: Arc<dyn PackageSource> = Arc::new(AssetSource);
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(AssetSource);
         let script = "return { data = { c = read_asset('data.txt') } }";
         let res = rt
             .run_script(script, &src, "acme/s", "s", &Default::default(), None, None)
@@ -1451,7 +1451,7 @@ mod require_tests {
     #[test]
     fn test_read_asset_traversal_is_blocked() {
         let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
-        let src: Arc<dyn PackageSource> = Arc::new(MockSource);
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(MockSource);
         let script = "return { data = { c = read_asset('../../etc/passwd') } }";
         let err = rt
             .run_script(script, &src, "t", "s", &Default::default(), None, None)

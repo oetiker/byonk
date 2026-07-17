@@ -2,9 +2,9 @@ pub mod compat;
 pub mod config;
 pub mod device;
 pub mod display_spec;
-pub mod package_manifest;
 pub mod param_schema;
 pub mod screen_meta;
+pub mod screen_repo_manifest;
 
 pub use config::{
     normalize_algorithm_name, AdminConfig, AppConfig, DeviceConfig, DitherTuningValues,

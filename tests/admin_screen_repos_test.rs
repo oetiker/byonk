@@ -12,7 +12,7 @@ async fn test_add_package_persists_and_lists_with_token_redacted() {
 
     let resp = app
         .post_json(
-            "/api/admin/packages",
+            "/api/admin/screen-repos",
             &[AUTH],
             r#"{"handle":"weather","repo":"github.com/x/y","pin":"v1","token":"secret-token"}"#,
         )
@@ -20,7 +20,9 @@ async fn test_add_package_persists_and_lists_with_token_redacted() {
     assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.text());
 
     // GET /packages shows the new handle with token_set true.
-    let listed = app.get_with_headers("/api/admin/packages", &[AUTH]).await;
+    let listed = app
+        .get_with_headers("/api/admin/screen-repos", &[AUTH])
+        .await;
     assert_eq!(listed.status, StatusCode::OK);
     let json: serde_json::Value = listed.json();
     let row = json
@@ -48,10 +50,14 @@ async fn test_add_package_duplicate_handle_conflicts() {
     let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
 
     let body = r#"{"handle":"weather","repo":"github.com/x/y","pin":"v1"}"#;
-    let first = app.post_json("/api/admin/packages", &[AUTH], body).await;
+    let first = app
+        .post_json("/api/admin/screen-repos", &[AUTH], body)
+        .await;
     assert_eq!(first.status, StatusCode::OK);
 
-    let second = app.post_json("/api/admin/packages", &[AUTH], body).await;
+    let second = app
+        .post_json("/api/admin/screen-repos", &[AUTH], body)
+        .await;
     assert_eq!(second.status, StatusCode::CONFLICT);
 }
 
@@ -62,7 +68,7 @@ async fn test_add_package_builtin_handle_conflicts() {
 
     let resp = app
         .post_json(
-            "/api/admin/packages",
+            "/api/admin/screen-repos",
             &[AUTH],
             r#"{"handle":"byonk-builtin","repo":"github.com/x/y"}"#,
         )
@@ -76,7 +82,7 @@ async fn test_delete_builtin_package_conflicts() {
     let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
 
     let resp = app
-        .delete("/api/admin/packages/byonk-builtin", &[AUTH])
+        .delete("/api/admin/screen-repos/byonk-builtin", &[AUTH])
         .await;
     assert!(resp.status.is_client_error(), "status: {}", resp.status);
 }
@@ -88,14 +94,16 @@ async fn test_delete_unreferenced_package_succeeds() {
 
     let resp = app
         .post_json(
-            "/api/admin/packages",
+            "/api/admin/screen-repos",
             &[AUTH],
             r#"{"handle":"weather","repo":"github.com/x/y","pin":"v1"}"#,
         )
         .await;
     assert_eq!(resp.status, StatusCode::OK);
 
-    let listed = app.get_with_headers("/api/admin/packages", &[AUTH]).await;
+    let listed = app
+        .get_with_headers("/api/admin/screen-repos", &[AUTH])
+        .await;
     let json: serde_json::Value = listed.json();
     assert!(json
         .as_array()
@@ -104,10 +112,12 @@ async fn test_delete_unreferenced_package_succeeds() {
         .any(|p| p["handle"] == "weather"));
 
     // No device references `weather/...`: delete succeeds.
-    let del = app.delete("/api/admin/packages/weather", &[AUTH]).await;
+    let del = app.delete("/api/admin/screen-repos/weather", &[AUTH]).await;
     assert_eq!(del.status, StatusCode::OK, "body: {}", del.text());
 
-    let listed = app.get_with_headers("/api/admin/packages", &[AUTH]).await;
+    let listed = app
+        .get_with_headers("/api/admin/screen-repos", &[AUTH])
+        .await;
     let json: serde_json::Value = listed.json();
     assert!(!json
         .as_array()
@@ -124,7 +134,7 @@ async fn test_delete_package_referenced_by_device_is_conflict() {
     // Register the package.
     let resp = app
         .post_json(
-            "/api/admin/packages",
+            "/api/admin/screen-repos",
             &[AUTH],
             r#"{"handle":"weather","repo":"github.com/x/y","pin":"v1"}"#,
         )
@@ -159,12 +169,12 @@ async fn test_delete_package_referenced_by_device_is_conflict() {
         .patch_json(
             "/api/admin/settings",
             &[AUTH],
-            r#"{"package_refresh_interval":1}"#,
+            r#"{"screen_repo_refresh_interval":1}"#,
         )
         .await;
     assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.text());
 
-    let del = app.delete("/api/admin/packages/weather", &[AUTH]).await;
+    let del = app.delete("/api/admin/screen-repos/weather", &[AUTH]).await;
     assert_eq!(del.status, StatusCode::CONFLICT, "body: {}", del.text());
     assert!(
         del.text().contains("AA:BB:CC:DD:EE:FF"),
@@ -181,7 +191,7 @@ async fn test_delete_package_referenced_by_default_device_is_conflict() {
     // Register the package.
     let resp = app
         .post_json(
-            "/api/admin/packages",
+            "/api/admin/screen-repos",
             &[AUTH],
             r#"{"handle":"weather","repo":"github.com/x/y","pin":"v1"}"#,
         )
@@ -212,12 +222,12 @@ async fn test_delete_package_referenced_by_default_device_is_conflict() {
         .patch_json(
             "/api/admin/settings",
             &[AUTH],
-            r#"{"package_refresh_interval":1}"#,
+            r#"{"screen_repo_refresh_interval":1}"#,
         )
         .await;
     assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.text());
 
-    let del = app.delete("/api/admin/packages/weather", &[AUTH]).await;
+    let del = app.delete("/api/admin/screen-repos/weather", &[AUTH]).await;
     assert_eq!(del.status, StatusCode::CONFLICT, "body: {}", del.text());
     assert!(
         del.text().contains("DEFAULT"),
@@ -230,7 +240,7 @@ async fn test_delete_package_referenced_by_default_device_is_conflict() {
 async fn test_delete_missing_package_is_not_found() {
     let dir = tempfile::tempdir().unwrap();
     let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
-    let resp = app.delete("/api/admin/packages/nope", &[AUTH]).await;
+    let resp = app.delete("/api/admin/screen-repos/nope", &[AUTH]).await;
     assert_eq!(resp.status, StatusCode::NOT_FOUND);
 }
 
@@ -240,18 +250,24 @@ async fn test_patch_package_preserves_token_and_updates_pin() {
     let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
 
     app.post_json(
-        "/api/admin/packages",
+        "/api/admin/screen-repos",
         &[AUTH],
         r#"{"handle":"weather","repo":"github.com/x/y","pin":"v1","token":"secret-token"}"#,
     )
     .await;
 
     let patch = app
-        .patch_json("/api/admin/packages/weather", &[AUTH], r#"{"pin":"v2"}"#)
+        .patch_json(
+            "/api/admin/screen-repos/weather",
+            &[AUTH],
+            r#"{"pin":"v2"}"#,
+        )
         .await;
     assert_eq!(patch.status, StatusCode::OK, "body: {}", patch.text());
 
-    let listed = app.get_with_headers("/api/admin/packages", &[AUTH]).await;
+    let listed = app
+        .get_with_headers("/api/admin/screen-repos", &[AUTH])
+        .await;
     let json: serde_json::Value = listed.json();
     let row = json
         .as_array()
@@ -272,7 +288,7 @@ async fn test_patch_package_builtin_conflicts() {
     let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
     let resp = app
         .patch_json(
-            "/api/admin/packages/byonk-builtin",
+            "/api/admin/screen-repos/byonk-builtin",
             &[AUTH],
             r#"{"pin":"v2"}"#,
         )
@@ -285,7 +301,7 @@ async fn test_patch_missing_package_is_not_found() {
     let dir = tempfile::tempdir().unwrap();
     let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
     let resp = app
-        .patch_json("/api/admin/packages/nope", &[AUTH], r#"{"pin":"v2"}"#)
+        .patch_json("/api/admin/screen-repos/nope", &[AUTH], r#"{"pin":"v2"}"#)
         .await;
     assert_eq!(resp.status, StatusCode::NOT_FOUND);
 }
@@ -295,7 +311,7 @@ async fn test_update_missing_package_is_not_found() {
     let dir = tempfile::tempdir().unwrap();
     let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
     let resp = app
-        .post_json("/api/admin/packages/nope/update", &[AUTH], "")
+        .post_json("/api/admin/screen-repos/nope/update", &[AUTH], "")
         .await;
     assert_eq!(resp.status, StatusCode::NOT_FOUND);
 }
@@ -306,19 +322,19 @@ async fn test_update_package_and_update_all_return_ok() {
     let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
 
     app.post_json(
-        "/api/admin/packages",
+        "/api/admin/screen-repos",
         &[AUTH],
         r#"{"handle":"weather","repo":"github.com/x/y","pin":"v1"}"#,
     )
     .await;
 
     let resp = app
-        .post_json("/api/admin/packages/weather/update", &[AUTH], "")
+        .post_json("/api/admin/screen-repos/weather/update", &[AUTH], "")
         .await;
     assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.text());
 
     let resp = app
-        .post_json("/api/admin/packages/update", &[AUTH], "")
+        .post_json("/api/admin/screen-repos/update", &[AUTH], "")
         .await;
     assert_eq!(resp.status, StatusCode::OK, "body: {}", resp.text());
 }
@@ -328,7 +344,9 @@ async fn test_packages_list_reports_real_status_for_builtin() {
     let dir = tempfile::tempdir().unwrap();
     let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
 
-    let listed = app.get_with_headers("/api/admin/packages", &[AUTH]).await;
+    let listed = app
+        .get_with_headers("/api/admin/screen-repos", &[AUTH])
+        .await;
     assert_eq!(listed.status, StatusCode::OK);
     let text = listed.text();
     assert!(

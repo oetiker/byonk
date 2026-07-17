@@ -4,8 +4,8 @@ use std::sync::Arc;
 use crate::assets::AssetLoader;
 use crate::error::RenderError;
 use crate::models::DisplaySpec;
-use crate::services::package_loader::{join_rel, PackageSource, ResolvedScreen};
-use crate::services::package_manager::PackageManager;
+use crate::services::screen_repo_loader::{join_rel, ResolvedScreen, ScreenRepoSource};
+use crate::services::screen_repo_manager::ScreenRepoManager;
 use crate::services::{FontFaceInfo, LuaRuntime, RenderService, TemplateService};
 
 /// Resolve the effective refresh rate.
@@ -34,9 +34,9 @@ pub struct ScriptResult {
     pub skip_update: bool,
     /// Screen name (a `handle/path` ref), for logging
     pub screen_name: String,
-    /// The screen's package source, for reading `screen.svg` + sibling parts
-    pub source: Arc<dyn PackageSource>,
-    /// The screen's package-relative directory
+    /// The screen's screen repo source, for reading `screen.svg` + sibling parts
+    pub source: Arc<dyn ScreenRepoSource>,
+    /// The screen's screen-repo-relative directory
     pub screen_dir: String,
     /// Config params
     pub params: HashMap<String, serde_yaml::Value>,
@@ -115,7 +115,7 @@ pub struct ContentPipeline {
     lua_runtime: LuaRuntime,
     template_service: TemplateService,
     renderer: Arc<RenderService>,
-    package_manager: Arc<PackageManager>,
+    screen_repo_manager: Arc<ScreenRepoManager>,
 }
 
 impl ContentPipeline {
@@ -123,7 +123,7 @@ impl ContentPipeline {
         config: crate::server::SharedConfig,
         asset_loader: Arc<AssetLoader>,
         renderer: Arc<RenderService>,
-        package_manager: Arc<PackageManager>,
+        screen_repo_manager: Arc<ScreenRepoManager>,
     ) -> Result<Self, ContentError> {
         // Build font info from the renderer's fontdb
         let mut font_families: HashMap<String, Vec<FontFaceInfo>> = HashMap::new();
@@ -152,7 +152,7 @@ impl ContentPipeline {
             lua_runtime,
             template_service,
             renderer,
-            package_manager,
+            screen_repo_manager,
         })
     }
 
@@ -172,8 +172,12 @@ impl ContentPipeline {
             .or_else(|| config.get_device_config(device_mac));
 
         if let Some(device_config) = device_config {
-            // Found device config — resolve the device's screen ref via packages.
-            if let Some(resolved) = self.package_manager.loader().resolve(&device_config.screen) {
+            // Found device config — resolve the device's screen ref via screen repos.
+            if let Some(resolved) = self
+                .screen_repo_manager
+                .loader()
+                .resolve(&device_config.screen)
+            {
                 if let Some(ctx) = device_ctx.as_mut() {
                     ctx.refresh_override = device_config.refresh;
                 }
@@ -192,7 +196,7 @@ impl ContentPipeline {
             .default_device_screen()
             .unwrap_or("byonk-builtin/default");
         let resolved = self
-            .package_manager
+            .screen_repo_manager
             .loader()
             .resolve(default_ref)
             .ok_or_else(|| ContentError::ScreenNotFound(device_mac.to_string()))?;
@@ -212,7 +216,7 @@ impl ContentPipeline {
         device_ctx: Option<DeviceContext>,
     ) -> Result<ScriptResult, ContentError> {
         let resolved = self
-            .package_manager
+            .screen_repo_manager
             .loader()
             .resolve(screen_ref)
             .ok_or_else(|| ContentError::ScreenNotFound(screen_ref.to_string()))?;
@@ -234,7 +238,7 @@ impl ContentPipeline {
             ContentError::ScreenNotFound(format!("{screen_name} (missing script.lua)"))
         })?;
 
-        // Run the Lua script, resolving require() against the screen's package.
+        // Run the Lua script, resolving require() against the screen's screen repo.
         let lua_result = self.lua_runtime.run_script(
             &script_src,
             &resolved.source,
@@ -344,13 +348,13 @@ impl ContentPipeline {
 
         let template_data = serde_json::Value::Object(template_context);
 
-        // Read the screen's `screen.svg` from its package.
+        // Read the screen's `screen.svg` from its screen repo.
         let template_rel = join_rel(&result.screen_dir, "screen.svg");
         let template_src = result.source.read_string(&template_rel).ok_or_else(|| {
             ContentError::Template(super::TemplateError::NotFound(template_rel.clone()))
         })?;
 
-        // Render the template to SVG (scoped to the screen's package + byonk-base).
+        // Render the template to SVG (scoped to the screen's screen repo + byonk-base).
         let svg_content = self.template_service.render(
             &template_src,
             &result.source,
@@ -613,7 +617,7 @@ impl ContentPipeline {
             .collect();
 
         let resolved = self
-            .package_manager
+            .screen_repo_manager
             .loader()
             .resolve(screen_ref)
             .ok_or_else(|| format!("Screen '{screen_ref}' not found"))?;
@@ -653,7 +657,7 @@ mod refresh_tests {
 mod pipeline_tests {
     use super::*;
     use crate::assets::AssetLoader;
-    use crate::services::package_cache::PackageCache;
+    use crate::services::screen_repo_cache::ScreenRepoCache;
     use std::collections::HashMap;
     use std::fs;
     use std::path::PathBuf;
@@ -681,10 +685,10 @@ mod pipeline_tests {
             std::process::id(),
             rand::random::<u64>()
         ));
-        let pm = PackageManager::new(
+        let pm = ScreenRepoManager::new(
             loader.clone(),
             shared.clone(),
-            PackageCache::new(cache_root),
+            ScreenRepoCache::new(cache_root),
             disk,
         );
         pm.rebuild_loader();
@@ -759,7 +763,7 @@ mod pipeline_tests {
         assert_eq!(result.screen_name, "acme/weather/forecast");
         assert_eq!(result.screen_dir, "weather/forecast");
 
-        // And the template renders through the package source.
+        // And the template renders through the screen repo source.
         let svg = pipeline.render_svg_from_script(&result, None).unwrap();
         assert!(svg.contains("<t>hi</t>"), "{svg}");
 

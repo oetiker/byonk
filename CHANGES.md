@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.16.0 - 2026-07-17
+
+### New
+
 - **Home Assistant integration** (`custom_components/byonk/`): run Byonk from Home
   Assistant with a zero-touch, Supervised/HAOS-only setup — it installs and starts the
   Byonk add-on for you, provisions the add-on's admin token with no user input, and
@@ -55,7 +63,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through-the-palette ramp).
 - **reTerminal E1004 panel profile** (`reterminal_e1004`): 1200×1600, 6-color Spectra 6
   palette. Added to the bundled `config.yaml`.
-
 ### Changed
 
 - **Breaking — screens are now packages.** The old flat `<name>.lua` + `<name>.svg`

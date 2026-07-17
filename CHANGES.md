@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Screen packages could never be fetched from the published container image.**
+  The release image is built `FROM scratch` and has no `/tmp` directory, so the
+  intermediate git clone (which used the system temp dir) failed with an opaque
+  `Could not open data at '/tmp/…'` and every package showed status `error`. The
+  clone now runs beside the package cache under the persistent data directory, so
+  fetching works in the container. Fetch failures are also written to the log now,
+  instead of only appearing in the per-package status.
+
 ## 0.16.0 - 2026-07-17
 
 ### New

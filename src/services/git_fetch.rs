@@ -162,21 +162,36 @@ pub fn fetch(
     std::fs::create_dir_all(dest)
         .map_err(|e| git_err(format!("creating {}: {e}", dest.display())))?;
 
-    let scratch = scratch_dir();
+    let scratch = scratch_for(dest);
     let result = fetch_into(repo, pin, token, dest, &scratch);
     // Always clean up scratch, regardless of outcome.
     let _ = std::fs::remove_dir_all(&scratch);
     result
 }
 
-fn scratch_dir() -> PathBuf {
+/// Directory for the intermediate bare clone. It MUST live on the same
+/// filesystem as `dest` (a sibling of it), NOT in `std::env::temp_dir()`.
+///
+/// The published container image is built `FROM scratch` (see
+/// `Dockerfile.release`) and has no `/tmp` directory, so `std::env::temp_dir()`
+/// resolves to a `/tmp/…` path whose parent does not exist — gix then fails the
+/// bare clone with `Could not open data at '/tmp/byonk-git-fetch-…'` and every
+/// package fetch errors. `dest` is the caller's package-cache checkout dir
+/// (under `/data`, just created via `create_dir_all`), so its parent is
+/// guaranteed to exist and be writable; cloning beside it also makes the final
+/// export a same-filesystem operation. Fall back to the system temp dir only
+/// when `dest` has no parent (not reachable for real cache paths).
+fn scratch_for(dest: &Path) -> PathBuf {
     let unique = format!(
         "byonk-git-fetch-{}-{}-{}",
         std::process::id(),
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
         rand::random::<u64>()
     );
-    std::env::temp_dir().join(unique)
+    match dest.parent() {
+        Some(parent) => parent.join(unique),
+        None => std::env::temp_dir().join(unique),
+    }
 }
 
 fn fetch_into(
@@ -369,6 +384,29 @@ mod tests {
     #[test]
     fn test_auth_url_local_path_unchanged() {
         assert_eq!(auth_url("/local/path", Some("tok")), "/local/path");
+    }
+
+    #[test]
+    fn test_scratch_is_sibling_of_dest_not_system_temp() {
+        // Regression: the release image is `FROM scratch` and has no /tmp, so
+        // the intermediate bare clone must live beside `dest` (on the writable
+        // package-cache filesystem under /data), never in std::env::temp_dir()
+        // — otherwise gix fails with "Could not open data at '/tmp/…'".
+        let dest = Path::new("/data/packages/repohash/scratch-checkout");
+        let scratch = scratch_for(dest);
+        assert_eq!(
+            scratch.parent(),
+            Some(Path::new("/data/packages/repohash")),
+            "scratch must be a sibling of dest"
+        );
+        assert!(
+            !scratch.starts_with(std::env::temp_dir()),
+            "scratch must not live in the system temp dir (release image has no /tmp)"
+        );
+        assert!(scratch
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("byonk-git-fetch-")));
     }
 
     #[test]

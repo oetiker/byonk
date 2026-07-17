@@ -183,6 +183,11 @@ impl PackageManager {
                     });
                     return;
                 }
+                tracing::info!(
+                    handle = %handle,
+                    sha = %fetched.resolved_sha,
+                    "package refreshed"
+                );
                 self.update_status(handle, |st| {
                     st.state = Some(PackageState::Ready);
                     st.resolved_sha = Some(fetched.resolved_sha.clone());
@@ -194,8 +199,13 @@ impl PackageManager {
             }
             Err(e) => {
                 cleanup_scratch(&scratch);
+                // `e`/`message` is already userinfo-redacted by git_fetch; the
+                // handle is operator-chosen. Log it so a failing package fetch
+                // is visible in the add-on log, not only in the per-package
+                // status surfaced by `GET /packages`.
                 let message = e.to_string();
                 let state = self.state_after_post_fetch_failure(handle, &repo);
+                tracing::warn!(handle = %handle, state = ?state, "package fetch failed: {message}");
                 self.update_status(handle, |st| {
                     st.state = Some(state);
                     st.error = Some(message);

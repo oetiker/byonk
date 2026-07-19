@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **"Add-on" is now "app" everywhere**, following Home Assistant 2026.2, which
+  renamed add-ons to apps in its UI (**Settings → Apps → App store**). The Byonk
+  documentation, the integration's messages, and the name of the Byonk repository
+  in the app store use the new wording. Nothing functional changed — the same
+  app, under a new label.
+
 ### Fixed
 
 ## 0.17.1 - 2026-07-17

@@ -9,9 +9,22 @@ it directly on your LAN.
 
 ## Install
 
+A full Home Assistant setup is **two parts**: this add-on (the server) and the
+[Byonk integration](ha-integration.md) (device onboarding, entities, automatic
+token provisioning). Install both.
+
+**Recommended — integration first.** Installing the
+[integration](ha-integration.md) installs and starts this add-on for you, and
+provisions the admin token automatically. See
+[its install steps](ha-integration.md#installation-via-hacs).
+
+**Add-on only** (server without Home Assistant device entities):
+
 1. **Settings → Add-ons → Add-on Store**.
 2. **⋮ → Repositories**, add `https://github.com/oetiker/byonk`, then close.
 3. Open **Byonk** in the store, **Install**, then **Start**.
+
+You can add the integration later — it picks up the running add-on.
 
 ## Point your TRMNL device at Byonk
 

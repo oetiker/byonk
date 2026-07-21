@@ -17,12 +17,12 @@
       }
     },
     "abort": {
-      "not_hassio": "Byonk requires the Byonk add-on, which needs a Home Assistant Supervised or HAOS installation.",
+      "not_hassio": "Byonk requires the Byonk app, which needs a Home Assistant Supervised or HAOS installation.",
       "single_instance_allowed": "Byonk is already configured.",
       "already_configured": "This device is already set up.",
       "no_hub": "The Byonk hub is not set up yet. Set up the Byonk integration first.",
-      "addon_error": "Could not install or start the Byonk add-on automatically. Add the Byonk add-on repository to the add-on store, install the Byonk add-on, then retry.",
-      "addon_unhealthy": "The Byonk add-on started, but its management API did not respond as expected. Make sure the Byonk add-on is up to date (a version that supports the admin API), then retry.",
+      "addon_error": "Could not install or start the Byonk app automatically. Add the Byonk app repository to the App store, install the Byonk app, then retry.",
+      "addon_unhealthy": "The Byonk app started, but its management API did not respond as expected. Make sure the Byonk app is up to date (a version that supports the admin API), then retry.",
       "add_failed": "Could not add the device to Byonk."
     },
     "error": {
@@ -76,7 +76,7 @@
   "issues": {
     "screen_repo_error": {
       "title": "Screen repo \"{handle}\" failed to update",
-      "description": "Byonk could not fetch the screen repo \"{handle}\" ({repo}).\n\nError: {error}\n\nCheck the repo URL, pin (branch/tag/commit) and access token in the Byonk add-on configuration, then use the \"Update screen repos\" button to retry."
+      "description": "Byonk could not fetch the screen repo \"{handle}\" ({repo}).\n\nError: {error}\n\nCheck the repo URL, pin (branch/tag/commit) and access token in the Byonk app configuration, then use the \"Update screen repos\" button to retry."
     }
   }
 }

@@ -1,11 +1,13 @@
 # Byonk
 
-Self-hosted content server for TRMNL e-ink devices. This add-on runs the prebuilt
+Self-hosted content server for TRMNL e-ink devices. This app runs the prebuilt
 `ghcr.io/oetiker/byonk` image under Home Assistant Supervisor.
+
+(Apps were called *add-ons* before Home Assistant 2026.2 — same thing, new name.)
 
 Byonk on Home Assistant comes in **two parts**, and you want both:
 
-- **This add-on** — the Byonk server itself: it serves screens to your TRMNL
+- **This app** — the Byonk server itself: it serves screens to your TRMNL
   devices on host port **3000**, and its Configuration tab holds Byonk's
   server-global settings (auth mode, screen repos).
 - **The Byonk integration** (a HACS custom integration) — onboards your TRMNL
@@ -16,7 +18,7 @@ Byonk on Home Assistant comes in **two parts**, and you want both:
 ## Installation
 
 The easiest path is to **install the integration first — it installs and starts
-this add-on for you**, fully zero-touch.
+this app for you**, fully zero-touch.
 
 1. In Home Assistant, open **HACS → Integrations**.
 2. Three-dot menu (top right) → **Custom repositories**, add
@@ -24,25 +26,25 @@ this add-on for you**, fully zero-touch.
    (Once Byonk is in the HACS default store you can skip this and just search.)
 3. Search for *Byonk* in HACS, install it, and **restart Home Assistant**.
 4. Go to **Settings → Devices & Services → Add Integration** and search for
-   *Byonk*. It adds the Byonk add-on repository, installs and starts this add-on,
+   *Byonk*. It adds the Byonk app repository, installs and starts this app,
    and generates the admin token itself.
 
-### Installing the add-on on its own
+### Installing the app on its own
 
 If you would rather run the server without the integration (no Home Assistant
 device entities, manual `config.yaml` editing):
 
-1. **Settings → Add-ons → Add-on Store**.
-2. **⋮** menu (top right) → **Repositories**, add
-   `https://github.com/oetiker/byonk`, and close.
+1. **Settings → Apps → App store**.
+2. Three-dot menu (top right) → **Repositories**, add
+   `https://github.com/oetiker/byonk`, and select **Add**.
 3. Find **Byonk** in the store, click **Install**, then **Start**.
 
-You can add the integration later at any time — it will pick up the add-on you
+You can add the integration later at any time — it will pick up the app you
 already have running.
 
 ## Pointing your TRMNL device at Byonk
 
-The add-on publishes Byonk on host port **3000**. Configure your TRMNL device to
+The app publishes Byonk on host port **3000**. Configure your TRMNL device to
 use `http://<your-home-assistant-host>:3000` as its server.
 
 A newly booted device shows a **registration code** on its screen and appears as a
@@ -53,7 +55,7 @@ instead.)
 ## Configuration
 
 This Configuration tab is the source of truth for Byonk's server-global settings.
-**Changes apply on add-on restart.**
+**Changes apply on app restart.**
 
 - **Admin token** — leave blank. The Byonk integration provisions and manages it
   automatically. While blank, the management API is disabled (this does not affect
@@ -72,9 +74,9 @@ does not edit them, so this tab stays the single editor.
 
 ## Editing screens and config
 
-Your configuration, screens, and fonts live in the add-on's config folder
-(mapped to `/config` inside the add-on). Edit them with the **File editor** or
-**Studio Code Server** add-on. Empty folders are seeded with sensible defaults on
+Your configuration, screens, and fonts live in the app's config folder
+(mapped to `/config` inside the app). Edit them with the **File editor** or
+**Studio Code Server** app. Empty folders are seeded with sensible defaults on
 first start. Edits to `config.yaml` are picked up without a restart.
 
 Per-device screen mappings are best managed through the Byonk integration; manual

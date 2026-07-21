@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Home Assistant "add-ons" are now called "apps".** Home Assistant 2026.2 renamed
+  add-ons to apps in its UI (**Settings → Apps → App store**). Byonk's Home Assistant
+  documentation, the integration's messages, and the Supervisor repository name now
+  use the new wording. Nothing functional changed — it's the same add-on/app.
+
 ### Fixed
 
 ## 0.17.1 - 2026-07-17

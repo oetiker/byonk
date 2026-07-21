@@ -21,7 +21,7 @@
       "single_instance_allowed": "Byonk is already configured.",
       "already_configured": "This device is already set up.",
       "no_hub": "The Byonk hub is not set up yet. Set up the Byonk integration first.",
-      "addon_error": "Could not install or start the Byonk app automatically. Add the Byonk app repository to the app store, install the Byonk app, then retry.",
+      "addon_error": "Could not install or start the Byonk app automatically. Add the Byonk app repository to the App store, install the Byonk app, then retry.",
       "addon_unhealthy": "The Byonk app started, but its management API did not respond as expected. Make sure the Byonk app is up to date (a version that supports the admin API), then retry.",
       "add_failed": "Could not add the device to Byonk."
     },

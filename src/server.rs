@@ -216,7 +216,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/setup/", get(handle_setup))
         .route("/api/display", get(handle_display))
         .route("/api/display/", get(handle_display))
-        .route("/api/image/:hash", get(handle_image))
+        .route("/api/image/{hash}", get(handle_image))
         .route("/api/log", post(api::handle_log))
         .route("/api/log/", post(api::handle_log))
         .route("/api/time", get(api::handle_time))
@@ -283,6 +283,16 @@ async fn handle_image(
 #[cfg(test)]
 mod reload_tests {
     use super::*;
+
+    #[test]
+    fn build_router_accepts_brace_path_syntax() {
+        // axum 0.8 panics at router-build time on old `:param` syntax; this
+        // exercises build_router (and the nested admin_router) to confirm
+        // all routes use `{param}` brace syntax and construct cleanly.
+        let loader = Arc::new(AssetLoader::new(None, None, None));
+        let state = create_app_state(loader).unwrap();
+        let _ = build_router(state);
+    }
 
     #[test]
     fn test_appstate_has_package_manager_resolving_builtin() {

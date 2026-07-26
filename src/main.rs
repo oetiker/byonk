@@ -842,7 +842,7 @@ async fn run_dev_server() -> anyhow::Result<()> {
         .route("/render", get(handle_render))
         .route("/resolve-mac", get(handle_resolve_mac))
         .route("/panel-colors", post(handle_set_panel_colors))
-        .route("/panel-colors/:panel", delete(handle_delete_panel_colors))
+        .route("/panel-colors/{panel}", delete(handle_delete_panel_colors))
         .with_state(dev_state);
 
     // Build router: start with shared API routes, add dev routes

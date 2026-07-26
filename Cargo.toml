@@ -11,7 +11,7 @@ license = "MIT"
 [dependencies]
 eink-dither = { path = "crates/eink-dither" }
 # HTTP server
-axum = "0.7"
+axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "trace", "set-header"] }
@@ -36,7 +36,7 @@ serde_yaml = "0.9"
 
 # OpenAPI documentation
 utoipa = { version = "5", features = ["axum_extras"] }
-utoipa-swagger-ui = { version = "8", features = ["axum"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
 
 # Error handling
 thiserror = "2"

@@ -233,6 +233,12 @@ impl AssetLoader {
         self.config_file.as_deref()
     }
 
+    /// Path to the external `SCREENS_DIR`, if one is configured. Used to
+    /// auto-register it as the writable `local` screen repo handle.
+    pub fn screens_dir(&self) -> Option<&std::path::Path> {
+        self.screens_dir.as_deref()
+    }
+
     /// Read the config file
     ///
     /// If an external path is configured and exists, uses that.

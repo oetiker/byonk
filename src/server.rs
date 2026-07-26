@@ -141,11 +141,17 @@ pub fn build_screen_repo_manager(
         .map(|dir| collect_disk_packages(std::path::Path::new(&dir), &config.load().screen_repos))
         .unwrap_or_default();
 
+    // `SCREENS_DIR` auto-registers as the writable `local` screen repo handle
+    // (unless `config.screen_repos` already has an explicit `local` entry) —
+    // see `ScreenRepoManager::build_disk_sources`.
+    let screens_dir = asset_loader.screens_dir().map(|p| p.to_path_buf());
+
     let manager = ScreenRepoManager::new(
         asset_loader,
         config,
         ScreenRepoCache::new(cache_root),
         extra_disk,
+        screens_dir,
     );
     manager.rebuild_loader();
     manager

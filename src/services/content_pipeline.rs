@@ -690,6 +690,7 @@ mod pipeline_tests {
             shared.clone(),
             ScreenRepoCache::new(cache_root),
             disk,
+            None,
         );
         pm.rebuild_loader();
         ContentPipeline::new(shared, loader, renderer, pm).unwrap()

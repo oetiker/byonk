@@ -367,6 +367,20 @@ impl ScreenRepoSource for EmbeddedBuiltinSource {
     }
 }
 
+/// The kind of on-disk screen repo source a `handle` should be backed by.
+///
+/// Distinguishes a read-only git-fetched cache checkout from a writable,
+/// authored/managed local directory (a `path:` config entry, or the
+/// auto-registered `SCREENS_DIR` under the `local` handle) so
+/// `ScreenRepoLoader::new` can construct the right `ScreenRepoSource` impl
+/// per handle.
+pub enum DiskSource {
+    /// A read-only git-fetched cache checkout (`GitScreenRepoSource`).
+    Git(PathBuf),
+    /// A writable, authored/managed local directory (`LocalScreenRepoSource`).
+    Local(PathBuf),
+}
+
 /// Resolves screen references against a registry of screen repos keyed by handle.
 pub struct ScreenRepoLoader {
     registry: HashMap<String, Arc<dyn ScreenRepoSource>>,
@@ -374,10 +388,11 @@ pub struct ScreenRepoLoader {
 
 impl ScreenRepoLoader {
     /// Build a loader. The `byonk-builtin` handle is always registered (backed by
-    /// the embedded tree + `SCREENS_DIR` overlay). Each `disk_packages` entry maps
-    /// a handle to a screen repo root directory. ScreenRepos whose manifest is
-    /// missing/invalid are skipped with a warning.
-    pub fn new(asset_loader: Arc<AssetLoader>, disk_packages: HashMap<String, PathBuf>) -> Self {
+    /// the embedded tree + `SCREENS_DIR` overlay). Each `disk_sources` entry maps
+    /// a handle to a typed on-disk screen repo root (git cache vs. writable
+    /// local). ScreenRepos whose manifest is missing/invalid are skipped with
+    /// a warning.
+    pub fn new(asset_loader: Arc<AssetLoader>, disk_sources: HashMap<String, DiskSource>) -> Self {
         let mut registry: HashMap<String, Arc<dyn ScreenRepoSource>> = HashMap::new();
 
         match EmbeddedBuiltinSource::load(asset_loader) {
@@ -389,18 +404,35 @@ impl ScreenRepoLoader {
             }
         }
 
-        for (handle, root) in disk_packages {
-            match GitScreenRepoSource::load(&root) {
-                Ok(src) => {
-                    registry.insert(handle, Arc::new(src));
-                }
-                Err(e) => {
-                    tracing::warn!(handle = %handle, root = %root.display(), error = %e, "skipping disk screen repo: invalid manifest");
-                }
+        for (handle, source) in disk_sources {
+            match source {
+                DiskSource::Git(root) => match GitScreenRepoSource::load(&root) {
+                    Ok(src) => {
+                        registry.insert(handle, Arc::new(src));
+                    }
+                    Err(e) => {
+                        tracing::warn!(handle = %handle, root = %root.display(), error = %e, "skipping disk screen repo: invalid manifest");
+                    }
+                },
+                DiskSource::Local(root) => match LocalScreenRepoSource::load(&root) {
+                    Ok(src) => {
+                        registry.insert(handle, Arc::new(src));
+                    }
+                    Err(e) => {
+                        tracing::warn!(handle = %handle, root = %root.display(), error = %e, "skipping local screen repo: invalid manifest");
+                    }
+                },
             }
         }
 
         ScreenRepoLoader { registry }
+    }
+
+    /// The registered source for `handle`, or `None` if unregistered. Used by
+    /// tests and by `ScreenStore` to read/write a specific handle's source
+    /// directly.
+    pub fn source_for(&self, handle: &str) -> Option<Arc<dyn ScreenRepoSource>> {
+        self.registry.get(handle).cloned()
     }
 
     /// Resolve `"handle/path"` to a screen. `None` if the handle is unknown, the
@@ -480,7 +512,7 @@ mod tests {
 
         let loader = std::sync::Arc::new(crate::assets::AssetLoader::new(None, None, None));
         let mut disk = HashMap::new();
-        disk.insert("acme".to_string(), tmp.clone());
+        disk.insert("acme".to_string(), DiskSource::Git(tmp.clone()));
         let pl = ScreenRepoLoader::new(loader, disk);
 
         let r = pl.resolve("acme/weather/forecast").expect("resolve");

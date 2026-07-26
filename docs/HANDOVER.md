@@ -1,39 +1,57 @@
 # Handover — Byonk
 
-_Last updated: 2026-07-17 — **Fetch bug fix + "packages" → "screen repos" rename (everything incl. API) + HA error-visibility feature. VM-verified live; PR #27 OPEN.** Branch `fix/screen-repos-and-fetch-scratch` (off `main` `e61658d`), pushed. All local gates green; VM live-verify passed via the from-source add-on. Remaining: PR #27 CI + review → squash-merge → release 0.16.1._
+_Last updated: 2026-07-26 — **Screen-authoring initiative: executing Plan 1 (authoring core) via subagent-driven development. Tasks 1–5 of 13 DONE and reviewed-clean; Task 6 (ScreenStore read/write) is next.** Branch `feat/screen-store-authoring-core` (off `chore/rust-toolchain-pin` @ `12385da`), HEAD `87e4919`, local-only (not pushed). All gates green through Task 5._
 
-## Status: PR #27 open, VM-verified
-- **PR:** https://github.com/oetiker/byonk/pull/27 — CI running at hand-off.
-- **VM live-verify (from-source `local_byonk`):** Supervisor accepted the new `screen_repos` schema; `GET /api/admin/screen-repos` serves the `tobitest` repo (`https://github.com/oetiker/byonk-dist-test.git`) at `status: ready`, sha `97578c5f`, serving `tobitest/hello`; old `/api/admin/packages` → 404; `GET /screens` wrapper field is `screen_repos`. The `/tmp` fetch error is gone. **VM state now:** `local_byonk` running (my branch, throwaway admin_token `verifytoken123` + tobitest), published `43664941_byonk` **stopped**, the existing integration entry still points at the stopped published add-on (in error) — re-onboard the integration (needs HA UI login) to see the renamed entities/button/repair issue, or restore by `ha addons stop local_byonk && ha addons start 43664941_byonk`.
-- Integration UI not verified live (HA login = password entry, disallowed) but covered by 77 pytest + the API wire check.
+## The initiative
 
-## TL;DR — what happened this session
+Turn byonk into a place where screens are **authored**, not just served, and make an LLM (Claude Code) a first-class author that can develop screens against a byonk running **anywhere** — including the HA add-on inside HA — over the LAN, with no filesystem access and no Samba share. Creating a screen means editing three languages (yaml + lua + svg); today that's read-only, hand-edited over a share.
 
-User reported: added a screen-repo (their `byonk-dist-test` repo) in the add-on, clicked refresh, got "an error but no further information." Root-caused and fixed, then did a full user-requested rename.
+Design is split into **3 specs** (spec 1 is in flight):
+- **Spec 1 — Screen store core + MCP** (`docs/superpowers/specs/2026-07-24-screen-store-and-mcp-design.md`). A typed writable screen-source model + a shared `ScreenStore` mutation/validate/render core + an always-on MCP interface at `/mcp`.
+- **Spec 2 — Svelte web UI at `/`** (not written). Always-on SPA, three-pane editor, live preview, full `/dev` parity, then retire `/dev` + `byonk dev`.
+- **Spec 3 — Git commit & history** (not written). gix write path over local repos that are git working copies.
 
-1. **Bug fix (`1b2ed93`)** — screen-repo fetch was **completely broken in the published container**: the release image is `FROM scratch` (no `/tmp`), and `git_fetch.rs` cloned the intermediate bare repo into `std::env::temp_dir()` (`/tmp/…`), which gix can't create there → `Could not open data at '/tmp/byonk-git-fetch-…'`, status `error`. Fix: clone into a **sibling of `dest`** (under the package cache on `/data`, guaranteed to exist). Also added `tracing` warn/info so fetch failures hit the add-on log, not only `GET`.
-   - **Proven**: identical fetch succeeded on Mac; and with `TMPDIR=/no/such/tmp` (simulating the scratch container) the fixed fetch returns `PROBE_OK`. Unit test `test_scratch_is_sibling_of_dest_not_system_temp`.
+Spec 1 is itself split into **2 implementation plans**:
+- **Plan 1 — Authoring core** (`docs/superpowers/plans/2026-07-26-screen-store-authoring-core.md`, 13 tasks): axum bump → typed writable sources → `ScreenStore` → builtin/examples split + migration. **← executing now.**
+- **Plan 2 — MCP interface** (not written): Component 5 of spec 1, on top of Plan 1's finished core.
 
-2. **Rename "packages" → "screen repos" (`ae57f43`, `f685be9`, `5b9fec7`)** — user chose: term **"Screen Repos"**, scope **everything incl. the HTTP API**, and **surface errors visibly**. A screen repo = a git repository of screens.
-   - **API**: `/api/admin/packages*` → `/api/admin/screen-repos*`; `GET /screens` grouping wrapper field `packages` → `screen_repos`; settings field `package_refresh_interval` → `screen_repo_refresh_interval`. Per-repo fields (handle, repo, pin, builtin, status, error, …) unchanged.
-   - **config.yaml / add-on options + schema**: `packages` → `screen_repos`, `package_refresh_interval` → `screen_repo_refresh_interval`; env `PACKAGES_CACHE_DIR` → `SCREEN_REPOS_CACHE_DIR` (value `/data/packages` kept).
-   - **Rust internals**: `Package{Manager,Loader,Cache,Status,State,Ref,Manifest,Info,Source}` → `ScreenRepo*`; files `src/services/screen_repo_*.rs`, `src/models/screen_repo_manifest.rs`; `config_writer` upsert/remove fns renamed.
-   - **HA integration**: API client, coordinator (`screen_repos`, `non_builtin_screen_repos`, `screen_repo()`), `screen_repo_entities.py` / `ByonkScreenRepoStatusSensor`, button "Update screen repos", strings/translations.
-   - **KEPT**: `byonk-builtin` handle value, `byonk-screens.yaml` filename, `/data/packages` path value — so device screen paths and on-disk layout are unaffected.
+## How to resume (READ FIRST)
 
-3. **Error-visibility feature (`f685be9`)** — a screen repo in `error` state now raises a **HA Repair issue** ("Screen repo X failed to update") carrying the real fetch error, auto-cleared on recovery. Translation `issues.screen_repo_error` in strings.json/en.json. Tests: `tests_ha/test_screen_repo_issues.py`.
+1. **Ledger is the source of truth:** `cat .superpowers/sdd/progress.md` (git-ignored). It lists each task's status + commit range. Tasks marked complete are DONE — do not re-dispatch. `git log --oneline 12385da..HEAD` corroborates.
+2. **Resume execution** with the **superpowers:subagent-driven-development** skill, continuing at **Task 6**. The workflow: for each task — `scripts/task-brief PLAN N` → dispatch implementer subagent (fresh, model per task) → `scripts/review-package BASE HEAD` → dispatch task reviewer → fix loop if needed → append one line to the ledger. Scripts live in the skill dir: `/Users/oetiker/.claude/plugins/cache/claude-plugins-official/superpowers/6.1.1/skills/subagent-driven-development/scripts/` (run them from the repo root — they resolve the repo via cwd).
+3. BASE for Task 6's review package = current HEAD `87e4919`.
 
-## Verification status (all GREEN at `5b9fec7`)
-- Rust: `cargo build`, `cargo clippy -- -D warnings`, `cargo fmt --check`, `cargo test` (73/5/2/… all ok) — green.
-- HA: `make ha-check` (ruff + **77 pytest**) — green.
-- Docs: `make docs` (mdbook) — clean (only harmless mermaid version warning).
-- Fetch fix functionally proven via `TMPDIR=/no/such/tmp` probe (`PROBE_OK`).
+## Done (Tasks 1–5 — "typed writable sources" component, all reviewed clean)
 
-## Remaining
-1. **(optional) VM live-verify** — needs the **from-source** local add-on (`local_byonk`) rebuilt on the QEMU VM (the VM currently runs the *published* 0.16.0 scratch image with the OLD naming + the bug). Recipe: memory `ha-vm-from-source-addon-build` + `tools/ha-vm/README.md`; re-scaffold `local_byonk` (config.yaml sans `image:` + Debian Dockerfile), `SMB_USER=byonk SMB_PASS=byonk make ha-rebuild`, `make ha-deploy`. Then in the add-on Config tab add a `screen_repos:` entry for `https://github.com/oetiker/byonk-dist-test.git` and confirm it fetches + shows as a screen repo + the button works; point at a bad repo to see the Repair issue. NOTE: the Debian from-source image HAS `/tmp`, so it validates the **rename/boundary**, not the scratch `/tmp` fix (already proven by the probe). The scratch fix is confirmed in production only at the 0.16.1 release image.
-2. **Push + PR + release 0.16.1** — not started; user not yet asked. Branch is off `main`; `main-protect` ruleset blocks direct pushes (use PR; release uses `RELEASE_TOKEN` + admin bypass, per the 0.16.0 memory).
+- **T1 `002a21a`** axum 0.7→0.8 (+ swagger-ui 8→9). Found/fixed 3 extra `:param` routes in `api/admin/mod.rs` beyond the plan's list. No utoipa bump needed.
+- **T2 `2a6e62a`** `writable_root() -> Option<&Path>` (default `None`) on `ScreenRepoSource`; renamed `DiskScreenRepoSource` → `GitScreenRepoSource`.
+- **T3 `2d5006a`** `LocalScreenRepoSource` (writable; `writable_root()=Some(root)`). Shared `walk_screen_paths`/`walk_ext_files`/`resolve_manifest_root` extracted (Git behavior preserved). `tempfile` added as dev-dep.
+- **T4 `4b2e143`** `ScreenRepoRef.path` variant + `validate()` (rejects `repo`+`path` together), wired **inside** `AppConfig::load_from_assets` so no caller can bypass.
+- **T5 `87e4919`** [opus-reviewed] `path:` entries + `SCREENS_DIR` register as writable local sources. `SCREENS_DIR` auto-registers as handle **`local`** unless config declares one (explicit wins). Key design: `AssetLoader::screens_dir()` accessor + `server::build_screen_repo_manager` derivation (no `main.rs` threading); shared `build_disk_sources()` so initial-snapshot == every-rebuild; `DiskSource{Git,Local}` enum; `ScreenRepoLoader::source_for(handle)` added (Task 6 depends on it). `rebuild_loader` no longer skips `path:` entries.
 
-## Reference
-- Rename mapping spec (durable): `…/scratchpad/rename-spec.md` (session scratch).
-- Memories: `ha-vm-from-source-addon-build`, `ha-vm-addon-manifest-sync-gap`, `ha-addon-owned-global-config`, `ha-vm-admin-api-testing`, `changelog-user-facing-only`, `no-git-add-all`, `byonk-is-ours-change-apis-freely`.
-- Build/verify: `make check` (Rust), `make ha-check` (Python), `make docs`.
+## Next (Tasks 6–13)
+
+- **T6** `ScreenStore` (`src/services/screen_store.rs`): `read_file`/`write_file` with blake3 **etag** optimistic concurrency + path-traversal (canonicalize-then-verify-prefix) safety; `StoreError{ReadOnly{copy_hint},NotFound,Conflict,Traversal,TooLarge,Io}`. Adds `blake3` dep. Consumes `manager.loader().source_for()` + `writable_root()`.
+- **T7** create/copy/rename/delete screens (copy = fork-to-edit for read-only sources).
+- **T8** `validate` (meta schema + Lua compile + SVG/include resolution).
+- **T9** `render` with diagnostics (png + raw + captured Lua `log_*` + returned data + line-numbered Lua error). Touches `lua_runtime.rs` to capture logs per-run.
+- **T10** split embedded `screens/` → minimal `byonk-builtin` (`default` + `calibration/*`) + shipped `examples` (hello, mandelbrot, webscrape, gphoto, swiss-departure-board, demo/font). ⚠️ Plan Step 5 uses `git add -A screens/` — **override to explicit-path staging** (constraint: no `git add -A`).
+- **T11** seed `local` manifest + `examples` repo; stop copying builtin screens into SCREENS_DIR.
+- **T12** one-time migration: rewrite old `byonk-builtin/<user-screen>` device refs → `local/<x>` (genuine builtins untouched); idempotent.
+- **T13** wire `ScreenStore` into `AppState` + docs (`docs/src/guide/authoring.md`) + CHANGES.md.
+
+## Key decisions (durable)
+
+- **Three built-in layers, kept separate:** (1) `byonk-base-v1` include library — embedded, universal, versioned, read-only, **untouched by this work**; (2) `byonk-builtin` repo — minimal read-only `default` + `calibration/*`; (3) `examples` — shipped, seeded to disk, editable. Writability is a **structural property of the source** (`writable_root()`), never a name check.
+- **`byonk-builtin` handle string is frozen** (device configs reference it). Only what it embeds changes.
+- MCP (Plan 2) = `rmcp` streamable-HTTP at `/mcp` on the main router, admin-token gated (same `require_admin` Bearer as `/api/admin/*`). That's why axum 0.8 was a prerequisite.
+- After the whole plan: validate the HA add-on options-schema change on the VM (memory `ha-vm-addon-manifest-sync-gap`).
+
+## Build / verify
+
+- `make check` = fmt + `clippy -- -D warnings` + tests (green through T5). `make docs` must stay clean.
+- **Global constraints (bind every task):** never `git add -A`/`.` (stage explicit paths, verify `git diff --cached`); CHANGES.md = user-facing only; `byonk-base-v1` untouched; scratch release image (no `/tmp`, on-disk state under `/data`); Rust toolchain via rustup/`rust-toolchain.toml`.
+
+## After Plan 1
+
+Final whole-branch review (opus, `superpowers:requesting-code-review`), then `superpowers:finishing-a-development-branch`. Then write Plan 2 (MCP) and Spec 2/3.

@@ -424,7 +424,7 @@ impl ScreenRepoSource for EmbeddedBuiltinSource {
             format!("{}/", self.root_prefix)
         };
         let screen_prefix = format!("{screen_path}/");
-        let mut out: Vec<String> = self
+        let mut out: std::collections::BTreeSet<String> = self
             .loader
             .list_screens()
             .into_iter()
@@ -437,8 +437,28 @@ impl ScreenRepoSource for EmbeddedBuiltinSource {
                 }
             })
             .collect();
-        out.sort();
-        out
+
+        // `list_screens()`'s overlay branch (`AssetLoader::collect_screen_files`)
+        // only picks up `.lua`/`.svg`/`.yaml` files — embedded assets are
+        // unfiltered (rust-embed includes image globs), so this only bites a
+        // screen living under `SCREENS_DIR` (the HA add-on's primary
+        // layout): its non-lua/svg/yaml assets (images, etc) are visible to
+        // `read()` but invisible to the list above. Walk the overlay dir
+        // directly too, so `copy_screen` sees every file the source can
+        // actually serve, not just the subset `list_screens()` happens to
+        // enumerate. A `BTreeSet` dedups (an overlay file that also matches
+        // `list_screens()`'s extension filter would otherwise appear twice)
+        // and keeps the result sorted.
+        if let Some(screens_dir) = self.loader.screens_dir() {
+            let overlay_base = if self.root_prefix.is_empty() {
+                screens_dir.to_path_buf()
+            } else {
+                screens_dir.join(&self.root_prefix)
+            };
+            out.extend(walk_files_under(&overlay_base, screen_path));
+        }
+
+        out.into_iter().collect()
     }
 }
 

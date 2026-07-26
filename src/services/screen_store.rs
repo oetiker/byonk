@@ -10,6 +10,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use crate::services::content_pipeline::ContentPipeline;
+use crate::services::screen_repo_loader::ScreenRepoSource;
 use crate::services::screen_repo_manager::ScreenRepoManager;
 
 /// Largest file `read_file`/`write_file` will handle. Guards against
@@ -308,8 +309,9 @@ impl ScreenStore {
     /// Guarded write of one file into a writable repo: `ensure_writable_parent`
     /// then `atomic_write`. Shared by `create_screen` and `copy_screen`, which
     /// (unlike `write_file`) never need an `if_match` check interleaved
-    /// between the two.
-    fn put(&self, base: &Path, target: &Path, bytes: &[u8]) -> Result<(), StoreError> {
+    /// between the two. An associated fn (not a method) — it never touches
+    /// `self`.
+    fn put(base: &Path, target: &Path, bytes: &[u8]) -> Result<(), StoreError> {
         Self::ensure_writable_parent(base, target)?;
         Self::atomic_write(target, bytes)
     }
@@ -330,7 +332,17 @@ impl ScreenStore {
         }
 
         for (rel, contents) in template.files() {
-            self.put(&base, &dir.join(rel), contents.as_bytes())?;
+            if let Err(e) = Self::put(&base, &dir.join(rel), contents.as_bytes()) {
+                // Best-effort cleanup: leaving a half-scaffolded dir behind
+                // would make `dir.exists()` above trip `Conflict` on every
+                // retry, with no way back in short of an out-of-band
+                // delete. `dir` was only ever joined onto `base` (never
+                // escaped it — every `put` call canonicalize-verifies its
+                // own target), so removing it here can't touch anything
+                // outside the writable root.
+                let _ = std::fs::remove_dir_all(&dir);
+                return Err(e);
+            }
         }
         self.manager.rebuild_loader();
         Ok(format!("{handle}/{name}"))
@@ -361,10 +373,40 @@ impl ScreenStore {
             return Err(StoreError::Conflict);
         }
 
+        if let Err(e) = Self::copy_screen_files(from_source.as_ref(), from_path, &to_base, &to_dir)
+        {
+            // Best-effort cleanup, same reasoning as `create_screen`: a
+            // failure partway through (a bad file, a `put` error) must not
+            // leave a half-copied screen dir that permanently trips the
+            // `Conflict` check above on retry, and that `rebuild_loader`
+            // (below — skipped on this path) would otherwise never even
+            // pick up correctly.
+            let _ = std::fs::remove_dir_all(&to_dir);
+            return Err(e);
+        }
+
+        self.manager.rebuild_loader();
+        Ok(format!("{to_handle}/{to_name}"))
+    }
+
+    /// Copy every file `from_source.screen_files(from_path)` lists into
+    /// `to_dir` (a subdirectory of `to_base`). An associated fn (not a
+    /// method): takes the source directly so it can be exercised in tests
+    /// against a stub `ScreenRepoSource`, independent of `ScreenRepoManager`
+    /// plumbing.
+    fn copy_screen_files(
+        from_source: &dyn ScreenRepoSource,
+        from_path: &str,
+        to_base: &Path,
+        to_dir: &Path,
+    ) -> Result<(), StoreError> {
         for rel in from_source.screen_files(from_path) {
             let bytes = from_source.read(&rel).ok_or_else(|| {
                 StoreError::Io(format!("source file {rel} listed but unreadable"))
             })?;
+            if bytes.len() > MAX_FILE_BYTES {
+                return Err(StoreError::TooLarge);
+            }
             let suffix = rel
                 .strip_prefix(from_path)
                 .and_then(|s| s.strip_prefix('/'))
@@ -373,11 +415,17 @@ impl ScreenStore {
                         "source file {rel} is not under screen path {from_path}"
                     ))
                 })?;
-            self.put(&to_base, &to_dir.join(suffix), &bytes)?;
+            // `screen_files` is a public trait method with no default
+            // impl — a future (or buggy) `ScreenRepoSource` could report an
+            // entry outside its own screen dir (`..`), and this suffix
+            // becomes part of an on-disk write target, so it must pass
+            // through the exact same guard every other write-target
+            // fragment does. Fail closed here rather than trusting the
+            // source.
+            let suffix = safe_rel(suffix)?;
+            Self::put(to_base, &to_dir.join(&suffix), &bytes)?;
         }
-
-        self.manager.rebuild_loader();
-        Ok(format!("{to_handle}/{to_name}"))
+        Ok(())
     }
 
     /// Rename a screen within its own writable repo (no cross-handle moves).
@@ -806,6 +854,172 @@ mod tests {
             repo_root.join("byonk-screens.yaml").exists(),
             "repo root contents must survive"
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn rename_rejects_symlink_escape_on_source() {
+        // Reaches `rename_screen`'s `!canon_old.starts_with(&canon_base)`
+        // branch specifically: `screen_path` itself ("evil") is lexically
+        // clean (passes `safe_rel`), but resolves via symlink to outside
+        // the writable root.
+        let (store, repo_root) = test_store_with_local();
+        let outside = tempdir_path("screen_store_rename_outside_src");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, repo_root.join("evil")).unwrap();
+
+        let err = store.rename_screen("local/evil", "renamed").unwrap_err();
+        assert!(matches!(err, StoreError::Traversal));
+        assert!(!repo_root.join("renamed").exists());
+        assert!(!outside.join("renamed").exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn rename_rejects_symlink_escape_on_destination_ancestor() {
+        // Reaches the destination-side guard (the
+        // `deepest_existing_ancestor(new_parent)` check): the source ("a")
+        // is legitimate, but the new name's leading segment ("linked") is a
+        // symlink resolving outside the writable root, even though the
+        // full destination path doesn't exist yet.
+        let (store, repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "a", StarterKind::Minimal)
+            .unwrap();
+
+        let outside = tempdir_path("screen_store_rename_outside_dst");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, repo_root.join("linked")).unwrap();
+
+        let err = store
+            .rename_screen("local/a", "linked/newname")
+            .unwrap_err();
+        assert!(matches!(err, StoreError::Traversal));
+        assert!(!outside.join("newname").exists());
+        // The source must be untouched — the rename must never have executed.
+        store.read_file("local/a", "meta.yaml").unwrap();
+    }
+
+    /// A `ScreenRepoSource` stub whose `screen_files` reports an entry
+    /// outside its own screen dir (`..`) — simulating a future/buggy
+    /// `ScreenRepoSource` impl, since `screen_files` has no default and
+    /// every implementor decides its own contents. `read` deliberately
+    /// does NOT reject the traversing path itself (unlike every real
+    /// source's `is_safe_rel` check), so this isolates
+    /// `copy_screen_files`'s own `safe_rel(suffix)` guard as the thing
+    /// that must catch it.
+    struct TraversalStubSource;
+    impl ScreenRepoSource for TraversalStubSource {
+        fn read(&self, rel: &str) -> Option<Vec<u8>> {
+            match rel {
+                "s/../../evil.txt" => Some(b"pwn".to_vec()),
+                _ => None,
+            }
+        }
+        fn screen_paths(&self) -> Vec<String> {
+            vec!["s".to_string()]
+        }
+        fn svg_files(&self) -> Vec<String> {
+            vec![]
+        }
+        fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
+            unreachable!("manifest() not used by copy_screen_files")
+        }
+        fn screen_files(&self, _screen_path: &str) -> Vec<String> {
+            vec!["s/../../evil.txt".to_string()]
+        }
+    }
+
+    #[test]
+    fn copy_screen_files_rejects_traversing_source_entry() {
+        let (_store, repo_root) = test_store_with_local();
+        let to_base = repo_root.clone();
+        let to_dir = to_base.join("dest");
+        let src = TraversalStubSource;
+
+        let err = ScreenStore::copy_screen_files(&src, "s", &to_base, &to_dir).unwrap_err();
+        assert!(matches!(err, StoreError::Traversal));
+
+        let outer = repo_root.parent().unwrap().parent().unwrap();
+        assert!(
+            !outer.join("evil.txt").exists(),
+            "a traversing screen_files entry must be rejected before any write"
+        );
+        assert!(!to_dir.exists());
+    }
+
+    #[test]
+    fn copy_carries_screens_dir_overlay_assets_missed_by_list_screens_extension_filter() {
+        // `AssetLoader::list_screens()`'s overlay branch
+        // (`collect_screen_files`) only picks up `.lua`/`.svg`/`.yaml`
+        // files. Embedded assets are unfiltered (rust-embed includes image
+        // globs), which is why `copy_forks_read_only_screen_into_local`'s
+        // `background.jpg` assertion above passes even without this test —
+        // but a screen living under `SCREENS_DIR` (the HA add-on's primary
+        // layout, also visible under the `byonk-builtin` handle) must not
+        // silently lose its non-lua/svg/yaml assets when copied.
+        let screens_dir = tempdir_path("screen_store_overlay_screens_dir");
+        std::fs::create_dir_all(screens_dir.join("myscreen")).unwrap();
+        std::fs::write(
+            screens_dir.join("myscreen/meta.yaml"),
+            "title: M\ndescription: d\nbyonk: \"0.15\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            screens_dir.join("myscreen/script.lua"),
+            "return { data = {} }\n",
+        )
+        .unwrap();
+        std::fs::write(screens_dir.join("myscreen/screen.svg"), "<svg/>\n").unwrap();
+        std::fs::write(
+            screens_dir.join("myscreen/photo.png"),
+            [0x89, b'P', b'N', b'G'],
+        )
+        .unwrap();
+
+        let local_repo = tempdir_path("screen_store_overlay_local_repo");
+        std::fs::create_dir_all(&local_repo).unwrap();
+        std::fs::write(
+            local_repo.join("byonk-screens.yaml"),
+            "name: local\ndescription: d\nauthor: a\nlicense: MIT\n",
+        )
+        .unwrap();
+
+        let asset_loader = Arc::new(AssetLoader::new(Some(screens_dir.clone()), None, None));
+        let mut screen_repos = std::collections::HashMap::new();
+        screen_repos.insert(
+            "local".to_string(),
+            crate::models::config::ScreenRepoRef {
+                path: Some(local_repo.display().to_string()),
+                ..Default::default()
+            },
+        );
+        let shared_config: SharedConfig = Arc::new(arc_swap::ArcSwap::from(Arc::new(AppConfig {
+            screen_repos,
+            ..AppConfig::default()
+        })));
+        let cache = crate::services::screen_repo_cache::ScreenRepoCache::new(tempdir_path(
+            "screen_store_overlay_cache",
+        ));
+        let manager = crate::services::screen_repo_manager::ScreenRepoManager::new(
+            asset_loader.clone(),
+            shared_config.clone(),
+            cache,
+            std::collections::HashMap::new(),
+            None,
+        );
+        let renderer = Arc::new(RenderService::new(&asset_loader).unwrap());
+        let pipeline = Arc::new(
+            ContentPipeline::new(shared_config, asset_loader, renderer, manager.clone()).unwrap(),
+        );
+        let store = ScreenStore::new(manager, pipeline);
+
+        let r = store
+            .copy_screen("byonk-builtin/myscreen", "local", "myscreen2")
+            .unwrap();
+        assert_eq!(r, "local/myscreen2");
+        let photo = store.read_file("local/myscreen2", "photo.png").unwrap();
+        assert!(photo.binary);
     }
 
     #[test]

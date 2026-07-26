@@ -158,11 +158,27 @@ pub fn normalize_algorithm_name(name: &str) -> String {
 pub struct ScreenRepoRef {
     #[serde(default)]
     pub repo: Option<String>,
+    /// Writable local directory backing this screen repo, as an alternative
+    /// to a git `repo`. Mutually exclusive with `repo`.
+    #[serde(default)]
+    pub path: Option<String>,
     #[serde(default)]
     pub pin: Option<String>,
     /// Secret token; redacted in read APIs.
     #[serde(default)]
     pub token: Option<String>,
+}
+
+impl ScreenRepoRef {
+    /// Reject nonsensical combinations. `handle` is only for the error message.
+    pub fn validate(&self, handle: &str) -> Result<(), String> {
+        if self.repo.is_some() && self.path.is_some() {
+            return Err(format!(
+                "screen repo '{handle}': set either 'repo' or 'path', not both"
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Application configuration loaded from config.yaml
@@ -309,9 +325,23 @@ impl AppConfig {
         let config: Self = serde_yaml::from_str(&content)
             .map_err(|e| anyhow::anyhow!("Invalid config.yaml: {e}"))?;
 
+        config.validate().map_err(|e| anyhow::anyhow!(e))?;
+
         tracing::info!(devices = config.devices.len(), "Loaded configuration");
 
         Ok(config)
+    }
+
+    /// Validate cross-field invariants not expressible via serde alone.
+    ///
+    /// Currently checks that no `screen_repos` entry sets both `repo` and
+    /// `path` (they are mutually exclusive: one is a git remote, the other a
+    /// writable local directory).
+    pub fn validate(&self) -> Result<(), String> {
+        for (handle, entry) in &self.screen_repos {
+            entry.validate(handle)?;
+        }
+        Ok(())
     }
 
     /// Check if a device is registered (by MAC or by registration code)
@@ -696,6 +726,27 @@ colors: "#000000,#FFFFFF"
         assert!(cfg.screen_repos.contains_key("byonk-builtin"));
         assert_eq!(cfg.screen_repos["weather"].pin.as_deref(), Some("v1.4.0"));
         assert!(cfg.screen_repos["byonk-builtin"].repo.is_none());
+    }
+
+    #[test]
+    fn screen_repo_path_variant_parses() {
+        let yaml = "screen_repos:\n  local:\n    path: /config/screens\n";
+        let cfg: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            cfg.screen_repos["local"].path.as_deref(),
+            Some("/config/screens")
+        );
+    }
+
+    #[test]
+    fn screen_repo_rejects_repo_and_path_together() {
+        let r = ScreenRepoRef {
+            repo: Some("github.com/a/b".into()),
+            path: Some("/x".into()),
+            pin: None,
+            token: None,
+        };
+        assert!(r.validate("weather").is_err());
     }
 
     #[test]

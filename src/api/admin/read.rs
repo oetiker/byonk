@@ -427,6 +427,7 @@ mod build_package_info_tests {
             "weather".to_string(),
             ScreenRepoRef {
                 repo: Some("github.com/x/y".to_string()),
+                path: None,
                 pin: Some("main".to_string()),
                 token: None,
             },
@@ -453,6 +454,7 @@ mod build_package_info_tests {
             "weather".to_string(),
             ScreenRepoRef {
                 repo: Some("github.com/x/y".to_string()),
+                path: None,
                 pin: Some("main".to_string()),
                 token: None,
             },
@@ -474,6 +476,7 @@ mod build_package_info_tests {
             "weather".to_string(),
             ScreenRepoRef {
                 repo: Some("github.com/x/y".to_string()),
+                path: None,
                 pin: Some("main".to_string()),
                 token: None,
             },

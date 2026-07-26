@@ -154,6 +154,7 @@ pub fn apply_to_config(result: &ReadResult, config: &mut AppConfig) {
                     p.handle.trim().to_string(),
                     ScreenRepoRef {
                         repo: p.repo.clone(),
+                        path: None,
                         pin: p.pin.clone(),
                         token: p.token.clone(),
                     },
@@ -426,6 +427,7 @@ mod tests {
             "stale".to_string(),
             ScreenRepoRef {
                 repo: Some("https://example.com/stale.git".to_string()),
+                path: None,
                 pin: None,
                 token: None,
             },

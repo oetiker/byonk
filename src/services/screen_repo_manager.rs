@@ -526,6 +526,7 @@ mod tests {
             "weather".to_string(),
             ScreenRepoRef {
                 repo: Some(src.url.clone()),
+                path: None,
                 pin: Some(src.branch.clone()),
                 token: None,
             },
@@ -563,6 +564,7 @@ mod tests {
             "weather".to_string(),
             ScreenRepoRef {
                 repo: Some(src.url.clone()),
+                path: None,
                 pin: Some(src.branch.clone()),
                 token: None,
             },
@@ -607,6 +609,7 @@ mod tests {
             "ghost".to_string(),
             ScreenRepoRef {
                 repo: Some("file:///no/such/repo/on/disk".to_string()),
+                path: None,
                 pin: Some("main".to_string()),
                 token: None,
             },
@@ -632,6 +635,7 @@ mod tests {
             "weather".to_string(),
             ScreenRepoRef {
                 repo: Some(src.url.clone()),
+                path: None,
                 pin: Some(src.branch.clone()),
                 token: None,
             },
@@ -687,6 +691,7 @@ mod tests {
             "weather".to_string(),
             ScreenRepoRef {
                 repo: Some(src.url.clone()),
+                path: None,
                 pin: Some(src.branch.clone()),
                 token: None,
             },
@@ -727,6 +732,7 @@ mod tests {
             "weather".to_string(),
             ScreenRepoRef {
                 repo: Some(src.url.clone()),
+                path: None,
                 pin: Some(src.branch.clone()),
                 token: None,
             },
@@ -790,6 +796,7 @@ mod tests {
             "weather".to_string(),
             ScreenRepoRef {
                 repo: Some(src.url.clone()),
+                path: None,
                 pin: Some(src.head_sha.clone()),
                 token: None,
             },
@@ -837,6 +844,7 @@ mod tests {
             "weather".to_string(),
             ScreenRepoRef {
                 repo: Some(src.url.clone()),
+                path: None,
                 pin: Some(src.branch.clone()),
                 token: None,
             },

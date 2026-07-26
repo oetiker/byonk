@@ -50,6 +50,38 @@ pub fn etag(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
 
+/// Which starter template `create_screen` scaffolds. One variant today;
+/// the enum exists so a future starter (e.g. a data-table layout) can be
+/// added without changing `create_screen`'s signature.
+#[derive(Debug, Clone, Copy)]
+pub enum StarterKind {
+    Minimal,
+}
+
+impl StarterKind {
+    /// The (filename, contents) pairs to scaffold for this starter kind.
+    fn files(self) -> [(&'static str, &'static str); 3] {
+        match self {
+            StarterKind::Minimal => [
+                ("meta.yaml", STARTER_META),
+                ("script.lua", STARTER_LUA),
+                ("screen.svg", STARTER_SVG),
+            ],
+        }
+    }
+}
+
+const STARTER_META: &str =
+    "title: New Screen\ndescription: A new screen.\nbyonk: \"0.15\"\nrefresh: 300\n";
+const STARTER_LUA: &str =
+    "-- Return the data table for your screen.\nreturn { data = { message = \"Hello\" } }\n";
+const STARTER_SVG: &str = concat!(
+    "{% extends \"byonk-base-v1/base.svg\" %}\n",
+    "{% block content %}\n",
+    "  <text x=\"40\" y=\"80\" font-size=\"48\">{{ data.message }}</text>\n",
+    "{% endblock %}\n",
+);
+
 /// Reject `..`, absolute, and empty components. Returns a clean relative `PathBuf`.
 ///
 /// Used for both the per-file `file` argument and (via `ScreenStore::split_ref`)
@@ -187,35 +219,13 @@ impl ScreenStore {
         let rel = safe_rel(file)?;
         let base = self.resolve_writable_root(handle, screen_path)?;
         let target = base.join(screen_path).join(&rel);
-        let parent = target.parent().ok_or_else(|| {
-            StoreError::Io(format!(
-                "cannot determine parent directory of {}",
-                target.display()
-            ))
-        })?;
 
-        // canonicalize-then-verify-prefix guard (defends against symlink
-        // escape): verify BEFORE touching the filesystem — never
-        // `create_dir_all` first and check after. `base` must already exist
-        // (`LocalScreenRepoSource::load` had to read it to load the
-        // manifest before this handle was ever registered as writable), so
-        // if it fails to canonicalize now, the writable root was deleted or
-        // replaced out from under a stale loader snapshot; treat that as a
-        // hard failure rather than silently skipping the guard.
-        let canon_base = base.canonicalize().map_err(|e| {
-            StoreError::Io(format!(
-                "writable root {} is unavailable: {e}",
-                base.display()
-            ))
-        })?;
-        let existing_ancestor = deepest_existing_ancestor(parent);
-        let canon_existing = existing_ancestor
-            .canonicalize()
-            .map_err(|e| StoreError::Io(e.to_string()))?;
-        if !canon_existing.starts_with(&canon_base) {
-            return Err(StoreError::Traversal);
-        }
-        std::fs::create_dir_all(parent).map_err(|e| StoreError::Io(e.to_string()))?;
+        // Guard + create the target's parent dir BEFORE any filesystem
+        // interaction with `target` itself — including the `if_match` read
+        // below, not just the eventual write. A symlink planted at any
+        // point along `screen_path`/`file` must be caught here, not
+        // followed by a stat/read first.
+        Self::ensure_writable_parent(&base, &target)?;
 
         if let Some(expected) = if_match {
             match std::fs::read(&target) {
@@ -232,12 +242,55 @@ impl ScreenStore {
             }
         }
 
-        // Atomic tmp+rename in the same dir. The tmp name is unique per
-        // write (pid + random suffix appended, not substituted via
-        // `with_extension`) so concurrent writes to sibling files that share
-        // a stem-less extension swap (e.g. `script.lua` and `script.svg`)
-        // never stage through the same path, and an aborted write never
-        // leaves a fixed, collidable `*.byonk-tmp` name behind.
+        Self::atomic_write(&target, bytes)?;
+        self.manager.rebuild_loader();
+        Ok(etag(bytes))
+    }
+
+    /// Canonicalize `base` (the writable root) and verify that the nearest
+    /// existing ancestor of `target`'s parent resolves under it — the
+    /// write-path's verify-before-mutate symlink-escape guard, factored out
+    /// so every operation that writes a file into a writable repo runs it.
+    /// Verify BEFORE touching the filesystem: never `create_dir_all` first
+    /// and check after. `base` must already exist (`LocalScreenRepoSource::load`
+    /// had to read it to load the manifest before this handle was ever
+    /// registered as writable), so if it fails to canonicalize now, the
+    /// writable root was deleted or replaced out from under a stale loader
+    /// snapshot; treat that as a hard failure rather than silently skipping
+    /// the guard.
+    fn ensure_writable_parent(base: &Path, target: &Path) -> Result<(), StoreError> {
+        let parent = target.parent().ok_or_else(|| {
+            StoreError::Io(format!(
+                "cannot determine parent directory of {}",
+                target.display()
+            ))
+        })?;
+
+        let canon_base = base.canonicalize().map_err(|e| {
+            StoreError::Io(format!(
+                "writable root {} is unavailable: {e}",
+                base.display()
+            ))
+        })?;
+        let existing_ancestor = deepest_existing_ancestor(parent);
+        let canon_existing = existing_ancestor
+            .canonicalize()
+            .map_err(|e| StoreError::Io(e.to_string()))?;
+        if !canon_existing.starts_with(&canon_base) {
+            return Err(StoreError::Traversal);
+        }
+        std::fs::create_dir_all(parent).map_err(|e| StoreError::Io(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Atomic tmp+rename write of `bytes` to `target` (whose parent dir must
+    /// already exist and have been guard-verified by `ensure_writable_parent`).
+    /// The tmp name is unique per write (pid + random suffix appended, not
+    /// substituted via `with_extension`) so concurrent writes to sibling
+    /// files that share a stem-less extension swap (e.g. `script.lua` and
+    /// `script.svg`) never stage through the same path, and an aborted write
+    /// never leaves a fixed, collidable `*.byonk-tmp` name behind.
+    fn atomic_write(target: &Path, bytes: &[u8]) -> Result<(), StoreError> {
         let file_name = target
             .file_name()
             .and_then(|n| n.to_str())
@@ -248,9 +301,173 @@ impl ScreenStore {
             rand::random::<u64>()
         ));
         std::fs::write(&tmp, bytes).map_err(|e| StoreError::Io(e.to_string()))?;
-        std::fs::rename(&tmp, &target).map_err(|e| StoreError::Io(e.to_string()))?;
+        std::fs::rename(&tmp, target).map_err(|e| StoreError::Io(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Guarded write of one file into a writable repo: `ensure_writable_parent`
+    /// then `atomic_write`. Shared by `create_screen` and `copy_screen`, which
+    /// (unlike `write_file`) never need an `if_match` check interleaved
+    /// between the two.
+    fn put(&self, base: &Path, target: &Path, bytes: &[u8]) -> Result<(), StoreError> {
+        Self::ensure_writable_parent(base, target)?;
+        Self::atomic_write(target, bytes)
+    }
+
+    /// Scaffold a new screen (`handle/name`) from `template`'s starter files.
+    /// Rejects an already-existing destination as `Conflict`.
+    pub fn create_screen(
+        &self,
+        handle: &str,
+        name: &str,
+        template: StarterKind,
+    ) -> Result<String, StoreError> {
+        let screen_path = safe_rel(name)?;
+        let base = self.resolve_writable_root(handle, name)?;
+        let dir = base.join(&screen_path);
+        if dir.exists() {
+            return Err(StoreError::Conflict);
+        }
+
+        for (rel, contents) in template.files() {
+            self.put(&base, &dir.join(rel), contents.as_bytes())?;
+        }
         self.manager.rebuild_loader();
-        Ok(etag(bytes))
+        Ok(format!("{handle}/{name}"))
+    }
+
+    /// Fork a screen (built-in, git-fetched, or another writable repo) into a
+    /// writable destination, carrying over every file under the source
+    /// screen's directory (not just `meta.yaml`/`script.lua`/`screen.svg`).
+    /// Rejects an already-existing destination as `Conflict`.
+    pub fn copy_screen(
+        &self,
+        from_ref: &str,
+        to_handle: &str,
+        to_name: &str,
+    ) -> Result<String, StoreError> {
+        let (from_handle, from_path) = Self::split_ref(from_ref)?;
+        let to_path = safe_rel(to_name)?;
+
+        let loader = self.manager.loader();
+        let from_source = loader.source_for(from_handle).ok_or(StoreError::NotFound)?;
+        if !from_source.screen_paths().iter().any(|p| p == from_path) {
+            return Err(StoreError::NotFound);
+        }
+
+        let to_base = self.resolve_writable_root(to_handle, to_name)?;
+        let to_dir = to_base.join(&to_path);
+        if to_dir.exists() {
+            return Err(StoreError::Conflict);
+        }
+
+        for rel in from_source.screen_files(from_path) {
+            let bytes = from_source.read(&rel).ok_or_else(|| {
+                StoreError::Io(format!("source file {rel} listed but unreadable"))
+            })?;
+            let suffix = rel
+                .strip_prefix(from_path)
+                .and_then(|s| s.strip_prefix('/'))
+                .ok_or_else(|| {
+                    StoreError::Io(format!(
+                        "source file {rel} is not under screen path {from_path}"
+                    ))
+                })?;
+            self.put(&to_base, &to_dir.join(suffix), &bytes)?;
+        }
+
+        self.manager.rebuild_loader();
+        Ok(format!("{to_handle}/{to_name}"))
+    }
+
+    /// Rename a screen within its own writable repo (no cross-handle moves).
+    /// Rejects an already-existing destination as `Conflict`.
+    pub fn rename_screen(&self, screen_ref: &str, new_name: &str) -> Result<String, StoreError> {
+        let (handle, screen_path) = Self::split_ref(screen_ref)?;
+        let new_path = safe_rel(new_name)?;
+        let base = self.resolve_writable_root(handle, screen_path)?;
+        let old_dir = base.join(screen_path);
+        let new_dir = base.join(&new_path);
+
+        let canon_base = base.canonicalize().map_err(|e| {
+            StoreError::Io(format!(
+                "writable root {} is unavailable: {e}",
+                base.display()
+            ))
+        })?;
+        let canon_old = old_dir.canonicalize().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                StoreError::NotFound
+            } else {
+                StoreError::Io(e.to_string())
+            }
+        })?;
+        if !canon_old.starts_with(&canon_base) {
+            return Err(StoreError::Traversal);
+        }
+        if !canon_old.is_dir() {
+            return Err(StoreError::NotFound);
+        }
+
+        if new_dir.exists() {
+            return Err(StoreError::Conflict);
+        }
+        // Verify the destination's nearest existing ancestor resolves under
+        // `base` too — verify BEFORE creating anything, same as a write —
+        // so a symlinked intermediate segment in `new_name` can't redirect
+        // the eventual `rename` outside the writable root.
+        let new_parent = new_dir.parent().unwrap_or(&new_dir);
+        let canon_new_parent = deepest_existing_ancestor(new_parent)
+            .canonicalize()
+            .map_err(|e| StoreError::Io(e.to_string()))?;
+        if !canon_new_parent.starts_with(&canon_base) {
+            return Err(StoreError::Traversal);
+        }
+        std::fs::create_dir_all(new_parent).map_err(|e| StoreError::Io(e.to_string()))?;
+
+        std::fs::rename(&old_dir, &new_dir).map_err(|e| StoreError::Io(e.to_string()))?;
+        self.manager.rebuild_loader();
+        Ok(format!("{handle}/{new_name}"))
+    }
+
+    /// Delete a screen from its writable repo.
+    pub fn delete_screen(&self, screen_ref: &str) -> Result<(), StoreError> {
+        let (handle, screen_path) = Self::split_ref(screen_ref)?;
+        let base = self.resolve_writable_root(handle, screen_path)?;
+        let dir = base.join(screen_path);
+
+        let canon_base = base.canonicalize().map_err(|e| {
+            StoreError::Io(format!(
+                "writable root {} is unavailable: {e}",
+                base.display()
+            ))
+        })?;
+        let canon_dir = dir.canonicalize().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                StoreError::NotFound
+            } else {
+                StoreError::Io(e.to_string())
+            }
+        })?;
+        if !canon_dir.starts_with(&canon_base) {
+            return Err(StoreError::Traversal);
+        }
+        // Defense in depth: `screen_path` is non-empty and lexically
+        // `..`-free (enforced by `safe_rel` inside `split_ref`), so `dir`
+        // can never lexically equal `base` — but a symlink could still
+        // resolve it back to the repo root. Assert that explicitly too:
+        // `remove_dir_all` on an unverified path is the highest-consequence
+        // call in this module.
+        if canon_dir == canon_base {
+            return Err(StoreError::Traversal);
+        }
+        if !canon_dir.is_dir() {
+            return Err(StoreError::NotFound);
+        }
+
+        std::fs::remove_dir_all(&dir).map_err(|e| StoreError::Io(e.to_string()))?;
+        self.manager.rebuild_loader();
+        Ok(())
     }
 }
 
@@ -421,6 +638,174 @@ mod tests {
             .unwrap();
         let f = store.read_file("local/clock", "script.lua").unwrap();
         assert!(!f.binary);
+    }
+
+    // --- Task 7: create / copy / rename / delete -------------------------
+
+    #[test]
+    fn create_scaffolds_three_files_extending_base() {
+        let (store, _repo_root) = test_store_with_local();
+        let r = store
+            .create_screen("local", "clock", StarterKind::Minimal)
+            .unwrap();
+        assert_eq!(r, "local/clock");
+        let svg = store.read_file("local/clock", "screen.svg").unwrap();
+        let svg_s = String::from_utf8(svg.bytes).unwrap();
+        assert!(
+            svg_s.contains("byonk-base-v1/base.svg"),
+            "starter must extend the base library"
+        );
+        store.read_file("local/clock", "meta.yaml").unwrap();
+        store.read_file("local/clock", "script.lua").unwrap();
+    }
+
+    #[test]
+    fn create_rejects_existing_destination() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "dup", StarterKind::Minimal)
+            .unwrap();
+        let err = store
+            .create_screen("local", "dup", StarterKind::Minimal)
+            .unwrap_err();
+        assert!(matches!(err, StoreError::Conflict));
+    }
+
+    #[test]
+    fn copy_forks_read_only_screen_into_local() {
+        let (store, _repo_root) = test_store_with_local();
+        // byonk-builtin/default exists (embedded); copy it into local
+        let r = store
+            .copy_screen("byonk-builtin/default", "local", "my-default")
+            .unwrap();
+        assert_eq!(r, "local/my-default");
+        store.read_file("local/my-default", "meta.yaml").unwrap();
+        // The embedded `default` screen also ships a non-triple asset
+        // (background.jpg); copy_screen must carry it over too, not just
+        // the meta/script/svg triple.
+        let bg = store
+            .read_file("local/my-default", "background.jpg")
+            .unwrap();
+        assert!(bg.binary);
+    }
+
+    #[test]
+    fn copy_rejects_existing_destination() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "dup", StarterKind::Minimal)
+            .unwrap();
+        let err = store
+            .copy_screen("byonk-builtin/default", "local", "dup")
+            .unwrap_err();
+        assert!(matches!(err, StoreError::Conflict));
+    }
+
+    #[test]
+    fn copy_preserves_non_triple_files() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .write_file("local/photo", "meta.yaml", b"title: P\n", None)
+            .unwrap();
+        store
+            .write_file("local/photo", "script.lua", b"return {}", None)
+            .unwrap();
+        store
+            .write_file("local/photo", "screen.svg", b"<svg/>", None)
+            .unwrap();
+        store
+            .write_file("local/photo", "assets/logo.png", &[0xFF, 0xD8, 0xFF], None)
+            .unwrap();
+
+        let r = store.copy_screen("local/photo", "local", "photo2").unwrap();
+        assert_eq!(r, "local/photo2");
+        let logo = store.read_file("local/photo2", "assets/logo.png").unwrap();
+        assert_eq!(logo.bytes, vec![0xFF, 0xD8, 0xFF]);
+    }
+
+    #[test]
+    fn rename_and_delete_roundtrip() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "a", StarterKind::Minimal)
+            .unwrap();
+        store.rename_screen("local/a", "b").unwrap();
+        assert!(store.read_file("local/a", "meta.yaml").is_err());
+        store.read_file("local/b", "meta.yaml").unwrap();
+        store.delete_screen("local/b").unwrap();
+        assert!(store.read_file("local/b", "meta.yaml").is_err());
+    }
+
+    #[test]
+    fn rename_rejects_existing_destination() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "a", StarterKind::Minimal)
+            .unwrap();
+        store
+            .create_screen("local", "b", StarterKind::Minimal)
+            .unwrap();
+        let err = store.rename_screen("local/a", "b").unwrap_err();
+        assert!(matches!(err, StoreError::Conflict));
+    }
+
+    #[test]
+    fn rename_and_delete_reject_read_only_handle() {
+        let (store, _repo_root) = test_store_with_local();
+        let err = store
+            .rename_screen("byonk-builtin/default", "x")
+            .unwrap_err();
+        assert!(matches!(err, StoreError::ReadOnly { .. }));
+        let err = store.delete_screen("byonk-builtin/default").unwrap_err();
+        assert!(matches!(err, StoreError::ReadOnly { .. }));
+    }
+
+    #[test]
+    fn structural_ops_reject_traversal_before_any_mutation() {
+        let (store, repo_root) = test_store_with_local();
+        let outer = repo_root.parent().unwrap().parent().unwrap().to_path_buf();
+
+        let err = store
+            .create_screen("local", "../../marker", StarterKind::Minimal)
+            .unwrap_err();
+        assert!(matches!(err, StoreError::Traversal));
+
+        let err = store
+            .copy_screen("byonk-builtin/default", "local", "../../marker")
+            .unwrap_err();
+        assert!(matches!(err, StoreError::Traversal));
+
+        store
+            .create_screen("local", "a", StarterKind::Minimal)
+            .unwrap();
+        let err = store.rename_screen("local/a", "../../marker").unwrap_err();
+        assert!(matches!(err, StoreError::Traversal));
+
+        let err = store.delete_screen("local/../../marker").unwrap_err();
+        assert!(matches!(err, StoreError::Traversal));
+
+        assert!(
+            !outer.join("marker").exists(),
+            "a traversing ref must be rejected before any directory is created"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn delete_refuses_to_remove_repo_root_via_symlink() {
+        let (store, repo_root) = test_store_with_local();
+        // Plant a symlink inside the repo that resolves back to the repo
+        // root itself — the highest-consequence possible target for
+        // `delete_screen`'s `remove_dir_all`.
+        std::os::unix::fs::symlink(&repo_root, repo_root.join("selfloop")).unwrap();
+
+        let err = store.delete_screen("local/selfloop").unwrap_err();
+        assert!(matches!(err, StoreError::Traversal));
+        assert!(repo_root.exists(), "repo root must not be deleted");
+        assert!(
+            repo_root.join("byonk-screens.yaml").exists(),
+            "repo root contents must survive"
+        );
     }
 
     #[test]

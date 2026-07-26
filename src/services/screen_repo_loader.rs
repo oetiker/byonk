@@ -39,6 +39,18 @@ pub trait ScreenRepoSource: Send + Sync {
     /// The parsed screen repo manifest.
     fn manifest(&self) -> &ScreenRepoManifest;
 
+    /// Every file that lives under `screen_path` (recursively), as paths
+    /// relative to the manifest root (i.e. what `read` resolves against) —
+    /// not just the `meta.yaml`/`script.lua`/`screen.svg` triple, but any
+    /// other asset a screen carries (images, extra libs, etc). This is the
+    /// full file set `ScreenStore::copy_screen` must carry over when it
+    /// forks a screen into a writable repo.
+    ///
+    /// Deliberately has no default implementation: a future `ScreenRepoSource`
+    /// must decide this explicitly rather than silently returning nothing
+    /// (which `copy_screen` would then read as "empty screen").
+    fn screen_files(&self, screen_path: &str) -> Vec<String>;
+
     /// The on-disk directory `read`/`screen_paths`/`svg_files` resolve
     /// screen-repo-relative paths against (i.e. the manifest-`root`-relative
     /// directory, not necessarily the screen repo's top-level directory), or
@@ -164,6 +176,34 @@ fn walk_ext_files(base: &Path, ext: &str) -> Vec<String> {
     out
 }
 
+/// Recursively collect every file (no extension filter) under
+/// `base.join(screen_path)`, returned relative to `base` (i.e. still
+/// prefixed with `screen_path`) — the on-disk implementation shared by
+/// `GitScreenRepoSource`/`LocalScreenRepoSource::screen_files`. Unlike
+/// `walk_ext_files`, this walks a single screen's subtree, not the whole
+/// screen repo.
+fn walk_files_under(base: &Path, screen_path: &str) -> Vec<String> {
+    fn walk(base: &Path, current: &Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(current) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(base, &path, out);
+            } else if let Ok(rel) = path.strip_prefix(base) {
+                if let Some(s) = rel.to_str() {
+                    out.push(s.replace('\\', "/"));
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(base, &base.join(screen_path), &mut out);
+    out.sort();
+    out
+}
+
 /// Resolve the directory manifest-relative paths resolve against, given a screen
 /// repo root and its manifest's optional `root:` offset.
 fn resolve_manifest_root(root: &Path, manifest: &ScreenRepoManifest) -> PathBuf {
@@ -218,6 +258,10 @@ impl ScreenRepoSource for GitScreenRepoSource {
     fn manifest(&self) -> &ScreenRepoManifest {
         &self.manifest
     }
+
+    fn screen_files(&self, screen_path: &str) -> Vec<String> {
+        walk_files_under(&self.manifest_root, screen_path)
+    }
 }
 
 /// A screen repo that lives in a writable on-disk directory (authored/managed locally,
@@ -266,6 +310,10 @@ impl ScreenRepoSource for LocalScreenRepoSource {
 
     fn manifest(&self) -> &ScreenRepoManifest {
         &self.manifest
+    }
+
+    fn screen_files(&self, screen_path: &str) -> Vec<String> {
+        walk_files_under(&self.manifest_root, screen_path)
     }
 
     fn writable_root(&self) -> Option<&Path> {
@@ -367,6 +415,30 @@ impl ScreenRepoSource for EmbeddedBuiltinSource {
 
     fn manifest(&self) -> &ScreenRepoManifest {
         &self.manifest
+    }
+
+    fn screen_files(&self, screen_path: &str) -> Vec<String> {
+        let prefix = if self.root_prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", self.root_prefix)
+        };
+        let screen_prefix = format!("{screen_path}/");
+        let mut out: Vec<String> = self
+            .loader
+            .list_screens()
+            .into_iter()
+            .filter_map(|entry| {
+                let under = entry.strip_prefix(&prefix)?;
+                if under.starts_with(&screen_prefix) {
+                    Some(under.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        out.sort();
+        out
     }
 }
 

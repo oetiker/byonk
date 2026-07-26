@@ -82,6 +82,10 @@ impl ScreenRepoSource for AssetScreensSource {
     fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
         unreachable!("AssetScreensSource::manifest() is not used")
     }
+
+    fn screen_files(&self, _screen_path: &str) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Lua runtime for executing screen scripts
@@ -1343,6 +1347,9 @@ mod require_tests {
         fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
             unreachable!("manifest() not used by require()")
         }
+        fn screen_files(&self, _screen_path: &str) -> Vec<String> {
+            vec![]
+        }
     }
 
     #[test]
@@ -1375,6 +1382,9 @@ mod require_tests {
             }
             fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
                 unreachable!()
+            }
+            fn screen_files(&self, _screen_path: &str) -> Vec<String> {
+                vec![]
             }
         }
         let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
@@ -1437,6 +1447,9 @@ mod require_tests {
             }
             fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
                 unreachable!()
+            }
+            fn screen_files(&self, _screen_path: &str) -> Vec<String> {
+                vec![]
             }
         }
         let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));

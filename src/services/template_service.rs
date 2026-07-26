@@ -386,6 +386,9 @@ mod tests {
         fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
             unreachable!("manifest() not used by render()")
         }
+        fn screen_files(&self, _screen_path: &str) -> Vec<String> {
+            vec![]
+        }
     }
 
     fn svc() -> TemplateService {

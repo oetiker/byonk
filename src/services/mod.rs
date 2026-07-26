@@ -11,6 +11,7 @@ pub mod screen_repo_cache;
 pub mod screen_repo_loader;
 pub mod screen_repo_manager;
 pub mod screen_repo_status;
+pub mod screen_store;
 pub mod template_service;
 
 pub use config_writer::{remove_device, set_scalar, upsert_device, ConfigWriteError};
@@ -20,4 +21,5 @@ pub use device_registry::{DeviceRegistry, InMemoryRegistry};
 pub use file_watcher::{FileChangeEvent, FileWatcher, SharedFileWatcher};
 pub use lua_runtime::{FontFaceInfo, LuaRuntime, ScriptError, ScriptResult};
 pub use renderer::RenderService;
+pub use screen_store::ScreenStore;
 pub use template_service::{TemplateError, TemplateService};

@@ -415,7 +415,7 @@ fn copy_dir_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::models::config::AppConfig;
     use std::fs;
@@ -447,8 +447,9 @@ mod tests {
 
     /// Build a manager with no configured screen repos and `screens_dir` set
     /// to `path`, so `SCREENS_DIR` auto-registers as the writable `local`
-    /// handle.
-    fn test_manager_with_screens_dir(path: &Path) -> Arc<ScreenRepoManager> {
+    /// handle. `pub(crate)` so other modules' tests (e.g. `screen_store`) can
+    /// reuse this fixture instead of duplicating it.
+    pub(crate) fn test_manager_with_screens_dir(path: &Path) -> Arc<ScreenRepoManager> {
         let config = shared_config(HashMap::new());
         let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_screens_dir"));
         ScreenRepoManager::new(

@@ -39,8 +39,12 @@ pub trait ScreenRepoSource: Send + Sync {
     /// The parsed screen repo manifest.
     fn manifest(&self) -> &ScreenRepoManifest;
 
-    /// On-disk directory this source may be written to, or `None` if read-only
-    /// (embedded, or a git cache that a refresh would clobber).
+    /// The on-disk directory `read`/`screen_paths`/`svg_files` resolve
+    /// screen-repo-relative paths against (i.e. the manifest-`root`-relative
+    /// directory, not necessarily the screen repo's top-level directory), or
+    /// `None` if this source is read-only (embedded, or a git cache that a
+    /// refresh would clobber). Callers that write files here MUST resolve
+    /// against this same directory so writes stay visible to `read`.
     fn writable_root(&self) -> Option<&std::path::Path> {
         None
     }
@@ -218,13 +222,13 @@ impl ScreenRepoSource for GitScreenRepoSource {
 
 /// A screen repo that lives in a writable on-disk directory (authored/managed locally,
 /// as opposed to a git-fetched cache). Reads the same on-disk layout as
-/// `GitScreenRepoSource`, but exposes its root as writable so callers may create or
-/// edit screens in place.
+/// `GitScreenRepoSource`, but exposes its manifest-root as writable so callers may
+/// create or edit screens in place.
 pub struct LocalScreenRepoSource {
     manifest: ScreenRepoManifest,
-    /// The screen repo root itself (the writable directory).
-    root: PathBuf,
     /// Directory the manifest-relative paths resolve against (`root.join(manifest.root)`).
+    /// This is also what `writable_root` returns: reads and writes MUST share
+    /// one base directory, or a write would land somewhere `read` can't see it.
     manifest_root: PathBuf,
 }
 
@@ -239,7 +243,6 @@ impl LocalScreenRepoSource {
         let manifest_root = resolve_manifest_root(root, &manifest);
         Ok(LocalScreenRepoSource {
             manifest,
-            root: root.to_path_buf(),
             manifest_root,
         })
     }
@@ -266,7 +269,7 @@ impl ScreenRepoSource for LocalScreenRepoSource {
     }
 
     fn writable_root(&self) -> Option<&Path> {
-        Some(&self.root)
+        Some(&self.manifest_root)
     }
 }
 

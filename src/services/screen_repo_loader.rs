@@ -106,9 +106,73 @@ fn split_ref(screen_ref: &str) -> Option<(&str, &str)> {
     }
 }
 
+/// Recursively collect directories (relative to `base`) that contain a `meta.yaml`,
+/// starting from `base` itself. Shared by every on-disk `ScreenRepoSource`
+/// implementation (`GitScreenRepoSource`, `LocalScreenRepoSource`).
+fn walk_screen_paths(base: &Path) -> Vec<String> {
+    fn walk(base: &Path, current: &Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(current) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.join("meta.yaml").is_file() {
+                    if let Ok(rel) = path.strip_prefix(base) {
+                        if let Some(s) = rel.to_str() {
+                            out.push(s.replace('\\', "/"));
+                        }
+                    }
+                }
+                walk(base, &path, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(base, base, &mut out);
+    out.sort();
+    out
+}
+
+/// Recursively collect files (relative to `base`) whose extension is `ext`, starting
+/// from `base` itself. Shared by every on-disk `ScreenRepoSource` implementation.
+fn walk_ext_files(base: &Path, ext: &str) -> Vec<String> {
+    fn walk(base: &Path, current: &Path, ext: &str, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(current) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(base, &path, ext, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some(ext) {
+                if let Ok(rel) = path.strip_prefix(base) {
+                    if let Some(s) = rel.to_str() {
+                        out.push(s.replace('\\', "/"));
+                    }
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(base, base, ext, &mut out);
+    out.sort();
+    out
+}
+
+/// Resolve the directory manifest-relative paths resolve against, given a screen
+/// repo root and its manifest's optional `root:` offset.
+fn resolve_manifest_root(root: &Path, manifest: &ScreenRepoManifest) -> PathBuf {
+    match manifest.root.as_deref() {
+        Some(r) if !r.is_empty() && r != "." => root.join(r),
+        _ => root.to_path_buf(),
+    }
+}
+
 /// A screen repo that lives in an on-disk directory (a git-fetched cache). Files are
 /// read with `fs::read`; screens are discovered by walking the manifest root for
-/// `meta.yaml` files.
+/// `meta.yaml` files. Read-only: a refresh may clobber the cache, so `writable_root`
+/// returns `None`.
 pub struct GitScreenRepoSource {
     manifest: ScreenRepoManifest,
     /// Directory the manifest-relative paths resolve against (`root.join(manifest.root)`).
@@ -123,53 +187,11 @@ impl GitScreenRepoSource {
         let src = std::fs::read_to_string(&manifest_path)
             .map_err(|e| format!("cannot read {}: {e}", manifest_path.display()))?;
         let manifest = ScreenRepoManifest::from_yaml(&src)?;
-        let manifest_root = match manifest.root.as_deref() {
-            Some(r) if !r.is_empty() && r != "." => root.join(r),
-            _ => root.to_path_buf(),
-        };
+        let manifest_root = resolve_manifest_root(root, &manifest);
         Ok(GitScreenRepoSource {
             manifest,
             manifest_root,
         })
-    }
-
-    /// Recursively collect directories (relative to `base`) that contain a `meta.yaml`.
-    fn walk_screens(base: &Path, current: &Path, out: &mut Vec<String>) {
-        let Ok(entries) = std::fs::read_dir(current) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if path.join("meta.yaml").is_file() {
-                    if let Ok(rel) = path.strip_prefix(base) {
-                        if let Some(s) = rel.to_str() {
-                            out.push(s.replace('\\', "/"));
-                        }
-                    }
-                }
-                Self::walk_screens(base, &path, out);
-            }
-        }
-    }
-
-    /// Recursively collect files (relative to `base`) whose extension is `ext`.
-    fn walk_ext(base: &Path, current: &Path, ext: &str, out: &mut Vec<String>) {
-        let Ok(entries) = std::fs::read_dir(current) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                Self::walk_ext(base, &path, ext, out);
-            } else if path.extension().and_then(|e| e.to_str()) == Some(ext) {
-                if let Ok(rel) = path.strip_prefix(base) {
-                    if let Some(s) = rel.to_str() {
-                        out.push(s.replace('\\', "/"));
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -182,21 +204,69 @@ impl ScreenRepoSource for GitScreenRepoSource {
     }
 
     fn screen_paths(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        Self::walk_screens(&self.manifest_root, &self.manifest_root, &mut out);
-        out.sort();
-        out
+        walk_screen_paths(&self.manifest_root)
     }
 
     fn svg_files(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        Self::walk_ext(&self.manifest_root, &self.manifest_root, "svg", &mut out);
-        out.sort();
-        out
+        walk_ext_files(&self.manifest_root, "svg")
     }
 
     fn manifest(&self) -> &ScreenRepoManifest {
         &self.manifest
+    }
+}
+
+/// A screen repo that lives in a writable on-disk directory (authored/managed locally,
+/// as opposed to a git-fetched cache). Reads the same on-disk layout as
+/// `GitScreenRepoSource`, but exposes its root as writable so callers may create or
+/// edit screens in place.
+pub struct LocalScreenRepoSource {
+    manifest: ScreenRepoManifest,
+    /// The screen repo root itself (the writable directory).
+    root: PathBuf,
+    /// Directory the manifest-relative paths resolve against (`root.join(manifest.root)`).
+    manifest_root: PathBuf,
+}
+
+impl LocalScreenRepoSource {
+    /// Load a local (writable) screen repo rooted at `root`. Returns `Err` (skip) if
+    /// the `byonk-screens.yaml` manifest is missing or invalid.
+    pub fn load(root: &Path) -> Result<LocalScreenRepoSource, String> {
+        let manifest_path = root.join("byonk-screens.yaml");
+        let src = std::fs::read_to_string(&manifest_path)
+            .map_err(|e| format!("cannot read {}: {e}", manifest_path.display()))?;
+        let manifest = ScreenRepoManifest::from_yaml(&src)?;
+        let manifest_root = resolve_manifest_root(root, &manifest);
+        Ok(LocalScreenRepoSource {
+            manifest,
+            root: root.to_path_buf(),
+            manifest_root,
+        })
+    }
+}
+
+impl ScreenRepoSource for LocalScreenRepoSource {
+    fn read(&self, rel: &str) -> Option<Vec<u8>> {
+        if !is_safe_rel(rel) {
+            return None;
+        }
+        std::fs::read(self.manifest_root.join(rel)).ok()
+    }
+
+    fn screen_paths(&self) -> Vec<String> {
+        walk_screen_paths(&self.manifest_root)
+    }
+
+    fn svg_files(&self) -> Vec<String> {
+        walk_ext_files(&self.manifest_root, "svg")
+    }
+
+    fn manifest(&self) -> &ScreenRepoManifest {
+        &self.manifest
+    }
+
+    fn writable_root(&self) -> Option<&Path> {
+        Some(&self.root)
     }
 }
 
@@ -491,5 +561,24 @@ mod tests {
             src.writable_root().is_none(),
             "embedded builtin must be read-only"
         );
+    }
+
+    #[test]
+    fn local_source_is_writable_and_reads_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("byonk-screens.yaml"),
+            "name: local\ndescription: d\nauthor: a\nlicense: MIT\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("clock")).unwrap();
+        std::fs::write(
+            dir.path().join("clock/meta.yaml"),
+            "title: Clock\ndescription: d\nbyonk: \"0.15\"\n",
+        )
+        .unwrap();
+        let src = LocalScreenRepoSource::load(dir.path()).unwrap();
+        assert_eq!(src.writable_root(), Some(dir.path()));
+        assert!(src.screen_paths().iter().any(|p| p == "clock"));
     }
 }

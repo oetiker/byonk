@@ -38,6 +38,12 @@ pub trait ScreenRepoSource: Send + Sync {
 
     /// The parsed screen repo manifest.
     fn manifest(&self) -> &ScreenRepoManifest;
+
+    /// On-disk directory this source may be written to, or `None` if read-only
+    /// (embedded, or a git cache that a refresh would clobber).
+    fn writable_root(&self) -> Option<&std::path::Path> {
+        None
+    }
 }
 
 /// A fully resolved screen: its parsed metadata plus a handle back to its screen repo
@@ -100,18 +106,19 @@ fn split_ref(screen_ref: &str) -> Option<(&str, &str)> {
     }
 }
 
-/// A screen repo that lives in an on-disk directory. Files are read with `fs::read`;
-/// screens are discovered by walking the manifest root for `meta.yaml` files.
-pub struct DiskScreenRepoSource {
+/// A screen repo that lives in an on-disk directory (a git-fetched cache). Files are
+/// read with `fs::read`; screens are discovered by walking the manifest root for
+/// `meta.yaml` files.
+pub struct GitScreenRepoSource {
     manifest: ScreenRepoManifest,
     /// Directory the manifest-relative paths resolve against (`root.join(manifest.root)`).
     manifest_root: PathBuf,
 }
 
-impl DiskScreenRepoSource {
-    /// Load a disk screen repo rooted at `root`. Returns `Err` (skip) if the
+impl GitScreenRepoSource {
+    /// Load a git-cache screen repo rooted at `root`. Returns `Err` (skip) if the
     /// `byonk-screens.yaml` manifest is missing or invalid.
-    pub fn load(root: &Path) -> Result<DiskScreenRepoSource, String> {
+    pub fn load(root: &Path) -> Result<GitScreenRepoSource, String> {
         let manifest_path = root.join("byonk-screens.yaml");
         let src = std::fs::read_to_string(&manifest_path)
             .map_err(|e| format!("cannot read {}: {e}", manifest_path.display()))?;
@@ -120,7 +127,7 @@ impl DiskScreenRepoSource {
             Some(r) if !r.is_empty() && r != "." => root.join(r),
             _ => root.to_path_buf(),
         };
-        Ok(DiskScreenRepoSource {
+        Ok(GitScreenRepoSource {
             manifest,
             manifest_root,
         })
@@ -166,7 +173,7 @@ impl DiskScreenRepoSource {
     }
 }
 
-impl ScreenRepoSource for DiskScreenRepoSource {
+impl ScreenRepoSource for GitScreenRepoSource {
     fn read(&self, rel: &str) -> Option<Vec<u8>> {
         if !is_safe_rel(rel) {
             return None;
@@ -313,7 +320,7 @@ impl ScreenRepoLoader {
         }
 
         for (handle, root) in disk_packages {
-            match DiskScreenRepoSource::load(&root) {
+            match GitScreenRepoSource::load(&root) {
                 Ok(src) => {
                     registry.insert(handle, Arc::new(src));
                 }
@@ -453,7 +460,7 @@ mod tests {
         let secret = tmp.parent().unwrap().join("byonk_secret_marker.txt");
         fs::write(&secret, "TOP SECRET").unwrap();
 
-        let src = DiskScreenRepoSource::load(&tmp).expect("load");
+        let src = GitScreenRepoSource::load(&tmp).expect("load");
         // Legitimate read works.
         assert_eq!(
             src.read_string("lib/util.lua").as_deref(),
@@ -474,5 +481,15 @@ mod tests {
         let loader = std::sync::Arc::new(crate::assets::AssetLoader::new(None, None, None));
         let pl = ScreenRepoLoader::new(loader, HashMap::new());
         assert!(pl.handles().contains(&"byonk-builtin".to_string()));
+    }
+
+    #[test]
+    fn embedded_and_git_sources_are_read_only() {
+        let loader = std::sync::Arc::new(AssetLoader::new(None, None, None));
+        let src = EmbeddedBuiltinSource::load(loader).unwrap();
+        assert!(
+            src.writable_root().is_none(),
+            "embedded builtin must be read-only"
+        );
     }
 }

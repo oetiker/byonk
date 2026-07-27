@@ -321,6 +321,40 @@ mod reload_tests {
         let _ = build_router(state);
     }
 
+    /// Basic sanity check that `AppState.screen_store` is wired to a live
+    /// writable `local` repo and can create + render a screen through it.
+    /// The specific "does `screen_store` share `content_pipeline`'s
+    /// `ScreenRepoManager` Arc" invariant has a dedicated regression test
+    /// in `tests/screen_store_wiring_test.rs` (it needs a config-reload
+    /// scenario to actually discriminate a wiring bug from correct
+    /// behavior, which doesn't fit this unit-test module).
+    #[test]
+    fn screen_store_can_create_and_render_a_local_screen() {
+        use crate::services::screen_store::{RenderOpts, StarterKind};
+
+        let dir = tempfile::tempdir().unwrap();
+        let screens_dir = dir.path().join("screens");
+        let loader = Arc::new(AssetLoader::new(Some(screens_dir), None, None));
+        loader.seed_if_configured().expect("seed");
+
+        let state = create_app_state(loader).unwrap();
+
+        state
+            .screen_store
+            .create_screen("local", "wiretest", StarterKind::Minimal)
+            .expect("create_screen via screen_store");
+
+        let result = state
+            .screen_store
+            .render("local/wiretest", RenderOpts::default());
+        assert!(
+            result.error.is_none(),
+            "render must see the screen create_screen just wrote: {:?}",
+            result.error
+        );
+        assert!(!result.png.is_empty());
+    }
+
     #[test]
     fn test_appstate_has_package_manager_resolving_builtin() {
         let loader = Arc::new(AssetLoader::new(None, None, None));

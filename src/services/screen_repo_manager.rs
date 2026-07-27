@@ -33,6 +33,11 @@ use crate::services::screen_repo_status::{ScreenRepoState, ScreenRepoStatus};
 /// no explicit `local` entry of its own.
 const LOCAL_HANDLE: &str = "local";
 
+/// The handle the seeded `examples` directory (`<SCREENS_DIR>/../examples`,
+/// see `AssetLoader::examples_dir`) auto-registers under when
+/// `config.screen_repos` has no explicit `examples` entry of its own.
+const EXAMPLES_HANDLE: &str = "examples";
+
 /// Owns screen repo fetch orchestration + the live, hot-swappable [`ScreenRepoLoader`].
 pub struct ScreenRepoManager {
     asset_loader: Arc<AssetLoader>,
@@ -49,6 +54,10 @@ pub struct ScreenRepoManager {
     /// `SCREENS_DIR`, if configured — auto-registered as the writable `local`
     /// handle when `config.screen_repos` has no explicit `local` entry.
     screens_dir: Option<PathBuf>,
+    /// The seeded examples directory, if configured — auto-registered as the
+    /// writable `examples` handle when `config.screen_repos` has no explicit
+    /// `examples` entry. Mirrors `screens_dir`/`local`.
+    examples_dir: Option<PathBuf>,
 }
 
 impl ScreenRepoManager {
@@ -61,6 +70,7 @@ impl ScreenRepoManager {
         cache: ScreenRepoCache,
         extra_disk: HashMap<String, PathBuf>,
         screens_dir: Option<PathBuf>,
+        examples_dir: Option<PathBuf>,
     ) -> Arc<Self> {
         let disk_sources = Self::build_disk_sources(
             &extra_disk,
@@ -68,6 +78,7 @@ impl ScreenRepoManager {
             &cache,
             &HashMap::new(),
             &screens_dir,
+            &examples_dir,
         );
         let initial = ScreenRepoLoader::new(asset_loader.clone(), disk_sources);
         Arc::new(Self {
@@ -78,6 +89,7 @@ impl ScreenRepoManager {
             loader: ArcSwap::from_pointee(initial),
             extra_disk,
             screens_dir,
+            examples_dir,
         })
     }
 
@@ -99,6 +111,7 @@ impl ScreenRepoManager {
             &self.cache,
             &status,
             &self.screens_dir,
+            &self.examples_dir,
         );
         drop(status);
 
@@ -108,21 +121,22 @@ impl ScreenRepoManager {
 
     /// Build the handle -> typed on-disk source map shared by `new` (initial
     /// snapshot) and `rebuild_loader` (every subsequent snapshot), so the
-    /// `SCREENS_DIR` auto-registration under `local` and `path:`-entry
-    /// handling are computed identically — and survive rebuilds — in exactly
-    /// one place.
+    /// `SCREENS_DIR`/examples-dir auto-registration under `local`/`examples`
+    /// and `path:`-entry handling are computed identically — and survive
+    /// rebuilds — in exactly one place.
     ///
     /// Precedence per handle: `extra_disk` (`SCREEN_REPOS_DIR`, git-cache
     /// kind) < `config.screen_repos` (`path:` -> local, `repo:` -> resolved
-    /// git cache checkout) < the auto-registered `SCREENS_DIR` under `local`,
-    /// which only applies when `config.screen_repos` has no explicit `local`
-    /// entry of its own.
+    /// git cache checkout) < the auto-registered `SCREENS_DIR` under `local`
+    /// / examples dir under `examples`, which only applies when
+    /// `config.screen_repos` has no explicit entry for that handle of its own.
     fn build_disk_sources(
         extra_disk: &HashMap<String, PathBuf>,
         config: &AppConfig,
         cache: &ScreenRepoCache,
         status: &HashMap<String, ScreenRepoStatus>,
         screens_dir: &Option<PathBuf>,
+        examples_dir: &Option<PathBuf>,
     ) -> HashMap<String, DiskSource> {
         let mut disk_sources: HashMap<String, DiskSource> = extra_disk
             .iter()
@@ -158,6 +172,12 @@ impl ScreenRepoManager {
         if !config.screen_repos.contains_key(LOCAL_HANDLE) {
             if let Some(dir) = screens_dir {
                 disk_sources.insert(LOCAL_HANDLE.to_string(), DiskSource::Local(dir.clone()));
+            }
+        }
+
+        if !config.screen_repos.contains_key(EXAMPLES_HANDLE) {
+            if let Some(dir) = examples_dir {
+                disk_sources.insert(EXAMPLES_HANDLE.to_string(), DiskSource::Local(dir.clone()));
             }
         }
 
@@ -458,6 +478,28 @@ pub(crate) mod tests {
             cache,
             HashMap::new(),
             Some(path.to_path_buf()),
+            None,
+        )
+    }
+
+    /// Build a manager with no configured screen repos, `screens_dir` set to
+    /// `screens_path` (so `SCREENS_DIR` auto-registers as `local`), and
+    /// `examples_dir` set to `examples_path` (so it auto-registers as
+    /// `examples`) — mirrors `test_manager_with_screens_dir` but exercises
+    /// both auto-registered handles together.
+    pub(crate) fn test_manager_with_screens_and_examples_dir(
+        screens_path: &Path,
+        examples_path: &Path,
+    ) -> Arc<ScreenRepoManager> {
+        let config = shared_config(HashMap::new());
+        let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_screens_examples_dir"));
+        ScreenRepoManager::new(
+            asset_loader(),
+            config,
+            cache,
+            HashMap::new(),
+            Some(screens_path.to_path_buf()),
+            Some(examples_path.to_path_buf()),
         )
     }
 
@@ -497,7 +539,7 @@ pub(crate) mod tests {
         let mut extra_disk = HashMap::new();
         extra_disk.insert("acme".to_string(), tmp.clone());
 
-        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, extra_disk, None);
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, extra_disk, None, None);
         mgr.rebuild_loader();
 
         assert!(mgr.loader().resolve("acme/weather/forecast").is_some());
@@ -613,7 +655,7 @@ pub(crate) mod tests {
         let config = shared_config(screen_repos);
         let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_fetch"));
 
-        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None);
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None, None);
         mgr.refresh_one("weather");
 
         let status = mgr.status_snapshot();
@@ -652,7 +694,7 @@ pub(crate) mod tests {
         let cache_root = tempdir_path("pkgmgr_cache_no_teardown");
         let cache = ScreenRepoCache::new(cache_root.clone());
 
-        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None);
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None, None);
         mgr.refresh_one("weather");
         let sha = mgr
             .status_snapshot()
@@ -696,7 +738,7 @@ pub(crate) mod tests {
         let config = shared_config(screen_repos);
         let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_err"));
 
-        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None);
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None, None);
         mgr.refresh_one("ghost");
 
         let status = mgr.status_snapshot();
@@ -722,7 +764,7 @@ pub(crate) mod tests {
         let config = shared_config(screen_repos);
         let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_offline"));
 
-        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None);
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None, None);
         mgr.refresh_one("weather");
         assert_eq!(
             mgr.status_snapshot().get("weather").unwrap().state,
@@ -754,7 +796,7 @@ pub(crate) mod tests {
         let config = shared_config(screen_repos);
         let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_noop"));
 
-        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None);
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None, None);
         mgr.refresh_one(BUILTIN_HANDLE);
         mgr.refresh_one("acme");
         mgr.refresh_one("unknown-handle");
@@ -778,7 +820,7 @@ pub(crate) mod tests {
         let config = shared_config(screen_repos);
         let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_refresh_all"));
 
-        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None);
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None, None);
         mgr.refresh_all(false);
         assert_eq!(
             mgr.status_snapshot().get("weather").unwrap().state,
@@ -819,7 +861,7 @@ pub(crate) mod tests {
         let config = shared_config(screen_repos);
         let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_refresh_all_branch"));
 
-        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None);
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None, None);
         mgr.refresh_all(false);
         let first_sha = mgr
             .status_snapshot()
@@ -883,7 +925,7 @@ pub(crate) mod tests {
         let config = shared_config(screen_repos);
         let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_refresh_all_sha"));
 
-        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None);
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None, None);
         mgr.refresh_all(false);
         assert_eq!(
             mgr.status_snapshot().get("weather").unwrap().state,
@@ -932,7 +974,7 @@ pub(crate) mod tests {
         let cache_root = tempdir_path("pkgmgr_cache_install_fail");
         let cache = ScreenRepoCache::new(cache_root.clone());
 
-        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None);
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None, None);
         mgr.refresh_one("weather");
         let sha1 = mgr
             .status_snapshot()
@@ -995,7 +1037,7 @@ pub(crate) mod tests {
         let config = shared_config(screen_repos);
         let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_forget"));
 
-        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None);
+        let mgr = ScreenRepoManager::new(asset_loader(), config, cache, HashMap::new(), None, None);
         mgr.update_status("acme", |st| {
             st.state = Some(ScreenRepoState::Ready);
             st.resolved_sha = Some("deadbeef".to_string());
@@ -1058,6 +1100,7 @@ pub(crate) mod tests {
             cache,
             HashMap::new(),
             Some(screens_dir.path().to_path_buf()),
+            None,
         );
 
         let loader = mgr.loader();
@@ -1081,6 +1124,111 @@ pub(crate) mod tests {
         mgr.rebuild_loader();
         let loader = mgr.loader();
         let src = loader.source_for("local").expect("local handle present");
+        assert!(src.writable_root().is_some());
+    }
+
+    #[test]
+    fn examples_dir_auto_registers_as_writable_examples_handle() {
+        let screens_dir = tempfile::tempdir().unwrap();
+        let examples_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            examples_dir.path().join("byonk-screens.yaml"),
+            "name: examples\ndescription: d\nauthor: a\nlicense: MIT\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(examples_dir.path().join("hello")).unwrap();
+        std::fs::write(
+            examples_dir.path().join("hello/meta.yaml"),
+            "title: Hello\ndescription: d\nbyonk: \"0.15\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            examples_dir.path().join("hello/script.lua"),
+            "return { data = {} }\n",
+        )
+        .unwrap();
+        std::fs::write(examples_dir.path().join("hello/screen.svg"), "<svg/>\n").unwrap();
+
+        let mgr =
+            test_manager_with_screens_and_examples_dir(screens_dir.path(), examples_dir.path());
+        let loader = mgr.loader();
+        let src = loader
+            .source_for("examples")
+            .expect("examples handle present");
+        assert!(src.writable_root().is_some());
+
+        // End to end: `examples/hello` actually resolves.
+        assert!(loader.resolve("examples/hello").is_some());
+    }
+
+    #[test]
+    fn examples_dir_auto_register_is_suppressed_by_explicit_examples_config_entry() {
+        // An explicit `examples` entry in `config.screen_repos` wins over the
+        // examples-dir auto-registration — the auto-register only fills in
+        // when there's no explicit entry, exactly like `local`.
+        let examples_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            examples_dir.path().join("byonk-screens.yaml"),
+            "name: examples\ndescription: d\nauthor: a\nlicense: MIT\n",
+        )
+        .unwrap();
+
+        let explicit_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            explicit_dir.path().join("byonk-screens.yaml"),
+            "name: explicit\ndescription: d\nauthor: a\nlicense: MIT\n",
+        )
+        .unwrap();
+
+        let mut screen_repos = HashMap::new();
+        screen_repos.insert(
+            "examples".to_string(),
+            ScreenRepoRef {
+                repo: None,
+                path: Some(explicit_dir.path().display().to_string()),
+                pin: None,
+                token: None,
+            },
+        );
+        let config = shared_config(screen_repos);
+        let cache = ScreenRepoCache::new(tempdir_path("pkgmgr_cache_examples_dir_explicit"));
+
+        let mgr = ScreenRepoManager::new(
+            asset_loader(),
+            config,
+            cache,
+            HashMap::new(),
+            None,
+            Some(examples_dir.path().to_path_buf()),
+        );
+
+        let loader = mgr.loader();
+        let src = loader
+            .source_for("examples")
+            .expect("examples handle present");
+        assert_eq!(
+            src.manifest().name,
+            "explicit",
+            "explicit config 'examples' entry must win over examples-dir auto-register"
+        );
+    }
+
+    #[test]
+    fn examples_dir_auto_register_survives_rebuild_loader() {
+        let screens_dir = tempfile::tempdir().unwrap();
+        let examples_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            examples_dir.path().join("byonk-screens.yaml"),
+            "name: examples\ndescription: d\nauthor: a\nlicense: MIT\n",
+        )
+        .unwrap();
+        let mgr =
+            test_manager_with_screens_and_examples_dir(screens_dir.path(), examples_dir.path());
+        mgr.rebuild_loader();
+        let loader = mgr.loader();
+        let src = loader
+            .source_for("examples")
+            .expect("examples handle present");
         assert!(src.writable_root().is_some());
     }
 }

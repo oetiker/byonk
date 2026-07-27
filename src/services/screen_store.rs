@@ -1483,6 +1483,7 @@ mod tests {
             cache,
             std::collections::HashMap::new(),
             None,
+            None,
         );
         let renderer = Arc::new(RenderService::new(&asset_loader).unwrap());
         let pipeline = Arc::new(

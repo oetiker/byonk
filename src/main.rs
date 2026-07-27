@@ -665,6 +665,7 @@ async fn run_server() -> anyhow::Result<()> {
         Ok(report) if !report.is_empty() => {
             tracing::info!(
                 screens = report.screens_seeded.len(),
+                examples = report.examples_seeded.len(),
                 fonts = report.fonts_seeded.len(),
                 config = report.config_seeded,
                 "Seeded empty directories with embedded assets"
@@ -790,6 +791,7 @@ async fn run_dev_server() -> anyhow::Result<()> {
         Ok(report) if !report.is_empty() => {
             tracing::info!(
                 screens = report.screens_seeded.len(),
+                examples = report.examples_seeded.len(),
                 fonts = report.fonts_seeded.len(),
                 config = report.config_seeded,
                 "Seeded empty directories with embedded assets"

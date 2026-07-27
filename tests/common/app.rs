@@ -234,6 +234,15 @@ impl TestApp {
     /// Admin app with a custom screens directory containing a `broken.lua` with an
     /// invalid `@params` block, wired up via a fresh `config.yaml` on disk.
     /// Use this to exercise the warn-not-fatal `schema_error` path.
+    ///
+    /// Also seeds `dir/examples` (`<SCREENS_DIR>/../examples`, i.e. a sibling
+    /// of `screens_dir`) with the real `gphoto` and `swiss-departure-board`
+    /// example screens plus a manifest, copied from the embedded `examples`
+    /// set — so it auto-registers as the writable `examples` screen repo
+    /// handle (Task 11) and `examples/gphoto` / `examples/swiss-departure-board`
+    /// resolve for real, params schema and all. `config.yaml` declares no
+    /// `screen_repos.examples` entry, so nothing suppresses the auto-register.
+    ///
     /// `dir` must outlive the app.
     pub fn new_admin_with_screens(token: &str, dir: &std::path::Path) -> Self {
         // Create screens/ subdirectory with broken.lua and broken.svg
@@ -265,6 +274,8 @@ impl TestApp {
         )
         .expect("write extra.svg");
 
+        Self::seed_examples_fixture(dir);
+
         // Write a minimal config.yaml pointing at the broken screen
         let config_path = dir.join("config.yaml");
         let yaml = format!(
@@ -283,6 +294,38 @@ impl TestApp {
             registry,
             content_cache,
         }
+    }
+
+    /// Copy `gphoto` and `swiss-departure-board` from the embedded `examples`
+    /// set (Task 10) into `dir/examples`, plus a `byonk-screens.yaml`
+    /// manifest, so `dir/examples` auto-registers as the writable `examples`
+    /// screen repo handle (Task 11) once `screens_dir` is set to a sibling of
+    /// `dir`. Shared by `new_admin_with_screens` and any other fixture that
+    /// needs a real, params-bearing `examples/*` ref to resolve.
+    fn seed_examples_fixture(dir: &std::path::Path) {
+        let examples_dir = dir.join("examples");
+        let embedded = AssetLoader::new(None, None, None);
+        for (screen, file) in [
+            ("gphoto", "meta.yaml"),
+            ("gphoto", "script.lua"),
+            ("gphoto", "screen.svg"),
+            ("swiss-departure-board", "meta.yaml"),
+            ("swiss-departure-board", "script.lua"),
+            ("swiss-departure-board", "screen.svg"),
+        ] {
+            let rel = format!("{screen}/{file}");
+            let data = embedded
+                .read_example(std::path::Path::new(&rel))
+                .unwrap_or_else(|_| panic!("read embedded example {rel}"));
+            let dest = examples_dir.join(&rel);
+            std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+            std::fs::write(&dest, &*data).unwrap();
+        }
+        std::fs::write(
+            examples_dir.join("byonk-screens.yaml"),
+            "name: examples\ndescription: Example screens shipped with byonk.\nauthor: Byonk\nlicense: MIT\n",
+        )
+        .expect("write examples manifest");
     }
 
     pub async fn patch_json(

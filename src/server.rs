@@ -141,10 +141,13 @@ pub fn build_screen_repo_manager(
         .map(|dir| collect_disk_packages(std::path::Path::new(&dir), &config.load().screen_repos))
         .unwrap_or_default();
 
-    // `SCREENS_DIR` auto-registers as the writable `local` screen repo handle
-    // (unless `config.screen_repos` already has an explicit `local` entry) —
-    // see `ScreenRepoManager::build_disk_sources`.
+    // `SCREENS_DIR` auto-registers as the writable `local` screen repo handle,
+    // and the seeded examples dir (`<SCREENS_DIR>/../examples`) auto-registers
+    // as the writable `examples` handle — unless `config.screen_repos` already
+    // has an explicit entry for that handle — see
+    // `ScreenRepoManager::build_disk_sources`.
     let screens_dir = asset_loader.screens_dir().map(|p| p.to_path_buf());
+    let examples_dir = asset_loader.examples_dir().map(|p| p.to_path_buf());
 
     let manager = ScreenRepoManager::new(
         asset_loader,
@@ -152,6 +155,7 @@ pub fn build_screen_repo_manager(
         ScreenRepoCache::new(cache_root),
         extra_disk,
         screens_dir,
+        examples_dir,
     );
     manager.rebuild_loader();
     manager
@@ -310,6 +314,33 @@ mod reload_tests {
             .loader()
             .resolve("byonk-builtin/default")
             .is_some());
+    }
+
+    /// End-to-end (Task 11): seeding an empty `SCREENS_DIR` through the real
+    /// production wiring (`AssetLoader::new` -> `seed_if_configured` ->
+    /// `create_app_state` -> `build_screen_repo_manager`) must (a) register
+    /// the seeded `examples` directory so `examples/hello` actually resolves,
+    /// and (b) never copy built-in screens into `SCREENS_DIR` itself.
+    #[test]
+    fn seeded_examples_dir_resolves_end_to_end_and_screens_dir_gets_no_builtin_copies() {
+        let dir = tempfile::tempdir().unwrap();
+        let screens_dir = dir.path().join("screens");
+        let loader = Arc::new(AssetLoader::new(Some(screens_dir.clone()), None, None));
+        loader.seed_if_configured().expect("seed");
+
+        let state = create_app_state(loader).unwrap();
+        assert!(
+            state
+                .screen_repo_manager
+                .loader()
+                .resolve("examples/hello")
+                .is_some(),
+            "seeded examples dir must resolve examples/hello end to end"
+        );
+
+        assert!(screens_dir.join("byonk-screens.yaml").exists());
+        assert!(!screens_dir.join("default").exists());
+        assert!(!screens_dir.join("calibration").exists());
     }
 
     #[test]

@@ -741,6 +741,7 @@ mod pipeline_tests {
             ScreenRepoCache::new(cache_root),
             disk,
             None,
+            None,
         );
         pm.rebuild_loader();
         ContentPipeline::new(shared, loader, renderer, pm).unwrap()

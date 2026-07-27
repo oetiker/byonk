@@ -7,16 +7,22 @@ const AUTH: (&str, &str) = ("Authorization", "Bearer secret");
 
 // Device `screen` values are always qualified `handle/path` package refs.
 //
-// These tests need "some known, resolvable non-default builtin screen" (not
-// specifically `hello`/`gphoto`/`swiss-departure-board` — those moved to the
-// `examples` embed in Task 10 and no longer resolve as `byonk-builtin` refs
-// until Task 11 registers the `examples` handle). `calibration/color` and
-// `calibration/grey` are the only other screens left in the minimal
-// `byonk-builtin` repo, so they stand in wherever the tests need one or two
-// distinct known-good refs.
+// Most of these tests just need "some known, resolvable non-default builtin
+// screen" — `calibration/color` and `calibration/grey`, the only other
+// screens left in the minimal `byonk-builtin` repo, stand in wherever the
+// test doesn't care about params. The two params-patch tests below use
+// `TRANSIT` (`examples/swiss-departure-board`, registered as a real screen
+// repo handle since Task 11) instead, so they validate against a real,
+// non-empty params schema rather than an unknown-and-ignored param.
 const COLOR: &str = "byonk-builtin/calibration/color";
 const GREY: &str = "byonk-builtin/calibration/grey";
 const UNKNOWN: &str = "byonk-builtin/does-not-exist";
+// A real, params-bearing screen (declares `station`/`limit`), now that Task 11
+// registers `examples` as a real screen repo handle. Used by the two
+// params-patch tests below so they exercise `validate_params` against a
+// non-empty schema instead of an unknown-and-therefore-ignored param on a
+// screen with no schema at all.
+const TRANSIT: &str = "examples/swiss-departure-board";
 
 #[tokio::test]
 async fn test_write_on_embedded_config_returns_409() {
@@ -294,20 +300,22 @@ async fn test_patch_panel_and_dither_read_back_for_seen_device() {
 async fn test_patch_params_submap_reads_back_with_populated_devices() {
     // Repro for the nested-params write bug: with a populated devices map, the
     // config writer mis-indented the params sub-map so it parsed back empty.
+    // Uses `TRANSIT` (declares a `station` param) rather than `COLOR` so the
+    // params PATCH below is validated against a real, non-empty schema.
     let dir = tempfile::tempdir().unwrap();
-    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+    let app = TestApp::new_admin_with_screens("secret", dir.path());
 
     // Two devices -> populated devices map (exercises the non-empty write path).
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        &format!(r#"{{"key":"AA:BB","screen":"{COLOR}"}}"#),
+        &format!(r#"{{"key":"AA:BB","screen":"{TRANSIT}"}}"#),
     )
     .await;
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        &format!(r#"{{"key":"CC:DD","screen":"{COLOR}"}}"#),
+        &format!(r#"{{"key":"CC:DD","screen":"{TRANSIT}"}}"#),
     )
     .await;
 
@@ -334,13 +342,15 @@ async fn test_patch_params_submap_reads_back_with_populated_devices() {
 #[tokio::test]
 async fn test_patch_params_merge_preserves_other_keys() {
     // Editing one param (no screen change) must merge, not replace: a second
-    // single-key PATCH must not drop the first key.
+    // single-key PATCH must not drop the first key. Uses `TRANSIT` (declares
+    // `station`/`limit` params) so both PATCHes are validated against a real,
+    // non-empty schema.
     let dir = tempfile::tempdir().unwrap();
-    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+    let app = TestApp::new_admin_with_screens("secret", dir.path());
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        &format!(r#"{{"key":"AA:BB","screen":"{COLOR}"}}"#),
+        &format!(r#"{{"key":"AA:BB","screen":"{TRANSIT}"}}"#),
     )
     .await;
 

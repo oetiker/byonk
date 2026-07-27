@@ -89,13 +89,17 @@ pub enum AssetCategory {
 #[derive(Debug, Default)]
 pub struct SeedReport {
     pub screens_seeded: Vec<String>,
+    pub examples_seeded: Vec<String>,
     pub fonts_seeded: Vec<String>,
     pub config_seeded: bool,
 }
 
 impl SeedReport {
     pub fn is_empty(&self) -> bool {
-        self.screens_seeded.is_empty() && self.fonts_seeded.is_empty() && !self.config_seeded
+        self.screens_seeded.is_empty()
+            && self.examples_seeded.is_empty()
+            && self.fonts_seeded.is_empty()
+            && !self.config_seeded
     }
 }
 
@@ -110,6 +114,11 @@ pub struct InitReport {
 pub struct AssetLoader {
     /// External screens directory (from SCREENS_DIR env var)
     screens_dir: Option<PathBuf>,
+    /// Directory the shipped `examples` set is seeded into, derived from
+    /// `screens_dir` as `<SCREENS_DIR>/../examples`. `None` whenever
+    /// `screens_dir` is `None` — there is no fallback location, and nothing
+    /// is ever written outside a configured directory.
+    examples_dir: Option<PathBuf>,
     /// External fonts directory (from FONTS_DIR env var)
     fonts_dir: Option<PathBuf>,
     /// External config file path (from CONFIG_FILE env var)
@@ -126,8 +135,12 @@ impl AssetLoader {
         fonts_dir: Option<PathBuf>,
         config_file: Option<PathBuf>,
     ) -> Self {
+        let examples_dir = screens_dir
+            .as_ref()
+            .map(|dir| dir.join("..").join("examples"));
         Self {
             screens_dir,
+            examples_dir,
             fonts_dir,
             config_file,
         }
@@ -292,6 +305,13 @@ impl AssetLoader {
         self.screens_dir.as_deref()
     }
 
+    /// Path the shipped `examples` set is seeded into (`<SCREENS_DIR>/../examples`),
+    /// if `SCREENS_DIR` is configured. Used to auto-register it as the writable
+    /// `examples` screen repo handle, mirroring `screens_dir()`/`local`.
+    pub fn examples_dir(&self) -> Option<&std::path::Path> {
+        self.examples_dir.as_deref()
+    }
+
     /// Read the config file
     ///
     /// If an external path is configured and exists, uses that.
@@ -348,27 +368,52 @@ impl AssetLoader {
     pub fn seed_if_configured(&self) -> io::Result<SeedReport> {
         let mut report = SeedReport::default();
 
-        // Seed screens
+        // Seed screens: `SCREENS_DIR` is the user's own writable `local` repo,
+        // not a copy of byonk's built-in screens (those stay embedded-only,
+        // read-only, under the `byonk-builtin` handle). An empty/missing
+        // `SCREENS_DIR` only gets a manifest, so it registers as a (currently
+        // empty) `local` screen repo the user can start authoring into.
         if let Some(ref dir) = self.screens_dir {
             let should_seed = !dir.exists() || Self::is_empty_dir(dir);
             if should_seed {
                 fs::create_dir_all(dir)?;
-                for file in EmbeddedScreens::iter() {
-                    if let Some(data) = EmbeddedScreens::get(&file) {
+                const LOCAL_MANIFEST: &str = "name: local\ndescription: Your own screens.\nauthor: you\nlicense: UNLICENSED\n";
+                fs::write(dir.join("byonk-screens.yaml"), LOCAL_MANIFEST)?;
+                report.screens_seeded.push("byonk-screens.yaml".to_string());
+                tracing::info!(
+                    dir = %dir.display(),
+                    "Seeded local screens directory with a byonk-screens.yaml manifest"
+                );
+            }
+        }
+
+        // Seed examples: the shipped `examples` set (Task 10's `EmbeddedExamples`,
+        // including its own `byonk-screens.yaml` manifest) is copied to disk
+        // once, so it lands as an editable local screen repo under the
+        // `examples` handle. Only when `SCREENS_DIR` is configured (there is
+        // no fallback location — never write outside a configured directory)
+        // and the examples dir is empty/missing (once-only, idempotent: a
+        // user's edits or deletions inside an already-seeded `examples`
+        // directory are never touched again).
+        if let Some(ref dir) = self.examples_dir {
+            let should_seed = !dir.exists() || Self::is_empty_dir(dir);
+            if should_seed {
+                fs::create_dir_all(dir)?;
+                for file in EmbeddedExamples::iter() {
+                    if let Some(data) = EmbeddedExamples::get(&file) {
                         let path = dir.join(file.as_ref());
-                        // Create parent directories for nested assets (e.g., default/background.jpg)
                         if let Some(parent) = path.parent() {
                             fs::create_dir_all(parent)?;
                         }
                         fs::write(&path, &*data.data)?;
-                        report.screens_seeded.push(file.to_string());
+                        report.examples_seeded.push(file.to_string());
                     }
                 }
-                if !report.screens_seeded.is_empty() {
+                if !report.examples_seeded.is_empty() {
                     tracing::info!(
                         dir = %dir.display(),
-                        count = report.screens_seeded.len(),
-                        "Seeded screens directory with embedded assets"
+                        count = report.examples_seeded.len(),
+                        "Seeded examples directory with embedded assets"
                     );
                 }
             }
@@ -550,6 +595,7 @@ mod tests {
 
         let report = SeedReport {
             screens_seeded: vec!["test.lua".to_string()],
+            examples_seeded: vec![],
             fonts_seeded: vec![],
             config_seeded: false,
         };
@@ -557,6 +603,15 @@ mod tests {
 
         let report = SeedReport {
             screens_seeded: vec![],
+            examples_seeded: vec!["hello/script.lua".to_string()],
+            fonts_seeded: vec![],
+            config_seeded: false,
+        };
+        assert!(!report.is_empty());
+
+        let report = SeedReport {
+            screens_seeded: vec![],
+            examples_seeded: vec![],
             fonts_seeded: vec!["font.ttf".to_string()],
             config_seeded: false,
         };
@@ -564,6 +619,7 @@ mod tests {
 
         let report = SeedReport {
             screens_seeded: vec![],
+            examples_seeded: vec![],
             fonts_seeded: vec![],
             config_seeded: true,
         };
@@ -853,7 +909,81 @@ mod tests {
         let report = result.unwrap();
         assert!(!report.screens_seeded.is_empty());
         assert!(screens_dir.exists());
-        assert!(screens_dir.join("default/script.lua").exists());
+        assert!(screens_dir.join("byonk-screens.yaml").exists());
+    }
+
+    /// Brief Task-11 Step-1 test, verbatim: an empty `SCREENS_DIR` gets only a
+    /// `byonk-screens.yaml` manifest — no built-in screen copies land in it.
+    #[test]
+    fn seeds_local_manifest_not_screen_copies() {
+        let dir = tempfile::tempdir().unwrap();
+        let loader = AssetLoader::new(Some(dir.path().into()), None, None);
+        loader.seed_if_configured().unwrap();
+        assert!(dir.path().join("byonk-screens.yaml").exists());
+        // no builtin screen copies:
+        assert!(!dir.path().join("default").exists());
+        assert!(!dir.path().join("calibration").exists());
+    }
+
+    #[test]
+    fn test_seed_if_configured_writes_local_manifest_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let loader = AssetLoader::new(Some(dir.path().into()), None, None);
+        loader.seed_if_configured().unwrap();
+        let manifest = std::fs::read_to_string(dir.path().join("byonk-screens.yaml")).unwrap();
+        let parsed = crate::models::screen_repo_manifest::ScreenRepoManifest::from_yaml(&manifest)
+            .expect("seeded local manifest must be valid");
+        assert_eq!(parsed.name, "local");
+    }
+
+    #[test]
+    fn test_seed_if_configured_examples() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let screens_dir = temp_dir.path().join("screens");
+
+        let loader = AssetLoader::new(Some(screens_dir), None, None);
+        let report = loader.seed_if_configured().unwrap();
+
+        assert!(!report.examples_seeded.is_empty());
+        let examples_dir = loader.examples_dir().expect("examples_dir configured");
+        assert!(examples_dir.join("byonk-screens.yaml").exists());
+        assert!(examples_dir.join("hello/script.lua").exists());
+        assert!(examples_dir.join("gphoto/meta.yaml").exists());
+    }
+
+    #[test]
+    fn test_seed_if_configured_no_examples_dir_without_screens_dir() {
+        // No SCREENS_DIR configured -> no examples dir, nothing seeded, no
+        // fallback location invented.
+        let loader = AssetLoader::new(None, None, None);
+        assert!(loader.examples_dir().is_none());
+        let report = loader.seed_if_configured().unwrap();
+        assert!(report.examples_seeded.is_empty());
+    }
+
+    #[test]
+    fn test_seed_if_configured_examples_is_idempotent_and_never_clobbers_edits() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let screens_dir = temp_dir.path().join("screens");
+        let loader = AssetLoader::new(Some(screens_dir), None, None);
+
+        loader.seed_if_configured().unwrap();
+        let examples_dir = loader.examples_dir().unwrap().to_path_buf();
+
+        // User edits a seeded example, and deletes another one entirely.
+        std::fs::write(examples_dir.join("hello/script.lua"), "-- user edit\n").unwrap();
+        std::fs::remove_dir_all(examples_dir.join("mandelbrot")).unwrap();
+
+        // A second seed pass must change nothing: it must not resurrect the
+        // deleted screen and must not overwrite the user's edit.
+        let second = loader.seed_if_configured().unwrap();
+        assert!(
+            second.examples_seeded.is_empty(),
+            "second seed pass on a non-empty examples dir must seed nothing"
+        );
+        assert!(!examples_dir.join("mandelbrot").exists());
+        let edited = std::fs::read_to_string(examples_dir.join("hello/script.lua")).unwrap();
+        assert_eq!(edited, "-- user edit\n");
     }
 
     #[test]

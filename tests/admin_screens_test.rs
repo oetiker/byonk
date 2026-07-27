@@ -76,24 +76,42 @@ async fn test_screens_unauthorized() {
     assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
 }
 
-// `test_gphoto_screen_exposes_its_params` and
-// `test_swiss_departure_board_has_station_param` used to live here, asserting
-// that `gphoto`'s `album_url` and `swiss-departure-board`'s `station`
-// meta.yaml params surface through this *admin HTTP listing*. Both screens
-// moved to the `examples` embed in Task 10. Deliberately deferred (not
-// impossible to write today): this is HTTP-level coverage of a registered
-// screen repo, so re-adding it now would require standing up a temp-dir
-// screen repo fixture (`TestApp::new_admin_with_screens`,
-// `tests/common/app.rs`) just to exercise a repo that Task 11 is about to
-// register for real. Re-adding it against the real `examples` handle once
-// Task 11 lands is less work and tests the actual wiring, so it's deferred
-// there rather than duplicated with a throwaway fixture now. `meta.yaml`
-// parsing for these two screens (params present, correctly typed) is
-// covered directly, without any repo handle, in
-// `tests/screen_schemas_test.rs`'s `test_gphoto_params` /
-// `test_transit_params`; the generic `params:` → `ParamSchema` parsing
-// mechanism itself is covered independently of any bundled screen in
-// `src/models/screen_meta.rs`'s unit tests.
+#[tokio::test]
+async fn test_gphoto_screen_exposes_its_params() {
+    // The gphoto screen declares params in its meta.yaml; they surface on the
+    // ref. `gphoto` moved to the `examples` embed in Task 10; Task 11
+    // registers `examples` as a real (seeded) screen repo handle, so this is
+    // restored here against `examples/gphoto` instead of
+    // `byonk-builtin/useful/gphoto`.
+    let dir = tempfile::tempdir().unwrap();
+    let app = TestApp::new_admin_with_screens("secret", dir.path());
+    let resp = app.get_with_headers("/api/admin/screens", &[AUTH]).await;
+    let json: serde_json::Value = resp.json();
+
+    let gphoto = find_screen(&json, "examples/gphoto").expect("gphoto screen present");
+    let params = gphoto["params"].as_array().expect("params array");
+    assert!(
+        params.iter().any(|p| p["name"] == "album_url"),
+        "gphoto exposes its album_url param"
+    );
+}
+
+#[tokio::test]
+async fn test_swiss_departure_board_has_station_param() {
+    // meta.yaml-declared params reach the admin listing under the qualified
+    // ref. `swiss-departure-board` moved to the `examples` embed in Task 10;
+    // restored here against `examples/swiss-departure-board` now that Task 11
+    // registers `examples` as a real screen repo handle.
+    let dir = tempfile::tempdir().unwrap();
+    let app = TestApp::new_admin_with_screens("secret", dir.path());
+    let resp = app.get_with_headers("/api/admin/screens", &[AUTH]).await;
+    let json: serde_json::Value = resp.json();
+
+    let transit = find_screen(&json, "examples/swiss-departure-board")
+        .expect("swiss-departure-board screen present");
+    let params = transit["params"].as_array().unwrap();
+    assert!(params.iter().any(|p| p["name"] == "station"));
+}
 
 #[tokio::test]
 async fn test_packages_lists_builtin_with_redaction() {

@@ -205,6 +205,36 @@ impl SvgRenderer {
         Ok(optimized)
     }
 
+    /// Render SVG straight to a full-color 8-bit RGB PNG, with no e-ink
+    /// dithering or palette restriction applied — the pre-dither preview
+    /// authoring diagnostics compare the palette-restricted device output
+    /// against. Reuses the same rasterize/encode helpers
+    /// `render_to_palette_png` uses; skips the `eink-dither` step entirely,
+    /// so this never duplicates the dithering logic.
+    pub fn render_to_raw_png(
+        &self,
+        svg_data: &[u8],
+        spec: DisplaySpec,
+    ) -> Result<Vec<u8>, RenderError> {
+        let pixmap = self.rasterize_svg(svg_data, spec)?;
+        let rgb: Vec<u8> = rgba_to_eink_srgb(pixmap.data())
+            .into_iter()
+            .flat_map(|c| c.to_bytes())
+            .collect();
+
+        let png_bytes = encode_png(spec, png::ColorType::Rgb, png::BitDepth::Eight, None, &rgb)?;
+        let optimized = oxipng::optimize_from_memory(
+            &png_bytes,
+            &oxipng::Options {
+                strip: oxipng::StripChunks::Safe,
+                optimize_alpha: false,
+                ..Default::default()
+            },
+        )
+        .unwrap_or(png_bytes);
+        Ok(optimized)
+    }
+
     /// Parse and rasterize SVG to an RGBA pixmap
     fn rasterize_svg(&self, svg_data: &[u8], spec: DisplaySpec) -> Result<Pixmap, RenderError> {
         let options = usvg::Options {

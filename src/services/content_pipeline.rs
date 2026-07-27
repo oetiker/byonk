@@ -54,6 +54,9 @@ pub struct ScriptResult {
     pub script_chroma_clamp: Option<f32>,
     /// Optional dither strength override from Lua script
     pub script_strength: Option<f32>,
+    /// Messages captured from the script's `log_info`/`log_warn`/`log_error`
+    /// calls, in call order. See `lua_runtime::ScriptResult::logs`.
+    pub logs: Vec<String>,
 }
 
 /// Device context passed to templates and Lua scripts
@@ -161,6 +164,13 @@ impl ContentPipeline {
     /// through the full script→template→render pipeline.
     pub fn template_service(&self) -> &TemplateService {
         &self.template_service
+    }
+
+    /// The pipeline's shared config, for callers that need panel lookups
+    /// (e.g. `ScreenStore::render`'s panel-profile resolution) without
+    /// going through the full script→template→render pipeline.
+    pub fn config(&self) -> &crate::server::SharedConfig {
+        &self.config
     }
 
     /// Run script for a device (without rendering)
@@ -284,6 +294,7 @@ impl ContentPipeline {
             script_noise_scale: lua_result.noise_scale,
             script_chroma_clamp: lua_result.chroma_clamp,
             script_strength: lua_result.strength,
+            logs: lua_result.logs,
         })
     }
 
@@ -459,6 +470,22 @@ impl ContentPipeline {
             preserve_exact,
             tuning,
         )?;
+        Ok(png_bytes)
+    }
+
+    /// Render an SVG straight to a full-color PNG with no e-ink dithering —
+    /// the pre-dither preview `ScreenStore::render`'s `RenderOpts::include_raw`
+    /// asks for, so an author can compare the palette-restricted device
+    /// output against what the SVG actually contains.
+    pub fn render_raw_png_from_svg(
+        &self,
+        svg: &str,
+        spec: DisplaySpec,
+    ) -> Result<Vec<u8>, ContentError> {
+        let png_bytes = self
+            .renderer
+            .svg_renderer
+            .render_to_raw_png(svg.as_bytes(), spec)?;
         Ok(png_bytes)
     }
 

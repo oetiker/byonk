@@ -4,7 +4,7 @@
 use mlua::{Lua, Result as LuaResult, Table, UserData, UserDataMethods, Value};
 use scraper::{Html, Selector};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::DeviceContext;
 use crate::assets::AssetLoader;
@@ -33,6 +33,14 @@ pub struct ScriptResult {
     pub chroma_clamp: Option<f32>,
     /// Optional dither strength override from script
     pub strength: Option<f32>,
+    /// Messages captured from `log_info`/`log_warn`/`log_error` calls during
+    /// this run, in call order (each prefixed with its level, e.g.
+    /// `"[warn] ..."`). In addition to — not a replacement for — the
+    /// existing `tracing` calls those hooks make; this is for
+    /// authoring-time diagnostics (`ScreenStore::render`) that need the
+    /// log output back in the response rather than in the server's log
+    /// stream.
+    pub logs: Vec<String>,
 }
 
 /// Error type for Lua script execution
@@ -132,6 +140,10 @@ impl LuaRuntime {
         timestamp_override: Option<i64>,
     ) -> Result<ScriptResult, ScriptError> {
         let lua = Lua::new();
+        // Captures log_info/log_warn/log_error output for this run, in
+        // addition to the tracing calls those hooks already make (see
+        // `ScriptResult::logs`).
+        let log_sink: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
         // Set up the Lua environment
         self.setup_globals(
@@ -142,6 +154,7 @@ impl LuaRuntime {
             source,
             screen_dir,
             timestamp_override,
+            &log_sink,
         )?;
 
         // Install the sandboxed `require()` scoped to this screen repo + byonk-base.
@@ -182,6 +195,8 @@ impl LuaRuntime {
         let chroma_clamp = result.get::<f32>("chroma_clamp").ok();
         let strength = result.get::<f32>("strength").ok();
 
+        let logs = log_sink.lock().map(|g| g.clone()).unwrap_or_default();
+
         Ok(ScriptResult {
             data,
             refresh_rate,
@@ -193,6 +208,7 @@ impl LuaRuntime {
             noise_scale,
             chroma_clamp,
             strength,
+            logs,
         })
     }
 
@@ -298,6 +314,7 @@ impl LuaRuntime {
         source: &Arc<dyn ScreenRepoSource>,
         screen_dir: &str,
         timestamp_override: Option<i64>,
+        log_sink: &Arc<Mutex<Vec<String>>>,
     ) -> LuaResult<()> {
         let globals = lua.globals();
 
@@ -869,21 +886,34 @@ impl LuaRuntime {
         })?;
         globals.set("json_encode", json_encode)?;
 
-        // Logging functions
-        let log_info = lua.create_function(|_, msg: String| {
+        // Logging functions. Each appends to `log_sink` (for
+        // `ScriptResult::logs`) in addition to its existing tracing call.
+        let sink = log_sink.clone();
+        let log_info = lua.create_function(move |_, msg: String| {
             tracing::info!(script = true, "{}", msg);
+            if let Ok(mut logs) = sink.lock() {
+                logs.push(format!("[info] {msg}"));
+            }
             Ok(())
         })?;
         globals.set("log_info", log_info)?;
 
-        let log_warn = lua.create_function(|_, msg: String| {
+        let sink = log_sink.clone();
+        let log_warn = lua.create_function(move |_, msg: String| {
             tracing::warn!(script = true, "{}", msg);
+            if let Ok(mut logs) = sink.lock() {
+                logs.push(format!("[warn] {msg}"));
+            }
             Ok(())
         })?;
         globals.set("log_warn", log_warn)?;
 
-        let log_error = lua.create_function(|_, msg: String| {
+        let sink = log_sink.clone();
+        let log_error = lua.create_function(move |_, msg: String| {
             tracing::error!(script = true, "{}", msg);
+            if let Ok(mut logs) = sink.lock() {
+                logs.push(format!("[error] {msg}"));
+            }
             Ok(())
         })?;
         globals.set("log_error", log_error)?;

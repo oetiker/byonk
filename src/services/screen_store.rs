@@ -6,11 +6,13 @@
 //! screen repos) is read-only and returns `StoreError::ReadOnly` with a
 //! copy-hint pointing at the caller's next step (Task 7's `copy_screen`).
 
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use crate::models::screen_meta::ScreenMeta;
-use crate::services::content_pipeline::ContentPipeline;
+use crate::models::{normalize_algorithm_name, DisplaySpec, DitherTuningValues};
+use crate::services::content_pipeline::{ContentPipeline, DeviceContext};
 use crate::services::screen_repo_loader::ScreenRepoSource;
 use crate::services::screen_repo_manager::ScreenRepoManager;
 
@@ -78,6 +80,99 @@ pub struct Issue {
 pub struct ValidationReport {
     pub ok: bool,
     pub issues: Vec<Issue>,
+}
+
+/// Options for `ScreenStore::render`. Mirrors the knobs `/dev/render`
+/// (`crate::api::dev::handle_render`) accepts for a screen-name (non-MAC)
+/// render: no device lookup, no custom Lua params — an authoring-time
+/// preview of the screen as it stands on disk.
+///
+/// `model` selects the default width/height/palette when `width`/`height`
+/// aren't given (`"og"` → 800x480 4-grey, anything else, including `"x"`,
+/// follows `/dev/render`'s own model dispatch). `panel` names a profile
+/// from the `panels:` config section (colors + measured colors + dither
+/// tuning); unresolvable names fall back to the model default, same as
+/// `/dev/render`.
+#[derive(Debug, Clone)]
+pub struct RenderOpts {
+    pub model: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub panel: Option<String>,
+    pub dither: Option<String>,
+    pub error_clamp: Option<f32>,
+    pub chroma_clamp: Option<f32>,
+    pub noise_scale: Option<f32>,
+    pub preserve_exact: Option<bool>,
+    pub timestamp: Option<i64>,
+    /// Also render a pre-dither, full-color PNG alongside the palette-
+    /// restricted `png` (see `RenderResult::raw_png`).
+    pub include_raw: bool,
+}
+
+impl Default for RenderOpts {
+    /// `"og"` (800x480, 4-grey), matching `/dev/render`'s own default model
+    /// — the common case, and the one every starter screen renders under.
+    fn default() -> Self {
+        Self {
+            model: "og".to_string(),
+            width: None,
+            height: None,
+            panel: None,
+            dither: None,
+            error_clamp: None,
+            chroma_clamp: None,
+            noise_scale: None,
+            preserve_exact: None,
+            timestamp: None,
+            include_raw: false,
+        }
+    }
+}
+
+/// A line-numbered rendering failure. Not Lua-specific: a Tera/SVG failure,
+/// a dithering failure, or an unresolvable screen ref all populate this
+/// (with `line: None` where there's no line to report), rather than a
+/// separate error type per failure mode.
+#[derive(Debug, Clone)]
+pub struct RenderError {
+    pub line: Option<u32>,
+    pub message: String,
+}
+
+/// The result of `ScreenStore::render`: the PNG an author's edit produces,
+/// plus the diagnostics they (often an LLM) need to debug it without a
+/// separate round trip — captured `log_*` output, the script's returned
+/// `data` table, and (on failure) a line-numbered error. `error.is_some()`
+/// implies `png` is empty; it is never a panic or a silently-empty PNG.
+#[derive(Debug, Clone)]
+pub struct RenderResult {
+    pub png: Vec<u8>,
+    /// Pre-dither, full-color PNG — only populated when `RenderOpts::include_raw`.
+    pub raw_png: Option<Vec<u8>>,
+    pub log: Vec<String>,
+    pub data: serde_json::Value,
+    pub refresh_rate: u32,
+    pub error: Option<RenderError>,
+}
+
+/// Best-effort line-number extraction from an mlua error message shape like
+/// `runtime error: [string "..."]:12: attempt to index a nil value` or
+/// `syntax error: [string "..."]:1: unexpected symbol near <eof>` (both as
+/// wrapped by `ContentError`'s `Display`, e.g. `"Script error: Lua error:
+/// runtime error: [string \"...\"]:12: ..."`). Looks for the first `]:`
+/// marker and reads the digits immediately after it; returns `None` when
+/// the message doesn't have that shape (a non-Lua render failure, or a
+/// Lua message mlua didn't attach a location to).
+fn parse_lua_error_line(message: &str) -> Option<u32> {
+    let idx = message.find("]:")?;
+    let rest = &message[idx + 2..];
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        None
+    } else {
+        digits.parse().ok()
+    }
 }
 
 /// Which starter template `create_screen` scaffolds. One variant today;
@@ -647,6 +742,245 @@ impl ScreenStore {
 
         let ok = !issues.iter().any(|i| matches!(i.severity, Severity::Error));
         ValidationReport { ok, issues }
+    }
+
+    /// Render one screen with authoring diagnostics: runs `script.lua`,
+    /// renders `screen.svg` through it, and dithers to PNG — the same
+    /// pipeline `/dev/render` uses for a screen-name (non-MAC) preview, with
+    /// `RenderOpts` mapped onto the same knobs. Any failure along the way
+    /// (an unresolvable ref, a Lua error, a Tera/SVG failure — including a
+    /// dangling `{% include %}` target `validate` can't catch, since Tera
+    /// resolves includes at render time — or a dithering failure) is
+    /// returned in `RenderResult.error`, never a panic or a silently-empty
+    /// PNG.
+    ///
+    /// A read operation, like `validate`: works against read-only handles
+    /// (embedded `byonk-builtin`, git-fetched repos) too.
+    pub fn render(&self, screen_ref: &str, opts: RenderOpts) -> RenderResult {
+        let empty = || RenderResult {
+            png: Vec::new(),
+            raw_png: None,
+            log: Vec::new(),
+            data: serde_json::Value::Null,
+            refresh_rate: 0,
+            error: None,
+        };
+
+        // Dimensions: explicit override, else the model's default — mirrors
+        // `/dev/render`'s `query.model` dispatch (only "x" gets its own
+        // branch; everything else, including "og", is the 800x480 default).
+        let (width, height) = match opts.model.as_str() {
+            "x" => (opts.width.unwrap_or(1872), opts.height.unwrap_or(1404)),
+            _ => (opts.width.unwrap_or(800), opts.height.unwrap_or(480)),
+        };
+
+        // Fallback palette when no panel resolves a `colors` override —
+        // same per-model default `/dev/render` falls back to.
+        let model_palette: Vec<(u8, u8, u8)> = if opts.model == "x" {
+            (0..16)
+                .map(|i| {
+                    let v = (i * 255 / 15) as u8;
+                    (v, v, v)
+                })
+                .collect()
+        } else {
+            crate::api::display::parse_colors_header("#000000,#555555,#AAAAAA,#FFFFFF")
+        };
+
+        let config = self.pipeline.config().load();
+        let panel = opts
+            .panel
+            .as_deref()
+            .and_then(|name| config.get_panel(name));
+        let panel_colors: Option<String> = panel.map(|p| p.colors.clone());
+        let measured_colors: Option<Vec<(u8, u8, u8)>> = panel
+            .and_then(|p| p.colors_actual.as_deref())
+            .map(crate::api::display::parse_colors_header);
+
+        // Pre-script dither algorithm + tuning, for the device context the
+        // script sees via `device.dither.*` — same resolution `/dev/render`
+        // does before running the script.
+        let pre_script_algo = opts.dither.as_deref().unwrap_or("atkinson");
+        let panel_dither_config = panel.and_then(|p| p.dither.clone());
+        let pre_panel_tuning = panel_dither_config
+            .as_ref()
+            .map(|pdc| pdc.resolve_for_algorithm(Some(pre_script_algo)))
+            .unwrap_or_default();
+
+        let device_ctx = DeviceContext {
+            mac: "dev-simulator".to_string(),
+            battery_voltage: Some(4.2),
+            rssi: Some(-50),
+            model: Some(opts.model.clone()),
+            firmware_version: Some("dev".to_string()),
+            width: Some(width),
+            height: Some(height),
+            colors: Some(crate::api::display::colors_to_hex_strings(&model_palette)),
+            dither_algorithm: Some(pre_script_algo.to_string()),
+            dither_error_clamp: pre_panel_tuning.error_clamp,
+            dither_noise_scale: pre_panel_tuning.noise_scale,
+            dither_chroma_clamp: pre_panel_tuning.chroma_clamp,
+            dither_strength: pre_panel_tuning.strength,
+            ..Default::default()
+        };
+
+        // Run the script, capturing logs/data/refresh_rate. `run_script_direct`
+        // is the same entry point `/dev/render` uses for a screen-name preview.
+        let script_result = match self.pipeline.run_script_direct(
+            screen_ref,
+            HashMap::new(),
+            Some(device_ctx.clone()),
+            opts.timestamp,
+        ) {
+            Ok(r) => r,
+            Err(message) => {
+                return RenderResult {
+                    error: Some(RenderError {
+                        line: parse_lua_error_line(&message),
+                        message,
+                    }),
+                    ..empty()
+                };
+            }
+        };
+
+        let log = script_result.logs.clone();
+        let data = script_result.data.clone();
+        let refresh_rate = script_result.refresh_rate;
+
+        let svg = match self
+            .pipeline
+            .render_svg_from_script(&script_result, Some(&device_ctx))
+        {
+            Ok(s) => s,
+            Err(e) => {
+                let message = e.to_string();
+                return RenderResult {
+                    log,
+                    data,
+                    refresh_rate,
+                    error: Some(RenderError {
+                        line: parse_lua_error_line(&message),
+                        message,
+                    }),
+                    ..empty()
+                };
+            }
+        };
+
+        // Explicit render-option dither wins outright over the script's own
+        // choice (like a `/dev/render` UI override); otherwise the script's
+        // `dither` return value is used. Mirrors `effective_script_dither`/
+        // `effective_device_dither` in `handle_render` (there is no device
+        // config layer in an authoring render, so that layer is always empty).
+        let (effective_script_dither, dither_override): (Option<&str>, Option<&str>) =
+            match opts.dither.as_deref() {
+                Some(d) => (None, Some(d)),
+                None => (script_result.script_dither.as_deref(), None),
+            };
+
+        let effective_algo = dither_override.or(effective_script_dither);
+        let panel_tuning = panel_dither_config
+            .as_ref()
+            .map(|pdc| {
+                pdc.resolve_for_algorithm(effective_algo.map(normalize_algorithm_name).as_deref())
+            })
+            .unwrap_or_default();
+
+        let tuning = if opts.error_clamp.is_some()
+            || opts.noise_scale.is_some()
+            || opts.chroma_clamp.is_some()
+        {
+            DitherTuningValues {
+                error_clamp: opts.error_clamp,
+                noise_scale: opts.noise_scale,
+                chroma_clamp: opts.chroma_clamp,
+                strength: None,
+            }
+        } else {
+            let script_tuning = DitherTuningValues {
+                error_clamp: script_result.script_error_clamp,
+                noise_scale: script_result.script_noise_scale,
+                chroma_clamp: script_result.script_chroma_clamp,
+                strength: script_result.script_strength,
+            };
+            crate::api::display::resolve_tuning(
+                &script_tuning,
+                &DitherTuningValues::default(),
+                &panel_tuning,
+            )
+        };
+
+        let render_params = crate::api::display::resolve_render_params(
+            script_result.script_colors.as_deref(),
+            effective_script_dither,
+            script_result.script_preserve_exact,
+            None,
+            dither_override,
+            panel_colors.as_deref(),
+            &model_palette,
+            measured_colors.clone(),
+            opts.preserve_exact,
+            &tuning,
+        );
+
+        let display_spec = DisplaySpec::from_dimensions(width, height).unwrap_or(DisplaySpec::OG);
+        let use_actual = measured_colors.is_some();
+        let dither_tuning = crate::rendering::svg_to_png::DitherTuning {
+            serpentine: None,
+            error_clamp: render_params.error_clamp,
+            chroma_clamp: render_params.chroma_clamp,
+            noise_scale: render_params.noise_scale,
+            exact_absorb_error: None,
+            strength: render_params.strength,
+        };
+        let has_tuning = dither_tuning.error_clamp.is_some()
+            || dither_tuning.chroma_clamp.is_some()
+            || dither_tuning.noise_scale.is_some()
+            || dither_tuning.strength.is_some();
+
+        let png = match self.pipeline.render_png_from_svg(
+            &svg,
+            display_spec,
+            &render_params.palette,
+            measured_colors.as_deref(),
+            use_actual,
+            render_params.dither.as_deref(),
+            render_params.preserve_exact,
+            has_tuning.then_some(&dither_tuning),
+        ) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                let message = e.to_string();
+                return RenderResult {
+                    log,
+                    data,
+                    refresh_rate,
+                    error: Some(RenderError {
+                        line: parse_lua_error_line(&message),
+                        message,
+                    }),
+                    ..empty()
+                };
+            }
+        };
+
+        let raw_png = if opts.include_raw {
+            self.pipeline
+                .render_raw_png_from_svg(&svg, display_spec)
+                .ok()
+        } else {
+            None
+        };
+
+        RenderResult {
+            png,
+            raw_png,
+            log,
+            data,
+            refresh_rate,
+            error: None,
+        }
     }
 }
 
@@ -1273,5 +1607,155 @@ mod tests {
         // `manifest_root`) could never see what `write_file` just wrote.
         assert!(outer.join("contrib/trmnl/clock/script.lua").exists());
         assert!(!outer.join("clock/script.lua").exists());
+    }
+
+    // --- Task 9: render -----------------------------------------------------
+
+    #[test]
+    fn render_returns_png_data_and_log() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "r", StarterKind::Minimal)
+            .unwrap();
+        store
+            .write_file(
+                "local/r",
+                "script.lua",
+                b"log_info(\"hi\")\nreturn { data = { message = \"X\" } }",
+                None,
+            )
+            .unwrap();
+        let res = store.render("local/r", RenderOpts::default());
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert!(!res.png.is_empty());
+        assert_eq!(res.data["message"], "X");
+        assert!(res.log.iter().any(|l| l.contains("hi")));
+    }
+
+    #[test]
+    fn render_reports_lua_error_with_message() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "e", StarterKind::Minimal)
+            .unwrap();
+        store
+            .write_file("local/e", "script.lua", b"error(\"boom\")", None)
+            .unwrap();
+        let res = store.render("local/e", RenderOpts::default());
+        assert!(res.error.as_ref().unwrap().message.contains("boom"));
+    }
+
+    #[test]
+    fn render_reports_lua_error_with_line_number() {
+        // `error("boom")` on line 2 of the script (line 1 is a comment) —
+        // the mlua runtime error carries a line number, and `render` must
+        // surface it rather than leaving `RenderError.line` unparsed.
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "e2", StarterKind::Minimal)
+            .unwrap();
+        store
+            .write_file(
+                "local/e2",
+                "script.lua",
+                b"-- comment\nerror(\"boom\")",
+                None,
+            )
+            .unwrap();
+        let res = store.render("local/e2", RenderOpts::default());
+        let err = res.error.unwrap();
+        assert_eq!(err.line, Some(2), "message was: {}", err.message);
+    }
+
+    #[test]
+    fn render_missing_screen_returns_error_not_panic() {
+        let (store, _repo_root) = test_store_with_local();
+        let res = store.render("local/does-not-exist", RenderOpts::default());
+        assert!(res.error.is_some());
+        assert!(res.png.is_empty());
+    }
+
+    #[test]
+    fn render_reports_dangling_include_as_error() {
+        // `validate` can't catch this (Tera resolves `{% include %}` at
+        // render time, not registration — see `TemplateService::build_tera`'s
+        // doc comment); `render` must hit it and surface it as a populated
+        // `RenderResult.error`, not a panic or a silently-empty PNG.
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "badinclude", StarterKind::Minimal)
+            .unwrap();
+        store
+            .write_file(
+                "local/badinclude",
+                "screen.svg",
+                b"<svg>{% include \"badinclude/does-not-exist.svg\" %}</svg>",
+                None,
+            )
+            .unwrap();
+        let res = store.render("local/badinclude", RenderOpts::default());
+        assert!(
+            res.error.is_some(),
+            "expected a dangling include to fail render"
+        );
+        assert!(!res.error.as_ref().unwrap().message.is_empty());
+        assert!(res.png.is_empty());
+    }
+
+    #[test]
+    fn render_include_raw_produces_pre_dither_png() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "raw", StarterKind::Minimal)
+            .unwrap();
+        let res = store.render(
+            "local/raw",
+            RenderOpts {
+                include_raw: true,
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert!(!res.png.is_empty());
+        let raw = res.raw_png.expect("include_raw should populate raw_png");
+        assert!(!raw.is_empty());
+    }
+
+    #[test]
+    fn render_without_include_raw_leaves_raw_png_none() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "noraw", StarterKind::Minimal)
+            .unwrap();
+        let res = store.render("local/noraw", RenderOpts::default());
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert!(res.raw_png.is_none());
+    }
+
+    #[test]
+    fn render_works_for_read_only_source() {
+        // render is a read operation, like validate — it must work against
+        // the embedded (read-only) byonk-builtin handle too.
+        let (store, _repo_root) = test_store_with_local();
+        let res = store.render("byonk-builtin/default", RenderOpts::default());
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert!(!res.png.is_empty());
+    }
+
+    #[test]
+    fn parse_lua_error_line_extracts_runtime_error_line() {
+        let msg = "Script error: Lua error: runtime error: [string \"...\"]:12: attempt to index a nil value (local 'y')\nstack traceback:\n\t[C]: in metamethod 'index'";
+        assert_eq!(parse_lua_error_line(msg), Some(12));
+    }
+
+    #[test]
+    fn parse_lua_error_line_extracts_syntax_error_line() {
+        let msg = "Script error: Lua error: syntax error: [string \"...\"]:1: unexpected symbol near <eof>";
+        assert_eq!(parse_lua_error_line(msg), Some(1));
+    }
+
+    #[test]
+    fn parse_lua_error_line_none_when_unparseable() {
+        assert_eq!(parse_lua_error_line("Screen 'x/y' not found"), None);
     }
 }

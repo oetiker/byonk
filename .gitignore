@@ -30,4 +30,4 @@ tools/ha-vm/ssh/
 # screen repo manifest and shipped examples get seeded into the tracked
 # source tree — never commit them.
 screens/byonk-screens.yaml
-examples/
+/examples/

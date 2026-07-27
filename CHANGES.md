@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### New
 
 - **Writable local screen repositories** via `screen_repos: { <name>: { path: … } }`,
-  so your own screens live in their own handle (`local`) instead of shadowing the
-  built-ins.
+  so your own screens live in their own handle (`local`) instead of being mixed into
+  the `byonk-builtin` handle.
 - **Shipped example screens** (hello, mandelbrot, webscrape, gphoto,
   swiss-departure-board, font demo) now install as an editable `examples`
   repository. Override where they're seeded with the new `EXAMPLES_DIR`

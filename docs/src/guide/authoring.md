@@ -14,7 +14,7 @@ byonk ships three of these out of the box, and they play different roles:
 
 | Layer | Handle | Writable? | What it's for |
 |-------|--------|-----------|----------------|
-| Base include library | `byonk-base-v1` | No (embedded) | Shared SVG layouts and components (`base.svg`, `hinting.svg`, `header.svg`, …) that screens `{% extends %}` or `{% include %}` — see [SVG Templates](../tutorial/svg-templates.md). Not a screen repo itself; you never reference it as `handle/path` for a *screen*, only inside `{% include "byonk-base-v1/…" %}`. |
+| Base include library | `byonk-base-v1` | No (embedded) | Shared SVG layouts and components (`base.svg`, `hinting.svg`, `header.svg`, …) that screens `{% extends %}` or `{% include %}` — see [SVG Templates](../tutorial/svg-templates.md). It's also a sandboxed Lua module namespace: `require("byonk-base-v1/std")` and similar from `script.lua`. Not a screen repo itself; you never reference it as `handle/path` for a *screen*, only inside `{% include "byonk-base-v1/…" %}` or `require("byonk-base-v1/…")`. |
 | Built-in screens | `byonk-builtin` | No | A minimal, fixed set: `default` (the fallback screen for un-onboarded/unassigned devices) and `calibration/*` (panel calibration patterns). Always present, never changes shape. |
 | Examples | `examples` | Yes | Worked, runnable samples (`hello`, `mandelbrot`, `webscrape`, `gphoto`, `swiss-departure-board`, a font demo) — seeded to disk once so you can read, run, and edit them directly. |
 
@@ -33,10 +33,19 @@ out from git (`repo:`-configured, including the git-fetched form of
 replaced by the next fetch, so treating them as writable would risk losing
 edits.
 
-This is why `byonk-builtin` can never be edited in place, even though its
-files exist on disk in a Docker volume or the Home Assistant app's `/config`
-share: the handle is embedded, and edits to a same-named on-disk folder
-wouldn't be the thing devices actually resolve.
+This is why the `byonk-builtin` *handle* can never be re-pointed at your own
+files: it's always the embedded set, wherever you run byonk.
+
+**However**, watch out for a sharp edge this doesn't protect you from:
+`SCREENS_DIR` (your `local` repo) is also checked, file by file, whenever a
+`byonk-builtin` screen is *read* — so a `local` screen that happens to reuse
+a built-in's exact folder name silently overrides that built-in's files. In
+particular, don't create `local/default` or `local/calibration/color` (etc.)
+expecting them to be independent of `byonk-builtin/default` and
+`byonk-builtin/calibration/color` — they aren't; `byonk-builtin/default` is
+the fallback screen shown to un-onboarded and unassigned devices, so
+overriding it this way is easy to do by accident. Pick a different name for
+your own screens (as in the examples on this page) and this never comes up.
 
 ## Where your own screens live: `local`
 

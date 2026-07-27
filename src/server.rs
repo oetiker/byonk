@@ -85,7 +85,6 @@ pub struct AppState {
     /// Screen-authoring core (read/write/validate/render a screen's source
     /// files). Not yet consumed by any route — the MCP plan (spec 1
     /// Component 5) and the web-UI plan (spec 2) are its consumers.
-    #[allow(dead_code)]
     pub screen_store: Arc<ScreenStore>,
 }
 

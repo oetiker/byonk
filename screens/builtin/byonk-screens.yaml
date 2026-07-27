@@ -1,4 +1,4 @@
 name: byonk-builtin
-description: Screens bundled with byonk.
+description: Minimal screens built into byonk (default + calibration).
 author: Byonk
 license: MIT

@@ -3,15 +3,23 @@
 //!
 //! Screen params parsing itself is covered generically in
 //! `src/models/screen_meta.rs`'s unit tests (fixture YAML, not tied to any
-//! bundled screen). This file only exercises the wiring through
-//! `ScreenRepoLoader` for screens that are still part of the minimal embedded
-//! `byonk-builtin` repo after the builtin/examples split (Task 10) — `gphoto`,
-//! `swiss-departure-board`, `hello`, `mandelbrot`, and the font demos moved to
-//! the `examples` embed, which isn't registered as a screen repo handle until
-//! Task 11, so they are no longer resolvable here.
+//! bundled screen). This file exercises two things:
+//!
+//! - The `ScreenRepoLoader` resolution wiring, for screens that are still
+//!   part of the minimal embedded `byonk-builtin` repo after the
+//!   builtin/examples split (Task 10).
+//! - `meta.yaml` parsing for the screens that moved to the `examples` embed
+//!   (`gphoto`, `swiss-departure-board`, the font demos, ...). Those aren't
+//!   resolvable through a screen repo handle until Task 11 registers
+//!   `examples`, but their embedded `meta.yaml` bytes are readable right now
+//!   via `AssetLoader::read_example`/`list_examples`, so their params get
+//!   parsed and asserted directly — no repo handle is needed just to parse
+//!   an embedded manifest.
 
 use byonk::assets::AssetLoader;
+use byonk::models::screen_meta::ScreenMeta;
 use byonk::services::screen_repo_loader::ScreenRepoLoader;
+use std::path::Path;
 use std::sync::Arc;
 
 fn loader() -> ScreenRepoLoader {
@@ -33,6 +41,70 @@ fn param_names(screen_ref: &str) -> Vec<String> {
         .iter()
         .map(|f| f.name.clone())
         .collect()
+}
+
+/// Parse an embedded example screen's `meta.yaml` directly (no screen repo
+/// handle required — `examples` isn't registered until Task 11).
+fn example_meta(screen_dir: &str) -> ScreenMeta {
+    let loader = AssetLoader::new(None, None, None);
+    let raw = loader
+        .read_example(Path::new(&format!("{screen_dir}/meta.yaml")))
+        .unwrap_or_else(|e| panic!("{screen_dir}/meta.yaml reads: {e}"));
+    ScreenMeta::from_yaml(std::str::from_utf8(&raw).unwrap())
+        .unwrap_or_else(|e| panic!("{screen_dir}/meta.yaml parses: {e}"))
+}
+
+#[test]
+fn test_transit_params() {
+    let meta = example_meta("swiss-departure-board");
+    let names: Vec<String> = meta.params.fields.iter().map(|f| f.name.clone()).collect();
+    assert!(names.contains(&"station".to_string()));
+    assert!(names.contains(&"limit".to_string()));
+}
+
+#[test]
+fn test_gphoto_params() {
+    let meta = example_meta("gphoto");
+    let names: Vec<String> = meta.params.fields.iter().map(|f| f.name.clone()).collect();
+    assert!(names.contains(&"album_url".to_string()));
+}
+
+#[test]
+fn test_fontdemo_bitmap_is_enum() {
+    let meta = example_meta("demo/font/bitmap");
+    let f = meta
+        .params
+        .fields
+        .iter()
+        .find(|f| f.name == "font_prefix")
+        .expect("font_prefix param");
+    assert!(!f.options.is_empty());
+}
+
+#[test]
+fn test_all_examples_have_parseable_meta() {
+    // Every `*/meta.yaml` reachable from `list_examples()` must parse — a
+    // malformed or param-less example `meta.yaml` should fail loudly here
+    // rather than shipping silently (examples aren't resolvable through a
+    // screen repo handle until Task 11, so nothing else exercises this).
+    let loader = AssetLoader::new(None, None, None);
+    let meta_paths: Vec<String> = loader
+        .list_examples()
+        .into_iter()
+        .filter(|p| p.ends_with("/meta.yaml"))
+        .collect();
+    assert!(
+        !meta_paths.is_empty(),
+        "expected at least one example meta.yaml, got none"
+    );
+    for path in &meta_paths {
+        let raw = loader
+            .read_example(Path::new(path))
+            .unwrap_or_else(|e| panic!("{path} reads: {e}"));
+        let meta = ScreenMeta::from_yaml(std::str::from_utf8(&raw).unwrap())
+            .unwrap_or_else(|e| panic!("{path} parses: {e}"));
+        assert!(!meta.title.is_empty(), "{path} has a title");
+    }
 }
 
 #[test]

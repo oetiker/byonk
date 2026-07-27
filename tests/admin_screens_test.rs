@@ -79,15 +79,21 @@ async fn test_screens_unauthorized() {
 // `test_gphoto_screen_exposes_its_params` and
 // `test_swiss_departure_board_has_station_param` used to live here, asserting
 // that `gphoto`'s `album_url` and `swiss-departure-board`'s `station`
-// meta.yaml params surface through the admin listing. Both screens moved to
-// the `examples` embed in Task 10 and no longer resolve as `byonk-builtin`
-// refs, so that specific end-to-end coverage is gone until Task 11 registers
-// the `examples` screen repo handle (at which point equivalent coverage
-// should be re-added against `examples/gphoto` /
-// `examples/swiss-departure-board`). The underlying mechanism — meta.yaml
-// `params:` parsing into `ParamSchema` — is still covered generically by
-// `src/models/screen_meta.rs`'s unit tests, independent of any bundled
-// screen.
+// meta.yaml params surface through this *admin HTTP listing*. Both screens
+// moved to the `examples` embed in Task 10. Deliberately deferred (not
+// impossible to write today): this is HTTP-level coverage of a registered
+// screen repo, so re-adding it now would require standing up a temp-dir
+// screen repo fixture (`TestApp::new_admin_with_screens`,
+// `tests/common/app.rs`) just to exercise a repo that Task 11 is about to
+// register for real. Re-adding it against the real `examples` handle once
+// Task 11 lands is less work and tests the actual wiring, so it's deferred
+// there rather than duplicated with a throwaway fixture now. `meta.yaml`
+// parsing for these two screens (params present, correctly typed) is
+// covered directly, without any repo handle, in
+// `tests/screen_schemas_test.rs`'s `test_gphoto_params` /
+// `test_transit_params`; the generic `params:` → `ParamSchema` parsing
+// mechanism itself is covered independently of any bundled screen in
+// `src/models/screen_meta.rs`'s unit tests.
 
 #[tokio::test]
 async fn test_packages_lists_builtin_with_redaction() {

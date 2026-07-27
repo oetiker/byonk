@@ -109,7 +109,7 @@ panels:
         noise_scale: 5
 
 # Screens are auto-discovered from the embedded `byonk-builtin` package
-# (the `screens/` tree) and any on-disk packages; no per-screen map is needed.
+# (the `screens/builtin/` tree) and any on-disk packages; no per-screen map is needed.
 
 # Home Assistant owns real devices; only the reserved DEFAULT device ships.
 # Its screen is what every un-onboarded / unassigned device shows (the built-in

@@ -218,7 +218,6 @@ impl AssetLoader {
     /// Mirrors `read_screen`, but examples have no filesystem overlay (unlike
     /// `screens_dir`) — they are embedded-only until Task 11 seeds them to
     /// disk as the `examples` local screen repo.
-    #[allow(dead_code)] // unused until Task 11 registers the `examples` screen repo handle
     pub fn read_example(&self, relative_path: &Path) -> io::Result<Cow<'static, [u8]>> {
         let path_str = relative_path.to_string_lossy();
         EmbeddedExamples::get(&path_str)
@@ -236,7 +235,6 @@ impl AssetLoader {
 
     /// List all embedded example screen assets (paths relative to
     /// `screens/examples/`). Mirrors `list_screens`.
-    #[allow(dead_code)] // unused until Task 11 registers the `examples` screen repo handle
     pub fn list_examples(&self) -> Vec<String> {
         let mut result: Vec<String> = EmbeddedExamples::iter().map(|s| s.to_string()).collect();
         result.sort();

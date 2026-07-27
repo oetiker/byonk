@@ -708,4 +708,17 @@ mod tests {
         assert_eq!(src.writable_root(), Some(dir.path()));
         assert!(src.screen_paths().iter().any(|p| p == "clock"));
     }
+
+    #[test]
+    fn builtin_embeds_only_default_and_calibration() {
+        let loader = std::sync::Arc::new(AssetLoader::new(None, None, None));
+        let src = EmbeddedBuiltinSource::load(loader).unwrap();
+        let paths = src.screen_paths();
+        assert!(paths.iter().any(|p| p == "default"));
+        assert!(paths.iter().any(|p| p.starts_with("calibration/")));
+        assert!(
+            !paths.iter().any(|p| p == "hello" || p == "mandelbrot"),
+            "examples must not be builtin"
+        );
+    }
 }

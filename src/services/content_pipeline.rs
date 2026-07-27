@@ -753,7 +753,7 @@ mod pipeline_tests {
         config.devices.insert(
             RESERVED_DEFAULT_KEY.to_string(),
             DeviceConfig {
-                screen: "byonk-builtin/example/hello".to_string(),
+                screen: "byonk-builtin/calibration/grey".to_string(),
                 ..Default::default()
             },
         );
@@ -767,8 +767,8 @@ mod pipeline_tests {
             .run_script_for_device("00:11:22:33:44:55", None)
             .expect("default device screen should run");
         assert!(
-            result.screen_name.contains("hello"),
-            "expected fallback to resolve through devices[\"DEFAULT\"] (byonk-builtin/example/hello), got {}",
+            result.screen_name.contains("calibration/grey"),
+            "expected fallback to resolve through devices[\"DEFAULT\"] (byonk-builtin/calibration/grey), got {}",
             result.screen_name
         );
     }

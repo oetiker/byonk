@@ -117,7 +117,7 @@ panels:
 
 devices:
   "ABCDE-FGHJK":
-    screen: byonk-builtin/useful/gphoto
+    screen: examples/gphoto
     panel: my_panel
     dither: floyd-steinberg
     error_clamp: 0.08   # from dev mode tuning

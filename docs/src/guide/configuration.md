@@ -17,9 +17,11 @@ folder containing a `meta.yaml` is a screen. Each screen folder holds three fixe
 | `screen.svg` | Tera SVG template |
 
 Byonk auto-discovers these screens; you reference one by its **`handle/path`** ref (e.g.
-`byonk-builtin/useful/swiss-departure-board`). The bundled screens ship in the embedded
-`byonk-builtin` screen repo. See [Your First Screen](../tutorial/first-screen.md) for how to
-author one, and [Admin API](../api/admin-api.md) for the screen repo/screen listing endpoints.
+`examples/swiss-departure-board`). A minimal `default` + `calibration/*` set ships in the
+embedded `byonk-builtin` screen repo; worked examples like `swiss-departure-board` and
+`hello` ship separately in the embedded `examples` screen repo. See
+[Your First Screen](../tutorial/first-screen.md) for how to author one, and
+[Admin API](../api/admin-api.md) for the screen repo/screen listing endpoints.
 
 ## Configuration Structure
 
@@ -27,13 +29,13 @@ author one, and [Admin API](../api/admin-api.md) for the screen repo/screen list
 # Device-to-screen mapping
 devices:
   "94:A9:90:8C:6D:18":                              # Device MAC address
-    screen: byonk-builtin/useful/swiss-departure-board  # handle/path screen ref
+    screen: examples/swiss-departure-board  # handle/path screen ref
     params:                                          # Parameters passed to script.lua
       station: "Olten, Bahnhof"
       limit: 8
 
   "AA:BB:CC:DD:EE:FF":
-    screen: byonk-builtin/example/hello
+    screen: examples/hello
     params:
       name: "Zurich"
 
@@ -167,7 +169,7 @@ registration:
 devices:
   # Register using the code shown on the device screen
   "ABCDE-FGHJK":
-    screen: byonk-builtin/useful/swiss-departure-board
+    screen: examples/swiss-departure-board
     params:
       station: "Olten"
 ```
@@ -213,13 +215,13 @@ registration:
 devices:
   # By registration code (read from device screen)
   "ABCDE-FGHJK":
-    screen: byonk-builtin/useful/swiss-departure-board
+    screen: examples/swiss-departure-board
     params:
       station: "Olten"
 
   # By MAC address (found in logs)
   "AA:BB:CC:DD:EE:FF":
-    screen: byonk-builtin/example/hello
+    screen: examples/hello
 ```
 
 ### Custom Registration Screen
@@ -274,20 +276,20 @@ which hot-reloads after writes).
 devices:
   # Kitchen display - bus departures
   "94:A9:90:8C:6D:18":
-    screen: byonk-builtin/useful/swiss-departure-board
+    screen: examples/swiss-departure-board
     params:
       station: "Olten, Südwest"
       limit: 8
 
   # Office display - room booking (webscrape example)
   "AA:BB:CC:DD:EE:FF":
-    screen: byonk-builtin/example/webscrape
+    screen: examples/webscrape
     params:
       room: "Rosa"
 
   # Lobby display - different bus stop
   "BB:CC:DD:EE:FF:00":
-    screen: byonk-builtin/useful/swiss-departure-board
+    screen: examples/swiss-departure-board
     params:
       station: "Olten, Bahnhof"
       limit: 6
@@ -381,7 +383,7 @@ Panels are assigned to devices in three ways (highest priority first):
 ```yaml
 devices:
   "ABCDE-FGHJK":
-    screen: byonk-builtin/useful/swiss-departure-board
+    screen: examples/swiss-departure-board
     panel: trmnl_og_4grey  # explicit panel assignment
 ```
 

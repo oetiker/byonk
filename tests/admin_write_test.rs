@@ -6,17 +6,22 @@ use common::TestApp;
 const AUTH: (&str, &str) = ("Authorization", "Bearer secret");
 
 // Device `screen` values are always qualified `handle/path` package refs.
-const HELLO: &str = "byonk-builtin/example/hello";
-const GREY: &str = "byonk-builtin/calibration/grey";
-const GPHOTO: &str = "byonk-builtin/useful/gphoto";
+//
+// These tests need "some known, resolvable non-default builtin screen" (not
+// specifically `hello`/`gphoto`/`swiss-departure-board` — those moved to the
+// `examples` embed in Task 10 and no longer resolve as `byonk-builtin` refs
+// until Task 11 registers the `examples` handle). `calibration/color` and
+// `calibration/grey` are the only other screens left in the minimal
+// `byonk-builtin` repo, so they stand in wherever the tests need one or two
+// distinct known-good refs.
 const COLOR: &str = "byonk-builtin/calibration/color";
-const TRANSIT: &str = "byonk-builtin/useful/swiss-departure-board";
+const GREY: &str = "byonk-builtin/calibration/grey";
 const UNKNOWN: &str = "byonk-builtin/does-not-exist";
 
 #[tokio::test]
 async fn test_write_on_embedded_config_returns_409() {
     let app = TestApp::new_admin("secret"); // embedded-only
-    let body = format!(r#"{{"key":"CC:DD:EE:FF:00:11","screen":"{HELLO}"}}"#);
+    let body = format!(r#"{{"key":"CC:DD:EE:FF:00:11","screen":"{COLOR}"}}"#);
     let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
     assert_eq!(resp.status, StatusCode::CONFLICT);
 }
@@ -26,7 +31,7 @@ async fn test_add_device_persists_and_hot_reloads() {
     let dir = tempfile::tempdir().unwrap();
     let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
 
-    let body = format!(r#"{{"key":"CC:DD:EE:FF:00:11","screen":"{HELLO}"}}"#);
+    let body = format!(r#"{{"key":"CC:DD:EE:FF:00:11","screen":"{COLOR}"}}"#);
     let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
     assert_eq!(resp.status, StatusCode::OK);
 
@@ -34,7 +39,7 @@ async fn test_add_device_persists_and_hot_reloads() {
     let on_disk = std::fs::read_to_string(&path).unwrap();
     assert!(on_disk.contains("CC:DD:EE:FF:00:11"));
     assert!(
-        on_disk.contains(HELLO),
+        on_disk.contains(COLOR),
         "qualified screen ref written to disk"
     );
 
@@ -48,7 +53,7 @@ async fn test_add_device_persists_and_hot_reloads() {
         .find(|d| d["mac"] == "CC:DD:EE:FF:00:11")
         .expect("device present after hot reload");
     assert_eq!(
-        row["screen"], HELLO,
+        row["screen"], COLOR,
         "screen reads back as the qualified ref"
     );
 }
@@ -77,7 +82,7 @@ async fn test_add_builtin_ref_screen_is_accepted() {
     // A qualified builtin ref that ships in the embedded package must be assignable.
     let dir = tempfile::tempdir().unwrap();
     let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
-    let body = format!(r#"{{"key":"CC:DD:EE:FF:00:11","screen":"{GPHOTO}"}}"#);
+    let body = format!(r#"{{"key":"CC:DD:EE:FF:00:11","screen":"{COLOR}"}}"#);
     let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
     assert_eq!(resp.status, StatusCode::OK);
 }
@@ -88,7 +93,7 @@ async fn test_patch_default_device_screen_persists() {
     // endpoint (the reserved DEFAULT device ships in the embedded config).
     let dir = tempfile::tempdir().unwrap();
     let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
-    let body = format!(r#"{{"screen":"{GPHOTO}"}}"#);
+    let body = format!(r#"{{"screen":"{COLOR}"}}"#);
     let resp = app
         .patch_json("/api/admin/devices/DEFAULT", &[AUTH], &body)
         .await;
@@ -96,8 +101,8 @@ async fn test_patch_default_device_screen_persists() {
 
     let on_disk = std::fs::read_to_string(&path).unwrap();
     assert!(
-        on_disk.contains(GPHOTO),
-        "expected '{GPHOTO}' on disk:\n{on_disk}"
+        on_disk.contains(COLOR),
+        "expected '{COLOR}' on disk:\n{on_disk}"
     );
 }
 
@@ -160,7 +165,7 @@ async fn test_patch_then_delete_device() {
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        &format!(r#"{{"key":"CC:DD","screen":"{HELLO}"}}"#),
+        &format!(r#"{{"key":"CC:DD","screen":"{COLOR}"}}"#),
     )
     .await;
 
@@ -296,13 +301,13 @@ async fn test_patch_params_submap_reads_back_with_populated_devices() {
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        &format!(r#"{{"key":"AA:BB","screen":"{TRANSIT}"}}"#),
+        &format!(r#"{{"key":"AA:BB","screen":"{COLOR}"}}"#),
     )
     .await;
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        &format!(r#"{{"key":"CC:DD","screen":"{HELLO}"}}"#),
+        &format!(r#"{{"key":"CC:DD","screen":"{COLOR}"}}"#),
     )
     .await;
 
@@ -335,7 +340,7 @@ async fn test_patch_params_merge_preserves_other_keys() {
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        &format!(r#"{{"key":"AA:BB","screen":"{TRANSIT}"}}"#),
+        &format!(r#"{{"key":"AA:BB","screen":"{COLOR}"}}"#),
     )
     .await;
 
@@ -375,7 +380,7 @@ async fn test_patch_with_screen_change_replaces_params() {
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        &format!(r#"{{"key":"AA:BB","screen":"{HELLO}"}}"#),
+        &format!(r#"{{"key":"AA:BB","screen":"{COLOR}"}}"#),
     )
     .await;
     app.patch_json(
@@ -437,7 +442,7 @@ async fn test_patch_name_reads_back_and_clears() {
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        &format!(r#"{{"key":"AA:BB","screen":"{HELLO}"}}"#),
+        &format!(r#"{{"key":"AA:BB","screen":"{COLOR}"}}"#),
     )
     .await;
     app.patch_json("/api/admin/devices/AA:BB", &[AUTH], r#"{"name":"Kitchen"}"#)
@@ -475,7 +480,7 @@ async fn test_patch_refresh_reads_back() {
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        &format!(r#"{{"key":"AA:BB","screen":"{HELLO}"}}"#),
+        &format!(r#"{{"key":"AA:BB","screen":"{COLOR}"}}"#),
     )
     .await;
     let resp = app

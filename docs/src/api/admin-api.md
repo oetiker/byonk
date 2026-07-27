@@ -63,7 +63,7 @@ config mapping, plus any configured devices that have never connected yet.
     "last_seen": "2026-06-28T10:15:00+00:00",
     "battery_voltage": 4.12,
     "rssi": -58,
-    "screen": "byonk-builtin/useful/swiss-departure-board",
+    "screen": "examples/swiss-departure-board",
     "dither": "atkinson",
     "panel": null,
     "colors": null,
@@ -137,7 +137,7 @@ value a device's `screen` field is set to.
       "license": "MIT",
       "screens": [
         {
-          "ref": "byonk-builtin/useful/swiss-departure-board",
+          "ref": "examples/swiss-departure-board",
           "title": "Swiss Departure Board",
           "description": "Live public-transport departures for a Swiss stop.",
           "params": [
@@ -194,7 +194,7 @@ Field notes:
 - Screens are grouped under the screen repo that provides them. The repo-level `name`,
   `description`, `author`, and `license` come from that screen repo's `byonk-screens.yaml`
   manifest.
-- `ref` is the canonical `handle/path` reference (e.g. `byonk-builtin/useful/gphoto`) — the
+- `ref` is the canonical `handle/path` reference (e.g. `examples/gphoto`) — the
   assignable screen id, and what `screen` is set to on a device.
 - `title` and `description` come from the screen's `meta.yaml`.
 - `params` is the screen's parameter schema (`ParamField[]`), sourced from `meta.yaml`.
@@ -400,7 +400,7 @@ Create a new device mapping in `config.yaml`.
 ```json
 {
   "key": "AA:BB:CC:DD:EE:FF",
-  "screen": "byonk-builtin/useful/swiss-departure-board",
+  "screen": "examples/swiss-departure-board",
   "panel": null,
   "dither": "atkinson",
   "colors": null,
@@ -415,7 +415,7 @@ listed by `GET /api/admin/screens`). All other fields are optional.
 
 | Status | Meaning |
 |--------|---------|
-| `200` | Created — `{"key": "AA:BB:CC:DD:EE:FF", "screen": "byonk-builtin/useful/swiss-departure-board"}` |
+| `200` | Created — `{"key": "AA:BB:CC:DD:EE:FF", "screen": "examples/swiss-departure-board"}` |
 | `400` | Validation error (missing `key`/`screen`, unknown screen, param type mismatch, out-of-range value) |
 | `409` | Device key already exists, or config is embedded/read-only (`set CONFIG_FILE` env var) |
 
@@ -438,7 +438,7 @@ untouched.
 
 ```json
 {
-  "screen": "byonk-builtin/useful/swiss-departure-board",
+  "screen": "examples/swiss-departure-board",
   "dither": "floyd-steinberg",
   "params": { "station": "Bern, Bahnhof", "limit": 5 }
 }
@@ -448,7 +448,7 @@ untouched.
 
 | Status | Meaning |
 |--------|---------|
-| `200` | Updated — `{"key": "AA:BB:CC:DD:EE:FF", "screen": "byonk-builtin/useful/swiss-departure-board"}` |
+| `200` | Updated — `{"key": "AA:BB:CC:DD:EE:FF", "screen": "examples/swiss-departure-board"}` |
 | `400` | Validation error |
 | `404` | No device with that key |
 | `409` | Config is embedded/read-only |
@@ -563,11 +563,11 @@ params:
 
 ### Example — Swiss departure board screen
 
-The bundled `byonk-builtin/useful/swiss-departure-board` screen declares its params in
+The bundled `examples/swiss-departure-board` screen declares its params in
 `meta.yaml`:
 
 ```yaml
-# useful/swiss-departure-board/meta.yaml
+# examples/swiss-departure-board/meta.yaml
 title: Swiss Departure Board
 description: Live public-transport departures for a Swiss stop.
 byonk: "0.15"

@@ -14,9 +14,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Embedded screen assets (Lua scripts, SVG templates, and images)
+/// Embedded screen assets (Lua scripts, SVG templates, and images) — the
+/// minimal, read-only `byonk-builtin` repo (`default` + `calibration/*` only).
 #[derive(RustEmbed)]
-#[folder = "screens/"]
+#[folder = "screens/builtin/"]
 #[include = "*.lua"]
 #[include = "*.svg"]
 #[include = "*.yaml"]
@@ -34,6 +35,29 @@ use std::path::{Path, PathBuf};
 #[include = "**/*.gif"]
 #[include = "**/*.webp"]
 struct EmbeddedScreens;
+
+/// Embedded example screen assets (`screens/examples/`), shipped separately
+/// from `byonk-builtin`. Not yet registered as a screen repo — that is
+/// `Task 11`'s job (seeding `examples` to disk as an editable local repo).
+#[derive(RustEmbed)]
+#[folder = "screens/examples/"]
+#[include = "*.lua"]
+#[include = "*.svg"]
+#[include = "*.yaml"]
+#[include = "*.png"]
+#[include = "*.jpg"]
+#[include = "*.jpeg"]
+#[include = "*.gif"]
+#[include = "*.webp"]
+#[include = "**/*.lua"]
+#[include = "**/*.svg"]
+#[include = "**/*.yaml"]
+#[include = "**/*.png"]
+#[include = "**/*.jpg"]
+#[include = "**/*.jpeg"]
+#[include = "**/*.gif"]
+#[include = "**/*.webp"]
+struct EmbeddedExamples;
 
 /// Embedded font assets
 #[derive(RustEmbed)]
@@ -186,6 +210,37 @@ impl AssetLoader {
                 }
             }
         }
+    }
+
+    /// Read an embedded example screen asset by path relative to
+    /// `screens/examples/` (e.g. `"hello/script.lua"`).
+    ///
+    /// Mirrors `read_screen`, but examples have no filesystem overlay (unlike
+    /// `screens_dir`) — they are embedded-only until Task 11 seeds them to
+    /// disk as the `examples` local screen repo.
+    #[allow(dead_code)] // unused until Task 11 registers the `examples` screen repo handle
+    pub fn read_example(&self, relative_path: &Path) -> io::Result<Cow<'static, [u8]>> {
+        let path_str = relative_path.to_string_lossy();
+        EmbeddedExamples::get(&path_str)
+            .map(|f| {
+                tracing::trace!(path = %path_str, "Loading example from embedded assets");
+                f.data
+            })
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("Example not found: {path_str}"),
+                )
+            })
+    }
+
+    /// List all embedded example screen assets (paths relative to
+    /// `screens/examples/`). Mirrors `list_screens`.
+    #[allow(dead_code)] // unused until Task 11 registers the `examples` screen repo handle
+    pub fn list_examples(&self) -> Vec<String> {
+        let mut result: Vec<String> = EmbeddedExamples::iter().map(|s| s.to_string()).collect();
+        result.sort();
+        result
     }
 
     /// Get all font data (for loading into fontdb)
@@ -521,8 +576,8 @@ mod tests {
     fn test_read_screen_embedded() {
         let loader = AssetLoader::new(None, None, None);
 
-        // Should find embedded example/hello/script.lua
-        let result = loader.read_screen(Path::new("example/hello/script.lua"));
+        // Should find embedded default/script.lua (byonk-builtin's default screen)
+        let result = loader.read_screen(Path::new("default/script.lua"));
         assert!(result.is_ok());
 
         let content = result.unwrap();
@@ -544,7 +599,7 @@ mod tests {
     fn test_read_screen_string() {
         let loader = AssetLoader::new(None, None, None);
 
-        let result = loader.read_screen_string(Path::new("example/hello/script.lua"));
+        let result = loader.read_screen_string(Path::new("default/script.lua"));
         assert!(result.is_ok());
 
         let content = result.unwrap();
@@ -558,9 +613,39 @@ mod tests {
         let screens = loader.list_screens();
         assert!(!screens.is_empty());
 
-        // Should include the migrated hello screen's screen repo files
-        assert!(screens.iter().any(|s| s == "example/hello/script.lua"));
-        assert!(screens.iter().any(|s| s == "example/hello/screen.svg"));
+        // Should include the minimal byonk-builtin repo's default screen files
+        assert!(screens.iter().any(|s| s == "default/script.lua"));
+        assert!(screens.iter().any(|s| s == "default/screen.svg"));
+    }
+
+    #[test]
+    fn test_list_examples_contains_moved_screens() {
+        let loader = AssetLoader::new(None, None, None);
+        let examples = loader.list_examples();
+        assert!(!examples.is_empty());
+        for expected in [
+            "hello/script.lua",
+            "mandelbrot/script.lua",
+            "webscrape/script.lua",
+            "gphoto/script.lua",
+            "swiss-departure-board/script.lua",
+            "demo/font/bitmap/script.lua",
+        ] {
+            assert!(
+                examples.iter().any(|s| s == expected),
+                "expected examples embed to contain {expected}, got {examples:?}"
+            );
+        }
+        // The examples embed must not include the byonk-builtin screens.
+        assert!(!examples.iter().any(|s| s == "default/script.lua"));
+    }
+
+    #[test]
+    fn test_read_example() {
+        let loader = AssetLoader::new(None, None, None);
+        let result = loader.read_example(Path::new("hello/script.lua"));
+        assert!(result.is_ok());
+        assert!(loader.read_example(Path::new("nonexistent.lua")).is_err());
     }
 
     #[test]
@@ -695,7 +780,7 @@ mod tests {
         // Don't create the screen in temp dir, should fall back to embedded
 
         let loader = AssetLoader::new(Some(temp_dir.path().to_path_buf()), None, None);
-        let result = loader.read_screen(Path::new("example/hello/script.lua"));
+        let result = loader.read_screen(Path::new("default/script.lua"));
 
         assert!(result.is_ok());
     }
@@ -714,7 +799,7 @@ mod tests {
         assert!(screens.contains(&"custom.svg".to_string()));
         assert!(!screens.contains(&"readme.txt".to_string()));
         // Also includes embedded
-        assert!(screens.contains(&"example/hello/script.lua".to_string()));
+        assert!(screens.contains(&"default/script.lua".to_string()));
     }
 
     #[test]
@@ -770,7 +855,7 @@ mod tests {
         let report = result.unwrap();
         assert!(!report.screens_seeded.is_empty());
         assert!(screens_dir.exists());
-        assert!(screens_dir.join("example/hello/script.lua").exists());
+        assert!(screens_dir.join("default/script.lua").exists());
     }
 
     #[test]
@@ -828,7 +913,7 @@ mod tests {
         assert!(result.is_ok());
         let report = result.unwrap();
         assert!(!report.written.is_empty());
-        assert!(screens_dir.join("example/hello/script.lua").exists());
+        assert!(screens_dir.join("default/script.lua").exists());
     }
 
     #[test]

@@ -30,7 +30,7 @@ Device-specific parameters are available via the global `params` table:
 # config.yaml
 devices:
   "94:A9:90:8C:6D:18":
-    screen: byonk-builtin/useful/swiss-departure-board
+    screen: examples/swiss-departure-board
     params:
       city: "Zurich"
       units: "metric"

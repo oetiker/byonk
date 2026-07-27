@@ -710,7 +710,7 @@ local ts = time_parse("2024-12-27 14:30", "%Y-%m-%d %H:%M")
 Reads a file from the current screen's own folder.
 
 ```lua
--- From screens/example/hello/script.lua, reads screens/example/hello/logo.png
+-- From screens/examples/hello/script.lua, reads screens/examples/hello/logo.png
 local logo_bytes = read_asset("logo.png")
 ```
 
@@ -726,7 +726,7 @@ local logo_bytes = read_asset("logo.png")
 **Asset location convention:**
 
 ```
-screens/example/hello/     # The "hello" screen folder
+screens/examples/hello/     # The "hello" screen folder
 ├── meta.yaml              # Title, description, params
 ├── script.lua             # Data-fetch logic
 ├── screen.svg             # Template
@@ -735,7 +735,7 @@ screens/example/hello/     # The "hello" screen folder
 ```
 
 When `read_asset("logo.png")` is called from this screen's `script.lua`, it reads
-`screens/example/hello/logo.png` — a file sitting alongside `script.lua` in the
+`screens/examples/hello/logo.png` — a file sitting alongside `script.lua` in the
 screen's own folder.
 
 **Example: Embedding an image in data:**

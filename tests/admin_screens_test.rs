@@ -50,9 +50,11 @@ async fn test_screens_grouped_includes_builtin_with_titles() {
         );
     }
 
-    // A known builtin screen is present by its qualified ref.
-    let hello = find_screen(&json, "byonk-builtin/example/hello").expect("hello screen present");
-    assert_eq!(hello["title"], "Hello World");
+    // A known builtin screen is present by its qualified ref. (`hello` moved to
+    // the `examples` embed in Task 10 and is no longer part of `byonk-builtin`.)
+    let default_screen =
+        find_screen(&json, "byonk-builtin/default").expect("default screen present");
+    assert_eq!(default_screen["title"], "Default");
 
     // Panels + dither algorithms are still surfaced alongside packages.
     assert!(json["panels"]
@@ -74,33 +76,18 @@ async fn test_screens_unauthorized() {
     assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
 }
 
-#[tokio::test]
-async fn test_gphoto_screen_exposes_its_params() {
-    // The gphoto screen declares params in its meta.yaml; they surface on the ref.
-    let app = TestApp::new_admin("secret");
-    let resp = app.get_with_headers("/api/admin/screens", &[AUTH]).await;
-    let json: serde_json::Value = resp.json();
-
-    let gphoto = find_screen(&json, "byonk-builtin/useful/gphoto").expect("gphoto screen present");
-    let params = gphoto["params"].as_array().expect("params array");
-    assert!(
-        params.iter().any(|p| p["name"] == "album_url"),
-        "gphoto exposes its album_url param"
-    );
-}
-
-#[tokio::test]
-async fn test_swiss_departure_board_has_station_param() {
-    // meta.yaml-declared params reach the admin listing under the qualified ref.
-    let app = TestApp::new_admin("secret");
-    let resp = app.get_with_headers("/api/admin/screens", &[AUTH]).await;
-    let json: serde_json::Value = resp.json();
-
-    let transit = find_screen(&json, "byonk-builtin/useful/swiss-departure-board")
-        .expect("swiss-departure-board screen present");
-    let params = transit["params"].as_array().unwrap();
-    assert!(params.iter().any(|p| p["name"] == "station"));
-}
+// `test_gphoto_screen_exposes_its_params` and
+// `test_swiss_departure_board_has_station_param` used to live here, asserting
+// that `gphoto`'s `album_url` and `swiss-departure-board`'s `station`
+// meta.yaml params surface through the admin listing. Both screens moved to
+// the `examples` embed in Task 10 and no longer resolve as `byonk-builtin`
+// refs, so that specific end-to-end coverage is gone until Task 11 registers
+// the `examples` screen repo handle (at which point equivalent coverage
+// should be re-added against `examples/gphoto` /
+// `examples/swiss-departure-board`). The underlying mechanism — meta.yaml
+// `params:` parsing into `ParamSchema` — is still covered generically by
+// `src/models/screen_meta.rs`'s unit tests, independent of any bundled
+// screen.
 
 #[tokio::test]
 async fn test_packages_lists_builtin_with_redaction() {

@@ -39,26 +39,27 @@ fixed-name files:
 | `screen.svg` | Tera SVG template rendered with that `data` |
 
 A **package** is a directory tree with a `byonk-screens.yaml` manifest at its root; every
-folder inside it that contains a `meta.yaml` is a screen. The bundled screens ship in the
-embedded `byonk-builtin` package, whose folder layout looks like this:
+folder inside it that contains a `meta.yaml` is a screen. When `SCREENS_DIR` is set, byonk
+auto-registers it as a writable package under the handle `local`, whose folder layout
+looks like this:
 
 ```
-screens/                       # the byonk-builtin package root
+screens/                       # SCREENS_DIR — registers as the `local` package
   byonk-screens.yaml           # package manifest (name, description, author, license)
-  example/
-    hello/                     # screen ref: byonk-builtin/example/hello
-      meta.yaml
-      script.lua
-      screen.svg
+  hello/                       # screen ref: local/hello
+    meta.yaml
+    script.lua
+    screen.svg
 ```
 
-A screen is referenced by `handle/path` — here `byonk-builtin/example/hello` — and that is the
+A screen is referenced by `handle/path` — here `local/hello` — and that is the
 value a device's `screen` field is set to. In this tutorial we build a screen at
-`example/hello`.
+`local/hello`. (Byonk also ships a ready-made, near-identical worked example at
+`examples/hello` — `screens/examples/hello/` in the Byonk source — for reference.)
 
 ## Step 1: Create the meta.yaml
 
-Create `screens/example/hello/meta.yaml`. It describes the screen and (later) its parameters:
+Create `screens/hello/meta.yaml`. It describes the screen and (later) its parameters:
 
 ```yaml
 title: Hello World
@@ -73,7 +74,7 @@ refresh: 60         # default refresh in seconds (script.lua may override)
 
 ## Step 2: Create the Lua Script
 
-Create `screens/example/hello/script.lua`:
+Create `screens/hello/script.lua`:
 
 ```lua
 -- Hello World screen
@@ -99,7 +100,7 @@ return {
 
 ## Step 3: Create the SVG Template
 
-Create `screens/example/hello/screen.svg`:
+Create `screens/hello/screen.svg`:
 
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
@@ -155,7 +156,7 @@ is no separate `screens:` block — screens are auto-discovered from their packa
 ```yaml
 devices:
   "YOUR:MAC:AD:DR:ES:S0":
-    screen: byonk-builtin/example/hello
+    screen: local/hello
     params: {}
 ```
 
@@ -179,7 +180,7 @@ Replace `YOUR:MAC:AD:DR:ES:S0` with your device's actual MAC address.
 Let's make the greeting customizable. First declare the parameter in the screen's
 `meta.yaml` so the admin API and Home Assistant know about it:
 
-**screens/example/hello/meta.yaml:**
+**screens/hello/meta.yaml:**
 ```yaml
 title: Hello World
 description: Displays a greeting with the current time.
@@ -193,7 +194,7 @@ params:
     description: "Who to greet"
 ```
 
-**screens/example/hello/script.lua:**
+**screens/hello/script.lua:**
 ```lua
 local now = time_now()
 
@@ -214,7 +215,7 @@ return {
 ```yaml
 devices:
   "YOUR:MAC:AD:DR:ES:S0":
-    screen: byonk-builtin/example/hello
+    screen: local/hello
     params:
       name: "Alice"
 ```
@@ -225,7 +226,7 @@ Now your screen will say "Hello, Alice!" instead of "Hello, World!".
 
 Let's add a QR code to the screen that links to documentation. QR codes are useful for providing quick access to related content.
 
-**Update screens/example/hello/script.lua:**
+**Update screens/hello/script.lua:**
 ```lua
 local now = time_now()
 local name = params.name or "World"
@@ -247,7 +248,7 @@ return {
 }
 ```
 
-**Update screens/example/hello/screen.svg** to include the QR code:
+**Update screens/hello/screen.svg** to include the QR code:
 ```svg
 <!-- Add before the closing </svg> tag -->
 
@@ -328,8 +329,8 @@ This screen demonstrates:
 - Styled table layout with alternating rows
 - Color-coded line badges
 
-Check out the `screens/useful/swiss-departure-board/` folder
-(`byonk-builtin/useful/swiss-departure-board`) in the Byonk source for the complete
+Check out the `screens/examples/swiss-departure-board/` folder
+(`examples/swiss-departure-board`) in the Byonk source for the complete
 implementation.
 
 ## What's Next?

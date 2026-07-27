@@ -464,7 +464,7 @@ mod tests {
         let yaml = r#"
 devices:
   "AA:BB:CC:DD:EE:FF":
-    screen: byonk-builtin/example/hello
+    screen: examples/hello
     params:
       name: "Test User"
 "#;
@@ -474,7 +474,7 @@ devices:
         assert!(config.devices.contains_key("AA:BB:CC:DD:EE:FF"));
 
         let device = config.devices.get("AA:BB:CC:DD:EE:FF").unwrap();
-        assert_eq!(device.screen, "byonk-builtin/example/hello");
+        assert_eq!(device.screen, "examples/hello");
     }
 
     #[test]

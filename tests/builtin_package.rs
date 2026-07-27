@@ -1,5 +1,10 @@
-//! End-to-end check that the embedded `byonk-builtin` package resolves the
-//! migrated built-in screens through the package loader.
+//! End-to-end check that the embedded `byonk-builtin` screen repo resolves the
+//! minimal set of built-in screens (`default` + `calibration/*`) through the
+//! screen repo loader — and nothing else. Example screens (`hello`,
+//! `gphoto`, `swiss-departure-board`, ...) were split out into the shipped
+//! `examples` embed (Task 10); they are not part of `byonk-builtin` anymore
+//! and aren't resolvable at all until Task 11 registers the `examples`
+//! screen repo handle.
 
 use byonk::assets::AssetLoader;
 use byonk::services::screen_repo_loader::ScreenRepoLoader;
@@ -15,7 +20,7 @@ fn test_builtin_default_resolves() {
 }
 
 #[test]
-fn test_builtin_list_all_includes_migrated_screens() {
+fn test_builtin_list_all_is_exactly_default_and_calibration() {
     let loader = std::sync::Arc::new(AssetLoader::new(None, None, None));
     let pl = ScreenRepoLoader::new(loader, Default::default());
 
@@ -27,16 +32,32 @@ fn test_builtin_list_all_includes_migrated_screens() {
 
     for expected in [
         "byonk-builtin/default",
-        "byonk-builtin/useful/gphoto",
-        "byonk-builtin/useful/swiss-departure-board",
         "byonk-builtin/calibration/color",
-        "byonk-builtin/demo/font/bitmap",
-        "byonk-builtin/example/hello",
-        "byonk-builtin/example/webscrape",
+        "byonk-builtin/calibration/grey",
     ] {
         assert!(
             refs.iter().any(|r| r == expected),
             "list_all() should include {expected}; got {refs:?}"
+        );
+    }
+    assert_eq!(
+        refs.len(),
+        3,
+        "byonk-builtin must ship exactly default + calibration/color + calibration/grey, got {refs:?}"
+    );
+
+    // Example screens must not resolve through byonk-builtin anymore.
+    for moved in [
+        "byonk-builtin/example/hello",
+        "byonk-builtin/useful/gphoto",
+        "byonk-builtin/useful/swiss-departure-board",
+        "byonk-builtin/demo/font/bitmap",
+        "byonk-builtin/example/webscrape",
+        "byonk-builtin/example/mandelbrot",
+    ] {
+        assert!(
+            pl.resolve(moved).is_none(),
+            "{moved} moved to the examples embed and must not resolve as byonk-builtin"
         );
     }
 }

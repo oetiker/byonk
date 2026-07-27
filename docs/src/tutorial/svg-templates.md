@@ -270,7 +270,7 @@ The palette follows a priority chain: **Lua script `colors` return** > **device 
 ```yaml
 devices:
   "ABCDE-FGHJK":
-    screen: byonk-builtin/useful/swiss-departure-board
+    screen: examples/swiss-departure-board
     colors: "#000000,#FFFFFF,#FF0000"
 ```
 
@@ -449,12 +449,12 @@ For sizes without an exact bitmap strike, autotraced scalable outlines are used 
 
 ### Bitmap Font Demo Screen
 
-The built-in `byonk-builtin/demo/font/bitmap` screen showcases all sizes and styles for a given font family. Assign it to a device and configure it with the `font_prefix` parameter:
+The example `examples/demo/font/bitmap` screen showcases all sizes and styles for a given font family. Assign it to a device and configure it with the `font_prefix` parameter:
 
 ```yaml
 devices:
   "YOUR:MAC:AD:DR:ES:S0":
-    screen: byonk-builtin/demo/font/bitmap
+    screen: examples/demo/font/bitmap
     params:
       font_prefix: X11Helv   # or X11LuSans, X11LuType, X11Term, X11Misc
 ```
@@ -620,14 +620,13 @@ and `meta.yaml`:
 
 ```
 screens/
-└── example/
-    └── hello/            # screen ref: byonk-builtin/example/hello
-        ├── meta.yaml
-        ├── script.lua
-        ├── screen.svg
-        ├── logo.png
-        ├── icon.svg
-        └── background.jpg
+└── hello/                # screen ref: local/hello
+    ├── meta.yaml
+    ├── script.lua
+    ├── screen.svg
+    ├── logo.png
+    ├── icon.svg
+    └── background.jpg
 ```
 
 ### Method 1: Direct in SVG (Automatic Resolution)
@@ -659,7 +658,7 @@ Simply reference images by filename in your SVG template. Byonk automatically re
 
 For more control, use `read_asset()` and `base64_encode()` in your Lua script:
 
-**screens/example/hello/script.lua:**
+**screens/hello/script.lua:**
 ```lua
 local icon = read_asset("icon.png")
 
@@ -672,7 +671,7 @@ return {
 }
 ```
 
-**screens/example/hello/screen.svg:**
+**screens/hello/screen.svg:**
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480">
   <image x="10" y="10" width="64" height="64" href="{{ data.icon_src }}"/>

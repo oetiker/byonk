@@ -124,8 +124,9 @@ fn split_ref(screen_ref: &str) -> Option<(&str, &str)> {
 
 /// Recursively collect directories (relative to `base`) that contain a `meta.yaml`,
 /// starting from `base` itself. Shared by every on-disk `ScreenRepoSource`
-/// implementation (`GitScreenRepoSource`, `LocalScreenRepoSource`).
-fn walk_screen_paths(base: &Path) -> Vec<String> {
+/// implementation (`GitScreenRepoSource`, `LocalScreenRepoSource`), and by
+/// `screen_migration`'s "what counts as a present screen" check.
+pub(crate) fn walk_screen_paths(base: &Path) -> Vec<String> {
     fn walk(base: &Path, current: &Path, out: &mut Vec<String>) {
         let Ok(entries) = std::fs::read_dir(current) else {
             return;

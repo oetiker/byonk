@@ -713,6 +713,17 @@ async fn run_server() -> anyhow::Result<()> {
         _ => {}
     }
 
+    // One-time migration of pre-existing installs: older byonk versions copied
+    // their builtin screens into SCREENS_DIR under the `byonk-builtin` handle.
+    // This rewrites the leftover manifest and any device refs still pointing at
+    // `byonk-builtin/<x>` where `<x>` is actually a screen present in
+    // SCREENS_DIR, to the `local` handle. No-op (and logs nothing) once
+    // already migrated. Must run after seeding (which may have just written
+    // the manifest this reads) and before state is built.
+    if let Some(dir) = asset_loader.screens_dir() {
+        byonk::services::migrate_builtin_overlay_to_local(dir, asset_loader.config_path());
+    }
+
     // Create application state, injecting the add-on admin token (if any) into config.
     // Explicit BYONK_ADMIN_TOKEN env still wins (server resolves env before config.admin.token).
     let mut config = byonk::models::AppConfig::load_from_assets(&asset_loader)?;

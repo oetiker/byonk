@@ -96,24 +96,20 @@ impl TemplateService {
         );
     }
 
-    /// Render a screen template with the given data, scoped to one screen repo.
-    ///
-    /// Templates are always loaded fresh (to support live editing). Every base
-    /// asset is registered under `byonk-base-<v>/…` and every screen repo `.svg` under
-    /// its screen-repo-relative name, so `{% include %}`/`{% extends %}` can only reach
-    /// the screen's own screen repo plus the embedded `byonk-base` library.
-    ///
-    /// * `template_src` — the resolved `screen.svg` contents.
-    /// * `source` — the screen's screen repo source (for sibling includes/parts).
-    /// * `screen_path` — the screen's screen-repo-relative directory (for image refs
-    ///   and the main template name).
-    pub fn render(
+    /// Build a `Tera` instance for one screen: register every embedded base
+    /// asset, every screen repo `.svg`, and `template_src` itself as the main
+    /// template (named `screen_path/screen.svg`). This is the registration
+    /// phase shared by `render` (which goes on to render it against real
+    /// data) and `validate_template` (which stops here, needing no `data`
+    /// context) — so `{% include %}`/`{% extends %}` can only reach the
+    /// screen's own screen repo plus the embedded `byonk-base` library in
+    /// both paths, and a registration failure means the same thing in both.
+    fn build_tera(
         &self,
         template_src: &str,
         source: &Arc<dyn ScreenRepoSource>,
         screen_path: &str,
-        data: &serde_json::Value,
-    ) -> Result<String, TemplateError> {
+    ) -> Result<(Tera, String), TemplateError> {
         let mut tera = Tera::default();
 
         // Register every embedded base asset under `byonk-base-<version-path>`,
@@ -139,9 +135,32 @@ impl TemplateService {
         Self::register_filters(&mut tera);
 
         // Register the main screen template (authoritative source, may differ from
-        // the on-disk copy during live editing) and render it.
+        // the on-disk copy during live editing).
         let main_name = join_rel(screen_path, "screen.svg");
         tera.add_raw_template(&main_name, template_src)?;
+
+        Ok((tera, main_name))
+    }
+
+    /// Render a screen template with the given data, scoped to one screen repo.
+    ///
+    /// Templates are always loaded fresh (to support live editing). Every base
+    /// asset is registered under `byonk-base-<v>/…` and every screen repo `.svg` under
+    /// its screen-repo-relative name, so `{% include %}`/`{% extends %}` can only reach
+    /// the screen's own screen repo plus the embedded `byonk-base` library.
+    ///
+    /// * `template_src` — the resolved `screen.svg` contents.
+    /// * `source` — the screen's screen repo source (for sibling includes/parts).
+    /// * `screen_path` — the screen's screen-repo-relative directory (for image refs
+    ///   and the main template name).
+    pub fn render(
+        &self,
+        template_src: &str,
+        source: &Arc<dyn ScreenRepoSource>,
+        screen_path: &str,
+        data: &serde_json::Value,
+    ) -> Result<String, TemplateError> {
+        let (tera, main_name) = self.build_tera(template_src, source, screen_path)?;
 
         let context = Context::from_serialize(data)?;
         let svg = tera.render(&main_name, &context)?;
@@ -151,6 +170,26 @@ impl TemplateService {
         let svg = self.resolve_image_refs(&svg, source, screen_path)?;
 
         Ok(svg)
+    }
+
+    /// Validate that `template_src` compiles and its `{% extends %}` chain
+    /// resolves, without rendering it — the exact registration phase `render`
+    /// runs, minus the final `tera.render(...)` call that needs a `data`
+    /// context this caller doesn't have. Catches Tera syntax errors and
+    /// missing-parent/circular `extends` errors in `template_src` itself.
+    ///
+    /// Does NOT catch a missing `{% include %}` target: Tera only resolves
+    /// includes while actually rendering (see `build_tera`'s doc comment),
+    /// so a screen with a dangling include can pass `validate_template` and
+    /// still fail `render`.
+    pub fn validate_template(
+        &self,
+        template_src: &str,
+        source: &Arc<dyn ScreenRepoSource>,
+        screen_path: &str,
+    ) -> Result<(), TemplateError> {
+        self.build_tera(template_src, source, screen_path)?;
+        Ok(())
     }
 
     /// Resolve relative image href attributes to data URIs

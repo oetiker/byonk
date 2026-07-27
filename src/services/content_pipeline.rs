@@ -156,6 +156,13 @@ impl ContentPipeline {
         })
     }
 
+    /// The pipeline's `TemplateService`, for callers that need its template
+    /// registration/validation (e.g. `ScreenStore::validate`) without going
+    /// through the full script→template→render pipeline.
+    pub fn template_service(&self) -> &TemplateService {
+        &self.template_service
+    }
+
     /// Run script for a device (without rendering)
     pub fn run_script_for_device(
         &self,

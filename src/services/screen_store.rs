@@ -9,6 +9,7 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
+use crate::models::screen_meta::ScreenMeta;
 use crate::services::content_pipeline::ContentPipeline;
 use crate::services::screen_repo_loader::ScreenRepoSource;
 use crate::services::screen_repo_manager::ScreenRepoManager;
@@ -49,6 +50,34 @@ pub enum StoreError {
 /// Content-addressed etag: the blake3 hex digest of the file's bytes.
 pub fn etag(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
+}
+
+/// How serious a `validate` finding is. Only `Error` is emitted today (by
+/// `validate`'s three checks below); `Warning` exists for Task 9's render
+/// diagnostics and the MCP layer to use once they have something
+/// non-fatal to report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    Error,
+    Warning,
+}
+
+/// One `validate` finding: `location` is the screen-relative file the issue
+/// was found in (e.g. `"script.lua"`), `message` is human-readable detail
+/// (e.g. the mlua/tera/serde_yaml error text).
+#[derive(Debug, Clone)]
+pub struct Issue {
+    pub severity: Severity,
+    pub location: String,
+    pub message: String,
+}
+
+/// The result of `ScreenStore::validate`: `ok` is true iff `issues` contains
+/// no `Severity::Error` (a `Warning`-only report is still `ok`).
+#[derive(Debug, Clone)]
+pub struct ValidationReport {
+    pub ok: bool,
+    pub issues: Vec<Issue>,
 }
 
 /// Which starter template `create_screen` scaffolds. One variant today;
@@ -136,10 +165,10 @@ fn deepest_existing_ancestor(path: &Path) -> &Path {
 /// `ScreenRepoSource::writable_root`).
 pub struct ScreenStore {
     manager: Arc<ScreenRepoManager>,
-    /// Unused until Task 9's `render` (renders a screen through the same
-    /// pipeline devices use, so authors can preview an edit before publishing
-    /// it).
-    #[allow(dead_code)]
+    /// Used by `validate` (its `TemplateService` for SVG/include
+    /// registration checks); Task 9's `render` will use the rest of it
+    /// (renders a screen through the same pipeline devices use, so authors
+    /// can preview an edit before publishing it).
     pipeline: Arc<ContentPipeline>,
 }
 
@@ -516,6 +545,108 @@ impl ScreenStore {
         std::fs::remove_dir_all(&dir).map_err(|e| StoreError::Io(e.to_string()))?;
         self.manager.rebuild_loader();
         Ok(())
+    }
+
+    /// Statically validate one screen: parse `meta.yaml` against its schema,
+    /// compile `script.lua` without executing it, and check `screen.svg`
+    /// compiles as a Tera template with its `{% extends %}` chain resolving
+    /// (`TemplateService::validate_template`). A missing file is an Error
+    /// issue located at that filename, not a panic or a silently-ok report.
+    ///
+    /// A read operation, not a write: works against read-only handles
+    /// (embedded `byonk-builtin`, git-fetched repos) too, unlike
+    /// `write_file`/the structural ops above.
+    pub fn validate(&self, screen_ref: &str) -> ValidationReport {
+        let (handle, screen_path) = match Self::split_ref(screen_ref) {
+            Ok(v) => v,
+            Err(_) => {
+                return ValidationReport {
+                    ok: false,
+                    issues: vec![Issue {
+                        severity: Severity::Error,
+                        location: screen_ref.to_string(),
+                        message: "invalid screen reference".to_string(),
+                    }],
+                }
+            }
+        };
+        let loader = self.manager.loader();
+        let Some(source) = loader.source_for(handle) else {
+            return ValidationReport {
+                ok: false,
+                issues: vec![Issue {
+                    severity: Severity::Error,
+                    location: screen_ref.to_string(),
+                    message: format!("unknown screen repo '{handle}'"),
+                }],
+            };
+        };
+
+        let mut issues = Vec::new();
+
+        // meta.yaml — schema check only.
+        match source.read_string(&format!("{screen_path}/meta.yaml")) {
+            Some(text) => {
+                if let Err(message) = ScreenMeta::from_yaml(&text) {
+                    issues.push(Issue {
+                        severity: Severity::Error,
+                        location: "meta.yaml".to_string(),
+                        message,
+                    });
+                }
+            }
+            None => issues.push(Issue {
+                severity: Severity::Error,
+                location: "meta.yaml".to_string(),
+                message: "file not found".to_string(),
+            }),
+        }
+
+        // script.lua — compile without executing.
+        match source.read_string(&format!("{screen_path}/script.lua")) {
+            Some(text) => {
+                if let Err(e) = mlua::Lua::new().load(&text).into_function() {
+                    issues.push(Issue {
+                        severity: Severity::Error,
+                        location: "script.lua".to_string(),
+                        message: e.to_string(),
+                    });
+                }
+            }
+            None => issues.push(Issue {
+                severity: Severity::Error,
+                location: "script.lua".to_string(),
+                message: "file not found".to_string(),
+            }),
+        }
+
+        // screen.svg — Tera compile + extends-chain resolution, mirroring
+        // the registration phase real rendering runs (see
+        // `TemplateService::validate_template`'s doc comment for what this
+        // does and doesn't catch).
+        match source.read_string(&format!("{screen_path}/screen.svg")) {
+            Some(text) => {
+                if let Err(e) =
+                    self.pipeline
+                        .template_service()
+                        .validate_template(&text, &source, screen_path)
+                {
+                    issues.push(Issue {
+                        severity: Severity::Error,
+                        location: "screen.svg".to_string(),
+                        message: e.to_string(),
+                    });
+                }
+            }
+            None => issues.push(Issue {
+                severity: Severity::Error,
+                location: "screen.svg".to_string(),
+                message: "file not found".to_string(),
+            }),
+        }
+
+        let ok = !issues.iter().any(|i| matches!(i.severity, Severity::Error));
+        ValidationReport { ok, issues }
     }
 }
 
@@ -1020,6 +1151,95 @@ mod tests {
         assert_eq!(r, "local/myscreen2");
         let photo = store.read_file("local/myscreen2", "photo.png").unwrap();
         assert!(photo.binary);
+    }
+
+    // --- Task 8: validate -------------------------------------------------
+
+    #[test]
+    fn validate_flags_lua_syntax_error() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "bad", StarterKind::Minimal)
+            .unwrap();
+        store
+            .write_file("local/bad", "script.lua", b"return {", None)
+            .unwrap(); // unbalanced
+        let rep = store.validate("local/bad");
+        assert!(!rep.ok);
+        assert!(rep.issues.iter().any(|i| i.location.contains("script.lua")));
+    }
+
+    #[test]
+    fn validate_passes_for_starter() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "ok", StarterKind::Minimal)
+            .unwrap();
+        assert!(store.validate("local/ok").ok);
+    }
+
+    #[test]
+    fn validate_flags_missing_files_by_location_not_panic() {
+        let (store, repo_root) = test_store_with_local();
+        // A screen directory that exists but has none of the three files.
+        std::fs::create_dir_all(repo_root.join("empty")).unwrap();
+        let rep = store.validate("local/empty");
+        assert!(!rep.ok);
+        assert!(rep.issues.iter().any(|i| i.location == "meta.yaml"));
+        assert!(rep.issues.iter().any(|i| i.location == "script.lua"));
+        assert!(rep.issues.iter().any(|i| i.location == "screen.svg"));
+        assert!(rep
+            .issues
+            .iter()
+            .all(|i| matches!(i.severity, Severity::Error)));
+    }
+
+    #[test]
+    fn validate_flags_meta_schema_error() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "badmeta", StarterKind::Minimal)
+            .unwrap();
+        // Missing required `title` field.
+        store
+            .write_file(
+                "local/badmeta",
+                "meta.yaml",
+                b"description: d\nbyonk: \"0.15\"\n",
+                None,
+            )
+            .unwrap();
+        let rep = store.validate("local/badmeta");
+        assert!(!rep.ok);
+        assert!(rep.issues.iter().any(|i| i.location == "meta.yaml"));
+    }
+
+    #[test]
+    fn validate_flags_svg_missing_extends_target() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "badsvg", StarterKind::Minimal)
+            .unwrap();
+        store
+            .write_file(
+                "local/badsvg",
+                "screen.svg",
+                b"{% extends \"byonk-base-v1/does-not-exist.svg\" %}",
+                None,
+            )
+            .unwrap();
+        let rep = store.validate("local/badsvg");
+        assert!(!rep.ok);
+        assert!(rep.issues.iter().any(|i| i.location == "screen.svg"));
+    }
+
+    #[test]
+    fn validate_works_for_read_only_source() {
+        // validate is a read operation — it must work against the embedded
+        // (read-only) byonk-builtin handle, not just writable repos.
+        let (store, _repo_root) = test_store_with_local();
+        let rep = store.validate("byonk-builtin/default");
+        assert!(rep.ok, "{:?}", rep.issues);
     }
 
     #[test]

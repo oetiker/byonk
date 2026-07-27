@@ -77,6 +77,13 @@ struct EmbeddedConfig;
 #[include = "**/*.lua"]
 struct EmbeddedBase;
 
+/// The `local` handle's manifest, seeded into an empty/missing `SCREENS_DIR`
+/// (see `AssetLoader::seed_if_configured`) and written by `byonk init
+/// --screens` (see `AssetLoader::init`) — the one manifest content both
+/// paths must agree on, kept in exactly one place so they can't drift.
+const LOCAL_MANIFEST: &str =
+    "name: local\ndescription: Your own screens.\nauthor: you\nlicense: UNLICENSED\n";
+
 /// Asset category for selective operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssetCategory {
@@ -144,6 +151,53 @@ impl AssetLoader {
             fonts_dir,
             config_file,
         }
+    }
+
+    /// Override the derived examples directory (`<SCREENS_DIR>/../examples`)
+    /// with an explicit path — e.g. from the `EXAMPLES_DIR` env var, read
+    /// alongside `SCREENS_DIR`/`FONTS_DIR` at every `AssetLoader::new` call
+    /// site in `main.rs` that starts a server. `None` leaves whatever `new`
+    /// already computed untouched: this only ever redirects an
+    /// already-derived location (or leaves it `None`, when `screens_dir`
+    /// wasn't configured either) — it never invents a location `new`
+    /// wouldn't have. Unlike `examples_dir`'s derivation, this is
+    /// independent of `screens_dir`: setting `EXAMPLES_DIR` without
+    /// `SCREENS_DIR` is honored, matching how `FONTS_DIR`/`CONFIG_FILE` are
+    /// already independent of `SCREENS_DIR`.
+    pub fn with_examples_dir_override(mut self, examples_dir: Option<PathBuf>) -> Self {
+        if let Some(dir) = examples_dir {
+            self.examples_dir = Some(dir);
+        }
+        self
+    }
+
+    /// Read a screen asset from the embedded tree ONLY, bypassing the
+    /// `SCREENS_DIR` filesystem overlay entirely (unlike `read_screen`).
+    ///
+    /// Used for reads whose identity must never be shadowed by a file the
+    /// user happens to have at the same relative path under `SCREENS_DIR` —
+    /// currently just `byonk-builtin`'s own `byonk-screens.yaml`
+    /// (`EmbeddedBuiltinSource::load`): the built-in repo's
+    /// name/description/author/license/`root:` must always come from the
+    /// embedded tree, never from whatever manifest the `local` repo happens
+    /// to have at `SCREENS_DIR/byonk-screens.yaml` (same relative path, same
+    /// overlay `read_screen` would otherwise prefer).
+    pub fn read_screen_embedded_only(
+        &self,
+        relative_path: &Path,
+    ) -> io::Result<Cow<'static, [u8]>> {
+        let path_str = relative_path.to_string_lossy();
+        EmbeddedScreens::get(&path_str)
+            .map(|f| {
+                tracing::trace!(path = %path_str, "Loading screen from embedded assets (overlay bypassed)");
+                f.data
+            })
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("Screen not found: {path_str}"),
+                )
+            })
     }
 
     /// Read a screen asset (Lua script or SVG template)
@@ -365,97 +419,180 @@ impl AssetLoader {
     ///
     /// Only operates on paths that were configured (env var was set).
     /// Creates directories if they don't exist.
+    ///
+    /// Each of the four sections below (local manifest, examples, fonts,
+    /// config) is independently fallible: a failure in one is logged and
+    /// seeding moves on to the next, rather than aborting the rest via `?`.
+    /// This matters most for the examples section — the decorative shipped
+    /// examples set lives one level *above* the only directory the operator
+    /// actually configured (`<SCREENS_DIR>/../examples`), so it can be
+    /// unwritable/unmounted (e.g. a Docker rootfs) even when `SCREENS_DIR`
+    /// itself is fine. A failed examples seed must never prevent fonts or
+    /// config seeding (a 409 on every admin write otherwise, since an
+    /// unseeded `CONFIG_FILE` can't be found — see
+    /// `test_write_on_embedded_config_returns_409`). `seed_if_configured`
+    /// itself now always returns `Ok`: every fallible step already caught
+    /// and logged its own error, so there is nothing left to propagate.
     pub fn seed_if_configured(&self) -> io::Result<SeedReport> {
         let mut report = SeedReport::default();
 
-        // Seed screens: `SCREENS_DIR` is the user's own writable `local` repo,
-        // not a copy of byonk's built-in screens (those stay embedded-only,
-        // read-only, under the `byonk-builtin` handle). An empty/missing
-        // `SCREENS_DIR` only gets a manifest, so it registers as a (currently
-        // empty) `local` screen repo the user can start authoring into.
-        if let Some(ref dir) = self.screens_dir {
-            let should_seed = !dir.exists() || Self::is_empty_dir(dir);
-            if should_seed {
-                fs::create_dir_all(dir)?;
-                const LOCAL_MANIFEST: &str = "name: local\ndescription: Your own screens.\nauthor: you\nlicense: UNLICENSED\n";
-                fs::write(dir.join("byonk-screens.yaml"), LOCAL_MANIFEST)?;
-                report.screens_seeded.push("byonk-screens.yaml".to_string());
-                tracing::info!(
-                    dir = %dir.display(),
-                    "Seeded local screens directory with a byonk-screens.yaml manifest"
-                );
-            }
+        if let Err(e) = self.seed_local_manifest(&mut report) {
+            tracing::warn!(
+                error = %e,
+                "Failed to seed local screens directory; the 'local' screen repo handle may not register"
+            );
         }
 
-        // Seed examples: the shipped `examples` set (Task 10's `EmbeddedExamples`,
-        // including its own `byonk-screens.yaml` manifest) is copied to disk
-        // once, so it lands as an editable local screen repo under the
-        // `examples` handle. Only when `SCREENS_DIR` is configured (there is
-        // no fallback location — never write outside a configured directory)
-        // and the examples dir is empty/missing (once-only, idempotent: a
-        // user's edits or deletions inside an already-seeded `examples`
-        // directory are never touched again).
-        if let Some(ref dir) = self.examples_dir {
-            let should_seed = !dir.exists() || Self::is_empty_dir(dir);
-            if should_seed {
-                fs::create_dir_all(dir)?;
-                for file in EmbeddedExamples::iter() {
-                    if let Some(data) = EmbeddedExamples::get(&file) {
-                        let path = dir.join(file.as_ref());
-                        if let Some(parent) = path.parent() {
-                            fs::create_dir_all(parent)?;
-                        }
-                        fs::write(&path, &*data.data)?;
-                        report.examples_seeded.push(file.to_string());
-                    }
-                }
-                if !report.examples_seeded.is_empty() {
-                    tracing::info!(
-                        dir = %dir.display(),
-                        count = report.examples_seeded.len(),
-                        "Seeded examples directory with embedded assets"
-                    );
-                }
-            }
+        if let Err(e) = self.seed_examples(&mut report) {
+            tracing::warn!(
+                error = %e,
+                "Failed to seed examples directory; the 'examples' screen repo handle may not register (fonts/config seeding unaffected)"
+            );
         }
 
-        // Seed fonts
-        if let Some(ref dir) = self.fonts_dir {
-            let should_seed = !dir.exists() || Self::is_empty_dir(dir);
-            if should_seed {
-                fs::create_dir_all(dir)?;
-                for file in EmbeddedFonts::iter() {
-                    if let Some(data) = EmbeddedFonts::get(&file) {
-                        let path = dir.join(file.as_ref());
-                        fs::write(&path, &*data.data)?;
-                        report.fonts_seeded.push(file.to_string());
-                    }
-                }
-                if !report.fonts_seeded.is_empty() {
-                    tracing::info!(
-                        dir = %dir.display(),
-                        count = report.fonts_seeded.len(),
-                        "Seeded fonts directory with embedded assets"
-                    );
-                }
-            }
+        if let Err(e) = self.seed_fonts(&mut report) {
+            tracing::warn!(error = %e, "Failed to seed fonts directory");
         }
 
-        // Seed config
-        if let Some(ref path) = self.config_file {
-            if !path.exists() {
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                if let Some(data) = EmbeddedConfig::get("default-config.yaml") {
-                    fs::write(path, &*data.data)?;
-                    report.config_seeded = true;
-                    tracing::info!(path = %path.display(), "Seeded config file with embedded default");
-                }
-            }
+        if let Err(e) = self.seed_config(&mut report) {
+            tracing::warn!(error = %e, "Failed to seed config file");
         }
 
         Ok(report)
+    }
+
+    /// Seed `SCREENS_DIR` with a `local` manifest.
+    ///
+    /// `SCREENS_DIR` is the user's own writable `local` repo, not a copy of
+    /// byonk's built-in screens (those stay embedded-only, read-only, under
+    /// the `byonk-builtin` handle).
+    ///
+    /// Gate: **the manifest file itself doesn't exist yet** — not "the
+    /// directory is empty". A missing manifest is a broken state (no
+    /// `local` handle can register at all), not a user preference, unlike a
+    /// deleted screen (which is left alone). This also covers the upgrade
+    /// case: an existing non-empty `SCREENS_DIR` from an older byonk (or one
+    /// a user seeded content into before ever getting a manifest) gets a
+    /// `local` manifest retroactively. An existing manifest — including one
+    /// the user has since edited — is never overwritten, on this or any
+    /// later call.
+    fn seed_local_manifest(&self, report: &mut SeedReport) -> io::Result<()> {
+        let Some(ref dir) = self.screens_dir else {
+            return Ok(());
+        };
+        fs::create_dir_all(dir)?;
+        let manifest_path = dir.join("byonk-screens.yaml");
+        if !manifest_path.exists() {
+            fs::write(&manifest_path, LOCAL_MANIFEST)?;
+            report.screens_seeded.push("byonk-screens.yaml".to_string());
+            tracing::info!(
+                dir = %dir.display(),
+                "Seeded local screens directory with a byonk-screens.yaml manifest"
+            );
+        }
+        Ok(())
+    }
+
+    /// Seed the examples directory with the shipped `examples` set (Task
+    /// 10's `EmbeddedExamples`, including its own `byonk-screens.yaml`
+    /// manifest), so it lands as an editable local screen repo under the
+    /// `examples` handle. Only when an examples dir is configured (there is
+    /// no fallback location — never write outside a configured directory)
+    /// and it is empty/missing (once-only, idempotent: a user's edits or
+    /// deletions inside an already-seeded `examples` directory are never
+    /// touched again).
+    ///
+    /// A failure part-way through the copy loop cleans up whatever was
+    /// partially written (rather than leaving a permanently half-seeded,
+    /// non-empty-but-manifest-less directory that `is_empty_dir` would
+    /// never retry), so the next start attempts a full reseed from scratch.
+    fn seed_examples(&self, report: &mut SeedReport) -> io::Result<()> {
+        let Some(ref dir) = self.examples_dir else {
+            return Ok(());
+        };
+        let should_seed = !dir.exists() || Self::is_empty_dir(dir);
+        if !should_seed {
+            return Ok(());
+        }
+        fs::create_dir_all(dir)?;
+        if let Err(e) = Self::write_examples(dir, report) {
+            report.examples_seeded.clear();
+            let _ = fs::remove_dir_all(dir);
+            return Err(e);
+        }
+        if !report.examples_seeded.is_empty() {
+            tracing::info!(
+                dir = %dir.display(),
+                count = report.examples_seeded.len(),
+                "Seeded examples directory with embedded assets"
+            );
+        }
+        Ok(())
+    }
+
+    /// The examples copy loop itself, factored out so `seed_examples` can
+    /// wrap it with cleanup-on-error.
+    fn write_examples(dir: &Path, report: &mut SeedReport) -> io::Result<()> {
+        for file in EmbeddedExamples::iter() {
+            if let Some(data) = EmbeddedExamples::get(&file) {
+                let path = dir.join(file.as_ref());
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(&path, &*data.data)?;
+                report.examples_seeded.push(file.to_string());
+            }
+        }
+        Ok(())
+    }
+
+    /// Seed `FONTS_DIR` with embedded fonts. Gate unchanged (empty/missing
+    /// directory), per the controller ruling in Task 11's review: "leave the
+    /// fonts/config seeding gates alone."
+    fn seed_fonts(&self, report: &mut SeedReport) -> io::Result<()> {
+        let Some(ref dir) = self.fonts_dir else {
+            return Ok(());
+        };
+        let should_seed = !dir.exists() || Self::is_empty_dir(dir);
+        if !should_seed {
+            return Ok(());
+        }
+        fs::create_dir_all(dir)?;
+        for file in EmbeddedFonts::iter() {
+            if let Some(data) = EmbeddedFonts::get(&file) {
+                let path = dir.join(file.as_ref());
+                fs::write(&path, &*data.data)?;
+                report.fonts_seeded.push(file.to_string());
+            }
+        }
+        if !report.fonts_seeded.is_empty() {
+            tracing::info!(
+                dir = %dir.display(),
+                count = report.fonts_seeded.len(),
+                "Seeded fonts directory with embedded assets"
+            );
+        }
+        Ok(())
+    }
+
+    /// Seed `CONFIG_FILE` with the embedded default config. Gate unchanged
+    /// (file doesn't exist), per the controller ruling in Task 11's review.
+    fn seed_config(&self, report: &mut SeedReport) -> io::Result<()> {
+        let Some(ref path) = self.config_file else {
+            return Ok(());
+        };
+        if path.exists() {
+            return Ok(());
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if let Some(data) = EmbeddedConfig::get("default-config.yaml") {
+            fs::write(path, &*data.data)?;
+            report.config_seeded = true;
+            tracing::info!(path = %path.display(), "Seeded config file with embedded default");
+        }
+        Ok(())
     }
 
     /// Extract embedded assets to filesystem (init command)
@@ -467,26 +604,26 @@ impl AssetLoader {
         for category in categories {
             match category {
                 AssetCategory::Screens => {
+                    // `byonk-builtin` is embedded-only and read-only — it is
+                    // never copied into a user's screens directory (`Task
+                    // 11` retired that for `seed_if_configured`; this is the
+                    // matching fix for `init --screens`, its last surviving
+                    // copy-in path). In the new layering `SCREENS_DIR` is
+                    // the writable `local` repo, so `init --screens`
+                    // initializes it the same way `seed_if_configured` does:
+                    // write only the `byonk-screens.yaml` manifest.
                     let dir = self
                         .screens_dir
                         .clone()
                         .unwrap_or_else(|| PathBuf::from("./screens"));
                     fs::create_dir_all(&dir)?;
 
-                    for file in EmbeddedScreens::iter() {
-                        let path = dir.join(file.as_ref());
-                        if !force && path.exists() {
-                            report.skipped.push(path.display().to_string());
-                            continue;
-                        }
-                        if let Some(data) = EmbeddedScreens::get(&file) {
-                            // Create parent directories for nested assets (e.g., default/background.jpg)
-                            if let Some(parent) = path.parent() {
-                                fs::create_dir_all(parent)?;
-                            }
-                            fs::write(&path, &*data.data)?;
-                            report.written.push(path.display().to_string());
-                        }
+                    let manifest_path = dir.join("byonk-screens.yaml");
+                    if !force && manifest_path.exists() {
+                        report.skipped.push(manifest_path.display().to_string());
+                    } else {
+                        fs::write(&manifest_path, LOCAL_MANIFEST)?;
+                        report.written.push(manifest_path.display().to_string());
                     }
                 }
                 AssetCategory::Fonts => {
@@ -952,6 +1089,52 @@ mod tests {
     }
 
     #[test]
+    fn test_with_examples_dir_override_wins_over_derived_default() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let screens_dir = temp_dir.path().join("screens");
+        let explicit_examples_dir = temp_dir.path().join("my-examples");
+
+        let derived_default = screens_dir.join("..").join("examples");
+        let loader = AssetLoader::new(Some(screens_dir), None, None)
+            .with_examples_dir_override(Some(explicit_examples_dir.clone()));
+
+        assert_eq!(loader.examples_dir(), Some(explicit_examples_dir.as_path()));
+        assert_ne!(loader.examples_dir(), Some(derived_default.as_path()));
+
+        let report = loader.seed_if_configured().unwrap();
+        assert!(!report.examples_seeded.is_empty());
+        assert!(explicit_examples_dir.join("byonk-screens.yaml").exists());
+        assert!(!derived_default.exists());
+    }
+
+    #[test]
+    fn test_with_examples_dir_override_works_without_screens_dir() {
+        // EXAMPLES_DIR is an independent knob, like FONTS_DIR/CONFIG_FILE:
+        // it doesn't require SCREENS_DIR to also be set.
+        let temp_dir = tempfile::tempdir().unwrap();
+        let explicit_examples_dir = temp_dir.path().join("my-examples");
+
+        let loader = AssetLoader::new(None, None, None)
+            .with_examples_dir_override(Some(explicit_examples_dir.clone()));
+        assert_eq!(loader.examples_dir(), Some(explicit_examples_dir.as_path()));
+
+        let report = loader.seed_if_configured().unwrap();
+        assert!(!report.examples_seeded.is_empty());
+        assert!(explicit_examples_dir.join("byonk-screens.yaml").exists());
+    }
+
+    #[test]
+    fn test_with_examples_dir_override_none_leaves_derived_default() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let screens_dir = temp_dir.path().join("screens");
+        let derived_default = screens_dir.join("..").join("examples");
+
+        let loader =
+            AssetLoader::new(Some(screens_dir), None, None).with_examples_dir_override(None);
+        assert_eq!(loader.examples_dir(), Some(derived_default.as_path()));
+    }
+
+    #[test]
     fn test_seed_if_configured_no_examples_dir_without_screens_dir() {
         // No SCREENS_DIR configured -> no examples dir, nothing seeded, no
         // fallback location invented.
@@ -986,6 +1169,46 @@ mod tests {
         assert_eq!(edited, "-- user edit\n");
     }
 
+    /// Minor 5: a mid-loop failure while seeding examples must clean up the
+    /// partial write rather than leave a permanently half-seeded,
+    /// manifest-less directory that `is_empty_dir`'s gate would never retry.
+    /// Forces a write failure by pre-creating an empty, write-protected
+    /// examples dir (so the "empty/missing" seed gate still fires, but every
+    /// `fs::write`/nested `create_dir_all` inside it hits `PermissionDenied`).
+    #[test]
+    #[cfg(unix)]
+    fn test_seed_if_configured_examples_cleans_up_after_mid_loop_failure_and_retries_next_start() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let screens_dir = temp_dir.path().join("screens");
+        let loader = AssetLoader::new(Some(screens_dir), None, None);
+        let examples_dir = loader.examples_dir().unwrap().to_path_buf();
+
+        std::fs::create_dir_all(&examples_dir).unwrap();
+        std::fs::set_permissions(&examples_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+        // First attempt: every write into the read-only dir fails.
+        let first = loader.seed_if_configured().unwrap();
+        assert!(
+            first.examples_seeded.is_empty(),
+            "a mid-loop failure must not report partial success"
+        );
+        assert!(
+            !examples_dir.exists(),
+            "the half-seeded dir must be cleaned up so the next start retries from scratch"
+        );
+
+        // Second attempt (dir gone, permissions no longer an issue): a full,
+        // successful reseed from scratch.
+        let second = loader.seed_if_configured().unwrap();
+        assert!(
+            !second.examples_seeded.is_empty(),
+            "a subsequent start must retry and succeed once the obstruction is gone"
+        );
+        assert!(examples_dir.join("byonk-screens.yaml").exists());
+    }
+
     #[test]
     fn test_seed_if_configured_fonts() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -1014,24 +1237,75 @@ mod tests {
         assert!(config_path.exists());
     }
 
+    /// Controller ruling (Task 11 findings, Minor 7), scenario (i): the
+    /// local-manifest seed is gated on "the manifest file doesn't exist",
+    /// not "the directory is empty" — so a non-empty `SCREENS_DIR` that
+    /// merely lacks a manifest (the upgrade case: an older byonk's
+    /// `SCREENS_DIR`, or a stray file like `.DS_Store`, see Minor 7) still
+    /// gets one. Non-vacuous: under the old is_empty_dir-based gate this
+    /// directory would never seed a manifest at all (`is_empty_dir` is
+    /// false the moment ANY real file is present), so `screens_seeded`
+    /// would stay empty and the manifest would never be written — this
+    /// assertion would fail against that gate.
     #[test]
-    fn test_seed_if_configured_skips_existing() {
+    fn test_seed_if_configured_screens_writes_manifest_into_nonempty_dir_without_one() {
         let temp_dir = tempfile::tempdir().unwrap();
         let screens_dir = temp_dir.path().join("screens");
         std::fs::create_dir_all(&screens_dir).unwrap();
         std::fs::write(screens_dir.join("existing.lua"), "-- existing").unwrap();
 
-        let loader = AssetLoader::new(Some(screens_dir), None, None);
+        let loader = AssetLoader::new(Some(screens_dir.clone()), None, None);
         let result = loader.seed_if_configured();
 
         assert!(result.is_ok());
         let report = result.unwrap();
-        // Should not seed because directory is not empty
-        assert!(report.screens_seeded.is_empty());
+        assert!(
+            !report.screens_seeded.is_empty(),
+            "a non-empty SCREENS_DIR without a manifest must still get one (upgrade case)"
+        );
+        let manifest = std::fs::read_to_string(screens_dir.join("byonk-screens.yaml")).unwrap();
+        let parsed = crate::models::screen_repo_manifest::ScreenRepoManifest::from_yaml(&manifest)
+            .expect("seeded local manifest must be valid");
+        assert_eq!(parsed.name, "local");
+        // Pre-existing content is left alone.
+        assert!(screens_dir.join("existing.lua").exists());
+    }
+
+    /// Controller ruling (Task 11 findings, Minor 7), scenario (ii) + Minor
+    /// 6 coverage gap: once a `local` manifest exists — including one the
+    /// user has since hand-edited — it survives every later
+    /// `seed_if_configured()` call, verbatim, never overwritten.
+    #[test]
+    fn test_seed_if_configured_screens_never_overwrites_existing_manifest_across_multiple_runs() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let screens_dir = temp_dir.path().join("screens");
+        let loader = AssetLoader::new(Some(screens_dir.clone()), None, None);
+
+        // First run seeds the manifest into a fresh, empty dir.
+        let first = loader.seed_if_configured().unwrap();
+        assert!(!first.screens_seeded.is_empty());
+
+        // User hand-edits the seeded manifest.
+        let edited = "name: local\ndescription: My stuff.\nauthor: me\nlicense: UNLICENSED\n";
+        std::fs::write(screens_dir.join("byonk-screens.yaml"), edited).unwrap();
+
+        // Two more runs must never touch it.
+        for _ in 0..2 {
+            let report = loader.seed_if_configured().unwrap();
+            assert!(
+                report.screens_seeded.is_empty(),
+                "an existing local manifest must never be reseeded"
+            );
+            let current = std::fs::read_to_string(screens_dir.join("byonk-screens.yaml")).unwrap();
+            assert_eq!(
+                current, edited,
+                "user's manifest edit must survive verbatim"
+            );
+        }
     }
 
     #[test]
-    fn test_init_screens() {
+    fn test_init_screens_writes_local_manifest_not_builtin_copies() {
         let temp_dir = tempfile::tempdir().unwrap();
         let screens_dir = temp_dir.path().join("screens");
 
@@ -1041,7 +1315,34 @@ mod tests {
         assert!(result.is_ok());
         let report = result.unwrap();
         assert!(!report.written.is_empty());
-        assert!(screens_dir.join("default/script.lua").exists());
+        let manifest = std::fs::read_to_string(screens_dir.join("byonk-screens.yaml")).unwrap();
+        let parsed = crate::models::screen_repo_manifest::ScreenRepoManifest::from_yaml(&manifest)
+            .expect("init --screens must write a valid local manifest");
+        assert_eq!(parsed.name, "local");
+        // `byonk-builtin` is embedded-only, read-only, and frozen — `init
+        // --screens` must never copy it into the user's writable repo.
+        assert!(!screens_dir.join("default").exists());
+        assert!(!screens_dir.join("calibration").exists());
+    }
+
+    #[test]
+    fn test_init_screens_does_not_overwrite_existing_manifest_without_force() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let screens_dir = temp_dir.path().join("screens");
+        std::fs::create_dir_all(&screens_dir).unwrap();
+        std::fs::write(
+            screens_dir.join("byonk-screens.yaml"),
+            "name: local\ndescription: mine\nauthor: me\nlicense: UNLICENSED\n",
+        )
+        .unwrap();
+
+        let loader = AssetLoader::new(Some(screens_dir.clone()), None, None);
+        let report = loader.init(&[AssetCategory::Screens], false).unwrap();
+
+        assert!(report.written.is_empty());
+        assert!(!report.skipped.is_empty());
+        let content = std::fs::read_to_string(screens_dir.join("byonk-screens.yaml")).unwrap();
+        assert!(content.contains("author: me"));
     }
 
     #[test]

@@ -146,10 +146,38 @@ data/
 |----------|---------|-------------|
 | `BIND_ADDR` | `0.0.0.0:3000` | Server bind address |
 | `CONFIG_FILE` | *(embedded)* | Path to configuration file |
-| `SCREENS_DIR` | *(embedded)* | Directory containing Lua scripts and SVG templates |
+| `SCREENS_DIR` | *(embedded)* | Your own writable screen repo (auto-registers as the `local` handle) |
 | `FONTS_DIR` | *(embedded)* | Directory containing font files |
+| `EXAMPLES_DIR` | `<SCREENS_DIR>/../examples` | Where the shipped worked-example screens are seeded (auto-registers as the `examples` handle). Only takes effect once — an existing, non-empty directory is left alone. |
 
 When path variables are not set, Byonk uses embedded assets (no filesystem access).
+
+On first run, an empty/missing `SCREENS_DIR` gets seeded with only a
+`byonk-screens.yaml` manifest (no screen files — `byonk-builtin`'s `default` +
+`calibration/*` screens stay embedded-only and are never copied there). An
+empty/missing examples directory separately gets the full shipped `examples`
+set (worked examples like `hello`, `gphoto`, `swiss-departure-board`) plus its
+own manifest. Both seed once; your edits and deletions afterward are never
+touched again.
+
+**Docker note:** the default `EXAMPLES_DIR` is derived as a *sibling* of
+`SCREENS_DIR` (`<SCREENS_DIR>/../examples`), one level up from the directory
+you actually mount. If you only mount `SCREENS_DIR` itself (e.g. `-v
+./screens:/screens -e SCREENS_DIR=/screens`), the derived examples directory
+falls outside any mounted volume — ephemeral, and unwritable on a read-only
+container root. Either mount a parent directory and point `SCREENS_DIR` at a
+subdirectory of it (as in the example above, `-v ./data:/data -e
+SCREENS_DIR=/data/screens`, which keeps the derived `/data/examples` inside
+the same volume), or set `EXAMPLES_DIR` explicitly to a path you've mounted.
+
+**Config vs. seeding:** if `screen_repos.examples` is set explicitly in
+`config.yaml`, it wins for *registration* — the `examples` handle resolves to
+that configured path instead of the auto-registered `EXAMPLES_DIR`/derived
+default. Seeding (writing the shipped example files to disk) is unaffected by
+this and always follows `EXAMPLES_DIR`/the derived default, since seeding runs
+before `config.yaml` is parsed. In practice this only matters if you both
+override `screen_repos.examples.path` *and* still want the shipped examples
+copied to disk — in that case, set `EXAMPLES_DIR` to the same path.
 
 ## Running as a Service (systemd)
 

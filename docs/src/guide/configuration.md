@@ -158,6 +158,20 @@ A screen ref's first segment is the handle: `weather/forecast` resolves the `for
 in the `weather` screen repo. Registering the same repo under two handles at different pins
 lets you run two versions side by side.
 
+### Auto-registered `local` and `examples` handles
+
+Two handles auto-register from filesystem paths, without needing a
+`screen_repos:` entry — unless you add one yourself, which always wins:
+
+- `local` — `SCREENS_DIR`, your own writable screen repo.
+- `examples` — the shipped worked-example screens, seeded once to
+  `<SCREENS_DIR>/../examples` by default (override with the `EXAMPLES_DIR`
+  env var). See [Installation](installation.md#environment-variables) for
+  the env vars and the seeding-vs-registration precedence note (an explicit
+  `screen_repos.examples` config entry wins for registration, but seeding
+  always follows `EXAMPLES_DIR`/the derived default, not the configured
+  path).
+
 ## Device Registration
 
 Byonk supports optional device registration for enhanced security. When enabled, new devices must be explicitly approved before they can display content.

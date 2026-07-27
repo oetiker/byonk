@@ -61,7 +61,10 @@ enum Commands {
     },
     /// Extract embedded assets to filesystem for customization
     Init {
-        /// Extract screen files (Lua scripts and SVG templates)
+        /// Initialize your local screens directory (writes a
+        /// byonk-screens.yaml manifest so it registers as the writable
+        /// `local` screen repo; byonk-builtin itself is embedded-only and
+        /// is never copied here)
         #[arg(long)]
         screens: bool,
 
@@ -186,8 +189,12 @@ fn run_render_command(
     let screens_dir = std::env::var("SCREENS_DIR").ok().map(PathBuf::from);
     let fonts_dir = std::env::var("FONTS_DIR").ok().map(PathBuf::from);
     let config_file = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
+    let examples_dir = std::env::var("EXAMPLES_DIR").ok().map(PathBuf::from);
 
-    let asset_loader = Arc::new(AssetLoader::new(screens_dir, fonts_dir, config_file));
+    let asset_loader = Arc::new(
+        AssetLoader::new(screens_dir, fonts_dir, config_file)
+            .with_examples_dir_override(examples_dir),
+    );
 
     // Seed if configured paths are empty
     if let Err(e) = asset_loader.seed_if_configured() {
@@ -497,6 +504,7 @@ fn run_status_command() {
     let config_file = std::env::var("CONFIG_FILE").ok();
     let screens_dir = std::env::var("SCREENS_DIR").ok();
     let fonts_dir = std::env::var("FONTS_DIR").ok();
+    let examples_dir_env = std::env::var("EXAMPLES_DIR").ok();
 
     // Header
     println!("Byonk v{VERSION} - Bring Your Own Ink");
@@ -505,20 +513,26 @@ fn run_status_command() {
     // Environment variables section
     println!("Environment Variables:");
     println!(
-        "  BIND_ADDR   = {}",
+        "  BIND_ADDR    = {}",
         bind_addr.as_deref().unwrap_or("0.0.0.0:3000 (default)")
     );
     println!(
-        "  CONFIG_FILE = {}",
+        "  CONFIG_FILE  = {}",
         config_file.as_deref().unwrap_or("(not set)")
     );
     println!(
-        "  SCREENS_DIR = {}",
+        "  SCREENS_DIR  = {}",
         screens_dir.as_deref().unwrap_or("(not set)")
     );
     println!(
-        "  FONTS_DIR   = {}",
+        "  FONTS_DIR    = {}",
         fonts_dir.as_deref().unwrap_or("(not set)")
+    );
+    println!(
+        "  EXAMPLES_DIR = {}",
+        examples_dir_env
+            .as_deref()
+            .unwrap_or("(not set, derived from SCREENS_DIR)")
     );
 
     // Asset sources section
@@ -529,7 +543,8 @@ fn run_status_command() {
         screens_dir.clone().map(PathBuf::from),
         fonts_dir.clone().map(PathBuf::from),
         config_file.clone().map(PathBuf::from),
-    );
+    )
+    .with_examples_dir_override(examples_dir_env.clone().map(PathBuf::from));
 
     // Config source
     let config_source = if let Some(ref path) = config_file {
@@ -605,6 +620,26 @@ fn run_status_command() {
         );
     }
 
+    // Examples source — where the shipped `examples` screen repo lands once
+    // seeded (default `<SCREENS_DIR>/../examples`, or EXAMPLES_DIR if set).
+    match loader.examples_dir() {
+        Some(examples_path) => {
+            if examples_path.exists() {
+                println!("  Examples: {}", examples_path.display());
+            } else {
+                println!(
+                    "  Examples: {} (not yet seeded; seeds on next server start)",
+                    examples_path.display()
+                );
+            }
+        }
+        None => {
+            println!(
+                "  Examples: (none — set SCREENS_DIR or EXAMPLES_DIR to seed the shipped examples)"
+            );
+        }
+    }
+
     // Commands section
     println!("\nCommands:");
     println!("  byonk serve    Start the HTTP server");
@@ -644,19 +679,20 @@ async fn run_server() -> anyhow::Result<()> {
     let screens_dir = std::env::var("SCREENS_DIR").ok().map(PathBuf::from);
     let fonts_dir = std::env::var("FONTS_DIR").ok().map(PathBuf::from);
     let config_file = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
+    let examples_dir_env = std::env::var("EXAMPLES_DIR").ok().map(PathBuf::from);
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
 
-    let asset_loader = Arc::new(AssetLoader::new(
-        screens_dir.clone(),
-        fonts_dir.clone(),
-        config_file.clone(),
-    ));
+    let asset_loader = Arc::new(
+        AssetLoader::new(screens_dir.clone(), fonts_dir.clone(), config_file.clone())
+            .with_examples_dir_override(examples_dir_env.clone()),
+    );
 
     // Log asset sources
     tracing::info!(
         screens = ?screens_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
         fonts = ?fonts_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
         config = ?config_file.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
+        examples = ?asset_loader.examples_dir().map(|p| p.display().to_string()).unwrap_or_else(|| "none".to_string()),
         "Asset sources configured"
     );
 
@@ -770,19 +806,20 @@ async fn run_dev_server() -> anyhow::Result<()> {
     let screens_dir = std::env::var("SCREENS_DIR").ok().map(PathBuf::from);
     let fonts_dir = std::env::var("FONTS_DIR").ok().map(PathBuf::from);
     let config_file = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
+    let examples_dir_env = std::env::var("EXAMPLES_DIR").ok().map(PathBuf::from);
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
 
-    let asset_loader = Arc::new(AssetLoader::new(
-        screens_dir.clone(),
-        fonts_dir.clone(),
-        config_file.clone(),
-    ));
+    let asset_loader = Arc::new(
+        AssetLoader::new(screens_dir.clone(), fonts_dir.clone(), config_file.clone())
+            .with_examples_dir_override(examples_dir_env.clone()),
+    );
 
     // Log asset sources
     tracing::info!(
         screens = ?screens_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
         fonts = ?fonts_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
         config = ?config_file.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
+        examples = ?asset_loader.examples_dir().map(|p| p.display().to_string()).unwrap_or_else(|| "none".to_string()),
         "Asset sources configured"
     );
 

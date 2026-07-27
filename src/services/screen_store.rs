@@ -1621,6 +1621,71 @@ mod tests {
         assert!(!outer.join("clock/script.lua").exists());
     }
 
+    /// Minor 6 coverage gap: every other `examples`-handle test uses either
+    /// two unrelated tempdirs (`ScreenRepoManager` unit tests) or only
+    /// checks `resolve()` (the `server.rs` e2e test) — none actually
+    /// *writes* through the auto-registered `examples` handle against the
+    /// real, production-shaped `<SCREENS_DIR>/../examples` (a genuinely
+    /// `..`-bearing path, not a synthetic sibling tempdir). This locks in
+    /// what the reviewer verified by reading: the write-path
+    /// canonicalization guards handle that root correctly, and a write
+    /// really does land where `read_file`/the seeded files agree it should.
+    #[test]
+    fn write_through_examples_handle_with_real_derived_dot_dot_root() {
+        let screens_dir = tempdir_path("screen_store_examples_real_root_screens");
+        let asset_loader = Arc::new(AssetLoader::new(Some(screens_dir.clone()), None, None));
+        // Seeds SCREENS_DIR's local manifest AND the examples set into the
+        // real derived `<SCREENS_DIR>/../examples` (not a synthetic tempdir).
+        asset_loader.seed_if_configured().unwrap();
+        let examples_dir = asset_loader
+            .examples_dir()
+            .expect("examples_dir derived from screens_dir")
+            .to_path_buf();
+        assert!(
+            examples_dir.join("byonk-screens.yaml").exists(),
+            "precondition: examples must be seeded on disk before the write"
+        );
+
+        let config: SharedConfig =
+            Arc::new(arc_swap::ArcSwap::from(Arc::new(AppConfig::default())));
+        let cache = crate::services::screen_repo_cache::ScreenRepoCache::new(tempdir_path(
+            "screen_store_examples_real_root_cache",
+        ));
+        let manager = ScreenRepoManager::new(
+            asset_loader.clone(),
+            config.clone(),
+            cache,
+            HashMap::new(),
+            Some(screens_dir),
+            Some(examples_dir.clone()),
+        );
+
+        let renderer = Arc::new(RenderService::new(&asset_loader).unwrap());
+        let pipeline = Arc::new(
+            ContentPipeline::new(config, asset_loader, renderer, manager.clone()).unwrap(),
+        );
+        let store = ScreenStore::new(manager, pipeline);
+
+        // Write through the auto-registered `examples` handle.
+        store
+            .write_file(
+                "examples/hello",
+                "script.lua",
+                b"-- edited\nreturn {}",
+                None,
+            )
+            .unwrap();
+
+        // Read back through the store...
+        let f = store.read_file("examples/hello", "script.lua").unwrap();
+        assert_eq!(f.bytes, b"-- edited\nreturn {}");
+
+        // ...and confirm it actually landed on disk under the real
+        // `..`-bearing root, not some other location.
+        let on_disk = std::fs::read_to_string(examples_dir.join("hello/script.lua")).unwrap();
+        assert_eq!(on_disk, "-- edited\nreturn {}");
+    }
+
     // --- Task 9: render -----------------------------------------------------
 
     #[test]

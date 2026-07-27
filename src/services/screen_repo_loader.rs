@@ -333,10 +333,25 @@ pub struct EmbeddedBuiltinSource {
 impl EmbeddedBuiltinSource {
     /// Load the built-in screen repo. Returns `Err` (skip) if `byonk-screens.yaml`
     /// is missing or invalid.
+    ///
+    /// Reads the manifest **embedded-only**, deliberately bypassing the
+    /// `SCREENS_DIR` filesystem overlay `AssetLoader::read_screen` would
+    /// otherwise apply: `SCREENS_DIR` is the *separate* `local` repo's root
+    /// and happens to have its own `byonk-screens.yaml` at the same
+    /// relative path. Without this, the `local` manifest would shadow
+    /// `byonk-builtin`'s identity (name/description/author/license/`root:`)
+    /// on the primary deployment path (`SCREENS_DIR` set), and an invalid or
+    /// re-rooting `local` manifest could silently unregister the
+    /// `byonk-builtin` handle entirely. Only the manifest read is
+    /// embedded-only; individual screen file reads (`read`/`screen_paths`/
+    /// `svg_files` below) still go through the `SCREENS_DIR` overlay as
+    /// before — that per-file overlay behavior is unchanged and untouched.
     pub fn load(loader: Arc<AssetLoader>) -> Result<EmbeddedBuiltinSource, String> {
-        let src = loader
-            .read_screen_string(Path::new("byonk-screens.yaml"))
+        let bytes = loader
+            .read_screen_embedded_only(Path::new("byonk-screens.yaml"))
             .map_err(|e| format!("cannot read embedded byonk-screens.yaml: {e}"))?;
+        let src = String::from_utf8(bytes.into_owned())
+            .map_err(|e| format!("embedded byonk-screens.yaml is not valid UTF-8: {e}"))?;
         let manifest = ScreenRepoManifest::from_yaml(&src)?;
         let root_prefix = match manifest.root.as_deref() {
             Some(r) if !r.is_empty() && r != "." => r.trim_end_matches('/').to_string(),
@@ -707,6 +722,78 @@ mod tests {
         let src = LocalScreenRepoSource::load(dir.path()).unwrap();
         assert_eq!(src.writable_root(), Some(dir.path()));
         assert!(src.screen_paths().iter().any(|p| p == "clock"));
+    }
+
+    /// Important 1: a `SCREENS_DIR/byonk-screens.yaml` (the `local` repo's
+    /// own manifest, at the same relative path `EmbeddedBuiltinSource`
+    /// reads) must never change what `byonk-builtin` reports. Non-vacuous:
+    /// before the fix, `EmbeddedBuiltinSource::load` read the manifest via
+    /// `AssetLoader::read_screen`, which prefers `SCREENS_DIR` over the
+    /// embedded tree for any relative path — so this assertion would fail
+    /// (name would come back "local", not "byonk-builtin") against the
+    /// reverted code.
+    #[test]
+    fn builtin_manifest_is_not_shadowed_by_local_manifest_under_screens_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("byonk-screens.yaml"),
+            "name: local\ndescription: Your own screens.\nauthor: you\nlicense: UNLICENSED\n",
+        )
+        .unwrap();
+
+        let loader = Arc::new(AssetLoader::new(Some(dir.path().to_path_buf()), None, None));
+        let src = EmbeddedBuiltinSource::load(loader).expect("byonk-builtin must still load");
+        assert_eq!(
+            src.manifest().name,
+            "byonk-builtin",
+            "the local SCREENS_DIR manifest must not shadow byonk-builtin's identity"
+        );
+        assert_eq!(src.manifest().author, "Byonk");
+    }
+
+    /// Important 1: an *invalid* `SCREENS_DIR/byonk-screens.yaml` must not
+    /// unregister the `byonk-builtin` handle or break `byonk-builtin/default`
+    /// — since the manifest read is embedded-only, the overlay file's
+    /// validity is simply irrelevant to `byonk-builtin`. Non-vacuous: before
+    /// the fix, `EmbeddedBuiltinSource::load` would read this invalid
+    /// overlay file and fail to parse it, returning `Err` — this
+    /// `.expect(...)` would panic against the reverted code.
+    #[test]
+    fn builtin_survives_invalid_local_manifest_under_screens_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        // Missing required fields (author/license) -> ScreenRepoManifest::from_yaml errors.
+        std::fs::write(dir.path().join("byonk-screens.yaml"), "name: local\n").unwrap();
+
+        let loader = Arc::new(AssetLoader::new(Some(dir.path().to_path_buf()), None, None));
+        let src = EmbeddedBuiltinSource::load(loader.clone())
+            .expect("an invalid local manifest must not break byonk-builtin");
+        assert_eq!(src.manifest().name, "byonk-builtin");
+
+        // End to end through the registry too: byonk-builtin/default still resolves.
+        let pl = ScreenRepoLoader::new(loader, HashMap::new());
+        assert!(pl.handles().contains(&BUILTIN_HANDLE.to_string()));
+        assert!(pl.resolve("byonk-builtin/default").is_some());
+    }
+
+    /// Important 1, the `root:` variant the finding calls out explicitly: a
+    /// perfectly legal `root:` key in the overlay `SCREENS_DIR` manifest
+    /// must not re-root `byonk-builtin` — its `root_prefix` must always come
+    /// from the embedded manifest (which has none).
+    #[test]
+    fn builtin_root_prefix_is_not_reroot_by_local_manifest_root_key() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("byonk-screens.yaml"),
+            "name: local\ndescription: d\nauthor: you\nlicense: UNLICENSED\nroot: somewhere/else\n",
+        )
+        .unwrap();
+
+        let loader = Arc::new(AssetLoader::new(Some(dir.path().to_path_buf()), None, None));
+        let src = EmbeddedBuiltinSource::load(loader).expect("byonk-builtin must still load");
+        assert!(
+            src.screen_paths().iter().any(|p| p == "default"),
+            "byonk-builtin's root must stay the embedded tree's root, unaffected by the overlay manifest's root: key"
+        );
     }
 
     #[test]

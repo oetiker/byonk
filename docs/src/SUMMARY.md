@@ -8,6 +8,7 @@
 - [Home Assistant App](guide/ha-addon.md)
 - [Home Assistant Integration](guide/ha-integration.md)
 - [Configuration](guide/configuration.md)
+- [Screen Authoring](guide/authoring.md)
 - [Dev Mode](guide/dev-mode.md)
 
 # Concepts

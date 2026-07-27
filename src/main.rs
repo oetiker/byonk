@@ -425,10 +425,27 @@ fn run_init_command(
 ) -> anyhow::Result<()> {
     use byonk::assets::{AssetCategory, AssetLoader};
 
+    // Create asset loader with paths from env vars (or defaults) — needed by
+    // both `--list` (to enumerate the `examples` embed) and extraction below.
+    let screens_dir = std::env::var("SCREENS_DIR").ok().map(PathBuf::from);
+    let fonts_dir = std::env::var("FONTS_DIR").ok().map(PathBuf::from);
+    let config_file = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
+
+    let loader = AssetLoader::new(screens_dir, fonts_dir, config_file);
+
     if list {
         println!("Embedded assets:\n");
-        println!("Screens:");
+        println!(
+            "Built-in screens (embedded, read-only — `init --screens` does not extract these):"
+        );
         for f in AssetLoader::list_embedded(AssetCategory::Screens) {
+            println!("  {f}");
+        }
+        println!(
+            "\nExample screens (embedded, seeded automatically to the examples directory on \
+             server start — `init --screens` does not extract these either):"
+        );
+        for f in loader.list_examples() {
             println!("  {f}");
         }
         println!("\nFonts:");
@@ -439,6 +456,11 @@ fn run_init_command(
         for f in AssetLoader::list_embedded(AssetCategory::Config) {
             println!("  {f}");
         }
+        println!(
+            "\nNote: `init --screens` writes only a byonk-screens.yaml manifest to SCREENS_DIR, \
+             registering it as the writable `local` screen repo — it does not copy any of the \
+             built-in or example screens listed above."
+        );
         return Ok(());
     }
 
@@ -459,13 +481,6 @@ fn run_init_command(
         eprintln!("\nRun 'byonk init --list' to see embedded assets.");
         std::process::exit(1);
     }
-
-    // Create asset loader with paths from env vars (or defaults)
-    let screens_dir = std::env::var("SCREENS_DIR").ok().map(PathBuf::from);
-    let fonts_dir = std::env::var("FONTS_DIR").ok().map(PathBuf::from);
-    let config_file = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
-
-    let loader = AssetLoader::new(screens_dir, fonts_dir, config_file);
 
     // Extract assets
     let report = loader.init(&categories, force)?;

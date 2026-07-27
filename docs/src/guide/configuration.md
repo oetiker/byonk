@@ -146,13 +146,15 @@ screen_repos:
   weather:      { repo: https://github.com/acme/screens, pin: v1.4.0 }
   weather-beta: { repo: https://github.com/acme/screens, pin: v2.0.0 }  # same repo, different pin
   private:      { repo: https://github.com/acme/secret, pin: v1.0.0, token: ${GITHUB_TOKEN} }
+  drafts:       { path: /data/drafts }                    # writable local directory
 ```
 
 | Property | Required | Description |
 |----------|----------|-------------|
-| `repo` | No | Source git repo, as a full URL **with a scheme** — `https://…`, `git://…`, `ssh://…`, scp-style `git@host:owner/repo`, or `file:///path` for a local repo. A schemeless value like `github.com/acme/screens` is rejected (it would otherwise be read as a local path). Omit for the embedded built-in. |
-| `pin` | No | Commit sha, tag, or branch to fetch. |
-| `token` | No | Auth token for private repos (redacted in read APIs). |
+| `repo` | No | Source git repo, as a full URL **with a scheme** — `https://…`, `git://…`, `ssh://…`, scp-style `git@host:owner/repo`, or `file:///path` for a local repo. A schemeless value like `github.com/acme/screens` is rejected (it would otherwise be read as a local path). Mutually exclusive with `path`. Omit both for the embedded built-in. |
+| `path` | No | A writable local directory to register as this handle, as an alternative to a git-fetched `repo`. Mutually exclusive with `repo`. Unlike `repo`-backed screen repos, `path`-backed ones can be written to (see [Screen Authoring](authoring.md)). |
+| `pin` | No | Commit sha, tag, or branch to fetch. Only meaningful with `repo`. |
+| `token` | No | Auth token for private repos (redacted in read APIs). Only meaningful with `repo`. |
 
 A screen ref's first segment is the handle: `weather/forecast` resolves the `forecast` screen
 in the `weather` screen repo. Registering the same repo under two handles at different pins
@@ -171,6 +173,10 @@ Two handles auto-register from filesystem paths, without needing a
   `screen_repos.examples` config entry wins for registration, but seeding
   always follows `EXAMPLES_DIR`/the derived default, not the configured
   path).
+
+See [Screen Authoring](authoring.md) for how the built-in, example, and
+your-own-screens layers fit together, and how to fork a read-only screen
+into a writable one.
 
 ## Device Registration
 

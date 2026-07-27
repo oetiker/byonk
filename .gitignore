@@ -25,3 +25,9 @@ __pycache__/
 # Home Assistant test VM artifacts (large/binary, machine-local)
 tools/ha-vm/work/
 tools/ha-vm/ssh/
+
+# Dev-server seeding (make dev/make run set SCREENS_DIR=screens): the local
+# screen repo manifest and shipped examples get seeded into the tracked
+# source tree — never commit them.
+screens/byonk-screens.yaml
+examples/

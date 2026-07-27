@@ -24,7 +24,9 @@ use crate::error::ApiError;
 use crate::models::{config::ScreenRepoRef, AppConfig, DitherTuningValues};
 use crate::services::screen_repo_cache::ScreenRepoCache;
 use crate::services::screen_repo_manager::ScreenRepoManager;
-use crate::services::{ContentCache, ContentPipeline, InMemoryRegistry, RenderService};
+use crate::services::{
+    ContentCache, ContentPipeline, InMemoryRegistry, RenderService, ScreenStore,
+};
 
 /// Runtime overrides set by the dev GUI and consumed by production handlers.
 ///
@@ -80,6 +82,11 @@ pub struct AppState {
     /// True when byonk started as an HA Supervisor add-on (i.e. `/data/options.json`
     /// was present). In add-on mode, global-config admin writes are read-only.
     pub addon_mode: bool,
+    /// Screen-authoring core (read/write/validate/render a screen's source
+    /// files). Not yet consumed by any route — the MCP plan (spec 1
+    /// Component 5) and the web-UI plan (spec 2) are its consumers.
+    #[allow(dead_code)]
+    pub screen_store: Arc<ScreenStore>,
 }
 
 /// Create application state from an asset loader.
@@ -190,6 +197,15 @@ pub fn create_app_state_with_overrides(
     );
     let content_cache = Arc::new(ContentCache::new());
 
+    // `screen_repo_manager` is the SAME `Arc` handed to `content_pipeline`
+    // above — `ScreenStore::render` resolves through the pipeline's
+    // manager, everything else through this one directly; see
+    // `ScreenStore::new`'s doc comment for why they must match.
+    let screen_store = Arc::new(ScreenStore::new(
+        screen_repo_manager.clone(),
+        content_pipeline.clone(),
+    ));
+
     Ok(AppState {
         config: shared_config,
         asset_loader,
@@ -202,6 +218,7 @@ pub fn create_app_state_with_overrides(
         dev_overrides,
         screen_repo_manager,
         addon_mode: false,
+        screen_store,
     })
 }
 

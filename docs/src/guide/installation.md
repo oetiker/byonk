@@ -108,10 +108,8 @@ By default, Byonk listens on `0.0.0.0:3000` and uses embedded assets.
 
 ### Extracting Embedded Assets
 
-To customize the embedded screens and config:
-
 ```bash
-# See what's embedded
+# See what's embedded (built-in screens, examples, fonts, config)
 ./byonk init --list
 
 # Extract everything for editing
@@ -122,6 +120,14 @@ To customize the embedded screens and config:
 ./byonk init --config
 ```
 
+`./byonk init --screens` initializes `SCREENS_DIR` as your writable `local`
+screen repo: it writes a `byonk-screens.yaml` manifest there (nothing else).
+It does **not** copy the built-in or example screens — those stay embedded
+and read-only (built-ins) or get seeded separately (examples), as described
+in [Screen Repos Section](configuration.md#screen-repos-section) and
+[Screen Authoring](authoring.md). Use `./byonk init --config` to get an
+editable `config.yaml` to start from.
+
 ## Directory Structure (When Customizing)
 
 When using external files (via env vars), Byonk expects:
@@ -129,16 +135,23 @@ When using external files (via env vars), Byonk expects:
 ```
 data/
 ├── config.yaml              # Device and screen configuration
-├── screens/                 # A screen package (tree of screen folders)
-│   ├── byonk-screens.yaml   # Package manifest (name, description, author, license)
-│   ├── default/             # One screen = one folder
+├── screens/                 # Your writable `local` screen repo
+│   ├── byonk-screens.yaml   # Repo manifest (name, description, author, license)
+│   ├── my-clock/            # One screen = one folder
 │   │   ├── meta.yaml        # Title, description, params schema
 │   │   ├── script.lua       # Data-fetch logic
 │   │   └── screen.svg       # Tera template
 │   └── ...
+├── examples/                # Shipped worked examples, seeded once (editable)
+│   ├── byonk-screens.yaml
+│   ├── hello/
+│   └── ...
 └── fonts/                   # Custom fonts (optional)
     └── Outfit-Variable.ttf
 ```
+
+See [Screen Authoring](authoring.md) for how the built-in, example, and
+your-own-screens layers relate to each other.
 
 ## Environment Variables
 
@@ -260,7 +273,7 @@ Extract embedded assets for customization:
 
 ```bash
 ./byonk init --all        # Extract everything
-./byonk init --screens    # Extract screens only
+./byonk init --screens    # Initialize SCREENS_DIR as your writable `local` repo (manifest only)
 ./byonk init --list       # List embedded assets
 ```
 

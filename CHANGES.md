@@ -9,12 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- **Writable local screen repositories** via `screen_repos: { <name>: { path: … } }`,
+  so your own screens live in their own handle (`local`) instead of shadowing the
+  built-ins.
+- **Shipped example screens** (hello, mandelbrot, webscrape, gphoto,
+  swiss-departure-board, font demo) now install as an editable `examples`
+  repository. Override where they're seeded with the new `EXAMPLES_DIR`
+  environment variable.
+
 ### Changed
 
 - **Home Assistant "add-ons" are now called "apps".** Home Assistant 2026.2 renamed
   add-ons to apps in its UI (**Settings → Apps → App store**). Byonk's Home Assistant
   documentation, the integration's messages, and the Supervisor repository name now
   use the new wording. Nothing functional changed — it's the same add-on/app.
+- **Built-in screens are now a minimal, read-only set** (default + calibration);
+  your own screens are no longer mixed into the `byonk-builtin` handle. Existing
+  installs are migrated automatically on first start.
 
 ### Fixed
 

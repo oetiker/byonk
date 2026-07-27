@@ -192,15 +192,7 @@ impl SvgRenderer {
         let png_bytes = encode_png(spec, color_type, bit_depth, plte.as_deref(), &packed)?;
 
         // Re-compress with oxipng (zopfli + adaptive filter selection)
-        let optimized = oxipng::optimize_from_memory(
-            &png_bytes,
-            &oxipng::Options {
-                strip: oxipng::StripChunks::Safe,
-                optimize_alpha: false,
-                ..Default::default()
-            },
-        )
-        .unwrap_or(png_bytes);
+        let optimized = optimize_png(png_bytes);
         spec.validate_size(optimized.len())?;
         Ok(optimized)
     }
@@ -223,16 +215,7 @@ impl SvgRenderer {
             .collect();
 
         let png_bytes = encode_png(spec, png::ColorType::Rgb, png::BitDepth::Eight, None, &rgb)?;
-        let optimized = oxipng::optimize_from_memory(
-            &png_bytes,
-            &oxipng::Options {
-                strip: oxipng::StripChunks::Safe,
-                optimize_alpha: false,
-                ..Default::default()
-            },
-        )
-        .unwrap_or(png_bytes);
-        Ok(optimized)
+        Ok(optimize_png(png_bytes))
     }
 
     /// Parse and rasterize SVG to an RGBA pixmap
@@ -423,6 +406,23 @@ fn encode_png(
             .map_err(|e| RenderError::PngEncode(e.to_string()))?;
     }
     Ok(buf.into_inner())
+}
+
+/// Re-compress a PNG with oxipng (zopfli + adaptive filter selection).
+/// Falls back to the input bytes unchanged if optimization fails. Shared by
+/// `render_to_palette_png` (dithered device output) and `render_to_raw_png`
+/// (pre-dither preview) — both encode fast/uncompressed via `encode_png`
+/// and rely on this pass for the real compression.
+fn optimize_png(png_bytes: Vec<u8>) -> Vec<u8> {
+    oxipng::optimize_from_memory(
+        &png_bytes,
+        &oxipng::Options {
+            strip: oxipng::StripChunks::Safe,
+            optimize_alpha: false,
+            ..Default::default()
+        },
+    )
+    .unwrap_or(png_bytes)
 }
 
 /// Pack pixel values into N-bit PNG row data (1, 2, or 4 bits per pixel).

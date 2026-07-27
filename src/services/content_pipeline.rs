@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::assets::AssetLoader;
 use crate::error::RenderError;
@@ -203,6 +203,7 @@ impl ContentPipeline {
                     &device_config.params,
                     device_ctx.as_ref(),
                     None,
+                    None,
                 );
             }
             // Device config exists but screen not found — fall through to default
@@ -219,7 +220,7 @@ impl ContentPipeline {
             .ok_or_else(|| ContentError::ScreenNotFound(device_mac.to_string()))?;
 
         let empty_params: HashMap<String, serde_yaml::Value> = HashMap::new();
-        self.run_resolved(&resolved, &empty_params, device_ctx.as_ref(), None)
+        self.run_resolved(&resolved, &empty_params, device_ctx.as_ref(), None, None)
     }
 
     /// Run a screen by its `handle/path` ref with custom params (without rendering).
@@ -238,16 +239,22 @@ impl ContentPipeline {
             .resolve(screen_ref)
             .ok_or_else(|| ContentError::ScreenNotFound(screen_ref.to_string()))?;
 
-        self.run_resolved(&resolved, &params, device_ctx.as_ref(), None)
+        self.run_resolved(&resolved, &params, device_ctx.as_ref(), None, None)
     }
 
     /// Run a resolved screen's `script.lua` (without rendering).
+    ///
+    /// `caller_log_sink`, if given, is forwarded to `LuaRuntime::run_script`
+    /// so the caller can still read captured `log_*` output after a script
+    /// error (see that function's doc comment). `None` for every caller
+    /// that doesn't need logs on failure — behavior for them is unchanged.
     fn run_resolved(
         &self,
         resolved: &ResolvedScreen,
         params: &HashMap<String, serde_yaml::Value>,
         device_ctx: Option<&DeviceContext>,
         timestamp_override: Option<i64>,
+        caller_log_sink: Option<&Arc<Mutex<Vec<String>>>>,
     ) -> Result<ScriptResult, ContentError> {
         let screen_name = format!("{}/{}", resolved.handle, resolved.path);
         let script_rel = join_rel(&resolved.screen_dir, "script.lua");
@@ -264,6 +271,7 @@ impl ContentPipeline {
             params,
             device_ctx,
             timestamp_override,
+            caller_log_sink,
         )?;
 
         // Use script's refresh rate, device override, or the screen meta default.
@@ -632,12 +640,19 @@ impl ContentPipeline {
 
     /// Run a screen directly by its `handle/path` ref (for dev mode — no device
     /// config consulted). Params come in as JSON and are converted to YAML.
+    ///
+    /// `caller_log_sink`, if given, is forwarded to `run_resolved` /
+    /// `LuaRuntime::run_script` so the caller can read captured `log_*`
+    /// output even when this returns `Err` (the `ContentError` this wraps
+    /// into a `String` doesn't carry logs). `/dev/render` passes `None`
+    /// (unchanged behavior); `ScreenStore::render` passes its own sink.
     pub fn run_script_direct(
         &self,
         screen_ref: &str,
         params: HashMap<String, serde_json::Value>,
         device_ctx: Option<DeviceContext>,
         timestamp_override: Option<i64>,
+        caller_log_sink: Option<&Arc<Mutex<Vec<String>>>>,
     ) -> Result<ScriptResult, String> {
         // Convert JSON params to YAML params for consistency
         let yaml_params: HashMap<String, serde_yaml::Value> = params
@@ -661,6 +676,7 @@ impl ContentPipeline {
             &yaml_params,
             device_ctx.as_ref(),
             timestamp_override,
+            caller_log_sink,
         )
         .map_err(|e| e.to_string())
     }

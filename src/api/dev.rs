@@ -410,10 +410,8 @@ pub async fn handle_render(
     };
 
     // Determine dimensions from model or explicit values
-    let (width, height) = match query.model.as_str() {
-        "x" => (query.width.unwrap_or(1872), query.height.unwrap_or(1404)),
-        _ => (query.width.unwrap_or(800), query.height.unwrap_or(480)),
-    };
+    let (width, height) =
+        crate::api::display::resolve_preview_dimensions(&query.model, query.width, query.height);
 
     // Parse custom params (these override resolved params from MAC)
     let mut custom_params: HashMap<String, serde_json::Value> = resolved_params.unwrap_or_default();
@@ -429,18 +427,8 @@ pub async fn handle_render(
 
     // Build initial palette from colors param or model default (acts as "firmware header")
     // Priority chain: script_colors > device_config_colors > panel_colors > query.colors > model default
-    let query_palette: Vec<(u8, u8, u8)> = if let Some(ref colors_str) = query.colors {
-        crate::api::display::parse_colors_header(colors_str)
-    } else if query.model == "x" {
-        (0..16)
-            .map(|i| {
-                let v = (i * 255 / 15) as u8;
-                (v, v, v)
-            })
-            .collect()
-    } else {
-        crate::api::display::parse_colors_header("#000000,#555555,#AAAAAA,#FFFFFF")
-    };
+    let query_palette: Vec<(u8, u8, u8)> =
+        crate::api::display::resolve_query_palette(&query.model, query.colors.as_deref());
 
     // Resolve panel: query.panel (UI override) > device_config_panel > None
     let panel = query
@@ -451,13 +439,11 @@ pub async fn handle_render(
     let panel_colors: Option<String> = panel.as_ref().map(|p| p.colors.clone());
 
     // Apply priority chain: device_config_colors > panel_colors > query/model default
-    let default_palette: Vec<(u8, u8, u8)> = if let Some(ref config_colors) = device_config_colors {
-        crate::api::display::parse_colors_header(config_colors)
-    } else if let Some(ref pc) = panel_colors {
-        crate::api::display::parse_colors_header(pc)
-    } else {
-        query_palette.clone()
-    };
+    let default_palette: Vec<(u8, u8, u8)> = crate::api::display::resolve_ctx_palette(
+        device_config_colors.as_deref(),
+        panel_colors.as_deref(),
+        &query_palette,
+    );
 
     // Pre-script dither algorithm: query dither > device config > "atkinson"
     let pre_script_algo = query
@@ -514,6 +500,7 @@ pub async fn handle_render(
             custom_params,
             Some(ctx.clone()),
             timestamp_override,
+            None,
         )?;
 
         // Render SVG
@@ -676,26 +663,24 @@ pub async fn handle_render(
     };
 
     // Resolve tuning: query params (dev UI) > script > device config > panel > None
-    let tuning = if query.error_clamp.is_some()
-        || query.noise_scale.is_some()
-        || query.chroma_clamp.is_some()
-        || query.strength.is_some()
-    {
-        crate::models::DitherTuningValues {
-            error_clamp: query.error_clamp,
-            noise_scale: query.noise_scale,
-            chroma_clamp: query.chroma_clamp,
-            strength: query.strength,
-        }
-    } else {
-        let script_tuning = crate::models::DitherTuningValues {
-            error_clamp: script_error_clamp,
-            noise_scale: script_noise_scale,
-            chroma_clamp: script_chroma_clamp,
-            strength: script_strength,
-        };
-        crate::api::display::resolve_tuning(&script_tuning, &dc_tuning, &panel_tuning)
+    let query_tuning = crate::models::DitherTuningValues {
+        error_clamp: query.error_clamp,
+        noise_scale: query.noise_scale,
+        chroma_clamp: query.chroma_clamp,
+        strength: query.strength,
     };
+    let script_tuning = crate::models::DitherTuningValues {
+        error_clamp: script_error_clamp,
+        noise_scale: script_noise_scale,
+        chroma_clamp: script_chroma_clamp,
+        strength: script_strength,
+    };
+    let tuning = crate::api::display::resolve_effective_tuning(
+        &query_tuning,
+        &script_tuning,
+        &dc_tuning,
+        &panel_tuning,
+    );
 
     let render_params = crate::api::display::resolve_render_params(
         script_colors.as_deref(),
@@ -709,6 +694,8 @@ pub async fn handle_render(
         query.preserve_exact,
         &tuning,
     );
+
+    let (tuning, has_tuning) = crate::api::display::resolve_dither_tuning(&render_params);
 
     let final_palette = render_params.palette;
     let final_dither = render_params.dither;
@@ -731,19 +718,6 @@ pub async fn handle_render(
         .use_actual
         .unwrap_or_else(|| measured_colors.is_some())
         && measured_colors.is_some();
-
-    let tuning = crate::rendering::svg_to_png::DitherTuning {
-        serpentine: None,
-        error_clamp: render_params.error_clamp,
-        chroma_clamp: render_params.chroma_clamp,
-        noise_scale: render_params.noise_scale,
-        exact_absorb_error: None,
-        strength: render_params.strength,
-    };
-    let has_tuning = tuning.error_clamp.is_some()
-        || tuning.chroma_clamp.is_some()
-        || tuning.noise_scale.is_some()
-        || tuning.strength.is_some();
 
     match state.content_pipeline.render_png_from_svg(
         &svg,

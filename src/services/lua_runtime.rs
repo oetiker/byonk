@@ -43,6 +43,29 @@ pub struct ScriptResult {
     pub logs: Vec<String>,
 }
 
+/// Cap on `log_*` lines captured per script run. Guards against a script
+/// logging inside a tight loop building an unbounded `Vec<String>` for a
+/// single render — the production `/api/display` path captures logs too
+/// (via `run_script`'s always-present sink) even though nothing reads
+/// `ScriptResult::logs` there today. Once hit, further lines are dropped;
+/// a single truncation marker is appended so a caller that *does* read
+/// `logs` (i.e. `ScreenStore::render`) can tell output was cut off.
+const MAX_LOG_ENTRIES: usize = 500;
+
+/// Push a captured `log_*` line onto `sink`, capped at `MAX_LOG_ENTRIES`
+/// (see its doc comment).
+fn push_log(sink: &Arc<Mutex<Vec<String>>>, line: String) {
+    if let Ok(mut logs) = sink.lock() {
+        if logs.len() < MAX_LOG_ENTRIES {
+            logs.push(line);
+        } else if logs.len() == MAX_LOG_ENTRIES {
+            logs.push(format!(
+                "[warn] log capture truncated at {MAX_LOG_ENTRIES} entries"
+            ));
+        }
+    }
+}
+
 /// Error type for Lua script execution
 #[derive(Debug, thiserror::Error)]
 pub enum ScriptError {
@@ -128,6 +151,19 @@ impl LuaRuntime {
     /// modules and `read_asset()` for sibling files. `screen_name` (a `handle/path`
     /// ref) is used for logging. `screen_dir` is the screen's screen-repo-relative
     /// directory, against which `read_asset(path)` reads through `source`.
+    ///
+    /// `caller_log_sink`, if given, is used as the `log_*` capture sink
+    /// *instead of* an internally-created one — critically, it is a
+    /// reference the caller still owns after this call returns, including
+    /// when it returns `Err`. `lua.load(script_src).eval()?` below can
+    /// short-circuit *before* `ScriptResult` (and its `logs` field) is
+    /// built, which would otherwise discard every `log_*` call the script
+    /// made before it failed — exactly the diagnostic an author debugging
+    /// that failure needs most. `ScreenStore::render` passes its own sink
+    /// and reads it directly in its error branches; every other caller
+    /// passes `None` and is unaffected (an internal sink is created and
+    /// still drained into `ScriptResult::logs` on success, unchanged from
+    /// before).
     #[allow(clippy::too_many_arguments)]
     pub fn run_script(
         &self,
@@ -138,12 +174,22 @@ impl LuaRuntime {
         params: &HashMap<String, serde_yaml::Value>,
         device_ctx: Option<&DeviceContext>,
         timestamp_override: Option<i64>,
+        caller_log_sink: Option<&Arc<Mutex<Vec<String>>>>,
     ) -> Result<ScriptResult, ScriptError> {
         let lua = Lua::new();
         // Captures log_info/log_warn/log_error output for this run, in
         // addition to the tracing calls those hooks already make (see
-        // `ScriptResult::logs`).
-        let log_sink: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        // `ScriptResult::logs`). Uses the caller's sink when given (see
+        // `caller_log_sink` doc above) so logs survive an `Err` return;
+        // otherwise creates one that only this call will ever see.
+        let owned_sink: Arc<Mutex<Vec<String>>>;
+        let log_sink: &Arc<Mutex<Vec<String>>> = match caller_log_sink {
+            Some(sink) => sink,
+            None => {
+                owned_sink = Arc::new(Mutex::new(Vec::new()));
+                &owned_sink
+            }
+        };
 
         // Set up the Lua environment
         self.setup_globals(
@@ -154,7 +200,7 @@ impl LuaRuntime {
             source,
             screen_dir,
             timestamp_override,
-            &log_sink,
+            log_sink,
         )?;
 
         // Install the sandboxed `require()` scoped to this screen repo + byonk-base.
@@ -247,6 +293,7 @@ impl LuaRuntime {
             params,
             device_ctx,
             timestamp_override,
+            None,
         )
     }
 
@@ -887,13 +934,12 @@ impl LuaRuntime {
         globals.set("json_encode", json_encode)?;
 
         // Logging functions. Each appends to `log_sink` (for
-        // `ScriptResult::logs`) in addition to its existing tracing call.
+        // `ScriptResult::logs`, capped — see `push_log`) in addition to its
+        // existing tracing call.
         let sink = log_sink.clone();
         let log_info = lua.create_function(move |_, msg: String| {
             tracing::info!(script = true, "{}", msg);
-            if let Ok(mut logs) = sink.lock() {
-                logs.push(format!("[info] {msg}"));
-            }
+            push_log(&sink, format!("[info] {msg}"));
             Ok(())
         })?;
         globals.set("log_info", log_info)?;
@@ -901,9 +947,7 @@ impl LuaRuntime {
         let sink = log_sink.clone();
         let log_warn = lua.create_function(move |_, msg: String| {
             tracing::warn!(script = true, "{}", msg);
-            if let Ok(mut logs) = sink.lock() {
-                logs.push(format!("[warn] {msg}"));
-            }
+            push_log(&sink, format!("[warn] {msg}"));
             Ok(())
         })?;
         globals.set("log_warn", log_warn)?;
@@ -911,9 +955,7 @@ impl LuaRuntime {
         let sink = log_sink.clone();
         let log_error = lua.create_function(move |_, msg: String| {
             tracing::error!(script = true, "{}", msg);
-            if let Ok(mut logs) = sink.lock() {
-                logs.push(format!("[error] {msg}"));
-            }
+            push_log(&sink, format!("[error] {msg}"));
             Ok(())
         })?;
         globals.set("log_error", log_error)?;
@@ -1388,7 +1430,7 @@ mod require_tests {
         let src: Arc<dyn ScreenRepoSource> = Arc::new(MockSource);
         let script = "local u = require('lib/util'); return { data = { m = u.greet() } }";
         let res = rt
-            .run_script(script, &src, "t", "", &Default::default(), None, None)
+            .run_script(script, &src, "t", "", &Default::default(), None, None, None)
             .unwrap();
         assert_eq!(res.data["m"], serde_json::json!("hi"));
     }
@@ -1422,7 +1464,7 @@ mod require_tests {
         let script =
             "local a = require('lib/c'); local b = require('lib/c'); return { data = { a = a, b = b } }";
         let res = rt
-            .run_script(script, &src, "t", "", &Default::default(), None, None)
+            .run_script(script, &src, "t", "", &Default::default(), None, None, None)
             .unwrap();
         assert_eq!(res.data["a"], serde_json::json!(1));
         assert_eq!(res.data["b"], serde_json::json!(1));
@@ -1434,7 +1476,7 @@ mod require_tests {
         let src: Arc<dyn ScreenRepoSource> = Arc::new(MockSource);
         let script = "local x = require('nope/missing'); return { data = {} }";
         let err = rt
-            .run_script(script, &src, "t", "", &Default::default(), None, None)
+            .run_script(script, &src, "t", "", &Default::default(), None, None, None)
             .unwrap_err();
         assert!(
             err.to_string().contains("module 'nope/missing' not found"),
@@ -1450,7 +1492,7 @@ mod require_tests {
         let src: Arc<dyn ScreenRepoSource> = Arc::new(MockSource);
         let script = "local x = require('../escape'); return { data = {} }";
         let err = rt
-            .run_script(script, &src, "t", "", &Default::default(), None, None)
+            .run_script(script, &src, "t", "", &Default::default(), None, None, None)
             .unwrap_err();
         assert!(
             err.to_string().contains("module '../escape' not found"),
@@ -1486,7 +1528,16 @@ mod require_tests {
         let src: Arc<dyn ScreenRepoSource> = Arc::new(AssetSource);
         let script = "return { data = { c = read_asset('data.txt') } }";
         let res = rt
-            .run_script(script, &src, "acme/s", "s", &Default::default(), None, None)
+            .run_script(
+                script,
+                &src,
+                "acme/s",
+                "s",
+                &Default::default(),
+                None,
+                None,
+                None,
+            )
             .unwrap();
         assert_eq!(res.data["c"], serde_json::json!("hello-asset"));
     }
@@ -1497,7 +1548,16 @@ mod require_tests {
         let src: Arc<dyn ScreenRepoSource> = Arc::new(MockSource);
         let script = "return { data = { c = read_asset('../../etc/passwd') } }";
         let err = rt
-            .run_script(script, &src, "t", "s", &Default::default(), None, None)
+            .run_script(
+                script,
+                &src,
+                "t",
+                "s",
+                &Default::default(),
+                None,
+                None,
+                None,
+            )
             .unwrap_err();
         assert!(
             err.to_string().contains("Failed to read asset"),

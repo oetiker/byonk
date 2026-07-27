@@ -89,6 +89,87 @@ pub fn resolve_ctx_palette(
     }
 }
 
+/// Resolve preview width/height: explicit override, else the model's
+/// default (`"x"` -> the e-ink-X's 1872x1404, everything else -> the
+/// standard 800x480). Shared by `/dev/render` (`api::dev::handle_render`)
+/// and `ScreenStore::render` so the two preview paths can't drift on model
+/// dispatch.
+pub fn resolve_preview_dimensions(
+    model: &str,
+    width: Option<u32>,
+    height: Option<u32>,
+) -> (u32, u32) {
+    match model {
+        "x" => (width.unwrap_or(1872), height.unwrap_or(1404)),
+        _ => (width.unwrap_or(800), height.unwrap_or(480)),
+    }
+}
+
+/// The "query" palette: an explicit colors-header override, else the
+/// model's own default (a 16-grey ramp for `"x"`, else the standard
+/// 4-grey `DEFAULT_COLORS`). This is the innermost fallback that
+/// `resolve_ctx_palette`/`resolve_render_params` sit on top of. Shared by
+/// `/dev/render` and `ScreenStore::render`.
+pub fn resolve_query_palette(model: &str, colors_override: Option<&str>) -> Vec<(u8, u8, u8)> {
+    if let Some(colors_str) = colors_override {
+        parse_colors_header(colors_str)
+    } else if model == "x" {
+        (0..16)
+            .map(|i| {
+                let v = (i * 255 / 15) as u8;
+                (v, v, v)
+            })
+            .collect()
+    } else {
+        parse_colors_header(DEFAULT_COLORS)
+    }
+}
+
+/// If `override_tuning` has any field set, it wins wholesale — an explicit
+/// UI/API tuning override beats the script/device-config/panel chain even
+/// for the fields the caller left `None` (matching `/dev/render`'s existing
+/// "an explicit override replaces the whole tuning struct" behavior).
+/// Otherwise falls back to the normal `resolve_tuning` priority chain.
+/// Shared by `/dev/render` and `ScreenStore::render`.
+pub fn resolve_effective_tuning(
+    override_tuning: &DitherTuningValues,
+    script_tuning: &DitherTuningValues,
+    device_config_tuning: &DitherTuningValues,
+    panel_tuning: &DitherTuningValues,
+) -> DitherTuningValues {
+    if override_tuning.error_clamp.is_some()
+        || override_tuning.noise_scale.is_some()
+        || override_tuning.chroma_clamp.is_some()
+        || override_tuning.strength.is_some()
+    {
+        override_tuning.clone()
+    } else {
+        resolve_tuning(script_tuning, device_config_tuning, panel_tuning)
+    }
+}
+
+/// Build the eink-dither tuning override + whether any override is
+/// actually present, from resolved `RenderParams`. Shared by `/dev/render`
+/// and `ScreenStore::render` so "did the user override anything" can't
+/// drift between the two callers.
+pub fn resolve_dither_tuning(
+    render_params: &RenderParams,
+) -> (crate::rendering::svg_to_png::DitherTuning, bool) {
+    let tuning = crate::rendering::svg_to_png::DitherTuning {
+        serpentine: None,
+        error_clamp: render_params.error_clamp,
+        chroma_clamp: render_params.chroma_clamp,
+        noise_scale: render_params.noise_scale,
+        exact_absorb_error: None,
+        strength: render_params.strength,
+    };
+    let has_tuning = tuning.error_clamp.is_some()
+        || tuning.chroma_clamp.is_some()
+        || tuning.noise_scale.is_some()
+        || tuning.strength.is_some();
+    (tuning, has_tuning)
+}
+
 /// Resolve all rendering parameters after script execution.
 ///
 /// Palette: script_colors > device_config_colors > panel_colors > fallback

@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::models::screen_meta::ScreenMeta;
 use crate::models::{normalize_algorithm_name, DisplaySpec, DitherTuningValues};
@@ -261,13 +261,23 @@ fn deepest_existing_ancestor(path: &Path) -> &Path {
 pub struct ScreenStore {
     manager: Arc<ScreenRepoManager>,
     /// Used by `validate` (its `TemplateService` for SVG/include
-    /// registration checks); Task 9's `render` will use the rest of it
-    /// (renders a screen through the same pipeline devices use, so authors
-    /// can preview an edit before publishing it).
+    /// registration checks) and by `render` (resolves screens through its
+    /// own `ScreenRepoManager` — see `ScreenStore::new`'s doc comment for
+    /// why that manager must be the same `Arc` as `manager` above).
     pipeline: Arc<ContentPipeline>,
 }
 
 impl ScreenStore {
+    /// `manager` and `pipeline` must share the *same* underlying
+    /// `ScreenRepoManager` — `render` resolves screens through
+    /// `pipeline`'s manager, while every other method here (`read_file`,
+    /// `write_file`, `create_screen`, ...) resolves through `manager`
+    /// directly. If the caller ever constructs `pipeline` from a
+    /// *different* `ScreenRepoManager` than `manager` (e.g. two separately
+    /// loaded managers pointed at the same config), reads/writes and
+    /// renders would silently disagree about what a `screen_ref` resolves
+    /// to. Nothing in the type system enforces this — the production
+    /// wiring that constructs both (Task 13) must pass the same `Arc`.
     pub fn new(manager: Arc<ScreenRepoManager>, pipeline: Arc<ContentPipeline>) -> Self {
         Self { manager, pipeline }
     }
@@ -766,26 +776,14 @@ impl ScreenStore {
             error: None,
         };
 
-        // Dimensions: explicit override, else the model's default — mirrors
-        // `/dev/render`'s `query.model` dispatch (only "x" gets its own
-        // branch; everything else, including "og", is the 800x480 default).
-        let (width, height) = match opts.model.as_str() {
-            "x" => (opts.width.unwrap_or(1872), opts.height.unwrap_or(1404)),
-            _ => (opts.width.unwrap_or(800), opts.height.unwrap_or(480)),
-        };
-
-        // Fallback palette when no panel resolves a `colors` override —
-        // same per-model default `/dev/render` falls back to.
-        let model_palette: Vec<(u8, u8, u8)> = if opts.model == "x" {
-            (0..16)
-                .map(|i| {
-                    let v = (i * 255 / 15) as u8;
-                    (v, v, v)
-                })
-                .collect()
-        } else {
-            crate::api::display::parse_colors_header("#000000,#555555,#AAAAAA,#FFFFFF")
-        };
+        // Dimensions + base palette: explicit override, else the model's
+        // default — the same option-resolution chain `/dev/render` uses
+        // (`crate::api::display::resolve_preview_dimensions`/
+        // `resolve_query_palette`), shared so the two previews can't drift.
+        let (width, height) =
+            crate::api::display::resolve_preview_dimensions(&opts.model, opts.width, opts.height);
+        let query_palette: Vec<(u8, u8, u8)> =
+            crate::api::display::resolve_query_palette(&opts.model, None);
 
         let config = self.pipeline.config().load();
         let panel = opts
@@ -796,6 +794,13 @@ impl ScreenStore {
         let measured_colors: Option<Vec<(u8, u8, u8)>> = panel
             .and_then(|p| p.colors_actual.as_deref())
             .map(crate::api::display::parse_colors_header);
+
+        // The palette the script sees via `device.colors` — panel colors
+        // fold in over the model default, same as `/dev/render`'s
+        // `default_palette` (there is no device-config layer in an
+        // authoring render, so that step of the chain is always absent).
+        let ctx_palette: Vec<(u8, u8, u8)> =
+            crate::api::display::resolve_ctx_palette(None, panel_colors.as_deref(), &query_palette);
 
         // Pre-script dither algorithm + tuning, for the device context the
         // script sees via `device.dither.*` — same resolution `/dev/render`
@@ -815,7 +820,7 @@ impl ScreenStore {
             firmware_version: Some("dev".to_string()),
             width: Some(width),
             height: Some(height),
-            colors: Some(crate::api::display::colors_to_hex_strings(&model_palette)),
+            colors: Some(crate::api::display::colors_to_hex_strings(&ctx_palette)),
             dither_algorithm: Some(pre_script_algo.to_string()),
             dither_error_clamp: pre_panel_tuning.error_clamp,
             dither_noise_scale: pre_panel_tuning.noise_scale,
@@ -824,6 +829,15 @@ impl ScreenStore {
             ..Default::default()
         };
 
+        // Caller-owned log sink: passed *into* `run_script_direct` (down
+        // through `run_resolved`/`LuaRuntime::run_script`) so a Lua error —
+        // which short-circuits before `ScriptResult` is built — still
+        // leaves every `log_*` call made before the failure readable here,
+        // in the error branch below. See `LuaRuntime::run_script`'s doc
+        // comment for why this has to be caller-owned rather than read out
+        // of `ScriptResult` after the fact.
+        let log_sink: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
         // Run the script, capturing logs/data/refresh_rate. `run_script_direct`
         // is the same entry point `/dev/render` uses for a screen-name preview.
         let script_result = match self.pipeline.run_script_direct(
@@ -831,10 +845,13 @@ impl ScreenStore {
             HashMap::new(),
             Some(device_ctx.clone()),
             opts.timestamp,
+            Some(&log_sink),
         ) {
             Ok(r) => r,
             Err(message) => {
+                let log = log_sink.lock().map(|g| g.clone()).unwrap_or_default();
                 return RenderResult {
+                    log,
                     error: Some(RenderError {
                         line: parse_lua_error_line(&message),
                         message,
@@ -854,14 +871,15 @@ impl ScreenStore {
         {
             Ok(s) => s,
             Err(e) => {
-                let message = e.to_string();
+                // Tera/SVG failure, not Lua — no line number to report (see
+                // `RenderError`'s doc comment / binding resolution #2).
                 return RenderResult {
                     log,
                     data,
                     refresh_rate,
                     error: Some(RenderError {
-                        line: parse_lua_error_line(&message),
-                        message,
+                        line: None,
+                        message: e.to_string(),
                     }),
                     ..empty()
                 };
@@ -887,29 +905,24 @@ impl ScreenStore {
             })
             .unwrap_or_default();
 
-        let tuning = if opts.error_clamp.is_some()
-            || opts.noise_scale.is_some()
-            || opts.chroma_clamp.is_some()
-        {
-            DitherTuningValues {
-                error_clamp: opts.error_clamp,
-                noise_scale: opts.noise_scale,
-                chroma_clamp: opts.chroma_clamp,
-                strength: None,
-            }
-        } else {
-            let script_tuning = DitherTuningValues {
-                error_clamp: script_result.script_error_clamp,
-                noise_scale: script_result.script_noise_scale,
-                chroma_clamp: script_result.script_chroma_clamp,
-                strength: script_result.script_strength,
-            };
-            crate::api::display::resolve_tuning(
-                &script_tuning,
-                &DitherTuningValues::default(),
-                &panel_tuning,
-            )
+        let opts_tuning = DitherTuningValues {
+            error_clamp: opts.error_clamp,
+            noise_scale: opts.noise_scale,
+            chroma_clamp: opts.chroma_clamp,
+            strength: None,
         };
+        let script_tuning = DitherTuningValues {
+            error_clamp: script_result.script_error_clamp,
+            noise_scale: script_result.script_noise_scale,
+            chroma_clamp: script_result.script_chroma_clamp,
+            strength: script_result.script_strength,
+        };
+        let tuning = crate::api::display::resolve_effective_tuning(
+            &opts_tuning,
+            &script_tuning,
+            &DitherTuningValues::default(),
+            &panel_tuning,
+        );
 
         let render_params = crate::api::display::resolve_render_params(
             script_result.script_colors.as_deref(),
@@ -918,7 +931,7 @@ impl ScreenStore {
             None,
             dither_override,
             panel_colors.as_deref(),
-            &model_palette,
+            &query_palette,
             measured_colors.clone(),
             opts.preserve_exact,
             &tuning,
@@ -926,18 +939,8 @@ impl ScreenStore {
 
         let display_spec = DisplaySpec::from_dimensions(width, height).unwrap_or(DisplaySpec::OG);
         let use_actual = measured_colors.is_some();
-        let dither_tuning = crate::rendering::svg_to_png::DitherTuning {
-            serpentine: None,
-            error_clamp: render_params.error_clamp,
-            chroma_clamp: render_params.chroma_clamp,
-            noise_scale: render_params.noise_scale,
-            exact_absorb_error: None,
-            strength: render_params.strength,
-        };
-        let has_tuning = dither_tuning.error_clamp.is_some()
-            || dither_tuning.chroma_clamp.is_some()
-            || dither_tuning.noise_scale.is_some()
-            || dither_tuning.strength.is_some();
+        let (dither_tuning, has_tuning) =
+            crate::api::display::resolve_dither_tuning(&render_params);
 
         let png = match self.pipeline.render_png_from_svg(
             &svg,
@@ -951,14 +954,15 @@ impl ScreenStore {
         ) {
             Ok(bytes) => bytes,
             Err(e) => {
-                let message = e.to_string();
+                // Dither/PNG-encode failure, not Lua — no line number (see
+                // `render_svg_from_script`'s error branch above).
                 return RenderResult {
                     log,
                     data,
                     refresh_rate,
                     error: Some(RenderError {
-                        line: parse_lua_error_line(&message),
-                        message,
+                        line: None,
+                        message: e.to_string(),
                     }),
                     ..empty()
                 };
@@ -988,6 +992,7 @@ impl ScreenStore {
 mod tests {
     use super::*;
     use crate::assets::AssetLoader;
+    use crate::models::config::PanelConfig;
     use crate::models::AppConfig;
     use crate::server::SharedConfig;
     use crate::services::screen_repo_manager::tests::test_manager_with_screens_dir;
@@ -1009,6 +1014,13 @@ mod tests {
     /// (`../../marker` from `repo_root`) purely from the returned path,
     /// without ever probing real system directories.
     fn test_store_with_local() -> (ScreenStore, PathBuf) {
+        test_store_with_local_and_config(AppConfig::default())
+    }
+
+    /// Like `test_store_with_local`, but with a caller-supplied `AppConfig`
+    /// (e.g. one with `panels` populated, for tests that need `render`'s
+    /// panel resolution).
+    fn test_store_with_local_and_config(config: AppConfig) -> (ScreenStore, PathBuf) {
         let outer = tempdir_path("screen_store_local");
         let repo_root = outer.join("inner").join("local_repo");
         std::fs::create_dir_all(&repo_root).unwrap();
@@ -1021,8 +1033,7 @@ mod tests {
 
         let asset_loader = Arc::new(AssetLoader::new(None, None, None));
         let renderer = Arc::new(RenderService::new(&asset_loader).unwrap());
-        let shared_config: SharedConfig =
-            Arc::new(arc_swap::ArcSwap::from(Arc::new(AppConfig::default())));
+        let shared_config: SharedConfig = Arc::new(arc_swap::ArcSwap::from(Arc::new(config)));
         let pipeline = Arc::new(
             ContentPipeline::new(shared_config, asset_loader, renderer, manager.clone()).unwrap(),
         );
@@ -1646,6 +1657,36 @@ mod tests {
     }
 
     #[test]
+    fn render_error_still_returns_logs_from_before_the_failure() {
+        // Regression for the caller-owned log sink: a script's `log_info`
+        // calls before it errors are the single most useful diagnostic for
+        // debugging that failure, and must not be lost just because
+        // `run_script`'s `?` short-circuits before `ScriptResult` (and its
+        // `logs` field) is built. If this reverts to reading logs only out
+        // of `ScriptResult` on the `Ok` path, `res.log` goes back to `[]`
+        // here.
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "logthenerror", StarterKind::Minimal)
+            .unwrap();
+        store
+            .write_file(
+                "local/logthenerror",
+                "script.lua",
+                b"log_info(\"before the crash\")\nerror(\"boom\")",
+                None,
+            )
+            .unwrap();
+        let res = store.render("local/logthenerror", RenderOpts::default());
+        assert!(res.error.is_some(), "expected the script error to surface");
+        assert!(
+            res.log.iter().any(|l| l.contains("before the crash")),
+            "expected pre-failure log lines to survive the error, got: {:?}",
+            res.log
+        );
+    }
+
+    #[test]
     fn render_reports_lua_error_with_line_number() {
         // `error("boom")` on line 2 of the script (line 1 is a comment) —
         // the mlua runtime error carries a line number, and `render` must
@@ -1703,6 +1744,65 @@ mod tests {
     }
 
     #[test]
+    fn render_panel_option_selects_panel_colors_for_device_colors() {
+        // Regression for the Important-2 divergence: `render`'s
+        // `device_ctx.colors` (what a script sees via `device.colors`) must
+        // fold in the resolved panel's `colors`, matching what the panel's
+        // `colors` also drives the final dithered PNG toward — not the
+        // bare model default. A script that adapts its drawing to
+        // `device.colors` (the exact thing `RenderOpts::panel` exists to
+        // preview) would otherwise preview against the wrong palette. If
+        // this reverts to building `device_ctx.colors` from the bare model
+        // palette instead of `resolve_ctx_palette`, the assertion below
+        // fails (it'd see the 4-grey model default instead).
+        let mut panels = HashMap::new();
+        panels.insert(
+            "test-panel".to_string(),
+            PanelConfig {
+                name: "Test Panel".to_string(),
+                match_pattern: None,
+                width: None,
+                height: None,
+                colors: "#FF0000,#00FF00,#0000FF".to_string(),
+                colors_actual: None,
+                dither: None,
+            },
+        );
+        let config = AppConfig {
+            panels,
+            ..AppConfig::default()
+        };
+        let (store, _repo_root) = test_store_with_local_and_config(config);
+        store
+            .create_screen("local", "panelcheck", StarterKind::Minimal)
+            .unwrap();
+        store
+            .write_file(
+                "local/panelcheck",
+                "script.lua",
+                // `message` keeps the starter's `screen.svg` (which
+                // references `data.message`) happy; `colors` is what this
+                // test actually inspects.
+                b"return { data = { message = \"x\", colors = device.colors } }",
+                None,
+            )
+            .unwrap();
+        let res = store.render(
+            "local/panelcheck",
+            RenderOpts {
+                panel: Some("test-panel".to_string()),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert_eq!(
+            res.data["colors"],
+            serde_json::json!(["#FF0000", "#00FF00", "#0000FF"]),
+            "device.colors should be the panel's colors, not the model default"
+        );
+    }
+
+    #[test]
     fn render_include_raw_produces_pre_dither_png() {
         let (store, _repo_root) = test_store_with_local();
         store
@@ -1719,6 +1819,14 @@ mod tests {
         assert!(!res.png.is_empty());
         let raw = res.raw_png.expect("include_raw should populate raw_png");
         assert!(!raw.is_empty());
+        // Must actually be the pre-dither (full-color) PNG, not a second
+        // copy of the palette-restricted `png` — this would still pass if
+        // `render_raw_png_from_svg` accidentally returned the dithered
+        // bytes, so assert the two differ rather than just non-empty.
+        assert_ne!(
+            raw, res.png,
+            "raw_png should be the pre-dither PNG, not the dithered `png`"
+        );
     }
 
     #[test]

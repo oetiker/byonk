@@ -15,7 +15,9 @@ pub mod screen_repo_status;
 pub mod screen_store;
 pub mod template_service;
 
-pub use config_writer::{remove_device, set_scalar, upsert_device, ConfigWriteError};
+pub use config_writer::{
+    remove_device, replace_scalar, set_scalar, upsert_device, ConfigWriteError,
+};
 pub use content_cache::{CachedContent, ContentCache};
 pub use content_pipeline::{ContentPipeline, DeviceContext};
 pub use device_registry::{DeviceRegistry, InMemoryRegistry};

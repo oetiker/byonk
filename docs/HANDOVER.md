@@ -1,71 +1,65 @@
 # Handover — Byonk
 
-_Last updated: 2026-07-27 — **Screen-authoring initiative: executing Plan 1 (authoring core) via subagent-driven development. Tasks 1–7 of 13 DONE and reviewed-clean; Task 8 (`ScreenStore::validate`) is next.** Branch `feat/screen-store-authoring-core` (off `chore/rust-toolchain-pin` @ `12385da`), HEAD `5b04d4d`, local-only (not pushed). All gates green through Task 7._
+_Last updated: 2026-07-28 — **Screen-authoring initiative: Plan 1 (authoring core) is COMPLETE.** All 13 tasks implemented, individually reviewed, and closed out by a whole-branch review + one fix wave + a scoped re-review — no merge blockers. Branch `feat/screen-store-authoring-core`, HEAD `9ab8b0b`, 25 commits ahead of `main` (`67b3855`), local-only (not pushed). `make check` and `make docs` green on HEAD. **Awaiting the integration decision (merge / PR / hold).** Next work: write Plan 2 (MCP interface), then Specs 2 and 3._
 
 ## The initiative
 
-Turn byonk into a place where screens are **authored**, not just served, and make an LLM (Claude Code) a first-class author that can develop screens against a byonk running **anywhere** — including the HA add-on inside HA — over the LAN, with no filesystem access and no Samba share. Creating a screen means editing three languages (yaml + lua + svg); today that's read-only, hand-edited over a share.
+Turn byonk into a place where screens are **authored**, not just served, and make an LLM (Claude Code) a first-class author that can develop screens against a byonk running **anywhere** — including the HA app inside Home Assistant — over the LAN, with no filesystem access and no Samba share.
 
-Design is split into **3 specs** (spec 1 is in flight):
-- **Spec 1 — Screen store core + MCP** (`docs/superpowers/specs/2026-07-24-screen-store-and-mcp-design.md`). A typed writable screen-source model + a shared `ScreenStore` mutation/validate/render core + an always-on MCP interface at `/mcp`.
+Design is split into **3 specs**:
+- **Spec 1 — Screen store core + MCP** (`docs/superpowers/specs/2026-07-24-screen-store-and-mcp-design.md`). Split into two plans: **Plan 1 — Authoring core** (`docs/superpowers/plans/2026-07-26-screen-store-authoring-core.md`) ← **DONE, this branch**; **Plan 2 — MCP interface** (not written) — Component 5 of spec 1, `rmcp` streamable-HTTP at `/mcp` on the main router, admin-token gated (same `require_admin` Bearer as `/api/admin/*`). That's why Task 1 bumped axum to 0.8.
 - **Spec 2 — Svelte web UI at `/`** (not written). Always-on SPA, three-pane editor, live preview, full `/dev` parity, then retire `/dev` + `byonk dev`.
 - **Spec 3 — Git commit & history** (not written). gix write path over local repos that are git working copies.
 
-Spec 1 is itself split into **2 implementation plans**:
-- **Plan 1 — Authoring core** (`docs/superpowers/plans/2026-07-26-screen-store-authoring-core.md`, 13 tasks): axum bump → typed writable sources → `ScreenStore` → builtin/examples split + migration. **← executing now.**
-- **Plan 2 — MCP interface** (not written): Component 5 of spec 1, on top of Plan 1's finished core.
+## What Plan 1 shipped
 
-## How to resume (READ FIRST)
+**Typed writable sources (Tasks 1–5).** axum 0.7→0.8 (all `:param` routes → `{param}`). `ScreenRepoSource::writable_root() -> Option<&Path>`; `DiskScreenRepoSource` → `GitScreenRepoSource`; new `LocalScreenRepoSource`. A `path:` variant on screen-repo config refs (mutually exclusive with `repo:`, validated inside `AppConfig::load_from_assets`). `SCREENS_DIR` auto-registers as the writable handle **`local`** unless config declares one. **Writability is a structural property of the source, never a name check.** Registration happens at one site — `ScreenRepoManager::build_disk_sources`, called from both `new` and `rebuild_loader` — so the initial snapshot and every rebuild are identical by construction.
 
-1. **Ledger is the source of truth:** `cat .superpowers/sdd/2026-07-26-screen-store-authoring-core/progress.md` (git-ignored). Note the path: the ledger moved from the old flat `.superpowers/sdd/progress.md` into a **per-plan workspace** (the old file is left as `progress.md.migrated-to-workspace`; ignore it). The ledger lists each task's status, commit range, deferred minors, and the durable facts later tasks need. Tasks with a `Task <N>: complete` line are DONE — do not re-dispatch. `git log --oneline 12385da..HEAD` corroborates.
-2. **Resume execution** with the **superpowers:subagent-driven-development** skill (v6.2.0), continuing at **Task 8**. Per task: `scripts/task-brief PLAN N` → dispatch implementer subagent (fresh, model per task) → `scripts/review-package PLAN BASE HEAD` → dispatch task reviewer → fix loop → ledger line. Scripts live in the skill dir: `/Users/oetiker/.claude/plugins/cache/claude-plugins-official/superpowers/6.2.0/skills/subagent-driven-development/scripts/` (run from the repo root).
-3. **BASE for Task 8's review package = current HEAD `5b04d4d`.**
-4. Task briefs, implementer reports, and review packages for tasks 6–7 are in the workspace dir alongside the ledger — useful context, not required reading.
+**`ScreenStore` (Tasks 6–9)** — `src/services/screen_store.rs`, the shared core Plan 2 and Spec 2 both consume:
+- `read_file`/`write_file` with blake3 etags; strictly verify-before-mutate (resolve root → canonicalize base → canonicalize deepest existing ancestor → prefix check → `create_dir_all` → unique tmp → rename → `rebuild_loader()`).
+- `create_screen`/`copy_screen`/`rename_screen`/`delete_screen`, `StarterKind::Minimal`.
+- `validate` → `ValidationReport{ok, issues}` (meta schema + Lua compile-only + SVG registration via `TemplateService`).
+- `render(screen_ref, RenderOpts) -> RenderResult{png, raw_png, log, data, refresh_rate, error}` — one `RenderError{line, message}` for every failure class; every failure path returns a result, never a panic.
 
-## Done (Tasks 1–7, all reviewed clean)
+**Three built-in layers, kept separate (Tasks 10–12).** (1) `byonk-base-v1` — embedded include library **and** Lua namespace, untouched by this work; (2) `byonk-builtin` — minimal read-only *embedded* repo (`default` + `calibration/*`), handle string **frozen**; (3) `examples` — shipped samples, embedded separately, seeded to disk once as an editable repo, overridable with the new **`EXAMPLES_DIR`** env var. Byonk no longer copies builtin screens into `SCREENS_DIR`; that dir gets only a `local` manifest. A one-time startup migration rewrites the leftover manifest and rewrites device refs `byonk-builtin/<x>` → `local/<x>` **only** for the user's own screens.
 
-**Tasks 1–5 — "typed writable sources"** (details in the ledger):
-- **T1 `002a21a`** axum 0.7→0.8 (+ swagger-ui 8→9), all `:param` routes → `{param}`.
-- **T2 `2a6e62a`** `writable_root() -> Option<&Path>` on `ScreenRepoSource`; `DiskScreenRepoSource` → `GitScreenRepoSource`.
-- **T3 `2d5006a`** `LocalScreenRepoSource` (writable); shared disk-walk helpers extracted.
-- **T4 `4b2e143`** `ScreenRepoRef.path` variant + `validate()` (rejects `repo`+`path`), wired inside `AppConfig::load_from_assets`.
-- **T5 `87e4919`** `path:` entries + `SCREENS_DIR` register as writable local sources; `SCREENS_DIR` auto-registers as handle **`local`** unless config declares one. Added `AssetLoader::screens_dir()`, `server::build_screen_repo_manager`, `DiskSource{Git,Local}`, `ScreenRepoLoader::source_for(handle)`.
+**Wiring + docs (Task 13).** `AppState.screen_store: Arc<ScreenStore>` — no route consumes it yet, by design. New user page `docs/src/guide/authoring.md`; CHANGES.md Unreleased written.
 
-**Task 6 `27252b6` + `afb5fdb`** — `ScreenStore` (`src/services/screen_store.rs`): `read_file`/`write_file`, blake3 etags, `StoreError{ReadOnly{copy_hint},NotFound,Conflict,Traversal,TooLarge,Io}`. Opus review found 7 Important defects, all fixed + tested:
-- `split_ref` now validates **both** halves via `safe_rel` (an empty tail let a caller overwrite the repo manifest).
-- Write path is strictly **verify-before-mutate**: resolve root once → canonicalize base → canonicalize deepest existing ancestor of the target's parent → prefix check → `create_dir_all` → unique tmp (`<file>.byonk-tmp-<pid>-<rand>`) → `rename` → `rebuild_loader()`. A non-canonicalizable base is a hard error, never a skipped check.
-- `if_match` against a deleted file returns `Conflict` (was silently resurrecting it).
-- **`LocalScreenRepoSource::writable_root()` returns `manifest_root`, not the bare `root`** — write and read now share a base (the struct's `root` field is gone).
-- `rand` is now used in production code (already a normal dependency); `blake3` added.
+## Load-bearing invariants — do not break these
 
-**Task 7 `5211927` + `5b04d4d`** — `create_screen`/`copy_screen`/`rename_screen`/`delete_screen` + `StarterKind::Minimal`. Opus review found 2 Important defects, both fixed + tested:
-- `copy_screen` now `safe_rel`s the source-supplied path suffix (the canonicalize guard provably misses a lexical `..` when the destination dir doesn't exist yet).
-- `EmbeddedBuiltinSource::screen_files` merges the `list_screens()` set with a `walk_files_under()` walk of the `SCREENS_DIR` overlay — otherwise forking an overlay screen silently dropped its images (`collect_screen_files` filters to lua/svg/yaml). `AssetLoader::collect_screen_files` was deliberately **not** widened.
-- New trait method **`ScreenRepoSource::screen_files(&self, screen_path) -> Vec<String>`, no default impl, 8 implementors** (incl. test stubs in `lua_runtime.rs` / `template_service.rs` — those two files' edits are required, not scope creep).
-- Starter templates are three `&str` consts in `screen_store.rs`; `assets.rs` untouched, no new embed root. `create_screen`/`copy_screen` clean up their destination on partial failure; `MAX_FILE_BYTES` enforced on copy.
+- **`ScreenStore::new` must get the SAME `Arc<ScreenRepoManager>` the `ContentPipeline` has.** `render` resolves through `self.pipeline`'s manager, not `self.manager`. Guarded by `tests/screen_store_wiring_test.rs`, doc-noted on the field and on `new()`.
+- **The `byonk-builtin` handle string is frozen** — device configs in the wild reference it, and `content_pipeline.rs:215` hard-references `byonk-builtin/default` as the un-onboarded-device fallback.
+- **`byonk-builtin` enumerates embedded-only** (`screen_paths` → `AssetLoader::list_embedded`) so a user's screens are never listed twice. But **`read` deliberately keeps the `SCREENS_DIR` overlay**, so an upgraded install's customized `default/screen.svg` keeps rendering — which means `local/default` still *shadows* the builtin fallback on read. Documented as a sharp edge in `authoring.md`. `svg_files`/`screen_files` stay merged on purpose (single consumer, `TemplateService::build_tera`; `copy_screen` gates on the narrowed `screen_paths`).
+- **Option resolution for renders lives once**, in `src/api/display.rs` (`resolve_preview_dimensions`, `resolve_query_palette`, `resolve_ctx_palette`, `resolve_effective_tuning`, `resolve_dither_tuning`). Both `/dev/render`'s `handle_render` and `ScreenStore::render` call it. Any new knob goes there, once.
+- **The migration and `local`'s registration agree by construction** — `present_screen_dirs` goes through `LocalScreenRepoSource::load` + `screen_paths()`, the same entry point registration uses.
+- **`AssetLoader::read_screen_embedded_only`** exists solely so `EmbeddedBuiltinSource::load` reads its manifest without the overlay (otherwise a user's `local` manifest could unregister `byonk-builtin`). One caller — do not widen it.
+- Startup order: `seed_and_migrate` (`main.rs:681`) → build state → serve, used by **both** `run_server` and `run_dev_server`.
+- Seeding is four independently-fallible sections; a failed examples seed must never prevent config seeding. The local-manifest seed gate is "`byonk-screens.yaml` does not exist", not "dir is empty".
 
-## Next (Tasks 8–13)
+## Preconditions for Plan 2 (MCP) — close these in the commit that first exposes each surface
 
-- **T8** `validate` (meta schema + Lua compile-only + SVG/include resolution) → `ValidationReport{ok, issues}`.
-- **T9** `render` with diagnostics (png + raw + captured Lua `log_*` + returned data + line-numbered Lua error). Touches `lua_runtime.rs` to capture logs per-run.
-- **T10** split embedded `screens/` → minimal `byonk-builtin` (`default` + `calibration/*`) + shipped `examples`. ⚠️ Plan Step 5 says `git add -A screens/` — **override to explicit-path staging** (constraint: no `git add -A`).
-- **T11** seed `local` manifest + `examples` repo; stop copying builtin screens into SCREENS_DIR.
-- **T12** one-time migration: rewrite old `byonk-builtin/<user-screen>` device refs → `local/<x>` (genuine builtins untouched); idempotent.
-- **T13** wire `ScreenStore` into `AppState` + docs (`docs/src/guide/authoring.md`) + CHANGES.md.
+These are harmless today **only** because nothing routes to `ScreenStore`:
+1. **`MAX_FILE_BYTES` is not enforced on `validate`'s reads** (only `read_file` caps). A git-fetched or Samba-dropped file is unbounded → an API-triggered `validate` is an unbounded read into memory.
+2. **The disk sources' `read` follows symlinks** — `GitScreenRepoSource::read` / `LocalScreenRepoSource::read` apply only a lexical `is_safe_rel` check, so a repo containing `leak -> /etc/passwd` leaks it. Add canonicalize-and-prefix-check. (The *write* path is already fully guarded.)
+3. **`ScreenStore` has no internal serialization** — `create_screen`/`rename_screen` have TOCTOU windows, and two concurrent creates can interleave such that one's cleanup deletes the other's work. MCP and UI callers are concurrent.
 
-## Key decisions (durable)
+## Known parked items (non-blocking, reviewed and judged)
 
-- **Three built-in layers, kept separate:** (1) `byonk-base-v1` include library — embedded, universal, versioned, read-only, **untouched by this work**; (2) `byonk-builtin` repo — minimal read-only `default` + `calibration/*`; (3) `examples` — shipped, seeded to disk, editable. Writability is a **structural property of the source** (`writable_root()`), never a name check.
-- **`byonk-builtin` handle string is frozen** (device configs reference it). Only what it embeds changes.
-- MCP (Plan 2) = `rmcp` streamable-HTTP at `/mcp` on the main router, admin-token gated (same `require_admin` Bearer as `/api/admin/*`). That's why axum 0.8 was a prerequisite.
-- Reviews on the security-bearing store tasks (6, 7) ran on **opus** and both found real defects the sonnet implementer missed — keep reviewing the mutating surface at that tier.
-- After the whole plan: validate the HA add-on options-schema change on the VM (memory `ha-vm-addon-manifest-sync-gap`).
+- `docs/src/tutorial/first-screen.md:67,187` and `docs/src/api/admin-api.md:537,573` still show `byonk: "0.15"`, and `first-screen.md:67` mislabels it "minimum engine version" — it is a caret range, so `"0.15"` *excludes* 0.17.x. An author following the tutorial hand-writes the exact false compat warning the fix wave removed. **~4-line docs fix, worth doing soon.**
+- An explicit `local: { path: /elsewhere }` in config suppresses `SCREENS_DIR` auto-registration, but the migration (which runs before config load) would still rewrite refs to `local/x`. Exotic; the add-on path is blocked by the reserved-handle check.
+- `svg_files` staying merged means each `byonk-builtin` render registers every `.svg` under `SCREENS_DIR` as a Tera template — correctness-neutral, O(SCREENS_DIR) reads. Pre-existing.
+- 5 `clippy --all-targets` warnings, all pre-existing before this branch, all in test code; `make check` does not run that form.
+- The HA app's options schema (`AddonScreenRepo`) still has no `path:` shape. Deliberate: `apply_to_config` runs *after* config validation so a `path`+`repo` pair would bypass `ScreenRepoRef::validate`, and `build_disk_sources` checks `path` first so it would silently win — adding the field alone is unsafe. `local`/`examples` auto-register with zero config, so nothing is blocked.
 
 ## Build / verify
 
-- `make check` = fmt + `clippy -- -D warnings` + tests (green through T7; 23 `screen_store` tests). `make docs` must stay clean.
-- **Global constraints (bind every task):** never `git add -A`/`.` (stage explicit paths, verify `git diff --cached`); CHANGES.md = user-facing only; `byonk-base-v1` untouched; scratch release image (no `/tmp`, on-disk state under `/data`); Rust toolchain via rustup/`rust-toolchain.toml`.
+- `make check` = fmt + `clippy -- -D warnings` + tests (**519 tests green on `9ab8b0b`**). `make docs` builds clean (needs `cargo install mdbook-mermaid` once).
+- If `cargo` is not found, add `$HOME/.cargo/bin` to `PATH` — the toolchain is rustup-managed via `rust-toolchain.toml` (never add cargo/rust to mise).
+- **Global constraints:** never `git add -A`/`.` (stage explicit paths, verify `git diff --cached`); CHANGES.md is user-facing only; `byonk-base-v1` untouched; scratch release image (no `/tmp`, state under `/data`).
+- **After merge:** validate on the HA VM — the app's options-schema sync gotcha is in memory `ha-vm-addon-manifest-sync-gap`; the from-source build recipe is in `ha-vm-from-source-addon-build`.
 
-## After Plan 1
+## Process notes worth keeping
 
-Final whole-branch review (opus, `superpowers:requesting-code-review`) — point it at the ledger's `minor (deferred)` lines for triage — then `superpowers:finishing-a-development-branch`. Then write Plan 2 (MCP) and Spec 2/3.
+- Execution used **superpowers:subagent-driven-development** (v6.2.0): per task, brief → implementer → review package → task reviewer → fix loop → ledger line. The ledger lived at `.superpowers/sdd/2026-07-26-screen-store-authoring-core/progress.md` (git-ignored; deleted once the branch was finished).
+- **Reviews on opus repeatedly found real defects a sonnet implementer missed** — including a migration that would have rewritten `byonk-builtin/default` on every genuinely-upgraded install while all seven of its tests passed, because the fixtures never reproduced a real upgraded `SCREENS_DIR`. Keep reviewing the mutating and migration surfaces at that tier.
+- Subagents whose transcripts exceeded ~230k tokens stalled or died twice; handing findings over as a **file** and dispatching a fresh implementer was the reliable recovery.

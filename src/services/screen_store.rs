@@ -28,6 +28,19 @@ pub struct FileContents {
     pub binary: bool,
 }
 
+/// One entry in `ScreenStore::list_screens`'s report: a resolved screen plus
+/// whether its repo is writable and which files it's made of.
+pub struct ScreenListEntry {
+    pub screen_ref: String,
+    pub handle: String,
+    pub path: String,
+    pub title: String,
+    pub description: String,
+    pub byonk: String,
+    pub writable: bool,
+    pub files: Vec<String>,
+}
+
 /// Failure modes for `ScreenStore` reads/writes.
 #[derive(Debug)]
 pub enum StoreError {
@@ -340,6 +353,46 @@ impl ScreenStore {
                     "'{handle}' is read-only; use copy_screen to fork '{handle}/{screen_path}' into a writable repo (e.g. 'local')"
                 ),
             })
+    }
+
+    /// Every screen the loader currently resolves, annotated with whether its
+    /// repo is writable. `writable` is read off the source's `writable_root`,
+    /// never off the handle's name — a handle called `local` backed by a git
+    /// cache is still read-only, and that must be what callers see.
+    pub fn list_screens(&self) -> Vec<ScreenListEntry> {
+        let loader = self.manager.loader();
+        let mut out: Vec<ScreenListEntry> = loader
+            .list_all()
+            .into_iter()
+            .map(|s| {
+                // `screen_files` returns manifest-root-relative paths (e.g.
+                // "clock/script.lua", prefixed by `s.path` itself), but
+                // `ScreenListEntry::files` is screen-relative (e.g.
+                // "script.lua") — strip the screen-path prefix the same way
+                // `copy_screen_files` does when it turns this same listing
+                // into on-disk write targets.
+                let prefix = format!("{}/", s.path);
+                let files = s
+                    .source
+                    .screen_files(&s.path)
+                    .into_iter()
+                    .filter_map(|f| f.strip_prefix(&prefix).map(str::to_string))
+                    .collect();
+                ScreenListEntry {
+                    screen_ref: format!("{}/{}", s.handle, s.path),
+                    writable: s.source.writable_root().is_some(),
+                    files,
+                    title: s.meta.title.clone(),
+                    description: s.meta.description.clone(),
+                    byonk: s.meta.byonk.clone(),
+                    handle: s.handle,
+                    path: s.path,
+                }
+            })
+            .collect();
+        // Deterministic order — MCP clients diff these listings between calls.
+        out.sort_by(|a, b| a.screen_ref.cmp(&b.screen_ref));
+        out
     }
 
     /// Read one file within a screen (`screen_ref` e.g. `"local/clock"`,
@@ -703,6 +756,41 @@ impl ScreenStore {
         }
 
         std::fs::remove_dir_all(&dir).map_err(|e| StoreError::Io(e.to_string()))?;
+        self.manager.rebuild_loader();
+        Ok(())
+    }
+
+    /// Delete one file inside a screen. Refuses the three files that *define*
+    /// a screen (`meta.yaml`, `script.lua`, `screen.svg`) — removing one of
+    /// those leaves a directory the loader still enumerates but can no longer
+    /// resolve, which is a worse state than either keeping the file or
+    /// deleting the whole screen. `delete_screen` is the way to remove a
+    /// screen.
+    pub fn delete_file(&self, screen_ref: &str, file: &str) -> Result<(), StoreError> {
+        let _guard = self.mutation_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let (handle, screen_path) = Self::split_ref(screen_ref)?;
+        let rel = safe_rel(file)?;
+
+        // Writability is checked FIRST, so a read-only handle reports
+        // `ReadOnly` (with its copy hint) regardless of which file was
+        // named — "you cannot edit this repo" is the more useful answer
+        // than "that file is undeletable".
+        let base = self.resolve_writable_root(handle, screen_path)?;
+
+        const DEFINING: [&str; 3] = ["meta.yaml", "script.lua", "screen.svg"];
+        if DEFINING.contains(&rel.to_string_lossy().as_ref()) {
+            return Err(StoreError::Io(format!(
+                "'{file}' defines the screen and cannot be deleted; use delete_screen to remove '{screen_ref}'"
+            )));
+        }
+
+        let target = base.join(screen_path).join(&rel);
+        Self::ensure_writable_parent(&base, &target)?;
+        match std::fs::remove_file(&target) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(StoreError::NotFound),
+            Err(e) => return Err(StoreError::Io(e.to_string())),
+        }
         self.manager.rebuild_loader();
         Ok(())
     }

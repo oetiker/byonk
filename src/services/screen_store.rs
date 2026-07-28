@@ -545,12 +545,15 @@ impl ScreenStore {
         to_dir: &Path,
     ) -> Result<(), StoreError> {
         for rel in from_source.screen_files(from_path) {
-            let bytes = from_source.read(&rel).ok_or_else(|| {
-                StoreError::Io(format!("source file {rel} listed but unreadable"))
-            })?;
-            if bytes.len() > MAX_FILE_BYTES {
-                return Err(StoreError::TooLarge);
-            }
+            let bytes = match from_source.read_limited(&rel, MAX_FILE_BYTES) {
+                ReadOutcome::Found(b) => b,
+                ReadOutcome::Missing => {
+                    return Err(StoreError::Io(format!(
+                        "source file {rel} listed but unreadable"
+                    )))
+                }
+                ReadOutcome::TooLarge => return Err(StoreError::TooLarge),
+            };
             let suffix = rel
                 .strip_prefix(from_path)
                 .and_then(|s| s.strip_prefix('/'))
@@ -1145,6 +1148,32 @@ mod tests {
             .write_file("local/clock", "script.lua", &huge, None)
             .unwrap_err();
         assert!(matches!(err, StoreError::TooLarge));
+    }
+
+    /// `read_file`'s `TooLarge` branch had no test at all before this fix
+    /// round: only `write_file`'s cap (`write_rejects_too_large_payload`)
+    /// was covered. Growing the file directly on disk (rather than via
+    /// `write_file`, which enforces the same cap on the way in) is
+    /// deliberate — it's the only way to get an oversized file past the
+    /// write-side guard, mirroring how a git-fetched or Samba-dropped file
+    /// could arrive oversized without ever going through `write_file`.
+    #[test]
+    fn read_file_reports_too_large_distinctly() {
+        let (store, repo_root) = test_store_with_local();
+        store
+            .write_file("local/clock", "script.lua", b"return {}", None)
+            .unwrap();
+        std::fs::write(
+            repo_root.join("clock/script.lua"),
+            vec![0u8; MAX_FILE_BYTES + 1],
+        )
+        .unwrap();
+
+        match store.read_file("local/clock", "script.lua") {
+            Err(StoreError::TooLarge) => {}
+            Err(other) => panic!("expected TooLarge, got Err({other:?})"),
+            Ok(_) => panic!("expected TooLarge, got Ok"),
+        }
     }
 
     #[test]

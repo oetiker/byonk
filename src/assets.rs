@@ -200,39 +200,51 @@ impl AssetLoader {
             })
     }
 
+    /// Resolve `relative_path` against the `SCREENS_DIR` overlay, if one is
+    /// configured: canonicalize-and-prefix-check, then return the
+    /// canonicalized target if it exists and stays inside `SCREENS_DIR`.
+    ///
+    /// `SCREENS_DIR` is user-writable (Samba share, HA `/config/screens`), so
+    /// a symlink planted there must not become a read primitive for the
+    /// whole filesystem. This is the same guard `screen_repo_loader::read_within`
+    /// applies to git/local repos. Shared by `read_screen` and
+    /// `read_screen_capped` so the check exists in exactly one place.
+    ///
+    /// Returns `None` when there's no overlay configured, the file isn't
+    /// there, or it resolves outside `SCREENS_DIR` (logged as a warning) —
+    /// every case where the caller should fall through to the embedded copy.
+    fn resolve_screens_dir_overlay(&self, relative_path: &Path) -> Option<PathBuf> {
+        let dir = self.screens_dir.as_ref()?;
+        let full_path = dir.join(relative_path);
+        if !full_path.exists() {
+            return None;
+        }
+        // Read/stat the CANONICALIZED path, not `full_path` — checking one
+        // path and using another re-follows the symlink and leaves a swap
+        // window open on exactly the user-writable directory this guard
+        // defends. `read_within` does the same.
+        let checked = std::fs::canonicalize(dir)
+            .ok()
+            .zip(std::fs::canonicalize(&full_path).ok())
+            .filter(|(root, target)| target.starts_with(root))
+            .map(|(_, target)| target);
+        if checked.is_none() {
+            tracing::warn!(
+                path = %full_path.display(),
+                "refused SCREENS_DIR read escaping the screens directory"
+            );
+        }
+        checked
+    }
+
     /// Read a screen asset (Lua script or SVG template)
     ///
     /// If an external path is configured, tries filesystem first, then falls back to embedded.
     /// If no external path is configured, uses embedded only.
     pub fn read_screen(&self, relative_path: &Path) -> io::Result<Cow<'static, [u8]>> {
-        // Try external first if path configured
-        if let Some(ref dir) = self.screens_dir {
-            // Canonicalize-and-prefix-check: `SCREENS_DIR` is user-writable
-            // (Samba share, HA `/config/screens`), so a symlink planted there
-            // must not become a read primitive for the whole filesystem. This
-            // is the same guard `screen_repo_loader::read_within` applies to
-            // git/local repos; kept inline here because `read_screen` returns
-            // `io::Result<Cow<'static, [u8]>>`, not `Option<Vec<u8>>`.
-            let full_path = dir.join(relative_path);
-            if full_path.exists() {
-                // Read the CANONICALIZED path, not `full_path` — checking one
-                // path and reading another re-follows the symlink and leaves a
-                // swap window open on exactly the user-writable directory this
-                // guard defends. `read_within` does the same.
-                let checked = std::fs::canonicalize(dir)
-                    .ok()
-                    .zip(std::fs::canonicalize(&full_path).ok())
-                    .filter(|(root, target)| target.starts_with(root))
-                    .map(|(_, target)| target);
-                if let Some(target) = checked {
-                    tracing::trace!(path = %target.display(), "Loading screen from filesystem");
-                    return Ok(Cow::Owned(fs::read(&target)?));
-                }
-                tracing::warn!(
-                    path = %full_path.display(),
-                    "refused SCREENS_DIR read escaping the screens directory"
-                );
-            }
+        if let Some(target) = self.resolve_screens_dir_overlay(relative_path) {
+            tracing::trace!(path = %target.display(), "Loading screen from filesystem");
+            return Ok(Cow::Owned(fs::read(&target)?));
         }
 
         // Fall back to embedded
@@ -241,6 +253,49 @@ impl AssetLoader {
             .map(|f| {
                 tracing::trace!(path = %path_str, "Loading screen from embedded assets");
                 f.data
+            })
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("Screen not found: {path_str}"),
+                )
+            })
+    }
+
+    /// `read_screen`, but refuses anything on disk larger than `max_bytes`
+    /// without reading it into memory first.
+    ///
+    /// `SCREENS_DIR` is user-writable (Samba, HA `/config/screens`), so —
+    /// unlike the embedded fallback, whose bytes are already resident in the
+    /// binary — the overlay branch is unbounded I/O unless it `stat`s before
+    /// it reads. `Ok(None)` means "present in the overlay but over the cap",
+    /// distinct from `Err` ("not found anywhere"), so callers can report the
+    /// difference instead of collapsing both into one failure. The embedded
+    /// fallback has no size check of its own here — same reasoning as
+    /// `ScreenRepoSource::read_limited`'s default impl, it's already in
+    /// memory either way; callers that need the embedded branch capped too
+    /// (as `EmbeddedBuiltinSource::read_limited` does) check the returned
+    /// length themselves.
+    pub fn read_screen_capped(
+        &self,
+        relative_path: &Path,
+        max_bytes: usize,
+    ) -> io::Result<Option<Cow<'static, [u8]>>> {
+        if let Some(target) = self.resolve_screens_dir_overlay(relative_path) {
+            let meta = fs::metadata(&target)?;
+            if meta.len() > max_bytes as u64 {
+                return Ok(None);
+            }
+            tracing::trace!(path = %target.display(), "Loading screen from filesystem");
+            return Ok(Some(Cow::Owned(fs::read(&target)?)));
+        }
+
+        // Fall back to embedded
+        let path_str = relative_path.to_string_lossy();
+        EmbeddedScreens::get(&path_str)
+            .map(|f| {
+                tracing::trace!(path = %path_str, "Loading screen from embedded assets");
+                Some(f.data)
             })
             .ok_or_else(|| {
                 io::Error::new(

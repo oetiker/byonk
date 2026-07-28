@@ -40,10 +40,13 @@ pub trait ScreenRepoSource: Send + Sync {
 
     /// Read `rel`, refusing anything larger than `max_bytes`.
     ///
-    /// The default implementation is correct for embedded sources, whose
-    /// contents are already resident in the binary — there is no unbounded
-    /// I/O to avoid. Disk-backed sources override it to `stat` first, so an
-    /// oversized file is never read into memory at all.
+    /// The default implementation is read-then-check: safe ONLY for a source
+    /// whose `read` never touches disk (bytes already resident in the
+    /// binary, no filesystem overlay). Any source whose `read` can reach the
+    /// filesystem — directly, or indirectly via an overlay like
+    /// `EmbeddedBuiltinSource`'s `SCREENS_DIR` — MUST override this to `stat`
+    /// the resolved target before reading, so an oversized file is never
+    /// pulled into memory at all.
     fn read_limited(&self, rel: &str, max_bytes: usize) -> ReadOutcome {
         match self.read(rel) {
             None => ReadOutcome::Missing,
@@ -145,20 +148,10 @@ pub fn is_safe_rel(rel: &str) -> bool {
 /// canonicalized root before any bytes are read. Symlinks that stay inside
 /// the repo still resolve normally.
 pub(crate) fn read_within(root: &Path, rel: &str) -> Option<Vec<u8>> {
-    if !is_safe_rel(rel) {
-        return None;
+    match read_within_limited(root, rel, usize::MAX) {
+        ReadOutcome::Found(bytes) => Some(bytes),
+        ReadOutcome::Missing | ReadOutcome::TooLarge => None,
     }
-    let canon_root = std::fs::canonicalize(root).ok()?;
-    let canon_target = std::fs::canonicalize(canon_root.join(rel)).ok()?;
-    if !canon_target.starts_with(&canon_root) {
-        tracing::warn!(
-            root = %canon_root.display(),
-            rel,
-            "refused screen-repo read escaping the repo root"
-        );
-        return None;
-    }
-    std::fs::read(&canon_target).ok()
 }
 
 /// `read_within`, but `stat`s the resolved target first so an oversized file
@@ -477,6 +470,30 @@ impl ScreenRepoSource for EmbeddedBuiltinSource {
             .read_screen(Path::new(&full))
             .ok()
             .map(|b| b.into_owned())
+    }
+
+    /// Overrides the trait default: `read` above goes through the
+    /// `SCREENS_DIR` overlay, a user-writable directory (Samba, HA
+    /// `/config/screens`) — so, unlike a source whose bytes are always
+    /// resident in the binary, this source DOES have unbounded disk I/O to
+    /// avoid. Delegates to `AssetLoader::read_screen_capped`, which `stat`s
+    /// the overlay file before reading it.
+    fn read_limited(&self, rel: &str, max_bytes: usize) -> ReadOutcome {
+        if !is_safe_rel(rel) {
+            return ReadOutcome::Missing;
+        }
+        let full = join_rel(&self.root_prefix, rel);
+        match self.loader.read_screen_capped(Path::new(&full), max_bytes) {
+            Err(_) => ReadOutcome::Missing,
+            Ok(None) => ReadOutcome::TooLarge,
+            // The embedded fallback branch of `read_screen_capped` has no
+            // cap of its own (its bytes are already resident in the
+            // binary) — check the length here so an oversized *embedded*
+            // asset (unlikely, but not impossible for a future large
+            // built-in) is still reported as `TooLarge` rather than served.
+            Ok(Some(bytes)) if bytes.len() > max_bytes => ReadOutcome::TooLarge,
+            Ok(Some(bytes)) => ReadOutcome::Found(bytes.into_owned()),
+        }
     }
 
     /// **Embedded-only** — `AssetLoader::list_embedded`, not the
@@ -971,6 +988,32 @@ mod tests {
             Some("<svg id=\"mine\"/>"),
             "the customized on-disk copy must still win on read"
         );
+    }
+
+    /// Important A: `EmbeddedBuiltinSource::read` consults the `SCREENS_DIR`
+    /// filesystem overlay, so the trait's read-then-check default (correct
+    /// for a source whose bytes are always resident in the binary) would
+    /// load an oversized overlay file fully into memory before checking its
+    /// size. `read_limited` must override that default and refuse the file
+    /// via a `stat`, never reading it.
+    #[test]
+    fn builtin_read_limited_caps_the_screens_dir_overlay() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("default")).unwrap();
+        std::fs::write(dir.path().join("default/script.lua"), vec![b'x'; 16]).unwrap();
+
+        let loader = Arc::new(AssetLoader::new(Some(dir.path().to_path_buf()), None, None));
+        let src = EmbeddedBuiltinSource::load(loader).unwrap();
+
+        assert!(matches!(
+            src.read_limited("default/script.lua", 8),
+            ReadOutcome::TooLarge
+        ));
+        // A file within the cap still reads through the overlay normally.
+        match src.read_limited("default/script.lua", 16) {
+            ReadOutcome::Found(b) => assert_eq!(b, vec![b'x'; 16]),
+            other => panic!("expected Found, got {other:?}"),
+        }
     }
 
     #[test]

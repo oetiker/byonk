@@ -112,6 +112,31 @@ pub fn is_safe_rel(rel: &str) -> bool {
     !rel.split(['/', '\\']).any(|c| c == "..")
 }
 
+/// Read `root/rel`, refusing anything that resolves outside `root`.
+///
+/// `is_safe_rel` is a *lexical* guard — it stops `../` and absolute paths in
+/// the request string, but cannot see a symlink planted on disk. A repo is
+/// arbitrary content (git-fetched, Samba-dropped, or hand-placed), so the
+/// resolved target is canonicalized and prefix-checked against the
+/// canonicalized root before any bytes are read. Symlinks that stay inside
+/// the repo still resolve normally.
+pub(crate) fn read_within(root: &Path, rel: &str) -> Option<Vec<u8>> {
+    if !is_safe_rel(rel) {
+        return None;
+    }
+    let canon_root = std::fs::canonicalize(root).ok()?;
+    let canon_target = std::fs::canonicalize(canon_root.join(rel)).ok()?;
+    if !canon_target.starts_with(&canon_root) {
+        tracing::warn!(
+            root = %canon_root.display(),
+            rel,
+            "refused screen-repo read escaping the repo root"
+        );
+        return None;
+    }
+    std::fs::read(&canon_target).ok()
+}
+
 /// Split `"handle/path"` on the FIRST `/`. The path portion may itself contain `/`.
 fn split_ref(screen_ref: &str) -> Option<(&str, &str)> {
     let (handle, path) = screen_ref.split_once('/')?;
@@ -241,10 +266,7 @@ impl GitScreenRepoSource {
 
 impl ScreenRepoSource for GitScreenRepoSource {
     fn read(&self, rel: &str) -> Option<Vec<u8>> {
-        if !is_safe_rel(rel) {
-            return None;
-        }
-        std::fs::read(self.manifest_root.join(rel)).ok()
+        read_within(&self.manifest_root, rel)
     }
 
     fn screen_paths(&self) -> Vec<String> {
@@ -294,10 +316,7 @@ impl LocalScreenRepoSource {
 
 impl ScreenRepoSource for LocalScreenRepoSource {
     fn read(&self, rel: &str) -> Option<Vec<u8>> {
-        if !is_safe_rel(rel) {
-            return None;
-        }
-        std::fs::read(self.manifest_root.join(rel)).ok()
+        read_within(&self.manifest_root, rel)
     }
 
     fn screen_paths(&self) -> Vec<String> {

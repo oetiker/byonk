@@ -207,10 +207,26 @@ impl AssetLoader {
     pub fn read_screen(&self, relative_path: &Path) -> io::Result<Cow<'static, [u8]>> {
         // Try external first if path configured
         if let Some(ref dir) = self.screens_dir {
+            // Canonicalize-and-prefix-check: `SCREENS_DIR` is user-writable
+            // (Samba share, HA `/config/screens`), so a symlink planted there
+            // must not become a read primitive for the whole filesystem. This
+            // is the same guard `screen_repo_loader::read_within` applies to
+            // git/local repos; kept inline here because `read_screen` returns
+            // `io::Result<Cow<'static, [u8]>>`, not `Option<Vec<u8>>`.
             let full_path = dir.join(relative_path);
             if full_path.exists() {
-                tracing::trace!(path = %full_path.display(), "Loading screen from filesystem");
-                return Ok(Cow::Owned(fs::read(&full_path)?));
+                let ok = std::fs::canonicalize(dir)
+                    .ok()
+                    .zip(std::fs::canonicalize(&full_path).ok())
+                    .is_some_and(|(root, target)| target.starts_with(&root));
+                if ok {
+                    tracing::trace!(path = %full_path.display(), "Loading screen from filesystem");
+                    return Ok(Cow::Owned(fs::read(&full_path)?));
+                }
+                tracing::warn!(
+                    path = %full_path.display(),
+                    "refused SCREENS_DIR read escaping the screens directory"
+                );
             }
         }
 

@@ -63,6 +63,7 @@ These were settled against the live `rmcp` 2.2 source; they are not open questio
 | `tests/mcp_tools_test.rs` | Tool behaviour tests |
 | `tests/mcp_resources_test.rs` | Resource listing/reading tests |
 | `tests/common/mcp.rs` | `McpTestClient` helper (JSON-RPC over `TestApp`) |
+| `tests/common/store.rs` | `build_store(dir, screens)` fixture shared by Tasks 2–4 (created in Task 2) |
 | `tests/screen_repo_symlink_test.rs` | Task 1 — escape-guard tests |
 | `tests/screen_store_limits_test.rs` | Task 2 — size-cap and UTF-8 reporting tests |
 | `tests/screen_store_concurrency_test.rs` | Task 3 — concurrent-mutation tests |
@@ -522,37 +523,39 @@ Replace `validate`'s `check_file` closure body:
 
 Append to `tests/screen_store_limits_test.rs`. A `validate` over a screen whose `script.lua` is oversized must report the cap — not "file not found", which is what the old `read_string` path produced.
 
+First create the shared fixture, `tests/common/store.rs` — Tasks 3 and 4 consume it too, so it lives in `tests/common/` rather than being copied per test binary. (`tests/common/mod.rs` already carries `#![allow(dead_code)]`, so a binary that uses only part of the module compiles cleanly.)
+
 ```rust
+//! Shared fixture: a `ScreenStore` over a temp writable `local` screen repo.
+//!
+//! Built through the real `AppState` path so the store and the content
+//! pipeline share one `ScreenRepoManager` — the invariant
+//! `tests/screen_store_wiring_test.rs` guards. Constructing a `ScreenStore`
+//! directly with hand-matched `Arc`s would not exercise that path.
+
+use std::path::Path;
 use std::sync::Arc;
 
 use byonk::assets::AssetLoader;
 use byonk::models::AppConfig;
 use byonk::server::create_app_state_with_config;
-use byonk::services::screen_store::ScreenStore;
+use byonk::services::screen_store::{ScreenStore, StarterKind};
 
-/// A `ScreenStore` over a temp writable `local` repo holding one screen whose
-/// `script.lua` has the given contents. Built through the real `AppState`
-/// path (see `tests/screen_store_wiring_test.rs`).
-fn store_with_script(dir: &std::path::Path, script: &[u8]) -> Arc<ScreenStore> {
+/// A `ScreenStore` whose `local` handle is a writable repo at `dir/local`,
+/// pre-scaffolded with one minimal screen per entry in `screens`.
+///
+/// Callers needing specific file contents write them directly under
+/// `dir/local/<screen>/` afterwards — the disk sources stat and read on every
+/// access, so no loader rebuild is needed for an in-place file change.
+pub fn build_store(dir: &Path, screens: &[&str]) -> Arc<ScreenStore> {
     let config_path = dir.join("config.yaml");
     let repo_dir = dir.join("local");
-    std::fs::create_dir_all(repo_dir.join("big")).unwrap();
+    std::fs::create_dir_all(&repo_dir).unwrap();
     std::fs::write(
         repo_dir.join("byonk-screens.yaml"),
         "name: local\ndescription: Test fixture.\nauthor: test\nlicense: MIT\n",
     )
     .unwrap();
-    std::fs::write(
-        repo_dir.join("big/meta.yaml"),
-        "title: Big\ndescription: d\nbyonk: \"0.17\"\n",
-    )
-    .unwrap();
-    std::fs::write(
-        repo_dir.join("big/screen.svg"),
-        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480"/>"#,
-    )
-    .unwrap();
-    std::fs::write(repo_dir.join("big/script.lua"), script).unwrap();
     std::fs::write(
         &config_path,
         format!(
@@ -566,13 +569,31 @@ fn store_with_script(dir: &std::path::Path, script: &[u8]) -> Arc<ScreenStore> {
     let asset_loader = Arc::new(AssetLoader::new(None, None, Some(config_path)));
     let config = AppConfig::load_from_assets(&asset_loader).expect("load config");
     let state = create_app_state_with_config(asset_loader, config).expect("create app state");
-    state.screen_store.clone()
+    let store = state.screen_store.clone();
+    for name in screens {
+        store
+            .create_screen("local", name, StarterKind::Minimal)
+            .unwrap_or_else(|e| panic!("scaffold fixture screen {name}: {e:?}"));
+    }
+    store
 }
+```
+
+Add `pub mod store;` to `tests/common/mod.rs`.
+
+Then append to `tests/screen_store_limits_test.rs` — note it must gain `mod common;` at the top:
+
+```rust
+mod common;
+
+use common::store::build_store;
 
 #[test]
 fn test_validate_reports_oversized_file_distinctly() {
     let tmp = tempfile::tempdir().unwrap();
-    let store = store_with_script(tmp.path(), &vec![b'x'; MAX + 1]);
+    let store = build_store(tmp.path(), &["big"]);
+    // Overwrite the scaffolded script with an oversized one.
+    std::fs::write(tmp.path().join("local/big/script.lua"), vec![b'x'; MAX + 1]).unwrap();
 
     let report = store.validate("local/big");
 
@@ -597,8 +618,9 @@ fn test_validate_reports_oversized_file_distinctly() {
 #[test]
 fn test_validate_reports_non_utf8_distinctly() {
     let tmp = tempfile::tempdir().unwrap();
-    // Invalid UTF-8: a lone continuation byte.
-    let store = store_with_script(tmp.path(), &[0x80, 0x80, 0x80]);
+    let store = build_store(tmp.path(), &["big"]);
+    // Invalid UTF-8: lone continuation bytes.
+    std::fs::write(tmp.path().join("local/big/script.lua"), [0x80u8, 0x80, 0x80]).unwrap();
 
     let report = store.validate("local/big");
 
@@ -650,45 +672,16 @@ Create `tests/screen_store_concurrency_test.rs`:
 //! per-file failure removes the whole dir — so an interleaved pair can have
 //! one call's cleanup delete the other call's finished screen.
 
-use std::sync::Arc;
+mod common;
 
-use byonk::assets::AssetLoader;
-use byonk::models::AppConfig;
-use byonk::server::create_app_state_with_config;
-use byonk::services::screen_store::{ScreenStore, StarterKind};
-
-/// A `ScreenStore` over a temp writable `local` repo, built through the real
-/// `AppState` path so the store and the content pipeline share one
-/// `ScreenRepoManager` (see `tests/screen_store_wiring_test.rs`).
-fn build_store(dir: &std::path::Path) -> Arc<ScreenStore> {
-    let config_path = dir.join("config.yaml");
-    let repo_dir = dir.join("local");
-    std::fs::create_dir_all(&repo_dir).unwrap();
-    std::fs::write(
-        repo_dir.join("byonk-screens.yaml"),
-        "name: local\ndescription: Test fixture.\nauthor: test\nlicense: MIT\n",
-    )
-    .unwrap();
-    std::fs::write(
-        &config_path,
-        format!(
-            "devices:\n  DEFAULT:\n    screen: byonk-builtin/default\n\
-             screen_repos:\n  local:\n    path: {}\n",
-            repo_dir.display()
-        ),
-    )
-    .unwrap();
-
-    let asset_loader = Arc::new(AssetLoader::new(None, None, Some(config_path)));
-    let config = AppConfig::load_from_assets(&asset_loader).expect("load config");
-    let state = create_app_state_with_config(asset_loader, config).expect("create app state");
-    state.screen_store.clone()
-}
+use byonk::services::screen_store::StarterKind;
+use common::store::build_store;
 
 #[test]
 fn test_concurrent_creates_leave_every_successful_screen_intact() {
     let tmp = tempfile::tempdir().unwrap();
-    let store = build_store(tmp.path());
+    // No pre-scaffolded screens — the concurrent creates below make them.
+    let store = build_store(tmp.path(), &[]);
 
     let handles: Vec<_> = (0..8)
         .map(|i| {
@@ -715,7 +708,7 @@ fn test_concurrent_creates_leave_every_successful_screen_intact() {
 #[test]
 fn test_concurrent_creates_of_the_same_name_yield_exactly_one_winner() {
     let tmp = tempfile::tempdir().unwrap();
-    let store = build_store(tmp.path());
+    let store = build_store(tmp.path(), &[]);
 
     let handles: Vec<_> = (0..8)
         .map(|_| {
@@ -836,49 +829,15 @@ Create `tests/screen_store_listing_test.rs`:
 //! `list_screens` reports writability structurally, and `delete_file`
 //! refuses to strip a screen of the three files that define it.
 
-use std::sync::Arc;
+mod common;
 
-use byonk::assets::AssetLoader;
-use byonk::models::AppConfig;
-use byonk::server::create_app_state_with_config;
-use byonk::services::screen_store::{ScreenStore, StarterKind, StoreError};
-
-/// A `ScreenStore` over a temp writable `local` repo containing one screen,
-/// built through the real `AppState` path (see
-/// `tests/screen_store_wiring_test.rs`).
-fn build_store_with_screen(dir: &std::path::Path, name: &str) -> Arc<ScreenStore> {
-    let config_path = dir.join("config.yaml");
-    let repo_dir = dir.join("local");
-    std::fs::create_dir_all(&repo_dir).unwrap();
-    std::fs::write(
-        repo_dir.join("byonk-screens.yaml"),
-        "name: local\ndescription: Test fixture.\nauthor: test\nlicense: MIT\n",
-    )
-    .unwrap();
-    std::fs::write(
-        &config_path,
-        format!(
-            "devices:\n  DEFAULT:\n    screen: byonk-builtin/default\n\
-             screen_repos:\n  local:\n    path: {}\n",
-            repo_dir.display()
-        ),
-    )
-    .unwrap();
-
-    let asset_loader = Arc::new(AssetLoader::new(None, None, Some(config_path)));
-    let config = AppConfig::load_from_assets(&asset_loader).expect("load config");
-    let state = create_app_state_with_config(asset_loader, config).expect("create app state");
-    let store = state.screen_store.clone();
-    store
-        .create_screen("local", name, StarterKind::Minimal)
-        .expect("scaffold fixture screen");
-    store
-}
+use byonk::services::screen_store::StoreError;
+use common::store::build_store;
 
 #[test]
 fn test_list_screens_marks_builtin_read_only_and_local_writable() {
     let tmp = tempfile::tempdir().unwrap();
-    let store = build_store_with_screen(tmp.path(), "clock");
+    let store = build_store(tmp.path(), &["clock"]);
 
     let all = store.list_screens();
 
@@ -899,7 +858,7 @@ fn test_list_screens_marks_builtin_read_only_and_local_writable() {
 #[test]
 fn test_delete_file_removes_a_sibling_asset() {
     let tmp = tempfile::tempdir().unwrap();
-    let store = build_store_with_screen(tmp.path(), "clock");
+    let store = build_store(tmp.path(), &["clock"]);
     store
         .write_file("local/clock", "notes.txt", b"scratch", None)
         .unwrap();
@@ -915,7 +874,7 @@ fn test_delete_file_removes_a_sibling_asset() {
 #[test]
 fn test_delete_file_refuses_the_three_defining_files() {
     let tmp = tempfile::tempdir().unwrap();
-    let store = build_store_with_screen(tmp.path(), "clock");
+    let store = build_store(tmp.path(), &["clock"]);
 
     for f in ["meta.yaml", "script.lua", "screen.svg"] {
         let err = store.delete_file("local/clock", f);
@@ -931,7 +890,7 @@ fn test_delete_file_refuses_the_three_defining_files() {
 #[test]
 fn test_delete_file_on_a_read_only_handle_is_rejected() {
     let tmp = tempfile::tempdir().unwrap();
-    let store = build_store_with_screen(tmp.path(), "clock");
+    let store = build_store(tmp.path(), &["clock"]);
 
     match store.delete_file("byonk-builtin/default", "script.lua") {
         Err(StoreError::ReadOnly { copy_hint }) => {
@@ -1285,7 +1244,11 @@ use crate::server::AppState;
 /// only holds `AppState`, which is cheap to clone (all `Arc`s).
 #[derive(Clone)]
 pub struct ByonkMcp {
-    pub(crate) state: AppState,
+    /// `pub`, not `pub(crate)`: no tool reads it until Task 6, and a
+    /// crate-private never-read field trips `dead_code` under the
+    /// project's `clippy -- -D warnings` gate. A handler struct's state
+    /// is legitimately part of this module's public surface.
+    pub state: AppState,
     tool_router: ToolRouter<Self>,
 }
 

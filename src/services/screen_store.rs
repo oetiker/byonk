@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use crate::models::screen_meta::ScreenMeta;
 use crate::models::{normalize_algorithm_name, DisplaySpec, DitherTuningValues};
 use crate::services::content_pipeline::{ContentPipeline, DeviceContext};
-use crate::services::screen_repo_loader::ScreenRepoSource;
+use crate::services::screen_repo_loader::{ReadOutcome, ScreenRepoSource};
 use crate::services::screen_repo_manager::ScreenRepoManager;
 
 /// Largest file `read_file`/`write_file` will handle. Guards against
@@ -333,10 +333,11 @@ impl ScreenStore {
         let loader = self.manager.loader();
         let src = loader.source_for(handle).ok_or(StoreError::NotFound)?;
         let full_rel = format!("{screen_path}/{}", rel.to_string_lossy());
-        let bytes = src.read(&full_rel).ok_or(StoreError::NotFound)?;
-        if bytes.len() > MAX_FILE_BYTES {
-            return Err(StoreError::TooLarge);
-        }
+        let bytes = match src.read_limited(&full_rel, MAX_FILE_BYTES) {
+            ReadOutcome::Found(b) => b,
+            ReadOutcome::Missing => return Err(StoreError::NotFound),
+            ReadOutcome::TooLarge => return Err(StoreError::TooLarge),
+        };
         let binary = std::str::from_utf8(&bytes).is_err();
         let etag = etag(&bytes);
         Ok(FileContents {
@@ -706,12 +707,22 @@ impl ScreenStore {
         // what stops the three (soon more) copies from drifting apart on how
         // a missing file is reported.
         let mut check_file = |name: &str, validator: &dyn Fn(&str) -> Result<(), String>| {
-            let message = match source.read_string(&format!("{screen_path}/{name}")) {
-                Some(text) => match validator(&text) {
-                    Ok(()) => return,
-                    Err(message) => message,
+            let rel = format!("{screen_path}/{name}");
+            let message = match source.read_limited(&rel, MAX_FILE_BYTES) {
+                ReadOutcome::Missing => "file not found".to_string(),
+                ReadOutcome::TooLarge => format!(
+                    "file exceeds the {} MB limit and was not read",
+                    MAX_FILE_BYTES / (1024 * 1024)
+                ),
+                ReadOutcome::Found(bytes) => match String::from_utf8(bytes) {
+                    // Previously this surfaced as "file not found", because
+                    // `read_string` collapsed a UTF-8 failure into `None`.
+                    Err(_) => "file is not valid UTF-8".to_string(),
+                    Ok(text) => match validator(&text) {
+                        Ok(()) => return,
+                        Err(message) => message,
+                    },
                 },
-                None => "file not found".to_string(),
             };
             issues.push(Issue {
                 severity: Severity::Error,

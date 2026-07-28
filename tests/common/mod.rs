@@ -12,6 +12,7 @@ pub mod assertions;
 pub mod fixtures;
 pub mod mock_https_server;
 pub mod mock_server;
+pub mod store;
 
 pub use app::TestApp;
 pub use assertions::*;

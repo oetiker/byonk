@@ -17,6 +17,16 @@ use crate::models::screen_repo_manifest::ScreenRepoManifest;
 /// The handle under which the built-in (embedded + `SCREENS_DIR`) screen repo is registered.
 pub const BUILTIN_HANDLE: &str = "byonk-builtin";
 
+/// The result of a size-capped read. Distinguishes "not there" from "there
+/// but refused", so callers can report the difference instead of collapsing
+/// both into `None`.
+#[derive(Debug)]
+pub enum ReadOutcome {
+    Found(Vec<u8>),
+    Missing,
+    TooLarge,
+}
+
 /// Reads any file within a screen repo by screen-repo-root-relative (manifest-`root`-relative)
 /// path, using forward slashes. Implementations must be cheap to share across threads.
 pub trait ScreenRepoSource: Send + Sync {
@@ -26,6 +36,20 @@ pub trait ScreenRepoSource: Send + Sync {
     /// Read a screen repo file as a UTF-8 string, or `None` if missing / not valid UTF-8.
     fn read_string(&self, rel: &str) -> Option<String> {
         self.read(rel).and_then(|b| String::from_utf8(b).ok())
+    }
+
+    /// Read `rel`, refusing anything larger than `max_bytes`.
+    ///
+    /// The default implementation is correct for embedded sources, whose
+    /// contents are already resident in the binary — there is no unbounded
+    /// I/O to avoid. Disk-backed sources override it to `stat` first, so an
+    /// oversized file is never read into memory at all.
+    fn read_limited(&self, rel: &str, max_bytes: usize) -> ReadOutcome {
+        match self.read(rel) {
+            None => ReadOutcome::Missing,
+            Some(b) if b.len() > max_bytes => ReadOutcome::TooLarge,
+            Some(b) => ReadOutcome::Found(b),
+        }
     }
 
     /// All screen directories in this screen repo (dirs containing a `meta.yaml`),
@@ -135,6 +159,36 @@ pub(crate) fn read_within(root: &Path, rel: &str) -> Option<Vec<u8>> {
         return None;
     }
     std::fs::read(&canon_target).ok()
+}
+
+/// `read_within`, but `stat`s the resolved target first so an oversized file
+/// is refused without ever being read into memory.
+pub(crate) fn read_within_limited(root: &Path, rel: &str, max_bytes: usize) -> ReadOutcome {
+    if !is_safe_rel(rel) {
+        return ReadOutcome::Missing;
+    }
+    let Some(canon_root) = std::fs::canonicalize(root).ok() else {
+        return ReadOutcome::Missing;
+    };
+    let Some(canon_target) = std::fs::canonicalize(canon_root.join(rel)).ok() else {
+        return ReadOutcome::Missing;
+    };
+    if !canon_target.starts_with(&canon_root) {
+        tracing::warn!(
+            root = %canon_root.display(),
+            rel,
+            "refused screen-repo read escaping the repo root"
+        );
+        return ReadOutcome::Missing;
+    }
+    match std::fs::metadata(&canon_target) {
+        Ok(m) if m.len() > max_bytes as u64 => ReadOutcome::TooLarge,
+        Ok(_) => match std::fs::read(&canon_target) {
+            Ok(b) => ReadOutcome::Found(b),
+            Err(_) => ReadOutcome::Missing,
+        },
+        Err(_) => ReadOutcome::Missing,
+    }
 }
 
 /// Split `"handle/path"` on the FIRST `/`. The path portion may itself contain `/`.
@@ -269,6 +323,10 @@ impl ScreenRepoSource for GitScreenRepoSource {
         read_within(&self.manifest_root, rel)
     }
 
+    fn read_limited(&self, rel: &str, max_bytes: usize) -> ReadOutcome {
+        read_within_limited(&self.manifest_root, rel, max_bytes)
+    }
+
     fn screen_paths(&self) -> Vec<String> {
         walk_screen_paths(&self.manifest_root)
     }
@@ -317,6 +375,10 @@ impl LocalScreenRepoSource {
 impl ScreenRepoSource for LocalScreenRepoSource {
     fn read(&self, rel: &str) -> Option<Vec<u8>> {
         read_within(&self.manifest_root, rel)
+    }
+
+    fn read_limited(&self, rel: &str, max_bytes: usize) -> ReadOutcome {
+        read_within_limited(&self.manifest_root, rel, max_bytes)
     }
 
     fn screen_paths(&self) -> Vec<String> {

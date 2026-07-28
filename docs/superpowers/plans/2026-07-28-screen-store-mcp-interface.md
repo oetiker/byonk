@@ -419,10 +419,12 @@ Add to the `ScreenRepoSource` trait (next to `read_string`, around line 27):
 ```rust
     /// Read `rel`, refusing anything larger than `max_bytes`.
     ///
-    /// The default implementation is correct for embedded sources, whose
-    /// contents are already resident in the binary — there is no unbounded
-    /// I/O to avoid. Disk-backed sources override it to `stat` first, so an
-    /// oversized file is never read into memory at all.
+    /// The default implementation reads then checks. That is only safe for a
+    /// source whose bytes are genuinely resident in the binary — which is
+    /// **not** true of `EmbeddedBuiltinSource`, whose `read` deliberately
+    /// consults the `SCREENS_DIR` filesystem overlay. Every source that can
+    /// touch disk must override this, or the cap it appears to enforce is
+    /// fiction.
     fn read_limited(&self, rel: &str, max_bytes: usize) -> ReadOutcome {
         match self.read(rel) {
             None => ReadOutcome::Missing,
@@ -3429,6 +3431,8 @@ Under `### Fixed`:
 ```markdown
 - Screen repositories no longer follow symbolic links that point outside the
   repository, so a screen repo cannot expose files elsewhere on the server.
+- Validating a screen now reports an oversized or non-UTF-8 file for what it is,
+  instead of misreporting it as a missing file or a Lua syntax error.
 ```
 
 - [ ] **Step 4: Verify the docs build**

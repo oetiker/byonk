@@ -31,12 +31,23 @@ use crate::services::screen_repo_status::{ScreenRepoState, ScreenRepoStatus};
 
 /// The handle `SCREENS_DIR` auto-registers under when `config.screen_repos` has
 /// no explicit `local` entry of its own.
-const LOCAL_HANDLE: &str = "local";
+pub const LOCAL_HANDLE: &str = "local";
 
 /// The handle the seeded `examples` directory (`<SCREENS_DIR>/../examples`,
 /// see `AssetLoader::examples_dir`) auto-registers under when
 /// `config.screen_repos` has no explicit `examples` entry of its own.
-const EXAMPLES_HANDLE: &str = "examples";
+pub const EXAMPLES_HANDLE: &str = "examples";
+
+/// Handles byonk manages itself: `byonk-builtin` is always registered from the
+/// embed, and `local`/`examples` auto-register from `SCREENS_DIR` and the
+/// seeded examples directory whenever `config.screen_repos` doesn't claim them.
+///
+/// A caller that *builds* `config.screen_repos` from untrusted free text (the
+/// HA add-on Options form — see `addon_options::apply_to_config`) must reject
+/// these, because claiming one only suppresses the auto-registration: the
+/// add-on has no `path:` field, so the entry it would create registers nothing
+/// and the user's own screens become unreachable.
+pub const RESERVED_HANDLES: [&str; 3] = [BUILTIN_HANDLE, LOCAL_HANDLE, EXAMPLES_HANDLE];
 
 /// Owns screen repo fetch orchestration + the live, hot-swappable [`ScreenRepoLoader`].
 pub struct ScreenRepoManager {

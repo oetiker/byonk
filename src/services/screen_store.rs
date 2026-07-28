@@ -274,6 +274,19 @@ pub struct ScreenStore {
     /// own `ScreenRepoManager` — see `ScreenStore::new`'s doc comment for
     /// why that manager must be the same `Arc` as `manager` above).
     pipeline: Arc<ContentPipeline>,
+    /// Serializes every mutating operation.
+    ///
+    /// `create_screen`/`rename_screen`/`copy_screen` are check-then-act
+    /// (`dir.exists()` → scaffold) and their failure path removes the whole
+    /// destination dir — so without this, two interleaved creates can have
+    /// one's cleanup delete the other's finished screen. `write_file`'s
+    /// `if_match` read-then-write is the same shape. MCP tools and the web
+    /// UI are concurrent callers, so the window is reachable.
+    ///
+    /// Held only across local filesystem work plus `rebuild_loader()`; no
+    /// `.await` happens under it. Callers on an async runtime must invoke
+    /// `ScreenStore` inside `spawn_blocking` (see `src/mcp/`).
+    mutation_lock: Mutex<()>,
 }
 
 impl ScreenStore {
@@ -288,7 +301,11 @@ impl ScreenStore {
     /// to. Nothing in the type system enforces this — the production
     /// wiring that constructs both (Task 13) must pass the same `Arc`.
     pub fn new(manager: Arc<ScreenRepoManager>, pipeline: Arc<ContentPipeline>) -> Self {
-        Self { manager, pipeline }
+        Self {
+            manager,
+            pipeline,
+            mutation_lock: Mutex::new(()),
+        }
     }
 
     /// Split `"handle/screen_path"`, rejecting an empty handle and validating
@@ -357,6 +374,11 @@ impl ScreenStore {
         bytes: &[u8],
         if_match: Option<&str>,
     ) -> Result<String, StoreError> {
+        // Poisoning is not a correctness signal here — the guarded data is
+        // the filesystem, not in-memory state a panicking thread could have
+        // torn. Recover and proceed.
+        let _guard = self.mutation_lock.lock().unwrap_or_else(|e| e.into_inner());
+
         if bytes.len() > MAX_FILE_BYTES {
             return Err(StoreError::TooLarge);
         }
@@ -468,6 +490,11 @@ impl ScreenStore {
         name: &str,
         template: StarterKind,
     ) -> Result<String, StoreError> {
+        // Poisoning is not a correctness signal here — the guarded data is
+        // the filesystem, not in-memory state a panicking thread could have
+        // torn. Recover and proceed.
+        let _guard = self.mutation_lock.lock().unwrap_or_else(|e| e.into_inner());
+
         let screen_path = safe_rel(name)?;
         let base = self.resolve_writable_root(handle, name)?;
         let dir = base.join(&screen_path);
@@ -502,6 +529,11 @@ impl ScreenStore {
         to_handle: &str,
         to_name: &str,
     ) -> Result<String, StoreError> {
+        // Poisoning is not a correctness signal here — the guarded data is
+        // the filesystem, not in-memory state a panicking thread could have
+        // torn. Recover and proceed.
+        let _guard = self.mutation_lock.lock().unwrap_or_else(|e| e.into_inner());
+
         let (from_handle, from_path) = Self::split_ref(from_ref)?;
         let to_path = safe_rel(to_name)?;
 
@@ -578,6 +610,11 @@ impl ScreenStore {
     /// Rename a screen within its own writable repo (no cross-handle moves).
     /// Rejects an already-existing destination as `Conflict`.
     pub fn rename_screen(&self, screen_ref: &str, new_name: &str) -> Result<String, StoreError> {
+        // Poisoning is not a correctness signal here — the guarded data is
+        // the filesystem, not in-memory state a panicking thread could have
+        // torn. Recover and proceed.
+        let _guard = self.mutation_lock.lock().unwrap_or_else(|e| e.into_inner());
+
         let (handle, screen_path) = Self::split_ref(screen_ref)?;
         let new_path = safe_rel(new_name)?;
         let base = self.resolve_writable_root(handle, screen_path)?;
@@ -627,6 +664,11 @@ impl ScreenStore {
 
     /// Delete a screen from its writable repo.
     pub fn delete_screen(&self, screen_ref: &str) -> Result<(), StoreError> {
+        // Poisoning is not a correctness signal here — the guarded data is
+        // the filesystem, not in-memory state a panicking thread could have
+        // torn. Recover and proceed.
+        let _guard = self.mutation_lock.lock().unwrap_or_else(|e| e.into_inner());
+
         let (handle, screen_path) = Self::split_ref(screen_ref)?;
         let base = self.resolve_writable_root(handle, screen_path)?;
         let dir = base.join(screen_path);

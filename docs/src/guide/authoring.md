@@ -39,7 +39,10 @@ files: it's always the embedded set, wherever you run byonk.
 **However**, watch out for a sharp edge this doesn't protect you from:
 `SCREENS_DIR` (your `local` repo) is also checked, file by file, whenever a
 `byonk-builtin` screen is *read* — so a `local` screen that happens to reuse
-a built-in's exact folder name silently overrides that built-in's files. In
+a built-in's exact folder name silently overrides that built-in's files.
+(This is per-file only: `byonk-builtin`'s *set of screens* is fixed by what's
+embedded in the binary, so your own screens are never listed under it — they
+appear once, under `local`.) In
 particular, don't create `local/default` or `local/calibration/color` (etc.)
 expecting them to be independent of `byonk-builtin/default` and
 `byonk-builtin/calibration/color` — they aren't; `byonk-builtin/default` is

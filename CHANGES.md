@@ -29,6 +29,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Screens no longer show a bogus "requires byonk 0.15 but this engine is
+  0.17.1" warning.** Every bundled screen still declared compatibility with an
+  old engine series, so the screen list warned about all of them — including the
+  built-in default screen. The bundled screens now declare the current series,
+  and newly created screens inherit the running version instead of a fixed one.
+- **Your own screens are no longer listed twice.** A screen in your screens
+  directory appeared both under `local` and under `byonk-builtin`; it now
+  appears only under `local`, where it belongs.
+- **Reserved repository handles are rejected in the Home Assistant app
+  options.** Naming a screen-repo row `local`, `examples`, or `byonk-builtin`
+  used to silently make the screens in that repository unreachable. Such rows
+  are now ignored with a warning in the log.
+
 ## 0.17.1 - 2026-07-17
 
 ### New

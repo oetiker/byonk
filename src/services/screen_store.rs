@@ -185,19 +185,28 @@ pub enum StarterKind {
 
 impl StarterKind {
     /// The (filename, contents) pairs to scaffold for this starter kind.
-    fn files(self) -> [(&'static str, &'static str); 3] {
+    fn files(self) -> [(&'static str, String); 3] {
         match self {
             StarterKind::Minimal => [
-                ("meta.yaml", STARTER_META),
-                ("script.lua", STARTER_LUA),
-                ("screen.svg", STARTER_SVG),
+                ("meta.yaml", starter_meta()),
+                ("script.lua", STARTER_LUA.to_string()),
+                ("screen.svg", STARTER_SVG.to_string()),
             ],
         }
     }
 }
 
-const STARTER_META: &str =
-    "title: New Screen\ndescription: A new screen.\nbyonk: \"0.15\"\nrefresh: 300\n";
+/// The scaffolded `meta.yaml`. Its `byonk:` requirement is the *running
+/// engine's* major.minor (`compat::engine_compat_req`), never a literal — a
+/// hardcoded value silently goes stale at the next minor release and makes
+/// every freshly created screen report a compat warning it did nothing to
+/// deserve.
+fn starter_meta() -> String {
+    format!(
+        "title: New Screen\ndescription: A new screen.\nbyonk: \"{}\"\nrefresh: 300\n",
+        crate::models::compat::engine_compat_req()
+    )
+}
 const STARTER_LUA: &str =
     "-- Return the data table for your screen.\nreturn { data = { message = \"Hello\" } }\n";
 const STARTER_SVG: &str = concat!(
@@ -689,66 +698,50 @@ impl ScreenStore {
 
         let mut issues = Vec::new();
 
-        // meta.yaml — schema check only.
-        match source.read_string(&format!("{screen_path}/meta.yaml")) {
-            Some(text) => {
-                if let Err(message) = ScreenMeta::from_yaml(&text) {
-                    issues.push(Issue {
-                        severity: Severity::Error,
-                        location: "meta.yaml".to_string(),
-                        message,
-                    });
-                }
-            }
-            None => issues.push(Issue {
+        // Read one of the screen's files and run `validator` over it, pushing
+        // an Error `Issue` located at `name` either way: the validator's
+        // message if it rejects the contents, or "file not found" if the file
+        // isn't there at all. Every per-file check below is this same
+        // read -> check -> missing-file shape; keeping it in one place is
+        // what stops the three (soon more) copies from drifting apart on how
+        // a missing file is reported.
+        let mut check_file = |name: &str, validator: &dyn Fn(&str) -> Result<(), String>| {
+            let message = match source.read_string(&format!("{screen_path}/{name}")) {
+                Some(text) => match validator(&text) {
+                    Ok(()) => return,
+                    Err(message) => message,
+                },
+                None => "file not found".to_string(),
+            };
+            issues.push(Issue {
                 severity: Severity::Error,
-                location: "meta.yaml".to_string(),
-                message: "file not found".to_string(),
-            }),
-        }
+                location: name.to_string(),
+                message,
+            });
+        };
+
+        // meta.yaml — schema check only.
+        check_file("meta.yaml", &|text| ScreenMeta::from_yaml(text).map(|_| ()));
 
         // script.lua — compile without executing.
-        match source.read_string(&format!("{screen_path}/script.lua")) {
-            Some(text) => {
-                if let Err(e) = mlua::Lua::new().load(&text).into_function() {
-                    issues.push(Issue {
-                        severity: Severity::Error,
-                        location: "script.lua".to_string(),
-                        message: e.to_string(),
-                    });
-                }
-            }
-            None => issues.push(Issue {
-                severity: Severity::Error,
-                location: "script.lua".to_string(),
-                message: "file not found".to_string(),
-            }),
-        }
+        check_file("script.lua", &|text| {
+            mlua::Lua::new()
+                .load(text)
+                .into_function()
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        });
 
         // screen.svg — Tera compile + extends-chain resolution, mirroring
         // the registration phase real rendering runs (see
         // `TemplateService::validate_template`'s doc comment for what this
         // does and doesn't catch).
-        match source.read_string(&format!("{screen_path}/screen.svg")) {
-            Some(text) => {
-                if let Err(e) =
-                    self.pipeline
-                        .template_service()
-                        .validate_template(&text, &source, screen_path)
-                {
-                    issues.push(Issue {
-                        severity: Severity::Error,
-                        location: "screen.svg".to_string(),
-                        message: e.to_string(),
-                    });
-                }
-            }
-            None => issues.push(Issue {
-                severity: Severity::Error,
-                location: "screen.svg".to_string(),
-                message: "file not found".to_string(),
-            }),
-        }
+        check_file("screen.svg", &|text| {
+            self.pipeline
+                .template_service()
+                .validate_template(text, &source, screen_path)
+                .map_err(|e| e.to_string())
+        });
 
         let ok = !issues.iter().any(|i| matches!(i.severity, Severity::Error));
         ValidationReport { ok, issues }
@@ -1416,10 +1409,16 @@ mod tests {
         let err = ScreenStore::copy_screen_files(&src, "s", &to_base, &to_dir).unwrap_err();
         assert!(matches!(err, StoreError::Traversal));
 
-        let outer = repo_root.parent().unwrap().parent().unwrap();
+        // The suffix the stub reports is `../../evil.txt`, joined onto
+        // `to_dir` (= `<repo_root>/dest`) — so the path a weakened guard would
+        // actually write to is `<repo_root>/dest/../../evil.txt`, i.e.
+        // `repo_root.parent()/evil.txt` (one level *above* the repo root),
+        // not two.
+        let would_be_target = repo_root.parent().unwrap().join("evil.txt");
         assert!(
-            !outer.join("evil.txt").exists(),
-            "a traversing screen_files entry must be rejected before any write"
+            !would_be_target.exists(),
+            "a traversing screen_files entry must be rejected before any write ({})",
+            would_be_target.display()
         );
         assert!(!to_dir.exists());
     }
@@ -1431,24 +1430,25 @@ mod tests {
         // files. Embedded assets are unfiltered (rust-embed includes image
         // globs), which is why `copy_forks_read_only_screen_into_local`'s
         // `background.jpg` assertion above passes even without this test —
-        // but a screen living under `SCREENS_DIR` (the HA add-on's primary
-        // layout, also visible under the `byonk-builtin` handle) must not
-        // silently lose its non-lua/svg/yaml assets when copied.
+        // but the overlaid copy of a *builtin* screen (an upgraded install's
+        // customized `SCREENS_DIR/default`, the HA add-on's primary layout)
+        // must not silently lose the extra non-lua/svg/yaml assets the user
+        // dropped into it when it is forked.
         let screens_dir = tempdir_path("screen_store_overlay_screens_dir");
-        std::fs::create_dir_all(screens_dir.join("myscreen")).unwrap();
+        std::fs::create_dir_all(screens_dir.join("default")).unwrap();
         std::fs::write(
-            screens_dir.join("myscreen/meta.yaml"),
-            "title: M\ndescription: d\nbyonk: \"0.15\"\n",
+            screens_dir.join("default/meta.yaml"),
+            "title: My Default\ndescription: d\nbyonk: \"0.17\"\n",
         )
         .unwrap();
         std::fs::write(
-            screens_dir.join("myscreen/script.lua"),
+            screens_dir.join("default/script.lua"),
             "return { data = {} }\n",
         )
         .unwrap();
-        std::fs::write(screens_dir.join("myscreen/screen.svg"), "<svg/>\n").unwrap();
+        std::fs::write(screens_dir.join("default/screen.svg"), "<svg/>\n").unwrap();
         std::fs::write(
-            screens_dir.join("myscreen/photo.png"),
+            screens_dir.join("default/photo.png"),
             [0x89, b'P', b'N', b'G'],
         )
         .unwrap();
@@ -1492,11 +1492,102 @@ mod tests {
         let store = ScreenStore::new(manager, pipeline);
 
         let r = store
-            .copy_screen("byonk-builtin/myscreen", "local", "myscreen2")
+            .copy_screen("byonk-builtin/default", "local", "mydefault")
             .unwrap();
-        assert_eq!(r, "local/myscreen2");
-        let photo = store.read_file("local/myscreen2", "photo.png").unwrap();
+        assert_eq!(r, "local/mydefault");
+        let photo = store.read_file("local/mydefault", "photo.png").unwrap();
         assert!(photo.binary);
+        // The fork carried the *customized* on-disk bytes, not the embedded ones.
+        let meta = store.read_file("local/mydefault", "meta.yaml").unwrap();
+        assert!(String::from_utf8_lossy(&meta.bytes).contains("My Default"));
+    }
+
+    /// Important 1, the production shape nothing else covers: ONE
+    /// `AssetLoader` with `SCREENS_DIR` set, feeding both the
+    /// `ScreenRepoManager` (so `SCREENS_DIR` auto-registers as `local`) and
+    /// the `ContentPipeline` (so `byonk-builtin` overlays the same directory)
+    /// — exactly how `server.rs` wires the HA add-on. A user screen there must
+    /// have exactly one handle.
+    ///
+    /// Non-vacuous: against the reverted `screen_paths` (merged
+    /// `list_screens`) the `byonk-builtin/myclock` assertions fail, and
+    /// `list_all()` reports the screen twice.
+    #[test]
+    fn user_screen_under_screens_dir_belongs_to_local_only_not_builtin() {
+        let screens_dir = tempdir_path("screen_store_prod_shape_screens_dir");
+        std::fs::create_dir_all(screens_dir.join("myclock")).unwrap();
+        std::fs::write(
+            screens_dir.join("byonk-screens.yaml"),
+            "name: local\ndescription: Your own screens.\nauthor: you\nlicense: UNLICENSED\n",
+        )
+        .unwrap();
+        std::fs::write(
+            screens_dir.join("myclock/meta.yaml"),
+            "title: My Clock\ndescription: d\nbyonk: \"0.17\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            screens_dir.join("myclock/script.lua"),
+            "return { data = {} }\n",
+        )
+        .unwrap();
+        std::fs::write(screens_dir.join("myclock/screen.svg"), "<svg/>\n").unwrap();
+
+        // ONE AssetLoader, SCREENS_DIR set, shared by manager and pipeline.
+        let asset_loader = Arc::new(AssetLoader::new(Some(screens_dir.clone()), None, None));
+        let shared_config: SharedConfig =
+            Arc::new(arc_swap::ArcSwap::from(Arc::new(AppConfig::default())));
+        let cache = crate::services::screen_repo_cache::ScreenRepoCache::new(tempdir_path(
+            "screen_store_prod_shape_cache",
+        ));
+        let manager = crate::services::screen_repo_manager::ScreenRepoManager::new(
+            asset_loader.clone(),
+            shared_config.clone(),
+            cache,
+            std::collections::HashMap::new(),
+            Some(screens_dir.clone()),
+            None,
+        );
+        let renderer = Arc::new(RenderService::new(&asset_loader).unwrap());
+        let pipeline = Arc::new(
+            ContentPipeline::new(shared_config, asset_loader, renderer, manager.clone()).unwrap(),
+        );
+        let store = ScreenStore::new(manager.clone(), pipeline);
+
+        // Exact handle membership, as `GET /api/admin/screens` computes it.
+        let refs: Vec<String> = manager
+            .loader()
+            .list_all()
+            .into_iter()
+            .map(|r| format!("{}/{}", r.handle, r.path))
+            .collect();
+        assert!(
+            refs.contains(&"local/myclock".to_string()),
+            "the user's screen must be listed under `local`: {refs:?}"
+        );
+        assert!(
+            !refs.contains(&"byonk-builtin/myclock".to_string()),
+            "the user's screen must NOT also be listed under `byonk-builtin`: {refs:?}"
+        );
+        assert_eq!(
+            refs.iter().filter(|r| r.ends_with("/myclock")).count(),
+            1,
+            "the user's screen must appear exactly once across all handles: {refs:?}"
+        );
+
+        // Resolution agrees with the listing, on both halves of the store.
+        assert!(manager.loader().resolve("local/myclock").is_some());
+        assert!(manager.loader().resolve("byonk-builtin/myclock").is_none());
+
+        // The builtin fallback `content_pipeline.rs` hard-references is
+        // untouched by the narrowing, and the store can still fork it.
+        assert!(manager.loader().resolve("byonk-builtin/default").is_some());
+        assert_eq!(
+            store
+                .copy_screen("byonk-builtin/default", "local", "forked")
+                .unwrap(),
+            "local/forked"
+        );
     }
 
     // --- Task 8: validate -------------------------------------------------
@@ -1522,6 +1613,27 @@ mod tests {
             .create_screen("local", "ok", StarterKind::Minimal)
             .unwrap();
         assert!(store.validate("local/ok").ok);
+    }
+
+    /// Important 3: a screen the author just created must not immediately
+    /// report "screen requires byonk `X` but this engine is Y" in
+    /// `GET /api/admin/screens`. Non-vacuous: with `STARTER_META`'s old
+    /// hardcoded `byonk: "0.15"` this fails on any engine from 0.16.0 on.
+    #[test]
+    fn created_screen_declares_a_requirement_this_engine_satisfies() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "fresh", StarterKind::Minimal)
+            .unwrap();
+        let meta_bytes = store.read_file("local/fresh", "meta.yaml").unwrap().bytes;
+        let meta = ScreenMeta::from_yaml(std::str::from_utf8(&meta_bytes).unwrap()).unwrap();
+        let engine = crate::models::compat::engine_version();
+        assert_eq!(
+            crate::models::compat::compat_warning(engine, &meta.byonk),
+            None,
+            "a freshly scaffolded screen (byonk: {:?}) must not warn on engine {engine}",
+            meta.byonk
+        );
     }
 
     #[test]

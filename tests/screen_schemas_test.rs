@@ -17,6 +17,7 @@
 //!   an embedded manifest.
 
 use byonk::assets::AssetLoader;
+use byonk::models::compat::{compat_warning, engine_version};
 use byonk::models::screen_meta::ScreenMeta;
 use byonk::services::screen_repo_loader::ScreenRepoLoader;
 use std::path::Path;
@@ -136,6 +137,50 @@ fn test_all_bundled_screens_have_parseable_meta() {
             "{}/{} has a title",
             r.handle,
             r.path
+        );
+    }
+}
+
+/// No screen byonk itself ships may declare an engine requirement the running
+/// engine doesn't satisfy — otherwise `GET /api/admin/screens` reports a
+/// `compat_warning` on every one of them (including `byonk-builtin/default`,
+/// the fallback screen), which trains users to ignore the field entirely.
+///
+/// This is the guard against the exact drift that shipped in 0.16.0: every
+/// `meta.yaml` said `byonk: "0.15"` (= `^0.15`, i.e. `<0.16.0`) while the
+/// crate had moved on. Non-vacuous — revert any shipped `meta.yaml` to
+/// `"0.15"` and this fails.
+#[test]
+fn every_shipped_screen_is_compatible_with_this_engine() {
+    let engine = engine_version();
+
+    // Embedded `byonk-builtin`.
+    for r in loader().list_all() {
+        assert_eq!(
+            compat_warning(engine, &r.meta.byonk),
+            None,
+            "{}/{} declares an incompatible engine requirement",
+            r.handle,
+            r.path
+        );
+    }
+
+    // Embedded `examples` (seeded to disk as the `examples` repo at runtime;
+    // read straight out of the embed here, as the tests above do).
+    let asset_loader = AssetLoader::new(None, None, None);
+    let meta_paths: Vec<String> = asset_loader
+        .list_examples()
+        .into_iter()
+        .filter(|p| p.ends_with("/meta.yaml"))
+        .collect();
+    assert!(!meta_paths.is_empty());
+    for path in &meta_paths {
+        let raw = asset_loader.read_example(Path::new(path)).unwrap();
+        let meta = ScreenMeta::from_yaml(std::str::from_utf8(&raw).unwrap()).unwrap();
+        assert_eq!(
+            compat_warning(engine, &meta.byonk),
+            None,
+            "{path} declares an incompatible engine requirement"
         );
     }
 }

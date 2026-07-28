@@ -664,6 +664,48 @@ fn run_status_command() {
     println!("\nRun 'byonk --help' for more details.");
 }
 
+/// Seed configured-but-empty asset directories, then run the one-time
+/// `byonk-builtin` -> `local` migration for pre-existing installs.
+///
+/// Shared by `run_server` and `run_dev_server` so the two can't drift: a
+/// `byonk dev` run reads and writes the very same `SCREENS_DIR` and
+/// `config.yaml` a `byonk serve` run does, so skipping the migration in one
+/// of them leaves an unmigrated tree behind for the other (and, now that
+/// `byonk-builtin` no longer enumerates the `SCREENS_DIR` overlay, an
+/// unmigrated `byonk-builtin/<user-screen>` ref simply stops resolving).
+///
+/// Both steps are best-effort: neither may prevent the server from starting.
+/// Order matters — the migration reads the `byonk-screens.yaml` manifest that
+/// seeding may have just written, and both must complete before app state is
+/// built from the config they may have rewritten.
+fn seed_and_migrate(asset_loader: &Arc<byonk::assets::AssetLoader>) {
+    match asset_loader.seed_if_configured() {
+        Ok(report) if !report.is_empty() => {
+            tracing::info!(
+                screens = report.screens_seeded.len(),
+                examples = report.examples_seeded.len(),
+                fonts = report.fonts_seeded.len(),
+                config = report.config_seeded,
+                "Seeded empty directories with embedded assets"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(%e, "Failed to seed assets");
+        }
+        _ => {}
+    }
+
+    // One-time migration of pre-existing installs: older byonk versions copied
+    // their builtin screens into SCREENS_DIR under the `byonk-builtin` handle.
+    // This rewrites the leftover manifest and any device refs still pointing at
+    // `byonk-builtin/<x>` where `<x>` is actually a screen SCREENS_DIR will
+    // serve as `local`, to the `local` handle. No-op (and logs nothing) once
+    // already migrated.
+    if let Some(dir) = asset_loader.screens_dir() {
+        byonk::services::migrate_builtin_overlay_to_local(dir, asset_loader.config_path());
+    }
+}
+
 /// Run the HTTP server
 async fn run_server() -> anyhow::Result<()> {
     use byonk::assets::AssetLoader;
@@ -711,33 +753,8 @@ async fn run_server() -> anyhow::Result<()> {
         "Asset sources configured"
     );
 
-    // Seed if configured paths are empty
-    match asset_loader.seed_if_configured() {
-        Ok(report) if !report.is_empty() => {
-            tracing::info!(
-                screens = report.screens_seeded.len(),
-                examples = report.examples_seeded.len(),
-                fonts = report.fonts_seeded.len(),
-                config = report.config_seeded,
-                "Seeded empty directories with embedded assets"
-            );
-        }
-        Err(e) => {
-            tracing::warn!(%e, "Failed to seed assets");
-        }
-        _ => {}
-    }
-
-    // One-time migration of pre-existing installs: older byonk versions copied
-    // their builtin screens into SCREENS_DIR under the `byonk-builtin` handle.
-    // This rewrites the leftover manifest and any device refs still pointing at
-    // `byonk-builtin/<x>` where `<x>` is actually a screen present in
-    // SCREENS_DIR, to the `local` handle. No-op (and logs nothing) once
-    // already migrated. Must run after seeding (which may have just written
-    // the manifest this reads) and before state is built.
-    if let Some(dir) = asset_loader.screens_dir() {
-        byonk::services::migrate_builtin_overlay_to_local(dir, asset_loader.config_path());
-    }
+    // Seed empty configured directories, then migrate a pre-existing install.
+    seed_and_migrate(&asset_loader);
 
     // Create application state, injecting the add-on admin token (if any) into config.
     // Explicit BYONK_ADMIN_TOKEN env still wins (server resolves env before config.admin.token).
@@ -849,22 +866,10 @@ async fn run_dev_server() -> anyhow::Result<()> {
         "Asset sources configured"
     );
 
-    // Seed if configured paths are empty
-    match asset_loader.seed_if_configured() {
-        Ok(report) if !report.is_empty() => {
-            tracing::info!(
-                screens = report.screens_seeded.len(),
-                examples = report.examples_seeded.len(),
-                fonts = report.fonts_seeded.len(),
-                config = report.config_seeded,
-                "Seeded empty directories with embedded assets"
-            );
-        }
-        Err(e) => {
-            tracing::warn!(%e, "Failed to seed assets");
-        }
-        _ => {}
-    }
+    // Seed empty configured directories, then migrate a pre-existing install —
+    // exactly as `run_server` does, so `byonk dev` and `byonk serve` leave the
+    // same SCREENS_DIR/config.yaml state behind.
+    seed_and_migrate(&asset_loader);
 
     // Create file watcher for screens directory
     let file_watcher = Arc::new(FileWatcher::new(screens_dir.clone()));
@@ -926,4 +931,71 @@ async fn run_dev_server() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use byonk::assets::AssetLoader;
+
+    /// Minor 5: `byonk dev` and `byonk serve` must leave the same on-disk
+    /// state behind. They do so by both calling `seed_and_migrate` and
+    /// nothing else — this asserts that helper really does both halves
+    /// (seed, then migrate), so "did `dev` migrate?" reduces to "does `dev`
+    /// call the helper?", which is checkable by reading two lines.
+    ///
+    /// Non-vacuous: drop the `migrate_builtin_overlay_to_local` call from
+    /// `seed_and_migrate` (which is what `run_dev_server` effectively did
+    /// before this change) and the manifest/ref assertions fail.
+    #[test]
+    fn seed_and_migrate_both_seeds_and_migrates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let screens_dir = tmp.path().join("screens");
+        let config_path = tmp.path().join("config.yaml");
+
+        // A pre-split install: SCREENS_DIR is the old byonk-builtin overlay
+        // copy, with one of the user's own screens in it, and a device ref
+        // still pointing at `byonk-builtin/myclock`.
+        std::fs::create_dir_all(screens_dir.join("myclock")).unwrap();
+        std::fs::write(
+            screens_dir.join("byonk-screens.yaml"),
+            "name: byonk-builtin\ndescription: Built-in screens.\nauthor: Byonk\nlicense: MIT\n",
+        )
+        .unwrap();
+        std::fs::write(
+            screens_dir.join("myclock/meta.yaml"),
+            "title: C\ndescription: d\nbyonk: \"0.17\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &config_path,
+            "devices:\n  AA:BB:\n    screen: byonk-builtin/myclock\n",
+        )
+        .unwrap();
+
+        // `examples_dir` pinned inside the tempdir: its derived default is
+        // `<SCREENS_DIR>/../examples`, and seeding must not escape the fixture.
+        let loader = Arc::new(
+            AssetLoader::new(Some(screens_dir.clone()), None, Some(config_path.clone()))
+                .with_examples_dir_override(Some(tmp.path().join("examples"))),
+        );
+
+        seed_and_migrate(&loader);
+
+        // Migrated: the leftover manifest now names the `local` repo...
+        let manifest = std::fs::read_to_string(screens_dir.join("byonk-screens.yaml")).unwrap();
+        assert!(
+            manifest.contains("name: local"),
+            "manifest must be migrated to the `local` handle:\n{manifest}"
+        );
+        // ...and the device ref follows it.
+        let cfg = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            cfg.contains("screen: local/myclock"),
+            "device ref must be migrated to the `local` handle:\n{cfg}"
+        );
+
+        // Seeded: the shipped examples landed in the pinned examples dir.
+        assert!(tmp.path().join("examples/byonk-screens.yaml").exists());
+    }
 }

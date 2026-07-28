@@ -1,6 +1,6 @@
 title: Swiss Departure Board
 description: Real-time public transport departures from the Swiss OpenData Transport API.
-byonk: "0.15"
+byonk: "0.17"
 refresh: 60
 params:
   station:

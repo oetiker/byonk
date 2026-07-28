@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::assets::AssetLoader;
+use crate::assets::{AssetCategory, AssetLoader};
 use crate::models::screen_meta::ScreenMeta;
 use crate::models::screen_repo_manifest::ScreenRepoManifest;
 
@@ -124,9 +124,8 @@ fn split_ref(screen_ref: &str) -> Option<(&str, &str)> {
 
 /// Recursively collect directories (relative to `base`) that contain a `meta.yaml`,
 /// starting from `base` itself. Shared by every on-disk `ScreenRepoSource`
-/// implementation (`GitScreenRepoSource`, `LocalScreenRepoSource`), and by
-/// `screen_migration`'s "what counts as a present screen" check.
-pub(crate) fn walk_screen_paths(base: &Path) -> Vec<String> {
+/// implementation (`GitScreenRepoSource`, `LocalScreenRepoSource`).
+fn walk_screen_paths(base: &Path) -> Vec<String> {
     fn walk(base: &Path, current: &Path, out: &mut Vec<String>) {
         let Ok(entries) = std::fs::read_dir(current) else {
             return;
@@ -322,8 +321,16 @@ impl ScreenRepoSource for LocalScreenRepoSource {
     }
 }
 
-/// The built-in screen repo, backed by the embedded `screens/` tree (optionally
-/// overlaid by `SCREENS_DIR`) via `AssetLoader`.
+/// The built-in screen repo: the embedded `screens/builtin/` tree.
+///
+/// **Its screen set is exactly the embedded one.** `screen_paths` enumerates
+/// `AssetLoader::list_embedded` (never the merged `list_screens`), so a screen
+/// the user authors under `SCREENS_DIR` belongs to the `local` handle and to
+/// `local` only — it does not also surface as a `byonk-builtin` screen.
+///
+/// The `SCREENS_DIR` overlay survives inside that fixed set: individual file
+/// *reads* still prefer `SCREENS_DIR` (see `read`), which is what keeps an
+/// upgraded install's customized `SCREENS_DIR/default/screen.svg` rendering.
 pub struct EmbeddedBuiltinSource {
     loader: Arc<AssetLoader>,
     manifest: ScreenRepoManifest,
@@ -343,10 +350,10 @@ impl EmbeddedBuiltinSource {
     /// `byonk-builtin`'s identity (name/description/author/license/`root:`)
     /// on the primary deployment path (`SCREENS_DIR` set), and an invalid or
     /// re-rooting `local` manifest could silently unregister the
-    /// `byonk-builtin` handle entirely. Only the manifest read is
-    /// embedded-only; individual screen file reads (`read`/`screen_paths`/
-    /// `svg_files` below) still go through the `SCREENS_DIR` overlay as
-    /// before — that per-file overlay behavior is unchanged and untouched.
+    /// `byonk-builtin` handle entirely. `screen_paths` is embedded-only for a
+    /// related but distinct reason (see its own doc comment); individual file
+    /// reads (`read`, and `screen_files`) still go through the `SCREENS_DIR`
+    /// overlay.
     pub fn load(loader: Arc<AssetLoader>) -> Result<EmbeddedBuiltinSource, String> {
         let bytes = loader
             .read_screen_embedded_only(Path::new("byonk-screens.yaml"))
@@ -367,6 +374,19 @@ impl EmbeddedBuiltinSource {
 }
 
 impl ScreenRepoSource for EmbeddedBuiltinSource {
+    /// Reads still go through the `SCREENS_DIR` overlay
+    /// (`AssetLoader::read_screen` prefers the filesystem). Deliberate, and
+    /// load-bearing: a pre-split install copied the builtin screens into
+    /// `SCREENS_DIR` and users edited those copies in place, so dropping the
+    /// overlay here would silently revert a customized `default`/`calibration`
+    /// screen to the embedded bytes on upgrade.
+    ///
+    /// Note the flip side, unchanged by the enumeration narrowing below and
+    /// documented for users in `docs/src/guide/authoring.md`: because the two
+    /// repos share one directory, a `local` screen that reuses a builtin's
+    /// exact folder name (`local/default`) does override that builtin's files
+    /// on read. The two cases are indistinguishable on disk — they are the
+    /// same bytes — so the overlay cannot serve one without the other.
     fn read(&self, rel: &str) -> Option<Vec<u8>> {
         if !is_safe_rel(rel) {
             return None;
@@ -378,15 +398,22 @@ impl ScreenRepoSource for EmbeddedBuiltinSource {
             .map(|b| b.into_owned())
     }
 
+    /// **Embedded-only** — `AssetLoader::list_embedded`, not the
+    /// `SCREENS_DIR`-merged `list_screens`.
+    ///
+    /// The overlay was correct while `SCREENS_DIR` *was* `byonk-builtin`'s
+    /// on-disk copy. It is now the separate `local` repo, so enumerating it
+    /// here would report every user screen under a second handle: duplicating
+    /// each of them in `GET /api/admin/screens` (which groups
+    /// `loader.list_all()` by handle) and letting a `byonk-builtin/<x>` ref
+    /// resolve to a screen `byonk-builtin` does not ship.
     fn screen_paths(&self) -> Vec<String> {
         let prefix = if self.root_prefix.is_empty() {
             String::new()
         } else {
             format!("{}/", self.root_prefix)
         };
-        let mut out: Vec<String> = self
-            .loader
-            .list_screens()
+        let mut out: Vec<String> = AssetLoader::list_embedded(AssetCategory::Screens)
             .into_iter()
             .filter_map(|entry| {
                 // Keep only entries under the root prefix that are `meta.yaml` files.
@@ -406,6 +433,18 @@ impl ScreenRepoSource for EmbeddedBuiltinSource {
         out
     }
 
+    /// Stays **merged** with the `SCREENS_DIR` overlay, unlike `screen_paths`.
+    ///
+    /// This is not a listing surface: its only consumer is
+    /// `TemplateService::build_tera`, which registers each name as a Tera
+    /// template whose *content* it reads back through `read` — i.e. through
+    /// the overlay that stays merged either way. Narrowing it to the embedded
+    /// set would therefore close no boundary (a `byonk-builtin` screen's Lua
+    /// `require`s and image refs still resolve through the same overlaid
+    /// `read`), while breaking an upgraded install whose customized
+    /// `SCREENS_DIR/default/screen.svg` `{% include %}`s an SVG part that only
+    /// exists on disk — a break the migration cannot repair, since it
+    /// deliberately never rewrites `byonk-builtin/default`-shaped refs.
     fn svg_files(&self) -> Vec<String> {
         let prefix = if self.root_prefix.is_empty() {
             String::new()
@@ -433,6 +472,15 @@ impl ScreenRepoSource for EmbeddedBuiltinSource {
         &self.manifest
     }
 
+    /// Stays **merged** with the `SCREENS_DIR` overlay, like `read` and unlike
+    /// `screen_paths`. It is scoped to one screen's own subtree, and with
+    /// `screen_paths` narrowed that screen is always one of the embedded
+    /// three — so this can only ever pick up overlay files sitting *inside* a
+    /// builtin screen's directory. Those are exactly the files `read` serves,
+    /// and `copy_screen` (its only consumer) must carry all of them so forking
+    /// an upgraded install's customized `byonk-builtin/default` yields a
+    /// faithful copy rather than the embedded original minus the user's extra
+    /// assets.
     fn screen_files(&self, screen_path: &str) -> Vec<String> {
         let prefix = if self.root_prefix.is_empty() {
             String::new()
@@ -498,8 +546,9 @@ pub struct ScreenRepoLoader {
 }
 
 impl ScreenRepoLoader {
-    /// Build a loader. The `byonk-builtin` handle is always registered (backed by
-    /// the embedded tree + `SCREENS_DIR` overlay). Each `disk_sources` entry maps
+    /// Build a loader. The `byonk-builtin` handle is always registered (backed
+    /// by the embedded tree; `SCREENS_DIR` overlays its file reads but never
+    /// adds screens to it). Each `disk_sources` entry maps
     /// a handle to a typed on-disk screen repo root (git cache vs. writable
     /// local). ScreenRepos whose manifest is missing/invalid are skipped with
     /// a warning.
@@ -794,6 +843,52 @@ mod tests {
         assert!(
             src.screen_paths().iter().any(|p| p == "default"),
             "byonk-builtin's root must stay the embedded tree's root, unaffected by the overlay manifest's root: key"
+        );
+    }
+
+    /// Important 1: `SCREENS_DIR` is the `local` repo, not part of
+    /// `byonk-builtin`. A user screen sitting there must NOT be enumerated as
+    /// a builtin screen — otherwise it appears twice in
+    /// `GET /api/admin/screens` and `byonk-builtin/<x>` resolves to something
+    /// `byonk-builtin` doesn't ship. Non-vacuous: against the reverted code
+    /// (`screen_paths` reading `loader.list_screens()`) both assertions fail.
+    #[test]
+    fn builtin_does_not_enumerate_screens_dir_overlay_screens() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("myclock")).unwrap();
+        std::fs::write(
+            dir.path().join("myclock/meta.yaml"),
+            "title: C\ndescription: d\nbyonk: \"0.17\"\n",
+        )
+        .unwrap();
+
+        let loader = Arc::new(AssetLoader::new(Some(dir.path().to_path_buf()), None, None));
+        let src = EmbeddedBuiltinSource::load(loader).unwrap();
+        assert!(
+            !src.screen_paths().iter().any(|p| p == "myclock"),
+            "a SCREENS_DIR screen must not be enumerated as a byonk-builtin screen: {:?}",
+            src.screen_paths()
+        );
+        // ...while the embedded set is of course still all there.
+        assert!(src.screen_paths().iter().any(|p| p == "default"));
+    }
+
+    /// Important 1, the overlay half that must NOT change: an upgraded
+    /// install's customized `SCREENS_DIR/default/screen.svg` still wins over
+    /// the embedded bytes when read. Narrowing enumeration must not turn into
+    /// silently reverting people's edits.
+    #[test]
+    fn builtin_read_still_prefers_the_screens_dir_overlay_for_its_own_screens() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("default")).unwrap();
+        std::fs::write(dir.path().join("default/screen.svg"), "<svg id=\"mine\"/>").unwrap();
+
+        let loader = Arc::new(AssetLoader::new(Some(dir.path().to_path_buf()), None, None));
+        let src = EmbeddedBuiltinSource::load(loader).unwrap();
+        assert_eq!(
+            src.read_string("default/screen.svg").as_deref(),
+            Some("<svg id=\"mine\"/>"),
+            "the customized on-disk copy must still win on read"
         );
     }
 

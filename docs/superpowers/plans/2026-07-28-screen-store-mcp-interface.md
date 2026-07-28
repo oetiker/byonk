@@ -246,11 +246,18 @@ In `src/assets.rs`, `read_screen`, replace the overlay branch:
             // `io::Result<Cow<'static, [u8]>>`, not `Option<Vec<u8>>`.
             let full_path = dir.join(relative_path);
             if full_path.exists() {
-                let ok = std::fs::canonicalize(dir).ok().zip(std::fs::canonicalize(&full_path).ok())
-                    .is_some_and(|(root, target)| target.starts_with(&root));
-                if ok {
-                    tracing::trace!(path = %full_path.display(), "Loading screen from filesystem");
-                    return Ok(Cow::Owned(fs::read(&full_path)?));
+                // Read the CANONICALIZED path, not `full_path` — checking one
+                // path and reading another re-follows the symlink and leaves a
+                // swap window open on exactly the user-writable directory this
+                // guard defends. `read_within` does the same.
+                let checked = std::fs::canonicalize(dir)
+                    .ok()
+                    .zip(std::fs::canonicalize(&full_path).ok())
+                    .filter(|(root, target)| target.starts_with(root))
+                    .map(|(_, target)| target);
+                if let Some(target) = checked {
+                    tracing::trace!(path = %target.display(), "Loading screen from filesystem");
+                    return Ok(Cow::Owned(fs::read(&target)?));
                 }
                 tracing::warn!(
                     path = %full_path.display(),

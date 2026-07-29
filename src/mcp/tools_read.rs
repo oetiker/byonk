@@ -2,8 +2,9 @@
 //! screen's files contain.
 
 use rmcp::{
-    handler::server::wrapper::Parameters, model::CallToolResult, schemars, tool, tool_router,
-    ErrorData,
+    handler::server::wrapper::Parameters,
+    model::{CallToolResult, ContentBlock},
+    schemars, tool, tool_router, ErrorData,
 };
 use serde::{Deserialize, Serialize};
 
@@ -140,22 +141,42 @@ impl ByonkMcp {
         // Build from the live loader so `kind` and `writable` agree with what
         // the write path will actually enforce.
         let manager = self.state.screen_repo_manager.clone();
+        let config = self.state.config.clone();
         let repos = blocking(move || {
             let loader = manager.loader();
-            let mut by_handle: std::collections::BTreeMap<String, RepoEntry> = Default::default();
+            let cfg = config.load();
+
+            // Screen counts per handle, from the source of truth.
+            let mut counts: std::collections::HashMap<String, usize> = Default::default();
             for s in loader.list_all() {
-                let entry = by_handle
-                    .entry(s.handle.clone())
-                    .or_insert_with(|| RepoEntry {
-                        handle: s.handle.clone(),
-                        kind: s.source.kind().as_str().to_string(),
-                        name: s.source.manifest().name.clone(),
-                        screen_count: 0,
-                        writable: s.source.writable_root().is_some(),
-                    });
-                entry.screen_count += 1;
+                *counts.entry(s.handle).or_insert(0) += 1;
             }
-            by_handle.into_values().collect::<Vec<_>>()
+
+            // Union of loader-registered handles and configured screen-repo
+            // handles: `loader.list_all()` alone would hide a repo with zero
+            // screens (e.g. one an authoring agent just created and hasn't
+            // populated yet), leaving it nowhere for the agent to see it is
+            // allowed to write. Mirrors `src/api/admin/read.rs::screen_repos`.
+            let mut handles: std::collections::BTreeSet<String> =
+                loader.handles().into_iter().collect();
+            handles.extend(cfg.screen_repos.keys().cloned());
+
+            handles
+                .into_iter()
+                .filter_map(|handle| {
+                    // No source means the manifest failed to load (and the
+                    // loader already warned) — nothing to report a kind/name
+                    // for, so skip it, same as it not appearing anywhere else.
+                    let source = loader.source_for(&handle)?;
+                    Some(RepoEntry {
+                        screen_count: counts.get(&handle).copied().unwrap_or(0),
+                        kind: source.kind().as_str().to_string(),
+                        name: source.manifest().name.clone(),
+                        writable: source.writable_root().is_some(),
+                        handle,
+                    })
+                })
+                .collect::<Vec<_>>()
         })
         .await?;
         ok_json(ListReposOutput { repos })
@@ -169,12 +190,18 @@ impl ByonkMcp {
     pub async fn list_devices(&self) -> Result<CallToolResult, ErrorData> {
         // Mirrors the merge `src/api/admin/read.rs::list_devices` performs
         // (registry telemetry + config mapping).
-        let seen = self
-            .state
-            .registry
-            .list_all()
-            .await
-            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        //
+        // A registry read failure is the registry's problem, not a protocol
+        // fault — report it as a tool-level error (visible to the agent),
+        // not `Err(ErrorData)` (opaque to the model).
+        let seen = match self.state.registry.list_all().await {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "failed to read the device registry: {e}"
+                ))]))
+            }
+        };
         let config = self.state.config.load();
         let devices: Vec<DeviceEntry> = seen
             .iter()
@@ -205,7 +232,13 @@ impl ByonkMcp {
     )]
     pub async fn get_config(&self) -> Result<CallToolResult, ErrorData> {
         // Delegate to the same redaction the admin API applies — do not
-        // hand-roll a second one that could drift and start leaking.
-        ok_json(crate::api::admin::read::redacted_config(&self.state))
+        // hand-roll a second one that could drift and start leaking. Goes
+        // through `blocking` like every other tool here: `redacted_config`
+        // does synchronous file IO (`read_config_string`).
+        let state = self.state.clone();
+        match blocking(move || crate::api::admin::read::redacted_config(&state)).await? {
+            Ok(v) => ok_json(v),
+            Err(msg) => Ok(CallToolResult::error(vec![ContentBlock::text(msg)])),
+        }
     }
 }

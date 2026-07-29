@@ -75,6 +75,33 @@ async fn test_config_requires_auth() {
     assert_eq!(resp.status, StatusCode::UNAUTHORIZED);
 }
 
+/// A config file that becomes unreadable AFTER startup (e.g. corrupted on
+/// disk) must surface as a 500, not a 200 with a swallowed error — a
+/// monitoring client checking status codes needs to see the failure.
+/// `redacted_config` returning `Result` (rather than collapsing errors into
+/// `{"_error": ...}`) is what the axum handler relies on to still map this
+/// to `ApiError::Internal`.
+///
+/// Startup itself must succeed (so the config is loaded and validated once,
+/// same as a real corrupt-after-the-fact scenario), so the file is written
+/// valid first via `new_admin_with_file`, then overwritten with invalid
+/// UTF-8 bytes — that fails `String::from_utf8` inside
+/// `read_config_string`, without needing any filesystem-permission tricks.
+#[tokio::test]
+async fn test_config_read_failure_after_startup_is_a_500() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, cfg_path) = TestApp::new_admin_with_file("secret", dir.path());
+    std::fs::write(&cfg_path, [0xFF, 0xFE, 0x00, 0xFF]).expect("corrupt config file");
+
+    let resp = app.get_with_headers("/api/admin/config", &[AUTH]).await;
+    assert_eq!(
+        resp.status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "a config file that fails to read must 500, not silently succeed: {}",
+        resp.text()
+    );
+}
+
 /// Security: package tokens must NOT appear in GET /api/admin/config.
 /// `ScreenRepoRef.token` is documented "Secret token; redacted in read APIs".
 #[tokio::test]

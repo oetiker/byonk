@@ -53,20 +53,18 @@ pub async fn pending(
 /// /api/admin/config` handler and the MCP `get_config` tool, so there is
 /// exactly one place redaction can drift.
 ///
-/// Falls back to `serde_json::Value::Null` with an embedded error message
-/// under `_error` if the config file cannot be read or parsed — callers
-/// (both the axum handler and the MCP tool) treat that as a best-effort
-/// view rather than propagating a hard failure, since this is a read-only
-/// diagnostic surface.
-pub fn redacted_config(state: &AppState) -> serde_json::Value {
-    let text = match state.asset_loader.read_config_string() {
-        Ok(t) => t,
-        Err(e) => return serde_json::json!({ "_error": format!("read config: {e}") }),
-    };
-    let mut value: serde_yaml::Value = match serde_yaml::from_str(&text) {
-        Ok(v) => v,
-        Err(e) => return serde_json::json!({ "_error": format!("parse config: {e}") }),
-    };
+/// Returns `Err` (a human-readable message, not a raw error type) if the
+/// config file cannot be read, parsed or re-serialized. Callers decide what
+/// a failure means for their own surface: the axum handler turns it into a
+/// 500, the MCP tool into a tool-level error result — neither silently
+/// reports success on a real failure.
+pub fn redacted_config(state: &AppState) -> Result<serde_json::Value, String> {
+    let text = state
+        .asset_loader
+        .read_config_string()
+        .map_err(|e| format!("read config: {e}"))?;
+    let mut value: serde_yaml::Value =
+        serde_yaml::from_str(&text).map_err(|e| format!("parse config: {e}"))?;
 
     // Strip admin.token from the response.
     if let Some(map) = value.as_mapping_mut() {
@@ -90,8 +88,7 @@ pub fn redacted_config(state: &AppState) -> serde_json::Value {
         }
     }
 
-    serde_json::to_value(&value)
-        .unwrap_or_else(|e| serde_json::json!({ "_error": format!("to json: {e}") }))
+    serde_json::to_value(&value).map_err(|e| format!("to json: {e}"))
 }
 
 pub async fn get_config(
@@ -99,7 +96,9 @@ pub async fn get_config(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&state, &headers)?;
-    Ok(Json(redacted_config(&state)))
+    redacted_config(&state)
+        .map(Json)
+        .map_err(ApiError::Internal)
 }
 
 #[derive(Serialize)]

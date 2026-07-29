@@ -169,3 +169,153 @@ async fn test_list_devices_includes_a_registered_device() {
     let devices = structured(&result)["devices"].as_array().unwrap();
     assert!(devices.iter().any(|d| d["mac"] == "11:22:33:44:55:66"));
 }
+
+#[tokio::test]
+async fn test_copy_then_edit_a_builtin_screen() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = TestApp::new_admin_with_screens("secret", tmp.path());
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    // Fork the read-only builtin into the writable local repo.
+    let copied = client
+        .call_tool(
+            "copy_screen",
+            serde_json::json!({
+                "from_ref": "byonk-builtin/default",
+                "to_handle": "local",
+                "to_name": "mine"
+            }),
+        )
+        .await;
+    assert_eq!(structured(&copied)["screen_ref"], "local/mine");
+
+    // Read it, then write it back with its etag.
+    let read = client
+        .call_tool(
+            "read_screen_file",
+            serde_json::json!({ "screen_ref": "local/mine", "file": "script.lua" }),
+        )
+        .await;
+    let etag = structured(&read)["etag"].as_str().unwrap().to_string();
+
+    let written = client
+        .call_tool(
+            "write_screen_file",
+            serde_json::json!({
+                "screen_ref": "local/mine",
+                "file": "script.lua",
+                "content": "return { hello = \"world\" }\n",
+                "if_match": etag
+            }),
+        )
+        .await;
+    assert_ne!(structured(&written)["etag"], etag, "etag must change");
+}
+
+#[tokio::test]
+async fn test_write_to_a_read_only_handle_names_copy_screen() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = TestApp::new_admin_with_screens("secret", tmp.path());
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let result = client
+        .call_tool(
+            "write_screen_file",
+            serde_json::json!({
+                "screen_ref": "byonk-builtin/default",
+                "file": "script.lua",
+                "content": "return {}\n"
+            }),
+        )
+        .await;
+
+    assert_eq!(result["isError"], true);
+    let text = serde_json::to_string(&result).unwrap();
+    assert!(
+        text.contains("copy_screen"),
+        "the refusal must tell the agent how to proceed: {text}"
+    );
+}
+
+#[tokio::test]
+async fn test_stale_etag_is_a_conflict() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = TestApp::new_admin_with_screens("secret", tmp.path());
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    client
+        .call_tool(
+            "create_screen",
+            serde_json::json!({ "handle": "local", "name": "conflicted" }),
+        )
+        .await;
+
+    let result = client
+        .call_tool(
+            "write_screen_file",
+            serde_json::json!({
+                "screen_ref": "local/conflicted",
+                "file": "script.lua",
+                "content": "return {}\n",
+                "if_match": "0".repeat(64)
+            }),
+        )
+        .await;
+
+    assert_eq!(result["isError"], true);
+    assert!(serde_json::to_string(&result).unwrap().contains("conflict"));
+}
+
+#[tokio::test]
+async fn test_create_rename_delete_round_trip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = TestApp::new_admin_with_screens("secret", tmp.path());
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    client
+        .call_tool(
+            "create_screen",
+            serde_json::json!({ "handle": "local", "name": "tmp1" }),
+        )
+        .await;
+    client
+        .call_tool(
+            "rename_screen",
+            serde_json::json!({ "screen_ref": "local/tmp1", "new_name": "tmp2" }),
+        )
+        .await;
+
+    let listed = client
+        .call_tool("list_screens", serde_json::json!({}))
+        .await;
+    let refs: Vec<String> = structured(&listed)["screens"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["screen_ref"].as_str().unwrap().to_string())
+        .collect();
+    assert!(refs.contains(&"local/tmp2".to_string()));
+    assert!(!refs.contains(&"local/tmp1".to_string()));
+
+    client
+        .call_tool(
+            "delete_screen",
+            serde_json::json!({ "screen_ref": "local/tmp2" }),
+        )
+        .await;
+
+    let after = client
+        .call_tool("list_screens", serde_json::json!({}))
+        .await;
+    let refs: Vec<String> = structured(&after)["screens"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["screen_ref"].as_str().unwrap().to_string())
+        .collect();
+    assert!(!refs.contains(&"local/tmp2".to_string()));
+}

@@ -30,6 +30,7 @@ use crate::api::admin::require_admin;
 use crate::error::ApiError;
 use crate::server::AppState;
 
+pub mod tools_edit;
 pub mod tools_read;
 
 /// The MCP server handler. One instance per request in stateless mode; it
@@ -57,7 +58,7 @@ impl ByonkMcp {
             // not a free function in the module — confirmed in
             // `rmcp-macros-2.2.0/src/tool_router.rs`. So this is
             // `Self::tools_read_router()`, not `tools_read::tools_read_router()`.
-            tool_router: Self::tools_read_router(),
+            tool_router: Self::tools_read_router() + Self::tools_edit_router(),
         }
     }
 }

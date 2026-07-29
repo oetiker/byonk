@@ -235,7 +235,7 @@ pub fn reload_config(state: &AppState) -> anyhow::Result<()> {
 /// It includes the `Connection: close` header to prevent connection
 /// accumulation from ESP32 clients.
 pub fn build_router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         // TRMNL API endpoints (with and without trailing slashes for firmware compatibility)
         // TRMNL firmware 1.6.9+ sends requests with trailing slashes
         .route("/api/setup", get(handle_setup))
@@ -250,7 +250,12 @@ pub fn build_router(state: AppState) -> Router {
         // Health check
         .route("/health", get(|| async { "OK" }))
         // Admin API
-        .nest("/api/admin", crate::api::admin::admin_router())
+        .nest("/api/admin", crate::api::admin::admin_router());
+
+    // MCP endpoint — gated by the same admin token as /api/admin/*.
+    let router = crate::mcp::mount(router, &state);
+
+    router
         // Add state and tracing with request IDs
         .with_state(state)
         .layer(TraceLayer::new_for_http().make_span_with(RequestIdSpan))

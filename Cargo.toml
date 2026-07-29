@@ -61,6 +61,10 @@ semver = "1"
 # (see git_fetch.rs), so no worktree-checkout feature is needed here.
 gix = { version = "0.66", default-features = false, features = ["blocking-network-client", "blocking-http-transport-reqwest"] }
 
+# MCP server (Model Context Protocol) — streamable HTTP transport mounted at /mcp.
+# Pinned to the 2.x stable line; 3.0 is a prerelease.
+rmcp = { version = "2.2", features = ["server", "macros", "transport-streamable-http-server"] }
+
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"

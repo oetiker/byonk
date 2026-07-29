@@ -284,6 +284,16 @@ impl TestApp {
         std::fs::write(&config_path, yaml).expect("write config.yaml");
 
         let asset_loader = Arc::new(AssetLoader::new(Some(screens_dir), None, Some(config_path)));
+        // Mirrors production wiring (`AssetLoader::new` -> `seed_if_configured`
+        // -> `create_app_state`, see `main.rs`): without this, `screens_dir`
+        // never gets a `byonk-screens.yaml` manifest, so the writable `local`
+        // handle never registers in the loader and every `local/*` screen_ref
+        // resolves as if the repo didn't exist. The `examples` dir this
+        // fixture seeded above is already non-empty, so `seed_examples` is a
+        // no-op here; `config.yaml` already exists, so `seed_config` is too.
+        asset_loader
+            .seed_if_configured()
+            .expect("seed local manifest");
         let config = AppConfig::load_from_assets(&asset_loader).expect("load config");
         let state = create_app_state_with_config(asset_loader, config).expect("create state");
         let registry = state.registry.clone();

@@ -18,17 +18,19 @@ use axum::{
 };
 use rmcp::{
     handler::server::tool::ToolRouter,
-    model::{ServerCapabilities, ServerInfo},
+    model::{CallToolResult, ContentBlock, ServerCapabilities, ServerInfo},
     tool_handler,
     transport::streamable_http_server::{
         session::never::NeverSessionManager, StreamableHttpServerConfig, StreamableHttpService,
     },
-    ServerHandler,
+    ErrorData, ServerHandler,
 };
 
 use crate::api::admin::require_admin;
 use crate::error::ApiError;
 use crate::server::AppState;
+
+pub mod tools_read;
 
 /// The MCP server handler. One instance per request in stateless mode; it
 /// only holds `AppState`, which is cheap to clone (all `Arc`s).
@@ -48,9 +50,68 @@ impl ByonkMcp {
             state,
             // Combined from the per-module routers; each is added as its
             // task lands. See `#[tool_router(router = …, vis = "pub")]`.
-            tool_router: ToolRouter::new(),
+            //
+            // Deviation from the brief: `#[tool_router(router = <name>, …)]`
+            // generates an *associated* function on `Self`
+            // (`fn #name() -> ToolRouter<Self>` inside the `impl` block),
+            // not a free function in the module — confirmed in
+            // `rmcp-macros-2.2.0/src/tool_router.rs`. So this is
+            // `Self::tools_read_router()`, not `tools_read::tools_read_router()`.
+            tool_router: Self::tools_read_router(),
         }
     }
+}
+
+/// Run a synchronous `ScreenStore` operation off the async runtime.
+///
+/// `ScreenStore` is entirely blocking — `render` runs Lua (with blocking
+/// HTTP), resvg and dithering — so calling it directly from a handler would
+/// stall a tokio worker. Same pattern as `src/api/dev.rs:496`.
+pub(crate) async fn blocking<T, F>(f: F) -> Result<T, ErrorData>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| ErrorData::internal_error(format!("task panicked: {e}"), None))
+}
+
+/// Build a successful tool result carrying both a JSON `structured_content`
+/// payload and a pretty-printed text block (clients that ignore structured
+/// output still show the model something useful).
+pub(crate) fn ok_json<T: serde::Serialize>(value: T) -> Result<CallToolResult, ErrorData> {
+    let json = serde_json::to_value(&value)
+        .map_err(|e| ErrorData::internal_error(format!("serialize result: {e}"), None))?;
+    let text = serde_json::to_string_pretty(&json).unwrap_or_else(|_| json.to_string());
+    // `CallToolResult` is `#[non_exhaustive]`, so a struct literal (even with
+    // `..Default::default()`) fails with E0639 outside rmcp's own crate.
+    // Its fields are `pub`, so build via `success()` and assign the extra
+    // field instead — that's plain field access, not struct-literal syntax.
+    let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
+    result.structured_content = Some(json);
+    Ok(result)
+}
+
+/// Turn a `StoreError` into a **tool-level** error result.
+///
+/// Deliberately not `Err(ErrorData)`: MCP clients render protocol errors
+/// opaquely, so the model would never see the message. These messages are
+/// the agent's instructions for recovering — above all `ReadOnly`'s hint
+/// naming `copy_screen` — so they must arrive as visible content.
+pub(crate) fn store_failure(e: crate::services::screen_store::StoreError) -> CallToolResult {
+    use crate::services::screen_store::StoreError as E;
+    let message = match e {
+        E::ReadOnly { copy_hint } => copy_hint,
+        E::NotFound => "no such screen or file".to_string(),
+        E::Conflict => "conflict: the file changed on disk since you read it, or the target \
+                        already exists — re-read it and retry"
+            .to_string(),
+        E::Traversal => "path escapes the screen directory".to_string(),
+        E::TooLarge => "file exceeds the 5 MB limit".to_string(),
+        E::Io(m) => m,
+    };
+    CallToolResult::error(vec![ContentBlock::text(message)])
 }
 
 #[tool_handler(router = self.tool_router)]

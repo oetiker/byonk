@@ -569,8 +569,8 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("create fixture dir");
         let mut repo = gix::init(&dir).expect("init fixture repo");
 
-        let manifest_blob = repo.write_blob(b"root: .\n".to_vec()).unwrap().detach();
-        let meta_blob = repo.write_blob(b"title: F\n".to_vec()).unwrap().detach();
+        let manifest_blob = repo.write_blob(b"root: .\n").unwrap().detach();
+        let meta_blob = repo.write_blob(b"title: F\n").unwrap().detach();
 
         let forecast_tree_id = {
             let mut tree = gix::objs::Tree::empty();

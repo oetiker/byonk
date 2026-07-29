@@ -48,18 +48,25 @@ pub async fn pending(
     Ok(Json(out))
 }
 
-pub async fn get_config(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&state, &headers)?;
-
-    let text = state
-        .asset_loader
-        .read_config_string()
-        .map_err(|e| ApiError::Internal(format!("read config: {e}")))?;
-    let mut value: serde_yaml::Value = serde_yaml::from_str(&text)
-        .map_err(|e| ApiError::Internal(format!("parse config: {e}")))?;
+/// Build the non-secret config view: the raw config file with `admin.token`
+/// and every screen repo's `token` stripped. Shared by the axum `GET
+/// /api/admin/config` handler and the MCP `get_config` tool, so there is
+/// exactly one place redaction can drift.
+///
+/// Falls back to `serde_json::Value::Null` with an embedded error message
+/// under `_error` if the config file cannot be read or parsed — callers
+/// (both the axum handler and the MCP tool) treat that as a best-effort
+/// view rather than propagating a hard failure, since this is a read-only
+/// diagnostic surface.
+pub fn redacted_config(state: &AppState) -> serde_json::Value {
+    let text = match state.asset_loader.read_config_string() {
+        Ok(t) => t,
+        Err(e) => return serde_json::json!({ "_error": format!("read config: {e}") }),
+    };
+    let mut value: serde_yaml::Value = match serde_yaml::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => return serde_json::json!({ "_error": format!("parse config: {e}") }),
+    };
 
     // Strip admin.token from the response.
     if let Some(map) = value.as_mapping_mut() {
@@ -83,9 +90,16 @@ pub async fn get_config(
         }
     }
 
-    let json =
-        serde_json::to_value(&value).map_err(|e| ApiError::Internal(format!("to json: {e}")))?;
-    Ok(Json(json))
+    serde_json::to_value(&value)
+        .unwrap_or_else(|e| serde_json::json!({ "_error": format!("to json: {e}") }))
+}
+
+pub async fn get_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&state, &headers)?;
+    Ok(Json(redacted_config(&state)))
 }
 
 #[derive(Serialize)]
@@ -398,6 +412,41 @@ pub(crate) fn build_screen_repo_info(
     }
 }
 
+/// List the registered screen repos. `byonk-builtin` is always present (it is
+/// registered by the screen repo loader even without a `screen_repos:` config entry); any
+/// additional entries come from `config.screen_repos`. The screen repo `token` is never
+/// serialized — only whether one is set (`token_set`).
+pub async fn screen_repos(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<ScreenRepoInfo>>, ApiError> {
+    require_admin(&state, &headers)?;
+    let config = state.config.load();
+
+    // Screen counts per handle, from the source of truth (the screen repo loader).
+    let loader = state.screen_repo_manager.loader();
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for screen in loader.list_all() {
+        *counts.entry(screen.handle).or_insert(0) += 1;
+    }
+
+    // Union of loader-registered handles and configured screen repo handles, so the
+    // always-registered builtin appears and config-only screen repos are not dropped.
+    let mut handles: std::collections::BTreeSet<String> = loader.handles().into_iter().collect();
+    handles.extend(config.screen_repos.keys().cloned());
+
+    let statuses = state.screen_repo_manager.status_snapshot();
+    let out = handles
+        .into_iter()
+        .map(|handle| {
+            let count = counts.get(&handle).copied().unwrap_or(0);
+            build_screen_repo_info(&config, statuses.get(&handle), count, handle)
+        })
+        .collect();
+
+    Ok(Json(out))
+}
+
 #[cfg(test)]
 mod build_package_info_tests {
     use super::*;
@@ -545,39 +594,4 @@ mod build_package_info_tests {
             .with_timezone(&Utc);
         assert_eq!(reparsed, dt);
     }
-}
-
-/// List the registered screen repos. `byonk-builtin` is always present (it is
-/// registered by the screen repo loader even without a `screen_repos:` config entry); any
-/// additional entries come from `config.screen_repos`. The screen repo `token` is never
-/// serialized — only whether one is set (`token_set`).
-pub async fn screen_repos(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<Vec<ScreenRepoInfo>>, ApiError> {
-    require_admin(&state, &headers)?;
-    let config = state.config.load();
-
-    // Screen counts per handle, from the source of truth (the screen repo loader).
-    let loader = state.screen_repo_manager.loader();
-    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for screen in loader.list_all() {
-        *counts.entry(screen.handle).or_insert(0) += 1;
-    }
-
-    // Union of loader-registered handles and configured screen repo handles, so the
-    // always-registered builtin appears and config-only screen repos are not dropped.
-    let mut handles: std::collections::BTreeSet<String> = loader.handles().into_iter().collect();
-    handles.extend(config.screen_repos.keys().cloned());
-
-    let statuses = state.screen_repo_manager.status_snapshot();
-    let out = handles
-        .into_iter()
-        .map(|handle| {
-            let count = counts.get(&handle).copied().unwrap_or(0);
-            build_screen_repo_info(&config, statuses.get(&handle), count, handle)
-        })
-        .collect();
-
-    Ok(Json(out))
 }

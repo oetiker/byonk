@@ -17,6 +17,28 @@ use crate::models::screen_repo_manifest::ScreenRepoManifest;
 /// The handle under which the built-in (embedded + `SCREENS_DIR`) screen repo is registered.
 pub const BUILTIN_HANDLE: &str = "byonk-builtin";
 
+/// What backs a screen repo. Structural, not nominal — callers must never
+/// infer this from a handle's name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreenRepoKind {
+    /// Compiled into the binary; unshadowable and uneditable.
+    Embedded,
+    /// A git-fetched cache; read-only because a refresh would clobber edits.
+    Git,
+    /// A writable directory on disk.
+    Local,
+}
+
+impl ScreenRepoKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Embedded => "embedded",
+            Self::Git => "git",
+            Self::Local => "local",
+        }
+    }
+}
+
 /// The result of a size-capped read. Distinguishes "not there" from "there
 /// but refused", so callers can report the difference instead of collapsing
 /// both into `None`.
@@ -86,6 +108,12 @@ pub trait ScreenRepoSource: Send + Sync {
     /// against this same directory so writes stay visible to `read`.
     fn writable_root(&self) -> Option<&std::path::Path> {
         None
+    }
+
+    /// What backs this source. Defaults to `Embedded` so a future embedded
+    /// source needs no override; the two disk sources override it.
+    fn kind(&self) -> ScreenRepoKind {
+        ScreenRepoKind::Embedded
     }
 }
 
@@ -335,6 +363,10 @@ impl ScreenRepoSource for GitScreenRepoSource {
     fn screen_files(&self, screen_path: &str) -> Vec<String> {
         walk_files_under(&self.manifest_root, screen_path)
     }
+
+    fn kind(&self) -> ScreenRepoKind {
+        ScreenRepoKind::Git
+    }
 }
 
 /// A screen repo that lives in a writable on-disk directory (authored/managed locally,
@@ -392,6 +424,10 @@ impl ScreenRepoSource for LocalScreenRepoSource {
 
     fn writable_root(&self) -> Option<&Path> {
         Some(&self.manifest_root)
+    }
+
+    fn kind(&self) -> ScreenRepoKind {
+        ScreenRepoKind::Local
     }
 }
 

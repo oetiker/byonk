@@ -467,8 +467,10 @@ pub(crate) mod tests {
     }
 
     fn shared_config(screen_repos: HashMap<String, ScreenRepoRef>) -> SharedConfig {
-        let mut config = AppConfig::default();
-        config.screen_repos = screen_repos;
+        let config = AppConfig {
+            screen_repos,
+            ..Default::default()
+        };
         Arc::new(ArcSwap::from_pointee(config))
     }
 

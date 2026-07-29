@@ -73,7 +73,7 @@ mod tests {
 
     #[test]
     fn test_explicit_range_ok() {
-        assert_eq!(compat_warning("0.15.0", ">=0.14, <0.17").is_none(), true);
+        assert!(compat_warning("0.15.0", ">=0.14, <0.17").is_none());
     }
 
     #[test]

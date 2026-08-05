@@ -137,69 +137,92 @@ fn persist(state: &AppState, path: &std::path::Path, new_yaml: String) -> Result
     Ok(())
 }
 
-pub async fn add_device(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(body): Json<DeviceWrite>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin(&state, &headers)?;
-    let path = require_file_config(&state)?;
+/// Apply a device *add*: reject a duplicate key, validate the screen and
+/// params, and persist. Shared by `POST /api/admin/devices` and the MCP
+/// `assign_screen` tool's create-on-first-assignment fallback (a device that
+/// has only been *seen* by the registry — i.e. it shows up in `list_devices`
+/// — has no `config.devices` entry yet, so `apply_device_patch` 404s on it;
+/// `assign_screen` falls back to this to create the mapping).
+pub async fn apply_device_add(
+    state: &AppState,
+    key: &str,
+    body: DeviceWrite,
+) -> Result<serde_json::Value, ApiError> {
+    let path = require_file_config(state)?;
     let _guard = state.write_lock.lock().await;
-    let key = body
-        .key
-        .clone()
-        .ok_or_else(|| ApiError::BadRequest("`key` is required".into()))?;
     let screen = body
         .screen
         .clone()
         .ok_or_else(|| ApiError::BadRequest("`screen` is required".into()))?;
 
     // Reject duplicate.
-    if state.config.load().devices.contains_key(&key) {
+    if state.config.load().devices.contains_key(key) {
         return Err(ApiError::Conflict(format!("device `{key}` already exists")));
     }
 
     let empty = HashMap::new();
-    validate_screen_and_params(&state, &screen, body.params.as_ref().unwrap_or(&empty))?;
+    validate_screen_and_params(state, &screen, body.params.as_ref().unwrap_or(&empty))?;
 
     let block = device_block(&body, &screen);
     let yaml = state
         .asset_loader
         .read_config_string()
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let new_yaml = config_writer::upsert_device(&yaml, &key, &block)
+    let new_yaml = config_writer::upsert_device(&yaml, key, &block)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    persist(&state, &path, new_yaml)?;
+    persist(state, &path, new_yaml)?;
 
-    Ok(Json(serde_json::json!({ "key": key, "screen": screen })))
+    Ok(serde_json::json!({ "key": key, "screen": screen }))
 }
 
-pub async fn patch_device(
+pub async fn add_device(
     State(state): State<AppState>,
-    Path(key): Path<String>,
     headers: HeaderMap,
     Json(body): Json<DeviceWrite>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&state, &headers)?;
-    let path = require_file_config(&state)?;
+    let key = body
+        .key
+        .clone()
+        .ok_or_else(|| ApiError::BadRequest("`key` is required".into()))?;
+    Ok(Json(apply_device_add(&state, &key, body).await?))
+}
+
+/// Apply a device patch: merge with the existing entry, validate the screen
+/// and params, and persist. Shared by `PATCH /api/admin/devices/{key}` and
+/// the MCP `assign_screen` tool so both enforce identical rules — screen
+/// existence, param schema, the config write lock, and rollback on a failed
+/// reload.
+///
+/// Deliberately does NOT call `require_writable_global`: a device mapping is
+/// not global config, so it stays writable in add-on mode.
+///
+/// Note: when `body.screen` changes but `body.params` is `None`, the
+/// device's *existing* params carry over unchanged (validated against the
+/// new screen's schema) — they are NOT reset to the new screen's defaults.
+pub async fn apply_device_patch(
+    state: &AppState,
+    key: &str,
+    body: DeviceWrite,
+) -> Result<serde_json::Value, ApiError> {
+    let path = require_file_config(state)?;
     let _guard = state.write_lock.lock().await;
 
     // Must already exist.
     let existing = {
         let config = state.config.load();
-        config
-            .devices
-            .get(&key)
-            .cloned()
-            .ok_or(ApiError::NotFound)?
+        config.devices.get(key).cloned().ok_or(ApiError::NotFound)?
     };
 
     // Merge: start from existing, override provided fields.
     let screen = body.screen.clone().unwrap_or(existing.screen.clone());
 
-    // Params: a screen change replaces params wholesale (the new screen's
-    // defaults). Without a screen change, provided params are merged key-by-key
-    // into the existing set, so editing one parameter never drops the others.
+    // Params: a screen change replaces params wholesale with whatever the
+    // caller provided (or, if the caller provided none, the previous
+    // screen's params carry over unchanged — NOT the new screen's defaults;
+    // there is no meta.yaml default lookup here). Without a screen change,
+    // provided params are merged key-by-key into the existing set, so
+    // editing one parameter never drops the others.
     let params = if body.screen.is_none() {
         match &body.params {
             Some(p) => {
@@ -218,7 +241,7 @@ pub async fn patch_device(
     };
 
     let merged = DeviceWrite {
-        key: Some(key.clone()),
+        key: Some(key.to_string()),
         screen: Some(screen.clone()),
         panel: body.panel.clone().or(existing.panel.clone()),
         dither: body.dither.clone().or(existing.dither.clone()),
@@ -229,18 +252,28 @@ pub async fn patch_device(
     };
 
     let empty = HashMap::new();
-    validate_screen_and_params(&state, &screen, merged.params.as_ref().unwrap_or(&empty))?;
+    validate_screen_and_params(state, &screen, merged.params.as_ref().unwrap_or(&empty))?;
 
     let block = device_block(&merged, &screen);
     let yaml = state
         .asset_loader
         .read_config_string()
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let new_yaml = config_writer::upsert_device(&yaml, &key, &block)
+    let new_yaml = config_writer::upsert_device(&yaml, key, &block)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    persist(&state, &path, new_yaml)?;
+    persist(state, &path, new_yaml)?;
 
-    Ok(Json(serde_json::json!({ "key": key, "screen": screen })))
+    Ok(serde_json::json!({ "key": key, "screen": screen }))
+}
+
+pub async fn patch_device(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<DeviceWrite>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&state, &headers)?;
+    Ok(Json(apply_device_patch(&state, &key, body).await?))
 }
 
 pub async fn delete_device(

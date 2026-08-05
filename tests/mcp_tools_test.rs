@@ -491,3 +491,104 @@ async fn test_validate_of_a_healthy_builtin_passes() {
 
     assert_eq!(structured(&result)["ok"], true);
 }
+
+#[tokio::test]
+async fn test_assign_screen_updates_the_device_mapping() {
+    let tmp = tempfile::tempdir().unwrap();
+    // A file-backed config is required — device writes persist to disk.
+    let (app, _config_path) = TestApp::new_admin_with_file("secret", tmp.path());
+    let mac = "11:22:33:44:55:66";
+    app.register_device(mac).await;
+
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let result = client
+        .call_tool(
+            "assign_screen",
+            serde_json::json!({ "mac": mac, "screen_ref": "byonk-builtin/default" }),
+        )
+        .await;
+
+    assert_eq!(structured(&result)["screen"], "byonk-builtin/default");
+
+    // And it is visible through list_devices.
+    let devices = client
+        .call_tool("list_devices", serde_json::json!({}))
+        .await;
+    let d = structured(&devices)["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["mac"] == mac)
+        .cloned()
+        .expect("device must be listed");
+    assert_eq!(d["screen"], "byonk-builtin/default");
+}
+
+#[tokio::test]
+async fn test_assign_screen_rejects_an_unknown_screen() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (app, _config_path) = TestApp::new_admin_with_file("secret", tmp.path());
+    let mac = "11:22:33:44:55:66";
+    app.register_device(mac).await;
+
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let result = client
+        .call_tool(
+            "assign_screen",
+            serde_json::json!({ "mac": mac, "screen_ref": "local/does-not-exist" }),
+        )
+        .await;
+
+    assert_eq!(result["isError"], true);
+}
+
+#[tokio::test]
+async fn test_assign_screen_reassigns_an_already_configured_device() {
+    // Exercises the update-in-place path (apply_device_patch succeeding
+    // directly), not the seen-but-unconfigured create fallback: assign twice,
+    // to two different screens, and confirm the second call updates the
+    // existing mapping rather than conflicting with it.
+    let tmp = tempfile::tempdir().unwrap();
+    let (app, _config_path) = TestApp::new_admin_with_file("secret", tmp.path());
+    let mac = "11:22:33:44:55:66";
+    app.register_device(mac).await;
+
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    client
+        .call_tool(
+            "assign_screen",
+            serde_json::json!({ "mac": mac, "screen_ref": "byonk-builtin/default" }),
+        )
+        .await;
+
+    let result = client
+        .call_tool(
+            "assign_screen",
+            serde_json::json!({ "mac": mac, "screen_ref": "byonk-builtin/calibration/color" }),
+        )
+        .await;
+
+    assert_ne!(result["isError"], serde_json::json!(true));
+    assert_eq!(
+        structured(&result)["screen"],
+        "byonk-builtin/calibration/color"
+    );
+
+    let devices = client
+        .call_tool("list_devices", serde_json::json!({}))
+        .await;
+    let d = structured(&devices)["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["mac"] == mac)
+        .cloned()
+        .expect("device must be listed");
+    assert_eq!(d["screen"], "byonk-builtin/calibration/color");
+}

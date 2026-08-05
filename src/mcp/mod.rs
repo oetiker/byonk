@@ -30,6 +30,7 @@ use crate::api::admin::require_admin;
 use crate::error::ApiError;
 use crate::server::AppState;
 
+pub mod tools_device;
 pub mod tools_edit;
 pub mod tools_read;
 pub mod tools_render;
@@ -61,7 +62,8 @@ impl ByonkMcp {
             // `Self::tools_read_router()`, not `tools_read::tools_read_router()`.
             tool_router: Self::tools_read_router()
                 + Self::tools_edit_router()
-                + Self::tools_render_router(),
+                + Self::tools_render_router()
+                + Self::tools_device_router(),
         }
     }
 }

@@ -1914,7 +1914,14 @@ mod tests {
     /// really does land where `read_file`/the seeded files agree it should.
     #[test]
     fn write_through_examples_handle_with_real_derived_dot_dot_root() {
-        let screens_dir = tempdir_path("screen_store_examples_real_root_screens");
+        // `screens_dir` must be NESTED inside a private parent: the derived
+        // examples dir is `<SCREENS_DIR>/../examples`, so a screens dir placed
+        // directly in the system temp dir would resolve `..` to the temp dir
+        // itself and make every run of this test share one `$TMPDIR/examples`.
+        // `seed_examples` only seeds a missing-or-empty directory, so the
+        // first run's leftovers would silently starve every later run.
+        let outer = tempdir_path("screen_store_examples_real_root");
+        let screens_dir = outer.join("screens");
         let asset_loader = Arc::new(AssetLoader::new(Some(screens_dir.clone()), None, None));
         // Seeds SCREENS_DIR's local manifest AND the examples set into the
         // real derived `<SCREENS_DIR>/../examples` (not a synthetic tempdir).

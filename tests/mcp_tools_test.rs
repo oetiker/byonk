@@ -341,6 +341,8 @@ async fn test_render_screen_returns_an_image_block() {
     assert_eq!(image["mimeType"], "image/png");
     // Base64 PNG magic: iVBORw0KGgo
     assert!(image["data"].as_str().unwrap().starts_with("iVBORw0KGgo"));
+    // A render that worked must not be flagged as an error.
+    assert_ne!(result["isError"], serde_json::json!(true), "{result}");
 }
 
 #[tokio::test]
@@ -379,6 +381,27 @@ async fn test_render_of_a_broken_script_reports_the_lua_line() {
     let error = &s["error"];
     assert!(!error.is_null(), "a broken script must report an error");
     assert_eq!(error["line"], 2, "the Lua error line must be reported");
+
+    // A failed render is `is_error: true` — the diagnostics alone are not
+    // enough, since a client that only reads the flag would call it a success.
+    assert_eq!(
+        result["isError"],
+        serde_json::json!(true),
+        "a failed render must be flagged is_error: {result}"
+    );
+    // ...and it must carry NO image block: `png` is empty on failure, so
+    // emitting one would hand the agent a zero-byte image.
+    let content = result["content"].as_array().unwrap();
+    assert!(
+        !content.iter().any(|c| c["type"] == "image"),
+        "a failed render must not emit an image block: {result}"
+    );
+    // The diagnostics must still arrive as visible content, not only as
+    // structured output.
+    assert!(
+        content.iter().any(|c| c["type"] == "text"),
+        "a failed render must still carry its diagnostics as text: {result}"
+    );
 }
 
 #[tokio::test]

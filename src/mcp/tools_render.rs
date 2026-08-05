@@ -145,7 +145,9 @@ impl ByonkMcp {
     #[tool(
         description = "Statically check a screen without running it: meta.yaml against its \
                           schema, script.lua compiled (not executed), and screen.svg parsed \
-                          with its extends/include chain resolved."
+                          with its {% extends %} chain resolved. A missing {% include %} \
+                          target is NOT caught here — Tera resolves includes only while \
+                          rendering, so use render_screen to catch a dangling include."
     )]
     pub async fn validate_screen(
         &self,

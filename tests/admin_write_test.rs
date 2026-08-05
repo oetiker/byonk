@@ -384,7 +384,9 @@ async fn test_patch_params_merge_preserves_other_keys() {
 
 #[tokio::test]
 async fn test_patch_with_screen_change_replaces_params() {
-    // A screen change replaces params wholesale (new screen's defaults).
+    // A screen change replaces params wholesale with whatever the caller
+    // provides — not with the new screen's defaults; there is no meta.yaml
+    // defaults lookup in this path.
     let dir = tempfile::tempdir().unwrap();
     let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
     app.post_json(
@@ -520,4 +522,16 @@ async fn test_patch_refresh_reads_back() {
         .find(|d| d["key"] == "AA:BB")
         .unwrap();
     assert_eq!(row["refresh"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn test_add_device_on_embedded_config_returns_409_even_with_no_key() {
+    // Regression for the apply_device_add extraction: the embedded/read-only
+    // config check must still run before the body is validated, so a request
+    // missing `key` against an embedded config 409s (not 400) — same as it
+    // did before the shared core existed.
+    let app = TestApp::new_admin("secret"); // embedded-only, no key in body
+    let body = format!(r#"{{"screen":"{COLOR}"}}"#);
+    let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
+    assert_eq!(resp.status, StatusCode::CONFLICT);
 }

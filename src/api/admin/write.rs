@@ -181,6 +181,11 @@ pub async fn add_device(
     Json(body): Json<DeviceWrite>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&state, &headers)?;
+    // Restore the pre-extraction ordering: an embedded/read-only config must
+    // still 409 even when the body is missing `key`, exactly as before this
+    // was split into a shared core (which re-checks this internally, but
+    // only after the key is already resolved).
+    require_file_config(&state)?;
     let key = body
         .key
         .clone()

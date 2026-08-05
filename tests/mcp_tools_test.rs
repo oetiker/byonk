@@ -511,6 +511,9 @@ async fn test_assign_screen_updates_the_device_mapping() {
         .await;
 
     assert_eq!(structured(&result)["screen"], "byonk-builtin/default");
+    // The mac was only ever seen (never configured) before this call, so
+    // this must be a create, not an update.
+    assert_eq!(structured(&result)["created"], true);
 
     // And it is visible through list_devices.
     let devices = client
@@ -579,6 +582,8 @@ async fn test_assign_screen_reassigns_an_already_configured_device() {
         structured(&result)["screen"],
         "byonk-builtin/calibration/color"
     );
+    // Second call updates the mapping the first call created — not a create.
+    assert_eq!(structured(&result)["created"], false);
 
     let devices = client
         .call_tool("list_devices", serde_json::json!({}))
@@ -591,4 +596,93 @@ async fn test_assign_screen_reassigns_an_already_configured_device() {
         .cloned()
         .expect("device must be listed");
     assert_eq!(d["screen"], "byonk-builtin/calibration/color");
+}
+
+#[tokio::test]
+async fn test_assign_screen_rejects_a_mac_the_registry_has_never_seen() {
+    // An arbitrary/typo'd mac must not silently create a phantom device —
+    // there is no MCP tool to delete one. Only a mac the registry actually
+    // reports (i.e. one that has polled /api/setup) may be auto-created.
+    let tmp = tempfile::tempdir().unwrap();
+    let (app, _config_path) = TestApp::new_admin_with_file("secret", tmp.path());
+    let mac = "11:22:33:44:55:66"; // never registered
+
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let result = client
+        .call_tool(
+            "assign_screen",
+            serde_json::json!({ "mac": mac, "screen_ref": "byonk-builtin/default" }),
+        )
+        .await;
+
+    assert_eq!(result["isError"], true);
+
+    // And it must not have persisted a phantom device entry as a side effect.
+    let auth = ("Authorization", "Bearer secret");
+    let listed = app.get_with_headers("/api/admin/devices", &[auth]).await;
+    let json: serde_json::Value = listed.json();
+    assert!(
+        json.as_array().unwrap().iter().all(|d| d["key"] != mac),
+        "no device should have been created for an unseen mac: {json}"
+    );
+}
+
+#[tokio::test]
+async fn test_assign_screen_reassignment_preserves_existing_params() {
+    // The tool description says a screen reassignment carries the device's
+    // existing params over unchanged rather than resetting them to the new
+    // screen's defaults. Pin that down so a future refactor can't silently
+    // flip it while the suite stays green.
+    let tmp = tempfile::tempdir().unwrap();
+    let (app, _config_path) = TestApp::new_admin_with_file("secret", tmp.path());
+    let mac = "11:22:33:44:55:66";
+    app.register_device(mac).await;
+
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    // First assignment creates the mapping.
+    client
+        .call_tool(
+            "assign_screen",
+            serde_json::json!({ "mac": mac, "screen_ref": "byonk-builtin/default" }),
+        )
+        .await;
+
+    // Set a custom param out-of-band (assign_screen itself takes no params).
+    let auth = ("Authorization", "Bearer secret");
+    let resp = app
+        .patch_json(
+            &format!("/api/admin/devices/{mac}"),
+            &[auth],
+            r#"{"params":{"keep_me":"still-here"}}"#,
+        )
+        .await;
+    assert_eq!(resp.status, axum::http::StatusCode::OK);
+
+    // Reassign to a different screen with no params in the call.
+    let result = client
+        .call_tool(
+            "assign_screen",
+            serde_json::json!({ "mac": mac, "screen_ref": "byonk-builtin/calibration/color" }),
+        )
+        .await;
+    assert_ne!(result["isError"], serde_json::json!(true), "{result}");
+
+    let listed = app.get_with_headers("/api/admin/devices", &[auth]).await;
+    let json: serde_json::Value = listed.json();
+    let row = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["key"] == mac)
+        .cloned()
+        .expect("device row present");
+    assert_eq!(row["screen"], "byonk-builtin/calibration/color");
+    assert_eq!(
+        row["params"]["keep_me"], "still-here",
+        "reassignment must not reset params to the new screen's defaults"
+    );
 }

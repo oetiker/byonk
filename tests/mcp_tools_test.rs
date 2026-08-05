@@ -319,3 +319,152 @@ async fn test_create_rename_delete_round_trip() {
         .collect();
     assert!(!refs.contains(&"local/tmp2".to_string()));
 }
+
+#[tokio::test]
+async fn test_render_screen_returns_an_image_block() {
+    let app = TestApp::new_admin("secret");
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let result = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({ "screen_ref": "byonk-builtin/default" }),
+        )
+        .await;
+
+    let content = result["content"].as_array().unwrap();
+    let image = content
+        .iter()
+        .find(|c| c["type"] == "image")
+        .expect("render must return an image content block");
+    assert_eq!(image["mimeType"], "image/png");
+    // Base64 PNG magic: iVBORw0KGgo
+    assert!(image["data"].as_str().unwrap().starts_with("iVBORw0KGgo"));
+}
+
+#[tokio::test]
+async fn test_render_of_a_broken_script_reports_the_lua_line() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = TestApp::new_admin_with_screens("secret", tmp.path());
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    client
+        .call_tool(
+            "create_screen",
+            serde_json::json!({ "handle": "local", "name": "broken" }),
+        )
+        .await;
+    client
+        .call_tool(
+            "write_screen_file",
+            serde_json::json!({
+                "screen_ref": "local/broken",
+                "file": "script.lua",
+                // Line 2 indexes a nil value at runtime.
+                "content": "local t = nil\nreturn { x = t.y }\n"
+            }),
+        )
+        .await;
+
+    let result = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({ "screen_ref": "local/broken" }),
+        )
+        .await;
+
+    let s = structured(&result);
+    let error = &s["error"];
+    assert!(!error.is_null(), "a broken script must report an error");
+    assert_eq!(error["line"], 2, "the Lua error line must be reported");
+}
+
+#[tokio::test]
+async fn test_render_captures_script_log_output() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = TestApp::new_admin_with_screens("secret", tmp.path());
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    client
+        .call_tool(
+            "create_screen",
+            serde_json::json!({ "handle": "local", "name": "chatty" }),
+        )
+        .await;
+    client
+        .call_tool(
+            "write_screen_file",
+            serde_json::json!({
+                "screen_ref": "local/chatty",
+                "file": "script.lua",
+                "content": "log_info(\"hello from lua\")\nreturn {}\n"
+            }),
+        )
+        .await;
+
+    let result = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({ "screen_ref": "local/chatty" }),
+        )
+        .await;
+
+    let log = serde_json::to_string(&structured(&result)["log"]).unwrap();
+    assert!(log.contains("hello from lua"), "log not captured: {log}");
+}
+
+#[tokio::test]
+async fn test_validate_screen_flags_a_lua_syntax_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = TestApp::new_admin_with_screens("secret", tmp.path());
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    client
+        .call_tool(
+            "create_screen",
+            serde_json::json!({ "handle": "local", "name": "syntax" }),
+        )
+        .await;
+    client
+        .call_tool(
+            "write_screen_file",
+            serde_json::json!({
+                "screen_ref": "local/syntax",
+                "file": "script.lua",
+                "content": "return {\n"
+            }),
+        )
+        .await;
+
+    let result = client
+        .call_tool(
+            "validate_screen",
+            serde_json::json!({ "screen_ref": "local/syntax" }),
+        )
+        .await;
+
+    let s = structured(&result);
+    assert_eq!(s["ok"], false);
+    let issues = s["issues"].as_array().unwrap();
+    assert!(issues.iter().any(|i| i["location"] == "script.lua"));
+}
+
+#[tokio::test]
+async fn test_validate_of_a_healthy_builtin_passes() {
+    let app = TestApp::new_admin("secret");
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let result = client
+        .call_tool(
+            "validate_screen",
+            serde_json::json!({ "screen_ref": "byonk-builtin/default" }),
+        )
+        .await;
+
+    assert_eq!(structured(&result)["ok"], true);
+}

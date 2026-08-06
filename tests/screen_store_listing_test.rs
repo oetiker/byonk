@@ -77,6 +77,26 @@ fn test_delete_file_removes_a_sibling_asset() {
     ));
 }
 
+/// Cleanup 6: deleting a nonexistent nested file must not materialize any
+/// directories as a side effect on its way to reporting NotFound.
+/// `ensure_writable_parent`'s last act is `create_dir_all(parent)`, which is
+/// exactly right for a write (the target directory may not exist yet) but
+/// wrong for a delete of something that was never there.
+#[test]
+fn test_delete_file_of_a_missing_nested_path_creates_no_directories() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = build_store(tmp.path(), &["clock"]);
+    let local_root = tmp.path().join("local");
+
+    let err = store.delete_file("local/clock", "sub/x.png").unwrap_err();
+    assert!(matches!(err, StoreError::NotFound));
+
+    assert!(
+        !local_root.join("clock/sub").exists(),
+        "delete_file must not create directories for a target that never existed"
+    );
+}
+
 #[test]
 fn test_delete_file_refuses_the_three_defining_files() {
     let tmp = tempfile::tempdir().unwrap();

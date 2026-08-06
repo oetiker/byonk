@@ -487,16 +487,21 @@ impl ScreenStore {
 
     /// Canonicalize `base` (the writable root) and verify that the nearest
     /// existing ancestor of `target`'s parent resolves under it — the
-    /// write-path's verify-before-mutate symlink-escape guard, factored out
-    /// so every operation that writes a file into a writable repo runs it.
-    /// Verify BEFORE touching the filesystem: never `create_dir_all` first
-    /// and check after. `base` must already exist (`LocalScreenRepoSource::load`
+    /// verify-before-mutate symlink-escape guard, factored out so every
+    /// operation that touches a file in a writable repo runs it. Verify
+    /// BEFORE touching the filesystem: never `create_dir_all` first and
+    /// check after. `base` must already exist (`LocalScreenRepoSource::load`
     /// had to read it to load the manifest before this handle was ever
     /// registered as writable), so if it fails to canonicalize now, the
     /// writable root was deleted or replaced out from under a stale loader
     /// snapshot; treat that as a hard failure rather than silently skipping
     /// the guard.
-    fn ensure_writable_parent(base: &Path, target: &Path) -> Result<(), StoreError> {
+    ///
+    /// Does NOT create `target`'s parent directory — see `ensure_writable_parent`
+    /// for the write-path variant that does. A caller that only needs the
+    /// guard (e.g. `delete_file`, which never wants to conjure directories
+    /// for a target that turns out not to exist) should call this directly.
+    fn verify_writable_parent(base: &Path, target: &Path) -> Result<(), StoreError> {
         let parent = target.parent().ok_or_else(|| {
             StoreError::Io(format!(
                 "cannot determine parent directory of {}",
@@ -517,6 +522,17 @@ impl ScreenStore {
         if !canon_existing.starts_with(&canon_base) {
             return Err(StoreError::Traversal);
         }
+        Ok(())
+    }
+
+    /// `verify_writable_parent` plus creating `target`'s parent directory —
+    /// what every write (as opposed to delete) needs, since a write's target
+    /// directory may not exist yet.
+    fn ensure_writable_parent(base: &Path, target: &Path) -> Result<(), StoreError> {
+        Self::verify_writable_parent(base, target)?;
+        // `parent()` cannot fail here: `verify_writable_parent` already
+        // called it successfully above.
+        let parent = target.parent().expect("checked by verify_writable_parent");
         std::fs::create_dir_all(parent).map_err(|e| StoreError::Io(e.to_string()))?;
         Ok(())
     }
@@ -803,7 +819,9 @@ impl ScreenStore {
         }
 
         let target = base.join(screen_path).join(&rel);
-        Self::ensure_writable_parent(&base, &target)?;
+        // Guard only — never conjure directories as a side effect of a
+        // delete that may well end up reporting NotFound.
+        Self::verify_writable_parent(&base, &target)?;
         match std::fs::remove_file(&target) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(StoreError::NotFound),

@@ -272,8 +272,53 @@ mod tests {
             OutputFormat::Png,
         )
         .unwrap();
-        assert!(w <= 80 && h <= 48, "must fit inside: {w}x{h}");
-        assert!(w == 80 || h == 48, "must touch one edge: {w}x{h}");
+        // 200x100 into an 80x48 box: scale = min(80/200, 48/100) = min(0.4,
+        // 0.48) = 0.4, so the box's width is the binding edge and the result
+        // is exactly 80x40 (not 80x48 — that would be Cover, which crops
+        // rather than letterboxing). Pinning the exact value, not just
+        // "fits inside", is what actually distinguishes Contain from Cover.
+        assert_eq!((w, h), (80, 40));
+    }
+
+    #[test]
+    fn stretch_and_cover_produce_different_pixels() {
+        // Cover and Stretch both fill an 80x48 box exactly from a 200x100
+        // source, so dimensions alone cannot tell them apart — Cover crops
+        // to the box's aspect before a uniform scale, Stretch scales each
+        // axis independently and distorts. Assert on content instead.
+        let src = test_png(200, 100);
+        let g_cover = GeometryOpts {
+            fit: Fit::Cover,
+            width: Some(80),
+            height: Some(48),
+            ..default_geometry()
+        };
+        let g_stretch = GeometryOpts {
+            fit: Fit::Stretch,
+            width: Some(80),
+            height: Some(48),
+            ..default_geometry()
+        };
+        let (cover_uri, cw, ch) = process_image(
+            &src,
+            &g_cover,
+            &eink_photo::Params::default(),
+            OutputFormat::Png,
+        )
+        .unwrap();
+        let (stretch_uri, sw, sh) = process_image(
+            &src,
+            &g_stretch,
+            &eink_photo::Params::default(),
+            OutputFormat::Png,
+        )
+        .unwrap();
+        assert_eq!((cw, ch), (80, 48));
+        assert_eq!((sw, sh), (80, 48));
+        assert_ne!(
+            cover_uri, stretch_uri,
+            "Cover (crop-to-fill) and Stretch (distort-to-fill) must differ in content"
+        );
     }
 
     #[test]
@@ -326,6 +371,54 @@ mod tests {
         )
         .unwrap();
         assert_eq!((w, h), (50, 40));
+    }
+
+    /// Decode a `data:image/png;base64,...` URI back to an RGB pixel at
+    /// (x, y), so a test can assert on actual content rather than only
+    /// dimensions.
+    fn decode_data_uri_pixel(uri: &str, x: u32, y: u32) -> image::Rgb<u8> {
+        let b64 = uri
+            .strip_prefix("data:image/png;base64,")
+            .expect("expected a PNG data URI");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap();
+        let img = image::load_from_memory(&bytes).unwrap();
+        *img.to_rgb8().get_pixel(x, y)
+    }
+
+    #[test]
+    fn crop_selects_the_correct_origin_not_just_the_correct_size() {
+        // Every pixel encodes its own coordinates as (x, y, 0), so a crop
+        // that gets the right *size* but the wrong *origin* (e.g. a bug
+        // that always crops from (0, 0)) is still caught: dimensions alone
+        // cannot tell (px=0,py=0) apart from the correct origin when the
+        // crop width/height are unchanged, but the pixel content can.
+        let mut coord_img = image::RgbImage::new(20, 20);
+        for (x, y, px) in coord_img.enumerate_pixels_mut() {
+            *px = image::Rgb([x as u8, y as u8, 0]);
+        }
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(coord_img)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        let src = out.into_inner();
+
+        // x=0.5, y=0.5, w=0.25, h=0.25 on a 20x20 source: px=py=10, pw=ph=5.
+        let g = GeometryOpts {
+            crop: Some((0.5, 0.5, 0.25, 0.25)),
+            fit: Fit::None,
+            ..default_geometry()
+        };
+        let (uri, w, h) =
+            process_image(&src, &g, &eink_photo::Params::default(), OutputFormat::Png).unwrap();
+        assert_eq!((w, h), (5, 5));
+        let top_left = decode_data_uri_pixel(&uri, 0, 0);
+        assert_eq!(
+            top_left,
+            image::Rgb([10, 10, 0]),
+            "top-left pixel of the crop must be source (10, 10), not (0, 0)"
+        );
     }
 
     #[test]
@@ -406,6 +499,92 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, ImageProcessError::TooLarge { .. }));
+    }
+
+    /// Standard zlib/PNG CRC-32 (polynomial 0xEDB88320), computed by hand
+    /// rather than pulled from a dependency — this is only needed to make a
+    /// hand-built PNG chunk pass the decoder's checksum check.
+    fn crc32(data: &[u8]) -> u32 {
+        let mut crc: u32 = 0xFFFF_FFFF;
+        for &byte in data {
+            crc ^= byte as u32;
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        crc ^ 0xFFFF_FFFF
+    }
+
+    /// A 33-byte PNG: just the 8-byte signature plus a single IHDR chunk
+    /// declaring a 30000x30000 image, with no pixel data at all. Small
+    /// enough to sail past the byte-length guard (`MAX_SOURCE_BYTES`), but
+    /// its claimed dimensions vastly exceed `image::Limits`, so the decoder
+    /// must reject it before ever allocating a buffer sized to fit it.
+    fn oversized_ihdr_only_png() -> Vec<u8> {
+        let mut png: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        let width: u32 = 30_000;
+        let height: u32 = 30_000;
+        let mut chunk_body = Vec::new();
+        chunk_body.extend_from_slice(b"IHDR");
+        chunk_body.extend_from_slice(&width.to_be_bytes());
+        chunk_body.extend_from_slice(&height.to_be_bytes());
+        // bit depth 8, color type 2 (truecolor), compression 0, filter 0,
+        // interlace 0.
+        chunk_body.extend_from_slice(&[8, 2, 0, 0, 0]);
+        let len = (chunk_body.len() - 4) as u32; // length excludes the type field
+        png.extend_from_slice(&len.to_be_bytes());
+        png.extend_from_slice(&chunk_body);
+        png.extend_from_slice(&crc32(&chunk_body).to_be_bytes());
+        png
+    }
+
+    #[test]
+    fn an_oversized_decoded_image_is_rejected_before_allocating() {
+        // The only control between attacker-supplied bytes and a very large
+        // allocation is `image::Limits`, set on the reader before decoding.
+        // A 33-byte header claiming 30000x30000 pixels must be rejected
+        // without ever touching pixel data (there is none in this file).
+        let huge = oversized_ihdr_only_png();
+        assert!(
+            huge.len() < MAX_SOURCE_BYTES,
+            "the fixture must pass the byte-length guard to actually test the pixel-area guard"
+        );
+        let err = process_image(
+            &huge,
+            &default_geometry(),
+            &eink_photo::Params::default(),
+            OutputFormat::Png,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ImageProcessError::Decode(_)),
+            "expected Decode (limits rejection), got {err:?}"
+        );
+    }
+
+    #[test]
+    fn an_out_of_range_photo_param_surfaces_as_a_photo_error() {
+        // eink_photo::process's own `validate()` rejects exposure outside
+        // -5..=5; process_image must map that PhotoError through as
+        // ImageProcessError::Photo rather than panicking or losing it.
+        let err = process_image(
+            &test_png(4, 4),
+            &default_geometry(),
+            &eink_photo::Params {
+                exposure: Some(30.0),
+                ..Default::default()
+            },
+            OutputFormat::Png,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ImageProcessError::Photo(_)),
+            "expected Photo, got {err:?}"
+        );
     }
 
     #[test]

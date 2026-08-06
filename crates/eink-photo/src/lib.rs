@@ -19,6 +19,8 @@
 // yet called from here.
 #[allow(dead_code)]
 mod color;
+#[allow(dead_code)]
+mod colorops;
 mod params;
 #[allow(dead_code)]
 mod presence;

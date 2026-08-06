@@ -519,36 +519,52 @@ mod tests {
         crc ^ 0xFFFF_FFFF
     }
 
-    /// A 33-byte PNG: just the 8-byte signature plus a single IHDR chunk
-    /// declaring a 30000x30000 image, with no pixel data at all. Small
-    /// enough to sail past the byte-length guard (`MAX_SOURCE_BYTES`), but
-    /// its claimed dimensions vastly exceed `image::Limits`, so the decoder
-    /// must reject it before ever allocating a buffer sized to fit it.
-    fn oversized_ihdr_only_png() -> Vec<u8> {
-        let mut png: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    /// A small, fully valid PNG (real IHDR + real IDAT pixel data, built by
+    /// `test_png`) with its IHDR width/height overwritten to declare a
+    /// 30000x30000 image, and the IHDR chunk's CRC recomputed so the chunk
+    /// stays well-formed. The pixel data still matches the *original* small
+    /// dimensions, but that never matters: the decoder must reject the file
+    /// on the declared dimensions, via `image::Limits`, before it ever gets
+    /// as far as reading a single IDAT byte.
+    ///
+    /// This is deliberately not a truncated/header-only file. A header-only
+    /// fixture (no IDAT at all) triggers the decoder's "unexpected end of
+    /// file" path for other reasons once the pixel data is actually needed,
+    /// which produces the same `ImageProcessError::Decode` variant as a real
+    /// limits rejection but is not exercising `image::Limits` at all. With
+    /// real IDAT bytes present, EOF is not available as an alternate
+    /// explanation for the rejection — only the declared-dimensions check
+    /// can be what stops decoding.
+    fn oversized_declared_dimensions_png() -> Vec<u8> {
+        let mut png = test_png(4, 4);
+
+        // PNG layout: 8-byte signature, then chunks of
+        // [len:4][type:4][data:len][crc:4]. The first chunk after the
+        // signature is always IHDR, with an all-fields data payload:
+        // width:4, height:4, bit depth:1, color type:1, compression:1,
+        // filter:1, interlace:1 (13 bytes total).
+        assert_eq!(&png[12..16], b"IHDR", "test_png's first chunk must be IHDR");
         let width: u32 = 30_000;
         let height: u32 = 30_000;
-        let mut chunk_body = Vec::new();
-        chunk_body.extend_from_slice(b"IHDR");
-        chunk_body.extend_from_slice(&width.to_be_bytes());
-        chunk_body.extend_from_slice(&height.to_be_bytes());
-        // bit depth 8, color type 2 (truecolor), compression 0, filter 0,
-        // interlace 0.
-        chunk_body.extend_from_slice(&[8, 2, 0, 0, 0]);
-        let len = (chunk_body.len() - 4) as u32; // length excludes the type field
-        png.extend_from_slice(&len.to_be_bytes());
-        png.extend_from_slice(&chunk_body);
-        png.extend_from_slice(&crc32(&chunk_body).to_be_bytes());
+        png[16..20].copy_from_slice(&width.to_be_bytes());
+        png[20..24].copy_from_slice(&height.to_be_bytes());
+
+        // Recompute the IHDR CRC over its type + data bytes (offsets
+        // 12..29 = 4-byte type + 13-byte data) so the chunk still passes
+        // the decoder's checksum validation after the edit.
+        let crc = crc32(&png[12..29]);
+        png[29..33].copy_from_slice(&crc.to_be_bytes());
+
         png
     }
 
     #[test]
-    fn an_oversized_decoded_image_is_rejected_before_allocating() {
+    fn an_oversized_declared_image_is_rejected_before_allocating() {
         // The only control between attacker-supplied bytes and a very large
         // allocation is `image::Limits`, set on the reader before decoding.
-        // A 33-byte header claiming 30000x30000 pixels must be rejected
-        // without ever touching pixel data (there is none in this file).
-        let huge = oversized_ihdr_only_png();
+        // A PNG with real pixel data but an IHDR declaring 30000x30000 must
+        // be rejected on the declared size, before any pixel data is read.
+        let huge = oversized_declared_dimensions_png();
         assert!(
             huge.len() < MAX_SOURCE_BYTES,
             "the fixture must pass the byte-length guard to actually test the pixel-area guard"
@@ -560,9 +576,20 @@ mod tests {
             OutputFormat::Png,
         )
         .unwrap_err();
+        // `matches!(err, ImageProcessError::Decode(_))` alone is NOT enough
+        // here: a truncated/EOF decode failure and a genuine
+        // `image::Limits` rejection both land in the same `Decode` variant,
+        // so that check alone cannot tell "the guard worked" apart from
+        // "decoding failed for an unrelated reason". Pin the message text
+        // that `image::LimitErrorKind::DimensionError` produces
+        // (`image-0.25.10/src/error.rs`), which is specific to the limits
+        // check and not emitted by any other decode failure path.
+        let ImageProcessError::Decode(msg) = &err else {
+            panic!("expected Decode, got {err:?}");
+        };
         assert!(
-            matches!(err, ImageProcessError::Decode(_)),
-            "expected Decode (limits rejection), got {err:?}"
+            msg.contains("exceeds limit"),
+            "expected an image::Limits dimension rejection, got: {msg}"
         );
     }
 

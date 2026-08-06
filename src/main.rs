@@ -58,6 +58,14 @@ enum Commands {
         /// Display colors as comma-separated hex RGB (e.g. "#000000,#FFFFFF,#FF0000")
         #[arg(long)]
         colors: Option<String>,
+
+        /// Draw the output PNG in the panel's measured colours — what the
+        /// screen will actually look like — instead of the spec colours that
+        /// are sent to the panel. Defaults to on whenever the device's panel
+        /// has a calibration. This changes only how the PNG is drawn; the
+        /// dithering always targets the measured colours when they resolve.
+        #[arg(long)]
+        use_actual: Option<bool>,
     },
     /// Extract embedded assets to filesystem for customization
     Init {
@@ -133,6 +141,7 @@ async fn main() -> anyhow::Result<()> {
             firmware,
             registration_code,
             colors,
+            use_actual,
         }) => run_render_command(
             &mac,
             &output,
@@ -142,6 +151,7 @@ async fn main() -> anyhow::Result<()> {
             firmware,
             registration_code,
             colors,
+            use_actual,
         ),
         Some(Commands::Init {
             screens,
@@ -171,6 +181,7 @@ fn run_render_command(
     firmware: Option<String>,
     registration_code: Option<String>,
     colors: Option<String>,
+    use_actual_flag: Option<bool>,
 ) -> anyhow::Result<()> {
     use byonk::assets::AssetLoader;
     use byonk::models::DisplaySpec;
@@ -290,6 +301,8 @@ fn run_render_command(
         cli_noise_scale,
         cli_chroma_clamp,
         cli_strength,
+        measured_colors,
+        measured_source,
     ) = if is_unregistered {
         let code = device_context.registration_code.as_deref().unwrap();
 
@@ -326,7 +339,30 @@ fn run_render_command(
             )
         };
 
-        (svg, cli_palette, None, true, None, None, None, None)
+        // No script runs on the unregistered path, so the winner is the
+        // pre-script chain alone — still subject to the length check so a
+        // mismatched panel.colors_actual is dropped with a warning, not
+        // passed through raw.
+        let measured = crate::api::display::resolve_measured_colors(
+            cli_palette.len(),
+            &pre_script_measured_candidates,
+        );
+        if let Some(w) = &measured.warning {
+            tracing::warn!(mac = %mac, "{w}");
+        }
+
+        (
+            svg,
+            cli_palette,
+            None,
+            true,
+            None,
+            None,
+            None,
+            None,
+            measured.colors,
+            measured.source,
+        )
     } else {
         // Normal render path
         let script_result = content_pipeline
@@ -395,6 +431,8 @@ fn run_render_command(
             render_params.noise_scale,
             render_params.chroma_clamp,
             render_params.strength,
+            render_params.measured_colors,
+            render_params.measured_source,
         )
     };
 
@@ -412,13 +450,24 @@ fn run_render_command(
         || cli_tuning.noise_scale.is_some()
         || cli_tuning.strength.is_some();
 
+    // Measured colours always steer the dithering when they resolve; the
+    // flag governs only the palette the file is written in. Mirrors
+    // dev.rs:748-753.
+    let use_actual = resolve_use_actual(use_actual_flag, measured_colors.is_some());
+
+    tracing::info!(
+        measured_source = measured_source,
+        use_actual = use_actual,
+        "CLI render measured-colour resolution"
+    );
+
     let png_bytes = content_pipeline
         .render_png_from_svg(
             &svg_content,
             display_spec,
             &final_palette,
-            None,
-            false,
+            measured_colors.as_deref(),
+            use_actual,
             dither.as_deref(),
             preserve_exact,
             if has_cli_tuning {
@@ -434,6 +483,21 @@ fn run_render_command(
     println!("Rendered {} ({} bytes)", output.display(), png_bytes.len());
 
     Ok(())
+}
+
+/// Resolve whether the rendered PNG should be drawn in the panel's
+/// measured colours rather than the spec palette. `flag` is the explicit
+/// `--use-actual` CLI value (or, at other call sites, an explicit
+/// query/UI override); `has_measured` is whether measured colours actually
+/// resolved for this render.
+///
+/// The default (when `flag` is `None`) is on whenever measured colours are
+/// available. `--use-actual true` with no calibration available is a
+/// no-op, not an error — hence the trailing `&& has_measured`. Mirrors the
+/// `use_actual` computation in `api::dev::handle_render`
+/// (`src/api/dev.rs:748-753`).
+fn resolve_use_actual(flag: Option<bool>, has_measured: bool) -> bool {
+    flag.unwrap_or(has_measured) && has_measured
 }
 
 /// Extract embedded assets to filesystem
@@ -959,6 +1023,25 @@ async fn run_dev_server() -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use byonk::assets::AssetLoader;
+
+    /// Pins the three settled cases of the `--use-actual` rule (see
+    /// `resolve_use_actual`'s doc comment): no explicit flag defaults to
+    /// "on if calibrated"; an explicit `true` is a no-op without a
+    /// calibration; an explicit `false` always wins.
+    #[test]
+    fn resolve_use_actual_defaults_to_on_when_calibrated() {
+        assert!(resolve_use_actual(None, true));
+    }
+
+    #[test]
+    fn resolve_use_actual_true_is_noop_without_calibration() {
+        assert!(!resolve_use_actual(Some(true), false));
+    }
+
+    #[test]
+    fn resolve_use_actual_false_wins_even_with_calibration() {
+        assert!(!resolve_use_actual(Some(false), true));
+    }
 
     /// Minor 5: `byonk dev` and `byonk serve` must leave the same on-disk
     /// state behind. They do so by both calling `seed_and_migrate` and

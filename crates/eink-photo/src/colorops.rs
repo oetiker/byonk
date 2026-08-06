@@ -76,7 +76,13 @@ mod tests {
         // covered by `full_negative_saturation_is_grey`, which does fail
         // against a no-op `apply_saturation`), but to fail if the scale
         // factor is *not* uniform (e.g. if it were secretly weighted by
-        // current saturation, as vibrance is).
+        // current saturation, as vibrance is). That mutant is why the
+        // tolerance is 0.005 and not something looser: substituting
+        // `apply_vibrance`'s body (current-weighted k) into
+        // `apply_saturation` at amount=15 gives dull_ratio=1.1446 vs
+        // vivid_ratio=1.1072, |Δ|=0.0375 — comfortably outside 0.005. The
+        // real implementation's two ratios are identical up to float
+        // rounding (|Δ|~1e-6), comfortably inside it.
         //
         // Deviation from the brief: the brief used amount=50.0 for these
         // pixels, but at k=1.5 the vivid pixel's blue channel goes negative
@@ -84,10 +90,11 @@ mod tests {
         // uniformity for reasons that have nothing to do with the
         // saturation formula and makes the brief's own reference
         // implementation fail this exact assertion (verified: ratios
-        // 1.500 vs 1.259, outside the 0.05 tolerance). amount=15.0 keeps
-        // both pixels comfortably inside 0..=1 (closest channel to a rail
-        // ends at 0.0316, not 0), so the ratio-uniformity claim is tested
-        // cleanly instead of being an artefact of clamping.
+        // 1.500 vs 1.259, |Δ|=0.241, outside even the brief's own 0.05
+        // tolerance). amount=15.0 keeps both pixels comfortably inside
+        // 0..=1 (closest channel to a rail ends at 0.0316, not 0), so the
+        // ratio-uniformity claim is tested cleanly instead of being an
+        // artefact of clamping.
         let mut dull = vec![0.55f32, 0.5, 0.45];
         let mut vivid = vec![0.9f32, 0.5, 0.1];
         let dull_before = sat(&dull);
@@ -99,7 +106,7 @@ mod tests {
         let dull_ratio = sat(&dull) / dull_before;
         let vivid_ratio = sat(&vivid) / vivid_before;
         assert!(
-            (dull_ratio - vivid_ratio).abs() < 0.05,
+            (dull_ratio - vivid_ratio).abs() < 0.005,
             "global saturation must be uniform: {dull_ratio} vs {vivid_ratio}"
         );
     }
@@ -115,21 +122,27 @@ mod tests {
         //
         // Deviation from the brief: the brief used amount=50.0 and margin
         // 1.2. At amount=50.0 the vivid pixel clamps on both rails (as in
-        // the test above), which *also* breaks a plain-saturation "fake"
-        // vibrance's ratio equality (verified by hand: a plain-saturation
-        // stand-in — uniform k=1.5, ignoring `current` — produces
-        // dull_ratio=1.500 vs vivid_ratio=1.259, a 1.19x gap purely from
-        // clamping asymmetry, which clears the brief's 1.2x margin without
-        // any vibrance-specific weighting at all). That means the brief's
-        // own numbers do not actually distinguish vibrance from plain
-        // saturation, which is the one property this test exists to prove
-        // (see Standing Ruling on vibrance vs saturation). amount=25.0 is
-        // chosen so *neither* pixel clamps (closest channel to a rail ends
-        // at 0.0191, not 0) — under a plain-saturation stand-in this yields
-        // dull_ratio == vivid_ratio == 1.25 exactly (ratio-of-ratios 1.0),
-        // which fails a 1.03x margin cleanly; under the real weighted
-        // vibrance formula it yields a genuine ~1.05x gap driven only by
-        // the `current`-weighting, independent of clamping.
+        // the test above); a plain-saturation "fake" vibrance stand-in
+        // (uniform k=1.5, ignoring `current`) gets the *same* clamping and
+        // scores a ratio-of-ratios of 1.1911 there — which does not even
+        // clear the brief's own 1.2x margin (misses by 0.9%), but more
+        // importantly *outscores* the real weighted implementation, which
+        // only reaches 1.1794 at that amount. In other words the brief's
+        // signal at amount=50 is essentially all clamping asymmetry, and
+        // vibrance's current-weighting actually *reduces* it there — the
+        // brief's test discriminates backwards, not just by too small a
+        // margin. amount=25.0 is chosen so the real implementation's
+        // pixels stay unclamped (vivid's closest channel to a rail is
+        // 0.0185, not 0), while the plain-saturation stand-in — which
+        // uses a uniform k=1.25 instead of the weighted, smaller k the
+        // real vivid pixel gets — still clamps its vivid pixel's blue
+        // channel (raw value -0.0140) and lands at ratio-of-ratios 1.0123.
+        // The real implementation reaches 1.0530. Both are measured
+        // values, not the "1.25 == 1.25 exactly" symmetric case a naive
+        // reading might expect: the mutant clamps, the real one doesn't.
+        // 1.0123 fails the 1.03x margin, 1.0530 clears it with 2.2%
+        // headroom — well outside f32's ~1e-7 rounding error, so the
+        // tighter margin is not float-fragile.
         let mut dull = vec![0.55f32, 0.5, 0.45];
         let mut vivid = vec![0.9f32, 0.5, 0.1];
         let dull_before = sat(&dull);
@@ -180,12 +193,24 @@ mod tests {
         // luminance itself (e.g. multiplying the whole pixel by k instead
         // of the distance-from-grey), which saturation_scales_every_pixel_
         // equally would not necessarily catch.
+        //
+        // Deviation from the brief: the brief used amount=60.0, which
+        // clamps both rails for this pixel (raw values [1.1063, 0.4881,
+        // -0.1738]), so roughly half the measured 0.0101 drift against a
+        // 0.02 tolerance was clamp error rather than the property under
+        // test — the third instance of the same problem flagged in
+        // `saturation_scales_every_pixel_equally` and
+        // `vibrance_favours_the_less_saturated_pixel` above. amount=15.0
+        // keeps both channels inside 0..=1 (closest to a rail: 0.0316),
+        // so luminance is preserved exactly up to float rounding and the
+        // default `assert_close` tolerance (1e-4) is the real bound, not
+        // a budget shared with clamping.
         let p0 = vec![0.9f32, 0.5, 0.1];
         let mut p = p0.clone();
         let before = crate::color::luminance(p0[0], p0[1], p0[2]);
-        apply_saturation(&mut p, 60.0);
+        apply_saturation(&mut p, 15.0);
         let after = crate::color::luminance(p[0], p[1], p[2]);
-        assert_close_tol(after, before, 0.02, "luminance drifted");
+        assert_close(after, before, "luminance drifted");
     }
 
     #[test]
@@ -202,10 +227,12 @@ mod tests {
 
     #[test]
     fn invert_is_its_own_inverse() {
-        // A no-op invert would fail this (0.9/0.5/0.1 double-inverted stays
-        // 0.9/0.5/0.1 only if the operation is actually 1-v); more to the
-        // point, a broken invert (e.g. one that clamps asymmetrically or
-        // forgets a channel) would show up as a mismatch after two passes.
+        // A no-op invert would actually *pass* this — a no-op composed
+        // with itself is still a no-op, so it trivially round-trips. This
+        // test's job is a different one: catching a broken-but-not-no-op
+        // invert (e.g. one that clamps asymmetrically or forgets a
+        // channel), which would show up as a mismatch after two passes.
+        // `invert_actually_inverts` below is what closes the no-op gap.
         let before = vec![0.9f32, 0.5, 0.1];
         let mut p = before.clone();
         apply_invert(&mut p);

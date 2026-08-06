@@ -202,9 +202,32 @@ pub fn resolve_dither_tuning(
 /// drift on spelling — the dev tuning popup renders this string verbatim.
 pub const SRC_SCRIPT: &str = "script";
 pub const SRC_DEV_OVERRIDE: &str = "dev_override";
+/// The authoring path's own dev-override slot: a `colors_actual` passed
+/// directly in `RenderOpts` (e.g. by the MCP `render_screen` tool), so an
+/// agent can preview a calibration without writing a panel into the config.
+pub const SRC_RENDER_OPTS: &str = "render_opts";
 pub const SRC_PANEL_ACTUAL: &str = "panel.colors_actual";
 pub const SRC_MEASURED_HEADER: &str = "Measured-Colors header";
 pub const SRC_NONE: &str = "none";
+
+/// Resolve whether the rendered PNG should be drawn in the panel's measured
+/// colours rather than the spec palette. `flag` is the caller's explicit
+/// request (the `--use-actual` CLI flag, `/dev/render`'s `use_actual` query
+/// parameter, or `RenderOpts::use_actual`); `has_measured` is whether
+/// measured colours actually resolved for this render.
+///
+/// The rule: an explicit request wins, but only when there is something
+/// measured to show. So the default (`flag == None`) is on whenever measured
+/// colours are available, and `Some(true)` with no calibration is a **no-op
+/// rather than an error** — hence the trailing `&& has_measured`.
+///
+/// Defined once, here beside the `SRC_*` consts and for the same reason: the
+/// CLI, `/dev/render` and the authoring path must not drift on this rule.
+/// Note this governs only the palette the output PNG is drawn in — measured
+/// colours always steer the dithering itself when they resolve.
+pub fn resolve_use_actual(flag: Option<bool>, has_measured: bool) -> bool {
+    flag.unwrap_or(has_measured) && has_measured
+}
 
 /// A single measured-colour candidate: `(source_label, parsed_colors)`.
 /// `None` means that source wasn't supplied at all (distinct from being
@@ -1192,6 +1215,25 @@ pub struct DisplayJsonResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pins the three settled cases of the `use_actual` rule (see
+    /// `resolve_use_actual`'s doc comment): no explicit flag defaults to
+    /// "on if calibrated"; an explicit `true` is a no-op without a
+    /// calibration; an explicit `false` always wins.
+    #[test]
+    fn resolve_use_actual_defaults_to_on_when_calibrated() {
+        assert!(resolve_use_actual(None, true));
+    }
+
+    #[test]
+    fn resolve_use_actual_true_is_noop_without_calibration() {
+        assert!(!resolve_use_actual(Some(true), false));
+    }
+
+    #[test]
+    fn resolve_use_actual_false_wins_even_with_calibration() {
+        assert!(!resolve_use_actual(Some(false), true));
+    }
 
     #[test]
     fn first_candidate_wins_when_length_matches() {

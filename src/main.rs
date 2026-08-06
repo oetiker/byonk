@@ -451,9 +451,11 @@ fn run_render_command(
         || cli_tuning.strength.is_some();
 
     // Measured colours always steer the dithering when they resolve; the
-    // flag governs only the palette the file is written in. Mirrors
-    // dev.rs:748-753.
-    let use_actual = resolve_use_actual(use_actual_flag, measured_colors.is_some());
+    // flag governs only the palette the file is written in. The rule itself
+    // lives in `api::display` so the CLI, `/dev/render` and the authoring
+    // path share one copy.
+    let use_actual =
+        byonk::api::display::resolve_use_actual(use_actual_flag, measured_colors.is_some());
 
     tracing::info!(
         measured_source = measured_source,
@@ -483,21 +485,6 @@ fn run_render_command(
     println!("Rendered {} ({} bytes)", output.display(), png_bytes.len());
 
     Ok(())
-}
-
-/// Resolve whether the rendered PNG should be drawn in the panel's
-/// measured colours rather than the spec palette. `flag` is the explicit
-/// `--use-actual` CLI value (or, at other call sites, an explicit
-/// query/UI override); `has_measured` is whether measured colours actually
-/// resolved for this render.
-///
-/// The default (when `flag` is `None`) is on whenever measured colours are
-/// available. `--use-actual true` with no calibration available is a
-/// no-op, not an error — hence the trailing `&& has_measured`. Mirrors the
-/// `use_actual` computation in `api::dev::handle_render`
-/// (`src/api/dev.rs:748-753`).
-fn resolve_use_actual(flag: Option<bool>, has_measured: bool) -> bool {
-    flag.unwrap_or(has_measured) && has_measured
 }
 
 /// Extract embedded assets to filesystem
@@ -1023,25 +1010,6 @@ async fn run_dev_server() -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use byonk::assets::AssetLoader;
-
-    /// Pins the three settled cases of the `--use-actual` rule (see
-    /// `resolve_use_actual`'s doc comment): no explicit flag defaults to
-    /// "on if calibrated"; an explicit `true` is a no-op without a
-    /// calibration; an explicit `false` always wins.
-    #[test]
-    fn resolve_use_actual_defaults_to_on_when_calibrated() {
-        assert!(resolve_use_actual(None, true));
-    }
-
-    #[test]
-    fn resolve_use_actual_true_is_noop_without_calibration() {
-        assert!(!resolve_use_actual(Some(true), false));
-    }
-
-    #[test]
-    fn resolve_use_actual_false_wins_even_with_calibration() {
-        assert!(!resolve_use_actual(Some(false), true));
-    }
 
     /// Minor 5: `byonk dev` and `byonk serve` must leave the same on-disk
     /// state behind. They do so by both calling `seed_and_migrate` and

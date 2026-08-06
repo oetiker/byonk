@@ -744,11 +744,10 @@ pub async fn handle_render(
     let display_spec = DisplaySpec::from_dimensions(width, height).unwrap_or(DisplaySpec::OG);
 
     // Dev mode uses measured colors for preview.
-    // Respect explicit query param; default to true when panel has measured colors.
-    let use_actual = query
-        .use_actual
-        .unwrap_or_else(|| measured_colors.is_some())
-        && measured_colors.is_some();
+    // Respect explicit query param; default to true when panel has measured
+    // colors. Shared rule — see `resolve_use_actual`'s doc comment.
+    let use_actual =
+        crate::api::display::resolve_use_actual(query.use_actual, measured_colors.is_some());
 
     match state.content_pipeline.render_png_from_svg(
         &svg,

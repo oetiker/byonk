@@ -60,31 +60,53 @@ impl ByonkMcp {
             refresh: None,
             name: None,
         };
+        // Resolve the identifier the agent passed (its actual MAC, as
+        // `list_devices` reports it, or its config key directly) to the
+        // *existing* `config.devices` key, if any — the same resolution
+        // `list_devices` performs (MAC, case-insensitively, or registration
+        // code). Without this, a device configured by registration code or
+        // under a differently-cased MAC would get patched by exact key,
+        // miss, and then be re-created under a brand-new MAC-keyed entry —
+        // shadowing (not replacing) the original config, which silently
+        // drops its name/params/panel/dither/refresh from the effective
+        // config (see MUST-FIX 1 in the branch review).
+        let seen = self
+            .state
+            .registry
+            .find_by_id(&DeviceId::new(a.mac.clone()))
+            .await;
+        let seen = match seen {
+            Ok(seen) => seen,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![ContentBlock::text(
+                    e.to_string(),
+                )]))
+            }
+        };
+        let code = seen.as_ref().map(|d| d.api_key.registration_code());
+        let resolved_key = self
+            .state
+            .config
+            .load()
+            .resolve_device_key(&a.mac, code.as_deref());
+
         // A device that has only been *seen* by the registry (it shows up in
-        // list_devices) has no `config.devices` entry yet, so the patch core
-        // 404s on it. Fall back to creating the mapping — this is the normal
+        // list_devices) has no `config.devices` entry yet, so nothing
+        // resolves. Fall back to creating the mapping — this is the normal
         // first-assignment path for a freshly onboarded device. But only for
         // a mac the registry actually reports: an arbitrary/typo'd mac must
         // not silently persist a phantom device with no MCP tool to remove
         // it. Same "known" notion `list_devices` uses.
         let mut created = false;
-        let result = match apply_device_patch(&self.state, &a.mac, body()).await {
-            Err(ApiError::NotFound) => {
-                let seen = self
-                    .state
-                    .registry
-                    .find_by_id(&DeviceId::new(a.mac.clone()))
-                    .await;
-                match seen {
-                    Ok(Some(_)) => {
-                        created = true;
-                        apply_device_add(&self.state, &a.mac, body()).await
-                    }
-                    Ok(None) => Err(ApiError::NotFound),
-                    Err(e) => Err(e),
+        let result = match resolved_key {
+            Some(key) => apply_device_patch(&self.state, &key, body()).await,
+            None => match seen {
+                Some(_) => {
+                    created = true;
+                    apply_device_add(&self.state, &a.mac, body()).await
                 }
-            }
-            other => other,
+                None => Err(ApiError::NotFound),
+            },
         };
         match result {
             Ok(value) => ok_json(AssignScreenOutput {

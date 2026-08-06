@@ -12,6 +12,23 @@ fn structured(result: &serde_json::Value) -> &serde_json::Value {
         .unwrap_or_else(|| panic!("no structuredContent in {result}"))
 }
 
+/// Read `config.yaml`'s `devices` map directly. The admin `/api/admin/devices`
+/// listing synthesizes one merged row per registry-seen device keyed by MAC
+/// regardless of which key its config entry actually lives under, so it
+/// cannot be used to prove how many (or which) `config.devices` entries
+/// really exist — go to the source of truth instead.
+fn read_config_devices(
+    config_path: &std::path::Path,
+) -> serde_json::Map<String, serde_json::Value> {
+    let yaml = std::fs::read_to_string(config_path).expect("read config.yaml");
+    let value: serde_yaml::Value = serde_yaml::from_str(&yaml).expect("parse config.yaml");
+    let json = serde_json::to_value(value).expect("yaml to json");
+    json.get("devices")
+        .and_then(|d| d.as_object())
+        .cloned()
+        .unwrap_or_default()
+}
+
 #[tokio::test]
 async fn test_list_screens_reports_builtin_as_read_only() {
     let app = TestApp::new_admin("secret");
@@ -626,6 +643,116 @@ async fn test_assign_screen_rejects_a_mac_the_registry_has_never_seen() {
     assert!(
         json.as_array().unwrap().iter().all(|d| d["key"] != mac),
         "no device should have been created for an unseen mac: {json}"
+    );
+}
+
+#[tokio::test]
+async fn test_assign_screen_patches_a_device_configured_by_registration_code() {
+    // A device may be configured in config.yaml under its registration code
+    // rather than its MAC (the documented HA onboarding path). assign_screen
+    // is only ever given the MAC (as list_devices reports it), so it must
+    // resolve that back to the code-keyed entry and patch it in place —
+    // not miss and create a second, MAC-keyed entry that shadows it.
+    let tmp = tempfile::tempdir().unwrap();
+    let (app, config_path) = TestApp::new_admin_with_file("secret", tmp.path());
+    let mac = "11:22:33:44:55:66";
+    let api_key = app.register_device(mac).await;
+    let code = byonk::models::ApiKey::new(api_key).registration_code();
+
+    // Pre-create the device's config entry under the registration code, with
+    // an existing name that must survive the assign_screen call untouched.
+    let auth = ("Authorization", "Bearer secret");
+    let create = app
+        .post_json(
+            "/api/admin/devices",
+            &[auth],
+            &format!(r#"{{"key":"{code}","screen":"byonk-builtin/default","name":"living-room"}}"#),
+        )
+        .await;
+    assert_eq!(create.status, axum::http::StatusCode::OK);
+
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let result = client
+        .call_tool(
+            "assign_screen",
+            serde_json::json!({ "mac": mac, "screen_ref": "byonk-builtin/calibration/color" }),
+        )
+        .await;
+    assert_ne!(result["isError"], serde_json::json!(true), "{result}");
+    assert_eq!(structured(&result)["created"], false);
+    assert_eq!(structured(&result)["key"], code);
+
+    // Inspect config.yaml directly — the admin listing endpoint synthesizes
+    // a merged row per registry-seen device keyed by MAC even when the real
+    // config entry lives under a different key, so it can't be used to prove
+    // a second config.devices entry wasn't created.
+    let devices = read_config_devices(&config_path);
+    assert!(
+        devices.contains_key(&code) && !devices.contains_key(mac),
+        "the code-keyed entry must be updated in place, no MAC-keyed entry created: {devices:?}"
+    );
+    let entry = &devices[&code];
+    assert_eq!(entry["screen"], "byonk-builtin/calibration/color");
+    assert_eq!(
+        entry["name"], "living-room",
+        "other fields on the pre-existing entry must survive"
+    );
+}
+
+#[tokio::test]
+async fn test_assign_screen_patches_a_device_configured_under_a_differently_cased_mac() {
+    // config.yaml may key a device under an upper-cased MAC while the device
+    // itself (and list_devices) report it lower-case — get_device_config
+    // deliberately retries uppercased. assign_screen must patch that same
+    // entry, not create a new lower-case-keyed one that shadows it.
+    let tmp = tempfile::tempdir().unwrap();
+    let (app, config_path) = TestApp::new_admin_with_file("secret", tmp.path());
+    // Must contain hex letters — an all-digit MAC is identical upper/lower
+    // case and wouldn't exercise the case-differing lookup at all.
+    let mac_lower = "aa:bb:cc:dd:ee:ff";
+    let mac_upper = mac_lower.to_uppercase();
+    app.register_device(mac_lower).await;
+
+    let auth = ("Authorization", "Bearer secret");
+    let create = app
+        .post_json(
+            "/api/admin/devices",
+            &[auth],
+            &format!(
+                r#"{{"key":"{mac_upper}","screen":"byonk-builtin/default","name":"kitchen"}}"#
+            ),
+        )
+        .await;
+    assert_eq!(create.status, axum::http::StatusCode::OK);
+
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let result = client
+        .call_tool(
+            "assign_screen",
+            serde_json::json!({ "mac": mac_lower, "screen_ref": "byonk-builtin/calibration/color" }),
+        )
+        .await;
+    assert_ne!(result["isError"], serde_json::json!(true), "{result}");
+    assert_eq!(structured(&result)["created"], false);
+    assert_eq!(structured(&result)["key"], mac_upper);
+
+    // Inspect config.yaml directly — see the comment in the registration-code
+    // variant of this test for why the admin listing endpoint can't be used
+    // to prove no second entry was created.
+    let devices = read_config_devices(&config_path);
+    assert!(
+        devices.contains_key(&mac_upper) && !devices.contains_key(mac_lower),
+        "the upper-case-keyed entry must be updated in place, no lower-case entry created: {devices:?}"
+    );
+    let entry = &devices[&mac_upper];
+    assert_eq!(entry["screen"], "byonk-builtin/calibration/color");
+    assert_eq!(
+        entry["name"], "kitchen",
+        "other fields on the pre-existing entry must survive"
     );
 }
 

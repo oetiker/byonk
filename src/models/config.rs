@@ -389,6 +389,37 @@ impl AppConfig {
         self.devices.get(&normalized)
     }
 
+    /// Resolve the `config.devices` key an existing entry is stored under,
+    /// given identifiers a device might be looked up by: its MAC
+    /// (case-insensitive) and/or its registration code. Mirrors the lookup
+    /// order `get_device_config` / `get_device_config_for_code` use, but
+    /// returns the key the entry actually lives under instead of the entry
+    /// itself — callers that need to mutate the entry in place (rather than
+    /// risk creating a shadowing duplicate under a different key) need the
+    /// key, not just confirmation that *some* entry resolves.
+    pub fn resolve_device_key(&self, mac: &str, code: Option<&str>) -> Option<String> {
+        if self.devices.contains_key(mac) {
+            return Some(mac.to_string());
+        }
+        let upper = mac.to_uppercase();
+        if upper != mac && self.devices.contains_key(&upper) {
+            return Some(upper);
+        }
+        if let Some(code) = code {
+            let normalized = code.to_uppercase().replace('-', "");
+            if normalized.len() == 10 {
+                let hyphenated = format!("{}-{}", &normalized[..5], &normalized[5..]);
+                if self.devices.contains_key(&hyphenated) {
+                    return Some(hyphenated);
+                }
+            }
+            if self.devices.contains_key(&normalized) {
+                return Some(normalized);
+            }
+        }
+        None
+    }
+
     /// Get a panel config by name
     pub fn get_panel(&self, name: &str) -> Option<&PanelConfig> {
         self.panels.get(name)

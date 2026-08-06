@@ -30,6 +30,7 @@ use crate::api::admin::require_admin;
 use crate::error::ApiError;
 use crate::server::AppState;
 
+pub mod resources;
 pub mod tools_device;
 pub mod tools_edit;
 pub mod tools_read;
@@ -146,6 +147,40 @@ impl ServerHandler for ByonkMcp {
              read its log/data/error fields. Read the byonk://reference/* resources for \
              the Lua and SVG contracts.",
         )
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListResourcesResult, ErrorData> {
+        let state = self.state.clone();
+        let list = blocking(move || resources::list(&state)).await?;
+        // `with_all_items` is the constructor rmcp's `paginated_result!`
+        // macro generates; it fills in `next_cursor: None` and `meta: None`.
+        Ok(rmcp::model::ListResourcesResult::with_all_items(list))
+    }
+
+    async fn read_resource(
+        &self,
+        request: rmcp::model::ReadResourceRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ReadResourceResult, ErrorData> {
+        let state = self.state.clone();
+        let uri = request.uri.clone();
+        let found = blocking(move || resources::read(&uri, &state)).await?;
+        match found {
+            // `ReadResourceResult` is `#[non_exhaustive]`, so it must be
+            // built via its constructor, not a struct literal (same
+            // reasoning as `ok_json`'s `CallToolResult` above).
+            Some(contents) => Ok(rmcp::model::ReadResourceResult::new(contents)),
+            // A resource read is addressed by URI, not chosen from arguments,
+            // so an unknown URI genuinely is a protocol-level fault.
+            None => Err(ErrorData::resource_not_found(
+                format!("unknown resource: {}", request.uri),
+                None,
+            )),
+        }
     }
 }
 

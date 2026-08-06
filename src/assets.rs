@@ -64,6 +64,16 @@ struct EmbeddedExamples;
 #[folder = "fonts/"]
 struct EmbeddedFonts;
 
+/// Authoring reference pages, embedded so the MCP server can serve them as
+/// contracts to an LLM author. These are the SAME files the mdBook builds —
+/// there is deliberately no second copy to drift.
+#[derive(RustEmbed)]
+#[folder = "docs/src/"]
+#[include = "api/lua-api.md"]
+#[include = "tutorial/svg-templates.md"]
+#[include = "guide/authoring.md"]
+pub struct EmbeddedDocs;
+
 /// Embedded default config
 #[derive(RustEmbed)]
 #[folder = "."]

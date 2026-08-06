@@ -1,178 +1,121 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-06 — **Two new implementation plans are written, reviewed and committed; nothing is implemented yet.** Branch `feat/screen-store-authoring-core`, HEAD `73beeb0`, 71 commits ahead of `origin/main` (`67b3855`), local-only (never pushed). The branch remains **HELD by user decision** — no merge, no PR, and the user has explicitly confirmed the new work lands on this same branch. **Working tree clean.** `make check` (606 passed / 0 failed / 1 ignored) and `make docs` were both green at `1bbcc2d`; the three commits since are documentation only._
+_Last updated: 2026-08-06 — **Plans A and B are being executed in parallel in two git worktrees, by subagent-driven development.** Plan A: 4 of 7 tasks complete. Plan B: 7 of 11 complete. Every completed task passed a task review and, where needed, a fix round plus a scoped re-review. Nothing has been merged back yet; `feat/screen-store-authoring-core` is untouched at `2d04902` and remains **HELD** — no PR, no merge, no push, by standing user decision._
+
+## Where the work lives
+
+Two worktrees, both outside the project (this Mac has no `/scratch`):
+
+| Stream | Worktree | Branch | HEAD | State |
+|---|---|---|---|---|
+| **Plan A** | `/Users/oetiker/checkouts/claude-worktrees/byonk-plan-a` | `feat/plan-a-measured-colours` | `58d334a` | Tasks 1–4 of 7 done. Suite **628 passed / 0 failed / 1 ignored**. Tree clean. |
+| **Plan B** | `/Users/oetiker/checkouts/claude-worktrees/byonk-plan-b` | `feat/plan-b-eink-photo` | `6b7ff9d` | Tasks 1–7 of 11 done. **63** `eink-photo` tests. Tree clean. |
+
+`feat/plan-a-measured-colours` branched from `2d04902`. `feat/plan-b-eink-photo` branched from **`efd16b1`** — Plan A's Task 1 — because Plan B's Task 9 (`palette_aware`) needs `device.colors_actual`. That dependency is already satisfied; nothing needs dropping.
+
+**Both branches merge back into `feat/screen-store-authoring-core` at the end.** Expect conflicts only in `CHANGES.md`, `docs/src/api/lua-api.md`, and possibly `lua_runtime.rs` (Plan A touched the script-return parsing; Plan B Task 9 adds the `image_process` global).
 
 ## Resume here
 
-**Start Plan A, Task 1.** The next session's job is implementation, not design. Both plans are complete, placeholder-free, and self-reviewed against the spec.
+Run both streams with **`superpowers:subagent-driven-development`**, one fresh implementer per task, a task review after each, a fix round plus scoped re-review when the review finds Critical/Important issues.
 
-1. Read `docs/superpowers/plans/2026-08-06-plan-a-measured-colours-end-to-end.md` (7 tasks) and execute it with **`superpowers:subagent-driven-development`** — fresh subagent per task, review gate between tasks.
-2. Then `docs/superpowers/plans/2026-08-06-plan-b-image-process-for-eink.md` (11 tasks). Plan B's Tasks 1–8 need nothing from Plan A; only Task 9's `palette_aware` reads `device.colors_actual`, and that task says which line to drop if Plan A is not yet in.
-3. **Then**, and only then, the two verification items still outstanding from the previous initiative (below) — they were never done.
+- **Plan A — next is Task 5** (`svg_to_png` warns instead of silently dropping mismatched measured colours), then Task 6 (`use_actual` + `colors_actual` on `render_screen`), Task 7 (docs — owns `CHANGES.md` and `docs/src/api/lua-api.md`).
+- **Plan B — next is Task 8** (the codec and geometry layer, `src/services/image_process.rs`; **adds the `image` 0.25 dependency** — its Step 1 says to stop and report if the lockfile gains a duplicate decoder), then Task 9 (the `image_process` Lua global), Task 10 (the end-to-end test), Task 11 (docs + the `gphoto` example).
+- Then a **final whole-branch review per stream** on the most capable model, pointed at the ledger's deferred-minor and parked lines.
+- Then merge both into `feat/screen-store-authoring-core`, run `make check` + `make docs`, and remove the worktrees.
 
-Do not open a PR or merge without being asked. The hold is deliberate and has survived several sessions.
+The ledgers are the recovery map — trust them and `git log` over memory:
+- `<worktree-a>/.superpowers/sdd/2026-08-06-plan-a-measured-colours-end-to-end/progress.md`
+- `<worktree-b>/.superpowers/sdd/2026-08-06-plan-b-image-process-for-eink/progress.md`
 
-## What is new since the last handover
+Both are git-ignored, so they do **not** travel with a merge. Read them before dispatching anything.
 
-| Commit | What |
-|---|---|
-| `6a1caa3` | **Spec** — `docs/superpowers/specs/2026-08-06-lua-colors-and-image-ops-design.md` |
-| `73beeb0` | **Plan A + Plan B**, plus a colour-science correction to the spec (see below) |
+## Rulings that supersede the plans — do not re-derive these
 
-The user asked for three things. One turned out to already exist, two became the plans.
+**Plan A, Task 3 signature (owner-authorised).** The plan's two-argument `resolve_measured_colors(palette_len, script, fallback, fallback_source)` extracted only the *top* link of a four-link chain. Replaced by:
 
-- **(a) Expose `actual_colors` to Lua so a script can customise them dynamically** → Plan A.
-- **(b) A Lightroom-inspired set of image operations applied before an image enters the SVG** → Plan B.
-- **(c) "Can an LLM working on a screen design fully round-trip test their work by downloading the rendered PNG?"** → **Yes, and there is no download step.** `render_screen` returns the PNG *inside* the tool result as an MCP image block (`src/mcp/tools_render.rs:135`), so a vision-capable model sees it directly; `include_raw` adds the pre-dither image; a failed render returns no image block at all. The user then added a requirement that fell out of this, which became Plan A's Part 3: the agent must be able to ask for the **measured**-colour preview, as `/dev` can.
+```rust
+pub type MeasuredCandidate = (&'static str, Option<Vec<(u8, u8, u8)>>);
+pub fn resolve_measured_colors(palette_len: usize, candidates: &[MeasuredCandidate]) -> MeasuredResolution
+```
 
-## The two plans
+It walks candidates in precedence order, applies the length rule **uniformly at every position** (the check sits inside the loop and is the only return path yielding colours, so an unvalidated candidate cannot structurally reach the caller), accumulates warnings joined with `"; "`, and returns the first survivor or `SRC_NONE`. Labels are the consts `SRC_SCRIPT` / `SRC_DEV_OVERRIDE` / `SRC_PANEL_ACTUAL` / `SRC_MEASURED_HEADER` / `SRC_NONE` at `src/api/display.rs:197-201` — never a fresh string literal.
 
-### Plan A — Measured colours end to end (7 tasks)
+**Plan B, shared test helper (owner-authorised).** Plan B's Global Constraints mandate a shared `assert_close`, but its task code blocks kept defining local per-module epsilon helpers. **The constraint governs.** Use `assert_close(a, b)` / `assert_close_tol(a, b, tol)` at `crates/eink-photo/src/lib.rs:95-105`; plain `assert!` for inequalities is the accepted pattern. Deviate from any brief snippet that defines a local `close()`.
 
-`docs/superpowers/plans/2026-08-06-plan-a-measured-colours-end-to-end.md`
+**Plan B, `box_blur` complexity (controller ruling).** The plan's doc comment promised an O(n) running sum; the code is O(n·radius). **Corrected the comment, did not rewrite the algorithm** — `image_process.rs` owns decode/crop/**resize** as steps 1–3 and `eink-photo` holds steps 4–16, so the blur always runs post-resize on a panel-sized image (~800×480, ~1.5e8 tap operations at the radius-40 clamp), never on a 4000px source.
 
-1. `device.colors_actual` readable from Lua — `nil`, not mirrored, when uncalibrated.
-2. `colors_actual` accepted as a script return value.
-3. **`resolve_measured_colors`** — the chain extracted as a pure function and unit-tested *in isolation*, so a reviewer can reject the semantics before four call sites depend on them.
-4. Wire it into all four render paths (`display.rs`, `dev.rs`, `screen_store.rs`, `main.rs`).
-5. `svg_to_png` warns instead of silently dropping mismatched measured colours.
-6. `use_actual` + `colors_actual` on `render_screen`.
-7. Docs.
+## The verification gap that has been silently weakening Plan B
 
-### Plan B — `image_process` for e-ink (11 tasks)
+**A clean root `make check` proves nothing about `crates/eink-photo`.** The crate is a workspace member but *not* a dependency of `byonk`, and the Makefile's clippy/test invocations are unscoped, so the root gate does not compile, lint, or test it. This was true and unnoticed for two tasks. Every Plan B dispatch must require, and every review must confirm, **pasted output** of:
 
-`docs/superpowers/plans/2026-08-06-plan-b-image-process-for-eink.md`
+```
+cargo test -p eink-photo -- --test-threads=2
+cargo clippy -p eink-photo -- -D warnings      # no --all-targets; that's where allow(dead_code) is load-bearing
+```
 
-A new **`crates/eink-photo`** (zero dependencies, mirroring `eink-dither`) built operation by operation, then `src/services/image_process.rs` for codecs and geometry, then the Lua global, then an end-to-end test that vibrance actually raises the dithered chromatic share.
+This resolves itself once Task 9 wires the crate into `byonk`. Until then it does not.
 
-**Adds one dependency:** `image` 0.25, `default-features = false`, features `jpeg`/`png`/`webp`. The decoders themselves (`png`, `zune-jpeg`, `image-webp`) are **already in the lockfile via resvg** — this adds the façade, not a new decoder stack. Plan B Task 8 Step 1 says to stop and report if the lockfile gains a duplicate decoder.
+## What is done
 
-## Design decisions already settled — do not re-litigate
+### Plan A (`docs/superpowers/plans/2026-08-06-plan-a-measured-colours-end-to-end.md`)
 
-All were decided with the user during brainstorming and are recorded in the spec's "Open questions" section (which says: none).
+1. **`efd16b1`** — `device.colors_actual` readable from Lua; `nil`, never mirrored, when uncalibrated. Hoisted `DeviceContext` construction above measured-colour resolution in `dev.rs` and `main.rs`.
+2. **`2b1bfb2`** — scripts can return `colors_actual`. `lua_runtime::ScriptResult.colors_actual` / `content_pipeline::ScriptResult.script_colors_actual`. The `colors`/`script_colors` naming asymmetry is **deliberate** — do not "fix" it.
+3. **`22247d4`** — the chain as a pure function (candidate-list signature above), 9 tests covering every position class. `parse_measured_color_list` parses per entry; `parse_hex_color` factored out.
+4. **`58d334a`** — wired into all four render paths, `main.rs` duplication collapsed, `measured_source` exposed on `RenderParams`, pre-script winner derived from the array so the two cannot drift.
 
-- **Read *and* override**, not read-only. A script both sees `device.colors_actual` and can return its own.
-- **Script wins the measured chain**: `script > dev override > panel.colors_actual > Measured-Colors header > none`. Symmetric with `script_colors`, which already beats everything. The dev tuning popup going inert on such a screen is mitigated by `measured_source` reporting `"script"`.
-- **A length mismatch never fails a render.** It logs (to the *script log* on the authoring path, `tracing::warn!` on device paths) and falls through to the next source.
-- **`image_process` is one parametric call, not a chainable object.** The user initially chose a chain, then reversed: *"the pseudo chainable design is non-obvious."* A record-then-bake chain reads as sequential but is not; an immediate-mode chain accepts wrong orderings. One call with a fixed order makes both problems unrepresentable.
-- **Purpose is e-ink survival, not a general editing toolkit.** Per-colour HSL, split toning, vignette, grain, lens correction and denoise are explicitly out: six colours cannot show the difference, and noise actively helps dithering.
-- **`preset = "eink"` is a base layer** — explicit keys override it, so `{ preset = "eink", clarity = 0 }` means no clarity. This is the only rule that stays predictable as the preset's numbers are retuned.
-- **`palette_aware` v1 does endpoints only.** Steering chroma toward reachable palette entries is future work; it interacts with the dithering colour science recorded in project memory and needs its own measurement.
-- **`RenderOpts.colors_actual` occupies the dev-override slot** — `script > RenderOpts.colors_actual > panel > none` — and reports `measured_source = "render_opts"`.
+### Plan B (`docs/superpowers/plans/2026-08-06-plan-b-image-process-for-eink.md`)
 
-### The colour-science correction, because it matters
+1. **`1d34ad3`** scaffold — `Params`, `Preset`, `Sharpen`, `PhotoError`, pass-through `process`. **Zero dependencies, and `[dependencies]` stays empty for the whole plan.**
+2. **`19712f5`** `color.rs` — true piecewise IEC 61966-2-1 transfer pair (0.04045 / 0.0031308 / 2.4), `luminance`; `apply_exposure` as a linear-light multiply.
+3. **`5b33cd0`** white balance (linear light), `measure_endpoints` (0.005/0.995 percentiles), `apply_endpoints` (tone domain).
+4. **`90bea2f`** highlights/shadows, contrast, `apply_curve` (constructs `BadCurve`).
+5. **`e74618f`** `presence.rs` — separable box blur (clamped borders), clarity, sharpen.
+6. **`c83df93`** `colorops.rs` — vibrance, saturation, grayscale, invert.
+7. **`6b7ff9d`** the assembled pipeline, `Preset::Eink` as a base layer, `palette_aware` endpoints, `OutOfRange` finally constructed, all `allow(dead_code)` removed.
 
-The spec originally ran the **whole** tone group in linear light. That is wrong and would have shipped visibly bad output: an S-curve, an endpoint remap or a shadow lift applied in linear light crushes midtones. Corrected in `73beeb0`:
+**The assembled order, verified against each operation's body:** `exposure → white balance` | `endpoints → highlights/shadows → contrast → curve` | `clarity → vibrance → saturation → grayscale → invert` | `sharpen`. `apply_exposure`/`apply_white_balance` round-trip internally, so the buffer is in the **tone domain at every step boundary**.
 
-- **Linear light**: exposure, white balance. These model light and are only correct as multiplications.
-- **Gamma-encoded tone domain**: `auto_levels`, blacks/whites, highlights/shadows, contrast, curve, clarity, vibrance, saturation, grayscale/invert, sharpen.
+## Two things needing a decision
 
-This is the same distinction `eink-dither` already draws — error diffusion in linear RGB, colour matching in OKLab. Plan B Task 4 has a test (`contrast_pivots_about_mid_grey_in_the_tone_domain`) that specifically catches a regression to the linear version.
+1. **The CLI render path ignores measured colours entirely.** `src/main.rs:366-398` computes `render_params`, but `:414-418` passes `None, false` to `render_png_from_svg` — `measured_colors` and `measured_source` are never destructured out. **Pre-existing**, not introduced by Plan A, confirmed identical at `22247d4`. Needs an explicit call before any later task assumes the CLI honours measured colours.
+2. **`screen_store` never surfaces `measured_source`.** The authoring path pushes the *warning* into `RenderResult.log` but not the winning label. If the authoring UI should render it verbatim the way the dev tuning popup does, that wiring is still missing.
 
-## Facts verified in the tree while planning — trust these over re-derivation
+## Settled and traced — do not re-investigate
 
-- `resolve_render_params` has **four** call sites: `src/main.rs:350`, `src/api/display.rs:761`, `src/api/dev.rs:685`, `src/services/screen_store.rs:1100`.
-- **`measured_colors` currently passes through `resolve_render_params` untouched** — there is no script layer today.
-- `svg_to_png.rs:341` sets `eink_actual = None` on a post-dedup length disagreement, **silently**. A script returning its own `colors` of a different length already loses its calibration with no diagnostic.
-- `screen_store.rs:1114` does `let use_actual = measured_colors.is_some()` — so MCP renders already show measured colours, but only by accident of configuration, with no way to ask or refuse.
-- `parse_colors_header` (`display.rs:30`) **silently drops** entries that are not 6-digit hex, so a malformed colour shows up downstream as a length mismatch. Plan A Task 3 has a test for exactly this.
-- **`DeviceContext` is built before measured colours are resolved in `dev.rs` (470 vs 569) and `main.rs` (237 vs ~320)**, but *after* in `display.rs` and `screen_store.rs`. Plan A Task 1 Steps 8–9 hoist the two that are wrong. This is the only structural churn in either plan.
-- `DeviceContext` derives `Default` and every construction site uses `..Default::default()` **except** `display.rs:663`, which names every field — so adding a field breaks exactly one site at compile time.
-- The two `ScriptResult` types differ deliberately: `lua_runtime::ScriptResult.colors` becomes `content_pipeline::ScriptResult.script_colors`. Do not "fix" the naming.
-- `crates/eink-dither` has **zero** runtime dependencies. `eink-photo` must match.
-- MCP test harness: `TestApp::new_admin("secret")` + `McpTestClient`; `call_tool` returns the JSON-RPC `result`; image blocks are `{"type":"image","mimeType":"image/png","data":"<b64>"}`.
-- `ScreenStore` test fixture: `common::store::build_store(dir, &["names"])` in `tests/common/store.rs`.
+**`/api/display` hardcodes `use_actual=false` (`display.rs:1145`) and that is CORRECT.** It governs only the emitted palette (PLTE / grey LUT, `svg_to_png.rs:353-364`). `measured_colors` still reaches the ditherer unconditionally: `display.rs:963` `.with_colors_actual` → `content_cache` → `:1114` read back → `:1144` as the `actual` argument → `svg_to_png.rs:342-349` builds `eink_actual` **without consulting `use_actual`** → `EinkPalette::new` → `Palette::new` precomputes `actual_srgb/linear/oklab/chroma`, and matching uses the actual colours (`crates/eink-dither/src/palette/palette.rs:150-231`). Measured colours steer which palette **index** each pixel gets while PLTE stays nominal — right, because the device maps index → physical ink. **Plan A's device path is functional.**
 
-## Still outstanding from the previous initiative — never done
+## Plan defects found so far — the plans' text, not the implementations
 
-These predate the new plans and are unaffected by them. Do them after Plan B, or whenever the user asks.
+Four confirmed, all in plan-authored test code. This matches the previous initiative's pattern exactly (twelve tasks, twelve plan defects, every one in the plan's text).
 
-- [ ] **Drive a real MCP client.** `claude mcp add --transport http byonk http://localhost:3000/mcp --header "Authorization: Bearer <token>"` against a local `byonk serve`, then the full loop: `list_screens` → `copy_screen` → edit → `render_screen` → `assign_screen`, and read the resources. **A green suite does not prove a real client negotiates the handshake** — the integration tests speak JSON-RPC directly.
-- [ ] **Validate on the HA VM**, reaching `/mcp` from the Mac host over the LAN — precisely the case `.disable_allowed_hosts()` exists for. Follow memories `ha-vm-from-source-addon-build` and `ha-vm-addon-manifest-sync-gap`; `make ha-rebuild` does **not** sync the add-on manifest.
-- [ ] **Confirm `/mcp` returns 404** on an install with no admin token configured.
+1. **Plan A Task 2** — a verbatim test used `r#"..."#` around Lua containing `"#000000"`, which terminates the raw string early and does not compile. Fixed to `r##"..."##`; verified byte-for-byte that only the delimiters changed.
+2. **Plan B Task 5** — `sharpen_raises_edge_contrast_more_than_clarity_at_the_same_amount` is **mathematically unsatisfiable**. Box-blur unsharp amplitude is `1 + k(1 − (2r+1)^-6)`, monotonically increasing in radius, so clarity always beats sharpen on *any* magnitude metric (variance 0.2304 vs 0.2302, step edge 0.0956 vs 0.0922, overshoot 0.9606 vs 0.9333). The plan's 128×128 escape hatch does not help. Replaced with a spatial-**footprint** test (768 vs 2304 px, 3× margin).
+3. **Plan B Task 6** — the amount=50 cases are unsatisfiable against the plan's *own* reference implementation (both rails clamp), and worse, the vibrance test **discriminates backwards**: a plain-saturation stand-in scores 1.1911 while real vibrance scores 1.1794, because the signal there is almost entirely clamping asymmetry, which vibrance's weighting *reduces*.
+4. **Plan B Task 7** — `process_applies_operations_in_the_fixed_order` sets no `sharpen`, and `process` guards the call with `if let Some(s) = p.sharpen`, so `apply_sharpen` was **never invoked**; its position was unobservable by construction.
 
-## What this branch already delivers
+## Process lessons earned in this run
 
-Byonk is a place where screens are **authored**, not just served, with an LLM as a first-class author working against a byonk running **anywhere** — including the HA add-on — over the LAN, with no filesystem access and no Samba share.
-
-- **Spec** — `docs/superpowers/specs/2026-07-24-screen-store-and-mcp-design.md`
-  - **Plan 1 — Authoring core** — DONE (13/13). `ScreenStore`, writable local repos, examples as an editable repo, atomic writes, validation.
-  - **Plan 2 — MCP interface** — DONE (12/12), final review clean. `/mcp` behind the admin token, **14 tools**, resources publishing byonk's own authoring references, user docs.
-- **Spec 2 — Svelte web UI at `/`** (not written). Consumes the same `ScreenStore`.
-- **Spec 3 — Git commit & history** (not written).
-
-**There are 14 tools, not 15.** read: `list_screens`, `read_screen_file`, `list_screen_repos`, `list_devices`, `get_config`. edit: `write_screen_file`, `create_screen`, `copy_screen`, `rename_screen`, `delete_screen`, `delete_screen_file`. render: `render_screen`, `validate_screen`. device: `assign_screen`. Names derive from the Rust fn names — no explicit `name =` attributes. Pinned by `test_tools_list_reports_exactly_the_14_authoring_tools`. **Plan A adds arguments, never tools — if that count changes, something is wrong.**
-
-The SDD ledger `.superpowers/sdd/2026-07-28-screen-store-mcp-interface/progress.md` (git-ignored) is the recovery map for that initiative: one line per task with commit ranges, every review verdict, every deferred minor, every human ruling. **Deliberately not deleted** because the branch is unmerged and verification is outstanding.
-
-## Decisions from the MCP work — still binding
-
-Established by reading the vendored `rmcp` 2.2 source (at `<scratchpad>/rmcp-2.2.0/`, or `~/.cargo/registry/src/*/rmcp-2.2.0/`; re-fetch with `curl -sL https://static.crates.io/crates/rmcp/rmcp-2.2.0.crate | tar xz`).
-
-- **`rmcp` 2.2**, the latest *stable*. `3.0.0-beta.4` is a prerelease — out of scope.
-- **`.disable_allowed_hosts()`** — rmcp defaults to loopback only, which would reject the entire LAN/HA use case. The Bearer token already defeats DNS rebinding. **User-approved.**
-- **Stateless** (`stateful_mode: false`, `json_response: true`, `NeverSessionManager`).
-- **Tool failures are `Ok(CallToolResult::error(...))`, never `Err(ErrorData)`** — clients render protocol errors opaquely, so the model never sees an `Err`'s message. **Resources are the exception**: a resource is addressed by URI, so an unknown URI *is* a protocol fault.
-- **`validate_screen` reporting `ok: false` is a SUCCESSFUL call.** A failed **render** is `is_error: true` but still carries its diagnostics.
-- **Never `Implementation::from_build_env()`** — its `env!` expands inside rmcp, reporting rmcp's name/version.
-- **Many rmcp types are `#[non_exhaustive]`** — struct literals fail with E0639. Use constructors + public-field assignment.
-- **`#[tool_router(router = x, vis = "pub")]` generates an ASSOCIATED function** — combine as `Self::tools_read_router() + …`.
-- **`schemars` only via `rmcp::schemars`.** Do not add `schemars` to `Cargo.toml`.
-- **Every `ScreenStore` call from an async handler goes through the `blocking` helper.**
-- Every POST to `/mcp` needs `Accept: application/json, text/event-stream` (else 406) **and** a `Host` header. `tests/common/mcp.rs` sets both.
-- **`assign_screen` creates a mapping only for a REGISTRY-SEEN device.** A typo'd MAC is refused; without the gate a typo persisted a phantom device to `config.yaml`, and there is no MCP delete tool to undo it.
-
-## Load-bearing invariants — do not break these
-
-- **`ScreenStore::new` must get the SAME `Arc<ScreenRepoManager>` the `ContentPipeline` has.** Guarded by `tests/screen_store_wiring_test.rs`.
-- **The `byonk-builtin` handle string is frozen** — `content_pipeline.rs:215` hard-references `byonk-builtin/default`.
-- **`byonk-builtin` enumerates embedded-only, but `read` keeps the `SCREENS_DIR` overlay** — it touches the filesystem despite the name. This mismatch caused a real defect once.
-- **Writability is structural** — derived from `writable_root().is_some()` (`screen_store.rs:383`), never from a handle's name.
-- **`ScreenStore`'s mutex is `std::sync::Mutex` and not reentrant.** No mutating method may call another. Only the six mutators take it; `list_screens`/`read_file`/`validate`/`render` deliberately do not.
-- **`verify_writable_parent` vs `ensure_writable_parent`** (`screen_store.rs:504-538`): the first is the canonicalize / deepest-existing-ancestor / `starts_with` guard; the second is that **plus** `create_dir_all`. Write paths need the mkdir version; `delete_file:824` must not create directories. Do not merge them back.
-- **The `byonk://examples/` guard is safe because `screen_ref` is a PURE STRING** compared by equality against `list_screens()` output — never joined onto a path before the check.
-- **Option resolution for renders lives once**, in `src/api/display.rs`. Plan A extends it there and nowhere else.
-- **Device writes must never call `require_writable_global`** — a device mapping is not global config, so it stays writable in HA add-on mode.
-- **A failed render emits NO image block** — all three `render()` failure branches return `..empty()`, and `empty()` sets `raw_png: None` (`screen_store.rs:943-949`).
-
-## Known-remaining minor issues (all triaged "fine to ship")
-
-1. **`write_file` reads the entire existing target into memory on every write** (`screen_store.rs:460`), not only when `if_match` is set, with no `MAX_FILE_BYTES` guard on that read — only the incoming bytes are size-checked (`:442`).
-2. **`stat`-then-`read` is two syscalls** — a final-component swap between them can still deliver oversized bytes. Requires a live local process with write access, which already implies content control; a statically-planted symlink is caught.
-3. **`AssetScreensSource`** (`lua_runtime.rs:97`) reads via the disk overlay without overriding `read_limited`, contradicting the trait contract. Private, no caller reaches it.
-4. `list_screen_repos` hides a *configured* repo whose manifest is missing/unloadable, while the admin endpoint lists it.
-5. `kind()` defaults to `Embedded` — fails to the most restrictive value, so a missing override is safe.
-6. **`Severity::Warning` is dead code** — every `Issue` `validate` pushes is `Severity::Error`.
-7. `resources.rs:107-113` — a *listed* example whose body fails to read yields a **successful 200** with the literal `(unreadable)`. The membership guard is the sole barrier.
-8. `validate_params` iterates only schema fields, so params carried across a screen change are never rejected for unknown keys. Pre-existing.
-9. Generated `params` schema carries `default: null` while its type is `"object"`. Cosmetic.
-
-### Worth filing as follow-up issues (pre-existing, out of scope)
-
-- **`resolve_manifest_root`** (`screen_repo_loader.rs:309`) joins the untrusted manifest `root:` field with no `is_safe_rel` check — and it now sets the writable root that every guard validates *against*.
-- **`walk_screen_paths`/`walk_ext_files` follow symlinked directories**, so a symlink loop in a fetched repo recurses to stack exhaustion. A DoS, not a disclosure.
-
-## Process notes that earned their place
-
-- **Twelve tasks, twelve plan defects — every one in the PLAN's text, not the implementation.** Plan code blocks are specific enough to look authoritative and are not. **Pre-flight every brief against the code before dispatching.** The two new plans were written *after* reading every signature they reference, and their line numbers are explicitly labelled as anchors to locate by content, not addresses to jump to — but that does not make them right.
-- **Reviews are what made the last initiative work; do not weaken them.** The final reviewer independently verified a deferred minor the ledger had logged as *Unverified* — and it was a real config-corrupting bug.
-- **The single most valuable catch remains a test that could not fail.** Ask of every contract-relevant test: would this fail against broken code? Both new plans state this as a global constraint and several tasks say explicitly what to do when a test turns out to measure nothing (Plan B Task 10 asserts `vivid > 0.0` purely as that guard).
-- **Implementers disclosing weak tests is the norm and it keeps paying.** One disclosed a scope caveat in its own test; another **disputed half of a review finding** — correctly. Keep telling them disclosure is valued, not penalised. Both new plans say so in their constraints and ask for it again in their final-verification checklists.
-- **Descriptions are code.** Tool and resource descriptions are the only contract an MCP client sees, and an agent acts on them. Verify every behavioural claim against the code, and fix the description, not the code.
-- **Put the foreground rule on the FIRST line of a dispatch.** Two agents were lost to tooling, neither to the work: BSD `sed -i` (macOS sed needs a backup-suffix argument — tell implementers to use Edit/Write and never `sed`) and a background Monitor for `make check`.
-- **Tell implementers to commit incrementally.** A whole fix wave was lost to a session crash with everything uncommitted; the retry committed per finding and survived.
-- Subagents stall or die past roughly ~150–230k transcript tokens; dispatch fresh rather than resuming a large one. Check `git status` before re-dispatching — a stalled agent's uncommitted work is often salvageable.
-- Keep unrelated lint/fixture/test-isolation fixes in **separate commits**.
+- **A correct dispute can still open a hole. Check what a substitution *costs*, not just whether it was right.** Twice: Task 5's footprint substitute let a no-op `apply_sharpen` pass the entire suite (`fs < fc` → `0 < 2304` → true); Task 6's rework carried a tolerance over unrescaled so the test passed the very mutant its comment claimed to catch. Both were caught by pointing the review at the substitution rather than the dispute.
+- **Mutation testing is what made the hardest reviews decisive.** Task 7's reviewer copied the crate to a scratch dir, moved operations, and re-ran — proving one test was the sole detector of a domain-group swap and that sharpen's position was entirely unpinned. Ask reviewers to do this when ordering or wiring is the risk.
+- **Ask reviewers to verify a claim, not to judge prose.** Every substantive catch this run came from a reviewer that re-derived arithmetic or ran code, not one that read a rationale.
+- **The foreground rule needs enforcing, not just stating.** Two implementers backgrounded `make check` and stalled waiting for a notification subagents never receive — despite the rule being the literal first line of their dispatch. Both were recovered by resuming with the correction; no work was lost. Check `git status` in the worktree before assuming a stalled agent lost anything.
+- **Dispatch fresh past ~150k transcript tokens.** Plan A's Task 4 implementer reached ~235k and finished, but the fix round went to a fresh agent carrying the brief, the report file, and the findings — which worked cleanly.
+- **Implementers disclosing gaps they could not close is working and should keep being praised.** Task 7's implementer flagged a coverage gap rather than claiming it covered; the reviewer then showed it was one parameter away from closable.
 
 ## Build / verify
 
-- `make check` = fmt + `clippy -- -D warnings` + tests. `make docs` needs `mdbook-mermaid` (installed and working).
-- **Test counts differ by convention**: `--lib` alone is ~362; **606** is lib + all integration binaries. Don't read a jump as a discrepancy. Plan A's tasks state their expected running totals — if one differs, stop and report rather than adjusting the expectation.
-- If `cargo` is missing, add `$HOME/.cargo/bin` to `PATH` — rustup-managed via `rust-toolchain.toml` (never add cargo/rust to mise).
-- **Cap parallelism at 4** for compiles and test runs — shared machine.
-- Never `git add -A`/`.` — stage explicit paths, verify `git diff --cached`. There are untracked local files here, including a stray `docs/src/guide/installation.md~`. CHANGES.md is user-facing only.
-- **Beware tests that derive a path via `..` from a temp dir** — several once resolved to one shared `$TMPDIR/examples` and starved each other. Nest the temp dir under a private parent.
+- `make check` = fmt + `clippy -- -D warnings` + tests. `make docs` needs `mdbook-mermaid`.
+- **Cap parallelism at 2 per stream** while both run (`CARGO_BUILD_JOBS=2`, `-- --test-threads=2`) — shared machine, combined limit 4.
+- Never `git add -A`/`.` — stage explicit paths, check `git diff --cached`. Untracked local files exist here.
+- `CHANGES.md` is user-facing only. Plan A Task 7 and Plan B Task 11 own the docs; earlier tasks correctly touch neither.
+- If `cargo` is missing, add `$HOME/.cargo/bin` to PATH (rustup via `rust-toolchain.toml`; never add cargo/rust to mise).
 
-## Working tree
+## Still outstanding from the previous initiative — never done
 
-**Clean** at `73beeb0`.
+Unaffected by this work. Do them after both plans land, or whenever asked.
+
+- [ ] **Drive a real MCP client** — `claude mcp add --transport http byonk http://localhost:3000/mcp --header "Authorization: Bearer <token>"`, then `list_screens` → `copy_screen` → edit → `render_screen` → `assign_screen`. A green suite does not prove a real client negotiates the handshake; the integration tests speak JSON-RPC directly.
+- [ ] **Validate on the HA VM**, reaching `/mcp` from the Mac host over the LAN. See memories `ha-vm-from-source-addon-build` and `ha-vm-addon-manifest-sync-gap`; `make ha-rebuild` does **not** sync the add-on manifest.
+- [ ] **Confirm `/mcp` returns 404** on an install with no admin token configured.

@@ -109,7 +109,9 @@ impl ByonkMcp {
     #[tool(
         description = "Read one file inside a screen (meta.yaml, script.lua, screen.svg or \
                           any sibling asset). Returns its contents and an etag to pass back \
-                          as if_match when writing."
+                          as if_match when writing. Binary files (not valid UTF-8, e.g. images \
+                          or fonts) return content: \"\" with binary: true — the etag is still \
+                          valid, but there is no way to read or write their bytes over MCP."
     )]
     pub async fn read_screen_file(
         &self,

@@ -79,7 +79,10 @@ impl ByonkMcp {
     #[tool(
         description = "Write one file inside a screen, atomically. Pass if_match with the \
                           etag you read to detect concurrent edits. Only writable repos \
-                          accept writes; fork a read-only screen with copy_screen first."
+                          accept writes; fork a read-only screen with copy_screen first. \
+                          UTF-8 text only: refused if the target already exists and is a \
+                          binary asset (not valid UTF-8) — binary assets must be placed by \
+                          other means, not over MCP."
     )]
     pub async fn write_screen_file(
         &self,

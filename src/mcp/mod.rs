@@ -115,6 +115,12 @@ pub(crate) fn store_failure(e: crate::services::screen_store::StoreError) -> Cal
                         already exists — re-read it and retry"
             .to_string(),
         E::Traversal => "path escapes the screen directory".to_string(),
+        E::BinaryOverwrite => "refused: this file already exists and is a binary asset (not \
+                               valid UTF-8). write_screen_file only writes UTF-8 text, so this \
+                               write would truncate/corrupt the asset. Binary assets must be \
+                               placed by other means (e.g. a file drop into the writable repo's \
+                               directory), not over MCP."
+            .to_string(),
         E::TooLarge => "file exceeds the 5 MB limit".to_string(),
         E::Io(m) => m,
     };

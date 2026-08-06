@@ -63,7 +63,7 @@ Or as a JSON config block (the shape most MCP clients accept):
 | Tool | What it does |
 |------|----------------|
 | `list_screens` | List every screen this server can resolve, with its repo, title and whether it is writable. |
-| `read_screen_file` | Read one file inside a screen (`meta.yaml`, `script.lua`, `screen.svg`, or another asset). |
+| `read_screen_file` | Read one file inside a screen (`meta.yaml`, `script.lua`, `screen.svg`, or another asset). Binary files (not valid UTF-8) return no content — only the etag and `binary: true`. |
 | `list_screen_repos` | List the configured screen repositories: handle, kind, writability. |
 | `list_devices` | List known TRMNL devices: MAC, model, assigned screen. |
 | `get_config` | Read this server's non-secret global configuration. |
@@ -72,12 +72,18 @@ Or as a JSON config block (the shape most MCP clients accept):
 
 | Tool | What it does |
 |------|----------------|
-| `write_screen_file` | Write one file inside a screen, atomically (supports optimistic-concurrency `if_match`). |
+| `write_screen_file` | Write one file inside a screen, atomically (supports optimistic-concurrency `if_match`). UTF-8 text only — refuses to overwrite an existing binary asset. |
 | `create_screen` | Scaffold a new screen from the minimal starter (`meta.yaml`, `script.lua`, `screen.svg`). |
 | `copy_screen` | Fork any screen — including read-only builtins and examples — into a writable repo. |
 | `rename_screen` | Rename a screen within its repo. |
 | `delete_screen` | Delete a screen and every file in its directory. |
 | `delete_screen_file` | Delete one sibling asset from a screen directory. |
+
+Binary assets (images, fonts, anything not valid UTF-8) can be read for their etag
+but not their content, and cannot be written or overwritten over MCP at all —
+`write_screen_file` refuses if the target already exists and is binary. Place binary
+assets by another means (a writable local screen repo mounted via `SCREENS_DIR`, a
+Samba share, or an `EXAMPLES_DIR`-seeded repo) and author text files around them.
 
 ### Render
 

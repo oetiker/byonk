@@ -257,6 +257,68 @@ async fn test_write_to_a_read_only_handle_names_copy_screen() {
 }
 
 #[tokio::test]
+async fn test_write_over_an_existing_binary_asset_is_refused_and_bytes_survive() {
+    // MUST-FIX 2: read_screen_file returns no content for a binary file, so
+    // an agent doing read -> edit -> write_screen_file on a screen carrying
+    // e.g. background.jpg would otherwise silently truncate it to empty (or
+    // whatever text it composed). write_screen_file must refuse instead.
+    let tmp = tempfile::tempdir().unwrap();
+    let app = TestApp::new_admin_with_screens("secret", tmp.path());
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    // Fork the builtin `default` screen (ships background.jpg) into local.
+    let copied = client
+        .call_tool(
+            "copy_screen",
+            serde_json::json!({
+                "from_ref": "byonk-builtin/default",
+                "to_handle": "local",
+                "to_name": "has-image"
+            }),
+        )
+        .await;
+    assert_eq!(structured(&copied)["screen_ref"], "local/has-image");
+
+    let before = client
+        .call_tool(
+            "read_screen_file",
+            serde_json::json!({ "screen_ref": "local/has-image", "file": "background.jpg" }),
+        )
+        .await;
+    assert_eq!(structured(&before)["binary"], true);
+    let etag_before = structured(&before)["etag"].as_str().unwrap().to_string();
+
+    let write = client
+        .call_tool(
+            "write_screen_file",
+            serde_json::json!({
+                "screen_ref": "local/has-image",
+                "file": "background.jpg",
+                "content": "not a jpeg anymore"
+            }),
+        )
+        .await;
+    assert_eq!(write["isError"], true, "{write}");
+    let text = serde_json::to_string(&write).unwrap();
+    assert!(text.contains("binary"), "the refusal must say why: {text}");
+
+    // The original bytes must be untouched — same content-addressed etag.
+    let after = client
+        .call_tool(
+            "read_screen_file",
+            serde_json::json!({ "screen_ref": "local/has-image", "file": "background.jpg" }),
+        )
+        .await;
+    assert_eq!(structured(&after)["binary"], true);
+    assert_eq!(
+        structured(&after)["etag"].as_str().unwrap(),
+        etag_before,
+        "the binary asset's bytes must be unchanged after the refused write"
+    );
+}
+
+#[tokio::test]
 async fn test_stale_etag_is_a_conflict() {
     let tmp = tempfile::tempdir().unwrap();
     let app = TestApp::new_admin_with_screens("secret", tmp.path());

@@ -53,6 +53,13 @@ pub enum StoreError {
     /// file no longer exists — a stale etag against a deleted file is a
     /// conflict, not a silent create).
     Conflict,
+    /// The target already exists and is not valid UTF-8 (a binary asset).
+    /// `write_file` only ever receives UTF-8 text from its callers (the MCP
+    /// `write_screen_file` tool takes a `String`), so writing over an
+    /// existing binary file would silently truncate it to whatever text the
+    /// caller sent — most often empty, since `read_screen_file` returns no
+    /// content for a binary file in the first place. Refuse instead.
+    BinaryOverwrite,
     /// `screen_path` or `file` escapes the screen's directory (`..`,
     /// absolute, empty, or symlink escape).
     Traversal,
@@ -447,19 +454,30 @@ impl ScreenStore {
         // followed by a stat/read first.
         Self::ensure_writable_parent(&base, &target)?;
 
-        if let Some(expected) = if_match {
-            match std::fs::read(&target) {
-                Ok(cur) if etag(&cur) != expected => return Err(StoreError::Conflict),
-                Ok(_) => {}
-                // A stale etag presented against a file that no longer
-                // exists (e.g. deleted concurrently) is a conflict, not a
-                // licence to resurrect it under the caller's assumed
-                // starting content.
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    return Err(StoreError::Conflict)
+        // Read the current file regardless of whether `if_match` was given:
+        // besides the etag check, this is also where an existing binary
+        // target is caught before it gets clobbered by UTF-8 text (see
+        // `StoreError::BinaryOverwrite`).
+        match std::fs::read(&target) {
+            Ok(cur) => {
+                if std::str::from_utf8(&cur).is_err() {
+                    return Err(StoreError::BinaryOverwrite);
                 }
-                Err(e) => return Err(StoreError::Io(e.to_string())),
+                if let Some(expected) = if_match {
+                    if etag(&cur) != expected {
+                        return Err(StoreError::Conflict);
+                    }
+                }
             }
+            // A stale etag presented against a file that no longer exists
+            // (e.g. deleted concurrently) is a conflict, not a licence to
+            // resurrect it under the caller's assumed starting content.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if if_match.is_some() {
+                    return Err(StoreError::Conflict);
+                }
+            }
+            Err(e) => return Err(StoreError::Io(e.to_string())),
         }
 
         Self::atomic_write(&target, bytes)?;
@@ -1325,6 +1343,29 @@ mod tests {
             .unwrap();
         let f = store.read_file("local/clock", "script.lua").unwrap();
         assert!(!f.binary);
+    }
+
+    /// A write over an *existing* binary target must be refused, and the
+    /// original bytes must survive untouched — this is the data-loss round
+    /// trip from MUST-FIX 2: `read_screen_file` returns no content for a
+    /// binary file, so an agent doing read -> edit -> `write_screen_file`
+    /// would otherwise silently truncate the asset to whatever text it sent.
+    #[test]
+    fn write_refuses_to_overwrite_an_existing_binary_file() {
+        let (store, _repo_root) = test_store_with_local();
+        let original = [0xFFu8, 0xD8, 0xFF, 0x00, 0x01];
+        store
+            .write_file("local/clock", "logo.png", &original, None)
+            .unwrap();
+
+        let err = store
+            .write_file("local/clock", "logo.png", b"not a png anymore", None)
+            .unwrap_err();
+        assert!(matches!(err, StoreError::BinaryOverwrite));
+
+        let after = store.read_file("local/clock", "logo.png").unwrap();
+        assert_eq!(after.bytes, original, "original binary bytes must survive");
+        assert!(after.binary);
     }
 
     // --- Task 7: create / copy / rename / delete -------------------------

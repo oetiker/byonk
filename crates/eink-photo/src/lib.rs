@@ -15,7 +15,13 @@
 //! → contrast → curve → clarity → vibrance → saturation → grayscale/invert
 //! → sharpen.
 
+// Wired into `process`'s pipeline by a later task; not dead code, just not
+// yet called from here.
+#[allow(dead_code)]
+mod color;
 mod params;
+#[allow(dead_code)]
+mod tone;
 
 pub use params::{Params, Preset, Sharpen};
 

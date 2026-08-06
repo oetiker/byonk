@@ -161,7 +161,7 @@ value a device's `screen` field is set to.
               "mode": "box"
             }
           ],
-          "byonk": "0.15",
+          "byonk": "0.17",
           "compat_warning": null
         }
       ]
@@ -534,7 +534,7 @@ on every device write.
 # <screen>/meta.yaml
 title: My Screen
 description: What this screen shows.
-byonk: "0.15"
+byonk: "0.17"
 params:
   <param-name>:
     type: <type>
@@ -570,7 +570,7 @@ The bundled `examples/swiss-departure-board` screen declares its params in
 # examples/swiss-departure-board/meta.yaml
 title: Swiss Departure Board
 description: Live public-transport departures for a Swiss stop.
-byonk: "0.15"
+byonk: "0.17"
 params:
   station:
     type: string

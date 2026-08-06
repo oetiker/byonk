@@ -64,12 +64,14 @@ Create `screens/hello/meta.yaml`. It describes the screen and (later) its parame
 ```yaml
 title: Hello World
 description: Displays a greeting with the current time.
-byonk: "0.15"       # minimum byonk engine version this screen targets
+byonk: "0.17"       # byonk engine series this screen targets (caret range)
 refresh: 60         # default refresh in seconds (script.lua may override)
 ```
 
 - `title` and `description` are shown by the admin API and the Home Assistant integration.
-- `byonk` declares engine compatibility (bare version = caret range; see the design docs).
+- `byonk` declares engine compatibility: a bare version is parsed as a caret range
+  (`"0.17"` means `>=0.17.0, <0.18.0`), not a minimum — pin it to the byonk series you
+  actually tested against.
 - `refresh` is an optional default; the Lua script's returned `refresh_rate` still overrides.
 
 ## Step 2: Create the Lua Script
@@ -184,7 +186,7 @@ Let's make the greeting customizable. First declare the parameter in the screen'
 ```yaml
 title: Hello World
 description: Displays a greeting with the current time.
-byonk: "0.15"
+byonk: "0.17"
 refresh: 60
 params:
   name:

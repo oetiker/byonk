@@ -9,6 +9,7 @@
 - [Home Assistant Integration](guide/ha-integration.md)
 - [Configuration](guide/configuration.md)
 - [Screen Authoring](guide/authoring.md)
+- [Authoring with an LLM (MCP)](guide/mcp.md)
 - [Dev Mode](guide/dev-mode.md)
 
 # Concepts

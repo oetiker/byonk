@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   swiss-departure-board, font demo) now install as an editable `examples`
   repository. Override where they're seeded with the new `EXAMPLES_DIR`
   environment variable.
+- **Author screens with an LLM over MCP.** Byonk now exposes a Model Context
+  Protocol endpoint at `/mcp`, so an assistant like Claude Code can list, read,
+  create, edit, validate and render screens on a running byonk — including one
+  inside Home Assistant — over the network, with no file access needed. It is
+  protected by the same admin token as the admin API, and is invisible (404)
+  until you set one. The server also publishes its own authoring references
+  (Lua API, SVG templates, the `meta.yaml` schema) so the assistant works from
+  this server's rules rather than guesswork.
 
 ### Changed
 
@@ -41,6 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   options.** Naming a screen-repo row `local`, `examples`, or `byonk-builtin`
   used to silently make the screens in that repository unreachable. Such rows
   are now ignored with a warning in the log.
+- Screen repositories no longer follow symbolic links that point outside the
+  repository, so a screen repo cannot expose files elsewhere on the server.
+- Validating a screen now reports an oversized or non-UTF-8 file for what it is,
+  instead of misreporting it as a missing file or a Lua syntax error.
 
 ## 0.17.1 - 2026-07-17
 

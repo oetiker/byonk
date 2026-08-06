@@ -5,6 +5,8 @@
 
 mod common;
 
+use std::sync::{Arc, Barrier};
+
 use byonk::services::screen_store::StarterKind;
 use common::store::build_store;
 
@@ -14,10 +16,16 @@ fn test_concurrent_creates_leave_every_successful_screen_intact() {
     // No pre-scaffolded screens — the concurrent creates below make them.
     let store = build_store(tmp.path(), &[]);
 
+    // Without a barrier, threads spawned in a loop can finish sequentially on
+    // a loaded runner (thread 0 done before thread 7 even starts), so this
+    // wouldn't actually exercise concurrent access. Release all 8 together.
+    let barrier = Arc::new(Barrier::new(8));
     let handles: Vec<_> = (0..8)
         .map(|i| {
             let store = store.clone();
+            let barrier = barrier.clone();
             std::thread::spawn(move || {
+                barrier.wait();
                 store.create_screen("local", &format!("screen{i}"), StarterKind::Minimal)
             })
         })
@@ -41,10 +49,17 @@ fn test_concurrent_creates_of_the_same_name_yield_exactly_one_winner() {
     let tmp = tempfile::tempdir().unwrap();
     let store = build_store(tmp.path(), &[]);
 
+    // Same rationale as above: without a barrier this test has no
+    // discriminating power — a buggy, unlocked create_screen could still
+    // pass every time on a fast/idle machine simply because the threads
+    // never actually overlap.
+    let barrier = Arc::new(Barrier::new(8));
     let handles: Vec<_> = (0..8)
         .map(|_| {
             let store = store.clone();
+            let barrier = barrier.clone();
             std::thread::spawn(move || {
+                barrier.wait();
                 store.create_screen("local", "contended", StarterKind::Minimal)
             })
         })

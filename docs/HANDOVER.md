@@ -1,22 +1,24 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-06 — **Plan A is COMPLETE and ready to merge. Plan B is on Task 10 of 11.** Both run as subagent-driven development in parallel git worktrees. Nothing has been merged; `feat/screen-store-authoring-core` is untouched at `bfc844e` and remains **HELD** — no PR, no merge, no push, by standing owner decision._
+_Last updated: 2026-08-06 — **BOTH PLANS ARE COMPLETE AND READY TO MERGE.** Every task, every task review, every fix round and both final whole-branch reviews are clean. Nothing has been merged; `feat/screen-store-authoring-core` remains **HELD** — no PR, no merge, no push, by standing owner decision. **The next action needs the owner's go-ahead.**_
 
 ## Where the work lives
 
 | Stream | Worktree | Branch | HEAD | State |
 |---|---|---|---|---|
-| **Plan A** | `/Users/oetiker/checkouts/claude-worktrees/byonk-plan-a` | `feat/plan-a-measured-colours` | `c04311d` | **DONE.** All 8 tasks + final review + final fix wave, all clean. 382 lib tests / 0 failed / 1 ignored. `make check` + `make docs` green. |
-| **Plan B** | `/Users/oetiker/checkouts/claude-worktrees/byonk-plan-b` | `feat/plan-b-eink-photo` | `4e5f1b6` | Tasks 1–9 done; **Task 10 fix round 1 awaiting its scoped re-review**. Task 11 (docs) then a final whole-branch review remain. |
+| **Plan A** | `/Users/oetiker/checkouts/claude-worktrees/byonk-plan-a` | `feat/plan-a-measured-colours` | `c04311d` | **DONE, ready to merge.** 8 tasks + final review + final fix wave, all clean. 382 lib tests / 0 failed / 1 ignored. `make check` + `make docs` green. |
+| **Plan B** | `/Users/oetiker/checkouts/claude-worktrees/byonk-plan-b` | `feat/plan-b-eink-photo` | `e914481` | **DONE, ready to merge.** 11 tasks + final review, all clean. 653 tests green. `eink-photo` still has **zero dependencies**. |
 
-`feat/plan-a-measured-colours` branched from `2d04902`; `feat/plan-b-eink-photo` from `efd16b1` (Plan A's Task 1, for `device.colors_actual`). Both merge back into `feat/screen-store-authoring-core` at the end.
+`feat/plan-a-measured-colours` branched from `2d04902`; `feat/plan-b-eink-photo` from `efd16b1` (Plan A's Task 1, for `device.colors_actual`).
 
-## Resume here
+## Resume here — the merge
 
-1. **Plan B, Task 10** — a scoped re-review is in flight (agent may have died; check `git log` in worktree B). Verdicts five findings; the only one that matters is the `colors_actual` coverage, which must be **mutation-verified**, not merely present.
-2. **Plan B, Task 11** — docs + the `gphoto` example. It owns `CHANGES.md` and `docs/` for the whole plan; every earlier task left them alone. **Plan A's Task 7 brief was incomplete for the same reason** — write Task 11's dispatch listing every user-visible thing the plan shipped, don't trust the plan's task text.
-3. **Plan B final whole-branch review** on the most capable model, pointed at the ledger's `minor (deferred)` lines.
-4. **Then merge both into `feat/screen-store-authoring-core`**, run `make check` + `make docs`, remove the worktrees, delete both SDD workspaces.
+Both final reviews said ready. **Plan B's final review specifically checked for a semantic conflict with Plan A and found none**: Plan B's `palette_aware` is a pure downstream consumer of `DeviceContext.colors_actual`, which Plan A's precedence chain resolves *before* the script runs. The two touch different concerns — tone-curve endpoints vs. the per-pixel dither palette. **Expected conflicts are textual only, in `CHANGES.md` and `docs/src/api/lua-api.md`.**
+
+1. Merge both into `feat/screen-store-authoring-core` (A first, then B — B branched off A's Task 1).
+2. Resolve the two textual conflicts; run `make check` + `make docs`.
+3. **Add the one follow-up test the final review recommended**: nothing exercises `palette_aware` together with a `colors_actual`-bearing panel. Cheap, and it sits exactly on the A/B seam.
+4. Remove the worktrees and delete both SDD workspaces.
 
 The ledgers are the recovery map — trust them and `git log` over memory. Both are git-ignored, so they do **not** travel with a merge; read them before dispatching anything:
 - `<worktree-a>/.superpowers/sdd/2026-08-06-plan-a-measured-colours-end-to-end/progress.md`
@@ -77,7 +79,8 @@ Two habits worth continuing to reward: implementers that **disclose gaps they co
 - `SRC_SCRIPT` is not asserted end-to-end through MCP `RenderDiagnostics` (guarded at `RenderResult`; the remaining hop is one `.to_string()` exercised by three other labels).
 - `content_hash` covers only the SVG, not `colors_actual`/palette/dither — **pre-existing**, confirmed untouched by Plan A.
 - **`CONFIG_FILE` unset silently loads the embedded default config**, logged at `trace!` only. Failure mode is a successful render against the wrong config with `measured_source="none"` and no visible signal. Pre-existing; worth a follow-up issue.
-- Plan B: EXIF orientation wiring is **known-unverified** (not "working"); `Fit::None` bypasses the output-dimension cap; `format="jpeg", quality=300` silently falls back to 90.
+- Plan B, all six triaged by its final review as **acceptable to carry**: EXIF orientation wiring is **known-unverified** (not "working") — the one worth a prompt follow-up test; `Fit::None` bypasses the output-dimension cap (bounded by the allocation guard); `format="jpeg", quality=300` silently falls back to 90 (house style, adjudicated); `MAX_SOURCE_PIXELS`'s doc overstates its guarantee; a dead `MAX_OUTPUT_DIM.max(20_000)`; docs say `Params` has 17 fields where it has 18.
+- No test exercises `palette_aware` together with a `colors_actual`-bearing panel — the A/B seam. Add it after the merge.
 
 ## Still outstanding from the previous initiative — never done
 

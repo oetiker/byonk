@@ -77,6 +77,28 @@ pub struct ParamSchema {
     pub fields: Vec<ParamField>,
 }
 
+/// Schema-only descriptor for one enum `options` entry: the bare value, or a
+/// map whose `label` defaults to `value` when omitted. Mirrors what
+/// `parse_options` actually accepts (a plain string, or `{value, label}`
+/// with `label` optional) — `EnumOption` itself can't describe this because
+/// it requires both fields, which is narrower than the parser.
+///
+/// Never constructed: nothing deserializes through it (`parse_options` reads
+/// raw `serde_yaml::Value`s directly), it exists purely so
+/// `#[schemars(with = "...")]` on `RawField::options` can generate an
+/// accurate `anyOf` schema.
+#[allow(dead_code)]
+#[derive(schemars::JsonSchema)]
+#[serde(untagged)]
+enum RawEnumOption {
+    Bare(String),
+    Labeled {
+        value: String,
+        #[serde(default)]
+        label: Option<String>,
+    },
+}
+
 /// Raw descriptor as written in YAML (without the `name`, which is the map key).
 ///
 /// `pub(crate)` (rather than private) so `screen_meta::meta_json_schema` can
@@ -105,10 +127,11 @@ pub(crate) struct RawField {
     /// (e.g. `"slider"`, `"textarea"`); not validated, purely advisory.
     #[serde(default)]
     mode: Option<String>,
-    /// Enum choices: either a list of strings, or a list of
-    /// `{value, label}` maps.
+    /// Enum choices: either a list of strings (value and label both become
+    /// that string), or a list of `{value, label}` maps where `label` is
+    /// optional and defaults to `value` when omitted.
     #[serde(default)]
-    #[schemars(with = "Option<Vec<EnumOption>>")]
+    #[schemars(with = "Option<Vec<RawEnumOption>>")]
     options: Option<serde_yaml::Value>,
     /// If true, the value should be masked in UIs and omitted from logs
     /// (e.g. API keys).

@@ -59,3 +59,54 @@ fn test_params_schema_describes_the_field_descriptor() {
         );
     }
 }
+
+/// `parse_options` (src/models/param_schema.rs) accepts an `options` entry
+/// that is EITHER a bare string OR a `{value, label}` map with `label`
+/// optional. A schema that requires both `value` and `label` on every entry
+/// (as plain `EnumOption` does) is narrower than the parser and would reject
+/// documents byonk actually accepts — the "schema drifts into a lie" failure
+/// this whole feature exists to prevent, so pin the union shape directly.
+#[test]
+fn test_options_schema_accepts_both_bare_strings_and_maps_with_optional_label() {
+    let schema = meta_json_schema();
+
+    // schema.properties.params.additionalProperties -> {"$ref": "#/$defs/RawField"}
+    let defs = schema["$defs"].as_object().expect("schema must have $defs");
+    let raw_field = &defs["RawField"];
+    let options_prop = &raw_field["properties"]["options"];
+    // options: Option<Vec<RawEnumOption>> -> {"type": ["array","null"], "items": {"$ref": "#/$defs/RawEnumOption"}}
+    let items_ref = options_prop["items"]["$ref"]
+        .as_str()
+        .expect("options.items must be a $ref to the enum-option union type");
+    let ref_name = items_ref
+        .strip_prefix("#/$defs/")
+        .expect("expected a local $defs $ref");
+    let raw_enum_option = &defs[ref_name];
+
+    let branches = raw_enum_option["anyOf"]
+        .as_array()
+        .or_else(|| raw_enum_option["oneOf"].as_array())
+        .expect(
+            "enum-option union must be anyOf/oneOf branches, not a single required-fields object",
+        );
+
+    let has_bare_string_branch = branches
+        .iter()
+        .any(|b| b["type"].as_str() == Some("string"));
+    assert!(
+        has_bare_string_branch,
+        "enum-option schema is missing the bare-string branch: {branches:?}"
+    );
+
+    let has_object_branch_with_only_value_required = branches.iter().any(|b| {
+        b["type"].as_str() == Some("object")
+            && b["required"].as_array().is_some_and(|r| {
+                let names: Vec<&str> = r.iter().filter_map(|v| v.as_str()).collect();
+                names.contains(&"value") && !names.contains(&"label")
+            })
+    });
+    assert!(
+        has_object_branch_with_only_value_required,
+        "enum-option schema's object branch must require only `value`, not `label`: {branches:?}"
+    );
+}

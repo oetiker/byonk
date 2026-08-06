@@ -51,11 +51,50 @@ end
 | `height` | number or nil | Display height in pixels (480 or 1404) |
 | `board` | string or nil | Board identifier (e.g., "trmnl_og_4clr") |
 | `colors` | table or nil | Display palette as hex RGB strings (e.g., {"#000000", "#FFFFFF"}) |
+| `colors_actual` | table or nil | The panel's measured colours, index-parallel to `colors` (see below) |
 | `dither` | table | Pre-script resolved dither tuning (see below) |
 
 **Type:** `table`
 
 > **Note:** Device fields may be `nil` if the device doesn't report them. Always check before using.
+
+#### device.colors_actual
+
+The colours the panel **really** shows, as measured — index-parallel to
+`device.colors`. `nil` when the panel has no measured colours configured.
+
+This is deliberately **not** filled in from `device.colors` when absent, so a
+script can tell an uncalibrated panel from one that measures exactly to spec:
+
+```lua
+local shown = device.colors_actual or device.colors
+
+-- Pick a foreground that genuinely contrasts on this panel, not one that
+-- only contrasts in the spec.
+local bg = shown[1]
+local fg = shown[2]
+```
+
+`device.colors_actual` is resolved *before* this script runs, so it reflects
+whichever of these applies first: the dev colour-tuning override (or, when
+rendering via the `render_screen` MCP tool, its `colors_actual` argument) >
+`panel.colors_actual` in `config.yaml` > the `Measured-Colors` header > none.
+
+A script can still go one step further and override what actually gets
+dithered against by *returning* its own `colors_actual` — see below. That
+return, when present, wins over everything `device.colors_actual` could have
+reported: the full chain for a render is `script > dev-override /
+render-opts > panel.colors_actual > measured header > none`. A mismatched
+length anywhere in that chain never fails the render — the offending layer is
+skipped with a warning and the next one down is tried.
+
+Measured colours only steer which palette **index** each pixel is dithered
+to; the PNG that gets sent to a real device is still drawn in the *nominal*
+palette (`colors`) — the device itself maps index to physical ink, so
+sending it nominal colours is correct even though the dithering targeted the
+measured ones. This split only matters if you're inspecting the raw PNG
+bytes; `render_screen`'s `use_actual` (see the MCP guide) exists precisely
+so an authoring agent can instead see what the panel will really look like.
 
 #### device.dither
 
@@ -984,6 +1023,7 @@ return {
   refresh_rate = 300,       -- Seconds until next refresh
   skip_update = false,      -- Optional: skip rendering, just check back later
   colors = { "#000000", "#FFFFFF", "#FF0000" },  -- Optional: override display palette
+  colors_actual = { "#0A0A0A", "#E8E6E0", "#A83A30" },  -- Optional: override measured colours
   dither = "atkinson",      -- Optional: dither algorithm
   preserve_exact = true,    -- Optional: preserve exact palette matches (default: true)
   error_clamp = 0.08,       -- Optional: error diffusion clamp
@@ -1044,6 +1084,35 @@ return {
   colors = { "#000000", "#FFFFFF", "#FF0000" }
 }
 ```
+
+### colors_actual
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `colors_actual` | table or nil | Optional array of hex RGB strings overriding the measured colours used for dithering, for this render only |
+
+This does not change the display palette itself (`colors`, above) — it changes what the dithering
+algorithm targets while still emitting that palette. It's how a screen adapts its own render to a
+calibration it has computed, or how an author previews one:
+
+```lua
+return {
+  data = { ... },
+  colors        = { "#000000", "#FFFFFF", "#FF0000", "#00FF00" },
+  colors_actual = { "#0A0A0A", "#E8E6E0", "#A83A30", "#3F7A45" },
+}
+```
+
+Must have the same number of entries as the resolved palette (`colors`, above). If it does not,
+the render still succeeds: the value is ignored, the next source in the chain is used instead, and
+a warning is written to the script log (visible in the MCP `render_screen` tool's `log` field and
+in dev mode). Entries that are not 6-digit hex are dropped, which shortens the list and therefore
+trips the same check.
+
+A script that returns `colors_actual` wins over every other source, including the dev
+colour-tuning popup — the dev UI reports the source as `script`, so this is visible rather than
+mysterious. See `device.colors_actual` above for the full precedence chain and why measured
+colours steer dithering while the emitted PNG palette can still be the nominal one.
 
 ### dither
 

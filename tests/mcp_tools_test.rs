@@ -400,6 +400,110 @@ async fn test_create_rename_delete_round_trip() {
 }
 
 #[tokio::test]
+async fn test_delete_screen_file_end_to_end() {
+    // Cleanup 5: delete_screen_file had no end-to-end MCP coverage at all —
+    // the equivalent ScreenStore-level unit test exists
+    // (screen_store_listing_test.rs), but nothing exercised the tool through
+    // the actual MCP wire protocol.
+    let tmp = tempfile::tempdir().unwrap();
+    let app = TestApp::new_admin_with_screens("secret", tmp.path());
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    client
+        .call_tool(
+            "create_screen",
+            serde_json::json!({ "handle": "local", "name": "with-notes" }),
+        )
+        .await;
+    client
+        .call_tool(
+            "write_screen_file",
+            serde_json::json!({
+                "screen_ref": "local/with-notes",
+                "file": "notes.txt",
+                "content": "scratch"
+            }),
+        )
+        .await;
+
+    let deleted = client
+        .call_tool(
+            "delete_screen_file",
+            serde_json::json!({ "screen_ref": "local/with-notes", "file": "notes.txt" }),
+        )
+        .await;
+    assert_eq!(structured(&deleted)["ok"], true);
+
+    let read_after = client
+        .call_tool(
+            "read_screen_file",
+            serde_json::json!({ "screen_ref": "local/with-notes", "file": "notes.txt" }),
+        )
+        .await;
+    assert_eq!(
+        read_after["isError"], true,
+        "the deleted file must be gone: {read_after}"
+    );
+
+    // The screen itself (its three defining files) must be untouched.
+    let meta = client
+        .call_tool(
+            "read_screen_file",
+            serde_json::json!({ "screen_ref": "local/with-notes", "file": "meta.yaml" }),
+        )
+        .await;
+    assert_ne!(meta["isError"], serde_json::json!(true), "{meta}");
+}
+
+#[tokio::test]
+async fn test_tools_list_reports_exactly_the_14_authoring_tools() {
+    // Cleanup 5: McpTestClient::list_tools existed but was never called —
+    // an entire `tools/list` response class had no coverage. Pin the
+    // documented tool count and names down.
+    let app = TestApp::new_admin("secret");
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let result = client.list_tools().await;
+    let tools = result["tools"].as_array().expect("tools array");
+    let names: std::collections::BTreeSet<String> = tools
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+
+    let expected: std::collections::BTreeSet<String> = [
+        // read
+        "list_screens",
+        "read_screen_file",
+        "list_screen_repos",
+        "list_devices",
+        "get_config",
+        // edit
+        "write_screen_file",
+        "create_screen",
+        "copy_screen",
+        "rename_screen",
+        "delete_screen",
+        "delete_screen_file",
+        // render
+        "render_screen",
+        "validate_screen",
+        // device
+        "assign_screen",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+
+    assert_eq!(
+        names, expected,
+        "tools/list must report exactly these 14 tools"
+    );
+    assert_eq!(tools.len(), 14, "no duplicate tool names");
+}
+
+#[tokio::test]
 async fn test_render_screen_returns_an_image_block() {
     let app = TestApp::new_admin("secret");
     let client = McpTestClient::new(&app, Some("secret"));

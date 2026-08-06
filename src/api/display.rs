@@ -26,21 +26,40 @@ const MAX_DISPLAY_HEIGHT: u32 = 2000;
 /// Default 4-grey palette for devices that don't send a Colors header
 const DEFAULT_COLORS: &str = "#000000,#555555,#AAAAAA,#FFFFFF";
 
-/// Parse a comma-separated list of hex RGB color strings into RGB tuples
+/// Parse a single hex RGB color string (`"#RRGGBB"` or `"RRGGBB"`) into an
+/// RGB tuple. Returns `None` for anything that isn't exactly 6 hex digits
+/// after trimming whitespace and a leading `#`.
+fn parse_hex_color(s: &str) -> Option<(u8, u8, u8)> {
+    let c = s.trim().trim_start_matches('#');
+    if c.len() == 6 {
+        let r = u8::from_str_radix(&c[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&c[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&c[4..6], 16).ok()?;
+        Some((r, g, b))
+    } else {
+        None
+    }
+}
+
+/// Parse a comma-separated list of hex RGB color strings into RGB tuples.
+/// Entries that aren't 6-digit hex are silently dropped.
 pub fn parse_colors_header(s: &str) -> Vec<(u8, u8, u8)> {
-    s.split(',')
-        .filter_map(|c| {
-            let c = c.trim().trim_start_matches('#');
-            if c.len() == 6 {
-                let r = u8::from_str_radix(&c[0..2], 16).ok()?;
-                let g = u8::from_str_radix(&c[2..4], 16).ok()?;
-                let b = u8::from_str_radix(&c[4..6], 16).ok()?;
-                Some((r, g, b))
-            } else {
-                None
-            }
-        })
-        .collect()
+    s.split(',').filter_map(parse_hex_color).collect()
+}
+
+/// Parse a list of individual hex RGB color strings (as returned by a
+/// script's `colors_actual`) into RGB tuples, one entry at a time.
+///
+/// Unlike [`parse_colors_header`], this must NOT join the entries into a
+/// single comma-separated string before parsing: a malformed entry that
+/// itself contains a comma (e.g. a script accidentally returning
+/// `"#111111,#222222"` as one list element) would, under a join/re-split,
+/// silently fracture into extra "valid" colors and inflate the parsed
+/// count — masking a genuine length mismatch instead of surfacing it.
+/// Entries that aren't 6-digit hex are dropped, matching
+/// `parse_colors_header`'s silent-drop behaviour for a single entry.
+pub fn parse_measured_color_list(items: &[String]) -> Vec<(u8, u8, u8)> {
+    items.iter().filter_map(|s| parse_hex_color(s)).collect()
 }
 
 /// Convert RGB tuples back to hex strings for Lua/template exposure
@@ -170,6 +189,23 @@ pub fn resolve_dither_tuning(
     (tuning, has_tuning)
 }
 
+/// Source labels for [`MeasuredResolution::source`] / [`resolve_measured_colors`].
+///
+/// Defined once so the four call sites (`api::display`, `api::dev`,
+/// `services::screen_store`, `main`) and the dev-UI-facing debug log can't
+/// drift on spelling — the dev tuning popup renders this string verbatim.
+pub const SRC_SCRIPT: &str = "script";
+pub const SRC_DEV_OVERRIDE: &str = "dev_override";
+pub const SRC_PANEL_ACTUAL: &str = "panel.colors_actual";
+pub const SRC_MEASURED_HEADER: &str = "Measured-Colors header";
+pub const SRC_NONE: &str = "none";
+
+/// A single measured-colour candidate: `(source_label, parsed_colors)`.
+/// `None` means that source wasn't supplied at all (distinct from being
+/// supplied with the wrong length, which is still `Some` but discarded by
+/// the length rule in [`resolve_measured_colors`]).
+pub type MeasuredCandidate = (&'static str, Option<Vec<(u8, u8, u8)>>);
+
 /// Outcome of resolving the measured ("actual") panel colours.
 ///
 /// `source` names which layer supplied the value, for the debug log and the
@@ -182,55 +218,58 @@ pub struct MeasuredResolution {
     pub warning: Option<String>,
 }
 
-/// Resolve the measured colours for a render.
+/// Resolve the measured colours for a render from an ordered list of
+/// candidate sources.
 ///
-/// The chain is `script > fallback`, where `fallback` is whatever the caller
-/// already resolved from the pre-script layers (dev override / render opts /
-/// `panel.colors_actual` / `Measured-Colors` header), labelled by
-/// `fallback_source`. A script value wins outright — symmetric with
-/// `script_colors` in [`resolve_render_params`].
+/// `candidates` is the full chain in precedence order, e.g.
+/// `[(SRC_SCRIPT, ..), (SRC_DEV_OVERRIDE, ..), (SRC_PANEL_ACTUAL, ..),
+/// (SRC_MEASURED_HEADER, ..)]` — each entry already parsed into RGB tuples
+/// by the caller (see [`parse_measured_color_list`] for the script list,
+/// [`parse_colors_header`] for the comma-joined string sources).
 ///
-/// A script value whose parsed length does not match `palette_len` is
-/// **discarded, not fatal**: a device fetching its screen must never be
-/// denied content over a calibration mistake. The mismatch is reported via
-/// `warning`, and the fallback is used instead. Note that
-/// [`parse_colors_header`] silently drops unparseable entries, so a malformed
-/// hex string shows up here as a length mismatch.
+/// The chain is walked in order. A candidate that is `None` is skipped
+/// silently — that source simply wasn't supplied. A candidate that IS
+/// supplied but whose length doesn't match `palette_len` is **discarded,
+/// not fatal**: a device fetching its screen must never be denied content
+/// over a calibration mistake at any single layer. The length rule applies
+/// uniformly to every position in the chain, not just the first — every
+/// mismatch is recorded and the walk continues to the next candidate. The
+/// first candidate whose length matches wins outright.
+///
+/// If no candidate resolves, `colors` is `None` and `source` is
+/// [`SRC_NONE`]. `warning`, when present, is the concatenation of every
+/// mismatch encountered along the way (not just the first) — these are
+/// diagnostics a script author or panel maintainer reads, so all of them
+/// are worth surfacing, not just the one that happened to be checked first.
 pub fn resolve_measured_colors(
-    script_colors_actual: Option<&[String]>,
     palette_len: usize,
-    fallback: Option<Vec<(u8, u8, u8)>>,
-    fallback_source: &'static str,
+    candidates: &[MeasuredCandidate],
 ) -> MeasuredResolution {
-    let Some(script) = script_colors_actual else {
-        return MeasuredResolution {
-            colors: fallback,
-            source: fallback_source,
-            warning: None,
-        };
-    };
+    let mut warnings: Vec<String> = Vec::new();
 
-    let parsed = parse_colors_header(&script.join(","));
-    if parsed.len() == palette_len {
-        return MeasuredResolution {
-            colors: Some(parsed),
-            source: "script",
-            warning: None,
+    for (source, candidate) in candidates {
+        let Some(colors) = candidate else {
+            continue;
         };
+        if colors.len() == palette_len {
+            return MeasuredResolution {
+                colors: Some(colors.clone()),
+                source,
+                warning: (!warnings.is_empty()).then(|| warnings.join(" ")),
+            };
+        }
+        warnings.push(format!(
+            "{source}: colors_actual has {} usable entries but the resolved \
+             palette has {}; skipping it.",
+            colors.len(),
+            palette_len
+        ));
     }
 
     MeasuredResolution {
-        colors: fallback,
-        source: fallback_source,
-        warning: Some(format!(
-            "colors_actual returned by the script has {} usable entries but the \
-             resolved palette has {}; ignoring it and falling back to {}. \
-             (Entries that are not 6-digit hex are dropped, which also shortens \
-             the list.)",
-            parsed.len(),
-            palette_len,
-            fallback_source
-        )),
+        colors: None,
+        source: SRC_NONE,
+        warning: (!warnings.is_empty()).then(|| warnings.join(" ")),
     }
 }
 
@@ -1093,80 +1132,178 @@ mod tests {
     use super::*;
 
     #[test]
-    fn measured_script_value_wins_over_fallback() {
-        let script = vec!["#0A0A0A".to_string(), "#E8E6E0".to_string()];
+    fn first_candidate_wins_when_length_matches() {
+        let script = parse_measured_color_list(&["#0A0A0A".to_string(), "#E8E6E0".to_string()]);
         let r = resolve_measured_colors(
-            Some(&script),
             2,
-            Some(vec![(1, 1, 1), (2, 2, 2)]),
-            "panel.colors_actual",
+            &[
+                (SRC_SCRIPT, Some(script)),
+                (SRC_PANEL_ACTUAL, Some(vec![(1, 1, 1), (2, 2, 2)])),
+            ],
         );
         assert_eq!(
             r.colors.unwrap(),
             vec![(0x0A, 0x0A, 0x0A), (0xE8, 0xE6, 0xE0)]
         );
-        assert_eq!(r.source, "script");
+        assert_eq!(r.source, SRC_SCRIPT);
         assert!(r.warning.is_none());
     }
 
     #[test]
-    fn measured_falls_back_when_script_absent() {
+    fn falls_back_to_next_candidate_when_first_is_absent() {
         let r = resolve_measured_colors(
-            None,
             2,
-            Some(vec![(1, 1, 1), (2, 2, 2)]),
-            "panel.colors_actual",
+            &[
+                (SRC_SCRIPT, None),
+                (SRC_PANEL_ACTUAL, Some(vec![(1, 1, 1), (2, 2, 2)])),
+            ],
         );
         assert_eq!(r.colors.unwrap(), vec![(1, 1, 1), (2, 2, 2)]);
-        assert_eq!(r.source, "panel.colors_actual");
+        assert_eq!(r.source, SRC_PANEL_ACTUAL);
         assert!(r.warning.is_none());
     }
 
     #[test]
-    fn measured_reports_none_when_nothing_resolves() {
-        let r = resolve_measured_colors(None, 4, None, "none");
-        assert!(r.colors.is_none());
-        assert_eq!(r.source, "none");
-        assert!(r.warning.is_none());
-    }
-
-    #[test]
-    fn measured_length_mismatch_warns_and_falls_back() {
-        let script = vec!["#0A0A0A".to_string(), "#E8E6E0".to_string()];
+    fn reports_none_when_no_candidates_resolve() {
         let r = resolve_measured_colors(
-            Some(&script),
+            4,
+            &[
+                (SRC_SCRIPT, None),
+                (SRC_DEV_OVERRIDE, None),
+                (SRC_PANEL_ACTUAL, None),
+                (SRC_MEASURED_HEADER, None),
+            ],
+        );
+        assert!(r.colors.is_none());
+        assert_eq!(r.source, SRC_NONE);
+        assert!(r.warning.is_none());
+    }
+
+    #[test]
+    fn length_mismatch_at_first_position_falls_through_to_second() {
+        let script = parse_measured_color_list(&["#0A0A0A".to_string(), "#E8E6E0".to_string()]);
+        let r = resolve_measured_colors(
             4, // official palette has 4 entries, script supplied 2
-            Some(vec![(1, 1, 1), (2, 2, 2), (3, 3, 3), (4, 4, 4)]),
-            "panel.colors_actual",
+            &[
+                (SRC_SCRIPT, Some(script)),
+                (
+                    SRC_PANEL_ACTUAL,
+                    Some(vec![(1, 1, 1), (2, 2, 2), (3, 3, 3), (4, 4, 4)]),
+                ),
+            ],
         );
         // Fell through to the next source, did NOT blank the calibration.
         assert_eq!(r.colors.unwrap().len(), 4);
-        assert_eq!(r.source, "panel.colors_actual");
+        assert_eq!(r.source, SRC_PANEL_ACTUAL);
         let w = r.warning.expect("a mismatch must be reported");
         assert!(
-            w.contains('2') && w.contains('4'),
-            "warning must name both lengths: {w}"
+            w.contains("has 2 usable"),
+            "warning must name the mismatched count: {w}"
+        );
+        assert!(
+            w.contains("palette has 4"),
+            "warning must name the resolved palette length: {w}"
         );
     }
 
     #[test]
-    fn measured_malformed_hex_is_caught_by_the_length_check() {
-        // parse_colors_header silently drops unparseable entries, so a typo
-        // shortens the list. The length rule is what turns that into a
-        // diagnostic instead of a silent half-calibration.
-        let script = vec!["#0A0A0A".to_string(), "not-a-colour".to_string()];
-        let r = resolve_measured_colors(Some(&script), 2, None, "none");
-        assert!(r.colors.is_none());
-        assert_eq!(r.source, "none");
-        assert!(r.warning.is_some());
+    fn length_mismatch_at_middle_position_falls_through_to_later_valid_candidate() {
+        // script absent, dev_override mismatched, panel.colors_actual valid.
+        let r = resolve_measured_colors(
+            3,
+            &[
+                (SRC_SCRIPT, None),
+                (SRC_DEV_OVERRIDE, Some(vec![(9, 9, 9), (8, 8, 8)])), // len 2, wrong
+                (
+                    SRC_PANEL_ACTUAL,
+                    Some(vec![(1, 1, 1), (2, 2, 2), (3, 3, 3)]),
+                ), // len 3, right
+                (
+                    SRC_MEASURED_HEADER,
+                    Some(vec![(7, 7, 7), (6, 6, 6), (5, 5, 5)]),
+                ), // never reached
+            ],
+        );
+        assert_eq!(r.colors.unwrap(), vec![(1, 1, 1), (2, 2, 2), (3, 3, 3)]);
+        assert_eq!(r.source, SRC_PANEL_ACTUAL);
+        let w = r
+            .warning
+            .expect("the skipped middle candidate must be reported");
+        assert!(
+            w.contains(SRC_DEV_OVERRIDE)
+                && w.contains("has 2 usable")
+                && w.contains("palette has 3"),
+            "warning must name the middle candidate that was skipped: {w}"
+        );
     }
 
     #[test]
-    fn measured_mismatch_falls_all_the_way_through_to_none() {
-        let script = vec!["#0A0A0A".to_string()];
-        let r = resolve_measured_colors(Some(&script), 3, None, "none");
+    fn all_candidates_mismatch_falls_through_to_none_with_accumulated_warnings() {
+        let r = resolve_measured_colors(
+            3,
+            &[
+                (SRC_SCRIPT, Some(vec![(1, 1, 1)])), // len 1, wrong
+                (SRC_DEV_OVERRIDE, Some(vec![(2, 2, 2), (2, 2, 2)])), // len 2, wrong
+            ],
+        );
         assert!(r.colors.is_none());
-        assert_eq!(r.source, "none");
-        assert!(r.warning.is_some());
+        assert_eq!(r.source, SRC_NONE);
+        let w = r.warning.expect("every mismatch must be reported");
+        assert!(
+            w.contains(SRC_SCRIPT) && w.contains("has 1 usable"),
+            "warning must mention the script mismatch: {w}"
+        );
+        assert!(
+            w.contains(SRC_DEV_OVERRIDE) && w.contains("has 2 usable"),
+            "warning must mention the dev_override mismatch, not just the first one: {w}"
+        );
+    }
+
+    #[test]
+    fn parse_measured_color_list_drops_malformed_entries() {
+        // parse_colors_header silently drops unparseable entries; the list
+        // variant must do the same, one entry at a time.
+        let parsed =
+            parse_measured_color_list(&["#0A0A0A".to_string(), "not-a-colour".to_string()]);
+        assert_eq!(parsed, vec![(0x0A, 0x0A, 0x0A)]);
+    }
+
+    #[test]
+    fn malformed_hex_is_caught_by_the_length_check() {
+        // A typo shortens the parsed list; the length rule is what turns
+        // that into a diagnostic instead of a silent half-calibration.
+        let script =
+            parse_measured_color_list(&["#0A0A0A".to_string(), "not-a-colour".to_string()]);
+        assert_eq!(
+            script.len(),
+            1,
+            "the malformed entry must have been dropped"
+        );
+        let r = resolve_measured_colors(2, &[(SRC_SCRIPT, Some(script))]);
+        assert!(r.colors.is_none());
+        assert_eq!(r.source, SRC_NONE);
+        let w = r.warning.expect("a mismatch must be reported");
+        assert!(
+            w.contains("has 1 usable"),
+            "warning must name 1 usable entry: {w}"
+        );
+        assert!(
+            w.contains("palette has 2"),
+            "warning must name the palette length: {w}"
+        );
+    }
+
+    #[test]
+    fn script_entry_containing_a_comma_does_not_inflate_the_parsed_count() {
+        // A malformed script entry that itself contains a comma must not,
+        // when parsed, silently fracture into extra "valid" colors. Joining
+        // the whole list with commas before parsing (the old behaviour)
+        // would inflate the count from 1 real usable entry to 3.
+        let items = vec![
+            "#111111,#222222".to_string(), // malformed: this is one entry, not two
+            "#333333".to_string(),
+        ];
+        let parsed = parse_measured_color_list(&items);
+        assert_eq!(parsed, vec![(0x33, 0x33, 0x33)]);
     }
 }

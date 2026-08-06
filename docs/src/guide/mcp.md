@@ -24,7 +24,7 @@ rules; they apply here unchanged.
 ## Connecting
 
 The endpoint is `http://<host>:<port>/mcp` — `http://localhost:3000/mcp` with byonk's
-default bind address, or `http://homeassistant.local:3000/mcp` for the Home Assistant
+default port, or `http://homeassistant.local:3000/mcp` for the Home Assistant
 app. Transport is streamable HTTP, stateless, with plain JSON responses (no
 server-sent-events framing to worry about). Authenticate with the token as a Bearer
 credential:

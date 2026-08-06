@@ -255,12 +255,13 @@ pub fn resolve_measured_colors(
             return MeasuredResolution {
                 colors: Some(colors.clone()),
                 source,
-                warning: (!warnings.is_empty()).then(|| warnings.join(" ")),
+                warning: (!warnings.is_empty()).then(|| warnings.join("; ")),
             };
         }
         warnings.push(format!(
             "{source}: colors_actual has {} usable entries but the resolved \
-             palette has {}; skipping it.",
+             palette has {}; skipping it. (Entries that are not 6-digit hex \
+             are dropped, which also shortens the list.)",
             colors.len(),
             palette_len
         ));
@@ -269,27 +270,45 @@ pub fn resolve_measured_colors(
     MeasuredResolution {
         colors: None,
         source: SRC_NONE,
-        warning: (!warnings.is_empty()).then(|| warnings.join(" ")),
+        warning: (!warnings.is_empty()).then(|| warnings.join("; ")),
     }
 }
 
 /// Resolve all rendering parameters after script execution.
 ///
-/// Palette: script_colors > device_config_colors > panel_colors > fallback
+/// Palette:  script_colors > device_config_colors > panel_colors > fallback
+/// Measured: script_colors_actual > pre_script_measured_candidates (in the
+///           order the caller supplies them, e.g. dev override >
+///           panel.colors_actual > Measured-Colors header)
 /// Dither: script_dither > device_config_dither > None
 /// Preserve: script_preserve_exact > override > true
+///
+/// `pre_script_measured_candidates` is the caller's own pre-script chain —
+/// each entry already parsed and labelled by the caller, in precedence
+/// order (see each call site's own doc comment for its exact chain: not
+/// every caller has a dev-override or header layer). This function doesn't
+/// re-derive that chain; it just prepends the script's own `colors_actual`
+/// and applies the length rule uniformly across the whole thing, so a
+/// mismatch at ANY position — including inside the caller's own chain —
+/// falls through to the next, not just a mismatch at the very front. A
+/// mismatch never fails the render: it's recorded into `warning_sink` and
+/// the resolver falls through (see [`resolve_measured_colors`]). The caller
+/// decides where that warning goes — `tracing::warn!` on device paths, the
+/// script log on authoring paths.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_render_params(
     script_colors: Option<&[String]>,
+    script_colors_actual: Option<&[String]>,
     script_dither: Option<&str>,
     script_preserve_exact: Option<bool>,
     device_config_colors: Option<&str>,
     device_config_dither: Option<&str>,
     panel_colors: Option<&str>,
     fallback_palette: &[(u8, u8, u8)],
-    measured_colors: Option<Vec<(u8, u8, u8)>>,
+    pre_script_measured_candidates: &[MeasuredCandidate],
     preserve_exact_override: Option<bool>,
     tuning: &DitherTuningValues,
+    warning_sink: &mut Option<String>,
 ) -> RenderParams {
     let palette = if let Some(sc) = script_colors {
         parse_colors_header(&sc.join(","))
@@ -309,9 +328,17 @@ pub fn resolve_render_params(
         .or(preserve_exact_override)
         .unwrap_or(true);
 
+    let script_measured = script_colors_actual.map(parse_measured_color_list);
+    let mut candidates: Vec<MeasuredCandidate> =
+        Vec::with_capacity(1 + pre_script_measured_candidates.len());
+    candidates.push((SRC_SCRIPT, script_measured));
+    candidates.extend_from_slice(pre_script_measured_candidates);
+    let measured = resolve_measured_colors(palette.len(), &candidates);
+    *warning_sink = measured.warning;
+
     RenderParams {
         palette,
-        measured_colors,
+        measured_colors: measured.colors,
         dither,
         preserve_exact,
         error_clamp: tuning.error_clamp,
@@ -684,18 +711,38 @@ pub async fn handle_display<R: DeviceRegistry>(
     } else {
         None
     };
+    let override_colors_parsed: Option<Vec<(u8, u8, u8)>> =
+        override_colors.as_deref().map(parse_colors_header);
+    let panel_actual_parsed: Option<Vec<(u8, u8, u8)>> = panel
+        .and_then(|p| p.colors_actual.as_deref())
+        .map(parse_colors_header);
+    let header_parsed: Option<Vec<(u8, u8, u8)>> =
+        measured_colors_header.as_deref().map(parse_colors_header);
+    // The pre-script chain, as a candidate array in precedence order — the
+    // final resolution (after the script runs and the palette length is
+    // known) prepends the script's own `colors_actual` in front of this and
+    // applies the length rule uniformly across all four, so a mismatch at
+    // ANY position falls through to the next rather than only the front.
+    let pre_script_measured_candidates: Vec<crate::api::display::MeasuredCandidate> = vec![
+        (SRC_DEV_OVERRIDE, override_colors_parsed.clone()),
+        (SRC_PANEL_ACTUAL, panel_actual_parsed.clone()),
+        (SRC_MEASURED_HEADER, header_parsed.clone()),
+    ];
+    // Pre-script winner, used only to populate `DeviceContext.colors_actual`
+    // (what the *script* sees before it runs, when the final palette length
+    // isn't known yet — no length check applies here).
     let measured_source;
-    let measured_colors: Option<Vec<(u8, u8, u8)>> = if let Some(ref oc) = override_colors {
-        measured_source = "dev_override";
-        Some(parse_colors_header(oc))
-    } else if let Some(actual) = panel.and_then(|p| p.colors_actual.as_deref()) {
-        measured_source = "panel.colors_actual";
-        Some(parse_colors_header(actual))
-    } else if let Some(ref hdr) = measured_colors_header {
-        measured_source = "Measured-Colors header";
-        Some(parse_colors_header(hdr))
+    let measured_colors: Option<Vec<(u8, u8, u8)>> = if let Some(oc) = override_colors_parsed {
+        measured_source = SRC_DEV_OVERRIDE;
+        Some(oc)
+    } else if let Some(actual) = panel_actual_parsed {
+        measured_source = SRC_PANEL_ACTUAL;
+        Some(actual)
+    } else if let Some(hdr) = header_parsed {
+        measured_source = SRC_MEASURED_HEADER;
+        Some(hdr)
     } else {
-        measured_source = "none";
+        measured_source = SRC_NONE;
         None
     };
 
@@ -862,18 +909,24 @@ pub async fn handle_display<R: DeviceRegistry>(
                         resolve_tuning(&script_tuning, &dc_tuning_for_closure, &panel_final_tuning)
                     };
 
+                    let mut measured_warning: Option<String> = None;
                     let params = resolve_render_params(
                         result.script_colors.as_deref(),
+                        result.script_colors_actual.as_deref(),
                         eff_script_dither,
                         result.script_preserve_exact,
                         dc_colors.as_deref(),
                         eff_dc_dither,
                         panel_colors_for_chain.as_deref(),
                         &fallback,
-                        measured_colors.clone(),
+                        &pre_script_measured_candidates,
                         None,
                         &tuning,
+                        &mut measured_warning,
                     );
+                    if let Some(w) = &measured_warning {
+                        tracing::warn!(device = %mac, "{w}");
+                    }
 
                     tracing::debug!(
                         device = %mac,
@@ -1305,5 +1358,155 @@ mod tests {
         ];
         let parsed = parse_measured_color_list(&items);
         assert_eq!(parsed, vec![(0x33, 0x33, 0x33)]);
+    }
+
+    // ------------------------------------------------------------------
+    // resolve_render_params: the shared plumbing every one of the four
+    // call sites (api::display, api::dev, services::screen_store, main)
+    // goes through. These pin the two properties a mis-wired call site
+    // would silently violate: script always outranks whatever the caller
+    // passes as its pre-script chain, and the caller's own chain is walked
+    // in the order supplied — not reordered, not collapsed to just the
+    // first entry.
+    // ------------------------------------------------------------------
+
+    fn default_tuning() -> DitherTuningValues {
+        DitherTuningValues::default()
+    }
+
+    #[test]
+    fn resolve_render_params_prefers_script_colors_actual_over_pre_script_chain() {
+        // Distinct, non-guessable RGB triples per source so a wrong-source
+        // wiring bug fails the assertion instead of accidentally matching.
+        let script_actual = vec!["#111111".to_string(), "#222222".to_string()];
+        let pre_script: Vec<MeasuredCandidate> = vec![(
+            SRC_PANEL_ACTUAL,
+            Some(vec![(0x99, 0x99, 0x99), (0x88, 0x88, 0x88)]),
+        )];
+        let mut warning = None;
+        let params = resolve_render_params(
+            None,
+            Some(&script_actual),
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[(0, 0, 0), (255, 255, 255)],
+            &pre_script,
+            None,
+            &default_tuning(),
+            &mut warning,
+        );
+        assert_eq!(
+            params.measured_colors.unwrap(),
+            vec![(0x11, 0x11, 0x11), (0x22, 0x22, 0x22)],
+            "script's colors_actual must win over the caller's pre-script chain"
+        );
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn resolve_render_params_walks_pre_script_chain_in_supplied_order() {
+        // Mirrors api::display's own three-source chain: dev_override >
+        // panel.colors_actual > Measured-Colors header. No script value at
+        // all; dev_override is present but the wrong length (mismatch,
+        // skipped); panel.colors_actual is right; header is never reached.
+        // If the call site swapped panel/header order, this would resolve
+        // to the header's value instead — a silent, non-compiling bug this
+        // test is built to catch.
+        let pre_script: Vec<MeasuredCandidate> = vec![
+            (SRC_DEV_OVERRIDE, Some(vec![(0x01, 0x01, 0x01)])), // len 1, wrong
+            (
+                SRC_PANEL_ACTUAL,
+                Some(vec![(0xAA, 0xBB, 0xCC), (0xDD, 0xEE, 0xFF)]),
+            ), // len 2, right
+            (
+                SRC_MEASURED_HEADER,
+                Some(vec![(0x44, 0x44, 0x44), (0x55, 0x55, 0x55)]),
+            ), // never reached
+        ];
+        let mut warning = None;
+        let params = resolve_render_params(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[(0, 0, 0), (255, 255, 255)],
+            &pre_script,
+            None,
+            &default_tuning(),
+            &mut warning,
+        );
+        assert_eq!(
+            params.measured_colors.unwrap(),
+            vec![(0xAA, 0xBB, 0xCC), (0xDD, 0xEE, 0xFF)],
+            "must resolve to panel.colors_actual, the second entry in the supplied order"
+        );
+        let w = warning.expect("the skipped dev_override mismatch must be reported");
+        assert!(
+            w.contains(SRC_DEV_OVERRIDE),
+            "warning must name the skipped source: {w}"
+        );
+    }
+
+    #[test]
+    fn resolve_render_params_script_mismatch_falls_through_to_pre_script_chain() {
+        // Script supplies colors_actual but at the wrong length for the
+        // resolved (2-entry) palette; the caller's pre-script chain must
+        // still be consulted rather than the render losing calibration
+        // outright.
+        let script_actual = vec!["#010101".to_string()]; // len 1, wrong for a 2-entry palette
+        let pre_script: Vec<MeasuredCandidate> = vec![(
+            SRC_PANEL_ACTUAL,
+            Some(vec![(0x10, 0x20, 0x30), (0x40, 0x50, 0x60)]),
+        )];
+        let mut warning = None;
+        let params = resolve_render_params(
+            None,
+            Some(&script_actual),
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[(0, 0, 0), (255, 255, 255)],
+            &pre_script,
+            None,
+            &default_tuning(),
+            &mut warning,
+        );
+        assert_eq!(
+            params.measured_colors.unwrap(),
+            vec![(0x10, 0x20, 0x30), (0x40, 0x50, 0x60)]
+        );
+        let w = warning.expect("the script mismatch must be reported");
+        assert!(w.contains(SRC_SCRIPT), "warning must name script: {w}");
+    }
+
+    #[test]
+    fn resolve_render_params_no_candidates_resolve_to_none_without_failing() {
+        let mut warning = None;
+        let params = resolve_render_params(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[(0, 0, 0), (255, 255, 255)],
+            &[],
+            None,
+            &default_tuning(),
+            &mut warning,
+        );
+        assert!(params.measured_colors.is_none());
+        assert!(warning.is_none());
+        // A render must still produce a palette even with no measured colors.
+        assert_eq!(params.palette, vec![(0, 0, 0), (255, 255, 255)]);
     }
 }

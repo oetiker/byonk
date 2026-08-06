@@ -611,6 +611,42 @@ mod lua_unit_tests {
     }
 
     #[test]
+    fn test_script_colors_actual_length_mismatch_appears_in_log_and_falls_back() {
+        // The script returns a 4-entry palette but only 2 measured colours.
+        // The runtime itself does not judge lengths — it just carries the
+        // value through unchanged; Task 4's `resolve_render_params` is what
+        // turns the mismatch into a fallback + warning (see
+        // `services::screen_store::tests::
+        // render_script_colors_actual_length_mismatch_falls_back_to_panel_and_logs_warning`
+        // for that behavioural half, asserted through `ScreenStore::render`
+        // where the warning-to-script-log wiring is directly observable).
+        let script = r##"
+            return {
+                data = {},
+                colors        = { "#000000", "#555555", "#AAAAAA", "#FFFFFF" },
+                colors_actual = { "#0A0A0A", "#E8E6E0" },
+                refresh_rate  = 60
+            }
+        "##;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_mismatch.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_mismatch.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("Script must still run");
+
+        // The runtime itself does not judge lengths — it just carries the value.
+        assert_eq!(result.colors_actual.as_ref().unwrap().len(), 2);
+        assert_eq!(result.colors.as_ref().unwrap().len(), 4);
+    }
+
+    #[test]
     fn test_qr_svg_anchors() {
         let anchors = [
             "top-left",

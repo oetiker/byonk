@@ -233,21 +233,31 @@ fn run_render_command(
         vec![(0, 0, 0), (85, 85, 85), (170, 170, 170), (255, 255, 255)]
     };
 
-    // Measured panel colours, resolved before the device context so the script
-    // can read them as `device.colors_actual`. `registration_code` is borrowed
-    // here and moved into DeviceContext below.
-    let cli_device_config = config.get_device_config(mac).or_else(|| {
+    // Device config -> panel -> colors/dither/measured, resolved once here
+    // (before the device context and reused after the script runs) so this
+    // chain can't drift between what the script sees as `device.colors_actual`
+    // and what the final render actually dithers against — see Task 1
+    // review, which found `main.rs` recomputing this chain twice, ~80 lines
+    // apart. `registration_code` is borrowed here and moved into
+    // DeviceContext below.
+    let device_config = config.get_device_config(mac).or_else(|| {
         registration_code
             .as_deref()
             .and_then(|code| config.get_device_config_for_code(code))
     });
-    let cli_panel = cli_device_config
-        .and_then(|dc| dc.panel.clone())
-        .and_then(|name| config.get_panel(&name).cloned());
-    let cli_measured = cli_panel
-        .as_ref()
+    let dc_colors = device_config.and_then(|dc| dc.colors.clone());
+    let dc_dither = device_config.and_then(|dc| dc.dither.clone());
+    let dc_panel = device_config.and_then(|dc| dc.panel.clone());
+    let panel = dc_panel.as_deref().and_then(|name| config.get_panel(name));
+    let panel_colors = panel.map(|p| p.colors.clone());
+    let measured: Option<Vec<(u8, u8, u8)>> = panel
         .and_then(|p| p.colors_actual.as_deref())
         .map(byonk::api::display::parse_colors_header);
+    // Pre-script chain for the final measured-colour resolution after the
+    // script runs — the CLI has no dev-override or header layer (see
+    // `resolve_render_params`'s doc comment).
+    let pre_script_measured_candidates: Vec<byonk::api::display::MeasuredCandidate> =
+        vec![(byonk::api::display::SRC_PANEL_ACTUAL, measured.clone())];
 
     // Create device context with all provided fields
     let device_context = DeviceContext {
@@ -260,7 +270,7 @@ fn run_render_command(
         height: Some(display_spec.height),
         registration_code,
         colors: Some(byonk::api::display::colors_to_hex_strings(&cli_palette)),
-        colors_actual: cli_measured
+        colors_actual: measured
             .as_deref()
             .map(byonk::api::display::colors_to_hex_strings),
         ..Default::default()
@@ -323,22 +333,9 @@ fn run_render_command(
             .run_script_for_device(mac, Some(device_context.clone()))
             .map_err(|e| anyhow::anyhow!("Script error: {e}"))?;
 
-        // Resolve device config for palette/dither/panel (single lookup, same as display.rs)
-        let device_config = config.get_device_config(mac).or_else(|| {
-            device_context
-                .registration_code
-                .as_deref()
-                .and_then(|code| config.get_device_config_for_code(code))
-        });
-        let dc_colors = device_config.and_then(|dc| dc.colors.clone());
-        let dc_dither = device_config.and_then(|dc| dc.dither.clone());
-        let dc_panel = device_config.and_then(|dc| dc.panel.clone());
-        let panel = dc_panel.as_deref().and_then(|name| config.get_panel(name));
-        let panel_colors = panel.map(|p| p.colors.clone());
-        let measured = panel
-            .and_then(|p| p.colors_actual.as_deref())
-            .map(byonk::api::display::parse_colors_header);
-
+        // device_config/panel/dc_colors/dc_dither/panel_colors/measured were
+        // already resolved once above (before the device context) and are
+        // reused here rather than looked up a second time.
         let dc_tuning = byonk::models::DitherTuningValues {
             error_clamp: device_config.and_then(|dc| dc.error_clamp),
             noise_scale: device_config.and_then(|dc| dc.noise_scale),
@@ -366,18 +363,24 @@ fn run_render_command(
         };
         let tuning = byonk::api::display::resolve_tuning(&script_tuning, &dc_tuning, &panel_tuning);
 
+        let mut measured_warning: Option<String> = None;
         let render_params = byonk::api::display::resolve_render_params(
             script_result.script_colors.as_deref(),
+            script_result.script_colors_actual.as_deref(),
             script_result.script_dither.as_deref(),
             script_result.script_preserve_exact,
             dc_colors.as_deref(),
             dc_dither.as_deref(),
             panel_colors.as_deref(),
             &cli_palette,
-            measured,
+            &pre_script_measured_candidates,
             None,
             &tuning,
+            &mut measured_warning,
         );
+        if let Some(w) = &measured_warning {
+            tracing::warn!(mac = %mac, "{w}");
+        }
 
         let svg = content_pipeline
             .render_svg_from_script(&script_result, Some(&device_context))

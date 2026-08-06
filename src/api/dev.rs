@@ -467,14 +467,25 @@ pub async fn handle_render(
     let pre_script_tuning = pre_dc_tuning.or(&pre_panel_tuning);
 
     // Resolve measured colors: query param (from dev UI color tuning) > panel.colors_actual
-    let measured_colors: Option<Vec<(u8, u8, u8)>> = if let Some(ref ca) = query.colors_actual {
-        Some(crate::api::display::parse_colors_header(ca))
-    } else {
-        panel
-            .as_ref()
-            .and_then(|p| p.colors_actual.as_deref())
-            .map(crate::api::display::parse_colors_header)
-    };
+    let query_actual_parsed: Option<Vec<(u8, u8, u8)>> = query
+        .colors_actual
+        .as_deref()
+        .map(crate::api::display::parse_colors_header);
+    let panel_actual_parsed: Option<Vec<(u8, u8, u8)>> = panel
+        .as_ref()
+        .and_then(|p| p.colors_actual.as_deref())
+        .map(crate::api::display::parse_colors_header);
+    let measured_colors: Option<Vec<(u8, u8, u8)>> = query_actual_parsed
+        .clone()
+        .or_else(|| panel_actual_parsed.clone());
+    // Pre-script chain, in precedence order, for the final measured-colour
+    // resolution after the script runs (see `resolve_render_params`'s doc
+    // comment) — the dev UI's `colors_actual` query param stands in for a
+    // "dev override" layer.
+    let pre_script_measured_candidates: Vec<crate::api::display::MeasuredCandidate> = vec![
+        (crate::api::display::SRC_DEV_OVERRIDE, query_actual_parsed),
+        (crate::api::display::SRC_PANEL_ACTUAL, panel_actual_parsed),
+    ];
 
     // Create device context
     let device_ctx = DeviceContext {
@@ -525,6 +536,7 @@ pub async fn handle_render(
             (
                 String,
                 Option<Vec<String>>,
+                Option<Vec<String>>,
                 Option<String>,
                 Option<bool>,
                 Option<f32>,
@@ -536,6 +548,7 @@ pub async fn handle_render(
         >((
             svg,
             script_result.script_colors,
+            script_result.script_colors_actual,
             script_result.script_dither,
             script_result.script_preserve_exact,
             script_result.script_error_clamp,
@@ -549,6 +562,7 @@ pub async fn handle_render(
     let (
         svg,
         script_colors,
+        script_colors_actual,
         script_dither,
         script_preserve_exact,
         script_error_clamp,
@@ -685,24 +699,31 @@ pub async fn handle_render(
         &panel_tuning,
     );
 
+    let mut measured_warning: Option<String> = None;
     let render_params = crate::api::display::resolve_render_params(
         script_colors.as_deref(),
+        script_colors_actual.as_deref(),
         effective_script_dither,
         script_preserve_exact,
         device_config_colors.as_deref(),
         effective_device_dither,
         panel_colors.as_deref(),
         &query_palette,
-        measured_colors.clone(),
+        &pre_script_measured_candidates,
         query.preserve_exact,
         &tuning,
+        &mut measured_warning,
     );
+    if let Some(w) = &measured_warning {
+        tracing::warn!(screen = ?query.screen, mac = ?query.mac, "{w}");
+    }
 
     let (tuning, has_tuning) = crate::api::display::resolve_dither_tuning(&render_params);
 
     let final_palette = render_params.palette;
     let final_dither = render_params.dither;
     let preserve_exact = render_params.preserve_exact;
+    let measured_colors = render_params.measured_colors;
 
     tracing::debug!(
         resolved_palette = ?crate::api::display::colors_to_hex_strings(&final_palette),

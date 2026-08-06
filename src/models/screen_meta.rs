@@ -3,6 +3,10 @@
 
 use serde::Deserialize;
 
+// The schema derives resolve `schemars::` — use rmcp's re-export so there is
+// exactly one schemars version in the tree.
+use rmcp::schemars;
+
 use crate::models::param_schema::{parse_schema_from_value, ParamSchema};
 
 #[derive(Debug, Clone)]
@@ -14,15 +18,31 @@ pub struct ScreenMeta {
     pub params: ParamSchema,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 struct RawMeta {
+    /// Human-readable screen title.
     title: String,
+    /// One-line description of what the screen shows.
     description: String,
+    /// Engine compatibility requirement: a bare `major.minor` (e.g. `"0.17"`)
+    /// is read as a caret range (`^0.17`, i.e. `>=0.17.0, <0.18.0`) — not a
+    /// minimum. A full semver range expression (e.g. `">=0.14, <0.17"`) is
+    /// also accepted.
     byonk: String,
+    /// Default refresh interval in seconds.
     #[serde(default)]
     refresh: Option<u32>,
+    /// Parameter declarations, keyed by parameter name.
     #[serde(default)]
+    #[schemars(with = "std::collections::HashMap<String, crate::models::param_schema::RawField>")]
     params: serde_yaml::Value,
+}
+
+/// The JSON Schema for `meta.yaml`, generated from the very type that parses
+/// it — so the contract byonk publishes to authors cannot drift away from
+/// what byonk actually accepts.
+pub fn meta_json_schema() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(RawMeta)).expect("meta.yaml schema must serialize")
 }
 
 impl ScreenMeta {

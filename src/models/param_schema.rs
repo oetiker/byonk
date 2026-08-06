@@ -14,7 +14,11 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+// The schema derives resolve `schemars::` — use rmcp's re-export so there is
+// exactly one schemars version in the tree.
+use rmcp::schemars;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ParamType {
     #[default]
@@ -27,7 +31,7 @@ pub enum ParamType {
     Url,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct EnumOption {
     pub value: String,
     pub label: String,
@@ -74,8 +78,11 @@ pub struct ParamSchema {
 }
 
 /// Raw descriptor as written in YAML (without the `name`, which is the map key).
-#[derive(Deserialize)]
-struct RawField {
+///
+/// `pub(crate)` (rather than private) so `screen_meta::meta_json_schema` can
+/// reference it via `#[schemars(with = "...")]` for the `params` map.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct RawField {
     #[serde(rename = "type")]
     param_type: ParamType,
     #[serde(default)]
@@ -94,16 +101,28 @@ struct RawField {
     step: Option<f64>,
     #[serde(default)]
     unit: Option<String>,
+    /// Rendering hint for how this field should be presented in a form UI
+    /// (e.g. `"slider"`, `"textarea"`); not validated, purely advisory.
     #[serde(default)]
     mode: Option<String>,
+    /// Enum choices: either a list of strings, or a list of
+    /// `{value, label}` maps.
     #[serde(default)]
+    #[schemars(with = "Option<Vec<EnumOption>>")]
     options: Option<serde_yaml::Value>,
+    /// If true, the value should be masked in UIs and omitted from logs
+    /// (e.g. API keys).
     #[serde(default)]
     sensitive: bool,
+    /// If true, the value is free-form text that may span multiple lines.
     #[serde(default)]
     multiline: bool,
+    /// If true, the field is not shown in the default parameter form (still
+    /// settable, just not surfaced).
     #[serde(default)]
     hidden: bool,
+    /// If true, the field is grouped under an "advanced" section in the
+    /// default parameter form rather than shown up front.
     #[serde(default)]
     advanced: bool,
 }

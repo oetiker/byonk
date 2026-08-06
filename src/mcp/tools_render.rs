@@ -22,8 +22,10 @@ pub struct RenderArgs {
     /// (800x480, 4-grey).
     #[serde(default)]
     pub model: Option<String>,
+    /// Override the device model's default render width, in pixels.
     #[serde(default)]
     pub width: Option<u32>,
+    /// Override the device model's default render height, in pixels.
     #[serde(default)]
     pub height: Option<u32>,
     /// Panel profile name from the `panels:` config section.
@@ -32,7 +34,13 @@ pub struct RenderArgs {
     /// Dither algorithm, e.g. `floyd-steinberg`, `atkinson`.
     #[serde(default)]
     pub dither: Option<String>,
-    /// Also return the pre-dither, full-colour PNG for comparison.
+    /// Also return the pre-dither, full-colour PNG for comparison. When both
+    /// images are present, the dithered PNG is always the first image
+    /// content block and the raw one the second — order is the only signal;
+    /// there is no field naming which is which. Only produced on a
+    /// *successful* render: on failure neither image is returned, so a
+    /// failed render's content is diagnostics-only, with no image block at
+    /// all (see render_screen's description).
     #[serde(default)]
     pub include_raw: bool,
     /// Unix timestamp to render at, for testing time-dependent screens.
@@ -84,7 +92,11 @@ impl ByonkMcp {
         description = "Render a screen and return the dithered PNG plus diagnostics: the \
                           script's captured log output, the data table it returned, the \
                           refresh rate, and any error with its line number. Use this after \
-                          every edit — it is the fastest way to see what a change did."
+                          every edit — it is the fastest way to see what a change did. With \
+                          include_raw, a second (pre-dither, full-colour) image block follows \
+                          the dithered one — order is the only signal distinguishing them. A \
+                          failed render includes no image block at all, dithered or raw — read \
+                          the diagnostics' error field instead."
     )]
     pub async fn render_screen(
         &self,

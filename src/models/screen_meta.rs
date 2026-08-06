@@ -19,6 +19,7 @@ pub struct ScreenMeta {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[schemars(title = "meta.yaml")]
 struct RawMeta {
     /// Human-readable screen title.
     title: String,

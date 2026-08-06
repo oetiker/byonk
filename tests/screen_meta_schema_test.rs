@@ -21,6 +21,15 @@ fn test_schema_requires_exactly_what_the_parser_requires() {
     assert!(!required.contains(&"params"), "params is optional");
 }
 
+/// Cleanup 9: the generated schema's top-level `title` defaulted to the
+/// Rust-internal type name `RawMeta`, which means nothing to the LLM authors
+/// this document is published to (`byonk://schema/meta.yaml`).
+#[test]
+fn test_schema_title_is_meta_yaml_not_the_rust_type_name() {
+    let schema = meta_json_schema();
+    assert_eq!(schema["title"], "meta.yaml");
+}
+
 #[test]
 fn test_schema_documents_every_optional_top_level_field() {
     let schema = meta_json_schema();

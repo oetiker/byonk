@@ -994,6 +994,9 @@ impl ScreenStore {
             width: Some(width),
             height: Some(height),
             colors: Some(crate::api::display::colors_to_hex_strings(&ctx_palette)),
+            colors_actual: measured_colors
+                .as_deref()
+                .map(crate::api::display::colors_to_hex_strings),
             dither_algorithm: Some(pre_script_algo.to_string()),
             dither_error_clamp: pre_panel_tuning.error_clamp,
             dither_noise_scale: pre_panel_tuning.noise_scale,

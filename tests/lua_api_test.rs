@@ -445,6 +445,91 @@ mod lua_unit_tests {
     }
 
     #[test]
+    fn test_device_colors_actual_exposed_when_measured() {
+        let script = r#"
+            return {
+                data = {
+                    actual_1 = device.colors_actual[1],
+                    actual_3 = device.colors_actual[3],
+                    count = #device.colors_actual,
+                    official_count = #device.colors,
+                },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_ca.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let ctx = DeviceContext {
+            mac: "TE:ST:00:00:00:00".to_string(),
+            width: Some(800),
+            height: Some(480),
+            colors: Some(vec![
+                "#000000".to_string(),
+                "#FFFFFF".to_string(),
+                "#FF0000".to_string(),
+            ]),
+            colors_actual: Some(vec![
+                "#0A0A0A".to_string(),
+                "#E8E6E0".to_string(),
+                "#A83A30".to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_ca.lua"),
+                &HashMap::new(),
+                Some(&ctx),
+                None,
+            )
+            .expect("Script should run");
+
+        assert_eq!(result.data["actual_1"].as_str().unwrap(), "#0A0A0A");
+        assert_eq!(result.data["actual_3"].as_str().unwrap(), "#A83A30");
+        assert_eq!(result.data["count"].as_i64().unwrap(), 3);
+        // Index-parallel with device.colors.
+        assert_eq!(result.data["official_count"].as_i64().unwrap(), 3);
+    }
+
+    #[test]
+    fn test_device_colors_actual_is_nil_when_uncalibrated() {
+        // Deliberately NOT mirrored from device.colors: a script must be able to
+        // tell "this panel is uncalibrated" from "this panel measures to spec".
+        let script = r#"
+            return {
+                data = { is_nil = device.colors_actual == nil },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_ca_nil.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let ctx = DeviceContext {
+            mac: "TE:ST:00:00:00:00".to_string(),
+            width: Some(800),
+            height: Some(480),
+            colors: Some(vec!["#000000".to_string(), "#FFFFFF".to_string()]),
+            colors_actual: None,
+            ..Default::default()
+        };
+
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_ca_nil.lua"),
+                &HashMap::new(),
+                Some(&ctx),
+                None,
+            )
+            .expect("Script should run");
+
+        assert!(result.data["is_nil"].as_bool().unwrap());
+    }
+
+    #[test]
     fn test_qr_svg_anchors() {
         let anchors = [
             "top-left",

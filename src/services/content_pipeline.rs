@@ -82,6 +82,11 @@ pub struct DeviceContext {
     pub board: Option<String>,
     /// Available display colors as hex RGB strings (e.g. ["#000000", "#FFFFFF", "#FF0000"])
     pub colors: Option<Vec<String>>,
+    /// Measured colors the panel really shows, index-parallel to `colors`.
+    /// `None` when nothing in the measured chain resolved — deliberately not
+    /// mirrored from `colors`, so a script can distinguish an uncalibrated
+    /// panel from one that measures exactly to spec.
+    pub colors_actual: Option<Vec<String>>,
     /// Pre-script resolved dither algorithm name
     pub dither_algorithm: Option<String>,
     /// Pre-script resolved error clamp

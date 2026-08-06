@@ -412,6 +412,15 @@ impl LuaRuntime {
                 }
                 device_table.set("colors", colors_table)?;
             }
+            // Measured panel colours. Absent (nil in Lua) rather than mirrored
+            // from `colors` when uncalibrated — see DeviceContext::colors_actual.
+            if let Some(ref actual) = ctx.colors_actual {
+                let actual_table = lua.create_table()?;
+                for (i, color) in actual.iter().enumerate() {
+                    actual_table.set(i + 1, color.as_str())?;
+                }
+                device_table.set("colors_actual", actual_table)?;
+            }
             // Add dither sub-table with pre-script resolved values
             let dither_table = lua.create_table()?;
             if let Some(ref algo) = ctx.dither_algorithm {

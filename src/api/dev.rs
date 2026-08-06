@@ -466,6 +466,16 @@ pub async fn handle_render(
     };
     let pre_script_tuning = pre_dc_tuning.or(&pre_panel_tuning);
 
+    // Resolve measured colors: query param (from dev UI color tuning) > panel.colors_actual
+    let measured_colors: Option<Vec<(u8, u8, u8)>> = if let Some(ref ca) = query.colors_actual {
+        Some(crate::api::display::parse_colors_header(ca))
+    } else {
+        panel
+            .as_ref()
+            .and_then(|p| p.colors_actual.as_deref())
+            .map(crate::api::display::parse_colors_header)
+    };
+
     // Create device context
     let device_ctx = DeviceContext {
         mac: query
@@ -480,6 +490,9 @@ pub async fn handle_render(
         height: Some(height),
         registration_code: None,
         colors: Some(crate::api::display::colors_to_hex_strings(&default_palette)),
+        colors_actual: measured_colors
+            .as_deref()
+            .map(crate::api::display::colors_to_hex_strings),
         dither_algorithm: Some(pre_script_algo.to_string()),
         dither_error_clamp: pre_script_tuning.error_clamp,
         dither_noise_scale: pre_script_tuning.noise_scale,
@@ -564,16 +577,6 @@ pub async fn handle_render(
             )
                 .into_response();
         }
-    };
-
-    // Resolve measured colors: query param (from dev UI color tuning) > panel.colors_actual
-    let measured_colors: Option<Vec<(u8, u8, u8)>> = if let Some(ref ca) = query.colors_actual {
-        Some(crate::api::display::parse_colors_header(ca))
-    } else {
-        panel
-            .as_ref()
-            .and_then(|p| p.colors_actual.as_deref())
-            .map(crate::api::display::parse_colors_header)
     };
 
     tracing::debug!(

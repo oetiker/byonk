@@ -233,6 +233,22 @@ fn run_render_command(
         vec![(0, 0, 0), (85, 85, 85), (170, 170, 170), (255, 255, 255)]
     };
 
+    // Measured panel colours, resolved before the device context so the script
+    // can read them as `device.colors_actual`. `registration_code` is borrowed
+    // here and moved into DeviceContext below.
+    let cli_device_config = config.get_device_config(mac).or_else(|| {
+        registration_code
+            .as_deref()
+            .and_then(|code| config.get_device_config_for_code(code))
+    });
+    let cli_panel = cli_device_config
+        .and_then(|dc| dc.panel.clone())
+        .and_then(|name| config.get_panel(&name).cloned());
+    let cli_measured = cli_panel
+        .as_ref()
+        .and_then(|p| p.colors_actual.as_deref())
+        .map(byonk::api::display::parse_colors_header);
+
     // Create device context with all provided fields
     let device_context = DeviceContext {
         mac: mac.to_string(),
@@ -244,6 +260,9 @@ fn run_render_command(
         height: Some(display_spec.height),
         registration_code,
         colors: Some(byonk::api::display::colors_to_hex_strings(&cli_palette)),
+        colors_actual: cli_measured
+            .as_deref()
+            .map(byonk::api::display::colors_to_hex_strings),
         ..Default::default()
     };
 

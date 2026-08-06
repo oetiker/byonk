@@ -671,6 +671,7 @@ pub async fn handle_display<R: DeviceRegistry>(
         registration_code: Some(registration_code),
         board: board_header.clone(),
         colors: Some(ctx_color_hex),
+        colors_actual: measured_colors.as_deref().map(colors_to_hex_strings),
         dither_algorithm: Some(pre_script_algo.to_string()),
         dither_error_clamp: pre_script_tuning.error_clamp,
         dither_noise_scale: pre_script_tuning.noise_scale,

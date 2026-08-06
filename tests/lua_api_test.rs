@@ -3121,4 +3121,283 @@ mod lua_image_process_tests {
             blacks_white_px[0]
         );
     }
+
+    // ------------------------------------------------------------------
+    // Fix round 2: `blacks`/`whites`/`curve`/`sharpen`/`grayscale` each got
+    // a dedicated test above, but ten more `Params` fields
+    // (temperature, tint, auto_levels, highlights, shadows, contrast,
+    // clarity, vibrance, saturation, invert) were still covered only
+    // incidentally, by the blanket "every field forced to None" mutation —
+    // which those five dedicated tests happen to kill for unrelated
+    // reasons. A single one of these ten dropped from `parse_image_opts`
+    // would slip through undetected. One "differs from baseline" test per
+    // field closes that, same shape as `..._grayscale_changes_the_output`.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_image_process_temperature_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local warmed = image_process(png, { temperature = 100 })
+            return { data = { differs = baseline ~= warmed }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_temperature.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_temperature.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "temperature = 100 must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_tint_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local tinted = image_process(png, { tint = 100 })
+            return { data = { differs = baseline ~= tinted }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_tint.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_tint.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "tint = 100 must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_auto_levels_changes_the_output() {
+        // `tiny.png`'s content is deliberately "muted, low-saturation" (see
+        // its generator above) — its measured min/max sits well inside
+        // 0..1, so stretching it to the default output_endpoints of (0, 1)
+        // under auto_levels has an observable effect.
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local leveled = image_process(png, { auto_levels = true })
+            return { data = { differs = baseline ~= leveled }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_auto_levels.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_auto_levels.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "auto_levels = true must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_highlights_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local lifted = image_process(png, { highlights = 100 })
+            return { data = { differs = baseline ~= lifted }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_highlights.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_highlights.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "highlights = 100 must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_shadows_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local lifted = image_process(png, { shadows = 100 })
+            return { data = { differs = baseline ~= lifted }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_shadows.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_shadows.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "shadows = 100 must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_contrast_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local punchy = image_process(png, { contrast = 100 })
+            return { data = { differs = baseline ~= punchy }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_contrast.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_contrast.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "contrast = 100 must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_clarity_changes_the_output() {
+        // Clarity is a local-contrast (presence) effect: it needs pixel
+        // variation to act on, which `tiny.png`'s `(x + y) % 3` banding
+        // provides across its 40x20 extent.
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local clarified = image_process(png, { clarity = 100 })
+            return { data = { differs = baseline ~= clarified }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_clarity.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_clarity.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "clarity = 100 must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_vibrance_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local vivid = image_process(png, { vibrance = 100 })
+            return { data = { differs = baseline ~= vivid }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_vibrance.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_vibrance.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "vibrance = 100 must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_saturation_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local desat = image_process(png, { saturation = -100 })
+            return { data = { differs = baseline ~= desat }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_saturation.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_saturation.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "saturation = -100 must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_invert_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local inverted = image_process(png, { invert = true })
+            return { data = { differs = baseline ~= inverted }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_invert.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_invert.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "invert = true must change the output"
+        );
+    }
 }

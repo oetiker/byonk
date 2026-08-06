@@ -1,7 +1,9 @@
 target/
 *.swp
 .DS_Store
-.claude
+.claude/*
+# ...except shared skills, which are part of the project's agent setup
+!.claude/skills/
 config-google.yaml
 
 # Local-only working files (kept on disk, never committed)

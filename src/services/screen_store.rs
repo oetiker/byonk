@@ -2414,6 +2414,20 @@ mod tests {
             },
         );
         assert!(res.error.is_none(), "{:?}", res.error);
+        // `measured_source` must report the POST-script winner, never the
+        // caller's pre-script winner. This test is the only place the two
+        // differ by construction — the panel supplies a calibration AND the
+        // script overrides it — so it is the only place that can catch
+        // `measured_source` being populated from
+        // `pre_script_measured_candidates` instead of
+        // `render_params.measured_source`. That substitution passes every
+        // other test in the tree, including all the PLTE assertions below,
+        // because it changes only the reported label and not the render.
+        assert_eq!(
+            res.measured_source,
+            crate::api::display::SRC_SCRIPT,
+            "measured_source must name the script, the layer that actually won"
+        );
         // oxipng's recompression pass is free to reorder PLTE entries (e.g.
         // by usage frequency) for better compression, so compare as a set
         // rather than an ordered sequence — the property under test is
@@ -2488,6 +2502,17 @@ mod tests {
             "a calibration mismatch must not fail the render: {:?}",
             res.error
         );
+        // The mirror of the sibling test's assertion: here the script layer
+        // is supplied but discarded by the length rule, so the post-script
+        // winner is the panel. Reporting `SRC_SCRIPT` here (the first
+        // *supplied* candidate) would be exactly the lie the field exists to
+        // prevent — the render did not dither against the script's set.
+        assert_eq!(
+            res.measured_source,
+            crate::api::display::SRC_PANEL_ACTUAL,
+            "measured_source must name the panel, not the script whose \
+             mismatched set was discarded"
+        );
         // See the sibling test above for why this compares as a set.
         let mut plte = decode_plte(&res.png);
         plte.sort();
@@ -2515,5 +2540,78 @@ mod tests {
             warning_line.contains("has 2 usable"),
             "warning must name the mismatched entry count: {warning_line}"
         );
+    }
+
+    #[test]
+    fn render_opts_colors_actual_is_visible_to_the_script_as_device_colors_actual() {
+        // `RenderOpts::colors_actual` occupies the dev-override slot, and
+        // that slot feeds `DeviceContext.colors_actual` — what the script
+        // reads as `device.colors_actual` BEFORE it runs — exactly as the
+        // dev-UI override does in `api::dev`. Without this, an agent
+        // previewing a calibration would have it steer the ditherer while
+        // the script simultaneously saw a different set (or none), which is
+        // the drift the shared candidate array exists to prevent.
+        //
+        // The panel here also carries a calibration, so this pins
+        // PRECEDENCE into the context and not merely "the value arrives":
+        // deriving the context from the panel instead of from the candidate
+        // array yields the #D... set and fails.
+        let mut panels = HashMap::new();
+        panels.insert(
+            "test-panel".to_string(),
+            PanelConfig {
+                name: "Test Panel".to_string(),
+                match_pattern: None,
+                width: None,
+                height: None,
+                colors: "#000000,#404040,#808080,#FFFFFF".to_string(),
+                colors_actual: Some("#D10101,#D20202,#D30303,#D40404".to_string()),
+                dither: None,
+            },
+        );
+        let config = AppConfig {
+            panels,
+            ..AppConfig::default()
+        };
+        let (store, _repo_root) = test_store_with_local_and_config(config);
+        store
+            .create_screen("local", "ctxactual", StarterKind::Minimal)
+            .unwrap();
+        // Echo what the script saw back out through `data`, which `render`
+        // returns verbatim — the only channel that can observe the
+        // pre-script context from outside.
+        store
+            .write_file(
+                "local/ctxactual",
+                "script.lua",
+                br##"return {
+                    data = {
+                        message = "x",
+                        seen = table.concat(device.colors_actual or {}, ","),
+                    },
+                    refresh_rate = 60
+                }"##,
+                None,
+            )
+            .unwrap();
+        let res = store.render(
+            "local/ctxactual",
+            RenderOpts {
+                panel: Some("test-panel".to_string()),
+                colors_actual: Some("#E10101,#E20202,#E30303,#E40404".to_string()),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert_eq!(
+            res.data["seen"],
+            serde_json::json!("#E10101,#E20202,#E30303,#E40404"),
+            "the render option, not the panel, must reach the script as \
+             device.colors_actual: {:?}",
+            res.data
+        );
+        // And it must also be the layer that won the render itself, so the
+        // context and the ditherer cannot disagree.
+        assert_eq!(res.measured_source, crate::api::display::SRC_RENDER_OPTS);
     }
 }

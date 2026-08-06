@@ -1200,3 +1200,70 @@ panels:
         "the winning layer must actually change the render, not just the label"
     );
 }
+
+#[tokio::test]
+async fn test_render_screen_wrong_length_colors_actual_falls_through_to_the_panel() {
+    // The reason the authoring path PREPENDS a `render_opts` candidate to
+    // the chain instead of collapsing the chain to a single winner before
+    // resolving: the length rule lives inside `resolve_measured_colors`'s
+    // loop, so a wrong-length render option is DISCARDED and the walk
+    // continues to `panel.colors_actual` — it does not kill the calibration
+    // outright, and it does not fail the render.
+    //
+    // No other test in the tree has this discriminating power: a future
+    // regression that collapsed the chain to a winner first would leave
+    // every other measured-colour test passing and fail only here.
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = r##"
+admin:
+  token: secret
+panels:
+  test_panel:
+    name: "Test Panel"
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#0A0A0A,#3A3A3A,#9A9A9A,#E8E6E0"
+"##;
+    let (app, _config_path) = TestApp::new_with_config_yaml(yaml, dir.path());
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    // Two entries against a four-entry palette: supplied, but unusable.
+    let result = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({
+                "screen_ref": COLOR_SCREEN,
+                "panel": "test_panel",
+                "colors_actual": "#C10101,#C20202",
+                "timestamp": 1_750_000_000,
+            }),
+        )
+        .await;
+
+    // A calibration mistake must never deny the author a render.
+    assert_ne!(result["isError"], serde_json::json!(true), "{result}");
+    assert!(
+        first_image_b64(&result).starts_with("iVBORw0KGgo"),
+        "a wrong-length override must still produce a PNG"
+    );
+    // Fell THROUGH to the panel rather than resolving to nothing.
+    assert_eq!(
+        structured(&result)["measured_source"],
+        serde_json::json!("panel.colors_actual"),
+        "{result}"
+    );
+    // ...and the author is told why their override was ignored. The label
+    // and the warning answer different questions, so both must be present.
+    let log = structured(&result)["log"]
+        .as_array()
+        .expect("log array")
+        .iter()
+        .filter_map(|l| l.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        log.contains("render_opts") && log.contains("has 2 usable"),
+        "the discarded render option must be explained in the log, naming \
+         the layer and the count: {log}"
+    );
+}

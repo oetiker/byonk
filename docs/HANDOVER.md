@@ -105,12 +105,8 @@ All logged with full context in the ledger. The ones with real teeth:
 - **Beware tests that derive a path via `..` from a temp dir.** Task 8's `make check` failure was `write_through_examples_handle_with_real_derived_dot_dot_root` resolving `<SCREENS_DIR>/../examples` to one shared `$TMPDIR/examples`; `seed_examples` only seeds a missing-or-empty dir, so leftovers from an earlier run starved every later run. Nest the temp dir under a private parent.
 - **After Plan 2:** connect a real MCP client against a local `byonk serve` and drive list → copy → edit → render → assign (a green suite does not prove a real client negotiates the handshake), then validate on the HA VM per memories `ha-vm-from-source-addon-build` and `ha-vm-addon-manifest-sync-gap`.
 
-## Uncommitted working-tree state (unrelated to Plan 2)
+## Working tree
 
-Agent-setup housekeeping, deliberately not committed and left alone across all of Plan 2:
+**Clean.** The agent-setup housekeeping that sat uncommitted across all of Plan 2 landed in `f7ee6a0`: `.gitignore` now un-ignores `.claude/skills/` (everything else under `.claude/` stays ignored), the HA VM workflow moved out of `CLAUDE.md` into the `ha-vm-testing` skill, and three CLAUDE.md sections that restated the repo were dropped.
 
-- `.gitignore` — un-ignores `.claude/skills/`
-- `CLAUDE.md` — trimmed; HA VM detail moved into the `ha-vm-testing` skill
-- `.claude/skills/ha-vm-testing/SKILL.md` — new, untracked
-
-Land as one small commit whenever convenient. Every task dispatch has warned implementers not to stage these; keep doing that until they land.
+Task dispatches no longer need the "do not stage `.gitignore`/`CLAUDE.md`/`.claude/`" warning — but keep telling implementers to stage explicit paths and never `git add -A`, since the SDD workspace under `.superpowers/` is git-ignored scratch that must stay out of commits.

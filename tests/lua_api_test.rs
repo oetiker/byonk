@@ -2644,10 +2644,12 @@ mod lua_image_process_tests {
     #[test]
     fn test_image_process_rejects_an_unknown_preset() {
         // A typo'd preset that silently does nothing ships looking like it worked.
+        // Brought up to the standard of its `..._rejects_an_unknown_fit` sibling:
+        // pin which field the error names, not just that pcall failed.
         let script = r#"
             local png = read_asset("tiny.png")
-            local ok = pcall(function() return image_process(png, { preset = "vivid" }) end)
-            return { data = { ok = ok }, refresh_rate = 60 }
+            local ok, err = pcall(function() return image_process(png, { preset = "vivid" }) end)
+            return { data = { ok = ok, err = tostring(err) }, refresh_rate = 60 }
         "#;
 
         let (_temp, loader) = setup_image_env("test_img_preset_bad.lua", script);
@@ -2664,6 +2666,11 @@ mod lua_image_process_tests {
         assert!(
             !result.data["ok"].as_bool().unwrap(),
             "unknown preset must raise"
+        );
+        let err = result.data["err"].as_str().unwrap();
+        assert!(
+            err.contains("preset"),
+            "the error must name the field: {err}"
         );
     }
 
@@ -2891,5 +2898,227 @@ mod lua_image_process_tests {
         // 40x20 source `tiny_png` generates.
         assert_eq!(result.data["w"].as_i64().unwrap(), 40);
         assert_eq!(result.data["h"].as_i64().unwrap(), 20);
+    }
+
+    // ------------------------------------------------------------------
+    // Fix round 1: the tone-parameter half of `parse_image_opts` had zero
+    // coverage — `curve`/`sharpen`/most other tone fields could be deleted
+    // from the parser wholesale and every test above stayed green. These
+    // close that gap.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_image_process_grayscale_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local gray = image_process(png, { grayscale = true })
+            return { data = { differs = baseline ~= gray }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_grayscale.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_grayscale.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "grayscale = true must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_curve_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local curved = image_process(png, { curve = {{0,0},{0.5,0.9},{1,1}} })
+            return { data = { differs = baseline ~= curved }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_curve.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_curve.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "a non-identity curve must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_sharpen_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local sharp = image_process(png, { sharpen = { amount = 100, radius = 2 } })
+            return { data = { differs = baseline ~= sharp }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_sharpen.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_sharpen.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "sharpen must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_rejects_a_malformed_curve_point() {
+        // Pin the message text, not merely that an error occurred — a curve
+        // point missing its `output` value must name that, specifically.
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local ok, err = pcall(function()
+                return image_process(png, { curve = {{0.1}} })
+            end)
+            return { data = { ok = ok, err = tostring(err) }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_curve_bad.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_curve_bad.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run — the pcall catches the error");
+
+        assert!(
+            !result.data["ok"].as_bool().unwrap(),
+            "a curve point missing its output value must raise"
+        );
+        let err = result.data["err"].as_str().unwrap();
+        assert!(
+            err.contains("curve point missing output"),
+            "must be the specific malformed-curve-point message: {err}"
+        );
+    }
+
+    /// A hand-built 2x1 PNG: pure black then pure white, so `blacks`/
+    /// `whites`'s effect on each end of the tone range can be read straight
+    /// off the decoded pixels.
+    fn black_white_png() -> Vec<u8> {
+        let mut img = image::RgbImage::new(2, 1);
+        img.put_pixel(0, 0, image::Rgb([0, 0, 0]));
+        img.put_pixel(1, 0, image::Rgb([255, 255, 255]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        out.into_inner()
+    }
+
+    /// Decode a `data:image/png;base64,...` URI back to an RGB pixel, so a
+    /// test can assert on actual tone-mapped content, not just "it changed".
+    fn decode_data_uri_pixel(uri: &str, x: u32, y: u32) -> image::Rgb<u8> {
+        use base64::Engine as _;
+        let b64 = uri
+            .strip_prefix("data:image/png;base64,")
+            .expect("expected a PNG data URI");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap();
+        let img = image::load_from_memory(&bytes).unwrap();
+        *img.to_rgb8().get_pixel(x, y)
+    }
+
+    #[test]
+    fn test_image_process_blacks_and_whites_are_not_interchangeable() {
+        // `blacks` and `whites` push OPPOSITE ends of the tone range
+        // (blacks lifts the shadow floor, whites pulls the highlight
+        // ceiling down). A parser bug that swaps which `Params` field each
+        // Lua key maps to would still change the output — so a plain
+        // "differs from baseline" assertion can't catch it — but it would
+        // move the WRONG end of the range. A black/white source pins that:
+        // `blacks = -100` alone must lift the black pixel and leave the
+        // white pixel alone; `whites = -100` alone must do the reverse.
+        let script_blacks = r#"
+            local png = read_asset("bw.png")
+            local out = image_process(png, { fit = "none", blacks = -100 })
+            return { data = { out = out }, refresh_rate = 60 }
+        "#;
+        let script_whites = r#"
+            local png = read_asset("bw.png")
+            local out = image_process(png, { fit = "none", whites = -100 })
+            return { data = { out = out }, refresh_rate = 60 }
+        "#;
+
+        let (temp, loader) = setup_test_env(&[
+            ("test_bw_blacks.lua", script_blacks),
+            ("test_bw_whites.lua", script_whites),
+        ]);
+        std::fs::write(temp.path().join("bw.png"), black_white_png()).expect("write bw.png");
+
+        let runtime = LuaRuntime::new(loader);
+        let blacks_result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_bw_blacks.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+        let whites_result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_bw_whites.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        let blacks_out = blacks_result.data["out"].as_str().unwrap();
+        let whites_out = whites_result.data["out"].as_str().unwrap();
+
+        let blacks_black_px = decode_data_uri_pixel(blacks_out, 0, 0);
+        let whites_black_px = decode_data_uri_pixel(whites_out, 0, 0);
+        let blacks_white_px = decode_data_uri_pixel(blacks_out, 1, 0);
+        let whites_white_px = decode_data_uri_pixel(whites_out, 1, 0);
+
+        assert!(
+            blacks_black_px[0] > 20,
+            "blacks = -100 must lift the black pixel toward the shadow floor: got {}",
+            blacks_black_px[0]
+        );
+        assert!(
+            whites_black_px[0] < 5,
+            "whites = -100 alone must NOT move the black pixel: got {}",
+            whites_black_px[0]
+        );
+        assert!(
+            whites_white_px[0] < 235,
+            "whites = -100 must pull the white pixel down from the highlight ceiling: got {}",
+            whites_white_px[0]
+        );
+        assert!(
+            blacks_white_px[0] > 250,
+            "blacks = -100 alone must NOT move the white pixel: got {}",
+            blacks_white_px[0]
+        );
     }
 }

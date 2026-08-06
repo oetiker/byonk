@@ -332,12 +332,16 @@ mod tests {
     fn curve_interpolates_at_a_genuinely_interior_point() {
         // x=0.5 is itself a control point in the other interpolation test,
         // which makes f collapse to exactly 1.0 and hides shape bugs like
-        // `f*f` or swapped y0/y1. Query an x that is not a control point:
-        // on the line (0,0)-(1,1), f*f would give 0.0625 instead of 0.25,
-        // and swapping y0/y1 would give 0.75 instead of 0.25.
+        // `f*f` or swapped y0/y1. Query an x that is not a control point,
+        // and use a non-identity curve: on the line (0,0)-(1,1), an input
+        // of 0.25 would return 0.25 under a wholly no-op `apply_curve` too,
+        // so identity can't distinguish "interpolated correctly" from "did
+        // nothing". (0,0)-(1,0.5) at x=0.25 expects 0.125 — a no-op would
+        // return 0.25 (wrong), f*f would give y=0.5*0.0625=0.03125 (wrong),
+        // and swapped y0/y1 would give 0.5 + (0-0.5)*0.25 = 0.375 (wrong).
         let mut p = vec![0.25f32; 3];
-        apply_curve(&mut p, &[(0.0, 0.0), (1.0, 1.0)]).unwrap();
-        assert_close(p[0], 0.25, "interior fractional interpolation");
+        apply_curve(&mut p, &[(0.0, 0.0), (1.0, 0.5)]).unwrap();
+        assert_close(p[0], 0.125, "interior fractional interpolation");
     }
 
     #[test]

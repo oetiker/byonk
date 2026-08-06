@@ -9,7 +9,11 @@
 //! linear-light round trip here.
 
 /// Three separable box-blur passes, which converges close enough to a
-/// Gaussian for an unsharp mask and costs O(n) per pass with a running sum.
+/// Gaussian for an unsharp mask. Each pass is O(n·radius) — it re-sums the
+/// `2*radius+1` taps per pixel per channel rather than maintaining a
+/// running sum — which is acceptable because this crate's pipeline runs
+/// after `image_process`'s resize step, on an already panel-sized image
+/// (e.g. ~800x480), not on a multi-megapixel source.
 /// Edges are handled by clamping the sample coordinate, which is what keeps
 /// a border from darkening.
 pub fn box_blur(pixels: &[f32], width: usize, height: usize, radius: usize) -> Vec<f32> {
@@ -149,6 +153,30 @@ mod tests {
     }
 
     #[test]
+    fn blur_clamps_at_the_border_rather_than_wrapping() {
+        // The brief specifies clamping the sample coordinate at the border.
+        // `blur_of_a_flat_image_changes_nothing` doesn't pin *which* edge
+        // mode is used, since a flat field is unaffected by clamp, wrap, or
+        // shrink alike. A step edge distinguishes them: the far side of the
+        // image (column 0, opposite a rising edge on the right) keeps its
+        // source value under clamping, because every sample the kernel
+        // reaches at that border is clamped back to the same low-value
+        // column. Wrapping would pull in the image's high values from the
+        // opposite edge instead; shrinking would change the output width.
+        let src = step_edge(16, 4);
+        let out = box_blur(&src, 16, 4, 2);
+        for y in 0..4 {
+            let idx = (y * 16) * 3;
+            assert_close_tol(
+                out[idx],
+                0.2,
+                1e-4,
+                &format!("column 0 must hold the source value under clamping, row {y}"),
+            );
+        }
+    }
+
+    #[test]
     fn blur_preserves_the_mean() {
         let src = checkerboard(16, 16);
         let out = box_blur(&src, 16, 16, 2);
@@ -261,9 +289,36 @@ mod tests {
                 .count()
         };
         let (fs, fc) = (footprint(&sharp), footprint(&clear));
+        // fs > 0 closes a hole a pure footprint comparison leaves open: a
+        // no-op sharpen has footprint 0, and 0 < fc still satisfies the
+        // strict `<` below, so a sharpen that touches nothing (or that
+        // blurs instead of sharpening, which would also narrow its own
+        // footprint) could pass undetected. Requiring fs > 0 pins that
+        // sharpen actually changed something.
+        assert!(fs > 0, "sharpen must change at least one pixel");
         assert!(
             fs < fc,
             "sharpen's footprint ({fs}) must be narrower than clarity's ({fc})"
+        );
+    }
+
+    #[test]
+    fn sharpen_raises_variance_on_pixel_scale_detail() {
+        // Complements the footprint test above, which pins *where* sharpen
+        // acts but not that it acts by enough to matter, nor that it moves
+        // pixel values in the amplifying (not smoothing) direction. A no-op
+        // sharpen leaves variance unchanged (fails the strict `>` bound); a
+        // sharpen that blurred instead of amplified would *lower* variance
+        // (also fails). Checkerboard has maximal pixel-scale structure —
+        // exactly what `apply_sharpen`'s 1px radius targets.
+        let src = checkerboard(32, 32);
+        let mut out = src.clone();
+        apply_sharpen(&mut out, 32, 32, 60.0, 1.0);
+        assert!(
+            variance(&out) > variance(&src) * 1.05,
+            "sharpen must raise pixel-scale variance: {} -> {}",
+            variance(&src),
+            variance(&out)
         );
     }
 

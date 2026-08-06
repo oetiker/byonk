@@ -170,6 +170,70 @@ pub fn resolve_dither_tuning(
     (tuning, has_tuning)
 }
 
+/// Outcome of resolving the measured ("actual") panel colours.
+///
+/// `source` names which layer supplied the value, for the debug log and the
+/// dev UI; `warning` carries a human-readable diagnostic that the caller is
+/// responsible for surfacing — `tracing::warn!` on device paths, the script
+/// log on authoring paths.
+pub struct MeasuredResolution {
+    pub colors: Option<Vec<(u8, u8, u8)>>,
+    pub source: &'static str,
+    pub warning: Option<String>,
+}
+
+/// Resolve the measured colours for a render.
+///
+/// The chain is `script > fallback`, where `fallback` is whatever the caller
+/// already resolved from the pre-script layers (dev override / render opts /
+/// `panel.colors_actual` / `Measured-Colors` header), labelled by
+/// `fallback_source`. A script value wins outright — symmetric with
+/// `script_colors` in [`resolve_render_params`].
+///
+/// A script value whose parsed length does not match `palette_len` is
+/// **discarded, not fatal**: a device fetching its screen must never be
+/// denied content over a calibration mistake. The mismatch is reported via
+/// `warning`, and the fallback is used instead. Note that
+/// [`parse_colors_header`] silently drops unparseable entries, so a malformed
+/// hex string shows up here as a length mismatch.
+pub fn resolve_measured_colors(
+    script_colors_actual: Option<&[String]>,
+    palette_len: usize,
+    fallback: Option<Vec<(u8, u8, u8)>>,
+    fallback_source: &'static str,
+) -> MeasuredResolution {
+    let Some(script) = script_colors_actual else {
+        return MeasuredResolution {
+            colors: fallback,
+            source: fallback_source,
+            warning: None,
+        };
+    };
+
+    let parsed = parse_colors_header(&script.join(","));
+    if parsed.len() == palette_len {
+        return MeasuredResolution {
+            colors: Some(parsed),
+            source: "script",
+            warning: None,
+        };
+    }
+
+    MeasuredResolution {
+        colors: fallback,
+        source: fallback_source,
+        warning: Some(format!(
+            "colors_actual returned by the script has {} usable entries but the \
+             resolved palette has {}; ignoring it and falling back to {}. \
+             (Entries that are not 6-digit hex are dropped, which also shortens \
+             the list.)",
+            parsed.len(),
+            palette_len,
+            fallback_source
+        )),
+    }
+}
+
 /// Resolve all rendering parameters after script execution.
 ///
 /// Palette: script_colors > device_config_colors > panel_colors > fallback
@@ -1022,4 +1086,87 @@ pub struct DisplayJsonResponse {
     /// Special function to execute ('identify', 'sleep', etc.)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub special_function: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn measured_script_value_wins_over_fallback() {
+        let script = vec!["#0A0A0A".to_string(), "#E8E6E0".to_string()];
+        let r = resolve_measured_colors(
+            Some(&script),
+            2,
+            Some(vec![(1, 1, 1), (2, 2, 2)]),
+            "panel.colors_actual",
+        );
+        assert_eq!(
+            r.colors.unwrap(),
+            vec![(0x0A, 0x0A, 0x0A), (0xE8, 0xE6, 0xE0)]
+        );
+        assert_eq!(r.source, "script");
+        assert!(r.warning.is_none());
+    }
+
+    #[test]
+    fn measured_falls_back_when_script_absent() {
+        let r = resolve_measured_colors(
+            None,
+            2,
+            Some(vec![(1, 1, 1), (2, 2, 2)]),
+            "panel.colors_actual",
+        );
+        assert_eq!(r.colors.unwrap(), vec![(1, 1, 1), (2, 2, 2)]);
+        assert_eq!(r.source, "panel.colors_actual");
+        assert!(r.warning.is_none());
+    }
+
+    #[test]
+    fn measured_reports_none_when_nothing_resolves() {
+        let r = resolve_measured_colors(None, 4, None, "none");
+        assert!(r.colors.is_none());
+        assert_eq!(r.source, "none");
+        assert!(r.warning.is_none());
+    }
+
+    #[test]
+    fn measured_length_mismatch_warns_and_falls_back() {
+        let script = vec!["#0A0A0A".to_string(), "#E8E6E0".to_string()];
+        let r = resolve_measured_colors(
+            Some(&script),
+            4, // official palette has 4 entries, script supplied 2
+            Some(vec![(1, 1, 1), (2, 2, 2), (3, 3, 3), (4, 4, 4)]),
+            "panel.colors_actual",
+        );
+        // Fell through to the next source, did NOT blank the calibration.
+        assert_eq!(r.colors.unwrap().len(), 4);
+        assert_eq!(r.source, "panel.colors_actual");
+        let w = r.warning.expect("a mismatch must be reported");
+        assert!(
+            w.contains('2') && w.contains('4'),
+            "warning must name both lengths: {w}"
+        );
+    }
+
+    #[test]
+    fn measured_malformed_hex_is_caught_by_the_length_check() {
+        // parse_colors_header silently drops unparseable entries, so a typo
+        // shortens the list. The length rule is what turns that into a
+        // diagnostic instead of a silent half-calibration.
+        let script = vec!["#0A0A0A".to_string(), "not-a-colour".to_string()];
+        let r = resolve_measured_colors(Some(&script), 2, None, "none");
+        assert!(r.colors.is_none());
+        assert_eq!(r.source, "none");
+        assert!(r.warning.is_some());
+    }
+
+    #[test]
+    fn measured_mismatch_falls_all_the_way_through_to_none() {
+        let script = vec!["#0A0A0A".to_string()];
+        let r = resolve_measured_colors(Some(&script), 3, None, "none");
+        assert!(r.colors.is_none());
+        assert_eq!(r.source, "none");
+        assert!(r.warning.is_some());
+    }
 }

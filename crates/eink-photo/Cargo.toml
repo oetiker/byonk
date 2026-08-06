@@ -1,0 +1,10 @@
+[package]
+name = "eink-photo"
+version = "0.1.0"
+edition = "2021"
+description = "Tone mapping for photographs bound for e-ink displays"
+license = "MIT"
+
+# Intentionally dependency-free: this crate holds only pixel maths, so its
+# tests need no fixtures and its behaviour is fully determined by its inputs.
+[dependencies]

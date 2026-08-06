@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/eink-dither"]
+members = [".", "crates/eink-dither", "crates/eink-photo"]
 
 [package]
 name = "byonk"

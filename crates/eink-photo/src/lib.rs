@@ -83,6 +83,16 @@ pub fn process(
     validate(&p)?;
 
     // --- linear-light group -------------------------------------------------
+    // exposure and white balance each round-trip through linear light on
+    // their own (see color.rs / tone.rs) rather than sharing one conversion:
+    // that is the per-operation design approved in Task 2, and it is not
+    // free here — `apply_exposure` finishes with `linear_to_srgb`, which
+    // clamps to 1.0, and `apply_white_balance` immediately re-linearises.
+    // A highlight that overshoots under a positive `exposure` gets clipped
+    // to 1.0 *before* `temperature`/`tint` gets to act on it, where a fused
+    // linear stage would have preserved the extra headroom. Do not
+    // restructure this to fix it — it is inherent to the approved design,
+    // not a defect introduced by assembling the pipeline.
     if let Some(ev) = p.exposure {
         tone::apply_exposure(pixels, ev);
     }
@@ -105,15 +115,34 @@ pub fn process(
     // blacks/whites shift the target by up to 0.15 at full scale.
     dst_lo = (dst_lo - p.blacks.unwrap_or(0.0) / 100.0 * 0.15).clamp(0.0, 1.0);
     dst_hi = (dst_hi + p.whites.unwrap_or(0.0) / 100.0 * 0.15).clamp(0.0, 1.0);
+    // blacks/whites can push a perfectly valid `output_endpoints` past each
+    // other (e.g. lo=0.5, hi=0.51, blacks=-100, whites=-100 gives lo=0.65 >
+    // hi=0.36); `validate` below only checks the raw, pre-shift pair, so the
+    // combined result needs its own check or `apply_endpoints` silently
+    // inverts the image through a negative scale.
+    if dst_lo >= dst_hi {
+        return Err(PhotoError::OutOfRange {
+            field: "output_endpoints",
+            value: dst_lo,
+            min: 0.0,
+            max: dst_hi,
+        });
+    }
     if src != (0.0, 1.0) || (dst_lo, dst_hi) != (0.0, 1.0) {
         tone::apply_endpoints(pixels, src, (dst_lo, dst_hi));
     }
 
-    tone::apply_highlights_shadows(
-        pixels,
-        p.highlights.unwrap_or(0.0),
-        p.shadows.unwrap_or(0.0),
-    );
+    // `apply_highlights_shadows` early-returns internally at highlights==0.0
+    // && shadows==0.0, so this guard is not load-bearing for correctness —
+    // it's here only for consistency with every other step in the pipeline
+    // being an `if let`/`if` around its call.
+    if p.highlights.is_some() || p.shadows.is_some() {
+        tone::apply_highlights_shadows(
+            pixels,
+            p.highlights.unwrap_or(0.0),
+            p.shadows.unwrap_or(0.0),
+        );
+    }
     if let Some(c) = p.contrast {
         tone::apply_contrast(pixels, c);
     }
@@ -175,6 +204,19 @@ fn validate(p: &Params) -> Result<(), PhotoError> {
     if let Some(s) = p.sharpen {
         check("sharpen.amount", Some(s.amount), 0.0, 100.0)?;
         check("sharpen.radius", Some(s.radius), 0.3, 10.0)?;
+    }
+    // Structural check on the raw pair; `process` separately re-checks after
+    // blacks/whites are folded in, since those can invert an otherwise-valid
+    // pair (see the comment at the `output_endpoints` use site).
+    if let Some((lo, hi)) = p.output_endpoints {
+        if lo >= hi {
+            return Err(PhotoError::OutOfRange {
+                field: "output_endpoints",
+                value: lo,
+                min: 0.0,
+                max: hi,
+            });
+        }
     }
     Ok(())
 }
@@ -244,6 +286,59 @@ mod tests {
     }
 
     #[test]
+    fn process_order_differs_from_sharpen_before_endpoints() {
+        // The gap in `process_order_differs_from_contrast_before_exposure`:
+        // that test proves the linear-light/tone-domain group order, but not
+        // sharpen's position. `unsharp` (presence.rs) and `apply_endpoints`
+        // (tone.rs) are both affine and `box_blur` maps constants to
+        // themselves, so away from clamping the two operations commute
+        // exactly — a swap is invisible unless clamping actually engages.
+        // A full-range step edge plus a real `output_endpoints` compression
+        // forces that: sharpening the raw 0..1 edge first clips its overshoot
+        // against 0.0/1.0, and the later compression can't recover what was
+        // clipped away, so a sharpen-before-endpoints run comes out
+        // perceptibly flatter than the real (endpoints-before-sharpen) order.
+        let width = 4usize;
+        let height = 1usize;
+        let mut input = vec![0.0f32; width * height * 3];
+        for x in 0..width {
+            let v = if x < width / 2 { 0.0 } else { 1.0 };
+            for c in 0..3 {
+                input[x * 3 + c] = v;
+            }
+        }
+        let params = Params {
+            output_endpoints: Some((0.05, 0.92)),
+            sharpen: Some(Sharpen {
+                amount: 60.0,
+                radius: 1.0,
+            }),
+            ..Default::default()
+        };
+
+        let mut correct = input.clone();
+        process(&mut correct, width, height, &params).expect("must succeed");
+
+        // Hand-build the wrong order: sharpen the raw image first, then
+        // compress endpoints on the sharpened result.
+        let mut wrong = input.clone();
+        presence::apply_sharpen(&mut wrong, width, height, 60.0, 1.0);
+        tone::apply_endpoints(&mut wrong, (0.0, 1.0), (0.05, 0.92));
+
+        let max_diff = correct
+            .iter()
+            .zip(wrong.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_diff > 0.05,
+            "correct pipeline order (endpoints before sharpen) must differ \
+             substantially from sharpen-before-endpoints: {correct:?} vs \
+             {wrong:?} (max diff {max_diff})"
+        );
+    }
+
+    #[test]
     fn process_order_differs_from_contrast_before_exposure() {
         // `process_applies_operations_in_the_fixed_order` above only proves
         // apply_endpoints is wired correctly — with no other params set it
@@ -282,6 +377,20 @@ mod tests {
             "correct pipeline order (exposure before contrast) must differ \
              from contrast-before-exposure: {correct:?} vs {wrong:?}"
         );
+
+        // An inequality alone would also pass for an arbitrarily wrong
+        // order, not just the transposed one — pin the actual direction too
+        // by matching the real (exposure, then contrast) computation.
+        let mut hand_built_correct = input.clone();
+        tone::apply_exposure(&mut hand_built_correct, 1.0);
+        tone::apply_contrast(&mut hand_built_correct, 60.0);
+        for (i, (got, want)) in correct.iter().zip(hand_built_correct.iter()).enumerate() {
+            assert_close(
+                *got,
+                *want,
+                &format!("channel {i} vs hand-built exposure-then-contrast"),
+            );
+        }
     }
 
     #[test]
@@ -301,6 +410,175 @@ mod tests {
             err,
             PhotoError::OutOfRange {
                 field: "exposure",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn every_validated_slider_rejects_an_out_of_range_value() {
+        // `process_rejects_an_out_of_range_slider` only exercises `exposure`.
+        // `validate` has thirteen near-identical `check(...)` calls; a
+        // copy-paste error picking the wrong field name or reusing a
+        // neighbour's bound would go unnoticed by a single-field test.
+        // Table-driven so all thirteen are pinned cheaply.
+        let cases: Vec<(&'static str, Params)> = vec![
+            (
+                "exposure",
+                Params {
+                    exposure: Some(10.0),
+                    ..Default::default()
+                },
+            ),
+            (
+                "temperature",
+                Params {
+                    temperature: Some(200.0),
+                    ..Default::default()
+                },
+            ),
+            (
+                "tint",
+                Params {
+                    tint: Some(200.0),
+                    ..Default::default()
+                },
+            ),
+            (
+                "blacks",
+                Params {
+                    blacks: Some(200.0),
+                    ..Default::default()
+                },
+            ),
+            (
+                "whites",
+                Params {
+                    whites: Some(200.0),
+                    ..Default::default()
+                },
+            ),
+            (
+                "highlights",
+                Params {
+                    highlights: Some(200.0),
+                    ..Default::default()
+                },
+            ),
+            (
+                "shadows",
+                Params {
+                    shadows: Some(200.0),
+                    ..Default::default()
+                },
+            ),
+            (
+                "contrast",
+                Params {
+                    contrast: Some(200.0),
+                    ..Default::default()
+                },
+            ),
+            (
+                "clarity",
+                Params {
+                    clarity: Some(200.0),
+                    ..Default::default()
+                },
+            ),
+            (
+                "vibrance",
+                Params {
+                    vibrance: Some(200.0),
+                    ..Default::default()
+                },
+            ),
+            (
+                "saturation",
+                Params {
+                    saturation: Some(200.0),
+                    ..Default::default()
+                },
+            ),
+            (
+                "sharpen.amount",
+                Params {
+                    sharpen: Some(Sharpen {
+                        amount: 200.0,
+                        radius: 1.0,
+                    }),
+                    ..Default::default()
+                },
+            ),
+            (
+                "sharpen.radius",
+                Params {
+                    sharpen: Some(Sharpen {
+                        amount: 10.0,
+                        radius: 20.0,
+                    }),
+                    ..Default::default()
+                },
+            ),
+        ];
+        for (field, params) in cases {
+            let mut pixels = vec![0.5f32; 3];
+            let err = process(&mut pixels, 1, 1, &params)
+                .expect_err(&format!("{field} out of range must be rejected"));
+            match err {
+                PhotoError::OutOfRange {
+                    field: got_field, ..
+                } => {
+                    assert_eq!(got_field, field, "wrong field name reported");
+                }
+                other => panic!("{field}: expected OutOfRange, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn output_endpoints_with_a_reversed_pair_is_rejected() {
+        let mut pixels = vec![0.5f32; 3];
+        let err = process(
+            &mut pixels,
+            1,
+            1,
+            &Params {
+                output_endpoints: Some((0.9, 0.1)),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            PhotoError::OutOfRange {
+                field: "output_endpoints",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn output_endpoints_inverted_by_blacks_and_whites_is_rejected() {
+        // A raw pair that is individually valid (lo < hi) can still be
+        // pushed past itself once blacks/whites are folded in.
+        let mut pixels = vec![0.5f32; 3];
+        let err = process(
+            &mut pixels,
+            1,
+            1,
+            &Params {
+                output_endpoints: Some((0.5, 0.51)),
+                blacks: Some(-100.0),
+                whites: Some(-100.0),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            PhotoError::OutOfRange {
+                field: "output_endpoints",
                 ..
             }
         ));

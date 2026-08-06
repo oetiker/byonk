@@ -42,6 +42,8 @@ pub struct ScriptResult {
     pub params: HashMap<String, serde_yaml::Value>,
     /// Optional color palette override from Lua script (hex RGB strings)
     pub script_colors: Option<Vec<String>>,
+    /// Optional measured-colour override from Lua script (hex RGB strings)
+    pub script_colors_actual: Option<Vec<String>>,
     /// Optional dither mode from Lua script ("photo" or "graphics")
     pub script_dither: Option<String>,
     /// Optional preserve_exact override from Lua script
@@ -301,6 +303,7 @@ impl ContentPipeline {
             screen_dir: resolved.screen_dir.clone(),
             params: params.clone(),
             script_colors: lua_result.colors,
+            script_colors_actual: lua_result.colors_actual,
             script_dither: lua_result.dither,
             script_preserve_exact: lua_result.preserve_exact,
             script_error_clamp: lua_result.error_clamp,

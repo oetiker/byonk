@@ -530,6 +530,87 @@ mod lua_unit_tests {
     }
 
     #[test]
+    fn test_script_can_return_colors_actual() {
+        let script = r##"
+            return {
+                data = {},
+                colors        = { "#000000", "#FFFFFF", "#FF0000" },
+                colors_actual = { "#0A0A0A", "#E8E6E0", "#A83A30" },
+                refresh_rate  = 60
+            }
+        "##;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_ret_ca.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_ret_ca.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("Script should run");
+
+        assert_eq!(
+            result.colors_actual.as_deref(),
+            Some(
+                [
+                    "#0A0A0A".to_string(),
+                    "#E8E6E0".to_string(),
+                    "#A83A30".to_string()
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(result.colors.as_ref().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_script_without_colors_actual_yields_none() {
+        let script = r#"
+            return { data = {}, refresh_rate = 60 }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_no_ca.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_no_ca.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("Script should run");
+
+        assert!(result.colors_actual.is_none());
+    }
+
+    #[test]
+    fn test_script_empty_colors_actual_yields_none() {
+        // Matches the existing `colors` behaviour: an empty table is None, not
+        // Some(vec![]), so it falls through the chain instead of blanking it.
+        let script = r#"
+            return { data = {}, colors_actual = {}, refresh_rate = 60 }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_empty_ca.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_empty_ca.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("Script should run");
+
+        assert!(result.colors_actual.is_none());
+    }
+
+    #[test]
     fn test_qr_svg_anchors() {
         let anchors = [
             "top-left",

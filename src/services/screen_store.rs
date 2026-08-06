@@ -128,6 +128,17 @@ pub struct RenderOpts {
     /// Also render a pre-dither, full-color PNG alongside the palette-
     /// restricted `png` (see `RenderResult::raw_png`).
     pub include_raw: bool,
+    /// Draw the returned PNG in the measured colours (what the panel will
+    /// look like) rather than the spec colours (what is sent to the panel).
+    /// `None` keeps the historical default: on when measured colours
+    /// resolved. Affects only the output palette, never the dithering
+    /// decisions (see `api::display::resolve_use_actual`).
+    pub use_actual: Option<bool>,
+    /// Measured-colour override for this render, comma-separated hex. Sits
+    /// in the dev-override slot of the measured chain: `script > this >
+    /// panel.colors_actual > none`. Lets an agent preview a calibration
+    /// without writing a panel into the config.
+    pub colors_actual: Option<String>,
 }
 
 impl Default for RenderOpts {
@@ -146,6 +157,8 @@ impl Default for RenderOpts {
             preserve_exact: None,
             timestamp: None,
             include_raw: false,
+            use_actual: None,
+            colors_actual: None,
         }
     }
 }
@@ -174,6 +187,12 @@ pub struct RenderResult {
     pub data: serde_json::Value,
     pub refresh_rate: u32,
     pub error: Option<RenderError>,
+    /// Which layer supplied the measured colours this render dithered
+    /// against — one of the `api::display::SRC_*` labels. `SRC_NONE` when
+    /// the render used the official palette. Mirrors what the dev tuning
+    /// popup displays, so an authoring client can show it too. This is the
+    /// post-script value: the layer that actually won, script included.
+    pub measured_source: &'static str,
 }
 
 /// Best-effort line-number extraction from an mlua error message shape like
@@ -947,6 +966,7 @@ impl ScreenStore {
             data: serde_json::Value::Null,
             refresh_rate: 0,
             error: None,
+            measured_source: crate::api::display::SRC_NONE,
         };
 
         // Dimensions + base palette: explicit override, else the model's
@@ -964,16 +984,32 @@ impl ScreenStore {
             .as_deref()
             .and_then(|name| config.get_panel(name));
         let panel_colors: Option<String> = panel.map(|p| p.colors.clone());
-        let measured_colors: Option<Vec<(u8, u8, u8)>> = panel
+        let opts_actual_parsed: Option<Vec<(u8, u8, u8)>> = opts
+            .colors_actual
+            .as_deref()
+            .map(crate::api::display::parse_colors_header);
+        let panel_actual_parsed: Option<Vec<(u8, u8, u8)>> = panel
             .and_then(|p| p.colors_actual.as_deref())
             .map(crate::api::display::parse_colors_header);
         // Pre-script chain for the final measured-colour resolution after
-        // the script runs — there is no dev-override or header layer in an
-        // authoring render (see `resolve_render_params`'s doc comment).
-        let pre_script_measured_candidates: [crate::api::display::MeasuredCandidate; 1] = [(
-            crate::api::display::SRC_PANEL_ACTUAL,
-            measured_colors.clone(),
-        )];
+        // the script runs — there is no header layer in an authoring render,
+        // but `RenderOpts::colors_actual` occupies the dev-override slot (see
+        // `resolve_render_params`'s doc comment). Kept as a candidate ARRAY
+        // rather than collapsed to a winner here: the length rule lives
+        // inside `resolve_measured_colors`'s loop, so a wrong-length render
+        // option falls through to a valid `panel.colors_actual` instead of
+        // killing the calibration outright.
+        let pre_script_measured_candidates: [crate::api::display::MeasuredCandidate; 2] = [
+            (crate::api::display::SRC_RENDER_OPTS, opts_actual_parsed),
+            (crate::api::display::SRC_PANEL_ACTUAL, panel_actual_parsed),
+        ];
+        // Pre-script winner, used only to populate `DeviceContext.colors_actual`
+        // (what the script sees before it runs). Derived from the candidate
+        // array rather than its own `.or_else` chain so the two can't
+        // silently drift on precedence — same construction as `api::dev`.
+        let measured_colors: Option<Vec<(u8, u8, u8)>> = pre_script_measured_candidates
+            .iter()
+            .find_map(|(_, c)| c.clone());
 
         // The palette the script sees via `device.colors` — panel colors
         // fold in over the model default, same as `/dev/render`'s
@@ -1129,7 +1165,14 @@ impl ScreenStore {
         }
 
         let display_spec = DisplaySpec::from_dimensions(width, height).unwrap_or(DisplaySpec::OG);
-        let use_actual = render_params.measured_colors.is_some();
+        // An explicit request wins, but only when there is something measured
+        // to show. Uses the post-script resolved value, so a script-supplied
+        // calibration is what gets previewed. Shared rule — see
+        // `api::display::resolve_use_actual`.
+        let use_actual = crate::api::display::resolve_use_actual(
+            opts.use_actual,
+            render_params.measured_colors.is_some(),
+        );
         let (dither_tuning, has_tuning) =
             crate::api::display::resolve_dither_tuning(&render_params);
 
@@ -1175,6 +1218,9 @@ impl ScreenStore {
             data,
             refresh_rate,
             error: None,
+            // Post-script: the layer the ditherer actually acted on, which
+            // may differ from the pre-script winner above.
+            measured_source: render_params.measured_source,
         }
     }
 }

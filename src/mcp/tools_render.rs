@@ -46,6 +46,21 @@ pub struct RenderArgs {
     /// Unix timestamp to render at, for testing time-dependent screens.
     #[serde(default)]
     pub timestamp: Option<i64>,
+    /// Draw the returned PNG in the panel's measured colours — what the
+    /// screen will actually look like — instead of the spec colours that are
+    /// sent to the panel. Defaults to on whenever measured colours are
+    /// available (from `panel` or from `colors_actual`). This changes only
+    /// how the returned PNG is drawn; it never changes the dithering.
+    #[serde(default)]
+    pub use_actual: Option<bool>,
+    /// Measured panel colours for this render, comma-separated hex (e.g.
+    /// `#0A0A0A,#E8E6E0,#A83A30`), index-parallel to the palette. Use this to
+    /// preview a calibration without adding a panel to the config. A
+    /// `colors_actual` returned by the screen's own script wins over this,
+    /// and a list whose length doesn't match the palette is ignored (with a
+    /// warning in `log`) rather than failing the render.
+    #[serde(default)]
+    pub colors_actual: Option<String>,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -58,6 +73,14 @@ pub struct RenderDiagnostics {
     /// Present when the render failed. `line` points into script.lua when
     /// the failure was a Lua error.
     pub error: Option<RenderErrorOut>,
+    /// Which layer supplied the measured ("actual") panel colours this
+    /// render dithered against: `script` (the screen's own
+    /// `colors_actual`), `render_opts` (the `colors_actual` argument you
+    /// passed), `panel.colors_actual` (the named panel profile), or `none`
+    /// (no calibration applied — the render used the spec palette). Use it
+    /// to confirm which calibration actually took effect; a candidate whose
+    /// length doesn't match the palette is skipped, and `log` says so.
+    pub measured_source: String,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -96,7 +119,11 @@ impl ByonkMcp {
                           include_raw, a second (pre-dither, full-colour) image block follows \
                           the dithered one — order is the only signal distinguishing them. A \
                           failed render includes no image block at all, dithered or raw — read \
-                          the diagnostics' error field instead."
+                          the diagnostics' error field instead. By default the returned PNG \
+                          shows what the panel will actually look like when measured colours \
+                          are available; pass use_actual=false to see the spec colours that \
+                          are sent to the panel instead. The diagnostics' measured_source \
+                          field names which layer supplied those measured colours."
     )]
     pub async fn render_screen(
         &self,
@@ -111,6 +138,8 @@ impl ByonkMcp {
             dither: a.dither,
             timestamp: a.timestamp,
             include_raw: a.include_raw,
+            use_actual: a.use_actual,
+            colors_actual: a.colors_actual,
             ..RenderOpts::default()
         };
         let screen_ref = a.screen_ref.clone();
@@ -124,6 +153,7 @@ impl ByonkMcp {
                 line: e.line,
                 message: e.message.clone(),
             }),
+            measured_source: result.measured_source.to_string(),
         };
         let failed = diagnostics.error.is_some();
 

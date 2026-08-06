@@ -979,3 +979,224 @@ async fn test_assign_screen_reassignment_preserves_existing_params() {
         "reassignment must not reset params to the new screen's defaults"
     );
 }
+
+// --- render_screen: use_actual / colors_actual / measured_source ---------
+
+/// The base64 payload of the first image content block.
+fn first_image_b64(result: &serde_json::Value) -> String {
+    result["content"]
+        .as_array()
+        .expect("content array")
+        .iter()
+        .find(|c| c["type"] == "image")
+        .expect("a successful render must return an image block")["data"]
+        .as_str()
+        .expect("image data is a base64 string")
+        .to_string()
+}
+
+/// A four-entry measured set, index-parallel to the `og` model's 4-grey
+/// palette, whose two middle entries are strongly chromatic — so a render
+/// drawn in it cannot coincide with one drawn in the spec greys.
+const MEASURED_4: &str = "#0A0A0A,#E8E6E0,#A83A30,#3F7A45";
+
+/// `byonk-builtin/calibration/color` rather than `.../default`: it paints
+/// gradients and solid patches across every palette entry, so a change of
+/// output palette is guaranteed to move pixels. It is also time-independent,
+/// which the `default` screen (which draws the clock) is not.
+const COLOR_SCREEN: &str = "byonk-builtin/calibration/color";
+
+#[tokio::test]
+async fn test_render_screen_colors_actual_without_a_configured_panel() {
+    // An authoring agent must be able to preview a calibration without
+    // first writing a panel into config.yaml.
+    let app = TestApp::new_admin("secret");
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let result = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({
+                "screen_ref": COLOR_SCREEN,
+                "colors_actual": MEASURED_4,
+                "use_actual": true,
+                "timestamp": 1_750_000_000,
+            }),
+        )
+        .await;
+
+    assert_ne!(result["isError"], serde_json::json!(true), "{result}");
+    let b64 = first_image_b64(&result);
+    assert!(b64.starts_with("iVBORw0KGgo"), "must be a PNG");
+    // The render option occupies the dev-override slot of the measured
+    // chain, and with no panel and no script `colors_actual` it must win.
+    assert_eq!(
+        structured(&result)["measured_source"],
+        serde_json::json!("render_opts"),
+        "{result}"
+    );
+}
+
+#[tokio::test]
+async fn test_render_screen_use_actual_changes_the_output_palette() {
+    let app = TestApp::new_admin("secret");
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    // A fixed timestamp so the only difference between the two renders is
+    // the palette.
+    let render = |use_actual: bool| {
+        client.call_tool(
+            "render_screen",
+            serde_json::json!({
+                "screen_ref": COLOR_SCREEN,
+                "colors_actual": MEASURED_4,
+                "use_actual": use_actual,
+                "timestamp": 1_750_000_000,
+            }),
+        )
+    };
+
+    // Same-flag control FIRST: without this, a difference below could just
+    // be render nondeterminism rather than the flag doing anything.
+    let control_a = render(false).await;
+    let control_b = render(false).await;
+    assert_eq!(
+        first_image_b64(&control_a),
+        first_image_b64(&control_b),
+        "two identical renders must be byte-identical, else the \
+         differential assertion below proves nothing"
+    );
+
+    let with = render(true).await;
+    assert_ne!(
+        first_image_b64(&with),
+        first_image_b64(&control_a),
+        "use_actual must change the palette the PNG is drawn in"
+    );
+}
+
+#[tokio::test]
+async fn test_render_screen_default_still_matches_no_use_actual() {
+    // The default must preserve today's behaviour exactly: on when measured
+    // colours resolved. Omitting the flag and passing true must agree.
+    let app = TestApp::new_admin("secret");
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let omitted = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({
+                "screen_ref": COLOR_SCREEN,
+                "colors_actual": MEASURED_4,
+                "timestamp": 1_750_000_000,
+            }),
+        )
+        .await;
+    let explicit = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({
+                "screen_ref": COLOR_SCREEN,
+                "colors_actual": MEASURED_4,
+                "use_actual": true,
+                "timestamp": 1_750_000_000,
+            }),
+        )
+        .await;
+
+    assert_eq!(first_image_b64(&omitted), first_image_b64(&explicit));
+}
+
+#[tokio::test]
+async fn test_render_screen_measured_source_is_none_without_a_calibration() {
+    // The discriminating counterpart to the `render_opts` case above: no
+    // panel, no render option, no script `colors_actual` — the render used
+    // the spec palette and must say so.
+    let app = TestApp::new_admin("secret");
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let result = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({
+                "screen_ref": COLOR_SCREEN,
+                "timestamp": 1_750_000_000,
+            }),
+        )
+        .await;
+
+    assert_ne!(result["isError"], serde_json::json!(true), "{result}");
+    assert_eq!(
+        structured(&result)["measured_source"],
+        serde_json::json!("none"),
+        "{result}"
+    );
+}
+
+#[tokio::test]
+async fn test_render_screen_measured_source_reports_the_panel_layer() {
+    // The third distinct source: a panel profile supplies the calibration
+    // and no render option overrides it.
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = r##"
+admin:
+  token: secret
+panels:
+  test_panel:
+    name: "Test Panel"
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#0A0A0A,#3A3A3A,#9A9A9A,#E8E6E0"
+"##;
+    let (app, _config_path) = TestApp::new_with_config_yaml(yaml, dir.path());
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let from_panel = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({
+                "screen_ref": COLOR_SCREEN,
+                "panel": "test_panel",
+                "timestamp": 1_750_000_000,
+            }),
+        )
+        .await;
+    assert_ne!(
+        from_panel["isError"],
+        serde_json::json!(true),
+        "{from_panel}"
+    );
+    assert_eq!(
+        structured(&from_panel)["measured_source"],
+        serde_json::json!("panel.colors_actual"),
+        "{from_panel}"
+    );
+
+    // ...and an explicit render option outranks the panel, on the very same
+    // app — so the two labels differ for a reason other than the fixture.
+    let overridden = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({
+                "screen_ref": COLOR_SCREEN,
+                "panel": "test_panel",
+                "colors_actual": MEASURED_4,
+                "timestamp": 1_750_000_000,
+            }),
+        )
+        .await;
+    assert_eq!(
+        structured(&overridden)["measured_source"],
+        serde_json::json!("render_opts"),
+        "{overridden}"
+    );
+    assert_ne!(
+        first_image_b64(&from_panel),
+        first_image_b64(&overridden),
+        "the winning layer must actually change the render, not just the label"
+    );
+}

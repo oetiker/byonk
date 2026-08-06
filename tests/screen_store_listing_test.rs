@@ -4,7 +4,7 @@
 mod common;
 
 use byonk::services::screen_store::StoreError;
-use common::store::build_store;
+use common::store::{build_store, build_store_with_readonly_local};
 
 #[test]
 fn test_list_screens_marks_builtin_read_only_and_local_writable() {
@@ -25,6 +25,40 @@ fn test_list_screens_marks_builtin_read_only_and_local_writable() {
         .expect("local/clock must be listed");
     assert!(local.writable, "a local repo screen must be writable");
     assert!(local.files.iter().any(|f| f == "script.lua"));
+}
+
+/// Writability is a structural property of the resolved source
+/// (`writable_root().is_some()`), not of the handle's name — a buggy
+/// `writable = (handle == "local")` shortcut would pass every other test in
+/// this file, since they only ever see `local` as an actually-writable
+/// handle. `RESERVED_HANDLES` (which would otherwise stop a `local` entry
+/// from being redefined) is enforced only in the HA add-on's options parsing,
+/// not by `ScreenRepoManager` — a plain `config.yaml` really can register
+/// `local` against a read-only (git-fetched) source. Pin the correct
+/// behaviour down for that case too.
+#[test]
+fn test_list_screens_marks_a_readonly_local_handle_not_writable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = build_store_with_readonly_local(tmp.path());
+
+    let all = store.list_screens();
+
+    let builtin = all
+        .iter()
+        .find(|e| e.screen_ref == "byonk-builtin/default")
+        .expect("builtin default must still be listed");
+    assert!(!builtin.writable);
+
+    // No screens exist under this read-only `local` fixture, but the write
+    // path itself must still refuse — list_screens has nothing to assert on
+    // otherwise, since a repo with zero screens lists no `local/...` entries.
+    let err = store
+        .write_file("local/anything", "meta.yaml", b"x", None)
+        .unwrap_err();
+    assert!(
+        matches!(err, StoreError::ReadOnly { .. }),
+        "a `local` handle resolving to a read-only source must refuse writes: {err:?}"
+    );
 }
 
 #[test]

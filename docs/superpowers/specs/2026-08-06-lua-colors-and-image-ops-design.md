@@ -200,12 +200,23 @@ fixing that, so the operation set is Lightroom's, minus what six colours cannot 
 
 ### 2.2 Where it lives
 
-A new **`crates/eink-photo/`** — a pure pipeline with no byonk dependencies, mirroring how
-`crates/eink-dither` is structured. It takes decoded pixels plus a params struct and returns
-pixels; it knows nothing about Lua, SVG, or config, and is unit-testable in isolation.
+Three layers, each with one job:
 
-`src/services/lua_runtime.rs` gets only the thin binding: params-table parsing, the call,
-and encoding to a data URI. This matters because that file is already 1567 lines.
+- **`crates/eink-photo/`** — the tone pipeline, steps 4–16. A pure crate with **zero
+  dependencies**, mirroring how `crates/eink-dither` is structured: pixels plus a params
+  struct in, pixels out. It knows nothing about Lua, SVG, config, or image *file formats*,
+  and every operation is unit-testable in isolation.
+- **`src/services/image_process.rs`** — the codec and geometry layer, steps 1–3 and 17:
+  decode (honouring EXIF orientation), crop, resize, then encode to PNG or JPEG and wrap as
+  a `data:` URI. This is where the `image` dependency lives and where the size guards are
+  enforced.
+- **`src/services/lua_runtime.rs`** — the binding only: parse the Lua params table, call
+  the above, return three values. This split matters because that file is already 1567
+  lines.
+
+Keeping file-format knowledge out of `eink-photo` is what lets its tests run on synthetic
+buffers with no fixtures, and keeps the zero-dependency property that makes `eink-dither`
+pleasant to reason about.
 
 **Dependency:** `image` with `default-features = false, features = ["jpeg", "png", "webp"]`.
 The underlying decoders (`png`, `zune-jpeg`, `image-webp`) are already in the lockfile via
@@ -283,11 +294,11 @@ Fixed, documented, and not author-controllable:
 4. → **linear light**
 5. exposure
 6. white balance (temperature, tint)
-7. blacks / whites (endpoint placement — where `palette_aware` acts)
-8. highlights / shadows recovery
-9. contrast
-10. tone curve
-11. → **back to sRGB**
+7. → **gamma-encoded tone domain** (sRGB transfer curve)
+8. `auto_levels` / blacks / whites — endpoint placement, where `palette_aware` acts
+9. highlights / shadows recovery
+10. contrast (S-curve about mid-grey)
+11. tone curve
 12. clarity
 13. vibrance
 14. saturation
@@ -296,7 +307,16 @@ Fixed, documented, and not author-controllable:
 17. encode
 
 Geometry first is what keeps a 24 MP source cheap. Sharpening last is what makes it mean
-anything. `auto_levels`, when set, computes its endpoints after step 3 and feeds step 7.
+anything.
+
+**Why the domain switches at step 7.** Exposure and white balance are *physical* — they
+model light arriving at a sensor, and are only correct as multiplications in linear light.
+Everything from step 8 on is *tonal* — an S-curve, an endpoint remap, a shadow lift — and
+these are defined against a perceptually-spaced scale. Applying an S-curve in linear light
+crushes midtones and produces the harsh, plasticky result that distinguishes a naive
+implementation from a photo editor. Every editor that gets this right does the same split,
+and this codebase already draws the same distinction elsewhere: `eink-dither` diffuses
+error in linear RGB while matching colour in OKLab.
 
 ### 2.5 `preset`
 
@@ -364,9 +384,16 @@ failures are unreadable. Against synthetic gradients and colour ramps:
 - `clarity > 0` raises local variance without moving the global mean;
 - `vibrance > 0` raises saturation of low-saturation pixels more than of high-saturation
   ones — the property that distinguishes it from `saturation`;
+- an S-curve `contrast` is applied in the gamma-encoded domain, not in linear light —
+  asserted by checking that mid-grey stays put while a quarter-tone moves by the expected
+  amount, which the linear-domain version would get wrong.
+
+At the `image_process` layer (`src/services/image_process.rs`), where geometry and codecs
+live:
+
 - `crop` + `fit` produce the requested dimensions for every `fit` mode;
-- ordering is observable: `sharpen` with a downscale produces a different (sharper) result
-  than sharpening a pre-downscaled image, confirming step 16 runs after step 3.
+- ordering is observable: `sharpen` combined with a downscale produces a different (sharper)
+  result than sharpening an already-downscaled image, confirming step 16 runs after step 3.
 
 **Limits**: an oversized source is rejected before allocation, asserted by the error, not by
 watching memory.

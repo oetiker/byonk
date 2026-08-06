@@ -783,6 +783,149 @@ local image_src = "data:image/png;base64," .. base64_encode(image_bytes)
 
 See [Embedding Remote Images](../tutorial/advanced.md#embedding-remote-images) for a complete example with error handling.
 
+## Image Functions
+
+### image_process(bytes, options)
+
+Prepares a photograph for an e-ink panel: decodes it, optionally crops and
+resizes it, tone-maps it, sharpens it, and re-encodes it as a `data:` URI
+ready to drop into an SVG `<image href="...">`.
+
+An e-ink panel is a low-dynamic-range display with a handful of colours. A
+photograph sent to it untouched loses its shadows to a black sink, blows its
+highlights to paper white, and desaturates until nothing reaches a coloured
+palette entry. These options exist to fix that before dithering ever sees
+the image.
+
+```lua
+local photo = http_get("https://example.com/photo.jpg")
+local src, w, h = image_process(photo, {
+  preset        = "eink",
+  palette_aware = true,
+  fit           = "cover",
+  width         = layout.width,
+  height        = layout.height,
+})
+
+return { data = { image_src = src, image_w = w, image_h = h } }
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `bytes` | string | Encoded image bytes (PNG, JPEG, etc.), e.g. from `http_get` |
+| `options` | table (optional) | Geometry, tone and output options (see below) |
+
+**Returns:** `string, integer, integer` — the `data:` URI, and the result's
+actual width and height in pixels. With `fit = "cover"` or `"stretch"` these
+always equal the `width`/`height` you asked for. With `fit = "contain"` or
+`"none"` they can differ — see the `fit` table below — so use the returned
+values, not the ones you passed in, when positioning the image in the SVG.
+
+**All options are optional.** `image_process(bytes, {})` decodes and
+re-encodes without changing anything.
+
+**Geometry options:**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `crop` | table | none | `{ x = ..., y = ..., w = ..., h = ... }`, each 0–1, normalised to the *decoded* image (after EXIF orientation is applied, before resizing). `x`/`y` default to 0; `w`/`h` are required if `crop` is given at all. The region must lie within the image or `image_process` raises an error. |
+| `fit` | string | `"cover"` | How the (possibly cropped) image meets `width`/`height`. One of `"cover"`, `"contain"`, `"stretch"`, `"none"` — see below. |
+| `width`, `height` | integer | none | Target size in pixels, up to 4096 each. Give both, one, or neither — see `fit` below for what each combination does. |
+
+**How the four `fit` modes differ** — this is the part a screen author most
+often gets wrong:
+
+| `fit` | Behaviour |
+|-------|-----------|
+| `cover` (default) | Fills the `width`×`height` box exactly, cropping whatever doesn't fit. The result is always exactly `width`×`height`. Use this for a full-bleed photo. |
+| `contain` | Scales to fit *inside* the box, preserving aspect ratio, and crops nothing. **The result is not padded up to `width`×`height`** — one dimension comes out smaller than requested (e.g. asking for 80×48 on a 200×100 source returns 80×40). Read the two return values to find out how big it actually is. |
+| `stretch` | Fills the box exactly like `cover`, but scales each axis independently instead of cropping — the image distorts if the box's aspect ratio doesn't match the source's. |
+| `none` | Ignores `width`/`height` entirely and keeps the (cropped) source's own pixel size. Set this only when you want the source resolution and are positioning the `<image>` yourself. |
+
+If you give only one of `width`/`height` (in any `fit` mode except `none`),
+the other is derived from the source's aspect ratio.
+
+**Photo (tone) options.** Order is fixed and not something you control:
+crop → resize → exposure → white balance → auto-levels/blacks/whites →
+highlights/shadows → contrast → curve → clarity → vibrance → saturation →
+grayscale/invert → sharpen. Resizing first is what keeps a 24-megapixel
+source cheap; sharpening last, at output size, is what makes it mean
+anything.
+
+| Option | Range | Effect |
+|---|---|---|
+| `exposure` | −5…5 | Stops of exposure, applied in linear light |
+| `temperature` | −100…100 | Positive is warmer, applied in linear light |
+| `tint` | −100…100 | Positive is greener, applied in linear light |
+| `auto_levels` | boolean | Stretch the histogram to the full range before the other tone options |
+| `blacks`, `whites` | −100…100 | Nudge where the black/white points land |
+| `highlights`, `shadows` | −100…100 | Recover the two ends. The most useful pair on e-ink |
+| `contrast` | −100…100 | S-curve about mid-grey |
+| `curve` | `{ {in, out}, ... }` | Point tone curve, sorted by input, for anything the sliders miss |
+| `clarity` | −100…100 | Large-radius local contrast. The single option that makes a dithered photo readable |
+| `vibrance` | −100…100 | Saturation boost weighted toward dull pixels, so muted colours reach a coloured palette entry |
+| `saturation` | −100…100 | Global saturation |
+| `grayscale`, `invert` | boolean | |
+| `sharpen` | `{ amount = 0…100, radius = 0.3…10 }` | Applied last, at output size. `amount` defaults to 40 and `radius` to 1.0 if you set the table but omit one of them |
+| `preset` | `"eink"` \| `"none"` (default) | A tuned base layer: turns on `auto_levels`, opens up `shadows`, pulls back `highlights`, and adds `clarity`, `vibrance` and a light `sharpen`. Any of those fields you set explicitly yourself overrides the preset's value for that field — the rest of the preset still applies |
+| `palette_aware` | boolean | See below |
+
+There are 17 fields in total on the underlying pipeline (16 tone/geometry
+options above plus the palette-derived black/white points `palette_aware`
+sets internally) — `preset = "eink"` is a starting point for most of them,
+not a replacement for the ones you still need to set (`fit`, `width`,
+`height`).
+
+**`palette_aware`**, when `true`, places the tone-mapped black and white
+points at the panel's real darkest and lightest measurable colours instead
+of pure black/white, so the tone mapping doesn't spend range the panel can't
+show. It looks at `device.colors_actual` (the panel's measured colours)
+first, falling back to `device.colors` (the configured palette) if the
+device isn't calibrated. If neither is available, it does nothing and logs
+a warning — a screen using it still renders everywhere, just without the
+adjustment on unconfigured devices.
+
+**Output options:**
+
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `format` | `"png"` \| `"jpeg"` | `"png"` | Output image format |
+| `quality` | 1–100 | 90 | JPEG quality. Ignored for PNG |
+
+**Throws:** Error if the image can't be decoded, if `crop` lies outside the
+image, if the source exceeds internal size limits (32 MB encoded, 40
+megapixels decoded, 4096px per output dimension), or if a tone option is
+out of range. Wrap in `pcall` if a screen should survive a bad image:
+
+```lua
+local ok, src = pcall(function()
+  return image_process(photo, { preset = "eink" })
+end)
+if not ok then
+  log_error("image failed: " .. tostring(src))
+end
+```
+
+Out-of-range tone values (`exposure`, `temperature`, `tint`, `blacks`,
+`whites`, `highlights`, `shadows`, `contrast`, `clarity`, `vibrance`,
+`saturation`, `sharpen.amount`, `sharpen.radius`) are **errors, not silent
+clamps**, and the error message names the field, the value you gave, and
+the valid range — so `exposure = 30` (a typo for `3.0`) is caught instead of
+quietly producing a blown-out image. Unknown `fit`, `preset` or `format`
+strings are errors too, for the same reason.
+
+**A wrong-*typed* value is different: it is silently ignored, not
+rejected**, matching `http_request`, `qr_svg` and the dither options
+elsewhere in this API. `image_process` reads each option with Lua's normal
+number/string coercion, so `exposure = "3.0"` works exactly like
+`exposure = 3.0` — but `exposure = "abc"`, `width = "twenty"`,
+`crop = "half"` or `sharpen = "lots"` fail that coercion and are dropped as
+if you hadn't set them at all, with no error and no log line. Likewise
+`quality = 300` doesn't fit in the underlying integer type and silently
+falls back to the default of 90. If a photo option doesn't seem to be
+taking effect, double-check its type before assuming a bug.
+
 ## URL Encoding Functions
 
 ### url_encode(str)

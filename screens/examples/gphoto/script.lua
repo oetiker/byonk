@@ -106,7 +106,15 @@ if not img_ok then
   return error_return("Failed to fetch image")
 end
 
-local image_src = "data:image/jpeg;base64," .. base64_encode(img_data)
+-- Prepare the photo for the panel: a straight photograph loses its shadows
+-- and desaturates until nothing reaches a coloured palette entry.
+local image_src = image_process(img_data, {
+  preset        = "eink",
+  palette_aware = true,
+  fit           = "cover",
+  width         = width,
+  height        = height,
+})
 
 return {
   data = {

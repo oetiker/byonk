@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   swiss-departure-board, font demo) now install as an editable `examples`
   repository. Override where they're seeded with the new `EXAMPLES_DIR`
   environment variable.
+- **New `image_process()` function for Lua scripts**: crop, resize, tone-map
+  and sharpen a photograph before embedding it in a screen. A
+  `preset = "eink"` one-liner handles the common case, and `palette_aware`
+  tunes the result to what your panel can actually display.
+- **The `gphoto` example now uses `image_process()`**, so photo screens look
+  markedly better out of the box.
 - **Author screens with an LLM over MCP.** Byonk now exposes a Model Context
   Protocol endpoint at `/mcp`, so an assistant like Claude Code can list, read,
   create, edit, validate and render screens on a running byonk — including one

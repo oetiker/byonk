@@ -482,12 +482,23 @@ mod tests {
     fn build_eink_palette_keeps_matched_actual() {
         let official = vec![(0, 0, 0), (255, 255, 255), (255, 0, 0)];
         let actual = vec![(10, 10, 10), (232, 230, 224), (168, 58, 48)];
-        let (_palette, output) =
+        let (palette, output) =
             build_eink_palette(&official, Some(&actual), true).expect("must build");
         // use_actual = true draws the output in the measured colours, except
         // that pure black/white are forced to match — the existing B&W rule
         // applies to the dither palette, while `output` uses raw measured.
         assert_eq!(output, actual);
+
+        // The regression this test exists to catch: matched measured
+        // colours must actually reach the `EinkPalette` that dithering
+        // matches against, not just the display-facing `output` tuple
+        // (which is computed independently of `eink_actual`). Assert on
+        // `palette.actual(idx)` directly — the B&W-forced entries (0, 1)
+        // collapse to pure black/white, while entry 2 carries the raw
+        // measured red through unchanged.
+        assert_eq!(palette.actual(0), EinkSrgb::from_u8(0, 0, 0));
+        assert_eq!(palette.actual(1), EinkSrgb::from_u8(255, 255, 255));
+        assert_eq!(palette.actual(2), EinkSrgb::from_u8(168, 58, 48));
     }
 
     #[test]

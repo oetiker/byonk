@@ -475,9 +475,6 @@ pub async fn handle_render(
         .as_ref()
         .and_then(|p| p.colors_actual.as_deref())
         .map(crate::api::display::parse_colors_header);
-    let measured_colors: Option<Vec<(u8, u8, u8)>> = query_actual_parsed
-        .clone()
-        .or_else(|| panel_actual_parsed.clone());
     // Pre-script chain, in precedence order, for the final measured-colour
     // resolution after the script runs (see `resolve_render_params`'s doc
     // comment) — the dev UI's `colors_actual` query param stands in for a
@@ -486,6 +483,14 @@ pub async fn handle_render(
         (crate::api::display::SRC_DEV_OVERRIDE, query_actual_parsed),
         (crate::api::display::SRC_PANEL_ACTUAL, panel_actual_parsed),
     ];
+    // Pre-script winner, used only to populate `DeviceContext.colors_actual`
+    // (what the script sees before it runs). Derived from the candidate
+    // array above rather than its own `.or_else` chain so the two can't
+    // silently drift on precedence (see Task 1's `main.rs` finding, of
+    // which a separately-maintained duplicate here would be a recurrence).
+    let measured_colors: Option<Vec<(u8, u8, u8)>> = pre_script_measured_candidates
+        .iter()
+        .find_map(|(_, c)| c.clone());
 
     // Create device context
     let device_ctx = DeviceContext {
@@ -723,6 +728,7 @@ pub async fn handle_render(
     let final_palette = render_params.palette;
     let final_dither = render_params.dither;
     let preserve_exact = render_params.preserve_exact;
+    let measured_source = render_params.measured_source;
     let measured_colors = render_params.measured_colors;
 
     tracing::debug!(
@@ -730,6 +736,7 @@ pub async fn handle_render(
         resolved_dither = ?final_dither,
         resolved_preserve_exact = preserve_exact,
         has_measured = measured_colors.is_some(),
+        measured_source = measured_source,
         "Resolved dev render params"
     );
 

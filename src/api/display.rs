@@ -74,6 +74,12 @@ pub fn colors_to_hex_strings(colors: &[(u8, u8, u8)]) -> Vec<String> {
 pub struct RenderParams {
     pub palette: Vec<(u8, u8, u8)>,
     pub measured_colors: Option<Vec<(u8, u8, u8)>>,
+    /// Which layer supplied `measured_colors` — one of the `SRC_*` consts,
+    /// or [`SRC_NONE`]. This is the label the dev tuning popup renders
+    /// verbatim (see the `SRC_*` consts' doc comment); it names the source
+    /// that actually won the FULL chain (script included, after the
+    /// length rule), not just a caller's own pre-script layer.
+    pub measured_source: &'static str,
     pub dither: Option<String>,
     pub preserve_exact: bool,
     pub error_clamp: Option<f32>,
@@ -339,6 +345,7 @@ pub fn resolve_render_params(
     RenderParams {
         palette,
         measured_colors: measured.colors,
+        measured_source: measured.source,
         dither,
         preserve_exact,
         error_clamp: tuning.error_clamp,
@@ -723,28 +730,29 @@ pub async fn handle_display<R: DeviceRegistry>(
     // known) prepends the script's own `colors_actual` in front of this and
     // applies the length rule uniformly across all four, so a mismatch at
     // ANY position falls through to the next rather than only the front.
-    let pre_script_measured_candidates: Vec<crate::api::display::MeasuredCandidate> = vec![
+    let pre_script_measured_candidates: Vec<MeasuredCandidate> = vec![
         (SRC_DEV_OVERRIDE, override_colors_parsed.clone()),
         (SRC_PANEL_ACTUAL, panel_actual_parsed.clone()),
         (SRC_MEASURED_HEADER, header_parsed.clone()),
     ];
     // Pre-script winner, used only to populate `DeviceContext.colors_actual`
     // (what the *script* sees before it runs, when the final palette length
-    // isn't known yet — no length check applies here).
-    let measured_source;
-    let measured_colors: Option<Vec<(u8, u8, u8)>> = if let Some(oc) = override_colors_parsed {
-        measured_source = SRC_DEV_OVERRIDE;
-        Some(oc)
-    } else if let Some(actual) = panel_actual_parsed {
-        measured_source = SRC_PANEL_ACTUAL;
-        Some(actual)
-    } else if let Some(hdr) = header_parsed {
-        measured_source = SRC_MEASURED_HEADER;
-        Some(hdr)
-    } else {
-        measured_source = SRC_NONE;
-        None
-    };
+    // isn't known yet — no length check applies here). Derived from
+    // `pre_script_measured_candidates` above rather than its own
+    // if/else-if chain: two separately-maintained encodings of the same
+    // precedence order drift apart silently (see Task 1's `main.rs`
+    // finding, of which this was a recurrence) — add a source to the array
+    // and forget the if/else-if (or vice versa) and this and the final
+    // dithered render quietly stop agreeing on what "measured" means. Not
+    // length-checked (unlike the final resolution): this is just "first
+    // supplied", the palette length isn't known yet.
+    let pre_script_measured_winner = pre_script_measured_candidates
+        .iter()
+        .find_map(|(s, c)| c.clone().map(|c| (*s, c)));
+    let pre_script_measured_source = pre_script_measured_winner
+        .as_ref()
+        .map_or(SRC_NONE, |(s, _)| *s);
+    let measured_colors = pre_script_measured_winner.map(|(_, c)| c);
 
     // Panel official colors for palette chain
     let panel_colors_for_chain: Option<String> = panel.map(|p| p.colors.clone());
@@ -760,7 +768,7 @@ pub async fn handle_display<R: DeviceRegistry>(
         panel_colors_actual = ?panel.and_then(|p| p.colors_actual.as_deref()),
         board_header = ?board_header,
         measured_colors_header = ?measured_colors_header,
-        measured_source = measured_source,
+        pre_script_measured_source = pre_script_measured_source,
         "Device config and panel resolution"
     );
 
@@ -934,6 +942,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                         resolved_dither = ?params.dither,
                         resolved_preserve_exact = params.preserve_exact,
                         has_measured = params.measured_colors.is_some(),
+                        measured_source = params.measured_source,
                         "Resolved render params"
                     );
 
@@ -1402,6 +1411,11 @@ mod tests {
             params.measured_colors.unwrap(),
             vec![(0x11, 0x11, 0x11), (0x22, 0x22, 0x22)],
             "script's colors_actual must win over the caller's pre-script chain"
+        );
+        assert_eq!(
+            params.measured_source, SRC_SCRIPT,
+            "measured_source must name the script as the winning layer, not \
+             whatever the caller's own pre-script chain resolved to"
         );
         assert!(warning.is_none());
     }

@@ -17,9 +17,20 @@
 //! (`ScreenStore::render`) and inspects the *final dithered device PNG*,
 //! proving `vibrance` (set in Lua script options, consumed by
 //! `crates/eink-photo`) survives all three layers and changes what a real
-//! e-ink panel would show.
-
-mod common;
+//! e-ink panel would show. It also proves `colors_actual` (measured display
+//! colors) reaches that same final PNG — a claim the palette_aware-focused
+//! Lua-level tests don't make, since they never dither.
+//!
+//! What this file uniquely earns, precisely: not "vibrance changes
+//! `image_process`'s output" (already pinned at the Lua-binding level by
+//! `lua_api_test::test_image_process_vibrance_changes_the_output`), but
+//! that the effect *survives dithering against a real device palette* —
+//! i.e. that the palette resolved for the Lua script's `device.colors`
+//! context is the same palette actually used to quantize the final PNG. A
+//! regression where those two diverge (panel colors correctly threaded
+//! upstream into the script context, but silently dropped before the final
+//! `render_png_from_svg` call) is invisible to every other test in this
+//! feature and is exactly what this file is built to catch.
 
 use std::sync::Arc;
 
@@ -62,6 +73,18 @@ fn chromatic_share(png: &[u8]) -> f64 {
 /// dull/vivid gap was driven by vibrance rather than by an unlucky palette
 /// distance quirk. See the mutation notes in `task-10-report.md` for the
 /// numbers.
+///
+/// Measured with this exact fixture (`dull` = vibrance 0, `vivid` =
+/// vibrance 80, 24,000 px, `trmnl_og_4clr`-shaped palette): dull =
+/// 0.240083 (4250 red + 1512 yellow), vivid = 0.303875 (4061 red + 3232
+/// yellow) — ratio **1.2657**, a 5.5% margin over the `1.2` bar this test
+/// asserts. That margin is not a flake risk (the pipeline has no RNG
+/// anywhere in `crates/eink-photo`/`image_process.rs`, confirmed by
+/// `render_is_deterministic_for_identical_inputs` below), but it IS brittle
+/// to any future change in `eink-dither`'s nearest-palette matching — if
+/// this test starts failing, re-sweep vibrance 0..100 on this fixture
+/// before assuming the feature broke; a shifted margin, not a reversed
+/// sign, points at the matcher instead.
 fn muted_photo(w: u32, h: u32) -> Vec<u8> {
     let mut img = image::RgbImage::new(w, h);
     for (x, y, px) in img.enumerate_pixels_mut() {
@@ -78,20 +101,26 @@ fn muted_photo(w: u32, h: u32) -> Vec<u8> {
     out.into_inner()
 }
 
-/// Like `common::store::build_store`, but the fixture's `config.yaml` also
-/// declares a `panels:` entry with chromatic official colors — a real
-/// 4-color panel profile lifted from this repo's own `config.yaml`
-/// (`trmnl_og_4clr`).
+/// Build a `ScreenStore` whose fixture `config.yaml` declares two `panels:`
+/// entries with chromatic official colors — a real 4-color panel profile
+/// lifted from this repo's own `config.yaml` (`trmnl_og_4clr`):
+/// - `color`: `colors` only, no `colors_actual`.
+/// - `color_measured`: the same `colors`, plus `colors_actual` (this repo's
+///   real measured values for that panel) — exercises the
+///   `measured_colors`/`use_actual` arguments `ScreenStore::render` passes
+///   into `render_png_from_svg` (`screen_store.rs:1124-1129`) when a panel
+///   has measured colors.
 ///
-/// This is needed because `RenderOpts` has no `colors` field: the render
-/// palette comes from `resolve_query_palette(&opts.model, None)`, which for
-/// every model except `"x"` resolves to the 4-*grey* `DEFAULT_COLORS`
-/// constant (see `src/api/display.rs`) — chromatic-free. The only way to get
-/// a chromatic entry into the palette actually used for dithering is
-/// `RenderOpts::panel`, resolved against the `panels:` config section
-/// (`ScreenStore::render`'s `panel_colors` -> `resolve_render_params`). So
-/// this helper, not `common::store::build_store`, is what makes the test
-/// meaningful at all.
+/// A panel is needed at all because `RenderOpts` has no `colors` field: the
+/// render palette comes from `resolve_query_palette(&opts.model, None)`,
+/// which for every model except `"x"` resolves to the 4-*grey*
+/// `DEFAULT_COLORS` constant (see `src/api/display.rs`) — chromatic-free.
+/// The only way to get a chromatic entry into the palette actually used for
+/// dithering is `RenderOpts::panel`, resolved against the `panels:` config
+/// section (`ScreenStore::render`'s `panel_colors` ->
+/// `resolve_render_params`). There is no shared store-builder for this in
+/// `tests/common/store.rs` (its `build_store` hardcodes a `panels:`-free
+/// config), so this helper builds its own fixture.
 fn build_store_with_color_panel(dir: &std::path::Path) -> Arc<ScreenStore> {
     let config_path = dir.join("config.yaml");
     let repo_dir = dir.join("local");
@@ -107,7 +136,10 @@ fn build_store_with_color_panel(dir: &std::path::Path) -> Arc<ScreenStore> {
             "devices:\n  DEFAULT:\n    screen: byonk-builtin/default\n\
              screen_repos:\n  local:\n    path: {}\n\
              panels:\n  color:\n    name: \"Test 4-color panel\"\n\
-             \x20   colors: \"#000000,#FFFFFF,#FF0000,#FFFF00\"\n",
+             \x20   colors: \"#000000,#FFFFFF,#FF0000,#FFFF00\"\n\
+             \x20 color_measured:\n    name: \"Test 4-color panel (measured)\"\n\
+             \x20   colors: \"#000000,#FFFFFF,#FF0000,#FFFF00\"\n\
+             \x20   colors_actual: \"#383038,#B8B8B0,#9C484B,#D0BE47\"\n",
             repo_dir.display()
         ),
     )
@@ -118,6 +150,15 @@ fn build_store_with_color_panel(dir: &std::path::Path) -> Arc<ScreenStore> {
     assert!(
         config.get_panel("color").is_some(),
         "fixture config.yaml must parse a 'color' panel"
+    );
+    assert!(
+        config.get_panel("color_measured").is_some()
+            && config
+                .get_panel("color_measured")
+                .unwrap()
+                .colors_actual
+                .is_some(),
+        "fixture config.yaml must parse a 'color_measured' panel with colors_actual"
     );
     let state = create_app_state_with_config(asset_loader, config).expect("create app state");
     state.screen_store.clone()
@@ -215,18 +256,26 @@ fn vibrance_increases_the_chromatic_share_of_the_dithered_output() {
     );
 }
 
-/// Deliberately break the premise: render the same "vivid" screen at
-/// `vibrance = 0.0` twice (under different screen names, since `render`
-/// resolves screens by name). With vibrance neutralized on both sides the
-/// pipeline is deterministic (no RNG anywhere in `crates/eink-photo` or
-/// `src/services/image_process.rs`), so the two chromatic shares must be
-/// equal, and the `1.2`-ratio assertion must fail. This is the mutation
-/// check the brief requires before trusting the assertion above: it proves
-/// the test can fail, and that it fails for the right reason (vibrance is
-/// the only thing distinguishing "dull" from "vivid" — collapse that
-/// distinction and the test collapses with it).
+/// What this test actually pins: end-to-end determinism for identical
+/// inputs, and that the screen *name* alone (`"dull"` vs `"vivid"`) does not
+/// leak into the render. Render the same script (`vibrance = 0.0`) under two
+/// different screen names and require identical chromatic shares.
+///
+/// This is narrower than its former name (`broken_premise_...`) implied: it
+/// was checked against all three mutations applied for this task (vibrance
+/// stage skipped, vibrance param dropped in the Lua binding, panel palette
+/// bypassed downstream) and passed under every one of them — a regression in
+/// vibrance itself cannot fail this test, only a name-dependent or
+/// nondeterministic render can. What it *does* guard is real: it is the
+/// reason the 5.5% margin on `vivid > dull * 1.2` above is a safe assertion
+/// rather than a flaky one — if identical inputs ever stopped producing
+/// identical outputs, that margin would be meaningless. (The brief's
+/// deliberate-break check — setting `vibrance` to `0.0` in both runs of the
+/// *primary* test and confirming the `1.2` assertion fails — was performed
+/// manually during development, not left as a permanent test; see
+/// `task-10-report.md`'s mutation section for that evidence instead.)
 #[test]
-fn broken_premise_both_screens_at_zero_vibrance_do_not_pass() {
+fn render_is_deterministic_for_identical_inputs() {
     let tmp = tempfile::tempdir().unwrap();
     let store = build_store_with_color_panel(tmp.path());
     write_photo_screen(tmp.path(), "dull", 0.0);
@@ -252,10 +301,51 @@ fn broken_premise_both_screens_at_zero_vibrance_do_not_pass() {
 
     assert!(
         (dull - vivid).abs() < f64::EPSILON,
-        "with vibrance neutralized on both sides the shares must be identical: {dull} vs {vivid}"
+        "with vibrance neutralized on both sides and only the screen name \
+         differing, the shares must be identical: {dull} vs {vivid}"
     );
-    assert!(
-        !(vivid > dull * 1.2),
-        "the real assertion must NOT hold when vibrance is neutralized on both sides: {dull} -> {vivid}"
+}
+
+/// Proves `colors_actual` (measured display colors) changes the final
+/// dithered device PNG, not just the pre-dither `image_process` output the
+/// existing 25 Lua-level tests already pin for `palette_aware`. Same script,
+/// same `vibrance`, same official `colors` — the only difference between
+/// the two renders is whether the panel also carries `colors_actual`.
+///
+/// This closes a gap the initial version of this file left open: measured
+/// colors steer palette-index selection inside the very same
+/// `render_png_from_svg` call this file's other tests already exercise
+/// (`measured_colors` + `use_actual` args, `screen_store.rs:1124-1129`), and
+/// a sibling in-flight branch makes measured colors flow end-to-end for the
+/// first time — this is the interaction most likely to break at that merge,
+/// and this is the only test positioned to catch it.
+#[test]
+fn measured_colors_change_the_final_dithered_output() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = build_store_with_color_panel(tmp.path());
+    write_photo_screen(tmp.path(), "photo", 40.0);
+
+    let opts = |panel: &str| RenderOpts {
+        model: "og".to_string(),
+        width: Some(200),
+        height: Some(120),
+        panel: Some(panel.to_string()),
+        timestamp: Some(1_750_000_000),
+        ..Default::default()
+    };
+
+    let render = |panel: &str| {
+        let r = store.render("local/photo", opts(panel));
+        assert!(r.error.is_none(), "{panel} must render: {:?}", r.error);
+        r.png
+    };
+
+    let official_only = render("color");
+    let measured = render("color_measured");
+
+    assert_ne!(
+        official_only, measured,
+        "a panel with colors_actual set must dither differently from the \
+         same panel without it — measured colors must reach the final PNG"
     );
 }

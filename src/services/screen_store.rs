@@ -970,7 +970,7 @@ impl ScreenStore {
         // Pre-script chain for the final measured-colour resolution after
         // the script runs — there is no dev-override or header layer in an
         // authoring render (see `resolve_render_params`'s doc comment).
-        let pre_script_measured_candidates: Vec<crate::api::display::MeasuredCandidate> = vec![(
+        let pre_script_measured_candidates: [crate::api::display::MeasuredCandidate; 1] = [(
             crate::api::display::SRC_PANEL_ACTUAL,
             measured_colors.clone(),
         )];

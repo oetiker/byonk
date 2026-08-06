@@ -256,8 +256,8 @@ fn run_render_command(
     // Pre-script chain for the final measured-colour resolution after the
     // script runs — the CLI has no dev-override or header layer (see
     // `resolve_render_params`'s doc comment).
-    let pre_script_measured_candidates: Vec<byonk::api::display::MeasuredCandidate> =
-        vec![(byonk::api::display::SRC_PANEL_ACTUAL, measured.clone())];
+    let pre_script_measured_candidates: [byonk::api::display::MeasuredCandidate; 1] =
+        [(byonk::api::display::SRC_PANEL_ACTUAL, measured.clone())];
 
     // Create device context with all provided fields
     let device_context = DeviceContext {

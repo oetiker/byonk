@@ -86,12 +86,22 @@ pub fn process(
 mod tests {
     use super::*;
 
-    pub(crate) fn assert_close(a: f32, b: f32, what: &str) {
+    /// Shared assertion helper for all crate tests, per Plan B's Global
+    /// Constraints ("Use a shared `assert_close` helper; do not invent
+    /// per-test epsilons"). `assert_close` covers the default `1e-4`
+    /// tolerance; `assert_close_tol` is the escape hatch for the rare test
+    /// that legitimately needs something else — pass the tolerance
+    /// explicitly rather than inlining a bare `(a - b).abs() < …` comparison.
+    pub(crate) fn assert_close_tol(a: f32, b: f32, tol: f32, what: &str) {
         assert!(
-            (a - b).abs() < 1e-4,
-            "{what}: expected {b}, got {a} (delta {})",
+            (a - b).abs() < tol,
+            "{what}: expected {b}, got {a} (delta {}, tolerance {tol})",
             (a - b).abs()
         );
+    }
+
+    pub(crate) fn assert_close(a: f32, b: f32, what: &str) {
+        assert_close_tol(a, b, 1e-4, what);
     }
 
     #[test]

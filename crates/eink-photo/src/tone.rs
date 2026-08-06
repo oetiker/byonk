@@ -18,8 +18,8 @@ pub fn apply_exposure(pixels: &mut [f32], ev: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[allow(unused_imports)]
-    use crate::color::{linear_to_srgb, srgb_to_linear};
+    use crate::color::srgb_to_linear;
+    use crate::tests::{assert_close, assert_close_tol};
 
     #[test]
     fn exposure_of_one_ev_doubles_linear_light() {
@@ -30,10 +30,7 @@ mod tests {
         apply_exposure(&mut pixels, 1.0);
         let got_linear = srgb_to_linear(pixels[0]);
         let want_linear = srgb_to_linear(start_tone) * 2.0;
-        assert!(
-            (got_linear - want_linear).abs() < 1e-4,
-            "expected linear {want_linear}, got {got_linear}"
-        );
+        assert_close(got_linear, want_linear, "1EV doubles linear light");
     }
 
     #[test]
@@ -41,8 +38,10 @@ mod tests {
         let mut pixels = vec![0.1f32, 0.5, 0.9];
         let before = pixels.clone();
         apply_exposure(&mut pixels, 0.0);
-        for (a, b) in pixels.iter().zip(before.iter()) {
-            assert!((a - b).abs() < 1e-5);
+        for (i, (a, b)) in pixels.iter().zip(before.iter()).enumerate() {
+            // Tighter than the shared 1e-4: a true no-op should be near bit-
+            // exact, per Plan B's "unless stated" carve-out.
+            assert_close_tol(*a, *b, 1e-5, &format!("0EV no-op, channel {i}"));
         }
     }
 
@@ -52,10 +51,7 @@ mod tests {
         apply_exposure(&mut pixels, 3.0);
         for v in &pixels {
             assert!(*v <= 1.0 + 1e-6, "value escaped the range: {v}");
-            assert!(
-                (*v - 1.0).abs() < 1e-4,
-                "a +3EV push from 0.9 must reach white, got {v}"
-            );
+            assert_close(*v, 1.0, "+3EV push from 0.9 must reach white");
         }
     }
 

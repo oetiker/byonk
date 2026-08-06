@@ -32,43 +32,45 @@ pub fn luminance(r: f32, g: f32, b: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn close(a: f32, b: f32) -> bool {
-        (a - b).abs() < 1e-4
-    }
+    use crate::tests::{assert_close, assert_close_tol};
 
     #[test]
     fn transfer_round_trips() {
         for i in 0..=100 {
             let v = i as f32 / 100.0;
-            assert!(
-                close(linear_to_srgb(srgb_to_linear(v)), v),
-                "round trip failed at {v}"
+            assert_close(
+                linear_to_srgb(srgb_to_linear(v)),
+                v,
+                &format!("round trip at {v}"),
             );
         }
     }
 
     #[test]
     fn transfer_endpoints_are_exact() {
-        assert!(close(srgb_to_linear(0.0), 0.0));
-        assert!(close(srgb_to_linear(1.0), 1.0));
-        assert!(close(linear_to_srgb(0.0), 0.0));
-        assert!(close(linear_to_srgb(1.0), 1.0));
+        assert_close(srgb_to_linear(0.0), 0.0, "srgb_to_linear(0.0)");
+        assert_close(srgb_to_linear(1.0), 1.0, "srgb_to_linear(1.0)");
+        assert_close(linear_to_srgb(0.0), 0.0, "linear_to_srgb(0.0)");
+        assert_close(linear_to_srgb(1.0), 1.0, "linear_to_srgb(1.0)");
     }
 
     #[test]
     fn mid_grey_is_about_eighteen_percent_linear() {
         // sRGB 0.5 is ~0.214 in linear light — the number that makes the
-        // linear-vs-tone-domain distinction matter.
-        assert!(
-            (srgb_to_linear(0.5) - 0.2140).abs() < 1e-3,
-            "got {}",
-            srgb_to_linear(0.5)
+        // linear-vs-tone-domain distinction matter. Tolerance is 1e-3, not
+        // the shared 1e-4, per Plan B's "unless stated" carve-out — but it
+        // must still fail against a gamma-2.2 substitution (0.2176), which
+        // is well outside even this looser bound.
+        assert_close_tol(
+            srgb_to_linear(0.5),
+            0.2140,
+            1e-3,
+            "srgb_to_linear(0.5) ~ 18% linear grey",
         );
     }
 
     #[test]
     fn luminance_of_white_is_one() {
-        assert!(close(luminance(1.0, 1.0, 1.0), 1.0));
+        assert_close(luminance(1.0, 1.0, 1.0), 1.0, "luminance(white)");
     }
 }

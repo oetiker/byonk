@@ -75,11 +75,258 @@ pub fn apply_endpoints(pixels: &mut [f32], from: (f32, f32), to: (f32, f32)) {
     }
 }
 
+/// Highlight recovery and shadow lift.
+///
+/// Each acts through a weighting mask so the adjustment is confined to its
+/// end of the range: the shadow mask is `(1 - t)^2` and the highlight mask
+/// `t^2`, where `t` is the pixel's tone-domain luminance. Squaring is what
+/// keeps the opposite end still — a linear mask would visibly move it.
+///
+/// Both sliders are -100..=100.
+pub fn apply_highlights_shadows(pixels: &mut [f32], highlights: f32, shadows: f32) {
+    if highlights == 0.0 && shadows == 0.0 {
+        return;
+    }
+    // 100 units moves a fully-masked pixel by 0.35 in the tone domain.
+    let h = highlights / 100.0 * 0.35;
+    let s = shadows / 100.0 * 0.35;
+
+    for px in pixels.chunks_exact_mut(3) {
+        let t = crate::color::luminance(px[0], px[1], px[2]).clamp(0.0, 1.0);
+        let shadow_mask = (1.0 - t) * (1.0 - t);
+        let highlight_mask = t * t;
+        let delta = s * shadow_mask + h * highlight_mask;
+        for c in px.iter_mut() {
+            *c = (*c + delta).clamp(0.0, 1.0);
+        }
+    }
+}
+
+/// S-curve contrast about mid-grey, in the TONE domain.
+///
+/// `amount` is -100..=100. Positive uses a smoothstep-weighted blend toward a
+/// steeper slope; negative blends toward the identity flattened about 0.5.
+/// The construction guarantees two properties the tests pin: 0.5 is a fixed
+/// point, and the mapping is monotonic for every amount in range.
+pub fn apply_contrast(pixels: &mut [f32], amount: f32) {
+    if amount == 0.0 {
+        return;
+    }
+    let k = amount / 100.0;
+    for v in pixels.iter_mut() {
+        let x = v.clamp(0.0, 1.0);
+        let curved = if k > 0.0 {
+            // Smoothstep is the canonical monotonic S about 0.5.
+            let s = x * x * (3.0 - 2.0 * x);
+            x + (s - x) * k
+        } else {
+            // Blend toward a flat mid-grey; never past it, so no inversion.
+            x + (0.5 - x) * (-k) * 0.5
+        };
+        *v = curved.clamp(0.0, 1.0);
+    }
+}
+
+/// Piecewise-linear point tone curve in the tone domain.
+///
+/// Requires at least two points, strictly increasing in the input coordinate.
+/// Inputs below the first point or above the last are clamped to that point's
+/// output, so a curve that does not start at 0 or end at 1 still behaves
+/// predictably.
+pub fn apply_curve(pixels: &mut [f32], points: &[(f32, f32)]) -> Result<(), crate::PhotoError> {
+    if points.len() < 2 {
+        return Err(crate::PhotoError::BadCurve(
+            "a curve needs at least two points",
+        ));
+    }
+    for w in points.windows(2) {
+        if w[1].0 <= w[0].0 {
+            return Err(crate::PhotoError::BadCurve(
+                "points must be strictly increasing in the input coordinate",
+            ));
+        }
+    }
+
+    for v in pixels.iter_mut() {
+        let x = v.clamp(0.0, 1.0);
+        *v = if x <= points[0].0 {
+            points[0].1
+        } else if x >= points[points.len() - 1].0 {
+            points[points.len() - 1].1
+        } else {
+            let i = points
+                .windows(2)
+                .position(|w| x >= w[0].0 && x <= w[1].0)
+                .unwrap_or(0);
+            let (x0, y0) = points[i];
+            let (x1, y1) = points[i + 1];
+            let f = (x - x0) / (x1 - x0);
+            y0 + (y1 - y0) * f
+        }
+        .clamp(0.0, 1.0);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::color::srgb_to_linear;
     use crate::tests::{assert_close, assert_close_tol};
+
+    /// Build a linear 0..1 greyscale ramp of `n` pixels.
+    fn ramp(n: usize) -> Vec<f32> {
+        let mut v = Vec::with_capacity(n * 3);
+        for i in 0..n {
+            let t = i as f32 / (n - 1) as f32;
+            v.extend_from_slice(&[t, t, t]);
+        }
+        v
+    }
+
+    fn mean_of(pixels: &[f32], lo: usize, hi: usize) -> f32 {
+        let slice = &pixels[lo * 3..hi * 3];
+        slice.iter().sum::<f32>() / slice.len() as f32
+    }
+
+    #[test]
+    fn shadows_lift_the_low_quartile_and_leave_the_top_decile_alone() {
+        // The defining property of a shadow recovery: it must be local to the
+        // shadows. A naive brightness add would move the top decile too.
+        let before = ramp(100);
+        let mut after = before.clone();
+        apply_highlights_shadows(&mut after, 0.0, 50.0);
+
+        let q_before = mean_of(&before, 0, 25);
+        let q_after = mean_of(&after, 0, 25);
+        assert!(
+            q_after > q_before + 0.02,
+            "shadows must lift: {q_before} -> {q_after}"
+        );
+
+        let t_before = mean_of(&before, 90, 100);
+        let t_after = mean_of(&after, 90, 100);
+        assert_close_tol(
+            t_after,
+            t_before,
+            0.02,
+            "top decile must stay put under shadow lift",
+        );
+    }
+
+    #[test]
+    fn highlights_recover_the_top_and_leave_the_bottom_decile_alone() {
+        let before = ramp(100);
+        let mut after = before.clone();
+        apply_highlights_shadows(&mut after, -50.0, 0.0);
+
+        let t_before = mean_of(&before, 75, 100);
+        let t_after = mean_of(&after, 75, 100);
+        assert!(
+            t_after < t_before - 0.02,
+            "highlights must pull down: {t_before} -> {t_after}"
+        );
+
+        let b_before = mean_of(&before, 0, 10);
+        let b_after = mean_of(&after, 0, 10);
+        assert_close_tol(
+            b_after,
+            b_before,
+            0.02,
+            "bottom decile must stay put under highlight recovery",
+        );
+    }
+
+    #[test]
+    fn highlights_and_shadows_of_zero_are_a_no_op() {
+        let before = ramp(50);
+        let mut after = before.clone();
+        apply_highlights_shadows(&mut after, 0.0, 0.0);
+        for (i, (a, b)) in after.iter().zip(before.iter()).enumerate() {
+            assert_close_tol(
+                *a,
+                *b,
+                1e-5,
+                &format!("0/0 highlights/shadows no-op, channel {i}"),
+            );
+        }
+    }
+
+    #[test]
+    fn contrast_pivots_about_mid_grey_in_the_tone_domain() {
+        // This is the assertion that catches an S-curve applied in linear
+        // light: there, tone-domain 0.5 would NOT be the fixed point.
+        let mut p = vec![0.5f32; 3];
+        apply_contrast(&mut p, 60.0);
+        assert_close(p[0], 0.5, "mid grey must be the fixed point");
+    }
+
+    #[test]
+    fn positive_contrast_pushes_away_from_mid_grey() {
+        let mut p = vec![0.25f32, 0.25, 0.25, 0.75, 0.75, 0.75];
+        apply_contrast(&mut p, 50.0);
+        assert!(p[0] < 0.25, "quarter tone must darken, got {}", p[0]);
+        assert!(
+            p[3] > 0.75,
+            "three-quarter tone must brighten, got {}",
+            p[3]
+        );
+    }
+
+    #[test]
+    fn negative_contrast_pulls_toward_mid_grey() {
+        let mut p = vec![0.25f32, 0.25, 0.25];
+        apply_contrast(&mut p, -50.0);
+        assert!(
+            p[0] > 0.25,
+            "flattening must raise the quarter tone, got {}",
+            p[0]
+        );
+    }
+
+    #[test]
+    fn contrast_is_monotonic() {
+        // A tone operation that reorders brightness is broken, however
+        // pleasing any single sample looks.
+        let mut p = ramp(64);
+        apply_contrast(&mut p, 80.0);
+        for w in p.chunks_exact(3).collect::<Vec<_>>().windows(2) {
+            assert!(
+                w[1][0] >= w[0][0] - 1e-6,
+                "ordering inverted: {} then {}",
+                w[0][0],
+                w[1][0]
+            );
+        }
+    }
+
+    #[test]
+    fn curve_interpolates_between_its_points() {
+        let mut p = vec![0.5f32; 3];
+        apply_curve(&mut p, &[(0.0, 0.0), (0.5, 0.8), (1.0, 1.0)]).unwrap();
+        assert_close(p[0], 0.8, "curve midpoint interpolation");
+    }
+
+    #[test]
+    fn curve_endpoints_are_honoured() {
+        let mut p = vec![0.0f32, 0.0, 0.0, 1.0, 1.0, 1.0];
+        apply_curve(&mut p, &[(0.0, 0.1), (1.0, 0.9)]).unwrap();
+        assert_close(p[0], 0.1, "curve low endpoint");
+        assert_close(p[3], 0.9, "curve high endpoint");
+    }
+
+    #[test]
+    fn curve_rejects_unsorted_or_too_short_input() {
+        let mut p = vec![0.5f32; 3];
+        assert!(
+            apply_curve(&mut p, &[(0.5, 0.5)]).is_err(),
+            "one point is not a curve"
+        );
+        assert!(
+            apply_curve(&mut p, &[(1.0, 1.0), (0.0, 0.0)]).is_err(),
+            "unsorted input must be rejected, not silently reordered"
+        );
+    }
 
     #[test]
     fn exposure_of_one_ev_doubles_linear_light() {

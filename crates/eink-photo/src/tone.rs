@@ -329,6 +329,50 @@ mod tests {
     }
 
     #[test]
+    fn curve_interpolates_at_a_genuinely_interior_point() {
+        // x=0.5 is itself a control point in the other interpolation test,
+        // which makes f collapse to exactly 1.0 and hides shape bugs like
+        // `f*f` or swapped y0/y1. Query an x that is not a control point:
+        // on the line (0,0)-(1,1), f*f would give 0.0625 instead of 0.25,
+        // and swapping y0/y1 would give 0.75 instead of 0.25.
+        let mut p = vec![0.25f32; 3];
+        apply_curve(&mut p, &[(0.0, 0.0), (1.0, 1.0)]).unwrap();
+        assert_close(p[0], 0.25, "interior fractional interpolation");
+    }
+
+    #[test]
+    fn curve_clamps_input_outside_its_own_domain() {
+        // The existing endpoint test only checks x equal to the first/last
+        // control point, which is boundary-inclusive, not out-of-range.
+        // Use a curve whose domain is narrower than [0,1] and probe both
+        // sides of it.
+        let mut p = vec![0.0f32, 0.0, 0.0, 1.0, 1.0, 1.0];
+        apply_curve(&mut p, &[(0.2, 0.3), (0.8, 0.9)]).unwrap();
+        assert_close(
+            p[0],
+            0.3,
+            "input below the curve's domain clamps to the first point",
+        );
+        assert_close(
+            p[3],
+            0.9,
+            "input above the curve's domain clamps to the last point",
+        );
+    }
+
+    #[test]
+    fn curve_rejects_duplicate_x_points() {
+        // Same code path as `curve_rejects_unsorted_or_too_short_input`
+        // (w[1].0 <= w[0].0), but exact duplicates are a distinct case from
+        // strict reversal and deserve an explicit assertion.
+        let mut p = vec![0.5f32; 3];
+        assert!(
+            apply_curve(&mut p, &[(0.5, 0.2), (0.5, 0.8)]).is_err(),
+            "duplicate x coordinates must be rejected"
+        );
+    }
+
+    #[test]
     fn exposure_of_one_ev_doubles_linear_light() {
         // The defining property. Start from a tone-domain value, expect the
         // LINEAR value to double.

@@ -21,6 +21,8 @@
 mod color;
 mod params;
 #[allow(dead_code)]
+mod presence;
+#[allow(dead_code)]
 mod tone;
 
 pub use params::{Params, Preset, Sharpen};

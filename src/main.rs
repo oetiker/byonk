@@ -64,7 +64,8 @@ enum Commands {
         /// are sent to the panel. Defaults to on whenever the device's panel
         /// has a calibration. This changes only how the PNG is drawn; the
         /// dithering always targets the measured colours when they resolve.
-        #[arg(long)]
+        /// Bare `--use-actual` means `true`; `--use-actual false` opts out.
+        #[arg(long, num_args = 0..=1, default_missing_value = "true")]
         use_actual: Option<bool>,
     },
     /// Extract embedded assets to filesystem for customization
@@ -280,7 +281,13 @@ fn run_render_command(
         width: Some(display_spec.width),
         height: Some(display_spec.height),
         registration_code,
-        colors: Some(byonk::api::display::colors_to_hex_strings(&cli_palette)),
+        colors: Some(byonk::api::display::colors_to_hex_strings(
+            &byonk::api::display::resolve_ctx_palette(
+                dc_colors.as_deref(),
+                panel_colors.as_deref(),
+                &cli_palette,
+            ),
+        )),
         colors_actual: measured
             .as_deref()
             .map(byonk::api::display::colors_to_hex_strings),
@@ -339,11 +346,16 @@ fn run_render_command(
             )
         };
 
-        // No script runs on the unregistered path, so the winner is the
-        // pre-script chain alone — still subject to the length check so a
-        // mismatched panel.colors_actual is dropped with a warning, not
-        // passed through raw.
-        let measured = crate::api::display::resolve_measured_colors(
+        // No script runs on the unregistered path. `is_unregistered` is the
+        // negation of `is_device_registered`, which is true iff
+        // `device_config` resolves — so here `device_config` is always
+        // `None`, `panel` is always `None`, and
+        // `pre_script_measured_candidates` is always `[(SRC_PANEL_ACTUAL,
+        // None)]`. This call therefore always yields `SRC_NONE` with no
+        // colors and no warning; it's kept (rather than hardcoded) so this
+        // stays correct if the unregistered path ever grows a measured
+        // source of its own.
+        let measured = byonk::api::display::resolve_measured_colors(
             cli_palette.len(),
             &pre_script_measured_candidates,
         );

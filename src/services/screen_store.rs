@@ -189,9 +189,11 @@ pub struct RenderResult {
     pub error: Option<RenderError>,
     /// Which layer supplied the measured colours this render dithered
     /// against — one of the `api::display::SRC_*` labels. `SRC_NONE` when
-    /// the render used the official palette. Mirrors what the dev tuning
-    /// popup displays, so an authoring client can show it too. This is the
-    /// post-script value: the layer that actually won, script included.
+    /// the render used the official palette. There is no dev-UI element
+    /// that displays this; it's the diagnostics field an authoring client
+    /// (e.g. the MCP `render_screen` tool) surfaces to show the source.
+    /// This is the post-script value: the layer that actually won, script
+    /// included.
     pub measured_source: &'static str,
 }
 

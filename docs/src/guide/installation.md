@@ -257,7 +257,7 @@ Render a screen directly to PNG (useful for testing):
 | `-b, --battery` | Battery voltage for testing (e.g., 4.12) |
 | `-r, --rssi` | WiFi signal strength for testing (e.g., -67) |
 | `-f, --firmware` | Firmware version string for testing |
-| `--use-actual` | Draw the output PNG in the device's measured colours instead of the spec colours it sends to the panel. Defaults to on whenever the device's panel has a calibration; this only changes how the PNG is drawn, never the dithering. |
+| `--use-actual` | Draw the output PNG in the device's measured colours instead of the spec colours it sends to the panel. Defaults to on whenever the device's panel has a calibration; this only changes how the PNG is drawn, never the dithering. Accepts a bare flag (`--use-actual` means `true`) or an explicit `--use-actual true`/`--use-actual false`. `true` with no calibration is a no-op, not an error. |
 
 **Example with all device info:**
 

@@ -1105,14 +1105,16 @@ return {
 
 Must have the same number of entries as the resolved palette (`colors`, above). If it does not,
 the render still succeeds: the value is ignored, the next source in the chain is used instead, and
-a warning is written to the script log (visible in the MCP `render_screen` tool's `log` field and
-in dev mode). Entries that are not 6-digit hex are dropped, which shortens the list and therefore
-trips the same check.
+a warning is written to the script log. On the authoring path this is visible in the MCP
+`render_screen` tool's `log` field; on `/dev/render` the warning goes only to the server's
+`tracing` output — the dev UI receives raw PNG bytes and has no log surface to show it on.
 
 A script that returns `colors_actual` wins over every other source, including the dev
-colour-tuning popup — the dev UI reports the source as `script`, so this is visible rather than
-mysterious. See `device.colors_actual` above for the full precedence chain and why measured
-colours steer dithering while the emitted PNG palette can still be the nominal one.
+colour-tuning popup. The winning source isn't rendered anywhere in the dev UI, but it is visible
+as `measured_source` in the MCP `render_screen` tool's diagnostics, and as a `tracing` field in
+server logs — so it's inspectable rather than mysterious, just not from the dev UI itself. See
+`device.colors_actual` above for the full precedence chain and why measured colours steer
+dithering while the emitted PNG palette can still be the nominal one.
 
 ### dither
 

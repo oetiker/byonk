@@ -75,9 +75,10 @@ pub struct RenderParams {
     pub palette: Vec<(u8, u8, u8)>,
     pub measured_colors: Option<Vec<(u8, u8, u8)>>,
     /// Which layer supplied `measured_colors` — one of the `SRC_*` consts,
-    /// or [`SRC_NONE`]. This is the label the dev tuning popup renders
-    /// verbatim (see the `SRC_*` consts' doc comment); it names the source
-    /// that actually won the FULL chain (script included, after the
+    /// or [`SRC_NONE`]. Surfaced via `tracing` fields (server logs) and via
+    /// `RenderResult::measured_source` / the MCP `render_screen` tool's
+    /// diagnostics (see the `SRC_*` consts' doc comment); it names the
+    /// source that actually won the FULL chain (script included, after the
     /// length rule), not just a caller's own pre-script layer.
     pub measured_source: &'static str,
     pub dither: Option<String>,
@@ -198,8 +199,10 @@ pub fn resolve_dither_tuning(
 /// Source labels for [`MeasuredResolution::source`] / [`resolve_measured_colors`].
 ///
 /// Defined once so the four call sites (`api::display`, `api::dev`,
-/// `services::screen_store`, `main`) and the dev-UI-facing debug log can't
-/// drift on spelling — the dev tuning popup renders this string verbatim.
+/// `services::screen_store`, `main`) can't drift on spelling. The resolved
+/// value is not rendered anywhere in the dev UI — it's surfaced via
+/// `tracing` fields (server logs) and via `RenderResult::measured_source` /
+/// the MCP `render_screen` tool's diagnostics.
 pub const SRC_SCRIPT: &str = "script";
 pub const SRC_DEV_OVERRIDE: &str = "dev_override";
 /// The authoring path's own dev-override slot: a `colors_actual` passed

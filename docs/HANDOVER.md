@@ -1,6 +1,6 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-05 — **Plan 2 (MCP interface) is at 9/12. Tasks 1–9 are complete and individually reviewed clean.** Branch `feat/screen-store-authoring-core`, HEAD `3bc4820`, 50 commits ahead of `origin/main` (`67b3855`), local-only (never pushed). The branch remains **HELD** by user decision — no merge, no PR. `make check` green at `3bc4820`. Working tree clean apart from the three housekeeping items noted at the bottom._
+_Last updated: 2026-08-06 — **Plan 2 (MCP interface) is at 9/12. Tasks 1–9 are complete and individually reviewed clean.** Branch `feat/screen-store-authoring-core`, HEAD `2c13f69`, 53 commits ahead of `origin/main` (`67b3855`), local-only (never pushed). The branch remains **HELD** by user decision — no merge, no PR. **Working tree clean.** `make check` green at `3bc4820`, the last commit to touch code — everything since is docs/chore._
 
 ## Resume here
 
@@ -9,6 +9,33 @@ _Last updated: 2026-08-05 — **Plan 2 (MCP interface) is at 9/12. Tasks 1–9 a
 3. The plan is `docs/superpowers/plans/2026-07-28-screen-store-mcp-interface.md`. Extract per-task briefs with the skill's `scripts/task-brief PLAN_FILE N` — never hand a subagent the whole plan.
 
 Remaining: **10** `meta.yaml` JSON Schema · **11** MCP resources · **12** docs + CHANGES.
+
+## Next up — Task 10, and the pre-flight work already done for it
+
+**The brief is already extracted: `.superpowers/sdd/2026-07-28-screen-store-mcp-interface/task-10-brief.md`** (158 lines). BASE will be `2c13f69`.
+
+Task 10 produces `pub fn meta_json_schema() -> serde_json::Value` in `src/models/screen_meta.rs`, plus a new `tests/screen_meta_schema_test.rs`. Task 11 serves it as an MCP resource. The plan's stated rationale: *"Generating it from the very types that parse `meta.yaml` is what keeps it from drifting into a lie."*
+
+**That premise does not survive contact with the actual types.** I checked before writing this, and the next session should treat Task 10's approach as an open design question rather than a transcription job:
+
+- **`ScreenMeta` is `#[derive(Debug, Clone)]` only — it is not `Deserialize` at all.** Parsing goes through a *private* `RawMeta`. So there is no single public "type that parses meta.yaml" to derive from.
+- **Deriving `JsonSchema` on `ScreenMeta` would fail the brief's own test.** `params: ParamSchema` is non-`Option` with no serde default, so schemars marks it **required** — while the brief asserts `assert!(!required.contains(&"params"))`. `RawMeta` is the type with the `#[serde(default)]` attrs, and it is private.
+- **`ParamSchema`'s shape is not the YAML's shape.** It is `{ fields: Vec<ParamField> }`, but in `meta.yaml` params is a **map keyed by field name** (`RawField`'s doc comment says the name "is the map key"). A derived schema would describe `{fields: [...]}` — a document the parser does not accept. That is exactly the drift-into-a-lie the task exists to prevent.
+- **`RawMeta.params` is `serde_yaml::Value`** — untyped. Deriving from `RawMeta` yields `params: any`, losing the entire param schema.
+- **`schemars` is NOT a direct dependency** (only transitively via rmcp, resolved to **1.2.2**). The settled decision is "`schemars` only via `rmcp::schemars`" — but that was about MCP code. Task 10 touches `src/models/`, so honouring it literally makes **core model types depend on the MCP server crate**. Decide deliberately: add `schemars` as a direct dep pinned to rmcp's 1.2.2, or keep the derive out of `src/models/` entirely.
+
+The brief's *assertions* about what is required are correct (`RawMeta` requires `title`/`description`/`byonk`; `refresh` and `params` carry `#[serde(default)]`) — it is the *generation strategy* that needs a decision before dispatch. **Raise this with the user as a plan conflict before dispatching**, per the skill's rule on findings that contradict plan text.
+
+### Repeat these in every dispatch
+
+They have earned it over nine tasks:
+
+- The plan's code blocks are **not authoritative** — nine tasks, nine plan defects. Tell the implementer so.
+- `#[tool_router]` generates an **associated** function (`Self::x_router()`), which the plan has got wrong in three separate briefs.
+- **Verify every behavioural claim in a doc comment or tool description against the code**, and fix the description, not the code.
+- **Verify test discrimination by breaking the code and watching it fail**, then restore. Disclosing a weak test is valued, not penalised.
+- FOREGROUND only, `CARGO_BUILD_JOBS=4`, `-- --test-threads=4`, stage explicit paths, `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
+- Give reviewers a **call budget** and tell them to prefer `grep -n` / ranged `sed` over whole-file reads.
 
 ## The initiative
 

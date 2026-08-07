@@ -206,3 +206,231 @@ fn visual_photo() {
     eprintln!("\n=== photo {w}x{h} ===");
     render_all("photo", &pixels, w, h);
 }
+
+/// Magnified crops of the upper field, where the reported streak sits.
+///
+/// Luminance statistics kept pointing at the lower half while the visible
+/// line is near the top, which is itself evidence: a seam the eye finds but
+/// luminance does not is a change in *which inks* are used at roughly
+/// constant brightness. Nearest-neighbour upscaling keeps the dot pattern
+/// legible instead of blurring the thing being examined.
+#[test]
+#[ignore = "writes PNGs; run with --ignored"]
+fn visual_crop_upper_field() {
+    const W: usize = 480;
+    const H: usize = 320;
+    const Y0: usize = 55;
+    const Y1: usize = 145;
+    const ZOOM: usize = 3;
+
+    let mut pixels = Vec::with_capacity(W * H);
+    for y in 0..H {
+        let l = 0.12 + 0.76 * (y as f32 / (H - 1) as f32);
+        for x in 0..W {
+            let hue = x as f32 / W as f32;
+            let (r, g, b) = hsl_to_rgb(hue, 0.5, l);
+            pixels.push(Srgb::new(r, g, b));
+        }
+    }
+
+    let palette = panel();
+    eprintln!("\n=== upper-field crop, rows {Y0}..{Y1}, {ZOOM}x ===");
+    for &(name, algo) in ALGOS {
+        let out = EinkDitherer::new(palette.clone())
+            .algorithm(algo)
+            .dither(&pixels, W, H);
+        let rgb = out.to_rgb_actual();
+
+        let ch = Y1 - Y0;
+        let (ow, oh) = (W * ZOOM, ch * ZOOM);
+        let mut buf = vec![0u8; ow * oh * 3];
+        for y in 0..oh {
+            for x in 0..ow {
+                let sx = x / ZOOM;
+                let sy = Y0 + y / ZOOM;
+                let s = (sy * W + sx) * 3;
+                let d = (y * ow + x) * 3;
+                buf[d..d + 3].copy_from_slice(&rgb[s..s + 3]);
+            }
+        }
+        write(&format!("crop-{name}.png"), &buf, ow, oh);
+    }
+}
+
+/// Does the blue-noise jitter break up the structured artifacts?
+///
+/// Error diffusion on a smooth gradient can lock into a limit cycle instead
+/// of staying stochastic, producing repeating scallops at ink-set boundaries
+/// and herringbone across flat areas. The jitter exists to break that up, and
+/// Atkinson is the one kernel that opts out (`noise_scale = 0.0`) -- so if
+/// the mechanism is what it looks like, raising the scale should visibly
+/// reduce the structure, and Atkinson should be the worst offender at 0.
+#[test]
+#[ignore = "writes PNGs; run with --ignored"]
+fn visual_noise_scale_sweep() {
+    const W: usize = 480;
+    const H: usize = 320;
+    const Y0: usize = 55;
+    const Y1: usize = 145;
+    const ZOOM: usize = 3;
+
+    let mut pixels = Vec::with_capacity(W * H);
+    for y in 0..H {
+        let l = 0.12 + 0.76 * (y as f32 / (H - 1) as f32);
+        for x in 0..W {
+            let hue = x as f32 / W as f32;
+            let (r, g, b) = hsl_to_rgb(hue, 0.5, l);
+            pixels.push(Srgb::new(r, g, b));
+        }
+    }
+
+    let palette = panel();
+    eprintln!("\n=== noise_scale sweep ===");
+    for (name, algo) in [
+        ("atkinson", DitherAlgorithm::Atkinson),
+        ("jarvis-judice-ninke", DitherAlgorithm::JarvisJudiceNinke),
+    ] {
+        for scale in [0.0f32, 4.0, 8.0, 16.0] {
+            let out = EinkDitherer::new(palette.clone())
+                .algorithm(algo)
+                .noise_scale(scale)
+                .dither(&pixels, W, H);
+            let rgb = out.to_rgb_actual();
+
+            let ch = Y1 - Y0;
+            let (ow, oh) = (W * ZOOM, ch * ZOOM);
+            let mut buf = vec![0u8; ow * oh * 3];
+            for y in 0..oh {
+                for x in 0..ow {
+                    let s = ((Y0 + y / ZOOM) * W + x / ZOOM) * 3;
+                    let d = (y * ow + x) * 3;
+                    buf[d..d + 3].copy_from_slice(&rgb[s..s + 3]);
+                }
+            }
+            write(&format!("noise-{name}-{scale:04.1}.png"), &buf, ow, oh);
+        }
+    }
+}
+
+/// Locate horizontal seams in a smooth gradient.
+///
+/// Streaks across a gradient are far more objectionable than the dE they
+/// cost, because the eye finds straight lines in smooth content instantly.
+/// The input varies smoothly down the frame, so any sharp row-to-row jump in
+/// the output is an artifact of the algorithm, not of the content.
+///
+/// Where it lands identifies the cause, so this reports the row rather than
+/// just the fact:
+///   - a multiple of 64 implicates the blue-noise jitter table, which is
+///     indexed `[y % 64][x % 64]` and seams if it is not toroidal;
+///   - the same row under every kernel implicates the noise table or the
+///     palette decision boundary;
+///   - a kernel-dependent row implicates the error buffer or serpentine.
+#[test]
+#[ignore = "diagnostic; run with --ignored --nocapture"]
+fn visual_find_horizontal_seams() {
+    const W: usize = 480;
+    const H: usize = 320;
+    let mut pixels = Vec::with_capacity(W * H);
+    for y in 0..H {
+        let l = 0.12 + 0.76 * (y as f32 / (H - 1) as f32);
+        for x in 0..W {
+            let hue = x as f32 / W as f32;
+            let (r, g, b) = hsl_to_rgb(hue, 0.5, l);
+            pixels.push(Srgb::new(r, g, b));
+        }
+    }
+
+    let palette = panel();
+    eprintln!("\n=== horizontal seams in the 50%-saturation field ===");
+    eprintln!("(rows whose luminance error jumps most from the row above)\n");
+
+    for &(name, algo) in ALGOS {
+        let out = EinkDitherer::new(palette.clone())
+            .algorithm(algo)
+            .dither(&pixels, W, H);
+        let idx = out.indices();
+
+        // Per-row luminance error against the row's own input.
+        let row_err: Vec<f32> = (0..H)
+            .map(|y| {
+                let mut got = 0.0;
+                let mut want = 0.0;
+                for x in 0..W {
+                    let c = palette.actual_linear(idx[y * W + x] as usize);
+                    got += 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+                    let s = LinearRgb::from(pixels[y * W + x]);
+                    want += 0.2126 * s.r + 0.7152 * s.g + 0.0722 * s.b;
+                }
+                (got - want) / W as f32
+            })
+            .collect();
+
+        let mut jumps: Vec<(f32, usize)> = (1..H)
+            .map(|y| ((row_err[y] - row_err[y - 1]).abs(), y))
+            .collect();
+        jumps.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+
+        let mean_jump: f32 = jumps.iter().map(|j| j.0).sum::<f32>() / (H - 1) as f32;
+        let top: Vec<String> = jumps
+            .iter()
+            .take(5)
+            .map(|&(mag, y)| {
+                let mult64 = if y % 64 == 0 { " [64x]" } else { "" };
+                format!("y={y}{mult64} ({:.1}x)", mag / mean_jump)
+            })
+            .collect();
+        eprintln!("  {name:<20} {}", top.join("  "));
+    }
+
+    // A seam confined to one hue range is invisible to a full-width row
+    // average, which is most of them: the ink set changes with hue, so a
+    // decision boundary sweeps across only part of the frame. Splitting into
+    // hue bands is what makes a local streak measurable.
+    const BANDS: usize = 16;
+    let bw = W / BANDS;
+    eprintln!("\nWorst *local* seam per kernel (hue band x row):");
+    for &(name, algo) in ALGOS {
+        let out = EinkDitherer::new(palette.clone())
+            .algorithm(algo)
+            .dither(&pixels, W, H);
+        let idx = out.indices();
+
+        let mut band_err = vec![vec![0.0f32; H]; BANDS];
+        for (b, col) in band_err.iter_mut().enumerate() {
+            for (y, cell) in col.iter_mut().enumerate() {
+                let mut got = 0.0;
+                let mut want = 0.0;
+                for x in b * bw..(b + 1) * bw {
+                    let c = palette.actual_linear(idx[y * W + x] as usize);
+                    got += 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+                    let s = LinearRgb::from(pixels[y * W + x]);
+                    want += 0.2126 * s.r + 0.7152 * s.g + 0.0722 * s.b;
+                }
+                *cell = (got - want) / bw as f32;
+            }
+        }
+
+        let mut worst = (0.0f32, 0usize, 0usize);
+        let mut total = 0.0f32;
+        let mut n = 0usize;
+        for (b, col) in band_err.iter().enumerate() {
+            for y in 1..H {
+                let d = (col[y] - col[y - 1]).abs();
+                total += d;
+                n += 1;
+                if d > worst.0 {
+                    worst = (d, b, y);
+                }
+            }
+        }
+        let mean = total / n as f32;
+        let hue_deg = (worst.1 * bw + bw / 2) as f32 / W as f32 * 360.0;
+        eprintln!(
+            "  {name:<20} y={:<4} hue~{hue_deg:>5.0}deg  {:.1}x mean",
+            worst.2,
+            worst.0 / mean
+        );
+    }
+    eprintln!();
+}

@@ -11,7 +11,7 @@
 //!
 //! Output goes to `target/dither-compare/`.
 
-use eink_dither::{DitherAlgorithm, EinkDitherer, Palette, Srgb};
+use eink_dither::{DitherAlgorithm, EinkDitherer, LinearRgb, Palette, Srgb};
 use std::path::PathBuf;
 
 /// The measured E1002 six-colour panel: what the inks really look like, as
@@ -80,12 +80,41 @@ fn write(name: &str, buf: &[u8], w: usize, h: usize) {
     eprintln!("  wrote {}", path.display());
 }
 
+/// Mean luminance in *linear* light, which is where averaging is physical.
+///
+/// Averaging gamma-encoded sRGB would answer a different question and get
+/// the sign of small differences wrong.
+fn mean_luminance(rgb: &[LinearRgb]) -> f32 {
+    let sum: f32 = rgb
+        .iter()
+        .map(|c| 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b)
+        .sum();
+    sum / rgb.len() as f32
+}
+
 fn render_all(label: &str, pixels: &[Srgb], w: usize, h: usize) {
     let palette = panel();
+
+    // "Darker" is only a defect if it moves away from the original. An
+    // algorithm that selects black more often may be *correcting* an
+    // under-selection, in which case darker is more faithful, not less.
+    let orig_lin: Vec<LinearRgb> = pixels.iter().map(|&s| LinearRgb::from(s)).collect();
+    let orig_y = mean_luminance(&orig_lin);
+    eprintln!("  mean linear luminance -- original {orig_y:.4}");
+
     for &(name, algo) in ALGOS {
         let out = EinkDitherer::new(palette.clone())
             .algorithm(algo)
             .dither(pixels, w, h);
+
+        let dith_lin: Vec<LinearRgb> = out
+            .indices()
+            .iter()
+            .map(|&i| palette.actual_linear(i as usize))
+            .collect();
+        let y = mean_luminance(&dith_lin);
+        eprintln!("    {name:<20} {y:.4}   delta {:+.4}", y - orig_y);
+
         let rgb = out.to_rgb_actual();
         let (buf, ow, oh) = side_by_side(pixels, &rgb, w, h);
         write(&format!("{label}-{name}.png"), &buf, ow, oh);

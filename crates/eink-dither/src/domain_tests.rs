@@ -2147,8 +2147,257 @@ mod domain_tests {
             );
         }
 
+        // The list above ranks by Atkinson's gap, so it can only ever show
+        // targets Floyd-Steinberg improves. Floyd's *mean* is the worse of the
+        // two, so it must lose somewhere; ranking the other way round is what
+        // shows where, and that is the half of the trade the algorithm choice
+        // actually turns on.
+        let mut floyd_worse: Vec<_> = worst.iter().filter(|w| w.4[2] > w.4[0]).collect();
+        floyd_worse.sort_by(|a, b| (b.4[2] - b.4[0]).partial_cmp(&(a.4[2] - a.4[0])).unwrap());
+        eprintln!(
+            "\nFloyd is worse than Atkinson on {}/{count} targets. Worst 12:",
+            floyd_worse.len()
+        );
+        eprintln!(
+            "{:>5} {:>5} | {:>6} | {:>6} {:>6} {:>6} {:>6} | best possible mixture",
+            "hue", "L", "bound", "atk", "atk+c2", "floyd", "fl+c2"
+        );
+        eprintln!("{}", "-".repeat(88));
+        for (_gap, hue, l, bound, got, recipe) in floyd_worse.iter().take(12) {
+            eprintln!(
+                "{hue:>4}\u{00b0} {:>5.2} | {bound:>6.3} | {:>6.3} {:>6.3} {:>6.3} {:>6.3} | {recipe}",
+                l, got[0], got[1], got[2], got[3]
+            );
+        }
+
+        // Per-lightness means separate "dark targets" from "everything else",
+        // which is the axis the Atkinson error loss is expected to act on.
+        eprintln!("\nMean dE by lightness:");
+        eprintln!(
+            "{:>5} | {:>6} | {:>6} {:>6} {:>6} {:>6}",
+            "L", "bound", "atk", "atk+c2", "floyd", "fl+c2"
+        );
+        eprintln!("{}", "-".repeat(48));
+        for &l in &lightnesses {
+            let rows: Vec<_> = worst.iter().filter(|w| w.2 == l).collect();
+            let k = rows.len() as f32;
+            let b: f32 = rows.iter().map(|w| w.3).sum::<f32>() / k;
+            let m: Vec<f32> = (0..4)
+                .map(|ci| rows.iter().map(|w| w.4[ci]).sum::<f32>() / k)
+                .collect();
+            eprintln!(
+                "{l:>5.2} | {b:>6.3} | {:>6.3} {:>6.3} {:>6.3} {:>6.3}",
+                m[0], m[1], m[2], m[3]
+            );
+        }
+
         let at_bound = worst.iter().filter(|w| w.0 < 0.02).count();
         eprintln!("\n{at_bound}/{count} targets are already within 0.02 dE of the physical bound.");
+    }
+
+    /// Rank every algorithm separately on reachable and gamut-limited targets.
+    ///
+    /// A single mean over the hue circle hides the decision, because the two
+    /// halves reward opposite behaviour. Where the target is reachable, the
+    /// job is to mix, and error must survive to accumulate. Where it is not,
+    /// the best available answer is usually one solid ink, and the residual
+    /// error is permanent and one-signed — an algorithm that faithfully
+    /// propagates all of it drives the accumulator away until it trips a
+    /// wrong ink. Averaging the two hides which algorithm fails which way.
+    #[test]
+    #[ignore = "diagnostic; run with --ignored --nocapture"]
+    fn test_algorithm_ranking_in_and_out_of_gamut() {
+        let official = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(255, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(0, 255, 0),
+        ];
+        let actual = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(0xB5, 0x03, 0x03),
+            Srgb::from_u8(0xFF, 0xEE, 0x00),
+            Srgb::from_u8(0x20, 0x54, 0x97),
+            Srgb::from_u8(0x0D, 0x87, 0x6B),
+        ];
+        let palette = Palette::new(&official, Some(&actual)).unwrap();
+        const PATCH: usize = 16;
+
+        let algos = [
+            ("atkinson", DitherAlgorithm::Atkinson),
+            ("atkinson-hybrid", DitherAlgorithm::AtkinsonHybrid),
+            ("floyd-steinberg", DitherAlgorithm::FloydSteinberg),
+            ("jarvis-judice-ninke", DitherAlgorithm::JarvisJudiceNinke),
+            ("sierra", DitherAlgorithm::Sierra),
+            ("sierra-two-row", DitherAlgorithm::SierraTwoRow),
+            ("sierra-lite", DitherAlgorithm::SierraLite),
+            ("stucki", DitherAlgorithm::Stucki),
+            ("burkes", DitherAlgorithm::Burkes),
+        ];
+
+        // A target counts as reachable when the physical bound is essentially
+        // zero: the palette can express it, so any miss is the algorithm's.
+        const REACHABLE: f32 = 0.02;
+        let lightnesses = [0.2f32, 0.32, 0.44, 0.56, 0.68, 0.8];
+
+        let mut in_gap = vec![0.0f32; algos.len()];
+        let mut in_worst = vec![0.0f32; algos.len()];
+        let mut out_gap = vec![0.0f32; algos.len()];
+        let mut out_worst = vec![0.0f32; algos.len()];
+        let (mut n_in, mut n_out) = (0usize, 0usize);
+
+        // Sweep saturation too. At s=1.0 only 20 of 144 targets are reachable,
+        // which is far too thin a sample to choose on — and unrepresentative,
+        // since real content is mostly not fully saturated. The muted rings
+        // are where a screen actually lives.
+        let saturations = [0.25f32, 0.5, 1.0];
+
+        for &s in &saturations {
+            for &l in &lightnesses {
+                for hue_deg in (0..360).step_by(15) {
+                    let (r, g, b) = hsl_to_rgb(hue_deg as f32 / 360.0, s, l);
+                    let src = Srgb::new(r, g, b);
+                    let target = Oklab::from(LinearRgb::from(src));
+                    let pixels = vec![src; PATCH * PATCH];
+                    let (bound, _) = best_reachable(&palette, target);
+                    let reachable = bound < REACHABLE;
+                    if reachable {
+                        n_in += 1;
+                    } else {
+                        n_out += 1;
+                    }
+
+                    for (ai, &(_, algo)) in algos.iter().enumerate() {
+                        let out = EinkDitherer::new(palette.clone())
+                            .algorithm(algo)
+                            .dither(&pixels, PATCH, PATCH);
+                        let mut acc = [0.0f32; 3];
+                        for &idx in out.indices() {
+                            let c = palette.actual_linear(idx as usize);
+                            acc[0] += c.r;
+                            acc[1] += c.g;
+                            acc[2] += c.b;
+                        }
+                        let n = (PATCH * PATCH) as f32;
+                        let avg = Oklab::from(LinearRgb::new(acc[0] / n, acc[1] / n, acc[2] / n));
+                        let gap = avg.distance_squared(target).sqrt() - bound;
+                        if reachable {
+                            in_gap[ai] += gap;
+                            in_worst[ai] = in_worst[ai].max(gap);
+                        } else {
+                            out_gap[ai] += gap;
+                            out_worst[ai] = out_worst[ai].max(gap);
+                        }
+                    }
+                }
+            }
+        }
+
+        eprintln!("\n=== Algorithm ranking, split by whether the target is reachable ===");
+        eprintln!("{n_in} reachable targets (bound < {REACHABLE}), {n_out} gamut-limited\n");
+        eprintln!(
+            "{:<20} | {:>9} {:>9} | {:>9} {:>9}",
+            "algorithm", "in mean", "in worst", "out mean", "out worst"
+        );
+        eprintln!("{}", "-".repeat(66));
+        let mut order: Vec<usize> = (0..algos.len()).collect();
+        order.sort_by(|&a, &b| {
+            (in_gap[a] / n_in as f32 + out_gap[a] / n_out as f32)
+                .partial_cmp(&(in_gap[b] / n_in as f32 + out_gap[b] / n_out as f32))
+                .unwrap()
+        });
+        for ai in order {
+            eprintln!(
+                "{:<20} | {:>9.3} {:>9.3} | {:>9.3} {:>9.3}",
+                algos[ai].0,
+                in_gap[ai] / n_in as f32,
+                in_worst[ai],
+                out_gap[ai] / n_out as f32,
+                out_worst[ai]
+            );
+        }
+        eprintln!();
+    }
+
+    /// Which inks actually landed, against the mixture that was available.
+    ///
+    /// The aggregate dE says Atkinson and Floyd-Steinberg each win on about
+    /// half the hue circle, which is not actionable on its own. This prints
+    /// the ink histogram next to the optimal recipe for a handful of targets
+    /// chosen from both halves, because "missed by 0.06" does not say whether
+    /// the patch came out too dark, too light, or speckled with a wrong ink —
+    /// and those have opposite fixes.
+    #[test]
+    #[ignore = "diagnostic; run with --ignored --nocapture"]
+    fn test_ink_histogram_versus_optimal_recipe() {
+        let official = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(255, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(0, 255, 0),
+        ];
+        let actual = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(0xB5, 0x03, 0x03),
+            Srgb::from_u8(0xFF, 0xEE, 0x00),
+            Srgb::from_u8(0x20, 0x54, 0x97),
+            Srgb::from_u8(0x0D, 0x87, 0x6B),
+        ];
+        let names = ["blk", "wht", "red", "yel", "blu", "grn"];
+        let palette = Palette::new(&official, Some(&actual)).unwrap();
+        const PATCH: usize = 32;
+
+        // First two: dark, in gamut, Atkinson misses badly (the open defect).
+        // Last two: saturated blue, far out of gamut, Atkinson is at the bound
+        // and Floyd is well past it.
+        let targets = [(30i32, 0.20f32), (45, 0.32), (240, 0.44), (255, 0.44)];
+
+        eprintln!("\n=== Ink histogram vs. the optimal mixture ===");
+        for &(hue_deg, l) in &targets {
+            let (r, g, b) = hsl_to_rgb(hue_deg as f32 / 360.0, 1.0, l);
+            let src = Srgb::new(r, g, b);
+            let target = Oklab::from(LinearRgb::from(src));
+            let pixels = vec![src; PATCH * PATCH];
+            let (bound, recipe) = best_reachable(&palette, target);
+
+            let total: f32 = recipe.iter().sum();
+            let want: Vec<String> = recipe
+                .iter()
+                .enumerate()
+                .map(|(i, &w)| format!("{}:{:>3.0}%", names[i], w / total * 100.0))
+                .collect();
+            eprintln!("\n  hue {hue_deg}° L {l:.2}   (physical bound dE {bound:.3})");
+            eprintln!("    optimal  {}", want.join("  "));
+
+            for (label, algo) in [
+                ("atkinson", DitherAlgorithm::Atkinson),
+                ("floyd   ", DitherAlgorithm::FloydSteinberg),
+                ("burkes  ", DitherAlgorithm::Burkes),
+                ("jarvis  ", DitherAlgorithm::JarvisJudiceNinke),
+            ] {
+                let out = EinkDitherer::new(palette.clone())
+                    .algorithm(algo)
+                    .dither(&pixels, PATCH, PATCH);
+                let mut hist = vec![0usize; palette.len()];
+                for &idx in out.indices() {
+                    hist[idx as usize] += 1;
+                }
+                let n = (PATCH * PATCH) as f32;
+                let got: Vec<String> = hist
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &c)| format!("{}:{:>3.0}%", names[i], c as f32 / n * 100.0))
+                    .collect();
+                eprintln!("    {label} {}", got.join("  "));
+            }
+        }
+        eprintln!();
     }
 
     /// A smooth input ramp must produce a smooth output ramp.

@@ -262,7 +262,6 @@ impl Preprocessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::palette::Palette;
 
     /// Helper to check approximate equality for f32
     fn approx_eq(a: f32, b: f32, tol: f32) -> bool {

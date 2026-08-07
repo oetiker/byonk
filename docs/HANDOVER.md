@@ -1,23 +1,33 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-07 — **Dependency security work is done and pushed. Two of three dithering defects are fixed and pushed. The third (Atkinson's 25% error loss) is diagnosed but not started.** `feat/screen-store-authoring-core` is still **HELD** by standing owner decision — no PR, no merge to `main`._
+_Last updated: 2026-08-07 — **Dependency security work is done and pushed. Two of three dithering defects are fixed and pushed. The third was re-measured and re-diagnosed this session: the earlier "Atkinson's 25% error loss" reading is wrong, and the algorithm swap it implied would cause a worse defect. It now needs an owner decision, not code.** `feat/screen-store-authoring-core` is still **HELD** by standing owner decision — no PR, no merge to `main`._
 
 ## Where the work lives
 
 | | |
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
-| HEAD | `904cf71` |
+| HEAD | `999d35b` |
 | Worktree | `/Users/oetiker/checkouts/byonk` (working in place, no worktree) |
 | State | `make check` green, tree clean, pushed to origin |
 
 ## Next action
 
-**Fix 3 of 3: the achromatic under-mixing defect.** Diagnosed, not started. Details below under "The remaining defect".
+**Owner decision needed before fix 3 proceeds.** Fix 3 was re-measured this
+session and re-diagnosed; the old diagnosis in this file was wrong. The
+evidence is committed as three `#[ignore]` diagnostics at `999d35b`. See
+"The remaining defect" below — read it before touching the ditherer.
 
-After that, the gamut-mapping feature has an approved spec waiting:
+Short version: do **not** swap the default algorithm, which is what the old
+diagnosis implied. The measurement that looked like it justified a swap is
+scored on a metric that is invalid for out-of-gamut targets, and the swap
+would render saturated blues nearly black. The open question is whether the
+gamut mapper is fix 3's prerequisite rather than something independent of it.
+
+The gamut-mapping feature has an approved spec waiting:
 `docs/superpowers/specs/2026-08-07-gamut-mapping-design.md`. Its
-"Prerequisites" section lists these dithering fixes; two are now done.
+"Prerequisites" section lists these dithering fixes; two are done, and the
+third may be reordered to depend on the mapper instead of preceding it.
 
 ## What happened this session
 
@@ -158,26 +168,62 @@ author writes.
 measured colour, not the official one. There is otherwise no longer any way to
 demand a specific ink. The gamut spec's SVG marker was to be the real answer.
 
-## The remaining defect — fix 3, not started
+## The remaining defect — fix 3, re-measured and re-diagnosed
 
-**Dark warm colours are under-mixed with black.** At 30°–60°, L 0.20–0.32, the
-computed bound is **0.000** — exactly reproducible from black plus red/yellow —
-yet production missed by 0.05–0.09. No gamut excuse.
+Re-measured at `999d35b`. The defect is real and still open, but **the previous
+diagnosis in this file was wrong and the fix it implied is a trap.** Do not act
+on the old "Atkinson discards 25%, so switch algorithm" reading.
 
-**It is not fixed by either change above**, and the gamut mapper will not touch
-it (those targets are in gamut, so the mapper is identity there by construction).
+**The symptom, restated from the ink histogram** (`test_ink_histogram_versus_optimal_recipe`).
+It is not under-mixing with black. It is a *spurious ink*: at 45°/L0.32, where
+the bound is 0.000 and the optimal recipe is blk 47% / red 30% / yel 23%,
+Atkinson produces **grn 41%** and only **blk 1%**. Green is not in the recipe
+at all. At 30°/L0.20 it is grn 18%. Whatever is wrong selects green, and a dE
+alone could never have said so.
 
-**Strong evidence for the cause:** Floyd-Steinberg largely fixes it where the
-clamp did not — 45°/L0.32 went 0.064 → **0.016**, 30°/L0.32 → 0.018. That is
-the signature of **Atkinson deliberately discarding 25% of its error**
-(6 entries of weight 1, divisor 8).
+**Why not to swap the default.** Widening the ranking to all nine kernels and
+sweeping saturation (`test_algorithm_ranking_in_and_out_of_gamut`) first looks
+like it settles it — with a representative 201 reachable / 231 gamut-limited
+sample, Atkinson is **last on both axes**, and its supposed out-of-gamut
+advantage was an artifact of scoring only fully saturated targets:
 
-Re-measure before acting: those numbers predate both fixes. Run
-`cargo test -p eink-dither gamut_bound -- --nocapture --ignored`.
+    algorithm             in mean  in worst | out mean  out worst
+    floyd-steinberg         0.010    0.057  |   0.012     0.076
+    burkes                  0.013    0.066  |   0.011     0.059
+    jarvis-judice-ninke     0.017    0.066  |   0.011     0.057
+    atkinson-hybrid         0.025    0.074  |   0.015     0.050
+    atkinson                0.038    0.099  |   0.013     0.072
 
-**Careful:** the 25% loss *is* Atkinson — changing it makes it not-Atkinson.
-The likelier move is reconsidering the default algorithm, not editing the
-kernel. That is a taste decision for the owner, not a silent fix.
+**The histogram vetoes that table.** On saturated blue (240°/L0.44, optimal
+`blu:100%`), Atkinson renders **98% blue** and *every* 100%-propagation kernel
+renders **70–87% black** — Floyd 87%, Burkes 83%, Jarvis 80%. A saturated blue
+region comes out nearly black. Mean dE barely registers it, because against a
+target that far outside the gamut solid blue and mostly-black score alike, so
+**the metric ranks the kernels that destroy blues highest**. Swapping the
+default on that table would trade a muted-orange defect for a much worse one.
+
+⚠️ **Generalise this:** dE against an out-of-gamut target is a bad objective.
+Rank on it only after the target is reachable.
+
+**The likely shared root cause, not yet confirmed.** For an unreachable target
+the residual error is permanent and one-signed, so it accumulates until it
+trips a wildly wrong ink; Atkinson's 25% discard is a bleed valve that happens
+to prevent the runaway. That predicts the two defects are one bug, and that
+**the gamut mapper is the unblock** — mapping targets into gamut first removes
+the permanent residual, which is what would make a wide kernel safe to adopt,
+which in turn is what fixes the dark-warm case. Contrary to the old note here,
+the mapper is not irrelevant to fix 3: it is plausibly its prerequisite.
+
+Confirm that chain before building on it — it is a hypothesis with good
+evidence, not a measurement. Unexplained: why *green* specifically wins at
+45°/L0.32, a target that is fully in gamut and so has no permanent residual.
+That one does not fit the runaway story and should be chased first.
+
+Reproduce all of the above with:
+
+    cargo test -p eink-dither ink_histogram -- --nocapture --ignored
+    cargo test -p eink-dither algorithm_ranking -- --nocapture --ignored
+    cargo test -p eink-dither gamut_bound -- --nocapture --ignored
 
 ## Build / verify
 

@@ -7,7 +7,7 @@ _Last updated: 2026-08-07 — **Plan A and Plan B are merged; the branch is veri
 | | |
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
-| HEAD | `d61a7d3` |
+| HEAD | `464bc2c` |
 | Worktree | `/Users/oetiker/checkouts/byonk` (the two plan worktrees are **removed**) |
 | Ahead of `main` | 114 commits |
 | State | `make check` green ("All checks passed!"), `make docs` green, tree clean |
@@ -22,6 +22,7 @@ Plan A (`feat/plan-a-measured-colours`) merged at `840a6c9`; Plan B (`feat/plan-
 4. **Did all three outstanding validation items** — see below.
 5. **Fixed two real defects the validation surfaced** (`df3e444`).
 6. **Fixed the MCP rough edges and made `render_screen`'s response size caller-controlled** (`d61a7d3`).
+7. **Added `include_svg` and data-URI summarising** (`464bc2c`), closing the last known MCP gap.
 
 ## The A/B seam test — `4fa616e`
 
@@ -52,7 +53,7 @@ So it is a 2×2 over `{color, color_measured} × {palette_aware off, on}`, and t
 
 **The two MCP rough edges below were FIXED** in `d61a7d3` — kept here only as the record of what direct JSON-RPC testing cannot catch. `create_screen`/`copy_screen`/`rename_screen` now take honest `path`/`to_path`/`new_path` names with full schema descriptions, and `assign_screen`'s description and error message state the real rule (a device is accepted if configured **or** registry-seen; `list_devices` shows only the latter). The same commit made `render_screen`'s response size caller-controlled — `image` (dithered|raw|both|none), `image_max_width`, `include_data` — taking a default render from 65 KB to 0.3 KB when only diagnostics are wanted. Watch out for `image: "raw"`/`"both"`: the pre-dither PNG is full-colour and ~10× the dithered one (648 KB / 710 KB), so pair them with `image_max_width`.
 
-**Still open — the LLM cannot see the expanded SVG.** `render_screen` returns the PNG and the script's `data`, and `read_screen_file` returns the `screen.svg` *source*, but the Tera-expanded markup that resvg actually parsed — after `{% extends %}` resolution and data interpolation — is exposed nowhere. `RenderResult` does not even carry it. That is precisely the artefact most likely to contain a layout bug, so an agent debugging a wrong-looking screen has to mentally run Tera over the template. Adding an `include_svg` flag means threading a `String` through `RenderResult`; discussed with the owner, not yet decided.
+**The expanded-SVG gap is now CLOSED** (`464bc2c`). `render_screen` takes `include_svg` and returns the markup resvg actually parsed — Tera rendered, `{% extends %}` resolved, data interpolated. The same commit added `data_uris` (shorten|full|omit, default shorten), which replaces embedded base64 payloads with a marker naming media type and length, in both `data` and the SVG. That is what makes `include_svg` affordable: on a 400x240 photo screen, 656 KB verbatim against 17 KB shortened, and 0.9 KB for markup with no image. The shortener lives in `src/mcp/data_uris.rs` with its own unit tests — the payload boundary is the subtle part, since it must stop at whatever delimiter the surrounding context uses.
 
 Carried over from the plans, unchanged:
 

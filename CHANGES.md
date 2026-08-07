@@ -56,6 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The git client used to fetch screen repositories was updated** (`gix` 0.66 →
   0.86), picking up security fixes in git's object, pack and ref handling. This
   matters if you fetch screen repositories from sources you don't fully control.
+- **HTTPS connections now trust your system's certificate store.** The HTTP
+  client was updated (`reqwest` 0.12 → 0.13), and with it byonk switched from a
+  bundled copy of the Mozilla root list to your platform's own trust store. If
+  your network uses an internal or corporate certificate authority that your
+  machine already trusts, `http_get()` in Lua scripts now works against it
+  without passing `ca_cert`. The official container image is unaffected — it
+  ships the same root certificates as before.
 - **Home Assistant "add-ons" are now called "apps".** Home Assistant 2026.2 renamed
   add-ons to apps in its UI (**Settings → Apps → App store**). Byonk's Home Assistant
   documentation, the integration's messages, and the Supervisor repository name now

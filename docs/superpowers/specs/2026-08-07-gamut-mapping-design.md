@@ -117,10 +117,19 @@ keys:
 
 ```lua
 gamut = {
-  knee   = 0.6,   -- where compression begins, as a fraction of Cmax
-  amount = 1.0,   -- 0 = no mapping, 1 = full
+  knee            = 0.6,   -- where compression begins, as a fraction of Cmax
+  amount          = 1.0,   -- 0 = no mapping, 1 = full
+  max_compression = 2.5,   -- cap on R; beyond it the knee's tail takes over
 }
 ```
+
+`max_compression` caps `R` (see Content adaptation). Since `R` is by
+definition the factor by which chroma is squeezed — it is the value mapped
+onto `Cmax` — the knob is literally "never compress by more than this".
+Raising it lets an extremely vivid image adapt further, at the cost of
+flattening everything else; lowering it protects the bulk of the image and
+pushes the extremes into the knee's asymptotic tail instead, where they stay
+distinguishable but heavily compressed.
 
 `amount` interpolates between the input and the mapped chroma:
 `C_out = C + amount * (C' - C)`. At `amount = 1` the output is the mapped
@@ -184,6 +193,37 @@ whole image).
 - `R <= 1` — the content is already in gamut. **Identity. No mapping at
   all.** Nothing is needlessly desaturated.
 - `R > 1` — compress `[0, R] -> [0, 1]` through the knee below.
+
+`R` is then capped at `max_compression` (default 2.5), so no image can
+squeeze the rest of its colours arbitrarily hard to accommodate its most
+extreme region.
+
+Content beyond the cap is **not** clipped. Normalising by the capped `R`
+simply leaves it above `Cmax` going into the knee, and because the knee is
+asymptotic it maps any input, however large, to just under `Cmax` while
+staying strictly increasing. So the extreme tail is compressed very hard but
+never collapses onto a shared value, and the monotonicity property below
+holds for all inputs. Clipping at the cap would have broken it.
+
+Both guards exist because a single scalar can be hijacked by a small region.
+Their limits are worth stating plainly:
+
+- The percentile handles literal outliers completely. On an 800x480 frame
+  the discarded top 1% is 3,840 pixels, so a handful of stray extreme pixels
+  cannot move `R` at all.
+- It does **not** handle a small-but-not-tiny region. A neon sign filling 2%
+  of the frame sits above the 99th-percentile cut, sets `R`, and compresses
+  the other 98% harder than needed. The cap bounds that damage; it does not
+  eliminate it.
+- The knee is the third protection and the most important one in practice:
+  compression only bites above `k*Cmax`, so low-chroma content passes
+  through untouched however large `R` becomes. A mostly-grey photo with one
+  vivid flower does not go flat.
+
+A percentile is a *relative* guard, so it weakens as the marked region
+shrinks: in a 50x50 marked photo the top 1% is 25 pixels, and three bad
+pixels are 12% of the discarded tail. The implementation therefore needs an
+absolute floor on the discard count as well as the percentage.
 
 ### Per pixel
 
@@ -340,6 +380,13 @@ literature may be the closer relative.
   endpoints.
 - HPMINDE-style clipping as a shipped mode. It may still be worth a few
   lines behind a test-only switch as a comparison point when tuning `k`.
+- **Per-hue `R`.** Deriving the compression factor per hue slice rather than
+  as one scalar would stop a vivid red from compressing the blues, which is
+  the main residual weakness of the adaptation. Rejected for now because it
+  changes relative chroma *between* hues — and the relationships between
+  colours are precisely what this design exists to preserve. Revisit only if
+  real screens show the scalar being hijacked in practice, and then measure
+  it against the hue-order metric rather than by eye.
 
 ## Prerequisites
 

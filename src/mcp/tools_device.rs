@@ -17,7 +17,10 @@ use crate::services::device_registry::DeviceRegistry;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct AssignScreenArgs {
-    /// Device MAC (or its config key), as reported by `list_devices`.
+    /// Device MAC, or the key it is configured under. `list_devices` reports
+    /// the MAC of every device that has actually connected; a device that is
+    /// only present in the config and has never connected is assignable too,
+    /// but will not appear there.
     pub mac: String,
     /// Screen reference to assign, `handle/path`.
     pub screen_ref: String,
@@ -36,15 +39,17 @@ pub struct AssignScreenOutput {
 #[tool_router(router = tools_device_router, vis = "pub")]
 impl ByonkMcp {
     #[tool(
-        description = "Assign a device to a screen (use list_devices first to find its mac). \
-                          The screen must exist. If the device already has a mapping, it is \
-                          updated in place — its existing params carry over unchanged \
-                          (revalidated against the new screen's schema), they are NOT reset to \
-                          the new screen's defaults — and the result reports created: false. If \
-                          the device has only been seen (it appears in list_devices but has \
-                          never been assigned a screen), assign_screen creates its mapping now \
-                          and reports created: true. A mac that list_devices has never reported \
-                          is rejected — call list_devices first to confirm it."
+        description = "Assign a device to a screen. The screen must exist. A device is \
+                          accepted if it is already configured OR the registry has seen it \
+                          connect; anything else is rejected. Note those are two different \
+                          sets: list_devices reports only devices that have connected, so a \
+                          device that exists solely in the config is assignable without \
+                          appearing there — use get_config to see those. If the device already \
+                          has a mapping it is updated in place, its existing params carry over \
+                          unchanged (revalidated against the new screen's schema) rather than \
+                          being reset to the new screen's defaults, and the result reports \
+                          created: false. If it had only been seen by the registry, its mapping \
+                          is created now and the result reports created: true."
     )]
     pub async fn assign_screen(
         &self,
@@ -121,7 +126,10 @@ impl ByonkMcp {
             // "device not found" are exactly the messages the agent needs to
             // read and act on.
             Err(ApiError::NotFound) => Ok(CallToolResult::error(vec![ContentBlock::text(
-                "no such device — call list_devices first to confirm its mac".to_string(),
+                "no such device — it is neither configured nor has it ever connected. \
+                 list_devices shows devices that have connected; get_config shows those \
+                 configured but not yet seen."
+                    .to_string(),
             )])),
             Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(
                 e.to_string(),

@@ -36,33 +36,50 @@ pub struct ScreenRefOutput {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CreateScreenArgs {
-    /// Writable repo handle — usually `local`.
+    /// Writable repo handle on its own — `local`, not `local/clock`. Only a
+    /// handle `list_screens` reports as writable will be accepted.
     pub handle: String,
-    /// New screen name, e.g. `clock` or `home/clock`.
-    pub name: String,
+    /// Where the screen lives inside the repo, e.g. `clock` or `home/clock`.
+    /// This is a directory path, **not** the screen's display title: the
+    /// scaffolded meta.yaml always starts out titled "New Screen". Set the
+    /// title by writing meta.yaml. The new screen's reference is
+    /// `handle/path`.
+    pub path: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CopyScreenArgs {
     /// Source screen, which may be read-only (a builtin or an example).
     pub from_ref: String,
+    /// Destination repo handle on its own — `local`, not `local/clock`. Only
+    /// a handle `list_screens` reports as writable will be accepted.
     pub to_handle: String,
-    pub to_name: String,
+    /// Where the copy lives inside that repo, e.g. `clock` or `home/clock`.
+    /// This is a directory path, **not** the screen's display title: the copy
+    /// keeps the source's meta.yaml verbatim, title included. Retitle it by
+    /// writing meta.yaml. The copy's reference is `to_handle/to_path`.
+    pub to_path: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RenameScreenArgs {
+    /// Screen to move, `handle/path`. Must be in a writable repo.
     pub screen_ref: String,
-    pub new_name: String,
+    /// New path inside the same repo, e.g. `clock` or `home/clock`. This
+    /// moves the screen's directory; it does **not** change the display title
+    /// in meta.yaml.
+    pub new_path: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ScreenRefArgs {
+    /// Screen reference, `handle/path`.
     pub screen_ref: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct DeleteFileArgs {
+    /// Screen reference, `handle/path`. Must be in a writable repo.
     pub screen_ref: String,
     /// Sibling asset to delete. meta.yaml / script.lua / screen.svg define
     /// the screen and cannot be deleted — use `delete_screen` instead.
@@ -114,7 +131,7 @@ impl ByonkMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let store = self.state.screen_store.clone();
         let outcome =
-            blocking(move || store.create_screen(&a.handle, &a.name, StarterKind::Minimal)).await?;
+            blocking(move || store.create_screen(&a.handle, &a.path, StarterKind::Minimal)).await?;
         match outcome {
             Ok(screen_ref) => ok_json(ScreenRefOutput { screen_ref }),
             Err(e) => Ok(store_failure(e)),
@@ -132,7 +149,7 @@ impl ByonkMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let store = self.state.screen_store.clone();
         let outcome =
-            blocking(move || store.copy_screen(&a.from_ref, &a.to_handle, &a.to_name)).await?;
+            blocking(move || store.copy_screen(&a.from_ref, &a.to_handle, &a.to_path)).await?;
         match outcome {
             Ok(screen_ref) => ok_json(ScreenRefOutput { screen_ref }),
             Err(e) => Ok(store_failure(e)),
@@ -148,7 +165,7 @@ impl ByonkMcp {
         Parameters(a): Parameters<RenameScreenArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         let store = self.state.screen_store.clone();
-        let outcome = blocking(move || store.rename_screen(&a.screen_ref, &a.new_name)).await?;
+        let outcome = blocking(move || store.rename_screen(&a.screen_ref, &a.new_path)).await?;
         match outcome {
             Ok(screen_ref) => ok_json(ScreenRefOutput { screen_ref }),
             Err(e) => Ok(store_failure(e)),

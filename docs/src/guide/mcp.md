@@ -75,9 +75,16 @@ Or as a JSON config block (the shape most MCP clients accept):
 | `write_screen_file` | Write one file inside a screen, atomically (supports optimistic-concurrency `if_match`). UTF-8 text only — refuses to overwrite an existing binary asset. |
 | `create_screen` | Scaffold a new screen from the minimal starter (`meta.yaml`, `script.lua`, `screen.svg`). |
 | `copy_screen` | Fork any screen — including read-only builtins and examples — into a writable repo. |
-| `rename_screen` | Rename a screen within its repo. |
+| `rename_screen` | Move a screen to a different path within its repo. |
 | `delete_screen` | Delete a screen and every file in its directory. |
 | `delete_screen_file` | Delete one sibling asset from a screen directory. |
+
+`create_screen`, `copy_screen` and `rename_screen` each take the screen's
+location inside a repo — `path`, `to_path` and `new_path` respectively. These
+are directory paths (`clock`, or `home/clock` to nest), **not** display titles:
+a new screen is always scaffolded as "New Screen" and a copy keeps the source's
+`meta.yaml` verbatim. Set the title by writing `meta.yaml`. The repo handle is
+passed separately (`local`, never `local/clock`).
 
 Binary assets (images, fonts, anything not valid UTF-8) can be read for their etag
 but not their content, and cannot be written or overwritten over MCP at all —
@@ -100,8 +107,43 @@ itself — a screen's dithering targets measured colours whenever they resolve, 
 
 | Argument | Type | What it does |
 |----------|------|----------------|
+| `image` | `dithered` \| `raw` \| `both` \| `none` | Which image(s) to return. Default `dithered`. `both` returns the dithered image then the pre-dither one, each preceded by a text block naming it. |
+| `image_max_width` | int, optional | Downscale returned image(s) to at most this width, preserving aspect ratio. Never upscales. |
+| `include_data` | bool, default `true` | Return the table the script produced. |
 | `use_actual` | bool, optional | Draw the returned PNG in the panel's measured colours instead of the spec colours. Defaults to on whenever measured colours are available. `true` with nothing measured is a no-op, not an error. |
 | `colors_actual` | string, optional | Comma-separated hex, index-parallel to the palette (e.g. `#0A0A0A,#E8E6E0,#A83A30`). Lets you preview a calibration without adding a `panel` to `config.yaml`. A `colors_actual` returned by the screen's own script still wins over this; a length mismatch is ignored (with a warning in the diagnostics' `log`) rather than failing the render. |
+
+#### Keeping the response small
+
+`render_screen` is by far the most expensive tool here, and an LLM client pays
+for every byte of it. Rendering the builtin default screen at 800×480 measures:
+
+| Arguments | Response |
+|-----------|----------|
+| *(defaults)* | 65 KB |
+| `image_max_width: 200` | 25 KB |
+| `image: "none"` | 3 KB |
+| `image: "none", include_data: false` | 0.3 KB |
+| `image: "raw"` | 648 KB |
+| `image: "both"` | 710 KB |
+| `image: "both", image_max_width: 300` | 171 KB |
+
+Note the raw pre-dither image: it is full-colour and *ten times* the size of
+the dithered one, so `raw` and `both` are worth pairing with `image_max_width`
+unless you specifically need its exact pixels.
+
+Three arguments let the caller decide what a render is worth:
+
+- **`image: "none"`** when you only need the script's `log`, `data` or `error` —
+  e.g. checking that an edit still runs. The images dominate the response.
+- **`image_max_width`** for a layout check at a fraction of the cost. Be aware
+  that resampling destroys the dither pattern, so a scaled `dithered` image is
+  fine for judging layout and tone and useless for judging dithering itself.
+  Omit it when you need to inspect the real pixels.
+- **`include_data: false`** when a script embeds an image. `image_process`
+  returns a base64 data URI, that URI lands in `data`, and the diagnostics are
+  serialised twice (once as text, once as structured content) — so the picture
+  is carried three times in total unless you drop the table.
 
 The diagnostics also include `measured_source`, naming which layer actually supplied the
 measured colours for that render: `script`, `render_opts` (the `colors_actual` argument

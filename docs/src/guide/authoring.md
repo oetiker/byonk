@@ -116,8 +116,10 @@ your client at `/mcp` with the admin token as a bearer credential — see
 
 - `copy_screen` forks any screen, including read-only builtins and examples,
   into a writable repo. Pass the destination **repo handle** as `to_handle`
-  (e.g. `local`) and the new screen's **path segment** as `to_name`
-  (e.g. `my-hello`), yielding `local/my-hello`.
+  (e.g. `local`) and the copy's **path inside that repo** as `to_path`
+  (e.g. `my-hello`), yielding `local/my-hello`. `to_path` is a directory
+  path, not a title — the copy keeps the source's `meta.yaml`, so retitle it
+  by writing that file.
 - `read_screen_file` / `write_screen_file` read and edit `meta.yaml`,
   `script.lua` and `screen.svg`. Writes take an optional `if_match` etag so
   concurrent edits don't clobber each other.

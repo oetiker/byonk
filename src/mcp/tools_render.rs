@@ -14,6 +14,63 @@ use serde::{Deserialize, Serialize};
 use super::{blocking, ok_json, ByonkMcp};
 use crate::services::screen_store::RenderOpts;
 
+fn default_true() -> bool {
+    true
+}
+
+/// Which image(s) `render_screen` should return.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageChoice {
+    /// The dithered PNG, as the panel would show it.
+    #[default]
+    Dithered,
+    /// The pre-dither, full-colour render.
+    Raw,
+    /// Dithered then raw, each preceded by a text block naming it.
+    Both,
+    /// No image at all — diagnostics only.
+    None,
+}
+
+impl ImageChoice {
+    fn wants_dithered(self) -> bool {
+        matches!(self, Self::Dithered | Self::Both)
+    }
+    fn wants_raw(self) -> bool {
+        matches!(self, Self::Raw | Self::Both)
+    }
+}
+
+/// Downscale a PNG to at most `max_width`, preserving aspect ratio.
+///
+/// Returns the original bytes unchanged when it is already narrow enough, or
+/// when decode/re-encode fails: a scaling problem must not turn a successful
+/// render into a failed tool call, and handing back the full-size image is
+/// always a correct (if larger) answer.
+fn downscale_png(png: &[u8], max_width: u32) -> Vec<u8> {
+    if max_width == 0 {
+        return png.to_vec();
+    }
+    let Ok(img) = image::load_from_memory(png) else {
+        return png.to_vec();
+    };
+    if img.width() <= max_width {
+        return png.to_vec();
+    }
+    let height = ((img.height() as u64 * max_width as u64) / img.width().max(1) as u64).max(1);
+    let scaled = img.resize(
+        max_width,
+        height as u32,
+        image::imageops::FilterType::Triangle,
+    );
+    let mut out = std::io::Cursor::new(Vec::new());
+    match scaled.write_to(&mut out, image::ImageFormat::Png) {
+        Ok(()) => out.into_inner(),
+        Err(_) => png.to_vec(),
+    }
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RenderArgs {
     /// Screen reference, `handle/path`.
@@ -34,15 +91,34 @@ pub struct RenderArgs {
     /// Dither algorithm, e.g. `floyd-steinberg`, `atkinson`.
     #[serde(default)]
     pub dither: Option<String>,
-    /// Also return the pre-dither, full-colour PNG for comparison. When both
-    /// images are present, the dithered PNG is always the first image
-    /// content block and the raw one the second — order is the only signal;
-    /// there is no field naming which is which. Only produced on a
-    /// *successful* render: on failure neither image is returned, so a
-    /// failed render's content is diagnostics-only, with no image block at
-    /// all (see render_screen's description).
+    /// Which image(s) to return. `dithered` (default) is what the panel
+    /// shows; `raw` is the pre-dither, full-colour render; `both` returns
+    /// dithered first then raw, each preceded by a text block naming it;
+    /// `none` returns diagnostics only. Use `none` when you only need the
+    /// script's `log`/`data`/`error` — images are by far the largest part of
+    /// this response. Note `raw` is full-colour and roughly ten times the
+    /// size of the dithered image (for an 800x480 screen, ~650 KB against
+    /// ~65 KB), so pair `raw`/`both` with `image_max_width` unless you need
+    /// its exact pixels. Images are only produced on a *successful* render; a
+    /// failure returns diagnostics with no image block regardless.
     #[serde(default)]
-    pub include_raw: bool,
+    pub image: ImageChoice,
+    /// Downscale returned image(s) to at most this width in pixels,
+    /// preserving aspect ratio. Never upscales. Use it to spend a fraction of
+    /// the context on a layout check — a 800x480 PNG costs roughly six times
+    /// what the same image at 200px wide does. Caveat: resampling destroys
+    /// the dither pattern, so a scaled `dithered` image is good for judging
+    /// layout and tone but useless for judging dithering itself; omit this to
+    /// inspect the real pixels.
+    #[serde(default)]
+    pub image_max_width: Option<u32>,
+    /// Return the table the script produced. Defaults to true. Set false when
+    /// you only need to see the picture: a script that embeds an image with
+    /// `image_process` puts a full base64 data URI in `data`, and the
+    /// diagnostics are serialized twice (once as text, once as structured
+    /// content), so that URI is carried twice on top of the PNG itself.
+    #[serde(default = "default_true")]
+    pub include_data: bool,
     /// Unix timestamp to render at, for testing time-dependent screens.
     #[serde(default)]
     pub timestamp: Option<i64>,
@@ -67,8 +143,10 @@ pub struct RenderArgs {
 pub struct RenderDiagnostics {
     /// Captured `log_info`/`log_warn`/`log_error` output from the script.
     pub log: Vec<String>,
-    /// The table the Lua script returned.
-    pub data: serde_json::Value,
+    /// The table the Lua script returned. Absent when you passed
+    /// `include_data: false` — omitted, not empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
     pub refresh_rate: u32,
     /// Present when the render failed. `line` points into script.lua when
     /// the failure was a Lua error.
@@ -115,15 +193,18 @@ impl ByonkMcp {
         description = "Render a screen and return the dithered PNG plus diagnostics: the \
                           script's captured log output, the data table it returned, the \
                           refresh rate, and any error with its line number. Use this after \
-                          every edit — it is the fastest way to see what a change did. With \
-                          include_raw, a second (pre-dither, full-colour) image block follows \
-                          the dithered one — order is the only signal distinguishing them. A \
-                          failed render includes no image block at all, dithered or raw — read \
-                          the diagnostics' error field instead. By default the returned PNG \
-                          shows what the panel will actually look like when measured colours \
-                          are available; pass use_actual=false to see the spec colours that \
-                          are sent to the panel instead. The diagnostics' measured_source \
-                          field names which layer supplied those measured colours."
+                          every edit — it is the fastest way to see what a change did. \
+                          Control what comes back, because this is the most expensive tool \
+                          here: `image` picks dithered (default), raw, both or none, \
+                          `image_max_width` downscales it, and `include_data: false` drops \
+                          the script's data table — worth doing when a script embeds an \
+                          image, since the resulting base64 URI is carried twice. A failed \
+                          render includes no image block at all — read the error field \
+                          instead. By default the returned PNG shows what the panel will \
+                          actually look like when measured colours are available; pass \
+                          use_actual=false to see the spec colours that are sent to the \
+                          panel instead. The diagnostics' measured_source field names which \
+                          layer supplied those measured colours."
     )]
     pub async fn render_screen(
         &self,
@@ -137,7 +218,7 @@ impl ByonkMcp {
             panel: a.panel,
             dither: a.dither,
             timestamp: a.timestamp,
-            include_raw: a.include_raw,
+            include_raw: a.image.wants_raw(),
             use_actual: a.use_actual,
             colors_actual: a.colors_actual,
             ..RenderOpts::default()
@@ -147,7 +228,7 @@ impl ByonkMcp {
 
         let diagnostics = RenderDiagnostics {
             log: result.log,
-            data: result.data,
+            data: a.include_data.then_some(result.data),
             refresh_rate: result.refresh_rate,
             error: result.error.as_ref().map(|e| RenderErrorOut {
                 line: e.line,
@@ -159,13 +240,31 @@ impl ByonkMcp {
 
         let mut content: Vec<ContentBlock> = Vec::new();
         let b64 = base64::engine::general_purpose::STANDARD;
+        // Label each image so `both` doesn't rely on block order to say which
+        // is which — two anonymous PNGs are indistinguishable to a client that
+        // reorders or drops one.
+        let labelled = a.image == ImageChoice::Both;
+        let push_image = |bytes: &[u8], label: &str, content: &mut Vec<ContentBlock>| {
+            let bytes = match a.image_max_width {
+                Some(w) => downscale_png(bytes, w),
+                None => bytes.to_vec(),
+            };
+            if labelled {
+                content.push(ContentBlock::text(label.to_string()));
+            }
+            content.push(ContentBlock::image(b64.encode(&bytes), "image/png"));
+        };
         // A failed render has an empty `png` by contract — emit only the
         // diagnostics so the agent isn't handed a zero-byte image.
-        if !result.png.is_empty() {
-            content.push(ContentBlock::image(b64.encode(&result.png), "image/png"));
+        if a.image.wants_dithered() && !result.png.is_empty() {
+            push_image(
+                &result.png,
+                "dithered (as the panel shows it)",
+                &mut content,
+            );
         }
         if let Some(raw) = &result.raw_png {
-            content.push(ContentBlock::image(b64.encode(raw), "image/png"));
+            push_image(raw, "raw (pre-dither, full colour)", &mut content);
         }
         content.push(ContentBlock::text(
             serde_json::to_string_pretty(&diagnostics)

@@ -201,7 +201,7 @@ async fn test_copy_then_edit_a_builtin_screen() {
             serde_json::json!({
                 "from_ref": "byonk-builtin/default",
                 "to_handle": "local",
-                "to_name": "mine"
+                "to_path": "mine"
             }),
         )
         .await;
@@ -274,7 +274,7 @@ async fn test_write_over_an_existing_binary_asset_is_refused_and_bytes_survive()
             serde_json::json!({
                 "from_ref": "byonk-builtin/default",
                 "to_handle": "local",
-                "to_name": "has-image"
+                "to_path": "has-image"
             }),
         )
         .await;
@@ -328,7 +328,7 @@ async fn test_stale_etag_is_a_conflict() {
     client
         .call_tool(
             "create_screen",
-            serde_json::json!({ "handle": "local", "name": "conflicted" }),
+            serde_json::json!({ "handle": "local", "path": "conflicted" }),
         )
         .await;
 
@@ -358,13 +358,13 @@ async fn test_create_rename_delete_round_trip() {
     client
         .call_tool(
             "create_screen",
-            serde_json::json!({ "handle": "local", "name": "tmp1" }),
+            serde_json::json!({ "handle": "local", "path": "tmp1" }),
         )
         .await;
     client
         .call_tool(
             "rename_screen",
-            serde_json::json!({ "screen_ref": "local/tmp1", "new_name": "tmp2" }),
+            serde_json::json!({ "screen_ref": "local/tmp1", "new_path": "tmp2" }),
         )
         .await;
 
@@ -413,7 +413,7 @@ async fn test_delete_screen_file_end_to_end() {
     client
         .call_tool(
             "create_screen",
-            serde_json::json!({ "handle": "local", "name": "with-notes" }),
+            serde_json::json!({ "handle": "local", "path": "with-notes" }),
         )
         .await;
     client
@@ -528,6 +528,180 @@ async fn test_render_screen_returns_an_image_block() {
     assert_ne!(result["isError"], serde_json::json!(true), "{result}");
 }
 
+/// Decode a base64 PNG content block and report its pixel width.
+fn image_width(block: &serde_json::Value) -> u32 {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(block["data"].as_str().expect("image data is a string"))
+        .expect("image data is valid base64");
+    image::load_from_memory(&bytes).expect("valid png").width()
+}
+
+fn image_blocks(result: &serde_json::Value) -> Vec<serde_json::Value> {
+    result["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["type"] == "image")
+        .cloned()
+        .collect()
+}
+
+/// The context controls exist so an agent can decide what it pays for. Each
+/// arm is asserted against the *default* arm, not against a hardcoded
+/// expectation, so the test keeps discriminating if the default render
+/// changes size or content.
+#[tokio::test]
+async fn test_render_screen_image_choice_selects_which_images_come_back() {
+    let app = TestApp::new_admin("secret");
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let render = |args: serde_json::Value| {
+        let client = &client;
+        async move { client.call_tool("render_screen", args).await }
+    };
+
+    let default = render(serde_json::json!({ "screen_ref": "byonk-builtin/default" })).await;
+    assert_eq!(
+        image_blocks(&default).len(),
+        1,
+        "the default must return exactly the dithered image"
+    );
+
+    let none =
+        render(serde_json::json!({ "screen_ref": "byonk-builtin/default", "image": "none" })).await;
+    assert!(
+        image_blocks(&none).is_empty(),
+        "image=none must return no image block at all: {none}"
+    );
+    assert_ne!(
+        none["isError"],
+        serde_json::json!(true),
+        "image=none is a successful render, not an error: {none}"
+    );
+    assert!(
+        none["structuredContent"]["data"].is_object(),
+        "image=none must still return diagnostics"
+    );
+
+    let both =
+        render(serde_json::json!({ "screen_ref": "byonk-builtin/default", "image": "both" })).await;
+    assert_eq!(
+        image_blocks(&both).len(),
+        2,
+        "image=both must return the dithered and the raw image: {both}"
+    );
+    // The labels are the whole point of `both` — two anonymous PNGs would be
+    // indistinguishable to a client that reordered or dropped one.
+    let text: String = both["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["type"] == "text")
+        .filter_map(|c| c["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.contains("dithered") && text.contains("raw"),
+        "image=both must label which image is which; got: {text}"
+    );
+
+    let raw =
+        render(serde_json::json!({ "screen_ref": "byonk-builtin/default", "image": "raw" })).await;
+    assert_eq!(
+        image_blocks(&raw).len(),
+        1,
+        "image=raw must return exactly one image: {raw}"
+    );
+}
+
+#[tokio::test]
+async fn test_render_screen_image_max_width_downscales_and_never_upscales() {
+    let app = TestApp::new_admin("secret");
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let full = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({ "screen_ref": "byonk-builtin/default" }),
+        )
+        .await;
+    let full_width = image_width(&image_blocks(&full)[0]);
+    assert!(
+        full_width > 200,
+        "fixture must be wider than the cap for this test to discriminate; was {full_width}"
+    );
+
+    let scaled = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({ "screen_ref": "byonk-builtin/default", "image_max_width": 200 }),
+        )
+        .await;
+    assert_eq!(
+        image_width(&image_blocks(&scaled)[0]),
+        200,
+        "image_max_width must downscale the returned PNG"
+    );
+
+    // Never upscale: a cap above the natural width must leave it untouched.
+    let big = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({
+                "screen_ref": "byonk-builtin/default",
+                "image_max_width": full_width * 2,
+            }),
+        )
+        .await;
+    assert_eq!(
+        image_width(&image_blocks(&big)[0]),
+        full_width,
+        "a cap wider than the image must not upscale it"
+    );
+}
+
+#[tokio::test]
+async fn test_render_screen_include_data_false_omits_the_script_table() {
+    let app = TestApp::new_admin("secret");
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let with = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({ "screen_ref": "byonk-builtin/default" }),
+        )
+        .await;
+    assert!(
+        with["structuredContent"]["data"].is_object(),
+        "data must be present by default: {with}"
+    );
+
+    let without = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({ "screen_ref": "byonk-builtin/default", "include_data": false }),
+        )
+        .await;
+    assert!(
+        without["structuredContent"]["data"].is_null(),
+        "include_data=false must omit the data table entirely: {without}"
+    );
+    // Dropping `data` must not cost the diagnostics that make a render
+    // readable — otherwise the option is a trap rather than a saving.
+    assert!(
+        without["structuredContent"]["refresh_rate"].is_number(),
+        "the rest of the diagnostics must survive include_data=false: {without}"
+    );
+    assert!(
+        without["structuredContent"]["log"].is_array(),
+        "log must survive include_data=false: {without}"
+    );
+}
+
 #[tokio::test]
 async fn test_render_of_a_broken_script_reports_the_lua_line() {
     let tmp = tempfile::tempdir().unwrap();
@@ -538,7 +712,7 @@ async fn test_render_of_a_broken_script_reports_the_lua_line() {
     client
         .call_tool(
             "create_screen",
-            serde_json::json!({ "handle": "local", "name": "broken" }),
+            serde_json::json!({ "handle": "local", "path": "broken" }),
         )
         .await;
     client
@@ -597,7 +771,7 @@ async fn test_render_captures_script_log_output() {
     client
         .call_tool(
             "create_screen",
-            serde_json::json!({ "handle": "local", "name": "chatty" }),
+            serde_json::json!({ "handle": "local", "path": "chatty" }),
         )
         .await;
     client
@@ -632,7 +806,7 @@ async fn test_validate_screen_flags_a_lua_syntax_error() {
     client
         .call_tool(
             "create_screen",
-            serde_json::json!({ "handle": "local", "name": "syntax" }),
+            serde_json::json!({ "handle": "local", "path": "syntax" }),
         )
         .await;
     client

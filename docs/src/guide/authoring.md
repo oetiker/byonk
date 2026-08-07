@@ -107,12 +107,30 @@ cp -r <examples dir>/hello <SCREENS_DIR>/my-hello
 
 then set `screen: local/my-hello` on a device.
 
-byonk's internal screen-authoring core (`ScreenStore`) already implements
-this fork operation — along with validating and rendering a screen's source
-files — as a foundation for upcoming interfaces (an MCP tool surface for
-LLM-driven authoring, and a web-based screen editor) that will do this copy
-for you. Those aren't wired up yet; this page will gain a "how to fork from
-the UI/MCP" section once they land.
+## Forking from an MCP client
+
+You don't have to copy files by hand. byonk exposes its screen-authoring core
+(`ScreenStore`) over MCP, so an LLM client can do the whole loop for you. Point
+your client at `/mcp` with the admin token as a bearer credential — see
+[MCP](mcp.md) for the endpoint and authentication details — then:
+
+- `copy_screen` forks any screen, including read-only builtins and examples,
+  into a writable repo. Pass the destination **repo handle** as `to_handle`
+  (e.g. `local`) and the new screen's **path segment** as `to_name`
+  (e.g. `my-hello`), yielding `local/my-hello`.
+- `read_screen_file` / `write_screen_file` read and edit `meta.yaml`,
+  `script.lua` and `screen.svg`. Writes take an optional `if_match` etag so
+  concurrent edits don't clobber each other.
+- `validate_screen` and `render_screen` check your work; `render_screen`
+  returns the actual dithered PNG plus the script's `log`, `data` and `error`,
+  which is the fastest way to debug a script.
+- `assign_screen` points a device at the result.
+
+`list_screens` and `list_screen_repos` report which handles are writable —
+only those can be edited in place, so fork a builtin first.
+
+A web-based screen editor is still to come; this page will gain a section on it
+once it lands.
 
 ## Next Steps
 

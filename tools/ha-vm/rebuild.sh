@@ -32,7 +32,11 @@ echo "==> syncing add-on build source"
 mount -t smbfs "//${SMB_USER}:${SMB_PASS}@localhost:${SMB_PORT}/addons" "$mnt_addons"
 dst="$mnt_addons/byonk"
 mkdir -p "$dst"
-for item in src crates fonts screens byonk-base static Cargo.toml Cargo.lock default-config.yaml; do
+# `docs/src` is a *compile-time* input, not documentation: `EmbeddedDocs`
+# (src/assets.rs) embeds three pages from it with rust-embed so the MCP server
+# can serve them as authoring contracts. Omit it and the build fails with
+# "folder '/build/docs/src/' does not exist".
+for item in src crates fonts screens byonk-base static docs/src Cargo.toml Cargo.lock default-config.yaml; do
   [ -e "$REPO_ROOT/$item" ] || continue
   if [ -d "$REPO_ROOT/$item" ]; then
     mkdir -p "$dst/$item"

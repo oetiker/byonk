@@ -1945,4 +1945,236 @@ mod domain_tests {
             );
         }
     }
+
+    /// Best patch-average reachable on this palette for `target`, and the
+    /// mixture that achieves it.
+    ///
+    /// A dithered patch's average is, by construction, a convex combination
+    /// of the palette's ACTUAL colours in linear RGB — that is the space in
+    /// which light adds. So the convex hull of those colours is a hard bound
+    /// on what ANY error-diffusion algorithm can reproduce, independent of
+    /// kernel, clamp or tuning. Measuring the ditherer against this bound
+    /// separates "the panel physically cannot make this colour" from "the
+    /// ditherer failed to make a colour the panel can make".
+    ///
+    /// The objective (OKLab distance of a linear-RGB mixture) is not convex,
+    /// so this is coordinate descent with a decreasing step from a fixed,
+    /// deterministic spread of starts: every vertex, the centroid, and every
+    /// pairwise midpoint. With six colours that is ample.
+    fn best_reachable(palette: &Palette, target: Oklab) -> (f32, Vec<f32>) {
+        let n = palette.len();
+        let cost = |w: &[f32]| -> f32 {
+            let total: f32 = w.iter().sum();
+            if total <= 0.0 {
+                return f32::MAX;
+            }
+            let mut mix = [0.0f32; 3];
+            for (i, &wi) in w.iter().enumerate() {
+                let c = palette.actual_linear(i);
+                mix[0] += wi * c.r;
+                mix[1] += wi * c.g;
+                mix[2] += wi * c.b;
+            }
+            let mix = LinearRgb::new(mix[0] / total, mix[1] / total, mix[2] / total);
+            Oklab::from(mix).distance_squared(target).sqrt()
+        };
+
+        let mut starts: Vec<Vec<f32>> = Vec::new();
+        for i in 0..n {
+            let mut w = vec![0.0; n];
+            w[i] = 1.0;
+            starts.push(w);
+        }
+        starts.push(vec![1.0 / n as f32; n]);
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let mut w = vec![0.0; n];
+                w[i] = 0.5;
+                w[j] = 0.5;
+                starts.push(w);
+            }
+        }
+
+        let mut best = (f32::MAX, vec![0.0; n]);
+        for mut w in starts {
+            let mut cur = cost(&w);
+            for &step in &[0.4f32, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002] {
+                loop {
+                    let mut improved = false;
+                    for i in 0..n {
+                        for d in [step, -step] {
+                            let mut cand = w.clone();
+                            cand[i] = (cand[i] + d).max(0.0);
+                            if cand.iter().sum::<f32>() <= 0.0 {
+                                continue;
+                            }
+                            let c = cost(&cand);
+                            if c < cur - 1e-7 {
+                                w = cand;
+                                cur = c;
+                                improved = true;
+                            }
+                        }
+                    }
+                    if !improved {
+                        break;
+                    }
+                }
+            }
+            if cur < best.0 {
+                let total: f32 = w.iter().sum();
+                best = (cur, w.iter().map(|x| x / total).collect());
+            }
+        }
+        best
+    }
+
+    /// Is the hue collapse inherent to a 6-colour panel, or is the ditherer
+    /// failing to use the palette it has?
+    ///
+    /// For each target this compares the achieved patch average against
+    /// `best_reachable` — the physical bound above. `gap = achieved - bound`
+    /// is the part that is the ditherer's fault and nothing else's.
+    ///
+    /// Run: `cargo test -p eink-dither gamut_bound -- --nocapture --ignored`
+    #[test]
+    #[ignore] // diagnostic -- run manually
+    fn test_dither_versus_gamut_bound() {
+        let official = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(255, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(0, 255, 0),
+        ];
+        let actual = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(0xB5, 0x03, 0x03),
+            Srgb::from_u8(0xFF, 0xEE, 0x00),
+            Srgb::from_u8(0x20, 0x54, 0x97),
+            Srgb::from_u8(0x0D, 0x87, 0x6B),
+        ];
+        let names = ["blk", "wht", "red", "yel", "blu", "grn"];
+        let palette = Palette::new(&official, Some(&actual)).unwrap();
+        const PATCH: usize = 16;
+
+        // (label, algorithm, preserve_exact, error_clamp override)
+        let configs: [(&str, DitherAlgorithm, bool, Option<f32>); 5] = [
+            ("production", DitherAlgorithm::Atkinson, true, None),
+            ("no-exact", DitherAlgorithm::Atkinson, false, None),
+            (
+                "no-exact+clamp2",
+                DitherAlgorithm::Atkinson,
+                false,
+                Some(2.0),
+            ),
+            (
+                "floyd no-exact",
+                DitherAlgorithm::FloydSteinberg,
+                false,
+                None,
+            ),
+            (
+                "floyd no-exact+clamp2",
+                DitherAlgorithm::FloydSteinberg,
+                false,
+                Some(2.0),
+            ),
+        ];
+
+        let lightnesses = [0.2f32, 0.32, 0.44, 0.56, 0.68, 0.8];
+        let mut sum_bound = 0.0f32;
+        let mut sum_got = [0.0f32; 5];
+        let mut count = 0usize;
+        let mut worst: Vec<(f32, i32, f32, f32, f32, String)> = Vec::new();
+
+        for &l in &lightnesses {
+            for hue_deg in (0..360).step_by(15) {
+                let (r, g, b) = hsl_to_rgb(hue_deg as f32 / 360.0, 1.0, l);
+                let src = Srgb::new(r, g, b);
+                let target = Oklab::from(LinearRgb::from(src));
+                let pixels = vec![src; PATCH * PATCH];
+
+                let (bound, recipe) = best_reachable(&palette, target);
+                sum_bound += bound;
+                count += 1;
+
+                let mut got = [0.0f32; 5];
+                for (ci, &(_, algo, preserve, clamp)) in configs.iter().enumerate() {
+                    let mut d = EinkDitherer::new(palette.clone())
+                        .algorithm(algo)
+                        .preserve_exact_matches(preserve);
+                    if let Some(c) = clamp {
+                        d = d.error_clamp(c);
+                    }
+                    let out = d.dither(&pixels, PATCH, PATCH);
+                    let mut acc = [0.0f32; 3];
+                    for &idx in out.indices() {
+                        let c = palette.actual_linear(idx as usize);
+                        acc[0] += c.r;
+                        acc[1] += c.g;
+                        acc[2] += c.b;
+                    }
+                    let n = (PATCH * PATCH) as f32;
+                    let avg = Oklab::from(LinearRgb::new(acc[0] / n, acc[1] / n, acc[2] / n));
+                    got[ci] = avg.distance_squared(target).sqrt();
+                    sum_got[ci] += got[ci];
+                }
+
+                let recipe_s: Vec<String> = recipe
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, &w)| w > 0.02)
+                    .map(|(i, &w)| format!("{}:{:.0}%", names[i], w * 100.0))
+                    .collect();
+                worst.push((
+                    got[0] - bound,
+                    hue_deg as i32,
+                    l,
+                    bound,
+                    got[0],
+                    recipe_s.join(" "),
+                ));
+            }
+        }
+
+        let n = count as f32;
+        eprintln!("\n=== Dither vs. the palette's physical bound ===");
+        eprintln!(
+            "{} targets (24 hues x {} lightness levels), {PATCH}x{PATCH} patches\n",
+            count,
+            lightnesses.len()
+        );
+        eprintln!(
+            "  gamut bound (best ANY algorithm could do) : mean dE {:.3}",
+            sum_bound / n
+        );
+        for (ci, &(label, _, _, _)) in configs.iter().enumerate() {
+            eprintln!(
+                "  {:<16} : mean dE {:.3}   gap over bound {:.3}",
+                label,
+                sum_got[ci] / n,
+                (sum_got[ci] - sum_bound) / n
+            );
+        }
+
+        worst.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        eprintln!("\nWorst 12 targets by gap (production):");
+        eprintln!(
+            "{:>5} {:>5} | {:>6} {:>6} {:>6} | best possible mixture",
+            "hue", "L", "bound", "got", "gap"
+        );
+        eprintln!("{}", "-".repeat(72));
+        for (gap, hue, l, bound, got, recipe) in worst.iter().take(12) {
+            eprintln!(
+                "{hue:>4}\u{00b0} {:>5.2} | {bound:>6.3} {got:>6.3} {gap:>6.3} | {recipe}",
+                l
+            );
+        }
+
+        let at_bound = worst.iter().filter(|w| w.0 < 0.02).count();
+        eprintln!("\n{at_bound}/{count} targets are already within 0.02 dE of the physical bound.");
+    }
 }

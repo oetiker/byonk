@@ -371,12 +371,12 @@ mod tests {
         let ditherer =
             EinkDitherer::new(palette.clone()).algorithm(DitherAlgorithm::FloydSteinberg);
         assert!((ditherer.dither_opts.error_clamp - 1.0).abs() < f32::EPSILON);
-        assert!((ditherer.dither_opts.noise_scale - 4.0).abs() < f32::EPSILON);
+        assert!((ditherer.dither_opts.noise_scale - 8.0).abs() < f32::EPSILON);
         assert!(!ditherer.dither_opts.hybrid_propagation);
 
         let ditherer = EinkDitherer::new(palette).algorithm(DitherAlgorithm::AtkinsonHybrid);
         assert!((ditherer.dither_opts.error_clamp - 1.0).abs() < f32::EPSILON);
-        assert!((ditherer.dither_opts.noise_scale - 0.0).abs() < f32::EPSILON);
+        assert!((ditherer.dither_opts.noise_scale - 8.0).abs() < f32::EPSILON);
         assert!(ditherer.dither_opts.hybrid_propagation);
     }
 

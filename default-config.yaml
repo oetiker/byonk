@@ -89,9 +89,6 @@ panels:
     height: 480
     colors: "#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00"
     colors_actual: "#000000,#FFFFFF,#B50303,#FFEE00,#205497,#0D876B"
-    dither:
-      sierra-lite:
-        noise_scale: 5
   reterminal_e1004:
     name: "reTerminal E1004 (6-color, 13.3\")"
     # E1004 firmware reports its identity in the `Model` header (not `Board`),
@@ -102,9 +99,6 @@ panels:
     colors: "#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00"
     # Measured on the physical E1004 panel via the dev-mode calibrator.
     colors_actual: "#000000,#FFFFFF,#C20000,#FFE042,#2160C4,#00994D"
-    dither:
-      sierra-lite:
-        noise_scale: 5
 
 # Screens are auto-discovered from the embedded `byonk-builtin` package
 # (the `screens/builtin/` tree) and any on-disk packages; no per-screen map is needed.

@@ -59,6 +59,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Dithered images no longer show weave patterns or stray lines.** Error
+  diffusion on smooth content could settle into a repeating pattern instead of
+  a random one, printing a herringbone texture across flat areas and, in
+  gradients, drawing a clean solid line straight through the picture. Both are
+  the kind of artifact the eye picks out immediately. Every dithering
+  algorithm's blue-noise setting has been retuned to break the pattern up.
+  Atkinson was the worst affected — it shipped with the noise turned off
+  entirely — so screens using it change the most. Colour accuracy improves
+  slightly at the same time, and fine detail is unaffected: thin strokes,
+  small text and hard edges render exactly as crisply as before.
+- **The reTerminal E1002 and E1004 panel presets no longer pin a noise value.**
+  Both fixed it at a setting that measurement shows is past the useful point
+  for the algorithm they set it on, so they now follow the tuned default. If
+  you had copied either preset into your own `config.yaml`, delete the
+  `dither: sierra-lite: noise_scale:` lines to pick this up.
 - **The git client used to fetch screen repositories was updated** (`gix` 0.66 →
   0.86), picking up security fixes in git's object, pack and ref handling. This
   matters if you fetch screen repositories from sources you don't fully control.

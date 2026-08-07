@@ -131,16 +131,44 @@ impl DitherAlgorithm {
     /// not exceed full scale in a channel. Going higher buys ~0.003 dE on
     /// flat patches while removing the bound that keeps one dark or blown-out
     /// region from dragging its neighbours.
+    ///
+    /// `noise_scale` jitters the split between the right and below neighbours
+    /// (see the dither loop). Without it, error diffusion on smooth content
+    /// locks into a limit cycle rather than staying stochastic, and the result
+    /// is structure the eye finds instantly: a herringbone weave over flat
+    /// areas, and solid lines drawn clean across a gradient. Both are far more
+    /// objectionable than the dE they cost.
+    ///
+    /// The values below are measured against the palette's physical bound
+    /// (`test_noise_scale_against_bound`), and the optimum tracks **kernel
+    /// width**. The jitter is clamped to the right/below weights, so on a
+    /// narrow kernel a large scale saturates that clamp and degenerates into a
+    /// deterministic toggle — reintroducing the very structure it exists to
+    /// break. Wide kernels have the headroom to absorb it:
+    ///
+    /// | kernel | neighbours | in-gamut gap at 0 → chosen |
+    /// |---|---|---|
+    /// | Sierra Lite | 3 | optimum at 2.0; 0.0120 by 24 |
+    /// | Floyd-Steinberg | 4 | optimum at 8.0; degrades after |
+    /// | Atkinson | 6 | 0.0384 → 0.0363 |
+    /// | Burkes / Sierra 2-row | 7 | 0.0132 → 0.0125 |
+    /// | Stucki / JJN / Sierra | 10–12 | still improving at 24 |
+    ///
+    /// Where a kernel was still improving at 24, the default stops at 16: the
+    /// remaining gain is ~0.0002 dE and 16 is the largest value checked by eye
+    /// for damage to thin strokes and text-scale detail (there is none).
     pub fn defaults(&self) -> (f32, f32) {
         let noise_scale = match self {
-            Self::Atkinson | Self::AtkinsonHybrid => 0.0,
-            Self::FloydSteinberg => 4.0,
-            Self::JarvisJudiceNinke => 6.0,
-            Self::Sierra => 5.5,
-            Self::SierraTwoRow => 7.0,
+            // Shipped at 0.0, which cost both accuracy and a visible weave.
+            Self::Atkinson | Self::AtkinsonHybrid => 8.0,
+            // Narrow kernels: measured optima, not "as high as possible".
+            Self::FloydSteinberg => 8.0,
             Self::SierraLite => 2.5,
-            Self::Stucki => 6.0,
-            Self::Burkes => 7.0,
+            Self::JarvisJudiceNinke => 16.0,
+            Self::Sierra => 16.0,
+            Self::SierraTwoRow => 16.0,
+            Self::Stucki => 16.0,
+            Self::Burkes => 16.0,
         };
         (1.0, noise_scale)
     }
@@ -497,10 +525,36 @@ mod tests {
             );
         }
 
-        let (_, ns) = DitherAlgorithm::Atkinson.defaults();
-        assert!((ns - 0.0).abs() < f32::EPSILON);
+        // Every algorithm must jitter. A zero here is not a tuning choice but
+        // a defect: without it error diffusion locks into a limit cycle and
+        // prints a herringbone weave or a solid line across a gradient.
+        // Atkinson shipped at 0.0 and was the worst affected.
+        for algo in [
+            DitherAlgorithm::Atkinson,
+            DitherAlgorithm::AtkinsonHybrid,
+            DitherAlgorithm::FloydSteinberg,
+            DitherAlgorithm::JarvisJudiceNinke,
+            DitherAlgorithm::Sierra,
+            DitherAlgorithm::SierraTwoRow,
+            DitherAlgorithm::SierraLite,
+            DitherAlgorithm::Stucki,
+            DitherAlgorithm::Burkes,
+        ] {
+            let (_, ns) = algo.defaults();
+            assert!(ns > 0.0, "{algo:?} must apply blue-noise jitter");
+        }
+
+        // The narrow kernels are the exception to "more is better": the jitter
+        // is clamped to the right/below weights, so a large scale saturates
+        // that clamp and degenerates into a deterministic toggle. Their
+        // measured optima are low and pinning them guards against a
+        // well-meaning sweep raising them with the rest.
+        let (_, ns) = DitherAlgorithm::SierraLite.defaults();
+        assert!((ns - 2.5).abs() < f32::EPSILON);
         let (_, ns) = DitherAlgorithm::FloydSteinberg.defaults();
-        assert!((ns - 4.0).abs() < f32::EPSILON);
+        assert!((ns - 8.0).abs() < f32::EPSILON);
+        let (_, ns) = DitherAlgorithm::Atkinson.defaults();
+        assert!((ns - 8.0).abs() < f32::EPSILON);
     }
 
     #[test]

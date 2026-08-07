@@ -234,26 +234,36 @@ fn visual_crop_upper_field() {
     }
 
     let palette = panel();
-    eprintln!("\n=== upper-field crop, rows {Y0}..{Y1}, {ZOOM}x ===");
+    // Survey the whole frame in bands, not just the first streak found. There
+    // turned out to be more than one boundary, and counting them matters: a
+    // single artifact invites a local patch, several at every ink transition
+    // point at the selection rule.
+    let bands = [(0usize, 90usize), (Y0, Y1), (145, 235), (230, 320)];
+    eprintln!("\n=== field crops in bands, {ZOOM}x ===");
     for &(name, algo) in ALGOS {
         let out = EinkDitherer::new(palette.clone())
             .algorithm(algo)
             .dither(&pixels, W, H);
         let rgb = out.to_rgb_actual();
 
-        let ch = Y1 - Y0;
-        let (ow, oh) = (W * ZOOM, ch * ZOOM);
-        let mut buf = vec![0u8; ow * oh * 3];
-        for y in 0..oh {
-            for x in 0..ow {
-                let sx = x / ZOOM;
-                let sy = Y0 + y / ZOOM;
-                let s = (sy * W + sx) * 3;
-                let d = (y * ow + x) * 3;
-                buf[d..d + 3].copy_from_slice(&rgb[s..s + 3]);
+        for (bi, &(y0, y1)) in bands.iter().enumerate() {
+            let ch = y1 - y0;
+            let (ow, oh) = (W * ZOOM, ch * ZOOM);
+            let mut buf = vec![0u8; ow * oh * 3];
+            for y in 0..oh {
+                for x in 0..ow {
+                    let s = ((y0 + y / ZOOM) * W + x / ZOOM) * 3;
+                    let d = (y * ow + x) * 3;
+                    buf[d..d + 3].copy_from_slice(&rgb[s..s + 3]);
+                }
             }
+            let label = if bi == 1 {
+                format!("crop-{name}.png")
+            } else {
+                format!("band{bi}-{name}.png")
+            };
+            write(&label, &buf, ow, oh);
         }
-        write(&format!("crop-{name}.png"), &buf, ow, oh);
     }
 }
 
@@ -270,8 +280,10 @@ fn visual_crop_upper_field() {
 fn visual_noise_scale_sweep() {
     const W: usize = 480;
     const H: usize = 320;
-    const Y0: usize = 55;
-    const Y1: usize = 145;
+    // Two bands, because they answer different questions: the upper one
+    // holds the scalloped arcs at the ink-set boundary, the lower one the
+    // thin green streak through the yellow field. Noise fixes one, not both.
+    const BANDS: [(usize, usize); 2] = [(55, 145), (145, 235)];
     const ZOOM: usize = 3;
 
     let mut pixels = Vec::with_capacity(W * H);
@@ -290,24 +302,40 @@ fn visual_noise_scale_sweep() {
         ("atkinson", DitherAlgorithm::Atkinson),
         ("jarvis-judice-ninke", DitherAlgorithm::JarvisJudiceNinke),
     ] {
-        for scale in [0.0f32, 4.0, 8.0, 16.0] {
+        for scale in [0.0f32, 6.0, 16.0] {
             let out = EinkDitherer::new(palette.clone())
                 .algorithm(algo)
                 .noise_scale(scale)
                 .dither(&pixels, W, H);
+
+            // Jitter cannot be free: it perturbs the kernel weights, so it
+            // buys smoothness with accuracy. Report the cost next to the
+            // image so the trade is visible rather than assumed.
+            let dith: Vec<LinearRgb> = out
+                .indices()
+                .iter()
+                .map(|&i| palette.actual_linear(i as usize))
+                .collect();
+            let orig: Vec<LinearRgb> = pixels.iter().map(|&s| LinearRgb::from(s)).collect();
+            eprintln!(
+                "  {name:<20} noise {scale:>4.1}  luminance delta {:+.4}",
+                mean_luminance(&dith) - mean_luminance(&orig)
+            );
+
             let rgb = out.to_rgb_actual();
 
-            let ch = Y1 - Y0;
-            let (ow, oh) = (W * ZOOM, ch * ZOOM);
-            let mut buf = vec![0u8; ow * oh * 3];
-            for y in 0..oh {
-                for x in 0..ow {
-                    let s = ((Y0 + y / ZOOM) * W + x / ZOOM) * 3;
-                    let d = (y * ow + x) * 3;
-                    buf[d..d + 3].copy_from_slice(&rgb[s..s + 3]);
+            for (bi, &(y0, y1)) in BANDS.iter().enumerate() {
+                let (ow, oh) = (W * ZOOM, (y1 - y0) * ZOOM);
+                let mut buf = vec![0u8; ow * oh * 3];
+                for y in 0..oh {
+                    for x in 0..ow {
+                        let s = ((y0 + y / ZOOM) * W + x / ZOOM) * 3;
+                        let d = (y * ow + x) * 3;
+                        buf[d..d + 3].copy_from_slice(&rgb[s..s + 3]);
+                    }
                 }
+                write(&format!("noise{bi}-{name}-{scale:04.1}.png"), &buf, ow, oh);
             }
-            write(&format!("noise-{name}-{scale:04.1}.png"), &buf, ow, oh);
         }
     }
 }

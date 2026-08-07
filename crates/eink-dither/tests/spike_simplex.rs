@@ -158,16 +158,26 @@ impl SupportCache {
 ///
 /// `restrict = false` reproduces the production selection rule (all inks), so
 /// the two arms differ in exactly one thing.
+#[derive(Clone, Copy)]
+struct Arm {
+    restrict: bool,
+    full_propagation: bool,
+    jitter: f32,
+}
+
 fn dither_restricted(
     palette: &Palette,
     cache: &mut SupportCache,
     image: &[Srgb],
     w: usize,
     h: usize,
-    restrict: bool,
-    full_propagation: bool,
-    jitter: f32,
+    arm: Arm,
 ) -> Vec<u8> {
+    let Arm {
+        restrict,
+        full_propagation,
+        jitter,
+    } = arm;
     // Atkinson: 6 neighbours of weight 1, divisor 8 (25% discarded).
     const K: [(i32, i32, f32); 6] = [
         (1, 0, 1.0),
@@ -336,8 +346,30 @@ fn spike_arcs_under_support_restriction() {
     let px = muted_field(W, H);
     let mut cache = SupportCache::new(palette.clone(), SUPPORT_THRESHOLD);
 
-    let base = dither_restricted(&palette, &mut cache, &px, W, H, false, false, 0.0);
-    let restr = dither_restricted(&palette, &mut cache, &px, W, H, true, true, ARM_JITTER);
+    let base = dither_restricted(
+        &palette,
+        &mut cache,
+        &px,
+        W,
+        H,
+        Arm {
+            restrict: false,
+            full_propagation: false,
+            jitter: 0.0,
+        },
+    );
+    let restr = dither_restricted(
+        &palette,
+        &mut cache,
+        &px,
+        W,
+        H,
+        Arm {
+            restrict: true,
+            full_propagation: true,
+            jitter: ARM_JITTER,
+        },
+    );
     eprintln!("  support cache entries: {}", cache.map.len());
 
     // Stacked crops of the band that holds the scalloped front, unrestricted
@@ -414,7 +446,18 @@ fn spike_patches_under_support_restriction() {
             ("floyd           ", false, true),
             ("restricted+floyd", true, true),
         ] {
-            let out = dither_restricted(&palette, &mut cache, &px, P, P, restrict, fullprop, 0.0);
+            let out = dither_restricted(
+                &palette,
+                &mut cache,
+                &px,
+                P,
+                P,
+                Arm {
+                    restrict,
+                    full_propagation: fullprop,
+                    jitter: 0.0,
+                },
+            );
             let mut hist = vec![0usize; palette.len()];
             for &i in &out {
                 hist[i as usize] += 1;
@@ -449,7 +492,18 @@ fn spike_patches_under_support_restriction() {
     // the gradient would both go flat. Report the ink count actually used.
     let px = muted_field(240, 160);
     for (label, restrict) in [("production", false), ("restricted", true)] {
-        let out = dither_restricted(&palette, &mut cache, &px, 240, 160, restrict, false, 0.0);
+        let out = dither_restricted(
+            &palette,
+            &mut cache,
+            &px,
+            240,
+            160,
+            Arm {
+                restrict,
+                full_propagation: false,
+                jitter: 0.0,
+            },
+        );
         let mut seen = vec![0usize; palette.len()];
         for &i in &out {
             seen[i as usize] += 1;
@@ -484,7 +538,18 @@ fn spike_is_the_banding_intrinsic() {
         ("q255 t0.001", 255.0, 0.001),
     ] {
         let mut cache = SupportCache::with_levels(palette.clone(), threshold, levels);
-        let idx = dither_restricted(&palette, &mut cache, &px, W, H, true, true, 2.0);
+        let idx = dither_restricted(
+            &palette,
+            &mut cache,
+            &px,
+            W,
+            H,
+            Arm {
+                restrict: true,
+                full_propagation: true,
+                jitter: 2.0,
+            },
+        );
         eprintln!("  {label}: {} cache entries", cache.map.len());
         out.push(rgb_of(&palette, &idx));
     }

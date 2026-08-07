@@ -71,6 +71,158 @@ fn push_log(sink: &Arc<Mutex<Vec<String>>>, line: String) {
     }
 }
 
+/// Translate a Lua options table into the three typed structs the pipeline
+/// needs. Unknown `preset` and `fit` values are errors, never silent no-ops:
+/// a typo that silently does nothing is worse than one that fails loudly.
+fn parse_image_opts(
+    opts: Option<&Table>,
+    palette_hex: Option<&[String]>,
+    log_sink: &Arc<Mutex<Vec<String>>>,
+) -> Result<
+    (
+        crate::services::image_process::GeometryOpts,
+        eink_photo::Params,
+        crate::services::image_process::OutputFormat,
+    ),
+    String,
+> {
+    use crate::services::image_process::{Fit, GeometryOpts, OutputFormat};
+
+    let Some(t) = opts else {
+        return Ok((
+            GeometryOpts::default(),
+            eink_photo::Params::default(),
+            OutputFormat::Png,
+        ));
+    };
+
+    let num = |k: &str| -> Option<f32> { t.get::<f32>(k).ok() };
+    let flag = |k: &str| -> Option<bool> {
+        match t.get::<Value>(k) {
+            Ok(Value::Boolean(b)) => Some(b),
+            _ => None,
+        }
+    };
+
+    // --- geometry ---
+    let crop = match t.get::<Table>("crop") {
+        Ok(c) => Some((
+            c.get::<f32>("x").unwrap_or(0.0),
+            c.get::<f32>("y").unwrap_or(0.0),
+            c.get::<f32>("w")
+                .map_err(|_| "crop.w is required".to_string())?,
+            c.get::<f32>("h")
+                .map_err(|_| "crop.h is required".to_string())?,
+        )),
+        Err(_) => None,
+    };
+    let fit = match t.get::<String>("fit").ok().as_deref() {
+        None | Some("cover") => Fit::Cover,
+        Some("contain") => Fit::Contain,
+        Some("stretch") => Fit::Stretch,
+        Some("none") => Fit::None,
+        Some(other) => {
+            return Err(format!(
+                "unknown fit {other:?}; expected cover, contain, stretch or none"
+            ))
+        }
+    };
+    let geometry = GeometryOpts {
+        crop,
+        fit,
+        width: t.get::<u32>("width").ok(),
+        height: t.get::<u32>("height").ok(),
+    };
+
+    // --- tone params ---
+    let preset = match t.get::<String>("preset").ok().as_deref() {
+        None | Some("none") => eink_photo::Preset::None,
+        Some("eink") => eink_photo::Preset::Eink,
+        Some(other) => return Err(format!("unknown preset {other:?}; expected eink or none")),
+    };
+
+    let curve = match t.get::<Table>("curve") {
+        Ok(c) => {
+            let mut pts = Vec::new();
+            for i in 1..=c.raw_len() {
+                let pair: Table = c
+                    .raw_get(i)
+                    .map_err(|_| "curve entries must be {input, output} pairs".to_string())?;
+                let x: f32 = pair
+                    .raw_get(1)
+                    .map_err(|_| "curve point missing input".to_string())?;
+                let y: f32 = pair
+                    .raw_get(2)
+                    .map_err(|_| "curve point missing output".to_string())?;
+                pts.push((x, y));
+            }
+            Some(pts)
+        }
+        Err(_) => None,
+    };
+
+    let sharpen = match t.get::<Table>("sharpen") {
+        Ok(s) => Some(eink_photo::Sharpen {
+            amount: s.get::<f32>("amount").unwrap_or(40.0),
+            radius: s.get::<f32>("radius").unwrap_or(1.0),
+        }),
+        Err(_) => None,
+    };
+
+    // --- palette_aware ---
+    let output_endpoints = if flag("palette_aware").unwrap_or(false) {
+        match palette_hex {
+            Some(hex) if !hex.is_empty() => {
+                let rgb = crate::api::display::parse_colors_header(&hex.join(","));
+                eink_photo::palette_endpoints(&rgb)
+            }
+            _ => {
+                push_log(
+                    log_sink,
+                    "[warn] image_process: palette_aware was requested but this device \
+                     has no palette; ignoring it"
+                        .to_string(),
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let params = eink_photo::Params {
+        preset,
+        exposure: num("exposure"),
+        temperature: num("temperature"),
+        tint: num("tint"),
+        auto_levels: flag("auto_levels"),
+        blacks: num("blacks"),
+        whites: num("whites"),
+        highlights: num("highlights"),
+        shadows: num("shadows"),
+        contrast: num("contrast"),
+        curve,
+        clarity: num("clarity"),
+        vibrance: num("vibrance"),
+        saturation: num("saturation"),
+        grayscale: flag("grayscale"),
+        invert: flag("invert"),
+        sharpen,
+        output_endpoints,
+    };
+
+    // --- output format ---
+    let format = match t.get::<String>("format").ok().as_deref() {
+        None | Some("png") => OutputFormat::Png,
+        Some("jpeg") | Some("jpg") => OutputFormat::Jpeg {
+            quality: t.get::<u8>("quality").unwrap_or(90),
+        },
+        Some(other) => return Err(format!("unknown format {other:?}; expected png or jpeg")),
+    };
+
+    Ok((geometry, params, format))
+}
+
 /// Error type for Lua script execution
 #[derive(Debug, thiserror::Error)]
 pub enum ScriptError {
@@ -620,6 +772,28 @@ impl LuaRuntime {
             }
         })?;
         globals.set("read_asset", read_asset)?;
+
+        // image_process(bytes, opts) -> data_uri, width, height
+        //
+        // One call, fixed order (see the eink-photo crate docs). Raises a Lua
+        // error on failure, matching http_get's contract and the `pcall`
+        // idiom the examples use.
+        let ctx_palette_hex: Option<Vec<String>> =
+            device_ctx.and_then(|c| c.colors_actual.clone().or_else(|| c.colors.clone()));
+        let img_log_sink = log_sink.clone();
+        let image_process =
+            lua.create_function(move |_, (bytes, opts): (mlua::String, Option<Table>)| {
+                let bytes = bytes.as_bytes();
+                let (geometry, params, format) =
+                    parse_image_opts(opts.as_ref(), ctx_palette_hex.as_deref(), &img_log_sink)
+                        .map_err(mlua::Error::external)?;
+                let (uri, w, h) = crate::services::image_process::process_image(
+                    &bytes, &geometry, &params, format,
+                )
+                .map_err(mlua::Error::external)?;
+                Ok((uri, w, h))
+            })?;
+        globals.set("image_process", image_process)?;
 
         // http_request(url, options?) -> string
         // Core HTTP function with method option

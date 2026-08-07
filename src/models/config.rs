@@ -144,7 +144,12 @@ pub fn normalize_algorithm_name(name: &str) -> String {
         "jjn" | "jarvis-judice-ninke" | "jarvis_judice_ninke" => "jarvis-judice-ninke".to_string(),
         "sierra" => "sierra".to_string(),
         "sierra-two-row" | "sierra_two_row" | "sierratworow" => "sierra-two-row".to_string(),
-        "sierra-lite" | "sierra_lite" | "sierralite" => "sierra-lite".to_string(),
+        // "sierra-light" is a long-standing misspelling of "sierra-lite" that
+        // reached shipped config and the admin API's algorithm list. Kept as
+        // an alias so those configs select the algorithm they name instead of
+        // falling through to the Atkinson default.
+        "sierra-lite" | "sierra_lite" | "sierralite" | "sierra-light" | "sierra_light"
+        | "sierralight" => "sierra-lite".to_string(),
         "stucki" => "stucki".to_string(),
         "burkes" => "burkes".to_string(),
         other => other.to_string(),
@@ -553,6 +558,55 @@ registration:
         assert!(config.is_device_registered("00:00:00:00:00:00", Some("XYZABCDEFG")));
         // Should not find unknown
         assert!(!config.is_device_registered("00:00:00:00:00:00", Some("UNKNOWNCODE")));
+    }
+
+    /// `sierra-light` is a misspelling that reached shipped config and the
+    /// admin API's advertised algorithm list. The renderer only matches
+    /// canonical names and otherwise falls back to Atkinson silently, so
+    /// before this alias existed a device configured for `sierra-light` was
+    /// quietly rendered with Atkinson AND lost its per-algorithm panel
+    /// tuning, with nothing in the output to say so.
+    #[test]
+    fn test_sierra_light_misspelling_resolves_to_sierra_lite() {
+        for name in [
+            "sierra-light",
+            "sierra_light",
+            "SierraLight",
+            "SIERRA-LIGHT",
+        ] {
+            assert_eq!(
+                normalize_algorithm_name(name),
+                "sierra-lite",
+                "`{name}` must canonicalize to sierra-lite, not fall through"
+            );
+        }
+        // The correct spellings keep working.
+        assert_eq!(normalize_algorithm_name("sierra-lite"), "sierra-lite");
+        assert_eq!(normalize_algorithm_name("sierralite"), "sierra-lite");
+        // And it must not swallow the other Sierra variants.
+        assert_eq!(normalize_algorithm_name("sierra"), "sierra");
+        assert_eq!(normalize_algorithm_name("sierra-two-row"), "sierra-two-row");
+    }
+
+    /// Per-algorithm panel tuning is keyed by canonical name, so a config
+    /// written with the misspelling must still find its tuning block.
+    #[test]
+    fn test_panel_tuning_found_via_sierra_light_alias() {
+        let yaml = r#"
+defaults:
+  error_clamp: 0.5
+sierra-lite:
+  error_clamp: 0.11
+  noise_scale: 5
+"#;
+        let cfg: PanelDitherConfig = serde_yaml::from_str(yaml).unwrap();
+        let tuning = cfg.resolve_for_algorithm(Some("sierra-light"));
+        assert_eq!(
+            tuning.error_clamp,
+            Some(0.11),
+            "misspelled algorithm must still resolve its per-algorithm tuning"
+        );
+        assert_eq!(tuning.noise_scale, Some(5.0));
     }
 
     #[test]

@@ -271,7 +271,6 @@ const DITHER_ALGORITHMS: &[&str] = &[
     "sierra",
     "sierra-two-row",
     "sierra-lite",
-    "sierra-light",
     "stucki",
     "burkes",
 ];

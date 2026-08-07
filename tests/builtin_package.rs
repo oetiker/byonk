@@ -33,6 +33,7 @@ fn test_builtin_list_all_is_exactly_default_and_calibration() {
     for expected in [
         "byonk-builtin/default",
         "byonk-builtin/calibration/color",
+        "byonk-builtin/calibration/gamut",
         "byonk-builtin/calibration/grey",
     ] {
         assert!(
@@ -42,8 +43,8 @@ fn test_builtin_list_all_is_exactly_default_and_calibration() {
     }
     assert_eq!(
         refs.len(),
-        3,
-        "byonk-builtin must ship exactly default + calibration/color + calibration/grey, got {refs:?}"
+        4,
+        "byonk-builtin must ship exactly default + calibration/{{color,gamut,grey}}, got {refs:?}"
     );
 
     // Example screens must not resolve through byonk-builtin anymore.

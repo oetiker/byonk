@@ -98,6 +98,40 @@ The calibrator shows everything you need to evaluate dithering quality:
 
 Use the calibrator on your physical device while adjusting tuning in dev mode — the live sync means every change you make is immediately visible on the display.
 
+### Gamut Patch Screen
+
+`byonk-builtin/calibration/gamut` answers a narrower question: which colors can
+this panel actually mix, and which does it give up on?
+
+```yaml
+devices:
+  "ABCDE-FGHJK":
+    screen: byonk-builtin/calibration/gamut
+    panel: my_panel
+    params:
+      hues: 24      # hue columns around the full circle (2-48)
+      levels: 6     # lightness rows (1-12)
+```
+
+It draws the hue circle as isolated flat patches rather than the calibrator's
+smooth gradient. That difference is the point: in a gradient, neighbouring hues
+bleed together, so a hue the panel cannot reproduce still looks like it is doing
+something. Here each patch stands alone, so you can read it directly:
+
+- **A speckled patch** — the ditherer mixed several palette colors to approximate
+  the request. This is what working output looks like.
+- **A solid patch** — the ditherer picked one palette entry for every pixel. On a
+  6-color panel expect solid blue across roughly 225°–270°: that genuinely is the
+  best the palette offers, not a bug.
+- **A solid white patch** (drawn outlined, so it doesn't read as a missing cell) —
+  the request collapsed to white entirely. Cyan around 180° does this on 6-color
+  panels, whose bluest and greenest inks are both dark.
+
+Rows vary lightness because reachability depends on it — a hue may mix cleanly
+when dark and collapse when light. The screen sets `preserve_exact = false` so
+that hues landing exactly on a palette primary are dithered on the same terms as
+every other patch, instead of being passed through flat by exact-match handling.
+
 ### Calibration Workflow
 
 1. **Assign the `byonk-builtin/calibration/color` screen** to your device in `config.yaml`

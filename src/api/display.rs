@@ -352,9 +352,15 @@ pub fn resolve_render_params(
         fallback_palette.to_vec()
     };
 
+    // Canonicalize here, at the single point where the effective algorithm is
+    // decided, so the renderer and the per-algorithm tuning lookup can never
+    // disagree about which algorithm was asked for. The renderer matches
+    // canonical names only and silently falls back to Atkinson otherwise, so
+    // an un-normalized alias reaching it is a silent wrong-algorithm render.
     let dither = script_dither
         .map(|s| s.to_string())
-        .or_else(|| device_config_dither.map(|s| s.to_string()));
+        .or_else(|| device_config_dither.map(|s| s.to_string()))
+        .map(|s| crate::models::normalize_algorithm_name(&s));
 
     let preserve_exact = script_preserve_exact
         .or(preserve_exact_override)

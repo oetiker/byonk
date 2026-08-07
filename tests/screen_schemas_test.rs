@@ -127,8 +127,8 @@ fn test_all_bundled_screens_have_parseable_meta() {
     let all = pl.list_all();
     assert_eq!(
         all.len(),
-        3,
-        "expected exactly the 3 minimal builtin screens (default + calibration/color + calibration/grey) to resolve, got {}",
+        4,
+        "expected exactly the 4 minimal builtin screens (default + calibration/{{color,gamut,grey}}) to resolve, got {}",
         all.len()
     );
     for r in &all {

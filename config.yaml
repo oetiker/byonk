@@ -99,7 +99,7 @@ panels:
     colors: "#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00"
     colors_actual: "#000000,#FFFFFF,#B50303,#FFEE00,#205497,#0D876B"
     dither:
-      sierra-light:
+      sierra-lite:
         error_clamp: 0.11
         noise_scale: 5
   reterminal_e1004:
@@ -113,7 +113,7 @@ panels:
     # Measured on the physical E1004 panel via the dev-mode calibrator.
     colors_actual: "#000000,#FFFFFF,#C20000,#FFE042,#2160C4,#00994D"
     dither:
-      sierra-light:
+      sierra-lite:
         error_clamp: 0.11
         noise_scale: 5
 
@@ -195,7 +195,7 @@ devices:
   # No explicit `panel:` — the reterminal_e1004 panel auto-detects via the Model header.
   "44:1B:F6:83:93:38":
     screen: gphoto
-    dither: sierra-light
+    dither: sierra-lite
     params:
       album_url: "https://photos.app.goo.gl/xS9tWGRShAzf3YCg6"
       show_status: false

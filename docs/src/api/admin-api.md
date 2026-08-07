@@ -183,7 +183,6 @@ value a device's `screen` field is set to.
     "sierra",
     "sierra-two-row",
     "sierra-lite",
-    "sierra-light",
     "stucki",
     "burkes"
   ]

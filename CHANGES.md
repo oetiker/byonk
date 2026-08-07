@@ -50,6 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--use-actual` flag to draw the output PNG in those measured colours
   instead of the spec palette. Previously the CLI ignored measured colours
   entirely.
+- **New `byonk-builtin/calibration/gamut` screen** draws the hue circle as
+  isolated flat patches across several lightness levels, so you can see at a
+  glance which colours your panel can actually mix and which it collapses to a
+  single flat colour. Complements the existing colour calibrator, whose smooth
+  gradient hides exactly this. Tune the grid with the `hues` and `levels`
+  params.
 
 ### Changed
 
@@ -73,6 +79,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`sierra-light` now selects Sierra Lite instead of silently falling back to
+  Atkinson.** The misspelling was listed by the admin API as if it were its own
+  algorithm and shipped in the panel presets, but nothing understood it: any
+  device configured with it was rendered with Atkinson and also lost its
+  per-algorithm panel tuning, with nothing in the output to say so. The name is
+  now an accepted alias for `sierra-lite`, and the effective algorithm is
+  canonicalised once so the renderer and the tuning lookup cannot disagree. If
+  you had a device on `sierra-light`, it will now genuinely render with Sierra
+  Lite — which will look different.
 - **Screens no longer show a bogus "requires byonk 0.15 but this engine is
   0.17.1" warning.** Every bundled screen still declared compatibility with an
   old engine series, so the screen list warned about all of them — including the

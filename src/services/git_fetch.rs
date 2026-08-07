@@ -517,10 +517,10 @@ mod tests {
         // environment without any git config.
         let mut config = repo.config_snapshot_mut();
         config
-            .set_raw_value(&gix::config::tree::User::NAME, "byonk-test")
+            .set_raw_value(gix::config::tree::User::NAME, "byonk-test")
             .expect("set user.name");
         config
-            .set_raw_value(&gix::config::tree::User::EMAIL, "byonk-test@example.com")
+            .set_raw_value(gix::config::tree::User::EMAIL, "byonk-test@example.com")
             .expect("set user.email");
         config.commit().expect("commit config");
 
@@ -611,10 +611,10 @@ mod tests {
 
         let mut config = repo.config_snapshot_mut();
         config
-            .set_raw_value(&gix::config::tree::User::NAME, "byonk-test")
+            .set_raw_value(gix::config::tree::User::NAME, "byonk-test")
             .expect("set user.name");
         config
-            .set_raw_value(&gix::config::tree::User::EMAIL, "byonk-test@example.com")
+            .set_raw_value(gix::config::tree::User::EMAIL, "byonk-test@example.com")
             .expect("set user.email");
         config.commit().expect("commit config");
 

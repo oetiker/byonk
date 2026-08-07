@@ -381,7 +381,7 @@ fn sharp_scene() -> (Vec<Srgb>, usize, usize) {
             for y in 0..4 {
                 for x in 0..3 {
                     if (ch + row + x) % 3 != 0 {
-                        set((bx + x) as i32, (by + y) as i32, black);
+                        set(bx + x, by + y, black);
                     }
                 }
             }

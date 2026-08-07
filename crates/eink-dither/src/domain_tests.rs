@@ -206,7 +206,7 @@ mod domain_tests {
             let result = ditherer.dither(&image, 8, 8);
             let indices = result.indices();
 
-            let has_blue = indices.iter().any(|&idx| idx == 4);
+            let has_blue = indices.contains(&4);
             assert!(
                 !has_blue,
                 "REGRESSION: Orange input mapped to blue on a 7-color e-ink palette. \
@@ -1049,7 +1049,7 @@ mod domain_tests {
                 avg_lch.l, avg_lch.c,
                 r.delta_e,
                 chromatic_pct,
-                pcts.get(0).unwrap_or(&0.0),
+                pcts.first().unwrap_or(&0.0),
                 pcts.get(1).unwrap_or(&0.0),
                 pcts.get(2).unwrap_or(&0.0),
                 pcts.get(3).unwrap_or(&0.0),
@@ -1266,8 +1266,8 @@ mod domain_tests {
         // Show which palette entry wins for each hue at S=1, L=0.5
         eprintln!("\n=== Raw nearest-match (Euclidean OKLab) per hue ===");
         eprintln!(
-            "{:>5} | {:14} | {:28} | {:>8} | {}",
-            "Hue", "sRGB", "OKLab L     a      b     C", "nearest", "dist"
+            "{:>5} | {:14} | {:28} | {:>8} | dist",
+            "Hue", "sRGB", "OKLab L     a      b     C", "nearest"
         );
         eprintln!("{}", "-".repeat(85));
 
@@ -2102,14 +2102,7 @@ mod domain_tests {
                     .filter(|(_, &w)| w > 0.02)
                     .map(|(i, &w)| format!("{}:{:.0}%", names[i], w * 100.0))
                     .collect();
-                worst.push((
-                    got[0] - bound,
-                    hue_deg as i32,
-                    l,
-                    bound,
-                    got,
-                    recipe_s.join(" "),
-                ));
+                worst.push((got[0] - bound, hue_deg, l, bound, got, recipe_s.join(" ")));
             }
         }
 
@@ -2328,7 +2321,13 @@ mod domain_tests {
         let algos = [
             ("atkinson", DitherAlgorithm::Atkinson),
             ("atkinson-hybrid", DitherAlgorithm::AtkinsonHybrid),
+            ("floyd-steinberg", DitherAlgorithm::FloydSteinberg),
             ("jarvis-judice-ninke", DitherAlgorithm::JarvisJudiceNinke),
+            ("sierra", DitherAlgorithm::Sierra),
+            ("sierra-two-row", DitherAlgorithm::SierraTwoRow),
+            ("sierra-lite", DitherAlgorithm::SierraLite),
+            ("stucki", DitherAlgorithm::Stucki),
+            ("burkes", DitherAlgorithm::Burkes),
         ];
         let saturations = [0.25f32, 0.5, 1.0];
         let lightnesses = [0.2f32, 0.32, 0.44, 0.56, 0.68, 0.8];

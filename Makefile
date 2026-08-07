@@ -45,12 +45,20 @@ fmt:
 	cargo fmt
 
 # Run clippy linter
+#
+# --workspace --all-targets, because the bare form checks only the root
+# package's non-test targets. That silently skipped every crate under
+# crates/ and every test file in the repo.
 lint:
-	cargo clippy -- -D warnings
+	cargo clippy --workspace --all-targets -- -D warnings
 
 # Run tests
+#
+# --workspace: `cargo test` alone runs only the root package, so the
+# eink-dither suite never ran here and a failing test in it still reported
+# "All checks passed!".
 test:
-	cargo test
+	cargo test --workspace
 
 # Coverage configuration for Homebrew Rust (set LLVM paths)
 # For rustup users, these variables are not needed

@@ -74,6 +74,39 @@ fn side_by_side(orig: &[Srgb], dithered_rgb: &[u8], w: usize, h: usize) -> (Vec<
     (buf, out_w, h)
 }
 
+/// Compose `original | before | after` into one RGB8 buffer.
+///
+/// Three panels rather than two: a before/after pair shows that something
+/// changed but not whether it moved toward the source, which is the only
+/// question worth asking of a rendering change.
+fn triptych(
+    orig: &[Srgb],
+    before: &[u8],
+    after: &[u8],
+    w: usize,
+    h: usize,
+) -> (Vec<u8>, usize, usize) {
+    const GAP: usize = 8;
+    let out_w = w * 3 + GAP * 2;
+    let mut buf = vec![0x80u8; out_w * h * 3];
+    for y in 0..h {
+        for x in 0..w {
+            let s = orig[y * w + x];
+            let d = (y * out_w + x) * 3;
+            buf[d] = (s.r.clamp(0.0, 1.0) * 255.0).round() as u8;
+            buf[d + 1] = (s.g.clamp(0.0, 1.0) * 255.0).round() as u8;
+            buf[d + 2] = (s.b.clamp(0.0, 1.0) * 255.0).round() as u8;
+
+            let sd = (y * w + x) * 3;
+            let db = (y * out_w + (x + w + GAP)) * 3;
+            buf[db..db + 3].copy_from_slice(&before[sd..sd + 3]);
+            let da = (y * out_w + (x + 2 * (w + GAP))) * 3;
+            buf[da..da + 3].copy_from_slice(&after[sd..sd + 3]);
+        }
+    }
+    (buf, out_w, h)
+}
+
 fn write(name: &str, buf: &[u8], w: usize, h: usize) {
     let path = out_dir().join(name);
     image::save_buffer(&path, buf, w as u32, h as u32, image::ColorType::Rgb8).unwrap();
@@ -633,4 +666,125 @@ fn visual_find_horizontal_seams() {
         );
     }
     eprintln!();
+}
+
+/// Before/after for the one change the evidence currently supports.
+///
+/// Nothing in the ditherer has changed yet, so "after" here means the
+/// proposed `noise_scale` defaults rather than committed work. The sweep
+/// found raising them improves colour accuracy monotonically on both
+/// reachable and gamut-limited targets while leaving sharp structure
+/// untouched, which is a strong enough claim that it should be checked by
+/// eye on real scenes before it lands.
+///
+/// Panels are original | before | after, at the same scale, so the question
+/// "did it move toward the source" is answerable directly.
+#[test]
+#[ignore = "writes PNGs; run with --ignored"]
+fn visual_before_after_noise_defaults() {
+    // (label, algorithm, shipped default, proposed)
+    let cases = [
+        ("atkinson", DitherAlgorithm::Atkinson, 0.0f32, 8.0f32),
+        ("atkinson-hybrid", DitherAlgorithm::AtkinsonHybrid, 0.0, 8.0),
+        (
+            "jarvis-judice-ninke",
+            DitherAlgorithm::JarvisJudiceNinke,
+            6.0,
+            16.0,
+        ),
+    ];
+
+    let mut scenes: Vec<(&str, Vec<Srgb>, usize, usize)> = Vec::new();
+
+    const W: usize = 480;
+    const H: usize = 320;
+    let mut muted = Vec::with_capacity(W * H);
+    for y in 0..H {
+        let l = 0.12 + 0.76 * (y as f32 / (H - 1) as f32);
+        for x in 0..W {
+            let (r, g, b) = hsl_to_rgb(x as f32 / W as f32, 0.5, l);
+            muted.push(Srgb::new(r, g, b));
+        }
+    }
+    scenes.push(("field", muted, W, H));
+
+    let (sharp, sw, sh) = sharp_scene();
+    scenes.push(("sharp", sharp, sw, sh));
+
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../screens/builtin/calibration/color/photo.png");
+    if let Ok(img) = image::open(&src) {
+        let img = img.resize(480, 480, image::imageops::FilterType::Lanczos3);
+        let rgb = img.to_rgb8();
+        let (w, h) = (rgb.width() as usize, rgb.height() as usize);
+        scenes.push((
+            "photo",
+            rgb.pixels()
+                .map(|p| Srgb::from_u8(p[0], p[1], p[2]))
+                .collect(),
+            w,
+            h,
+        ));
+    }
+
+    let palette = panel();
+    eprintln!("\n=== before/after: proposed noise_scale defaults ===");
+    for (scene, px, w, h) in &scenes {
+        let orig: Vec<LinearRgb> = px.iter().map(|&s| LinearRgb::from(s)).collect();
+        let oy = mean_luminance(&orig);
+        for &(name, algo, before_scale, after_scale) in &cases {
+            let render = |scale: f32| {
+                let out = EinkDitherer::new(palette.clone())
+                    .algorithm(algo)
+                    .noise_scale(scale)
+                    .dither(px, *w, *h);
+                let lin: Vec<LinearRgb> = out
+                    .indices()
+                    .iter()
+                    .map(|&i| palette.actual_linear(i as usize))
+                    .collect();
+                (out.to_rgb_actual(), mean_luminance(&lin))
+            };
+            let (before, by) = render(before_scale);
+            let (after, ay) = render(after_scale);
+            eprintln!(
+                "  {scene:<6} {name:<20} luminance delta {:+.4} -> {:+.4}",
+                by - oy,
+                ay - oy
+            );
+            let (buf, ow, oh) = triptych(px, &before, &after, *w, *h);
+            write(&format!("BA-{scene}-{name}.png"), &buf, ow, oh);
+
+            // Full-frame is too small to judge a dot pattern. The artifacts
+            // this change targets live at pixel scale, so crop and magnify
+            // the bands that hold them: the limit-cycle streak through the
+            // yellow field, and the flat area that herringbones.
+            if *scene != "field" {
+                continue;
+            }
+            // Stacked, not side by side: these bands are wide and short, so
+            // laying them left/right gives an unreadable aspect ratio. Before
+            // on top, after below, same columns aligned.
+            const ZOOM: usize = 4;
+            let regions = [
+                ("wire", 40usize, 300usize, 155usize, 200usize),
+                ("weave", 330, 470, 60, 105),
+            ];
+            for (tag, x0, x1, y0, y1) in regions {
+                let (cw, ch) = (x1 - x0, y1 - y0);
+                let (ow2, oh2) = (cw * ZOOM, ch * ZOOM * 2 + 8);
+                let mut buf = vec![0x80u8; ow2 * oh2 * 3];
+                for y in 0..ch * ZOOM {
+                    for x in 0..ow2 {
+                        let sd = ((y0 + y / ZOOM) * *w + x0 + x / ZOOM) * 3;
+                        let db = (y * ow2 + x) * 3;
+                        buf[db..db + 3].copy_from_slice(&before[sd..sd + 3]);
+                        let da = ((y + ch * ZOOM + 8) * ow2 + x) * 3;
+                        buf[da..da + 3].copy_from_slice(&after[sd..sd + 3]);
+                    }
+                }
+                write(&format!("BAzoom-{tag}-{name}.png"), &buf, ow2, oh2);
+            }
+        }
+    }
 }

@@ -128,6 +128,9 @@ pub struct RenderOpts {
     /// Also render a pre-dither, full-color PNG alongside the palette-
     /// restricted `png` (see `RenderResult::raw_png`).
     pub include_raw: bool,
+    /// Also return the expanded SVG that was rasterized (see
+    /// `RenderResult::svg`).
+    pub include_svg: bool,
     /// Draw the returned PNG in the measured colours (what the panel will
     /// look like) rather than the spec colours (what is sent to the panel).
     /// `None` keeps the historical default: on when measured colours
@@ -157,6 +160,7 @@ impl Default for RenderOpts {
             preserve_exact: None,
             timestamp: None,
             include_raw: false,
+            include_svg: false,
             use_actual: None,
             colors_actual: None,
         }
@@ -195,6 +199,13 @@ pub struct RenderResult {
     /// This is the post-script value: the layer that actually won, script
     /// included.
     pub measured_source: &'static str,
+    /// The fully expanded SVG that was rasterized — Tera rendered,
+    /// `{% extends %}` chain resolved, script data interpolated. Only
+    /// populated when `RenderOpts::include_svg`; it is the largest field
+    /// here whenever a script embeds an image, because the data URI is
+    /// inlined verbatim. `None` on a failure that happened before or during
+    /// SVG generation, since there is then no expanded markup to show.
+    pub svg: Option<String>,
 }
 
 /// Best-effort line-number extraction from an mlua error message shape like
@@ -969,6 +980,7 @@ impl ScreenStore {
             refresh_rate: 0,
             error: None,
             measured_source: crate::api::display::SRC_NONE,
+            svg: None,
         };
 
         // Dimensions + base palette: explicit override, else the model's
@@ -1223,6 +1235,7 @@ impl ScreenStore {
             // Post-script: the layer the ditherer actually acted on, which
             // may differ from the pre-script winner above.
             measured_source: render_params.measured_source,
+            svg: opts.include_svg.then_some(svg),
         }
     }
 }

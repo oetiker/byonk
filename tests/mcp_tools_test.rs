@@ -702,6 +702,166 @@ async fn test_render_screen_include_data_false_omits_the_script_table() {
     );
 }
 
+/// Scaffold a screen whose script embeds a base64 data URI and whose SVG
+/// inlines it — the shape `image_process` produces, and the one that makes a
+/// render response enormous.
+///
+/// The payload is deliberately several KB rather than just over the
+/// shortener's 64-char floor: the size assertion below is about whether this
+/// feature is worth having, and a token-sized payload would make it pass or
+/// fail on fixed JSON overhead instead of on the thing being measured. A real
+/// 800x480 photo URI is hundreds of KB, so this still understates it.
+async fn write_data_uri_screen(client: &McpTestClient<'_>, path: &str) {
+    client
+        .call_tool(
+            "create_screen",
+            serde_json::json!({ "handle": "local", "path": path }),
+        )
+        .await;
+    let payload = "iVBORw0KGgoAAAANSUhEUg".repeat(200);
+    let script = format!(
+        "return {{ data = {{ src = \"data:image/png;base64,{payload}\" }}, refresh_rate = 300 }}\n"
+    );
+    for (file, content) in [
+        ("script.lua", script),
+        (
+            "screen.svg",
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="{{ device.width }}" height="{{ device.height }}"><image x="0" y="0" width="10" height="10" href="{{ data.src }}"/></svg>"#
+                .to_string(),
+        ),
+    ] {
+        client
+            .call_tool(
+                "write_screen_file",
+                serde_json::json!({
+                    "screen_ref": format!("local/{path}"),
+                    "file": file,
+                    "content": content,
+                }),
+            )
+            .await;
+    }
+}
+
+#[tokio::test]
+async fn test_render_screen_include_svg_returns_the_expanded_markup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = TestApp::new_admin_with_screens("secret", tmp.path());
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+    write_data_uri_screen(&client, "svgcheck").await;
+
+    let without = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({ "screen_ref": "local/svgcheck", "image": "none" }),
+        )
+        .await;
+    assert!(
+        without["structuredContent"]["svg"].is_null(),
+        "svg must be absent unless asked for: {without}"
+    );
+
+    let with = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({
+                "screen_ref": "local/svgcheck", "image": "none", "include_svg": true,
+            }),
+        )
+        .await;
+    let svg = with["structuredContent"]["svg"]
+        .as_str()
+        .expect("include_svg must return the markup");
+    // The point of the feature: this is the *expanded* markup, not the
+    // template. Both the Tera device placeholder and the data reference must
+    // already be substituted, or the agent is just re-reading script.lua.
+    assert!(
+        !svg.contains("{{") && !svg.contains("{%"),
+        "the SVG must be fully expanded, with no Tera syntax left: {svg}"
+    );
+    assert!(
+        svg.contains("width=\"800\""),
+        "device dimensions must be interpolated: {svg}"
+    );
+    assert!(
+        svg.contains("href=\"data:image/png;base64,"),
+        "the script's data must be interpolated into the markup: {svg}"
+    );
+}
+
+#[tokio::test]
+async fn test_render_screen_shortens_data_uris_in_both_data_and_svg() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = TestApp::new_admin_with_screens("secret", tmp.path());
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+    write_data_uri_screen(&client, "uricheck").await;
+
+    let render = |args: serde_json::Value| {
+        let client = &client;
+        async move { client.call_tool("render_screen", args).await }
+    };
+    let base = serde_json::json!({
+        "screen_ref": "local/uricheck", "image": "none", "include_svg": true,
+    });
+    let with_mode = |mode: &str| {
+        let mut v = base.clone();
+        v["data_uris"] = serde_json::Value::String(mode.to_string());
+        v
+    };
+
+    // Default: shortened in BOTH places the payload hides.
+    let shortened = render(base.clone()).await;
+    let sc = &shortened["structuredContent"];
+    assert!(
+        !sc["data"]["src"].as_str().unwrap().contains("iVBORw0KGgo"),
+        "the data table's URI payload must be elided by default: {sc}"
+    );
+    assert!(
+        !sc["svg"].as_str().unwrap().contains("iVBORw0KGgo"),
+        "the SVG's inlined URI payload must be elided by default: {sc}"
+    );
+    assert!(
+        sc["data"]["src"].as_str().unwrap().contains("image/png"),
+        "shorten must keep the media type so the author knows what is embedded: {sc}"
+    );
+
+    // full: the bytes come back verbatim, in both places.
+    let full = render(with_mode("full")).await;
+    let sc_full = &full["structuredContent"];
+    assert!(
+        sc_full["data"]["src"]
+            .as_str()
+            .unwrap()
+            .contains("iVBORw0KGgo"),
+        "data_uris=full must return the payload verbatim: {sc_full}"
+    );
+    assert!(
+        sc_full["svg"].as_str().unwrap().contains("iVBORw0KGgo"),
+        "data_uris=full must leave the SVG's URI intact: {sc_full}"
+    );
+
+    // omit: the media type goes too.
+    let omitted = render(with_mode("omit")).await;
+    let sc_omit = &omitted["structuredContent"];
+    assert!(
+        !sc_omit["data"]["src"]
+            .as_str()
+            .unwrap()
+            .contains("image/png"),
+        "data_uris=omit must drop the media type as well: {sc_omit}"
+    );
+
+    // The whole point is size. Shortening must be a large, not marginal, win.
+    let big = serde_json::to_string(&full).unwrap().len();
+    let small = serde_json::to_string(&shortened).unwrap().len();
+    assert!(
+        small * 2 < big,
+        "shortening must at least halve the response ({small} vs {big} bytes)"
+    );
+}
+
 #[tokio::test]
 async fn test_render_of_a_broken_script_reports_the_lua_line() {
     let tmp = tempfile::tempdir().unwrap();

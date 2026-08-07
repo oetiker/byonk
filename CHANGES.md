@@ -31,8 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Lua API, SVG templates, the `meta.yaml` schema) so the assistant works from
   this server's rules rather than guesswork. `render_screen` lets the assistant
   choose what it gets back — which image (or none), scaled to a width it picks,
-  and whether to include the script's data table — so reviewing a screen costs
-  only as much of its context as the assistant decides to spend.
+  whether to include the script's data table, and whether to include the fully
+  expanded SVG that was rasterized — so reviewing a screen costs only as much
+  of its context as the assistant decides to spend. Embedded base64 images are
+  summarised rather than repeated verbatim by default, which takes a photo
+  screen's render from 336 KB to 17 KB.
 - **Lua scripts can now read and override a panel's measured colours.**
   `device.colors_actual` exposes what the panel really shows (`nil` when
   uncalibrated), and a script can return its own `colors_actual` to retune

@@ -30,6 +30,7 @@ use crate::api::admin::require_admin;
 use crate::error::ApiError;
 use crate::server::AppState;
 
+pub mod data_uris;
 pub mod resources;
 pub mod tools_device;
 pub mod tools_edit;

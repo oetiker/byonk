@@ -11,6 +11,7 @@ use rmcp::{
 };
 use serde::{Deserialize, Serialize};
 
+use super::data_uris::{shorten_in_json, shorten_in_text, DataUriMode};
 use super::{blocking, ok_json, ByonkMcp};
 use crate::services::screen_store::RenderOpts;
 
@@ -119,6 +120,24 @@ pub struct RenderArgs {
     /// content), so that URI is carried twice on top of the PNG itself.
     #[serde(default = "default_true")]
     pub include_data: bool,
+    /// Also return the fully expanded SVG that was rasterized — Tera
+    /// rendered, `{% extends %}` resolved, script data interpolated. This is
+    /// the markup resvg actually parsed, so it is the thing to read when a
+    /// screen renders but looks wrong and the template and data each look
+    /// fine on their own. Off by default because it is large. Not returned
+    /// when the render failed before the SVG was produced (a Lua error), but
+    /// a *template* error leaves no SVG either — read `error` in both cases.
+    #[serde(default)]
+    pub include_svg: bool,
+    /// How to treat embedded base64 `data:` URIs in the returned `data` table
+    /// and SVG. `shorten` (default) replaces each payload with a marker
+    /// naming its media type and length; `omit` drops the media type too;
+    /// `full` returns them verbatim. A screen embedding an 800x480 photo
+    /// carries a data URI of a few hundred KB that no reader can interpret,
+    /// so the default keeps the response nimble while still showing that an
+    /// image is there. Use `full` only when you need the bytes themselves.
+    #[serde(default)]
+    pub data_uris: DataUriMode,
     /// Unix timestamp to render at, for testing time-dependent screens.
     #[serde(default)]
     pub timestamp: Option<i64>,
@@ -151,6 +170,10 @@ pub struct RenderDiagnostics {
     /// Present when the render failed. `line` points into script.lua when
     /// the failure was a Lua error.
     pub error: Option<RenderErrorOut>,
+    /// The expanded SVG that was rasterized. Present only when you passed
+    /// `include_svg: true` and the render got far enough to produce one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub svg: Option<String>,
     /// Which layer supplied the measured ("actual") panel colours this
     /// render dithered against: `script` (the screen's own
     /// `colors_actual`), `render_opts` (the `colors_actual` argument you
@@ -219,6 +242,7 @@ impl ByonkMcp {
             dither: a.dither,
             timestamp: a.timestamp,
             include_raw: a.image.wants_raw(),
+            include_svg: a.include_svg,
             use_actual: a.use_actual,
             colors_actual: a.colors_actual,
             ..RenderOpts::default()
@@ -226,9 +250,23 @@ impl ByonkMcp {
         let screen_ref = a.screen_ref.clone();
         let result = blocking(move || store.render(&screen_ref, opts)).await?;
 
+        // Shorten in both places the payload can hide: the script's table and
+        // the expanded SVG. The SVG is where it hurts most — the URI is
+        // inlined verbatim into an attribute.
+        let data = a.include_data.then(|| {
+            let mut d = result.data;
+            shorten_in_json(&mut d, a.data_uris);
+            d
+        });
+        // `RenderOpts::include_svg` above already decides whether the store
+        // produces this at all — do not re-gate it here. A second guard would
+        // mask a store-side regression rather than surface it.
+        let svg = result.svg.map(|s| shorten_in_text(&s, a.data_uris));
+
         let diagnostics = RenderDiagnostics {
             log: result.log,
-            data: a.include_data.then_some(result.data),
+            svg,
+            data,
             refresh_rate: result.refresh_rate,
             error: result.error.as_ref().map(|e| RenderErrorOut {
                 line: e.line,

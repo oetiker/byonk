@@ -110,6 +110,8 @@ itself — a screen's dithering targets measured colours whenever they resolve, 
 | `image` | `dithered` \| `raw` \| `both` \| `none` | Which image(s) to return. Default `dithered`. `both` returns the dithered image then the pre-dither one, each preceded by a text block naming it. |
 | `image_max_width` | int, optional | Downscale returned image(s) to at most this width, preserving aspect ratio. Never upscales. |
 | `include_data` | bool, default `true` | Return the table the script produced. |
+| `include_svg` | bool, default `false` | Also return the fully expanded SVG that was rasterized. |
+| `data_uris` | `shorten` \| `full` \| `omit` | How to treat embedded base64 `data:` URIs in `data` and the SVG. Default `shorten`. |
 | `use_actual` | bool, optional | Draw the returned PNG in the panel's measured colours instead of the spec colours. Defaults to on whenever measured colours are available. `true` with nothing measured is a no-op, not an error. |
 | `colors_actual` | string, optional | Comma-separated hex, index-parallel to the palette (e.g. `#0A0A0A,#E8E6E0,#A83A30`). Lets you preview a calibration without adding a `panel` to `config.yaml`. A `colors_actual` returned by the screen's own script still wins over this; a length mismatch is ignored (with a warning in the diagnostics' `log`) rather than failing the render. |
 
@@ -132,7 +134,40 @@ Note the raw pre-dither image: it is full-colour and *ten times* the size of
 the dithered one, so `raw` and `both` are worth pairing with `image_max_width`
 unless you specifically need its exact pixels.
 
-Three arguments let the caller decide what a render is worth:
+Screens that embed a photo are the extreme case. `image_process` returns the
+picture as a base64 `data:` URI, which lands in `data` — serialised twice, as
+text and as structured content — and again inside the SVG if you ask for it.
+Rendering a 400×240 photo screen measures:
+
+| Arguments | Response |
+|-----------|----------|
+| `data_uris: "full"` | 336 KB |
+| *(defaults — `shorten`)* | 17 KB |
+| `include_svg: true, data_uris: "full"` | 656 KB |
+| `include_svg: true` | 17 KB |
+| `include_svg: true, image: "none"` | 0.9 KB |
+| `include_svg: true, image: "none", include_data: false` | 0.7 KB |
+
+Shortening is what makes `include_svg` usable at all: verbatim it doubles the
+response to 656 KB, shortened it costs about 400 bytes.
+
+#### Reading the expanded SVG
+
+`include_svg` returns the markup resvg actually parsed — Tera rendered,
+`{% extends %}` resolved, script data interpolated:
+
+```xml
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480">
+  <image x="0" y="0" width="400" height="240" href="data:image/png;base64,<159784 chars elided>"/>
+</svg>
+```
+
+Reach for it when a screen renders but looks wrong and the template and the
+data each look correct on their own — the bug is usually in how they combined.
+`validate_screen` parses the SVG too, but statically, without the data, and it
+returns no markup.
+
+Five arguments let the caller decide what a render is worth:
 
 - **`image: "none"`** when you only need the script's `log`, `data` or `error` —
   e.g. checking that an edit still runs. The images dominate the response.
@@ -140,10 +175,11 @@ Three arguments let the caller decide what a render is worth:
   that resampling destroys the dither pattern, so a scaled `dithered` image is
   fine for judging layout and tone and useless for judging dithering itself.
   Omit it when you need to inspect the real pixels.
-- **`include_data: false`** when a script embeds an image. `image_process`
-  returns a base64 data URI, that URI lands in `data`, and the diagnostics are
-  serialised twice (once as text, once as structured content) — so the picture
-  is carried three times in total unless you drop the table.
+- **`include_data: false`** when you only want the picture and not the table
+  that produced it.
+- **`data_uris`** to keep embedded images out of the text entirely. The default
+  already shortens them; `omit` also drops the media type, and `full` is only
+  worth it when you genuinely need the bytes.
 
 The diagnostics also include `measured_source`, naming which layer actually supplied the
 measured colours for that render: `script`, `render_opts` (the `colors_actual` argument

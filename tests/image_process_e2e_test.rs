@@ -319,6 +319,120 @@ fn render_is_deterministic_for_identical_inputs() {
 /// a sibling in-flight branch makes measured colors flow end-to-end for the
 /// first time — this is the interaction most likely to break at that merge,
 /// and this is the only test positioned to catch it.
+/// Write a screen whose script sets `palette_aware` explicitly, with
+/// vibrance pinned to 0 so the only variable is the palette the tone
+/// mapper's output endpoints are derived from.
+fn write_palette_aware_photo_screen(dir: &std::path::Path, name: &str, palette_aware: bool) {
+    write_photo_screen(dir, name, 0.0);
+    std::fs::write(
+        dir.join("local").join(name).join("script.lua"),
+        format!(
+            r#"
+            local photo = read_asset("photo.png")
+            local src, w, h = image_process(photo, {{
+                width = 200, height = 120, fit = "stretch",
+                vibrance = 0,
+                palette_aware = {palette_aware},
+            }})
+            return {{ data = {{ src = src, w = w, h = h }}, refresh_rate = 3600 }}
+            "#
+        ),
+    )
+    .unwrap();
+}
+
+/// The seam between measured colors and `palette_aware`: proves a panel's
+/// `colors_actual` is what `palette_aware` derives its output endpoints
+/// from, all the way from the `panels:` config section to the final
+/// dithered PNG.
+///
+/// Neither existing suite covers this pairing. The Lua-level
+/// `test_image_process_palette_aware_with_a_palette_actually_uses_it`
+/// hands `LuaRuntime` a hand-built `DeviceContext` with `colors_actual`
+/// already populated, so it cannot see whether anything upstream actually
+/// populates it; `measured_colors_change_the_final_dithered_output` above
+/// proves measured colors reach the *ditherer*, which is a different
+/// consumer entirely — that path would keep working with `palette_aware`
+/// wholly broken.
+///
+/// A bare "measured panel differs from official panel" assertion would be
+/// confounded by exactly that: the two already differ for dithering
+/// reasons alone. So this is a 2x2, and the control arm carries the
+/// argument.
+///
+/// The fixture's `color` panel is `#000000..#FFFFFF`, whose endpoints are
+/// *exactly* the `(0.0, 1.0)` that `eink_photo`'s tone mapper already
+/// defaults to when `output_endpoints` is `None` (`palette_endpoints` in
+/// `crates/eink-photo/src/preset.rs`, `unwrap_or((0.0, 1.0))` in
+/// `lib.rs`). So on that panel `palette_aware` is a provable no-op —
+/// byte-identical output — while on `color_measured` the measured range is
+/// compressed well inside 0..1 and the tone curve must visibly change.
+///
+/// That asymmetry is what makes this mutation-resistant. The palette the
+/// Lua binding hands to `palette_aware` is
+/// `colors_actual.or(colors)` (`lua_runtime.rs`, captured pre-script in
+/// `setup_globals`). Break any hop that carries `colors_actual` from the
+/// panel config into `DeviceContext` and the fallback is that same
+/// `#000000..#FFFFFF` spec palette — endpoints `(0.0, 1.0)`, no-op,
+/// measured arm collapses onto its control and the second assertion
+/// fails.
+#[test]
+fn palette_aware_derives_its_endpoints_from_a_panels_measured_colors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = build_store_with_color_panel(tmp.path());
+    write_palette_aware_photo_screen(tmp.path(), "plain", false);
+    write_palette_aware_photo_screen(tmp.path(), "aware", true);
+
+    // Compare a compact fingerprint rather than the PNG itself: a failed
+    // byte-vector comparison dumps two ~4KB pixel dumps into the test
+    // output, which buries the message that explains the failure.
+    let render = |screen: &str, panel: &str| -> String {
+        let r = store.render(
+            &format!("local/{screen}"),
+            RenderOpts {
+                model: "og".to_string(),
+                width: Some(200),
+                height: Some(120),
+                panel: Some(panel.to_string()),
+                timestamp: Some(1_750_000_000),
+                ..Default::default()
+            },
+        );
+        assert!(
+            r.error.is_none(),
+            "{screen} on {panel} must render: {:?}",
+            r.error
+        );
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        r.png.hash(&mut h);
+        format!("{} bytes, digest {:016x}", r.png.len(), h.finish())
+    };
+
+    // Control: on a panel whose spec palette spans the full 0..1 tone
+    // range and which has no measured colors, palette_aware has nothing
+    // to compress and must not change a single pixel.
+    assert_eq!(
+        render("plain", "color"),
+        render("aware", "color"),
+        "on a #000000..#FFFFFF panel with no colors_actual, palette_aware's \
+         endpoints are the (0.0, 1.0) default — it must be a no-op. If this \
+         fails, the assertion below no longer isolates measured colors."
+    );
+
+    // The seam: the same script, the same spec palette, the only
+    // difference being that this panel also declares colors_actual.
+    assert_ne!(
+        render("plain", "color_measured"),
+        render("aware", "color_measured"),
+        "palette_aware must compress the tone curve into the panel's \
+         measured range — so a panel carrying colors_actual must render \
+         differently with palette_aware on than off. Identical output means \
+         colors_actual never reached the Lua image_process binding and it \
+         fell back to the spec palette."
+    );
+}
+
 #[test]
 fn measured_colors_change_the_final_dithered_output() {
     let tmp = tempfile::tempdir().unwrap();

@@ -765,9 +765,9 @@ fn visual_before_after_noise_defaults() {
             // Stacked, not side by side: these bands are wide and short, so
             // laying them left/right gives an unreadable aspect ratio. Before
             // on top, after below, same columns aligned.
-            const ZOOM: usize = 4;
+            const ZOOM: usize = 6;
             let regions = [
-                ("wire", 40usize, 300usize, 155usize, 200usize),
+                ("wire", 55usize, 195usize, 180usize, 215usize),
                 ("weave", 330, 470, 60, 105),
             ];
             for (tag, x0, x1, y0, y1) in regions {

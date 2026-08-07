@@ -1637,4 +1637,312 @@ mod domain_tests {
             "AtkinsonHybrid builder should be reusable"
         );
     }
+
+    // ========================================================================
+    // DIAGNOSTIC: full-hue gamut sweep, measured by patch average
+    // ========================================================================
+
+    /// Diagnostic: sweep the full hue circle as flat patches, dither each
+    /// through the real `EinkDitherer` path, and measure what the patch
+    /// *averages to* — the colour a viewer perceives from a distance —
+    /// rather than which single palette entry won.
+    ///
+    /// `print_column_dominance` above reports the dominant entry, which
+    /// cannot distinguish "the ditherer mixed red and yellow into orange"
+    /// from "the ditherer painted the whole patch red". This one can: it
+    /// averages the ACTUAL palette colours in linear RGB (the space in
+    /// which light physically adds) and reports the achieved OKLCh plus
+    /// the perceptual error against the request.
+    ///
+    /// Three configurations are compared, which separates the two distinct
+    /// causes of flat output:
+    ///
+    /// - `production`  — what byonk ships today.
+    /// - `no-exact`    — exact-match passthrough disabled. Any pixel equal
+    ///   to an official palette colour is otherwise forced to that entry
+    ///   with its error discarded, which pins the pure primaries (0°, 60°,
+    ///   120°, 240°) to a single flat colour no matter what else changes.
+    /// - `no-exact+clamp` — additionally widens `error_clamp`. A saturated
+    ///   hue sits at a channel extreme, so the default 0.08 of headroom
+    ///   lets almost no error accumulate and the same entry wins forever.
+    ///
+    /// Run: `cargo test -p eink-dither hue_gamut_sweep -- --nocapture --ignored`
+    #[test]
+    #[ignore] // diagnostic -- run manually
+    fn test_hue_gamut_sweep_patch_average() {
+        // reTerminal E1002, measured colours from default-config.yaml.
+        let official = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(255, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(0, 255, 0),
+        ];
+        let actual = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(0xB5, 0x03, 0x03),
+            Srgb::from_u8(0xFF, 0xEE, 0x00),
+            Srgb::from_u8(0x20, 0x54, 0x97),
+            Srgb::from_u8(0x0D, 0x87, 0x6B),
+        ];
+        let names = ["blk", "wht", "red", "yel", "blu", "grn"];
+        let palette = Palette::new(&official, Some(&actual)).unwrap();
+
+        const PATCH: usize = 8;
+
+        // (label, preserve_exact, error_clamp override)
+        let configs: [(&str, bool, Option<f32>); 3] = [
+            ("production", true, None),
+            ("no-exact", false, None),
+            ("no-exact+clamp", false, Some(2.0)),
+        ];
+
+        eprintln!(
+            "\nPatch average over {PATCH}x{PATCH}, Atkinson. dE = OKLab distance to the request."
+        );
+        eprintln!(
+            "{:>4} | {:>17} | {:>26} | {:>26} | {:>26}",
+            "hue", "requested", "production", "no-exact", "no-exact+clamp"
+        );
+        eprintln!("{}", "-".repeat(112));
+
+        let mut totals = [0.0f32; 3];
+        for hue_deg in (0..360).step_by(15) {
+            let (r, g, b) = hsl_to_rgb(hue_deg as f32 / 360.0, 1.0, 0.5);
+            let src = Srgb::new(r, g, b);
+            let pixels = vec![src; PATCH * PATCH];
+            let target_lab = Oklab::from(LinearRgb::from(src));
+            let target = Oklch::from(target_lab);
+
+            let mut cells: Vec<String> = Vec::new();
+            for (ci, &(_, preserve, clamp)) in configs.iter().enumerate() {
+                let mut d = EinkDitherer::new(palette.clone())
+                    .algorithm(DitherAlgorithm::Atkinson)
+                    .preserve_exact_matches(preserve);
+                if let Some(c) = clamp {
+                    d = d.error_clamp(c);
+                }
+                let out = d.dither(&pixels, PATCH, PATCH);
+
+                let mut sum = [0.0f32; 3];
+                let mut hist = [0usize; 6];
+                for &idx in out.indices() {
+                    let c = palette.actual_linear(idx as usize);
+                    sum[0] += c.r;
+                    sum[1] += c.g;
+                    sum[2] += c.b;
+                    hist[idx as usize] += 1;
+                }
+                let n = (PATCH * PATCH) as f32;
+                let avg_lab = Oklab::from(LinearRgb::new(sum[0] / n, sum[1] / n, sum[2] / n));
+                let got = Oklch::from(avg_lab);
+                let de = avg_lab.distance_squared(target_lab).sqrt();
+                totals[ci] += de;
+
+                let used = hist.iter().filter(|&&n| n > 0).count();
+                let top = hist
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, &n)| n)
+                    .map(|(i, _)| names[i])
+                    .unwrap();
+                cells.push(format!(
+                    "L{:.2} C{:.3} h{:>3.0}\u{00b0} dE{:.2} {}{}",
+                    got.l,
+                    got.c,
+                    got.h.to_degrees().rem_euclid(360.0),
+                    de,
+                    top,
+                    if used == 1 {
+                        "*".to_string()
+                    } else {
+                        format!("+{}", used - 1)
+                    },
+                ));
+            }
+
+            eprintln!(
+                "{hue_deg:>3}\u{00b0} | L{:.2} C{:.3} h{:>3.0}\u{00b0} | {:>26} | {:>26} | {:>26}",
+                target.l,
+                target.c,
+                target.h.to_degrees().rem_euclid(360.0),
+                cells[0],
+                cells[1],
+                cells[2],
+            );
+        }
+        eprintln!("{}", "-".repeat(112));
+        eprintln!(
+            "mean dE over 24 hues: production {:.3} | no-exact {:.3} | no-exact+clamp {:.3}",
+            totals[0] / 24.0,
+            totals[1] / 24.0,
+            totals[2] / 24.0
+        );
+        eprintln!("(* = patch is a single flat colour, i.e. no dithering happened at all)");
+    }
+
+    /// Isolates the `error_clamp` variable behind the flat-patch collapse
+    /// seen in `test_hue_gamut_sweep_patch_average`.
+    ///
+    /// `clamp_channel` clamps the *pixel value plus accumulated error* into
+    /// `[-error_clamp, 1 + error_clamp]`. A fully saturated hue already sits
+    /// at a channel extreme (magenta is b=1.0), so at error_clamp=0.08 there
+    /// is only 0.08 of headroom for error to accumulate in that channel: the
+    /// same entry wins every pixel and the patch comes out flat.
+    ///
+    /// Exact-match passthrough is disabled here deliberately, to hold the
+    /// other cause fixed — otherwise the pure primaries (0/60/120/240) are
+    /// pinned by exact matching and show no response to the clamp at all,
+    /// which is what made this look like a dead end on the first pass.
+    ///
+    /// Findings: widening the clamp restores mixing at 120 (yel-only ->
+    /// yel+grn, reaching the palette optimum), 180 and 300. It does NOT
+    /// help at 225-270, where flat blue really is the best the hull offers.
+    ///
+    /// Run: `cargo test -p eink-dither clamp_headroom -- --nocapture --ignored`
+    #[test]
+    #[ignore] // diagnostic -- run manually
+    fn test_clamp_headroom_hypothesis() {
+        let official = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(255, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(0, 255, 0),
+        ];
+        let actual = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(0xB5, 0x03, 0x03),
+            Srgb::from_u8(0xFF, 0xEE, 0x00),
+            Srgb::from_u8(0x20, 0x54, 0x97),
+            Srgb::from_u8(0x0D, 0x87, 0x6B),
+        ];
+        let names = ["blk", "wht", "red", "yel", "blu", "grn"];
+        let palette = Palette::new(&official, Some(&actual)).unwrap();
+        const PATCH: usize = 8;
+
+        for &hue_deg in &[120.0f32, 270.0, 300.0, 180.0] {
+            eprintln!("\n=== hue {hue_deg}\u{00b0} vs error_clamp ===");
+            for &ec in &[0.08f32, 0.2, 0.5, 1.0, 2.0] {
+                let (r, g, b) = hsl_to_rgb(hue_deg / 360.0, 1.0, 0.5);
+                let src = Srgb::new(r, g, b);
+                let pixels = vec![src; PATCH * PATCH];
+
+                let out = EinkDitherer::new(palette.clone())
+                    .algorithm(DitherAlgorithm::Atkinson)
+                    .preserve_exact_matches(false)
+                    .error_clamp(ec)
+                    .dither(&pixels, PATCH, PATCH);
+
+                let mut sum = [0.0f32; 3];
+                let mut hist = [0usize; 6];
+                for &idx in out.indices() {
+                    let c = palette.actual_linear(idx as usize);
+                    sum[0] += c.r;
+                    sum[1] += c.g;
+                    sum[2] += c.b;
+                    hist[idx as usize] += 1;
+                }
+                let n = (PATCH * PATCH) as f32;
+                let got = Oklch::from(Oklab::from(LinearRgb::new(
+                    sum[0] / n,
+                    sum[1] / n,
+                    sum[2] / n,
+                )));
+                let target = Oklch::from(Oklab::from(LinearRgb::from(src)));
+                let mix: Vec<String> = hist
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, &n)| n > 0)
+                    .map(|(i, &n)| format!("{}:{}", names[i], n))
+                    .collect();
+                eprintln!(
+                    "  clamp {:>4} | got L{:.2} C{:.3} h{:>3.0}\u{00b0} (target C{:.3} h{:>3.0}\u{00b0}) | {}",
+                    ec,
+                    got.l,
+                    got.c,
+                    got.h.to_degrees().rem_euclid(360.0),
+                    target.c,
+                    target.h.to_degrees().rem_euclid(360.0),
+                    mix.join(" "),
+                );
+            }
+        }
+    }
+
+    /// Second hypothesis for the flat-patch collapse: the collapse is an
+    /// out-of-gamut effect, not a diffusion defect. A 6-colour panel's
+    /// hull contains no bright magenta (its bluest primary is dark), so
+    /// magenta is unreachable — and the pipeline responds by picking the
+    /// nearest entry for every pixel instead of mapping into the hull.
+    ///
+    /// If that is right, a target that IS inside the hull — e.g. the exact
+    /// 50/50 linear mix of two primaries — must dither to a proper mix.
+    ///
+    /// Run: `cargo test -p eink-dither in_gamut -- --nocapture --ignored`
+    #[test]
+    #[ignore] // diagnostic -- run manually
+    fn test_in_gamut_targets_still_mix() {
+        let official = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(255, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(0, 255, 0),
+        ];
+        let actual = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(0xB5, 0x03, 0x03),
+            Srgb::from_u8(0xFF, 0xEE, 0x00),
+            Srgb::from_u8(0x20, 0x54, 0x97),
+            Srgb::from_u8(0x0D, 0x87, 0x6B),
+        ];
+        let names = ["blk", "wht", "red", "yel", "blu", "grn"];
+        let palette = Palette::new(&official, Some(&actual)).unwrap();
+        const PATCH: usize = 8;
+
+        // Exact 50/50 linear mixes of primary pairs — guaranteed in-hull.
+        let pairs = [(2usize, 4usize), (4, 5), (2, 3), (1, 4)];
+        for (i, j) in pairs {
+            let a = palette.actual_linear(i);
+            let b = palette.actual_linear(j);
+            let mid = LinearRgb::new((a.r + b.r) * 0.5, (a.g + b.g) * 0.5, (a.b + b.b) * 0.5);
+            let src = Srgb::from(mid);
+            let pixels = vec![src; PATCH * PATCH];
+
+            let out = EinkDitherer::new(palette.clone())
+                .algorithm(DitherAlgorithm::Atkinson)
+                .dither(&pixels, PATCH, PATCH);
+
+            let mut sum = [0.0f32; 3];
+            let mut hist = [0usize; 6];
+            for &idx in out.indices() {
+                let c = palette.actual_linear(idx as usize);
+                sum[0] += c.r;
+                sum[1] += c.g;
+                sum[2] += c.b;
+                hist[idx as usize] += 1;
+            }
+            let n = (PATCH * PATCH) as f32;
+            let got = LinearRgb::new(sum[0] / n, sum[1] / n, sum[2] / n);
+            let dist = Oklab::from(got).distance_squared(Oklab::from(mid)).sqrt();
+            let mix: Vec<String> = hist
+                .iter()
+                .enumerate()
+                .filter(|(_, &n)| n > 0)
+                .map(|(k, &n)| format!("{}:{}", names[k], n))
+                .collect();
+            eprintln!(
+                "50/50 {:>3}+{:<3} target lin({:.3},{:.3},{:.3}) got({:.3},{:.3},{:.3}) dE={:.3} | {}",
+                names[i], names[j], mid.r, mid.g, mid.b, got.r, got.g, got.b, dist,
+                mix.join(" ")
+            );
+        }
+    }
 }

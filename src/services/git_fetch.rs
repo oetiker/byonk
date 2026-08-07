@@ -249,12 +249,12 @@ fn resolve_pin(repo: &gix::Repository, pin: &str) -> Option<(gix::ObjectId, PinK
         }
     }
     if let Ok(mut r) = repo.find_reference(format!("refs/tags/{pin}").as_str()) {
-        if let Ok(id) = r.peel_to_id_in_place() {
+        if let Ok(id) = r.peel_to_id() {
             return Some((id.detach(), PinKind::Tag));
         }
     }
     if let Ok(mut r) = repo.find_reference(format!("refs/remotes/{REMOTE_NAME}/{pin}").as_str()) {
-        if let Ok(id) = r.peel_to_id_in_place() {
+        if let Ok(id) = r.peel_to_id() {
             return Some((id.detach(), PinKind::Branch));
         }
     }

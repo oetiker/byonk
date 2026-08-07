@@ -53,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The git client used to fetch screen repositories was updated** (`gix` 0.66 →
+  0.86), picking up security fixes in git's object, pack and ref handling. This
+  matters if you fetch screen repositories from sources you don't fully control.
 - **Home Assistant "add-ons" are now called "apps".** Home Assistant 2026.2 renamed
   add-ons to apps in its UI (**Settings → Apps → App store**). Byonk's Home Assistant
   documentation, the integration's messages, and the Supervisor repository name now

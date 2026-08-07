@@ -1,33 +1,36 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-07 — **Dependency security work is done and pushed. Two of three dithering defects are fixed and pushed. The third was re-measured and re-diagnosed this session: the earlier "Atkinson's 25% error loss" reading is wrong, and the algorithm swap it implied would cause a worse defect. It now needs an owner decision, not code.** `feat/screen-store-authoring-core` is still **HELD** by standing owner decision — no PR, no merge to `main`._
+_Last updated: 2026-08-07 — **Dependency security work is done and pushed. Two of three dithering defects are fixed and pushed. The third is now fully diagnosed, with a measured candidate fix (`AtkinsonHybrid`) awaiting one owner decision. No ditherer code has been changed.** `feat/screen-store-authoring-core` is still **HELD** by standing owner decision — no PR, no merge to `main`._
 
 ## Where the work lives
 
 | | |
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
-| HEAD | `999d35b` |
+| HEAD | `2e9dfcf` |
 | Worktree | `/Users/oetiker/checkouts/byonk` (working in place, no worktree) |
 | State | `make check` green, tree clean, pushed to origin |
 
 ## Next action
 
-**Owner decision needed before fix 3 proceeds.** Fix 3 was re-measured this
-session and re-diagnosed; the old diagnosis in this file was wrong. The
-evidence is committed as three `#[ignore]` diagnostics at `999d35b`. See
-"The remaining defect" below — read it before touching the ditherer.
+**One owner decision: adopt `AtkinsonHybrid` as the default algorithm?**
 
-Short version: do **not** swap the default algorithm, which is what the old
-diagnosis implied. The measurement that looked like it justified a swap is
-scored on a metric that is invalid for out-of-gamut targets, and the swap
-would render saturated blues nearly black. The open question is whether the
-gamut mapper is fix 3's prerequisite rather than something independent of it.
+Fix 3 is now fully diagnosed and the evidence is committed as four `#[ignore]`
+diagnostics (`999d35b`, `2e9dfcf`). Read "The remaining defect" below before
+touching the ditherer.
+
+Short version: the cause is that black is the ink the dark-warm mixture needs
+most *and* the one greedy matching ranks last, so Atkinson's 25% error discard
+starves it. `AtkinsonHybrid` propagates achromatic error fully and beats
+Atkinson on both axes. Do **not** instead swap to a 100%-propagation kernel:
+that scores best on mean dE only because dE is invalid for out-of-gamut
+targets, and it collapses saturated blue to ~20% blue / ~80% black.
 
 The gamut-mapping feature has an approved spec waiting:
 `docs/superpowers/specs/2026-08-07-gamut-mapping-design.md`. Its
-"Prerequisites" section lists these dithering fixes; two are done, and the
-third may be reordered to depend on the mapper instead of preceding it.
+"Prerequisites" section lists these dithering fixes; two are done and the third
+is diagnosed. The ordering there stands — fix 3's targets are in gamut, so the
+mapper neither fixes it nor depends on it.
 
 ## What happened this session
 
@@ -205,19 +208,56 @@ default on that table would trade a muted-orange defect for a much worse one.
 ⚠️ **Generalise this:** dE against an out-of-gamut target is a bad objective.
 Rank on it only after the target is reachable.
 
-**The likely shared root cause, not yet confirmed.** For an unreachable target
-the residual error is permanent and one-signed, so it accumulates until it
-trips a wildly wrong ink; Atkinson's 25% discard is a bleed valve that happens
-to prevent the runaway. That predicts the two defects are one bug, and that
-**the gamut mapper is the unblock** — mapping targets into gamut first removes
-the permanent residual, which is what would make a wide kernel safe to adopt,
-which in turn is what fixes the dark-warm case. Contrary to the old note here,
-the mapper is not irrelevant to fix 3: it is plausibly its prerequisite.
+**The green anomaly — chased, and it closes the diagnosis.**
+`test_error_trajectory_decision_regions` steps along the error each ink choice
+creates and reports which ink the matcher returns, separating "matcher picks
+green" from "diffusion walks into green". It is the matcher, at `t=0`, and it
+is **not a matcher defect**: green genuinely is the nearest single ink to dark
+olive in Euclidean OKLab.
 
-Confirm that chain before building on it — it is a hypothesis with good
-evidence, not a measurement. Unexplained: why *green* specifically wins at
-45°/L0.32, a target that is fully in gamut and so has no permanent residual.
-That one does not fit the runaway story and should be chased first.
+    45° L0.32, distance nearest first:
+      grn:0.165  red:0.203  blu:0.291  yel:0.341  wht:0.414  blk:0.617
+    optimal mixture (bound 0.000):
+      blk:47%  red:30%  yel:23%
+
+**Read those two lines together — that is the whole bug.** The ink the mixture
+needs most is the ink greedy matching ranks *last*. Black is only ever selected
+after the accumulator has travelled a long way in the achromatic direction, and
+Atkinson's 25% discard caps that travel. So black lands at 1% instead of 47%
+and the nearer chromatic ink fills in.
+
+⚠️ **Correction to an earlier draft of this section:** it claimed the "25% error
+loss" diagnosis was wrong. That was an overstatement — the error loss *is* the
+proximate cause. What was wrong was only the remedy it implied (swap to a
+100%-propagation kernel) and the "under-mixed with black" phrasing, which named
+the symptom as if it were the mechanism.
+
+Also refuted: the guess that the gamut mapper is fix 3's prerequisite. These
+targets are in gamut with bound 0.000, so there is no permanent residual and
+the mapper is identity there. The original handover was right about that.
+
+**The candidate fix: `AtkinsonHybrid`**, which already exists and is documented
+for exactly this ("100% for the achromatic component, 75% for the chromatic").
+The achromatic component is the black direction, so the diagnosis predicts it,
+and the measurement agrees. It is the only algorithm of the nine with no
+catastrophic case:
+
+    target                  atkinson    atk-hybrid   best wide kernel
+    30° L0.20  blk 76% opt    46%          60%         57% (floyd)
+               grn  0% opt    18%          10%         13% (burkes)
+    45° L0.32  blk 47% opt     1%          20%         39% (floyd)
+               grn  0% opt    41%          21%          7% (floyd)
+    240° L0.44 blu100% opt    98%          96%         20% (jarvis)  <-- collapse
+    255° L0.44 blu100% opt   100%          94%         27% (jarvis)  <-- collapse
+
+Aggregate: hybrid beats Atkinson on in-gamut mean (0.025 vs 0.038) *and* on
+out-of-gamut worst case (0.050 vs 0.072, best of all nine). It is not a
+complete fix — 45°/L0.32 still lands blk 20% against 47% optimal, where Floyd
+reaches 39% — but it is the only move measured that improves the defect without
+opening a worse one.
+
+**Still an owner decision**, because it changes default rendering for every
+device. Nothing has been changed in the ditherer.
 
 Reproduce all of the above with:
 

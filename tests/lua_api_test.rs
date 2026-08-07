@@ -445,6 +445,208 @@ mod lua_unit_tests {
     }
 
     #[test]
+    fn test_device_colors_actual_exposed_when_measured() {
+        let script = r#"
+            return {
+                data = {
+                    actual_1 = device.colors_actual[1],
+                    actual_3 = device.colors_actual[3],
+                    count = #device.colors_actual,
+                    official_count = #device.colors,
+                },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_ca.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let ctx = DeviceContext {
+            mac: "TE:ST:00:00:00:00".to_string(),
+            width: Some(800),
+            height: Some(480),
+            colors: Some(vec![
+                "#000000".to_string(),
+                "#FFFFFF".to_string(),
+                "#FF0000".to_string(),
+            ]),
+            colors_actual: Some(vec![
+                "#0A0A0A".to_string(),
+                "#E8E6E0".to_string(),
+                "#A83A30".to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_ca.lua"),
+                &HashMap::new(),
+                Some(&ctx),
+                None,
+            )
+            .expect("Script should run");
+
+        assert_eq!(result.data["actual_1"].as_str().unwrap(), "#0A0A0A");
+        assert_eq!(result.data["actual_3"].as_str().unwrap(), "#A83A30");
+        assert_eq!(result.data["count"].as_i64().unwrap(), 3);
+        // Index-parallel with device.colors.
+        assert_eq!(result.data["official_count"].as_i64().unwrap(), 3);
+    }
+
+    #[test]
+    fn test_device_colors_actual_is_nil_when_uncalibrated() {
+        // Deliberately NOT mirrored from device.colors: a script must be able to
+        // tell "this panel is uncalibrated" from "this panel measures to spec".
+        let script = r#"
+            return {
+                data = { is_nil = device.colors_actual == nil },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_ca_nil.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let ctx = DeviceContext {
+            mac: "TE:ST:00:00:00:00".to_string(),
+            width: Some(800),
+            height: Some(480),
+            colors: Some(vec!["#000000".to_string(), "#FFFFFF".to_string()]),
+            colors_actual: None,
+            ..Default::default()
+        };
+
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_ca_nil.lua"),
+                &HashMap::new(),
+                Some(&ctx),
+                None,
+            )
+            .expect("Script should run");
+
+        assert!(result.data["is_nil"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn test_script_can_return_colors_actual() {
+        let script = r##"
+            return {
+                data = {},
+                colors        = { "#000000", "#FFFFFF", "#FF0000" },
+                colors_actual = { "#0A0A0A", "#E8E6E0", "#A83A30" },
+                refresh_rate  = 60
+            }
+        "##;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_ret_ca.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_ret_ca.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("Script should run");
+
+        assert_eq!(
+            result.colors_actual.as_deref(),
+            Some(
+                [
+                    "#0A0A0A".to_string(),
+                    "#E8E6E0".to_string(),
+                    "#A83A30".to_string()
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(result.colors.as_ref().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_script_without_colors_actual_yields_none() {
+        let script = r#"
+            return { data = {}, refresh_rate = 60 }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_no_ca.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_no_ca.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("Script should run");
+
+        assert!(result.colors_actual.is_none());
+    }
+
+    #[test]
+    fn test_script_empty_colors_actual_yields_none() {
+        // Matches the existing `colors` behaviour: an empty table is None, not
+        // Some(vec![]), so it falls through the chain instead of blanking it.
+        let script = r#"
+            return { data = {}, colors_actual = {}, refresh_rate = 60 }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_empty_ca.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_empty_ca.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("Script should run");
+
+        assert!(result.colors_actual.is_none());
+    }
+
+    #[test]
+    fn test_script_colors_actual_length_mismatch_appears_in_log_and_falls_back() {
+        // The script returns a 4-entry palette but only 2 measured colours.
+        // The runtime itself does not judge lengths — it just carries the
+        // value through unchanged; Task 4's `resolve_render_params` is what
+        // turns the mismatch into a fallback + warning (see
+        // `services::screen_store::tests::
+        // render_script_colors_actual_length_mismatch_falls_back_to_panel_and_logs_warning`
+        // for that behavioural half, asserted through `ScreenStore::render`
+        // where the warning-to-script-log wiring is directly observable).
+        let script = r##"
+            return {
+                data = {},
+                colors        = { "#000000", "#555555", "#AAAAAA", "#FFFFFF" },
+                colors_actual = { "#0A0A0A", "#E8E6E0" },
+                refresh_rate  = 60
+            }
+        "##;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_mismatch.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_mismatch.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("Script must still run");
+
+        // The runtime itself does not judge lengths — it just carries the value.
+        assert_eq!(result.colors_actual.as_ref().unwrap().len(), 2);
+        assert_eq!(result.colors.as_ref().unwrap().len(), 4);
+    }
+
+    #[test]
     fn test_qr_svg_anchors() {
         let anchors = [
             "top-left",

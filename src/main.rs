@@ -58,6 +58,15 @@ enum Commands {
         /// Display colors as comma-separated hex RGB (e.g. "#000000,#FFFFFF,#FF0000")
         #[arg(long)]
         colors: Option<String>,
+
+        /// Draw the output PNG in the panel's measured colours — what the
+        /// screen will actually look like — instead of the spec colours that
+        /// are sent to the panel. Defaults to on whenever the device's panel
+        /// has a calibration. This changes only how the PNG is drawn; the
+        /// dithering always targets the measured colours when they resolve.
+        /// Bare `--use-actual` means `true`; `--use-actual false` opts out.
+        #[arg(long, num_args = 0..=1, default_missing_value = "true")]
+        use_actual: Option<bool>,
     },
     /// Extract embedded assets to filesystem for customization
     Init {
@@ -133,6 +142,7 @@ async fn main() -> anyhow::Result<()> {
             firmware,
             registration_code,
             colors,
+            use_actual,
         }) => run_render_command(
             &mac,
             &output,
@@ -142,6 +152,7 @@ async fn main() -> anyhow::Result<()> {
             firmware,
             registration_code,
             colors,
+            use_actual,
         ),
         Some(Commands::Init {
             screens,
@@ -171,6 +182,7 @@ fn run_render_command(
     firmware: Option<String>,
     registration_code: Option<String>,
     colors: Option<String>,
+    use_actual_flag: Option<bool>,
 ) -> anyhow::Result<()> {
     use byonk::assets::AssetLoader;
     use byonk::models::DisplaySpec;
@@ -233,6 +245,32 @@ fn run_render_command(
         vec![(0, 0, 0), (85, 85, 85), (170, 170, 170), (255, 255, 255)]
     };
 
+    // Device config -> panel -> colors/dither/measured, resolved once here
+    // (before the device context and reused after the script runs) so this
+    // chain can't drift between what the script sees as `device.colors_actual`
+    // and what the final render actually dithers against — see Task 1
+    // review, which found `main.rs` recomputing this chain twice, ~80 lines
+    // apart. `registration_code` is borrowed here and moved into
+    // DeviceContext below.
+    let device_config = config.get_device_config(mac).or_else(|| {
+        registration_code
+            .as_deref()
+            .and_then(|code| config.get_device_config_for_code(code))
+    });
+    let dc_colors = device_config.and_then(|dc| dc.colors.clone());
+    let dc_dither = device_config.and_then(|dc| dc.dither.clone());
+    let dc_panel = device_config.and_then(|dc| dc.panel.clone());
+    let panel = dc_panel.as_deref().and_then(|name| config.get_panel(name));
+    let panel_colors = panel.map(|p| p.colors.clone());
+    let measured: Option<Vec<(u8, u8, u8)>> = panel
+        .and_then(|p| p.colors_actual.as_deref())
+        .map(byonk::api::display::parse_colors_header);
+    // Pre-script chain for the final measured-colour resolution after the
+    // script runs — the CLI has no dev-override or header layer (see
+    // `resolve_render_params`'s doc comment).
+    let pre_script_measured_candidates: [byonk::api::display::MeasuredCandidate; 1] =
+        [(byonk::api::display::SRC_PANEL_ACTUAL, measured.clone())];
+
     // Create device context with all provided fields
     let device_context = DeviceContext {
         mac: mac.to_string(),
@@ -243,7 +281,16 @@ fn run_render_command(
         width: Some(display_spec.width),
         height: Some(display_spec.height),
         registration_code,
-        colors: Some(byonk::api::display::colors_to_hex_strings(&cli_palette)),
+        colors: Some(byonk::api::display::colors_to_hex_strings(
+            &byonk::api::display::resolve_ctx_palette(
+                dc_colors.as_deref(),
+                panel_colors.as_deref(),
+                &cli_palette,
+            ),
+        )),
+        colors_actual: measured
+            .as_deref()
+            .map(byonk::api::display::colors_to_hex_strings),
         ..Default::default()
     };
 
@@ -261,6 +308,8 @@ fn run_render_command(
         cli_noise_scale,
         cli_chroma_clamp,
         cli_strength,
+        measured_colors,
+        measured_source,
     ) = if is_unregistered {
         let code = device_context.registration_code.as_deref().unwrap();
 
@@ -297,29 +346,44 @@ fn run_render_command(
             )
         };
 
-        (svg, cli_palette, None, true, None, None, None, None)
+        // No script runs on the unregistered path. `is_unregistered` is the
+        // negation of `is_device_registered`, which is true iff
+        // `device_config` resolves — so here `device_config` is always
+        // `None`, `panel` is always `None`, and
+        // `pre_script_measured_candidates` is always `[(SRC_PANEL_ACTUAL,
+        // None)]`. This call therefore always yields `SRC_NONE` with no
+        // colors and no warning; it's kept (rather than hardcoded) so this
+        // stays correct if the unregistered path ever grows a measured
+        // source of its own.
+        let measured = byonk::api::display::resolve_measured_colors(
+            cli_palette.len(),
+            &pre_script_measured_candidates,
+        );
+        if let Some(w) = &measured.warning {
+            tracing::warn!(mac = %mac, "{w}");
+        }
+
+        (
+            svg,
+            cli_palette,
+            None,
+            true,
+            None,
+            None,
+            None,
+            None,
+            measured.colors,
+            measured.source,
+        )
     } else {
         // Normal render path
         let script_result = content_pipeline
             .run_script_for_device(mac, Some(device_context.clone()))
             .map_err(|e| anyhow::anyhow!("Script error: {e}"))?;
 
-        // Resolve device config for palette/dither/panel (single lookup, same as display.rs)
-        let device_config = config.get_device_config(mac).or_else(|| {
-            device_context
-                .registration_code
-                .as_deref()
-                .and_then(|code| config.get_device_config_for_code(code))
-        });
-        let dc_colors = device_config.and_then(|dc| dc.colors.clone());
-        let dc_dither = device_config.and_then(|dc| dc.dither.clone());
-        let dc_panel = device_config.and_then(|dc| dc.panel.clone());
-        let panel = dc_panel.as_deref().and_then(|name| config.get_panel(name));
-        let panel_colors = panel.map(|p| p.colors.clone());
-        let measured = panel
-            .and_then(|p| p.colors_actual.as_deref())
-            .map(byonk::api::display::parse_colors_header);
-
+        // device_config/panel/dc_colors/dc_dither/panel_colors/measured were
+        // already resolved once above (before the device context) and are
+        // reused here rather than looked up a second time.
         let dc_tuning = byonk::models::DitherTuningValues {
             error_clamp: device_config.and_then(|dc| dc.error_clamp),
             noise_scale: device_config.and_then(|dc| dc.noise_scale),
@@ -347,18 +411,24 @@ fn run_render_command(
         };
         let tuning = byonk::api::display::resolve_tuning(&script_tuning, &dc_tuning, &panel_tuning);
 
+        let mut measured_warning: Option<String> = None;
         let render_params = byonk::api::display::resolve_render_params(
             script_result.script_colors.as_deref(),
+            script_result.script_colors_actual.as_deref(),
             script_result.script_dither.as_deref(),
             script_result.script_preserve_exact,
             dc_colors.as_deref(),
             dc_dither.as_deref(),
             panel_colors.as_deref(),
             &cli_palette,
-            measured,
+            &pre_script_measured_candidates,
             None,
             &tuning,
+            &mut measured_warning,
         );
+        if let Some(w) = &measured_warning {
+            tracing::warn!(mac = %mac, "{w}");
+        }
 
         let svg = content_pipeline
             .render_svg_from_script(&script_result, Some(&device_context))
@@ -373,6 +443,8 @@ fn run_render_command(
             render_params.noise_scale,
             render_params.chroma_clamp,
             render_params.strength,
+            render_params.measured_colors,
+            render_params.measured_source,
         )
     };
 
@@ -390,13 +462,26 @@ fn run_render_command(
         || cli_tuning.noise_scale.is_some()
         || cli_tuning.strength.is_some();
 
+    // Measured colours always steer the dithering when they resolve; the
+    // flag governs only the palette the file is written in. The rule itself
+    // lives in `api::display` so the CLI, `/dev/render` and the authoring
+    // path share one copy.
+    let use_actual =
+        byonk::api::display::resolve_use_actual(use_actual_flag, measured_colors.is_some());
+
+    tracing::info!(
+        measured_source = measured_source,
+        use_actual = use_actual,
+        "CLI render measured-colour resolution"
+    );
+
     let png_bytes = content_pipeline
         .render_png_from_svg(
             &svg_content,
             display_spec,
             &final_palette,
-            None,
-            false,
+            measured_colors.as_deref(),
+            use_actual,
             dither.as_deref(),
             preserve_exact,
             if has_cli_tuning {

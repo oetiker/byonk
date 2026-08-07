@@ -42,6 +42,8 @@ pub struct ScriptResult {
     pub params: HashMap<String, serde_yaml::Value>,
     /// Optional color palette override from Lua script (hex RGB strings)
     pub script_colors: Option<Vec<String>>,
+    /// Optional measured-colour override from Lua script (hex RGB strings)
+    pub script_colors_actual: Option<Vec<String>>,
     /// Optional dither mode from Lua script ("photo" or "graphics")
     pub script_dither: Option<String>,
     /// Optional preserve_exact override from Lua script
@@ -82,6 +84,11 @@ pub struct DeviceContext {
     pub board: Option<String>,
     /// Available display colors as hex RGB strings (e.g. ["#000000", "#FFFFFF", "#FF0000"])
     pub colors: Option<Vec<String>>,
+    /// Measured colors the panel really shows, index-parallel to `colors`.
+    /// `None` when nothing in the measured chain resolved — deliberately not
+    /// mirrored from `colors`, so a script can distinguish an uncalibrated
+    /// panel from one that measures exactly to spec.
+    pub colors_actual: Option<Vec<String>>,
     /// Pre-script resolved dither algorithm name
     pub dither_algorithm: Option<String>,
     /// Pre-script resolved error clamp
@@ -296,6 +303,7 @@ impl ContentPipeline {
             screen_dir: resolved.screen_dir.clone(),
             params: params.clone(),
             script_colors: lua_result.colors,
+            script_colors_actual: lua_result.colors_actual,
             script_dither: lua_result.dither,
             script_preserve_exact: lua_result.preserve_exact,
             script_error_clamp: lua_result.error_clamp,

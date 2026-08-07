@@ -24,6 +24,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until you set one. The server also publishes its own authoring references
   (Lua API, SVG templates, the `meta.yaml` schema) so the assistant works from
   this server's rules rather than guesswork.
+- **Lua scripts can now read and override a panel's measured colours.**
+  `device.colors_actual` exposes what the panel really shows (`nil` when
+  uncalibrated), and a script can return its own `colors_actual` to retune
+  the render for this pass — so a screen can adapt to, or improve on, what
+  its display actually renders.
+- **The `render_screen` MCP tool gained `use_actual` and `colors_actual`**, so
+  an authoring agent can preview a screen exactly as the panel will show it —
+  including previewing a calibration by hand — without first configuring a
+  panel. Its diagnostics also report `measured_source`, naming which layer
+  supplied the measured colours the render actually dithered against.
+- **`byonk render` now honours measured panel colours**, including a new
+  `--use-actual` flag to draw the output PNG in those measured colours
+  instead of the spec palette. Previously the CLI ignored measured colours
+  entirely.
 
 ### Changed
 
@@ -53,6 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repository, so a screen repo cannot expose files elsewhere on the server.
 - Validating a screen now reports an oversized or non-UTF-8 file for what it is,
   instead of misreporting it as a missing file or a Lua syntax error.
+- Measured panel colours are no longer discarded without explanation when a
+  screen's palette and its measured colours disagree in length; the mismatch is
+  now reported.
 
 ## 0.17.1 - 2026-07-17
 

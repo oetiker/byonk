@@ -342,6 +342,20 @@ fn build_eink_palette(
     let eink_actual = if !unique_actual.is_empty() && unique_actual.len() == unique_official.len() {
         Some(unique_actual.as_slice())
     } else {
+        // Never fail a device render over calibration — but do not lose it
+        // silently either. After the length check in
+        // `api::display::resolve_measured_colors` this should be unreachable
+        // from the script path; if it fires, something upstream disagrees
+        // about palette length (e.g. dedup removed a duplicate official
+        // colour without a matching measured entry).
+        if actual.is_some() {
+            tracing::warn!(
+                official = unique_official.len(),
+                measured = unique_actual.len(),
+                "measured colours dropped: length disagrees with the deduplicated \
+                 official palette; dithering will target the official colours"
+            );
+        }
         None
     };
 
@@ -452,6 +466,40 @@ fn pack_nbits(indices: &[u8], width: u32, bits: u8) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_eink_palette_drops_mismatched_actual_but_still_builds() {
+        // Three official colours, two measured: the measured list is dropped
+        // (never fail a device render) — but this must not be silent.
+        let official = vec![(0, 0, 0), (255, 255, 255), (255, 0, 0)];
+        let actual = vec![(10, 10, 10), (232, 230, 224)];
+        let (_palette, output) =
+            build_eink_palette(&official, Some(&actual), false).expect("must still build");
+        assert_eq!(output, official);
+    }
+
+    #[test]
+    fn build_eink_palette_keeps_matched_actual() {
+        let official = vec![(0, 0, 0), (255, 255, 255), (255, 0, 0)];
+        let actual = vec![(10, 10, 10), (232, 230, 224), (168, 58, 48)];
+        let (palette, output) =
+            build_eink_palette(&official, Some(&actual), true).expect("must build");
+        // use_actual = true draws the output in the measured colours, except
+        // that pure black/white are forced to match — the existing B&W rule
+        // applies to the dither palette, while `output` uses raw measured.
+        assert_eq!(output, actual);
+
+        // The regression this test exists to catch: matched measured
+        // colours must actually reach the `EinkPalette` that dithering
+        // matches against, not just the display-facing `output` tuple
+        // (which is computed independently of `eink_actual`). Assert on
+        // `palette.actual(idx)` directly — the B&W-forced entries (0, 1)
+        // collapse to pure black/white, while entry 2 carries the raw
+        // measured red through unchanged.
+        assert_eq!(palette.actual(0), EinkSrgb::from_u8(0, 0, 0));
+        assert_eq!(palette.actual(1), EinkSrgb::from_u8(255, 255, 255));
+        assert_eq!(palette.actual(2), EinkSrgb::from_u8(168, 58, 48));
+    }
 
     #[test]
     fn test_bitmap_font_families() {

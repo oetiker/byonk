@@ -128,6 +128,17 @@ pub struct RenderOpts {
     /// Also render a pre-dither, full-color PNG alongside the palette-
     /// restricted `png` (see `RenderResult::raw_png`).
     pub include_raw: bool,
+    /// Draw the returned PNG in the measured colours (what the panel will
+    /// look like) rather than the spec colours (what is sent to the panel).
+    /// `None` keeps the historical default: on when measured colours
+    /// resolved. Affects only the output palette, never the dithering
+    /// decisions (see `api::display::resolve_use_actual`).
+    pub use_actual: Option<bool>,
+    /// Measured-colour override for this render, comma-separated hex. Sits
+    /// in the dev-override slot of the measured chain: `script > this >
+    /// panel.colors_actual > none`. Lets an agent preview a calibration
+    /// without writing a panel into the config.
+    pub colors_actual: Option<String>,
 }
 
 impl Default for RenderOpts {
@@ -146,6 +157,8 @@ impl Default for RenderOpts {
             preserve_exact: None,
             timestamp: None,
             include_raw: false,
+            use_actual: None,
+            colors_actual: None,
         }
     }
 }
@@ -174,6 +187,14 @@ pub struct RenderResult {
     pub data: serde_json::Value,
     pub refresh_rate: u32,
     pub error: Option<RenderError>,
+    /// Which layer supplied the measured colours this render dithered
+    /// against — one of the `api::display::SRC_*` labels. `SRC_NONE` when
+    /// the render used the official palette. There is no dev-UI element
+    /// that displays this; it's the diagnostics field an authoring client
+    /// (e.g. the MCP `render_screen` tool) surfaces to show the source.
+    /// This is the post-script value: the layer that actually won, script
+    /// included.
+    pub measured_source: &'static str,
 }
 
 /// Best-effort line-number extraction from an mlua error message shape like
@@ -947,6 +968,7 @@ impl ScreenStore {
             data: serde_json::Value::Null,
             refresh_rate: 0,
             error: None,
+            measured_source: crate::api::display::SRC_NONE,
         };
 
         // Dimensions + base palette: explicit override, else the model's
@@ -964,9 +986,32 @@ impl ScreenStore {
             .as_deref()
             .and_then(|name| config.get_panel(name));
         let panel_colors: Option<String> = panel.map(|p| p.colors.clone());
-        let measured_colors: Option<Vec<(u8, u8, u8)>> = panel
+        let opts_actual_parsed: Option<Vec<(u8, u8, u8)>> = opts
+            .colors_actual
+            .as_deref()
+            .map(crate::api::display::parse_colors_header);
+        let panel_actual_parsed: Option<Vec<(u8, u8, u8)>> = panel
             .and_then(|p| p.colors_actual.as_deref())
             .map(crate::api::display::parse_colors_header);
+        // Pre-script chain for the final measured-colour resolution after
+        // the script runs — there is no header layer in an authoring render,
+        // but `RenderOpts::colors_actual` occupies the dev-override slot (see
+        // `resolve_render_params`'s doc comment). Kept as a candidate ARRAY
+        // rather than collapsed to a winner here: the length rule lives
+        // inside `resolve_measured_colors`'s loop, so a wrong-length render
+        // option falls through to a valid `panel.colors_actual` instead of
+        // killing the calibration outright.
+        let pre_script_measured_candidates: [crate::api::display::MeasuredCandidate; 2] = [
+            (crate::api::display::SRC_RENDER_OPTS, opts_actual_parsed),
+            (crate::api::display::SRC_PANEL_ACTUAL, panel_actual_parsed),
+        ];
+        // Pre-script winner, used only to populate `DeviceContext.colors_actual`
+        // (what the script sees before it runs). Derived from the candidate
+        // array rather than its own `.or_else` chain so the two can't
+        // silently drift on precedence — same construction as `api::dev`.
+        let measured_colors: Option<Vec<(u8, u8, u8)>> = pre_script_measured_candidates
+            .iter()
+            .find_map(|(_, c)| c.clone());
 
         // The palette the script sees via `device.colors` — panel colors
         // fold in over the model default, same as `/dev/render`'s
@@ -994,6 +1039,9 @@ impl ScreenStore {
             width: Some(width),
             height: Some(height),
             colors: Some(crate::api::display::colors_to_hex_strings(&ctx_palette)),
+            colors_actual: measured_colors
+                .as_deref()
+                .map(crate::api::display::colors_to_hex_strings),
             dither_algorithm: Some(pre_script_algo.to_string()),
             dither_error_clamp: pre_panel_tuning.error_clamp,
             dither_noise_scale: pre_panel_tuning.noise_scale,
@@ -1034,7 +1082,7 @@ impl ScreenStore {
             }
         };
 
-        let log = script_result.logs.clone();
+        let mut log = script_result.logs.clone();
         let data = script_result.data.clone();
         let refresh_rate = script_result.refresh_rate;
 
@@ -1097,21 +1145,36 @@ impl ScreenStore {
             &panel_tuning,
         );
 
+        let mut measured_warning: Option<String> = None;
         let render_params = crate::api::display::resolve_render_params(
             script_result.script_colors.as_deref(),
+            script_result.script_colors_actual.as_deref(),
             effective_script_dither,
             script_result.script_preserve_exact,
             None,
             dither_override,
             panel_colors.as_deref(),
             &query_palette,
-            measured_colors.clone(),
+            &pre_script_measured_candidates,
             opts.preserve_exact,
             &tuning,
+            &mut measured_warning,
         );
+        // The authoring path's warning channel is the script log, which
+        // render_screen returns to the agent — not the server's log stream.
+        if let Some(w) = measured_warning {
+            log.push(format!("[warn] {w}"));
+        }
 
         let display_spec = DisplaySpec::from_dimensions(width, height).unwrap_or(DisplaySpec::OG);
-        let use_actual = measured_colors.is_some();
+        // An explicit request wins, but only when there is something measured
+        // to show. Uses the post-script resolved value, so a script-supplied
+        // calibration is what gets previewed. Shared rule — see
+        // `api::display::resolve_use_actual`.
+        let use_actual = crate::api::display::resolve_use_actual(
+            opts.use_actual,
+            render_params.measured_colors.is_some(),
+        );
         let (dither_tuning, has_tuning) =
             crate::api::display::resolve_dither_tuning(&render_params);
 
@@ -1119,7 +1182,7 @@ impl ScreenStore {
             &svg,
             display_spec,
             &render_params.palette,
-            measured_colors.as_deref(),
+            render_params.measured_colors.as_deref(),
             use_actual,
             render_params.dither.as_deref(),
             render_params.preserve_exact,
@@ -1157,6 +1220,9 @@ impl ScreenStore {
             data,
             refresh_rate,
             error: None,
+            // Post-script: the layer the ditherer actually acted on, which
+            // may differ from the pre-script winner above.
+            measured_source: render_params.measured_source,
         }
     }
 }
@@ -2279,5 +2345,275 @@ mod tests {
     #[test]
     fn parse_lua_error_line_none_when_unparseable() {
         assert_eq!(parse_lua_error_line("Screen 'x/y' not found"), None);
+    }
+
+    /// Decode a PNG's `PLTE` chunk back into RGB triples. `render_png_from_svg`
+    /// always emits an indexed PNG whose palette is the measured colours when
+    /// `use_actual` is true (see `svg_to_png::build_eink_palette`'s doc
+    /// comment) — so the rendered PNG's own palette is a direct, black-box
+    /// window onto which measured-colour candidate actually won, with no need
+    /// to inspect `ScreenStore::render`'s internals.
+    fn decode_plte(png_bytes: &[u8]) -> Vec<(u8, u8, u8)> {
+        let decoder = png::Decoder::new(png_bytes);
+        let reader = decoder.read_info().expect("decode PNG header");
+        let plte = reader
+            .info()
+            .palette
+            .as_ref()
+            .expect("expected an indexed PNG with a PLTE chunk (use_actual should be true)");
+        plte.chunks_exact(3).map(|c| (c[0], c[1], c[2])).collect()
+    }
+
+    #[test]
+    fn render_script_colors_actual_wins_over_panel_colors_actual_when_lengths_match() {
+        // Regression for the measured-colour chain's top precedence level:
+        // a script's own `colors_actual` return must beat the panel's
+        // `colors_actual`, not the other way around and not some blend of
+        // the two. Panel and script measured sets are deliberately
+        // distinct, non-guessable RGB triples so a wrong-source wiring bug
+        // (e.g. passing the panel's set to the script's candidate slot, or
+        // vice versa) fails the PLTE assertion instead of accidentally
+        // matching.
+        let mut panels = HashMap::new();
+        panels.insert(
+            "test-panel".to_string(),
+            PanelConfig {
+                name: "Test Panel".to_string(),
+                match_pattern: None,
+                width: None,
+                height: None,
+                colors: "#000000,#404040,#808080,#FFFFFF".to_string(),
+                colors_actual: Some("#910101,#920202,#930303,#940404".to_string()),
+                dither: None,
+            },
+        );
+        let config = AppConfig {
+            panels,
+            ..AppConfig::default()
+        };
+        let (store, _repo_root) = test_store_with_local_and_config(config);
+        store
+            .create_screen("local", "scriptwins", StarterKind::Minimal)
+            .unwrap();
+        store
+            .write_file(
+                "local/scriptwins",
+                "script.lua",
+                br##"return {
+                    data = { message = "x" },
+                    colors = { "#000000", "#404040", "#808080", "#FFFFFF" },
+                    colors_actual = { "#A10101", "#A20202", "#A30303", "#A40404" },
+                    refresh_rate = 60
+                }"##,
+                None,
+            )
+            .unwrap();
+        let res = store.render(
+            "local/scriptwins",
+            RenderOpts {
+                panel: Some("test-panel".to_string()),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        // `measured_source` must report the POST-script winner, never the
+        // caller's pre-script winner. This test is the only place the two
+        // differ by construction — the panel supplies a calibration AND the
+        // script overrides it — so it is the only place that can catch
+        // `measured_source` being populated from
+        // `pre_script_measured_candidates` instead of
+        // `render_params.measured_source`. That substitution passes every
+        // other test in the tree, including all the PLTE assertions below,
+        // because it changes only the reported label and not the render.
+        assert_eq!(
+            res.measured_source,
+            crate::api::display::SRC_SCRIPT,
+            "measured_source must name the script, the layer that actually won"
+        );
+        // oxipng's recompression pass is free to reorder PLTE entries (e.g.
+        // by usage frequency) for better compression, so compare as a set
+        // rather than an ordered sequence — the property under test is
+        // "which candidate's colours ended up in the palette", not their
+        // position within it.
+        let mut plte = decode_plte(&res.png);
+        plte.sort();
+        let mut expected = vec![
+            (0xA1, 0x01, 0x01),
+            (0xA2, 0x02, 0x02),
+            (0xA3, 0x03, 0x03),
+            (0xA4, 0x04, 0x04),
+        ];
+        expected.sort();
+        assert_eq!(
+            plte, expected,
+            "the rendered PNG's palette must be the script's colors_actual, not the panel's"
+        );
+    }
+
+    #[test]
+    fn render_script_colors_actual_length_mismatch_falls_back_to_panel_and_logs_warning() {
+        // The script's colors_actual has the wrong length for the palette
+        // it also returns (4 nominal colors, only 2 measured) — this must
+        // never fail the render; it must fall through to panel.colors_actual
+        // and the mismatch must reach the AUTHOR via the script log
+        // (`RenderResult.log`), since the authoring path has no server log
+        // stream a script author would ever see.
+        let mut panels = HashMap::new();
+        panels.insert(
+            "test-panel".to_string(),
+            PanelConfig {
+                name: "Test Panel".to_string(),
+                match_pattern: None,
+                width: None,
+                height: None,
+                colors: "#000000,#404040,#808080,#FFFFFF".to_string(),
+                colors_actual: Some("#B10101,#B20202,#B30303,#B40404".to_string()),
+                dither: None,
+            },
+        );
+        let config = AppConfig {
+            panels,
+            ..AppConfig::default()
+        };
+        let (store, _repo_root) = test_store_with_local_and_config(config);
+        store
+            .create_screen("local", "scriptmismatch", StarterKind::Minimal)
+            .unwrap();
+        store
+            .write_file(
+                "local/scriptmismatch",
+                "script.lua",
+                br##"return {
+                    data = { message = "x" },
+                    colors = { "#000000", "#404040", "#808080", "#FFFFFF" },
+                    colors_actual = { "#C10101", "#C20202" },
+                    refresh_rate = 60
+                }"##,
+                None,
+            )
+            .unwrap();
+        let res = store.render(
+            "local/scriptmismatch",
+            RenderOpts {
+                panel: Some("test-panel".to_string()),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(
+            res.error.is_none(),
+            "a calibration mismatch must not fail the render: {:?}",
+            res.error
+        );
+        // The mirror of the sibling test's assertion: here the script layer
+        // is supplied but discarded by the length rule, so the post-script
+        // winner is the panel. Reporting `SRC_SCRIPT` here (the first
+        // *supplied* candidate) would be exactly the lie the field exists to
+        // prevent — the render did not dither against the script's set.
+        assert_eq!(
+            res.measured_source,
+            crate::api::display::SRC_PANEL_ACTUAL,
+            "measured_source must name the panel, not the script whose \
+             mismatched set was discarded"
+        );
+        // See the sibling test above for why this compares as a set.
+        let mut plte = decode_plte(&res.png);
+        plte.sort();
+        let mut expected = vec![
+            (0xB1, 0x01, 0x01),
+            (0xB2, 0x02, 0x02),
+            (0xB3, 0x03, 0x03),
+            (0xB4, 0x04, 0x04),
+        ];
+        expected.sort();
+        assert_eq!(
+            plte, expected,
+            "must fall back to panel.colors_actual when the script's colors_actual mismatches"
+        );
+        let warning_line = res
+            .log
+            .iter()
+            .find(|l| l.starts_with("[warn]"))
+            .unwrap_or_else(|| panic!("expected a [warn] log entry, got: {:?}", res.log));
+        assert!(
+            warning_line.contains(crate::api::display::SRC_SCRIPT),
+            "warning must name the script as the mismatched source: {warning_line}"
+        );
+        assert!(
+            warning_line.contains("has 2 usable"),
+            "warning must name the mismatched entry count: {warning_line}"
+        );
+    }
+
+    #[test]
+    fn render_opts_colors_actual_is_visible_to_the_script_as_device_colors_actual() {
+        // `RenderOpts::colors_actual` occupies the dev-override slot, and
+        // that slot feeds `DeviceContext.colors_actual` — what the script
+        // reads as `device.colors_actual` BEFORE it runs — exactly as the
+        // dev-UI override does in `api::dev`. Without this, an agent
+        // previewing a calibration would have it steer the ditherer while
+        // the script simultaneously saw a different set (or none), which is
+        // the drift the shared candidate array exists to prevent.
+        //
+        // The panel here also carries a calibration, so this pins
+        // PRECEDENCE into the context and not merely "the value arrives":
+        // deriving the context from the panel instead of from the candidate
+        // array yields the #D... set and fails.
+        let mut panels = HashMap::new();
+        panels.insert(
+            "test-panel".to_string(),
+            PanelConfig {
+                name: "Test Panel".to_string(),
+                match_pattern: None,
+                width: None,
+                height: None,
+                colors: "#000000,#404040,#808080,#FFFFFF".to_string(),
+                colors_actual: Some("#D10101,#D20202,#D30303,#D40404".to_string()),
+                dither: None,
+            },
+        );
+        let config = AppConfig {
+            panels,
+            ..AppConfig::default()
+        };
+        let (store, _repo_root) = test_store_with_local_and_config(config);
+        store
+            .create_screen("local", "ctxactual", StarterKind::Minimal)
+            .unwrap();
+        // Echo what the script saw back out through `data`, which `render`
+        // returns verbatim — the only channel that can observe the
+        // pre-script context from outside.
+        store
+            .write_file(
+                "local/ctxactual",
+                "script.lua",
+                br##"return {
+                    data = {
+                        message = "x",
+                        seen = table.concat(device.colors_actual or {}, ","),
+                    },
+                    refresh_rate = 60
+                }"##,
+                None,
+            )
+            .unwrap();
+        let res = store.render(
+            "local/ctxactual",
+            RenderOpts {
+                panel: Some("test-panel".to_string()),
+                colors_actual: Some("#E10101,#E20202,#E30303,#E40404".to_string()),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert_eq!(
+            res.data["seen"],
+            serde_json::json!("#E10101,#E20202,#E30303,#E40404"),
+            "the render option, not the panel, must reach the script as \
+             device.colors_actual: {:?}",
+            res.data
+        );
+        // And it must also be the layer that won the render itself, so the
+        // context and the ditherer cannot disagree.
+        assert_eq!(res.measured_source, crate::api::display::SRC_RENDER_OPTS);
     }
 }

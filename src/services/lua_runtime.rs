@@ -21,6 +21,11 @@ pub struct ScriptResult {
     pub skip_update: bool,
     /// Optional color palette override from script (hex RGB strings)
     pub colors: Option<Vec<String>>,
+    /// Optional measured-colour override from script (hex RGB strings),
+    /// index-parallel to `colors`. Wins the measured chain when its length
+    /// matches the resolved official palette; see
+    /// `crate::api::display::resolve_measured_colors`.
+    pub colors_actual: Option<Vec<String>>,
     /// Optional dither mode from script ("photo" or "graphics")
     pub dither: Option<String>,
     /// Optional preserve_exact override from script
@@ -225,6 +230,18 @@ impl LuaRuntime {
             })
             .filter(|v| !v.is_empty());
 
+        // Parse optional measured-colour array from script return. Same shape
+        // as `colors` above: positive integer keys, empty means None.
+        let colors_actual = result
+            .get::<Table>("colors_actual")
+            .ok()
+            .map(|t| {
+                (1..=t.raw_len())
+                    .filter_map(|i| t.raw_get::<String>(i).ok())
+                    .collect::<Vec<String>>()
+            })
+            .filter(|v| !v.is_empty());
+
         // Parse optional dither mode from script return
         let dither = result.get::<String>("dither").ok();
 
@@ -248,6 +265,7 @@ impl LuaRuntime {
             refresh_rate,
             skip_update,
             colors,
+            colors_actual,
             dither,
             preserve_exact,
             error_clamp,
@@ -411,6 +429,15 @@ impl LuaRuntime {
                     colors_table.set(i + 1, color.as_str())?;
                 }
                 device_table.set("colors", colors_table)?;
+            }
+            // Measured panel colours. Absent (nil in Lua) rather than mirrored
+            // from `colors` when uncalibrated — see DeviceContext::colors_actual.
+            if let Some(ref actual) = ctx.colors_actual {
+                let actual_table = lua.create_table()?;
+                for (i, color) in actual.iter().enumerate() {
+                    actual_table.set(i + 1, color.as_str())?;
+                }
+                device_table.set("colors_actual", actual_table)?;
             }
             // Add dither sub-table with pre-script resolved values
             let dither_table = lua.create_table()?;

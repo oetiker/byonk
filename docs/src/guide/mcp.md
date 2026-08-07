@@ -92,6 +92,21 @@ Samba share, or an `EXAMPLES_DIR`-seeded repo) and author text files around them
 | `render_screen` | Render a screen and return the dithered PNG plus diagnostics (log, data, error). |
 | `validate_screen` | Statically check a screen — `meta.yaml`, Lua, and template — without running it. |
 
+`render_screen` shows what the panel will *really* look like by default: when measured
+colours are available (from a named `panel` or from its own `colors_actual` argument), the
+returned PNG is drawn in them. This changes only how the PNG is drawn, never the dithering
+itself — a screen's dithering targets measured colours whenever they resolve, regardless of
+`use_actual`.
+
+| Argument | Type | What it does |
+|----------|------|----------------|
+| `use_actual` | bool, optional | Draw the returned PNG in the panel's measured colours instead of the spec colours. Defaults to on whenever measured colours are available. `true` with nothing measured is a no-op, not an error. |
+| `colors_actual` | string, optional | Comma-separated hex, index-parallel to the palette (e.g. `#0A0A0A,#E8E6E0,#A83A30`). Lets you preview a calibration without adding a `panel` to `config.yaml`. A `colors_actual` returned by the screen's own script still wins over this; a length mismatch is ignored (with a warning in the diagnostics' `log`) rather than failing the render. |
+
+The diagnostics also include `measured_source`, naming which layer actually supplied the
+measured colours for that render: `script`, `render_opts` (the `colors_actual` argument
+above), `panel.colors_actual`, or `none`.
+
 ### Assign
 
 | Tool | What it does |

@@ -67,11 +67,19 @@ impl EinkDitherer {
     /// let ditherer = EinkDitherer::new(palette);
     /// ```
     pub fn new(palette: Palette) -> Self {
+        // Derive from the default algorithm rather than restating a constant:
+        // this used to hardcode error_clamp(0.08), so `new()` and
+        // `.algorithm(Atkinson)` could silently disagree about the defaults.
+        let algorithm = DitherAlgorithm::default();
+        let (error_clamp, noise_scale) = algorithm.defaults();
         Self {
             palette,
             preprocess: PreprocessOptions::default(),
-            dither_opts: DitherOptions::new().error_clamp(0.08),
-            algorithm: DitherAlgorithm::Atkinson,
+            dither_opts: DitherOptions::new()
+                .error_clamp(error_clamp)
+                .noise_scale(noise_scale)
+                .hybrid_propagation(algorithm.is_hybrid_propagation()),
+            algorithm,
             error_clamp_explicit: false,
         }
     }
@@ -180,12 +188,15 @@ impl EinkDitherer {
         let preprocessor = Preprocessor::new(self.preprocess.clone());
         let result = preprocessor.process(pixels, width, height);
 
-        // 2. Resolve dither options, applying greyscale override if needed
-        let dither_opts = if !self.error_clamp_explicit && self.palette.is_greyscale() {
-            self.dither_opts.clone().error_clamp(0.6)
-        } else {
-            self.dither_opts.clone()
-        };
+        // 2. Dither using unified kernel dispatch.
+        //
+        // There used to be a greyscale override raising error_clamp to 0.6
+        // here. It compensated for the old clamp semantics, which bounded the
+        // resulting value rather than the error: a grey ramp lives near the
+        // channel extremes, so it was starved of headroom exactly where it
+        // needed it. The clamp now bounds the error itself and defaults to
+        // 1.0 for every palette, so the override would only ever *lower* it.
+        let dither_opts = self.dither_opts.clone();
 
         // 3. Dither using unified kernel dispatch
         let photo_palette = self.palette.for_error_diffusion();
@@ -359,12 +370,12 @@ mod tests {
         let palette = test_palette();
         let ditherer =
             EinkDitherer::new(palette.clone()).algorithm(DitherAlgorithm::FloydSteinberg);
-        assert!((ditherer.dither_opts.error_clamp - 0.12).abs() < f32::EPSILON);
+        assert!((ditherer.dither_opts.error_clamp - 1.0).abs() < f32::EPSILON);
         assert!((ditherer.dither_opts.noise_scale - 4.0).abs() < f32::EPSILON);
         assert!(!ditherer.dither_opts.hybrid_propagation);
 
         let ditherer = EinkDitherer::new(palette).algorithm(DitherAlgorithm::AtkinsonHybrid);
-        assert!((ditherer.dither_opts.error_clamp - 0.08).abs() < f32::EPSILON);
+        assert!((ditherer.dither_opts.error_clamp - 1.0).abs() < f32::EPSILON);
         assert!((ditherer.dither_opts.noise_scale - 0.0).abs() < f32::EPSILON);
         assert!(ditherer.dither_opts.hybrid_propagation);
     }

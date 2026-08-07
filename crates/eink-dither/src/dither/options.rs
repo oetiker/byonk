@@ -115,7 +115,7 @@ impl Default for DitherOptions {
     fn default() -> Self {
         Self {
             serpentine: true,
-            error_clamp: 0.5,
+            error_clamp: 1.0,
             chroma_clamp: f32::INFINITY,
             noise_scale: 5.0,
             strength: 1.0,
@@ -206,8 +206,8 @@ mod tests {
         let opts = DitherOptions::default();
         assert!(opts.serpentine, "serpentine should default to true");
         assert!(
-            (opts.error_clamp - 0.5).abs() < f32::EPSILON,
-            "error_clamp should default to 0.5"
+            (opts.error_clamp - 1.0).abs() < f32::EPSILON,
+            "error_clamp should default to 1.0"
         );
     }
 
@@ -225,7 +225,7 @@ mod tests {
         let opts = DitherOptions::new().serpentine(false);
         assert!(!opts.serpentine);
         // Other values unchanged
-        assert!((opts.error_clamp - 0.5).abs() < f32::EPSILON);
+        assert!((opts.error_clamp - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -259,6 +259,6 @@ mod tests {
         assert!((opts.strength - 0.5).abs() < f32::EPSILON);
         // Other values unchanged
         assert!(opts.serpentine);
-        assert!((opts.error_clamp - 0.5).abs() < f32::EPSILON);
+        assert!((opts.error_clamp - 1.0).abs() < f32::EPSILON);
     }
 }

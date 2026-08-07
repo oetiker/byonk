@@ -103,7 +103,7 @@ The `device.dither` sub-table contains the pre-script resolved dither tuning val
 ```lua
 -- Read current tuning
 local algo = device.dither.algorithm       -- "floyd-steinberg" (resolved algorithm)
-local ec = device.dither.error_clamp       -- 0.08 (from panel/device config)
+local ec = device.dither.error_clamp       -- 1.0 (from panel/device config)
 local ns = device.dither.noise_scale       -- 4.0
 local cc = device.dither.chroma_clamp      -- nil (not set)
 local st = device.dither.strength          -- 1.0 (default)
@@ -112,7 +112,7 @@ local st = device.dither.strength          -- 1.0 (default)
 return {
   data = { ... },
   refresh_rate = 300,
-  error_clamp = (device.dither.error_clamp or 0.1) * 0.5,
+  error_clamp = (device.dither.error_clamp or 1.0) * 0.5,
   -- noise_scale not returned -> keeps panel/device value
 }
 ```
@@ -1168,7 +1168,7 @@ return {
   colors = { "#000000", "#FFFFFF", "#FF0000" },  -- Optional: override display palette
   colors_actual = { "#0A0A0A", "#E8E6E0", "#A83A30" },  -- Optional: override measured colours
   dither = "atkinson",      -- Optional: dither algorithm
-  error_clamp = 0.08,       -- Optional: error diffusion clamp
+  error_clamp = 1.0,        -- Optional: cap on accumulated diffusion error
   noise_scale = 0.6,        -- Optional: blue noise jitter scale
   chroma_clamp = 2.0,       -- Optional: chromatic error clamp
   strength = 0.8,           -- Optional: error diffusion strength (default 1.0)
@@ -1298,7 +1298,7 @@ return {
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `error_clamp` | number or nil | Limits error diffusion amplitude (e.g. 0.08) |
+| `error_clamp` | number or nil | Caps the accumulated diffusion error a pixel may carry (default 1.0) |
 | `noise_scale` | number or nil | Blue noise jitter scale (e.g. 0.6) |
 | `chroma_clamp` | number or nil | Limits chromatic error propagation (e.g. 2.0) |
 | `strength` | number or nil | Error diffusion strength multiplier (0.0 = no diffusion, 1.0 = standard, default) |
@@ -1315,7 +1315,7 @@ return {
   data = { ... },
   refresh_rate = 3600,
   dither = "floyd-steinberg",
-  error_clamp = 0.08,
+  error_clamp = 1.0,
   noise_scale = 0.5,
   strength = 0.8
 }

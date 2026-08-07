@@ -116,17 +116,33 @@ impl DitherAlgorithm {
     }
 
     /// Get the per-algorithm default (error_clamp, noise_scale) for chromatic palettes.
+    ///
+    /// `error_clamp` bounds the accumulated diffusion error per channel (see
+    /// [`apply_error`]). It is deliberately uniform across algorithms: the
+    /// old per-algorithm values (0.03-0.12) were tuned when the clamp bounded
+    /// the resulting VALUE rather than the error, where the useful range
+    /// depended on how close the content sat to a channel extreme. Under the
+    /// current meaning that variation no longer corresponds to anything, and
+    /// measuring every algorithm against the palette's physical bound shows
+    /// the same shape for all of them: sharply better up to ~0.5, flattening
+    /// by ~1.0, negligible past ~2.0.
+    ///
+    /// 1.0 is the knee, and it has a natural reading — accumulated error may
+    /// not exceed full scale in a channel. Going higher buys ~0.003 dE on
+    /// flat patches while removing the bound that keeps one dark or blown-out
+    /// region from dragging its neighbours.
     pub fn defaults(&self) -> (f32, f32) {
-        match self {
-            Self::Atkinson | Self::AtkinsonHybrid => (0.08, 0.0),
-            Self::FloydSteinberg => (0.12, 4.0),
-            Self::JarvisJudiceNinke => (0.03, 6.0),
-            Self::Sierra => (0.10, 5.5),
-            Self::SierraTwoRow => (0.10, 7.0),
-            Self::SierraLite => (0.11, 2.5),
-            Self::Stucki => (0.03, 6.0),
-            Self::Burkes => (0.10, 7.0),
-        }
+        let noise_scale = match self {
+            Self::Atkinson | Self::AtkinsonHybrid => 0.0,
+            Self::FloydSteinberg => 4.0,
+            Self::JarvisJudiceNinke => 6.0,
+            Self::Sierra => 5.5,
+            Self::SierraTwoRow => 7.0,
+            Self::SierraLite => 2.5,
+            Self::Stucki => 6.0,
+            Self::Burkes => 7.0,
+        };
+        (1.0, noise_scale)
     }
 
     /// Whether this algorithm uses hybrid achromatic/chromatic error propagation.
@@ -193,10 +209,21 @@ impl ErrorBuffer {
 // Shared dithering infrastructure
 // ============================================================================
 
-/// Clamp a channel value with error to the valid range.
+/// Apply accumulated diffusion error to a channel, bounding the error itself.
+///
+/// The bound is on the ERROR, not on the resulting value. Bounding the value
+/// instead — clamping `channel + error` into `[-max, 1 + max]`, as this used
+/// to — makes the available headroom depend on where the channel already
+/// sits. A saturated colour is at a channel extreme by definition, so it got
+/// only `max` of room for error to accumulate, the same entry won every
+/// pixel, and the region came out flat. Neutral mid-tones, which need the
+/// help least, got the most headroom.
+///
+/// Bounding the error gives every channel the same room wherever it sits,
+/// while still capping how far one pixel's debt can drag its neighbours.
 #[inline]
-pub(crate) fn clamp_channel(value: f32, max_error: f32) -> f32 {
-    value.clamp(-max_error, 1.0 + max_error)
+pub(crate) fn apply_error(channel: f32, error: f32, max_error: f32) -> f32 {
+    channel + error.clamp(-max_error, max_error)
 }
 
 /// Core error diffusion algorithm with blue noise jitter, parameterized by kernel.
@@ -263,9 +290,9 @@ pub(crate) fn dither_with_kernel_noise(
             // Add accumulated error to input pixel
             let accumulated = error_buf.get_accumulated(x);
             let pixel = LinearRgb::new(
-                clamp_channel(image[idx].r + accumulated[0], options.error_clamp),
-                clamp_channel(image[idx].g + accumulated[1], options.error_clamp),
-                clamp_channel(image[idx].b + accumulated[2], options.error_clamp),
+                apply_error(image[idx].r, accumulated[0], options.error_clamp),
+                apply_error(image[idx].g, accumulated[1], options.error_clamp),
+                apply_error(image[idx].b, accumulated[2], options.error_clamp),
             );
 
             // Chroma of original pixel (for chromatic damping)
@@ -451,16 +478,28 @@ mod tests {
 
     #[test]
     fn test_algorithm_defaults() {
-        let (ec, ns) = DitherAlgorithm::Atkinson.defaults();
-        assert!((ec - 0.08).abs() < f32::EPSILON);
-        assert!((ns - 0.0).abs() < f32::EPSILON);
+        // error_clamp is uniform across algorithms; only noise_scale varies.
+        for algo in [
+            DitherAlgorithm::Atkinson,
+            DitherAlgorithm::AtkinsonHybrid,
+            DitherAlgorithm::FloydSteinberg,
+            DitherAlgorithm::JarvisJudiceNinke,
+            DitherAlgorithm::Sierra,
+            DitherAlgorithm::SierraTwoRow,
+            DitherAlgorithm::SierraLite,
+            DitherAlgorithm::Stucki,
+            DitherAlgorithm::Burkes,
+        ] {
+            let (ec, _) = algo.defaults();
+            assert!(
+                (ec - 1.0).abs() < f32::EPSILON,
+                "{algo:?} should use the uniform error_clamp default"
+            );
+        }
 
-        let (ec, ns) = DitherAlgorithm::AtkinsonHybrid.defaults();
-        assert!((ec - 0.08).abs() < f32::EPSILON);
+        let (_, ns) = DitherAlgorithm::Atkinson.defaults();
         assert!((ns - 0.0).abs() < f32::EPSILON);
-
-        let (ec, ns) = DitherAlgorithm::FloydSteinberg.defaults();
-        assert!((ec - 0.12).abs() < f32::EPSILON);
+        let (_, ns) = DitherAlgorithm::FloydSteinberg.defaults();
         assert!((ns - 4.0).abs() < f32::EPSILON);
     }
 

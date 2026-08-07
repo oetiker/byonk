@@ -2237,4 +2237,194 @@ mod domain_tests {
                 .collect::<Vec<_>>()
         );
     }
+
+    /// Sweep `error_clamp` under the new "bound the error" semantics to pick
+    /// per-algorithm defaults, scoring against the palette's physical bound.
+    ///
+    /// Run: `cargo test -p eink-dither clamp_sweep -- --nocapture --ignored`
+    #[test]
+    #[ignore] // diagnostic -- run manually
+    fn test_error_clamp_sweep_against_bound() {
+        let official = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(255, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(0, 255, 0),
+        ];
+        let actual = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(0xB5, 0x03, 0x03),
+            Srgb::from_u8(0xFF, 0xEE, 0x00),
+            Srgb::from_u8(0x20, 0x54, 0x97),
+            Srgb::from_u8(0x0D, 0x87, 0x6B),
+        ];
+        let palette = Palette::new(&official, Some(&actual)).unwrap();
+        const PATCH: usize = 16;
+        let lightnesses = [0.2f32, 0.32, 0.44, 0.56, 0.68, 0.8];
+
+        // Precompute the bound once; it does not depend on tuning.
+        let mut targets = Vec::new();
+        let mut sum_bound = 0.0f32;
+        for &l in &lightnesses {
+            for hue_deg in (0..360).step_by(15) {
+                let (r, g, b) = hsl_to_rgb(hue_deg as f32 / 360.0, 1.0, l);
+                let src = Srgb::new(r, g, b);
+                let target = Oklab::from(LinearRgb::from(src));
+                let (bound, _) = best_reachable(&palette, target);
+                sum_bound += bound;
+                targets.push((src, target));
+            }
+        }
+        let n = targets.len() as f32;
+        eprintln!(
+            "\nbound = {:.4} (mean dE over {} targets)\n",
+            sum_bound / n,
+            targets.len()
+        );
+
+        for algo in [
+            DitherAlgorithm::Atkinson,
+            DitherAlgorithm::FloydSteinberg,
+            DitherAlgorithm::SierraLite,
+            DitherAlgorithm::JarvisJudiceNinke,
+        ] {
+            eprint!("{:>20}:", format!("{algo:?}"));
+            for &ec in &[0.05f32, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0] {
+                let mut tot = 0.0f32;
+                for (src, target) in &targets {
+                    let pixels = vec![*src; PATCH * PATCH];
+                    let out = EinkDitherer::new(palette.clone())
+                        .algorithm(algo)
+                        .error_clamp(ec)
+                        .dither(&pixels, PATCH, PATCH);
+                    let mut acc = [0.0f32; 3];
+                    for &idx in out.indices() {
+                        let c = palette.actual_linear(idx as usize);
+                        acc[0] += c.r;
+                        acc[1] += c.g;
+                        acc[2] += c.b;
+                    }
+                    let m = (PATCH * PATCH) as f32;
+                    let avg = Oklab::from(LinearRgb::new(acc[0] / m, acc[1] / m, acc[2] / m));
+                    tot += avg.distance_squared(*target).sqrt();
+                }
+                eprint!("  ec{ec}={:.4}", tot / n);
+            }
+            eprintln!();
+        }
+    }
+
+    /// Sweep error_clamp against BOTH metrics at once: muted-colour accuracy
+    /// (which wants a tight bound) and the saturated-patch gamut gap (which
+    /// wants a loose one). The default has to satisfy both.
+    ///
+    /// Run: `cargo test -p eink-dither clamp_tradeoff -- --nocapture --ignored`
+    #[test]
+    #[ignore] // diagnostic -- run manually
+    fn test_error_clamp_tradeoff() {
+        let pal6 = Palette::new(
+            &[
+                Srgb::from_u8(0, 0, 0),
+                Srgb::from_u8(255, 255, 255),
+                Srgb::from_u8(255, 0, 0),
+                Srgb::from_u8(0, 255, 0),
+                Srgb::from_u8(0, 0, 255),
+                Srgb::from_u8(255, 255, 0),
+            ],
+            None,
+        )
+        .unwrap();
+        let muted: &[(&str, Srgb)] = &[
+            ("warm shadow", Srgb::from_u8(80, 70, 60)),
+            ("cool shadow", Srgb::from_u8(60, 65, 75)),
+            ("overcast sky", Srgb::from_u8(180, 185, 200)),
+            ("concrete", Srgb::from_u8(150, 145, 135)),
+            ("faded blue", Srgb::from_u8(130, 140, 160)),
+            ("dark leaf", Srgb::from_u8(50, 65, 40)),
+            ("sunset glow", Srgb::from_u8(220, 200, 170)),
+        ];
+
+        let measured = Palette::new(
+            &[
+                Srgb::from_u8(0, 0, 0),
+                Srgb::from_u8(255, 255, 255),
+                Srgb::from_u8(255, 0, 0),
+                Srgb::from_u8(255, 255, 0),
+                Srgb::from_u8(0, 0, 255),
+                Srgb::from_u8(0, 255, 0),
+            ],
+            Some(&[
+                Srgb::from_u8(0, 0, 0),
+                Srgb::from_u8(255, 255, 255),
+                Srgb::from_u8(0xB5, 0x03, 0x03),
+                Srgb::from_u8(0xFF, 0xEE, 0x00),
+                Srgb::from_u8(0x20, 0x54, 0x97),
+                Srgb::from_u8(0x0D, 0x87, 0x6B),
+            ]),
+        )
+        .unwrap();
+
+        eprintln!(
+            "\n{:>6} | {:>12} | {:>12}",
+            "clamp", "muted max dE", "gamut mean dE"
+        );
+        eprintln!("{}", "-".repeat(38));
+        for &ec in &[0.05f32, 0.1, 0.15, 0.2, 0.3, 0.5, 1.0, 2.0] {
+            // muted accuracy: worst case over the set
+            let mut worst = 0.0f32;
+            for &(_, color) in muted {
+                let image = vec![color; 128 * 128];
+                let out = EinkDitherer::new(pal6.clone())
+                    .saturation(1.0)
+                    .contrast(1.0)
+                    .error_clamp(ec)
+                    .dither(&image, 128, 128);
+                let mut acc = [0.0f32; 3];
+                for &idx in out.indices() {
+                    let c = pal6.actual_linear(idx as usize);
+                    acc[0] += c.r;
+                    acc[1] += c.g;
+                    acc[2] += c.b;
+                }
+                let n = out.indices().len() as f32;
+                let avg = Oklab::from(LinearRgb::new(acc[0] / n, acc[1] / n, acc[2] / n));
+                let de = avg
+                    .distance_squared(Oklab::from(LinearRgb::from(color)))
+                    .sqrt();
+                worst = worst.max(de);
+            }
+
+            // saturated patches vs the measured palette
+            let mut tot = 0.0f32;
+            let mut cnt = 0.0f32;
+            for &l in &[0.2f32, 0.44, 0.68] {
+                for hue_deg in (0..360).step_by(30) {
+                    let (r, g, b) = hsl_to_rgb(hue_deg as f32 / 360.0, 1.0, l);
+                    let src = Srgb::new(r, g, b);
+                    let out = EinkDitherer::new(measured.clone()).error_clamp(ec).dither(
+                        &vec![src; 16 * 16],
+                        16,
+                        16,
+                    );
+                    let mut acc = [0.0f32; 3];
+                    for &idx in out.indices() {
+                        let c = measured.actual_linear(idx as usize);
+                        acc[0] += c.r;
+                        acc[1] += c.g;
+                        acc[2] += c.b;
+                    }
+                    let n = 256.0f32;
+                    let avg = Oklab::from(LinearRgb::new(acc[0] / n, acc[1] / n, acc[2] / n));
+                    tot += avg
+                        .distance_squared(Oklab::from(LinearRgb::from(src)))
+                        .sqrt();
+                    cnt += 1.0;
+                }
+            }
+            eprintln!("{ec:>6} | {worst:>12.4} | {:>12.4}", tot / cnt);
+        }
+    }
 }

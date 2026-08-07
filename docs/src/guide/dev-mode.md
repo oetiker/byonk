@@ -65,7 +65,7 @@ The Render Options panel exposes three tuning parameters:
 
 | Control | Effect |
 |---------|--------|
-| **Error clamp** | Limits how much error is diffused. Lower values (0.05–0.1) reduce oscillation in smooth gradients. |
+| **Error clamp** | Caps how much accumulated error one pixel may carry into its neighbours. The default is 1.0 — full scale in a channel. Lowering it suppresses diffusion, which quietens oscillation but makes saturated areas render flat. |
 | **Noise scale** | Controls blue noise jitter strength. Higher values break "worm" artifacts more aggressively. |
 | **Chroma clamp** | Limits chromatic error propagation. Prevents color bleeding on chromatic palettes. |
 
@@ -152,7 +152,7 @@ devices:
     screen: examples/gphoto
     panel: my_panel
     dither: floyd-steinberg
-    error_clamp: 0.08   # from dev mode tuning
+    error_clamp: 1.0    # from dev mode tuning
     noise_scale: 0.5    # from dev mode tuning
 ```
 

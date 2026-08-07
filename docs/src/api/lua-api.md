@@ -1168,7 +1168,6 @@ return {
   colors = { "#000000", "#FFFFFF", "#FF0000" },  -- Optional: override display palette
   colors_actual = { "#0A0A0A", "#E8E6E0", "#A83A30" },  -- Optional: override measured colours
   dither = "atkinson",      -- Optional: dither algorithm
-  preserve_exact = true,    -- Optional: preserve exact palette matches (default: true)
   error_clamp = 0.08,       -- Optional: error diffusion clamp
   noise_scale = 0.6,        -- Optional: blue noise jitter scale
   chroma_clamp = 2.0,       -- Optional: chromatic error clamp
@@ -1292,22 +1291,6 @@ return {
   data = { image_url = "..." },
   refresh_rate = 3600,
   dither = "floyd-steinberg"
-}
-```
-
-### preserve_exact
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `preserve_exact` | boolean or nil | Whether to preserve exact palette color matches (default: true) |
-
-When `true` (default), pixels that exactly match a palette color are kept as-is without dithering. This preserves sharp edges for text, lines, and borders. Set to `false` to force all pixels through the dithering pipeline.
-
-```lua
-return {
-  data = { ... },
-  refresh_rate = 300,
-  preserve_exact = false  -- force all pixels through dithering
 }
 ```
 

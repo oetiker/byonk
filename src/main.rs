@@ -303,7 +303,6 @@ fn run_render_command(
         svg_content,
         final_palette,
         dither,
-        preserve_exact,
         cli_error_clamp,
         cli_noise_scale,
         cli_chroma_clamp,
@@ -367,7 +366,6 @@ fn run_render_command(
             svg,
             cli_palette,
             None,
-            true,
             None,
             None,
             None,
@@ -416,13 +414,11 @@ fn run_render_command(
             script_result.script_colors.as_deref(),
             script_result.script_colors_actual.as_deref(),
             script_result.script_dither.as_deref(),
-            script_result.script_preserve_exact,
             dc_colors.as_deref(),
             dc_dither.as_deref(),
             panel_colors.as_deref(),
             &cli_palette,
             &pre_script_measured_candidates,
-            None,
             &tuning,
             &mut measured_warning,
         );
@@ -438,7 +434,6 @@ fn run_render_command(
             svg,
             render_params.palette,
             render_params.dither,
-            render_params.preserve_exact,
             render_params.error_clamp,
             render_params.noise_scale,
             render_params.chroma_clamp,
@@ -454,7 +449,6 @@ fn run_render_command(
         error_clamp: cli_error_clamp,
         chroma_clamp: cli_chroma_clamp,
         noise_scale: cli_noise_scale,
-        exact_absorb_error: None,
         strength: cli_strength,
     };
     let has_cli_tuning = cli_tuning.error_clamp.is_some()
@@ -483,7 +477,6 @@ fn run_render_command(
             measured_colors.as_deref(),
             use_actual,
             dither.as_deref(),
-            preserve_exact,
             if has_cli_tuning {
                 Some(&cli_tuning)
             } else {

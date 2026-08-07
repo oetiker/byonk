@@ -46,8 +46,6 @@ pub struct ScriptResult {
     pub script_colors_actual: Option<Vec<String>>,
     /// Optional dither mode from Lua script ("photo" or "graphics")
     pub script_dither: Option<String>,
-    /// Optional preserve_exact override from Lua script
-    pub script_preserve_exact: Option<bool>,
     /// Optional error clamp override from Lua script
     pub script_error_clamp: Option<f32>,
     /// Optional blue noise jitter scale override from Lua script
@@ -305,7 +303,6 @@ impl ContentPipeline {
             script_colors: lua_result.colors,
             script_colors_actual: lua_result.colors_actual,
             script_dither: lua_result.dither,
-            script_preserve_exact: lua_result.preserve_exact,
             script_error_clamp: lua_result.error_clamp,
             script_noise_scale: lua_result.noise_scale,
             script_chroma_clamp: lua_result.chroma_clamp,
@@ -473,7 +470,6 @@ impl ContentPipeline {
         actual: Option<&[(u8, u8, u8)]>,
         use_actual: bool,
         dither: Option<&str>,
-        preserve_exact: bool,
         tuning: Option<&crate::rendering::svg_to_png::DitherTuning>,
     ) -> Result<Vec<u8>, ContentError> {
         let png_bytes = self.renderer.svg_renderer.render_to_palette_png(
@@ -483,7 +479,6 @@ impl ContentPipeline {
             actual,
             use_actual,
             dither,
-            preserve_exact,
             tuning,
         )?;
         Ok(png_bytes)

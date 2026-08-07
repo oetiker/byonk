@@ -39,16 +39,6 @@ pub struct DitherOptions {
     /// Default: `true`
     pub serpentine: bool,
 
-    /// Preserve exact palette matches without dithering.
-    ///
-    /// When a pixel exactly matches a palette color (byte-for-byte), skip
-    /// dithering entirely. This keeps text and solid UI elements crisp.
-    /// These pixels absorb any accumulated error from neighbors, acting
-    /// as error sinks that prevent color bleed across hard boundaries.
-    ///
-    /// Default: `true`
-    pub preserve_exact_matches: bool,
-
     /// Maximum error magnitude per channel (in linear RGB space).
     ///
     /// Accumulated error is clamped to this range to prevent "blooming"
@@ -97,16 +87,6 @@ pub struct DitherOptions {
     /// Default: `5.0`
     pub noise_scale: f32,
 
-    /// Whether exact-match pixels absorb accumulated error.
-    ///
-    /// When `true`, exact-match pixels act as error sinks — accumulated error
-    /// from neighbors is discarded, preventing color bleed across boundaries.
-    /// When `false`, accumulated error passes through (original behavior),
-    /// maintaining smooth gradient continuity but allowing bleed.
-    ///
-    /// Default: `true` (absorb — prevents bleed across boundaries)
-    pub exact_absorb_error: bool,
-
     /// Error diffusion strength multiplier.
     ///
     /// Scales the diffused error uniformly before propagation to neighbors:
@@ -135,11 +115,9 @@ impl Default for DitherOptions {
     fn default() -> Self {
         Self {
             serpentine: true,
-            preserve_exact_matches: true,
             error_clamp: 0.5,
             chroma_clamp: f32::INFINITY,
             noise_scale: 5.0,
-            exact_absorb_error: true,
             strength: 1.0,
             hybrid_propagation: false,
         }
@@ -162,16 +140,6 @@ impl DitherOptions {
     #[inline]
     pub fn serpentine(mut self, enabled: bool) -> Self {
         self.serpentine = enabled;
-        self
-    }
-
-    /// Set exact match preservation mode.
-    ///
-    /// # Arguments
-    /// * `enabled` - Whether to preserve pixels that exactly match palette colors
-    #[inline]
-    pub fn preserve_exact_matches(mut self, enabled: bool) -> Self {
-        self.preserve_exact_matches = enabled;
         self
     }
 
@@ -208,16 +176,6 @@ impl DitherOptions {
         self
     }
 
-    /// Set whether exact-match pixels absorb accumulated error.
-    ///
-    /// # Arguments
-    /// * `absorb` - When true, exact matches discard error; when false, error passes through
-    #[inline]
-    pub fn exact_absorb_error(mut self, absorb: bool) -> Self {
-        self.exact_absorb_error = absorb;
-        self
-    }
-
     /// Set error diffusion strength.
     ///
     /// # Arguments
@@ -248,10 +206,6 @@ mod tests {
         let opts = DitherOptions::default();
         assert!(opts.serpentine, "serpentine should default to true");
         assert!(
-            opts.preserve_exact_matches,
-            "preserve_exact_matches should default to true"
-        );
-        assert!(
             (opts.error_clamp - 0.5).abs() < f32::EPSILON,
             "error_clamp should default to 0.5"
         );
@@ -263,10 +217,6 @@ mod tests {
         let default_opts = DitherOptions::default();
 
         assert_eq!(new_opts.serpentine, default_opts.serpentine);
-        assert_eq!(
-            new_opts.preserve_exact_matches,
-            default_opts.preserve_exact_matches
-        );
         assert!((new_opts.error_clamp - default_opts.error_clamp).abs() < f32::EPSILON);
     }
 
@@ -275,16 +225,6 @@ mod tests {
         let opts = DitherOptions::new().serpentine(false);
         assert!(!opts.serpentine);
         // Other values unchanged
-        assert!(opts.preserve_exact_matches);
-        assert!((opts.error_clamp - 0.5).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn test_builder_preserve_exact_matches() {
-        let opts = DitherOptions::new().preserve_exact_matches(false);
-        assert!(!opts.preserve_exact_matches);
-        // Other values unchanged
-        assert!(opts.serpentine);
         assert!((opts.error_clamp - 0.5).abs() < f32::EPSILON);
     }
 
@@ -294,18 +234,13 @@ mod tests {
         assert!((opts.error_clamp - 0.3).abs() < f32::EPSILON);
         // Other values unchanged
         assert!(opts.serpentine);
-        assert!(opts.preserve_exact_matches);
     }
 
     #[test]
     fn test_builder_chaining() {
-        let opts = DitherOptions::new()
-            .serpentine(false)
-            .preserve_exact_matches(false)
-            .error_clamp(0.25);
+        let opts = DitherOptions::new().serpentine(false).error_clamp(0.25);
 
         assert!(!opts.serpentine);
-        assert!(!opts.preserve_exact_matches);
         assert!((opts.error_clamp - 0.25).abs() < f32::EPSILON);
     }
 

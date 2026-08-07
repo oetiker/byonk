@@ -117,10 +117,4 @@ return {
     font_size = font_size,
   },
   refresh_rate = 3600,
-  -- Exact-match passthrough forces any pixel that equals an official palette
-  -- colour to that entry and throws its error away. Four of the hues on this
-  -- grid land exactly on a primary, so with it on they would be flat by
-  -- construction and tell us nothing about whether mixing works. Off here so
-  -- every patch is dithered on equal terms.
-  preserve_exact = false,
 }

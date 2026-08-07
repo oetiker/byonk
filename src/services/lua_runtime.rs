@@ -28,8 +28,6 @@ pub struct ScriptResult {
     pub colors_actual: Option<Vec<String>>,
     /// Optional dither mode from script ("photo" or "graphics")
     pub dither: Option<String>,
-    /// Optional preserve_exact override from script
-    pub preserve_exact: Option<bool>,
     /// Optional error clamp override from script
     pub error_clamp: Option<f32>,
     /// Optional blue noise jitter scale override from script
@@ -397,13 +395,6 @@ impl LuaRuntime {
         // Parse optional dither mode from script return
         let dither = result.get::<String>("dither").ok();
 
-        // Parse optional preserve_exact from script return
-        // Note: can't use get::<bool>().ok() because mlua converts nil to false
-        let preserve_exact = match result.get::<Value>("preserve_exact") {
-            Ok(Value::Boolean(b)) => Some(b),
-            _ => None,
-        };
-
         // Parse optional dither tuning parameters from script return
         let error_clamp = result.get::<f32>("error_clamp").ok();
         let noise_scale = result.get::<f32>("noise_scale").ok();
@@ -419,7 +410,6 @@ impl LuaRuntime {
             colors,
             colors_actual,
             dither,
-            preserve_exact,
             error_clamp,
             noise_scale,
             chroma_clamp,

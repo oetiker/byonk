@@ -66,8 +66,6 @@ pub struct RenderQuery {
     pub panel: Option<String>,
     /// Show actual measured panel colors in preview (default: true when panel has measured colors)
     pub use_actual: Option<bool>,
-    /// Whether to preserve exact palette matches (default: true)
-    pub preserve_exact: Option<bool>,
     /// Dither algorithm override from dev UI (e.g. "atkinson", "floyd-steinberg")
     pub dither: Option<String>,
     /// Measured/actual colors override from dev UI color tuning
@@ -543,7 +541,6 @@ pub async fn handle_render(
                 Option<Vec<String>>,
                 Option<Vec<String>>,
                 Option<String>,
-                Option<bool>,
                 Option<f32>,
                 Option<f32>,
                 Option<f32>,
@@ -555,7 +552,6 @@ pub async fn handle_render(
             script_result.script_colors,
             script_result.script_colors_actual,
             script_result.script_dither,
-            script_result.script_preserve_exact,
             script_result.script_error_clamp,
             script_result.script_noise_scale,
             script_result.script_chroma_clamp,
@@ -569,7 +565,6 @@ pub async fn handle_render(
         script_colors,
         script_colors_actual,
         script_dither,
-        script_preserve_exact,
         script_error_clamp,
         script_noise_scale,
         script_chroma_clamp,
@@ -603,7 +598,6 @@ pub async fn handle_render(
         mac = ?query.mac,
         script_colors = ?script_colors,
         script_dither = ?script_dither,
-        script_preserve_exact = ?script_preserve_exact,
         dc_colors = ?device_config_colors,
         dc_dither = ?device_config_dither,
         panel_colors = ?panel_colors,
@@ -709,13 +703,11 @@ pub async fn handle_render(
         script_colors.as_deref(),
         script_colors_actual.as_deref(),
         effective_script_dither,
-        script_preserve_exact,
         device_config_colors.as_deref(),
         effective_device_dither,
         panel_colors.as_deref(),
         &query_palette,
         &pre_script_measured_candidates,
-        query.preserve_exact,
         &tuning,
         &mut measured_warning,
     );
@@ -727,14 +719,12 @@ pub async fn handle_render(
 
     let final_palette = render_params.palette;
     let final_dither = render_params.dither;
-    let preserve_exact = render_params.preserve_exact;
     let measured_source = render_params.measured_source;
     let measured_colors = render_params.measured_colors;
 
     tracing::debug!(
         resolved_palette = ?crate::api::display::colors_to_hex_strings(&final_palette),
         resolved_dither = ?final_dither,
-        resolved_preserve_exact = preserve_exact,
         has_measured = measured_colors.is_some(),
         measured_source = measured_source,
         "Resolved dev render params"
@@ -756,7 +746,6 @@ pub async fn handle_render(
         measured_colors.as_deref(),
         use_actual,
         final_dither.as_deref(),
-        preserve_exact,
         if has_tuning { Some(&tuning) } else { None },
     ) {
         Ok(png_bytes) => (

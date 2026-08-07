@@ -128,9 +128,7 @@ something. Here each patch stands alone, so you can read it directly:
   panels, whose bluest and greenest inks are both dark.
 
 Rows vary lightness because reachability depends on it — a hue may mix cleanly
-when dark and collapse when light. The screen sets `preserve_exact = false` so
-that hues landing exactly on a palette primary are dithered on the same terms as
-every other patch, instead of being passed through flat by exact-match handling.
+when dark and collapse when light.
 
 ### Calibration Workflow
 

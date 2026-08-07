@@ -139,7 +139,7 @@ impl DitherAlgorithm {
     }
 }
 
-use crate::color::{LinearRgb, Oklab, Srgb};
+use crate::color::{LinearRgb, Oklab};
 use crate::palette::Palette;
 
 /// Error buffer for efficient error diffusion.
@@ -193,29 +193,6 @@ impl ErrorBuffer {
 // Shared dithering infrastructure
 // ============================================================================
 
-/// Find exact byte-level match against official palette colors.
-pub(crate) fn find_exact_match(pixel: LinearRgb, palette: &Palette) -> Option<u8> {
-    if pixel.r < 0.0
-        || pixel.r > 1.0
-        || pixel.g < 0.0
-        || pixel.g > 1.0
-        || pixel.b < 0.0
-        || pixel.b > 1.0
-    {
-        return None;
-    }
-
-    let srgb = Srgb::from(pixel);
-    let pixel_bytes = srgb.to_bytes();
-
-    for i in 0..palette.len() {
-        if palette.official(i).to_bytes() == pixel_bytes {
-            return Some(i as u8);
-        }
-    }
-    None
-}
-
 /// Clamp a channel value with error to the valid range.
 #[inline]
 pub(crate) fn clamp_channel(value: f32, max_error: f32) -> f32 {
@@ -242,16 +219,6 @@ pub(crate) fn dither_with_kernel_noise(
     use blue_noise_matrix::BLUE_NOISE_64;
 
     let mut output = vec![0u8; width * height];
-
-    // Pre-detect exact matches for entire image
-    let exact_matches: Vec<Option<u8>> = if options.preserve_exact_matches {
-        image
-            .iter()
-            .map(|&pixel| find_exact_match(pixel, palette))
-            .collect()
-    } else {
-        vec![None; width * height]
-    };
 
     let threshold_sq = options.chroma_clamp * options.chroma_clamp;
 
@@ -292,66 +259,6 @@ pub(crate) fn dither_with_kernel_noise(
             let shift = (alpha * options.noise_scale).clamp(-base_below, base_right);
             let w_right = base_right - shift;
             let w_below = base_below + shift;
-
-            // Exact palette match handling
-            if let Some(palette_idx) = exact_matches[idx] {
-                output[idx] = palette_idx;
-                if options.exact_absorb_error {
-                    continue;
-                }
-                let accumulated = error_buf.get_accumulated(x);
-                let pixel = LinearRgb::new(
-                    clamp_channel(image[idx].r + accumulated[0], options.error_clamp),
-                    clamp_channel(image[idx].g + accumulated[1], options.error_clamp),
-                    clamp_channel(image[idx].b + accumulated[2], options.error_clamp),
-                );
-                let nearest_linear = palette.actual_linear(palette_idx as usize);
-                let error = [
-                    pixel.r - nearest_linear.r,
-                    pixel.g - nearest_linear.g,
-                    pixel.b - nearest_linear.b,
-                ];
-                let strength_error = [
-                    error[0] * options.strength,
-                    error[1] * options.strength,
-                    error[2] * options.strength,
-                ];
-                let divisor = kernel.divisor as f32;
-                for (entry_i, &(dx, dy, weight)) in kernel.entries.iter().enumerate() {
-                    let effective_dx = if reverse { -dx } else { dx };
-                    let nx = x as i32 + effective_dx;
-                    if nx >= 0 && (nx as usize) < width {
-                        let ny = y + dy as usize;
-                        if ny < height {
-                            let w = if Some(entry_i) == right_idx {
-                                w_right
-                            } else if Some(entry_i) == below_idx {
-                                w_below
-                            } else {
-                                weight as f32
-                            };
-                            let scaled_error = if options.hybrid_propagation {
-                                let em =
-                                    (strength_error[0] + strength_error[1] + strength_error[2])
-                                        * (1.0 / 3.0);
-                                [
-                                    em * w / weight_sum + (strength_error[0] - em) * w / divisor,
-                                    em * w / weight_sum + (strength_error[1] - em) * w / divisor,
-                                    em * w / weight_sum + (strength_error[2] - em) * w / divisor,
-                                ]
-                            } else {
-                                [
-                                    strength_error[0] * w / divisor,
-                                    strength_error[1] * w / divisor,
-                                    strength_error[2] * w / divisor,
-                                ]
-                            };
-                            error_buf.add_error(nx as usize, dy as usize, scaled_error);
-                        }
-                    }
-                }
-                continue;
-            }
 
             // Add accumulated error to input pixel
             let accumulated = error_buf.get_accumulated(x);
@@ -445,6 +352,7 @@ pub(crate) fn dither_with_kernel_noise(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::color::Srgb;
 
     #[test]
     fn test_error_buffer_creation() {
@@ -607,8 +515,7 @@ mod tests {
         let opts = DitherOptions::new()
             .error_clamp(0.12)
             .noise_scale(0.0)
-            .strength(0.0)
-            .preserve_exact_matches(false);
+            .strength(0.0);
 
         let result = dither_with_kernel_noise(&image, 4, 4, &palette, kernel, &opts);
 

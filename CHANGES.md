@@ -79,6 +79,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Gradients no longer get a hard seam where they cross a palette colour.**
+  Byonk used to detect pixels whose value exactly matched one of the panel's
+  colours and pin them to that ink, discarding their dithering error, to keep
+  text and logos crisp. That works for a deliberate flat fill but not for a
+  gradient, where a pixel's value matches only by coincidence — the pinned
+  pixels showed up as a visible stripe across an otherwise smooth ramp. It
+  also made a pure `#00FF00` area render as the panel's dark green when a much
+  closer bright yellow-green mixture was available.
+
+  The mechanism is gone entirely. It turned out to buy nothing: a pixel that
+  already equals a palette colour has no dithering error to begin with, so it
+  is reproduced exactly without any special handling. Text and solid palette
+  colours are unchanged; only the seams disappear.
+
+  **Breaking:** the `preserve_exact` key in a screen's Lua return value is
+  removed. Scripts setting it should drop it — the behaviour it disabled no
+  longer exists. Setting it now has no effect.
 - **`sierra-light` now selects Sierra Lite instead of silently falling back to
   Atkinson.** The misspelling was listed by the admin API as if it were its own
   algorithm and shipped in the panel presets, but nothing understood it: any

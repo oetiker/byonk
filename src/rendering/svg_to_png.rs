@@ -9,7 +9,6 @@ pub struct DitherTuning {
     pub error_clamp: Option<f32>,
     pub chroma_clamp: Option<f32>,
     pub noise_scale: Option<f32>,
-    pub exact_absorb_error: Option<bool>,
     pub strength: Option<f32>,
 }
 use resvg::usvg::{self, Transform};
@@ -94,7 +93,6 @@ impl SvgRenderer {
         actual: Option<&[(u8, u8, u8)]>,
         use_actual: bool,
         dither: Option<&str>,
-        preserve_exact: bool,
         tuning: Option<&DitherTuning>,
     ) -> Result<Vec<u8>, RenderError> {
         let pixmap = self.rasterize_svg(svg_data, spec)?;
@@ -121,9 +119,7 @@ impl SvgRenderer {
         let pixels = rgba_to_eink_srgb(pixmap.data());
 
         // Dither using eink-dither
-        let mut ditherer = EinkDitherer::new(eink_palette)
-            .algorithm(algorithm)
-            .preserve_exact_matches(preserve_exact);
+        let mut ditherer = EinkDitherer::new(eink_palette).algorithm(algorithm);
         if let Some(t) = tuning {
             if let Some(s) = t.serpentine {
                 ditherer = ditherer.serpentine(s);
@@ -136,9 +132,6 @@ impl SvgRenderer {
             }
             if let Some(ns) = t.noise_scale {
                 ditherer = ditherer.noise_scale(ns);
-            }
-            if let Some(ae) = t.exact_absorb_error {
-                ditherer = ditherer.exact_absorb_error(ae);
             }
             if let Some(st) = t.strength {
                 ditherer = ditherer.strength(st);
@@ -573,16 +566,7 @@ mod tests {
         let spec = DisplaySpec::from_dimensions(800, 200).unwrap();
         let palette = vec![(0, 0, 0), (255, 255, 255)];
         let png = renderer
-            .render_to_palette_png(
-                svg.as_bytes(),
-                spec,
-                &palette,
-                None,
-                false,
-                None,
-                true,
-                None,
-            )
+            .render_to_palette_png(svg.as_bytes(), spec, &palette, None, false, None, None)
             .unwrap();
         std::fs::write("/tmp/byonk-bitmap-font-test2.png", &png).unwrap();
         println!(

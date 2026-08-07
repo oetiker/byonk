@@ -29,7 +29,6 @@
 //!
 //! A key feature is detecting and preserving exact palette matches. Pixels that
 //! exactly match a palette color (by sRGB bytes) are:
-//! - Flagged in [`PreprocessResult::exact_matches`]
 //! - NOT enhanced (saturation/contrast skipped)
 //! - Ready to be passed through dithering without error diffusion
 //!
@@ -45,7 +44,7 @@
 //!
 //! // Configure preprocessing
 //! let options = PreprocessOptions::new().saturation(1.2).contrast(1.1);
-//! let preprocessor = Preprocessor::new(&palette, options);
+//! let preprocessor = Preprocessor::new(options);
 //!
 //! // Load your image pixels (example: 10x10 mid-gray)
 //! let input_pixels: Vec<Srgb> = vec![Srgb::from_u8(128, 128, 128); 10 * 10];
@@ -69,14 +68,13 @@
 //! let palette = Palette::new(&colors, None).unwrap();
 //!
 //! let options = PreprocessOptions::new();
-//! let preprocessor = Preprocessor::new(&palette, options);
+//! let preprocessor = Preprocessor::new(options);
 //!
 //! // Black pixels stay exactly black
 //! let input = vec![Srgb::from_u8(0, 0, 0); 100];
 //! let result = preprocessor.process(&input, 10, 10);
 //!
 //! // All pixels match palette exactly
-//! assert!(result.exact_matches.iter().all(|m| m.is_some()));
 //! ```
 
 mod oklch;

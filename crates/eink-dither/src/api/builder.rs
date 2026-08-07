@@ -122,25 +122,10 @@ impl EinkDitherer {
         self
     }
 
-    /// Set whether to preserve exact palette matches.
-    #[inline]
-    pub fn preserve_exact_matches(mut self, enabled: bool) -> Self {
-        self.dither_opts = self.dither_opts.preserve_exact_matches(enabled);
-        self.preprocess = self.preprocess.preserve_exact_matches(enabled);
-        self
-    }
-
     /// Set blue noise jitter scale.
     #[inline]
     pub fn noise_scale(mut self, scale: f32) -> Self {
         self.dither_opts = self.dither_opts.noise_scale(scale);
-        self
-    }
-
-    /// Set whether exact-match pixels absorb accumulated error.
-    #[inline]
-    pub fn exact_absorb_error(mut self, absorb: bool) -> Self {
-        self.dither_opts = self.dither_opts.exact_absorb_error(absorb);
         self
     }
 
@@ -192,7 +177,7 @@ impl EinkDitherer {
     /// The builder is reusable -- `dither()` takes `&self`.
     pub fn dither(&self, pixels: &[Srgb], width: usize, height: usize) -> DitheredImage {
         // 1. Preprocess
-        let preprocessor = Preprocessor::new(&self.palette, self.preprocess.clone());
+        let preprocessor = Preprocessor::new(self.preprocess.clone());
         let result = preprocessor.process(pixels, width, height);
 
         // 2. Resolve dither options, applying greyscale override if needed

@@ -123,7 +123,6 @@ pub struct RenderOpts {
     pub error_clamp: Option<f32>,
     pub chroma_clamp: Option<f32>,
     pub noise_scale: Option<f32>,
-    pub preserve_exact: Option<bool>,
     pub timestamp: Option<i64>,
     /// Also render a pre-dither, full-color PNG alongside the palette-
     /// restricted `png` (see `RenderResult::raw_png`).
@@ -157,7 +156,6 @@ impl Default for RenderOpts {
             error_clamp: None,
             chroma_clamp: None,
             noise_scale: None,
-            preserve_exact: None,
             timestamp: None,
             include_raw: false,
             include_svg: false,
@@ -1162,13 +1160,11 @@ impl ScreenStore {
             script_result.script_colors.as_deref(),
             script_result.script_colors_actual.as_deref(),
             effective_script_dither,
-            script_result.script_preserve_exact,
             None,
             dither_override,
             panel_colors.as_deref(),
             &query_palette,
             &pre_script_measured_candidates,
-            opts.preserve_exact,
             &tuning,
             &mut measured_warning,
         );
@@ -1197,7 +1193,6 @@ impl ScreenStore {
             render_params.measured_colors.as_deref(),
             use_actual,
             render_params.dither.as_deref(),
-            render_params.preserve_exact,
             has_tuning.then_some(&dither_tuning),
         ) {
             Ok(bytes) => bytes,

@@ -82,7 +82,6 @@ pub struct RenderParams {
     /// length rule), not just a caller's own pre-script layer.
     pub measured_source: &'static str,
     pub dither: Option<String>,
-    pub preserve_exact: bool,
     pub error_clamp: Option<f32>,
     pub noise_scale: Option<f32>,
     pub chroma_clamp: Option<f32>,
@@ -186,7 +185,6 @@ pub fn resolve_dither_tuning(
         error_clamp: render_params.error_clamp,
         chroma_clamp: render_params.chroma_clamp,
         noise_scale: render_params.noise_scale,
-        exact_absorb_error: None,
         strength: render_params.strength,
     };
     let has_tuning = tuning.error_clamp.is_some()
@@ -313,7 +311,6 @@ pub fn resolve_measured_colors(
 ///           order the caller supplies them, e.g. dev override >
 ///           panel.colors_actual > Measured-Colors header)
 /// Dither: script_dither > device_config_dither > None
-/// Preserve: script_preserve_exact > override > true
 ///
 /// `pre_script_measured_candidates` is the caller's own pre-script chain —
 /// each entry already parsed and labelled by the caller, in precedence
@@ -332,13 +329,11 @@ pub fn resolve_render_params(
     script_colors: Option<&[String]>,
     script_colors_actual: Option<&[String]>,
     script_dither: Option<&str>,
-    script_preserve_exact: Option<bool>,
     device_config_colors: Option<&str>,
     device_config_dither: Option<&str>,
     panel_colors: Option<&str>,
     fallback_palette: &[(u8, u8, u8)],
     pre_script_measured_candidates: &[MeasuredCandidate],
-    preserve_exact_override: Option<bool>,
     tuning: &DitherTuningValues,
     warning_sink: &mut Option<String>,
 ) -> RenderParams {
@@ -362,10 +357,6 @@ pub fn resolve_render_params(
         .or_else(|| device_config_dither.map(|s| s.to_string()))
         .map(|s| crate::models::normalize_algorithm_name(&s));
 
-    let preserve_exact = script_preserve_exact
-        .or(preserve_exact_override)
-        .unwrap_or(true);
-
     let script_measured = script_colors_actual.map(parse_measured_color_list);
     let mut candidates: Vec<MeasuredCandidate> =
         Vec::with_capacity(1 + pre_script_measured_candidates.len());
@@ -379,7 +370,6 @@ pub fn resolve_render_params(
         measured_colors: measured.colors,
         measured_source: measured.source,
         dither,
-        preserve_exact,
         error_clamp: tuning.error_clamp,
         noise_scale: tuning.noise_scale,
         chroma_clamp: tuning.chroma_clamp,
@@ -898,7 +888,6 @@ pub async fn handle_display<R: DeviceRegistry>(
                         device = %mac,
                         script_colors = ?result.script_colors,
                         script_dither = ?result.script_dither,
-                        script_preserve_exact = ?result.script_preserve_exact,
                         dc_colors = ?dc_colors,
                         dc_dither = ?dc_dither,
                         dev_dither = ?dev_dither,
@@ -954,13 +943,11 @@ pub async fn handle_display<R: DeviceRegistry>(
                         result.script_colors.as_deref(),
                         result.script_colors_actual.as_deref(),
                         eff_script_dither,
-                        result.script_preserve_exact,
                         dc_colors.as_deref(),
                         eff_dc_dither,
                         panel_colors_for_chain.as_deref(),
                         &fallback,
                         &pre_script_measured_candidates,
-                        None,
                         &tuning,
                         &mut measured_warning,
                     );
@@ -972,7 +959,6 @@ pub async fn handle_display<R: DeviceRegistry>(
                         device = %mac,
                         resolved_palette = ?colors_to_hex_strings(&params.palette),
                         resolved_dither = ?params.dither,
-                        resolved_preserve_exact = params.preserve_exact,
                         has_measured = params.measured_colors.is_some(),
                         measured_source = params.measured_source,
                         "Resolved render params"
@@ -994,7 +980,6 @@ pub async fn handle_display<R: DeviceRegistry>(
                                 .with_colors(Some(params.palette))
                                 .with_colors_actual(params.measured_colors)
                                 .with_dither(params.dither)
-                                .with_preserve_exact(Some(params.preserve_exact))
                                 .with_tuning(&tuning);
                                 let hash = cached.content_hash.clone();
                                 cache.store(cached);
@@ -1144,14 +1129,12 @@ pub async fn handle_image<R: DeviceRegistry>(
     let palette = cached.colors.as_deref().unwrap_or(&fallback_palette);
     let dither = cached.dither.as_deref();
     let colors_actual = cached.colors_actual.as_deref();
-    let preserve_exact = cached.preserve_exact.unwrap_or(true);
 
     tracing::debug!(
         content_hash = %content_hash,
         palette = ?colors_to_hex_strings(palette),
         colors_actual = ?colors_actual.map(colors_to_hex_strings),
         dither = ?dither,
-        preserve_exact = preserve_exact,
         "Dither parameters for PNG render"
     );
 
@@ -1161,7 +1144,6 @@ pub async fn handle_image<R: DeviceRegistry>(
         error_clamp: cached.error_clamp,
         chroma_clamp: cached.chroma_clamp,
         noise_scale: cached.noise_scale,
-        exact_absorb_error: None,
         strength: cached.strength,
     };
     let has_tuning = tuning.error_clamp.is_some()
@@ -1176,7 +1158,6 @@ pub async fn handle_image<R: DeviceRegistry>(
         colors_actual,
         false, // production always uses official colors
         dither,
-        preserve_exact,
         if has_tuning { Some(&tuning) } else { None },
     )?;
 
@@ -1451,10 +1432,8 @@ mod tests {
             None,
             None,
             None,
-            None,
             &[(0, 0, 0), (255, 255, 255)],
             &pre_script,
-            None,
             &default_tuning(),
             &mut warning,
         );
@@ -1499,10 +1478,8 @@ mod tests {
             None,
             None,
             None,
-            None,
             &[(0, 0, 0), (255, 255, 255)],
             &pre_script,
-            None,
             &default_tuning(),
             &mut warning,
         );
@@ -1537,10 +1514,8 @@ mod tests {
             None,
             None,
             None,
-            None,
             &[(0, 0, 0), (255, 255, 255)],
             &pre_script,
-            None,
             &default_tuning(),
             &mut warning,
         );
@@ -1562,10 +1537,8 @@ mod tests {
             None,
             None,
             None,
-            None,
             &[(0, 0, 0), (255, 255, 255)],
             &[],
-            None,
             &default_tuning(),
             &mut warning,
         );

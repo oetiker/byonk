@@ -26,8 +26,6 @@ pub struct CachedContent {
     pub colors_actual: Option<Vec<(u8, u8, u8)>>,
     /// Dither mode ("photo" or "graphics"), None = default (graphics)
     pub dither: Option<String>,
-    /// Whether to preserve exact palette matches (None = default true)
-    pub preserve_exact: Option<bool>,
     /// Optional error clamp for dithering
     pub error_clamp: Option<f32>,
     /// Optional blue noise jitter scale for dithering
@@ -52,7 +50,6 @@ impl CachedContent {
             colors: None,
             colors_actual: None,
             dither: None,
-            preserve_exact: None,
             error_clamp: None,
             noise_scale: None,
             chroma_clamp: None,
@@ -75,12 +72,6 @@ impl CachedContent {
     /// Set the dither mode
     pub fn with_dither(mut self, dither: Option<String>) -> Self {
         self.dither = dither;
-        self
-    }
-
-    /// Set the preserve_exact flag
-    pub fn with_preserve_exact(mut self, preserve_exact: Option<bool>) -> Self {
-        self.preserve_exact = preserve_exact;
         self
     }
 

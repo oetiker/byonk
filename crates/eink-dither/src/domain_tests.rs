@@ -1692,23 +1692,19 @@ mod domain_tests {
 
         const PATCH: usize = 8;
 
-        // (label, preserve_exact, error_clamp override)
-        let configs: [(&str, bool, Option<f32>); 3] = [
-            ("production", true, None),
-            ("no-exact", false, None),
-            ("no-exact+clamp", false, Some(2.0)),
-        ];
+        // (label, error_clamp override)
+        let configs: [(&str, Option<f32>); 2] = [("default", None), ("clamp 2.0", Some(2.0))];
 
         eprintln!(
             "\nPatch average over {PATCH}x{PATCH}, Atkinson. dE = OKLab distance to the request."
         );
         eprintln!(
-            "{:>4} | {:>17} | {:>26} | {:>26} | {:>26}",
-            "hue", "requested", "production", "no-exact", "no-exact+clamp"
+            "{:>4} | {:>17} | {:>26} | {:>26}",
+            "hue", "requested", "default", "clamp 2.0"
         );
-        eprintln!("{}", "-".repeat(112));
+        eprintln!("{}", "-".repeat(84));
 
-        let mut totals = [0.0f32; 3];
+        let mut totals = [0.0f32; 2];
         for hue_deg in (0..360).step_by(15) {
             let (r, g, b) = hsl_to_rgb(hue_deg as f32 / 360.0, 1.0, 0.5);
             let src = Srgb::new(r, g, b);
@@ -1717,10 +1713,8 @@ mod domain_tests {
             let target = Oklch::from(target_lab);
 
             let mut cells: Vec<String> = Vec::new();
-            for (ci, &(_, preserve, clamp)) in configs.iter().enumerate() {
-                let mut d = EinkDitherer::new(palette.clone())
-                    .algorithm(DitherAlgorithm::Atkinson)
-                    .preserve_exact_matches(preserve);
+            for (ci, &(_, clamp)) in configs.iter().enumerate() {
+                let mut d = EinkDitherer::new(palette.clone()).algorithm(DitherAlgorithm::Atkinson);
                 if let Some(c) = clamp {
                     d = d.error_clamp(c);
                 }
@@ -1764,21 +1758,19 @@ mod domain_tests {
             }
 
             eprintln!(
-                "{hue_deg:>3}\u{00b0} | L{:.2} C{:.3} h{:>3.0}\u{00b0} | {:>26} | {:>26} | {:>26}",
+                "{hue_deg:>3}\u{00b0} | L{:.2} C{:.3} h{:>3.0}\u{00b0} | {:>26} | {:>26}",
                 target.l,
                 target.c,
                 target.h.to_degrees().rem_euclid(360.0),
                 cells[0],
                 cells[1],
-                cells[2],
             );
         }
-        eprintln!("{}", "-".repeat(112));
+        eprintln!("{}", "-".repeat(84));
         eprintln!(
-            "mean dE over 24 hues: production {:.3} | no-exact {:.3} | no-exact+clamp {:.3}",
+            "mean dE over 24 hues: default {:.3} | clamp 2.0 {:.3}",
             totals[0] / 24.0,
-            totals[1] / 24.0,
-            totals[2] / 24.0
+            totals[1] / 24.0
         );
         eprintln!("(* = patch is a single flat colour, i.e. no dithering happened at all)");
     }
@@ -1834,7 +1826,6 @@ mod domain_tests {
 
                 let out = EinkDitherer::new(palette.clone())
                     .algorithm(DitherAlgorithm::Atkinson)
-                    .preserve_exact_matches(false)
                     .error_clamp(ec)
                     .dither(&pixels, PATCH, PATCH);
 
@@ -2060,35 +2051,19 @@ mod domain_tests {
         let palette = Palette::new(&official, Some(&actual)).unwrap();
         const PATCH: usize = 16;
 
-        // (label, algorithm, preserve_exact, error_clamp override)
-        let configs: [(&str, DitherAlgorithm, bool, Option<f32>); 5] = [
-            ("production", DitherAlgorithm::Atkinson, true, None),
-            ("no-exact", DitherAlgorithm::Atkinson, false, None),
-            (
-                "no-exact+clamp2",
-                DitherAlgorithm::Atkinson,
-                false,
-                Some(2.0),
-            ),
-            (
-                "floyd no-exact",
-                DitherAlgorithm::FloydSteinberg,
-                false,
-                None,
-            ),
-            (
-                "floyd no-exact+clamp2",
-                DitherAlgorithm::FloydSteinberg,
-                false,
-                Some(2.0),
-            ),
+        // (label, algorithm, error_clamp override)
+        let configs: [(&str, DitherAlgorithm, Option<f32>); 4] = [
+            ("atkinson", DitherAlgorithm::Atkinson, None),
+            ("atkinson+clamp2", DitherAlgorithm::Atkinson, Some(2.0)),
+            ("floyd", DitherAlgorithm::FloydSteinberg, None),
+            ("floyd+clamp2", DitherAlgorithm::FloydSteinberg, Some(2.0)),
         ];
 
         let lightnesses = [0.2f32, 0.32, 0.44, 0.56, 0.68, 0.8];
         let mut sum_bound = 0.0f32;
-        let mut sum_got = [0.0f32; 5];
+        let mut sum_got = [0.0f32; 4];
         let mut count = 0usize;
-        let mut worst: Vec<(f32, i32, f32, f32, [f32; 5], String)> = Vec::new();
+        let mut worst: Vec<(f32, i32, f32, f32, [f32; 4], String)> = Vec::new();
 
         for &l in &lightnesses {
             for hue_deg in (0..360).step_by(15) {
@@ -2101,11 +2076,9 @@ mod domain_tests {
                 sum_bound += bound;
                 count += 1;
 
-                let mut got = [0.0f32; 5];
-                for (ci, &(_, algo, preserve, clamp)) in configs.iter().enumerate() {
-                    let mut d = EinkDitherer::new(palette.clone())
-                        .algorithm(algo)
-                        .preserve_exact_matches(preserve);
+                let mut got = [0.0f32; 4];
+                for (ci, &(_, algo, clamp)) in configs.iter().enumerate() {
+                    let mut d = EinkDitherer::new(palette.clone()).algorithm(algo);
                     if let Some(c) = clamp {
                         d = d.error_clamp(c);
                     }
@@ -2151,7 +2124,7 @@ mod domain_tests {
             "  gamut bound (best ANY algorithm could do) : mean dE {:.3}",
             sum_bound / n
         );
-        for (ci, &(label, _, _, _)) in configs.iter().enumerate() {
+        for (ci, &(label, _, _)) in configs.iter().enumerate() {
             eprintln!(
                 "  {:<16} : mean dE {:.3}   gap over bound {:.3}",
                 label,
@@ -2161,20 +2134,107 @@ mod domain_tests {
         }
 
         worst.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-        eprintln!("\nWorst 12 targets by production gap, dE under each config:");
+        eprintln!("\nWorst 12 targets by default-config gap, dE under each config:");
         eprintln!(
             "{:>5} {:>5} | {:>6} | {:>6} {:>6} {:>6} {:>6} | best possible mixture",
-            "hue", "L", "bound", "prod", "noex", "clmp2", "floyd2"
+            "hue", "L", "bound", "atk", "atk+c2", "floyd", "fl+c2"
         );
         eprintln!("{}", "-".repeat(88));
         for (_gap, hue, l, bound, got, recipe) in worst.iter().take(12) {
             eprintln!(
                 "{hue:>4}\u{00b0} {:>5.2} | {bound:>6.3} | {:>6.3} {:>6.3} {:>6.3} {:>6.3} | {recipe}",
-                l, got[0], got[1], got[2], got[4]
+                l, got[0], got[1], got[2], got[3]
             );
         }
 
         let at_bound = worst.iter().filter(|w| w.0 < 0.02).count();
         eprintln!("\n{at_bound}/{count} targets are already within 0.02 dE of the physical bound.");
+    }
+
+    /// A smooth input ramp must produce a smooth output ramp.
+    ///
+    /// If this breaks, it means a pixel is being pinned to a palette entry
+    /// because its value happens to equal one, rather than because the
+    /// content called for it. Exact-match passthrough used to do exactly
+    /// that: any pixel equal to an official palette colour was forced to
+    /// that entry and its error discarded. Mid-gradient that puts a hard
+    /// seam across a smooth ramp, and at hue 120 (pure #00FF00) it pinned
+    /// the patch to the panel's dark green (L 0.56) when a bright
+    /// yellow-green mixture (L 0.87) was available and far closer.
+    ///
+    /// The ramp below crosses hue 120 deliberately. The test is scale-free:
+    /// it compares the largest step between neighbouring patches against the
+    /// median step, so it measures smoothness rather than any absolute
+    /// colour, and does not need updating when tuning changes.
+    #[test]
+    fn test_ramp_through_palette_primary_has_no_seam() {
+        let official = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(255, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(0, 255, 0),
+        ];
+        // Measured E1002 colours: the seam only exists when the panel's real
+        // green (#0D876B, dark) differs from the official #00FF00 that the
+        // content asks for. With actual == official, pinning to it is right.
+        let actual = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(0xB5, 0x03, 0x03),
+            Srgb::from_u8(0xFF, 0xEE, 0x00),
+            Srgb::from_u8(0x20, 0x54, 0x97),
+            Srgb::from_u8(0x0D, 0x87, 0x6B),
+        ];
+        let palette = Palette::new(&official, Some(&actual)).unwrap();
+        const PATCH: usize = 12;
+
+        // Hues 108..132 straddle 120, where pure #00FF00 lands exactly on a
+        // palette entry.
+        let mut avgs: Vec<Oklab> = Vec::new();
+        for step in 0..=12 {
+            let hue = 108.0 + step as f32 * 2.0;
+            let (r, g, b) = hsl_to_rgb(hue / 360.0, 1.0, 0.5);
+            let pixels = vec![Srgb::new(r, g, b); PATCH * PATCH];
+            let out = EinkDitherer::new(palette.clone())
+                .algorithm(DitherAlgorithm::Atkinson)
+                .dither(&pixels, PATCH, PATCH);
+            let mut sum = [0.0f32; 3];
+            for &idx in out.indices() {
+                let c = palette.actual_linear(idx as usize);
+                sum[0] += c.r;
+                sum[1] += c.g;
+                sum[2] += c.b;
+            }
+            let n = (PATCH * PATCH) as f32;
+            avgs.push(Oklab::from(LinearRgb::new(
+                sum[0] / n,
+                sum[1] / n,
+                sum[2] / n,
+            )));
+        }
+
+        let mut steps: Vec<f32> = avgs
+            .windows(2)
+            .map(|w| w[0].distance_squared(w[1]).sqrt())
+            .collect();
+        let max_step = steps.iter().cloned().fold(0.0f32, f32::max);
+        let mut sorted = steps.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median = sorted[sorted.len() / 2];
+        steps.sort_by(|a, b| b.partial_cmp(a).unwrap());
+
+        // A seam shows up as one step dwarfing its neighbours. Allow generous
+        // headroom: dithering is quantised, so steps are never uniform.
+        assert!(
+            max_step <= median * 6.0 + 0.02,
+            "ramp through hue 120 has a seam: largest step {max_step:.3} vs \
+             median {median:.3} (steps, descending: {:?})",
+            steps
+                .iter()
+                .map(|s| (s * 1000.0).round() / 1000.0)
+                .collect::<Vec<_>>()
+        );
     }
 }

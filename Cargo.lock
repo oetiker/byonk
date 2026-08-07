@@ -966,6 +966,7 @@ checksum = "b2972feb8dffe7bc8c5463b1dacda1b0dfbed3710e50f977d965429692d74cd8"
 name = "eink-dither"
 version = "0.1.0"
 dependencies = [
+ "image",
  "palette",
 ]
 

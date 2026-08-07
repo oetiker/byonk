@@ -186,6 +186,178 @@ fn visual_hue_lightness_field_muted() {
     render_all("field-muted", &pixels, W, H);
 }
 
+/// Sharp structure over the gradient: edges, thin lines, fine detail.
+///
+/// Continuous-tone scenes only exercise half of what a kernel does. E-ink
+/// screens are mostly rules, labels, icons and chart strokes, and error
+/// diffusion damages those in ways a gradient never reveals: thin lines
+/// break up, hard edges ring, and fine detail dissolves into the dot
+/// pattern. Atkinson's reputation rests on holding edges well, so the
+/// comparison is not decidable without this scene.
+///
+/// The elements are chosen so each failure mode has somewhere to show:
+///   - a radial star sweeps every angle at once, so directional bias in
+///     the kernel appears as spokes surviving unevenly;
+///   - line groups at 1/2/3 px find the width where a stroke stops being
+///     continuous;
+///   - flat swatches with hard borders show edge ringing and whether a
+///     deliberate flat fill survives as one ink;
+///   - a fine checkerboard is the resolution limit -- the point where the
+///     dither pattern and the content are the same frequency.
+#[test]
+#[ignore = "writes PNGs; run with --ignored"]
+fn visual_sharp_structures() {
+    let (px, w, h) = sharp_scene();
+    eprintln!("\n=== sharp structures over gradient ===");
+    render_all("sharp", &px, w, h);
+}
+
+/// Jitter is measured as a strict improvement on flat patches, but flat
+/// patches cannot see the risk: noise near a hard edge or a one-pixel stroke
+/// could dissolve exactly the detail those defaults are meant to protect.
+#[test]
+#[ignore = "writes PNGs; run with --ignored"]
+fn visual_sharp_noise_sweep() {
+    let (px, w, h) = sharp_scene();
+    let palette = panel();
+    eprintln!("\n=== sharp structures vs noise_scale ===");
+    for (name, algo) in [
+        ("atkinson", DitherAlgorithm::Atkinson),
+        ("jarvis-judice-ninke", DitherAlgorithm::JarvisJudiceNinke),
+    ] {
+        for scale in [0.0f32, 6.0, 16.0] {
+            let out = EinkDitherer::new(palette.clone())
+                .algorithm(algo)
+                .noise_scale(scale)
+                .dither(&px, w, h);
+            let rgb = out.to_rgb_actual();
+            let (buf, ow, oh) = side_by_side(&px, &rgb, w, h);
+            write(&format!("sharpnoise-{name}-{scale:04.1}.png"), &buf, ow, oh);
+        }
+    }
+}
+
+fn sharp_scene() -> (Vec<Srgb>, usize, usize) {
+    const W: usize = 480;
+    const H: usize = 320;
+
+    // Background: the same muted field, so structure is judged in context
+    // rather than against a flat white page it will never sit on.
+    let mut px = vec![Srgb::new(0.0, 0.0, 0.0); W * H];
+    for y in 0..H {
+        let l = 0.20 + 0.60 * (y as f32 / (H - 1) as f32);
+        for x in 0..W {
+            let (r, g, b) = hsl_to_rgb(x as f32 / W as f32, 0.45, l);
+            px[y * W + x] = Srgb::new(r, g, b);
+        }
+    }
+
+    let mut set = |x: i32, y: i32, c: Srgb| {
+        if x >= 0 && y >= 0 && (x as usize) < W && (y as usize) < H {
+            px[y as usize * W + x as usize] = c;
+        }
+    };
+    let black = Srgb::from_u8(0, 0, 0);
+    let white = Srgb::from_u8(255, 255, 255);
+
+    // Radial star, top-left: 24 black spokes on a white disc.
+    let (cx, cy, rad) = (72i32, 74i32, 56i32);
+    for y in cy - rad..=cy + rad {
+        for x in cx - rad..=cx + rad {
+            let (dx, dy) = ((x - cx) as f32, (y - cy) as f32);
+            let d = (dx * dx + dy * dy).sqrt();
+            if d > rad as f32 {
+                continue;
+            }
+            let ang = dy.atan2(dx);
+            let spoke = (ang * 24.0 / std::f32::consts::PI).rem_euclid(2.0) < 1.0;
+            set(x, y, if spoke { black } else { white });
+        }
+    }
+
+    // Line groups: 1, 2 and 3 px, horizontal then vertical, black then white.
+    let mut ly = 24i32;
+    for width in [1i32, 2, 3] {
+        for (i, c) in [black, white].into_iter().enumerate() {
+            for w in 0..width {
+                for x in 170..300 {
+                    set(x, ly + w, c);
+                }
+            }
+            ly += width + 6 + i as i32;
+        }
+    }
+    let mut lx = 320i32;
+    for width in [1i32, 2, 3] {
+        for c in [black, white] {
+            for w in 0..width {
+                for y in 20..120 {
+                    set(lx + w, y, c);
+                }
+            }
+            lx += width + 7;
+        }
+    }
+
+    // Diagonals, which no axis-aligned kernel treats the same as the above.
+    for i in 0..90 {
+        set(180 + i, 120 + i, black);
+        set(184 + i, 120 + i, white);
+    }
+
+    // Fine checkerboards at 1, 2 and 4 px -- the resolution limit.
+    for (k, cell) in [1usize, 2, 4].into_iter().enumerate() {
+        let ox = 30 + k * 70;
+        for y in 0..56 {
+            for x in 0..60 {
+                let on = ((x / cell) + (y / cell)) % 2 == 0;
+                set(
+                    (ox + x) as i32,
+                    (170 + y) as i32,
+                    if on { black } else { white },
+                );
+            }
+        }
+    }
+
+    // Flat swatches with hard borders: deliberate fills, which should survive
+    // as a single ink rather than dissolving into a mixture.
+    let swatches = [
+        Srgb::from_u8(0xB5, 0x03, 0x03),
+        Srgb::from_u8(0xFF, 0xEE, 0x00),
+        Srgb::from_u8(0x20, 0x54, 0x97),
+        Srgb::from_u8(0x0D, 0x87, 0x6B),
+        Srgb::from_u8(0x80, 0x80, 0x80),
+        Srgb::from_u8(0xC0, 0x60, 0x20),
+    ];
+    for (i, c) in swatches.iter().enumerate() {
+        let ox = 250 + (i % 3) * 74;
+        let oy = 170 + (i / 3) * 62;
+        for y in 0..54 {
+            for x in 0..66 {
+                set((ox + x) as i32, (oy + y) as i32, *c);
+            }
+        }
+    }
+
+    // Text-like bars: the smallest structure a screen routinely renders.
+    for row in 0..6 {
+        for ch in 0..22 {
+            let bx = 20 + ch * 6;
+            let by = 240 + row * 6;
+            for y in 0..4 {
+                for x in 0..3 {
+                    if (ch + row + x) % 3 != 0 {
+                        set((bx + x) as i32, (by + y) as i32, black);
+                    }
+                }
+            }
+        }
+    }
+
+    (px, W, H)
+}
+
 /// A real photograph -- the case the numbers are least able to judge.
 #[test]
 #[ignore = "writes PNGs; run with --ignored"]

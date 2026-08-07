@@ -2290,6 +2290,105 @@ mod domain_tests {
         eprintln!();
     }
 
+    /// What does raising `noise_scale` cost in colour accuracy?
+    ///
+    /// The jitter visibly removes two structured artifacts -- herringbone
+    /// over flat areas and the limit-cycle streaks that draw a solid line
+    /// through a gradient -- and the shipped defaults are low (Atkinson 0.0).
+    /// Raising them is only worth proposing if the accuracy it buys back is
+    /// priced, and luminance alone will not price it: the jitter perturbs the
+    /// kernel weights, so any damage should appear in colour first.
+    ///
+    /// Measured against the palette's physical bound, over the same
+    /// saturation-swept targets as the algorithm ranking.
+    #[test]
+    #[ignore = "diagnostic; run with --ignored --nocapture"]
+    fn test_noise_scale_against_bound() {
+        let official = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(255, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(0, 255, 0),
+        ];
+        let actual = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(0xB5, 0x03, 0x03),
+            Srgb::from_u8(0xFF, 0xEE, 0x00),
+            Srgb::from_u8(0x20, 0x54, 0x97),
+            Srgb::from_u8(0x0D, 0x87, 0x6B),
+        ];
+        let palette = Palette::new(&official, Some(&actual)).unwrap();
+        const PATCH: usize = 16;
+        const REACHABLE: f32 = 0.02;
+
+        let scales = [0.0f32, 2.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0];
+        let algos = [
+            ("atkinson", DitherAlgorithm::Atkinson),
+            ("atkinson-hybrid", DitherAlgorithm::AtkinsonHybrid),
+            ("jarvis-judice-ninke", DitherAlgorithm::JarvisJudiceNinke),
+        ];
+        let saturations = [0.25f32, 0.5, 1.0];
+        let lightnesses = [0.2f32, 0.32, 0.44, 0.56, 0.68, 0.8];
+
+        eprintln!("\n=== noise_scale vs. the palette's physical bound ===");
+        eprintln!("mean gap over bound, split by whether the target is reachable\n");
+        eprintln!(
+            "{:<20} {:>6} | {:>9} {:>9}",
+            "algorithm", "noise", "in gap", "out gap"
+        );
+        eprintln!("{}", "-".repeat(50));
+
+        for &(name, algo) in &algos {
+            for &scale in &scales {
+                let (mut in_sum, mut out_sum) = (0.0f32, 0.0f32);
+                let (mut n_in, mut n_out) = (0usize, 0usize);
+                for &s in &saturations {
+                    for &l in &lightnesses {
+                        for hue_deg in (0..360).step_by(15) {
+                            let (r, g, b) = hsl_to_rgb(hue_deg as f32 / 360.0, s, l);
+                            let src = Srgb::new(r, g, b);
+                            let target = Oklab::from(LinearRgb::from(src));
+                            let pixels = vec![src; PATCH * PATCH];
+                            let (bound, _) = best_reachable(&palette, target);
+
+                            let out = EinkDitherer::new(palette.clone())
+                                .algorithm(algo)
+                                .noise_scale(scale)
+                                .dither(&pixels, PATCH, PATCH);
+                            let mut acc = [0.0f32; 3];
+                            for &idx in out.indices() {
+                                let c = palette.actual_linear(idx as usize);
+                                acc[0] += c.r;
+                                acc[1] += c.g;
+                                acc[2] += c.b;
+                            }
+                            let n = (PATCH * PATCH) as f32;
+                            let avg =
+                                Oklab::from(LinearRgb::new(acc[0] / n, acc[1] / n, acc[2] / n));
+                            let gap = avg.distance_squared(target).sqrt() - bound;
+                            if bound < REACHABLE {
+                                in_sum += gap;
+                                n_in += 1;
+                            } else {
+                                out_sum += gap;
+                                n_out += 1;
+                            }
+                        }
+                    }
+                }
+                eprintln!(
+                    "{name:<20} {scale:>6.1} | {:>9.4} {:>9.4}",
+                    in_sum / n_in as f32,
+                    out_sum / n_out as f32
+                );
+            }
+            eprintln!();
+        }
+    }
+
     /// Rank every algorithm separately on reachable and gamut-limited targets.
     ///
     /// A single mean over the hue circle hides the decision, because the two

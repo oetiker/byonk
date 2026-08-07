@@ -1,318 +1,181 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-07 — **Dependency security work is done and pushed. Two of three dithering defects are fixed and pushed. The third is now fully diagnosed, with a measured candidate fix (`AtkinsonHybrid`) awaiting one owner decision. No ditherer code has been changed.** `feat/screen-store-authoring-core` is still **HELD** by standing owner decision — no PR, no merge to `main`._
+_Last updated: 2026-08-07 — **One real fix landed (blue-noise defaults, plus a build-system hole that was hiding it). The selector work is three-for-three refuted and should not be resumed without a new idea.** `feat/screen-store-authoring-core` is still **HELD** by standing owner decision — no PR, no merge to `main`._
 
 ## Where the work lives
 
 | | |
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
-| HEAD | `2e9dfcf` |
+| HEAD | `37efbe7` |
 | Worktree | `/Users/oetiker/checkouts/byonk` (working in place, no worktree) |
 | State | `make check` green, tree clean, pushed to origin |
 
 ## Next action
 
-**One owner decision: adopt `AtkinsonHybrid` as the default algorithm?**
+**Nothing is half-finished. Pick a direction deliberately.**
 
-Fix 3 is now fully diagnosed and the evidence is committed as four `#[ignore]`
-diagnostics (`999d35b`, `2e9dfcf`). Read "The remaining defect" below before
-touching the ditherer.
+The dithering defects that remain are real but every attempt to fix them has
+made the rendered output worse. Do not resume the selector work by trying
+another variant of the same idea — see "The refuted family" below, which
+records what has already died so it is not re-derived.
 
-Short version: the cause is that black is the ink the dark-warm mixture needs
-most *and* the one greedy matching ranks last, so Atkinson's 25% error discard
-starves it. `AtkinsonHybrid` propagates achromatic error fully and beats
-Atkinson on both axes. Do **not** instead swap to a 100%-propagation kernel:
-that scores best on mean dE only because dE is invalid for out-of-gamut
-targets, and it collapses saturated blue to ~20% blue / ~80% black.
+Candidates, in the order I would weigh them:
 
-The gamut-mapping feature has an approved spec waiting:
-`docs/superpowers/specs/2026-08-07-gamut-mapping-design.md`. Its
-"Prerequisites" section lists these dithering fixes; two are done and the third
-is diagnosed. The ordering there stands — fix 3's targets are in gamut, so the
-mapper neither fixes it nor depends on it.
+1. **Stop here and consolidate.** The noise-defaults fix is a genuine,
+   measured, visible improvement. The remaining defects have survived every
+   attempt; they may not be worth further regression risk.
+2. **Gamut mapping.** Its spec is approved and untouched
+   (`docs/superpowers/specs/2026-08-07-gamut-mapping-design.md`), it is
+   independent of the selector, and no gamut code has landed yet.
+3. **Reconsider the default algorithm** — `AtkinsonHybrid` is measured better
+   than Atkinson on both axes (see below). Small, and still unlanded.
 
-## What happened this session
+## ⚠️ Read this before trusting any dithering measurement
 
-**Dependency security** (`633158d`, `857c96e`) — 27 of 28 Dependabot alerts were
-one root cause, an outdated `gix`. Bumped 0.66 → 0.86, which needed the `sha1`
-feature made explicit and a deprecated `peel_to_id_in_place`. Then `reqwest`
-0.12 → 0.13 to collapse the duplicate copy gix pulled in.
+**`make check` did not run this crate's tests until `de9f605`.** `cargo test`
+and `cargo clippy` without `--workspace` cover only the root package, so
+nothing under `crates/` was ever checked. A failing `eink-dither` test still
+printed "All checks passed!". Coverage went 484 → 951 tests when fixed. Any
+"green" claim about dithering in a handover older than this is worthless.
 
-The consequential part was TLS, and it was verified rather than assumed:
-0.12's `rustls-tls` meant **ring + bundled Mozilla roots**; 0.13's `rustls`
-means **aws-lc-rs + the host trust store**. `aws-lc-sys` builds C and needs
-cmake, which ring did not — both cross musl images ship cmake and it compiles
-clean for `aarch64-unknown-linux-musl`. On Windows/x86_64 it additionally needs
-**NASM**, whose prebuilt fallback is opt-in only, and `windows-latest` has CMake
-but no NASM — so `release.yml` now installs it. **PR CI is Ubuntu-only, so that
-failure would only have appeared during the next release.**
+**Flat-patch dE is actively misleading, and it misled this whole session.**
+A flat patch is a single colour; every artifact that matters is at a boundary
+*between* colours. Every arm that improved patch dE made the rendered image
+worse — one of them scored the best numbers ever measured here and looks
+abysmal. Never conclude from patch dE alone. Render the field and look.
 
-The one remaining alert is `lru` (CVSS 0, an `IterMut` soundness lint). It
-arrives via `usvg`, which pins `lru = "0.12"` in the `oetiker/resvg` fork. Not
-fixable from this repo.
+- `cargo test -p eink-dither --test visual_compare -- --ignored --nocapture`
+  writes original/dithered pairs, magnified crops and before/after triptychs
+  to `target/dither-compare/`. Use it for every rendering change.
 
-**`sierra-light`** (`f9b17f4` area, in `26b346d`..`904cf71`) — a misspelling of
-`sierra-lite` that had spread into the admin API's advertised algorithm list and
-both 6-colour panel presets. Nothing understood it: the renderer matches
-canonical names and **silently falls back to Atkinson**, so a device configured
-for it rendered with Atkinson *and* lost its per-algorithm panel tuning, with
-nothing in the output to say so. Now an accepted alias, and
-`resolve_render_params` canonicalises the effective algorithm once so the
-renderer and the tuning lookup cannot disagree again.
+## What landed
 
-**Fix 1 — exact-match pinning deleted** (`904cf71`~2). See below.
-**Fix 2 — error_clamp semantics** (`904cf71`~1). See below.
-**Calibrator regression fixed** (`904cf71`). See below.
+**`6a16ac8` — blue-noise jitter defaults, tuned per kernel.** Error diffusion
+on smooth content locks into a limit cycle instead of staying stochastic,
+producing a herringbone weave over flat areas and solid lines drawn clean
+across gradients. Atkinson shipped with the jitter **off** (0.0).
 
-## The dithering investigation — settled, do not re-derive
+The optimum tracks **kernel width**, and it is not "turn it up everywhere" —
+the jitter is clamped to the right/below weights, so on a narrow kernel a large
+scale saturates that clamp and degenerates into a deterministic toggle:
 
-The user's report: a 6-colour panel renders most of the hue circle as flat
-bands and "does not even try".
+    sierra-lite (3 neighbours)   optimum 2.0, degrades to 0.0120 by 24 — kept at 2.5
+    floyd-steinberg (4)          optimum 8.0, degrades after            — 4.0 → 8.0
+    atkinson (6)                 0.0384 → 0.0363                        — 0.0 → 8.0
+    burkes, sierra-2row (7)      0.0132 → 0.0125                        — → 16.0
+    stucki, jjn, sierra (10–12)  still improving at 24                  — → 16.0
 
-**The measurement that settled it.** A dithered patch's average is by
-construction a convex combination of the palette's *actual* colours in linear
-RGB, so the convex hull of those six colours is a hard bound on what **any**
-error-diffusion algorithm can produce. `best_reachable()` in
-`crates/eink-dither/src/domain_tests.rs` computes it by coordinate descent.
+Wide kernels stop at 16, not 24: the remaining gain is ~0.0002 dE and 16 is the
+largest value checked by eye for damage to thin strokes and text-scale detail
+(there is none — a 1px stroke, a 1px checkerboard and text bars render as
+crisply at 16 as at 0).
 
-    bound (best any algorithm could do)   mean dE 0.097
-    production at the time                mean dE 0.119
+Both 6-colour panel presets pinned `sierra-lite: noise_scale: 5`, past its
+optimum; removed so they follow the default. Same class of stale pin as the
+`error_clamp: 0.11` removed earlier.
 
-So **~82% of the error is the gamut, not the code**, and 77 of 144 targets were
-already within 0.02 dE of the bound. Flat blue across 225°–270° genuinely is
-optimal. That number is what stops anyone chasing the rest.
+**`de9f605` — `make check` now covers the workspace.** See the warning above.
 
-**The diagnostics are checked in** (all `#[ignore]`, run manually):
+## The refuted family — do not re-derive
 
-- `test_hue_gamut_sweep_patch_average` — measures what a patch *averages to*,
-  not which entry won. The pre-existing `print_column_dominance` cannot tell
-  "mixed red and yellow into orange" from "painted it all red".
-- `test_dither_versus_gamut_bound` — the bound comparison above.
-- `test_error_clamp_tradeoff` / `test_error_clamp_sweep_against_bound` — used to
-  pick the new default.
-- `test_in_gamut_targets_still_mix` — proves the diffusion maths is sound: a
-  50/50 red+blue mix dithers to 33/31 with **dE 0.004**.
-- `byonk-builtin/calibration/gamut` — the visual counterpart. Isolated flat
-  patches over hue × lightness. Speckled = mixed, solid = gave up.
+The diagnosis was sound and is unchanged: **greedy nearest-ink selection
+answers the wrong question.** At 45° L0.32 the optimal mixture is
+blk 47% / red 30% / yel 23%, and black is the *farthest* of the six inks
+(0.617, dead last) while green — weight zero — is the nearest (0.165). The ink
+the mixture needs most is the one greedy matching reaches last, so Atkinson's
+25% error discard starves it and green fills in.
 
-## Fix 1 — exact-match pinning deleted
+Three attempts to act on that, all refuted **on rendered output**, all with
+excellent patch numbers:
 
-Any pixel whose value exactly equalled an official palette colour was forced to
-that entry and its error discarded. It keys off **pixel value**, which cannot
-tell "the author filled this shape with palette red" from "this gradient passes
-through palette red on its way from orange to magenta" — so ramps got a hard
-seam. It also pinned pure `#00FF00` to the panel's dark green (L 0.56) when a
-bright yellow-green mixture (L 0.87) was available and far closer.
+| attempt | patch result | render result |
+|---|---|---|
+| restrict candidates to the mixture's support | worse (dE 0.0496 → 0.0616) — black still unreachable, red absorbs the slack | arcs unchanged |
+| restriction **+ full propagation** | excellent — blk 1% → 42% (optimal 47%), blue held exactly at the bound | horizontal contours through gradients |
+| soft bias (distance reduced by mixture weight) | best ever measured — dE 0.0050 at 45° | flat regions; "does not even try" reintroduced |
 
-**Removed, not repaired**, because it was buying nothing: a pixel already equal
-to a palette colour has zero quantisation error, so error diffusion reproduces
-it exactly with no special case. Measured: the new default output is
-**pixel-identical** to the old `preserve_exact=false` render; against the old
-default only 1.26% of pixels in a text block change, all antialiased glyph
-edges, indistinguishable at 4× zoom.
+Mechanisms established, so they need not be retested:
 
-Guarded by `test_ramp_through_palette_primary_has_no_seam`.
+- **Green was standing in for the missing black.** It is dark, so it was
+  covering the luminance. Removing the symptom without curing the cause makes
+  the patch worse.
+- **Restriction is what makes full propagation safe** — black is not a
+  candidate for a blue target, so it cannot be run to. Floyd alone collapses
+  saturated blue to ~80% black; with restriction it sits at the bound.
+- **Hard gating bands gradients intrinsically.** Support membership is binary,
+  so an ink appears across a locus; in a vertical gradient those are horizontal
+  lines. Refining the lookup 64 → 255 levels (8k → 120k entries) changes
+  nothing.
+- **Soft biasing has no usable λ.** ≤ 0.10 and blue still collapses; ≥ 0.20 and
+  the dominant ink wins outright over whole regions and the output goes flat.
+  Quantisation excluded here too.
+- **Mixture weights are genuinely continuous** in the target (largest step
+  0.090 down a constant-hue column). The premise was right; it was not enough.
 
-**Breaking:** the Lua `preserve_exact` key is gone, with
-`preserve_exact_matches` / `exact_absorb_error` throughout, and `Preprocessor`
-lost its palette parameter and lifetime.
+Spike code is `crates/eink-dither/tests/spike_simplex.rs`, kept deliberately —
+it is the record of what does not work.
 
-⚠️ **Watch out:** the seam test must use a palette with *measured* colours. With
-`actual == official`, pinning pure green is correct and the test passes
-vacuously. It cost a false pass here.
+## Open defects
 
-## Fix 2 — error_clamp bounds the error, not the value
+1. **Dark warm under-mixing.** At 45° L0.32 black lands at 1% against an
+   optimal 47%. In gamut, bound 0.000, so no gamut excuse.
+2. **Blue collapse under full propagation.** Not a live defect at the current
+   defaults (Atkinson holds blue at 98–100%); it is the constraint that blocks
+   adopting any 100%-propagation kernel.
+3. **Scalloped arcs at ink-set boundaries.** Survives every kernel, every noise
+   scale, and candidate restriction. **No working hypothesis.**
+4. **Flat fills collapse to one ink** — a `#C06020` swatch renders solid red
+   rather than mixing. Visible in the sharp-structure scene.
 
-It used to clamp `channel + accumulated_error` into `[-clamp, 1+clamp]`.
-Bounding the **value** makes headroom depend on where the channel already sits:
-saturated colours are at an extreme by definition, so they were starved exactly
-where mixing was needed, while neutral mid-tones got the most room. Now
-`apply_error()` bounds the error itself.
+## The unlanded candidate
 
-Both metrics improve together — **there is no trade-off**, which was not the
-expectation going in:
+`AtkinsonHybrid` (100% achromatic / 75% chromatic propagation) beats Atkinson
+on both axes: in-gamut mean 0.025 vs 0.038, out-of-gamut worst case 0.050 vs
+0.072 (best of all nine). On the calibration photo Atkinson is **9.4% too
+light** and the hybrid lands within 1.4%; the owner judged it "the best nuance
+of all the photo samples". It does not fully fix defect 1 (black reaches 20%,
+not 47%).
 
-    clamp   muted max dE   gamut mean dE
-     0.05         0.3098          0.1514
-     0.2          0.1167          0.1240
-     1.0          0.0555          0.1127
-     2.0          0.0555          0.1103
-
-**1.0 is the knee** and reads naturally: accumulated error may not exceed full
-scale in a channel.
-
-Per-algorithm `error_clamp` defaults (0.03–0.12) are replaced by that single
-value — their variation was tuned under the old semantics and corresponds to
-nothing now. `noise_scale` stays per-algorithm.
-
-**Three places carried stale constants**, all fixed: `EinkDitherer::new`
-hardcoded `error_clamp(0.08)` so `new()` and `.algorithm(Atkinson)` disagreed;
-the greyscale override raising it to 0.6 compensated for the old semantics and
-would now only *lower* it; and both 6-colour panel presets pinned 0.11, which
-with the alias fix would finally have applied and hurt.
-
-**Config migration:** `error_clamp` in `config.yaml` or a script now means
-something different. Old values (~0.1) render flat. Docs updated.
-
-## Calibrator regression — found and fixed
-
-Fix 1 regressed the colour calibrator: its `#00FF00` patch came out **solid
-yellow**, indistinguishable from the `#FFFF00` patch beside it. Correct
-reproduction of *bright green* — the panel's green is a much darker `#0D876B` —
-but useless for a screen whose job is showing each ink.
-
-Fixed in the screen, no engine change: draw the **measured** colour, which is by
-definition an exact palette entry and so quantises with zero error and comes out
-as that ink alone. Label still shows the official value, since that is what an
-author writes.
-
-⚠️ **This is the general workaround** for "I want ink N exactly": draw the
-measured colour, not the official one. There is otherwise no longer any way to
-demand a specific ink. The gamut spec's SVG marker was to be the real answer.
-
-## The remaining defect — fix 3, re-measured and re-diagnosed
-
-Re-measured at `999d35b`. The defect is real and still open, but **the previous
-diagnosis in this file was wrong and the fix it implied is a trap.** Do not act
-on the old "Atkinson discards 25%, so switch algorithm" reading.
-
-**The symptom, restated from the ink histogram** (`test_ink_histogram_versus_optimal_recipe`).
-It is not under-mixing with black. It is a *spurious ink*: at 45°/L0.32, where
-the bound is 0.000 and the optimal recipe is blk 47% / red 30% / yel 23%,
-Atkinson produces **grn 41%** and only **blk 1%**. Green is not in the recipe
-at all. At 30°/L0.20 it is grn 18%. Whatever is wrong selects green, and a dE
-alone could never have said so.
-
-**Why not to swap the default.** Widening the ranking to all nine kernels and
-sweeping saturation (`test_algorithm_ranking_in_and_out_of_gamut`) first looks
-like it settles it — with a representative 201 reachable / 231 gamut-limited
-sample, Atkinson is **last on both axes**, and its supposed out-of-gamut
-advantage was an artifact of scoring only fully saturated targets:
-
-    algorithm             in mean  in worst | out mean  out worst
-    floyd-steinberg         0.010    0.057  |   0.012     0.076
-    burkes                  0.013    0.066  |   0.011     0.059
-    jarvis-judice-ninke     0.017    0.066  |   0.011     0.057
-    atkinson-hybrid         0.025    0.074  |   0.015     0.050
-    atkinson                0.038    0.099  |   0.013     0.072
-
-**The histogram vetoes that table.** On saturated blue (240°/L0.44, optimal
-`blu:100%`), Atkinson renders **98% blue** and *every* 100%-propagation kernel
-renders **70–87% black** — Floyd 87%, Burkes 83%, Jarvis 80%. A saturated blue
-region comes out nearly black. Mean dE barely registers it, because against a
-target that far outside the gamut solid blue and mostly-black score alike, so
-**the metric ranks the kernels that destroy blues highest**. Swapping the
-default on that table would trade a muted-orange defect for a much worse one.
-
-⚠️ **Generalise this:** dE against an out-of-gamut target is a bad objective.
-Rank on it only after the target is reachable.
-
-**The green anomaly — chased, and it closes the diagnosis.**
-`test_error_trajectory_decision_regions` steps along the error each ink choice
-creates and reports which ink the matcher returns, separating "matcher picks
-green" from "diffusion walks into green". It is the matcher, at `t=0`, and it
-is **not a matcher defect**: green genuinely is the nearest single ink to dark
-olive in Euclidean OKLab.
-
-    45° L0.32, distance nearest first:
-      grn:0.165  red:0.203  blu:0.291  yel:0.341  wht:0.414  blk:0.617
-    optimal mixture (bound 0.000):
-      blk:47%  red:30%  yel:23%
-
-**Read those two lines together — that is the whole bug.** The ink the mixture
-needs most is the ink greedy matching ranks *last*. Black is only ever selected
-after the accumulator has travelled a long way in the achromatic direction, and
-Atkinson's 25% discard caps that travel. So black lands at 1% instead of 47%
-and the nearer chromatic ink fills in.
-
-⚠️ **Correction to an earlier draft of this section:** it claimed the "25% error
-loss" diagnosis was wrong. That was an overstatement — the error loss *is* the
-proximate cause. What was wrong was only the remedy it implied (swap to a
-100%-propagation kernel) and the "under-mixed with black" phrasing, which named
-the symptom as if it were the mechanism.
-
-Also refuted: the guess that the gamut mapper is fix 3's prerequisite. These
-targets are in gamut with bound 0.000, so there is no permanent residual and
-the mapper is identity there. The original handover was right about that.
-
-**The candidate fix: `AtkinsonHybrid`**, which already exists and is documented
-for exactly this ("100% for the achromatic component, 75% for the chromatic").
-The achromatic component is the black direction, so the diagnosis predicts it,
-and the measurement agrees. It is the only algorithm of the nine with no
-catastrophic case:
-
-    target                  atkinson    atk-hybrid   best wide kernel
-    30° L0.20  blk 76% opt    46%          60%         57% (floyd)
-               grn  0% opt    18%          10%         13% (burkes)
-    45° L0.32  blk 47% opt     1%          20%         39% (floyd)
-               grn  0% opt    41%          21%          7% (floyd)
-    240° L0.44 blu100% opt    98%          96%         20% (jarvis)  <-- collapse
-    255° L0.44 blu100% opt   100%          94%         27% (jarvis)  <-- collapse
-
-Aggregate: hybrid beats Atkinson on in-gamut mean (0.025 vs 0.038) *and* on
-out-of-gamut worst case (0.050 vs 0.072, best of all nine). It is not a
-complete fix — 45°/L0.32 still lands blk 20% against 47% optimal, where Floyd
-reaches 39% — but it is the only move measured that improves the defect without
-opening a worse one.
-
-**Still an owner decision**, because it changes default rendering for every
-device. Nothing has been changed in the ditherer.
-
-Reproduce all of the above with:
-
-    cargo test -p eink-dither ink_histogram -- --nocapture --ignored
-    cargo test -p eink-dither algorithm_ranking -- --nocapture --ignored
-    cargo test -p eink-dither gamut_bound -- --nocapture --ignored
+Changing the default alters rendering for every device — owner's call, not
+taken.
 
 ## Build / verify
 
-- `make check` = fmt + `clippy -- -D warnings` + tests. **Pass `timeout: 600000`**
-  — it exceeds the Bash tool's 120 s default and gets auto-backgrounded otherwise.
-- `make docs` needs `mdbook-mermaid`.
-- `cargo clippy -- -D warnings` **skips test targets**.
+- `make check` = fmt + `clippy --workspace --all-targets -- -D warnings` +
+  `cargo test --workspace`. **Pass `timeout: 600000`** — it exceeds the Bash
+  tool's 120 s default and gets auto-backgrounded otherwise.
 - Cap parallelism at 2 (`CARGO_BUILD_JOBS=2`) — shared machine. Never `git add -A`.
-- **Local `podman build` needs `.dockerignore` to exclude `tools/`** — fixed this
-  session; `tools/ha-vm/work/` holds a ~22 GB VM image that killed the upload.
-- **`Dockerfile` is broken independently** — it copies `Cargo.toml`, `Cargo.lock`
-  and `src/` but never `crates/`, so the workspace cannot resolve `eink-dither`.
-  Releases are unaffected (they use `Dockerfile.release` with CI-built binaries).
-  Untouched as out of scope.
+- `make docs` needs `mdbook-mermaid`.
+- **`Dockerfile` is broken independently** — it copies `Cargo.toml`,
+  `Cargo.lock` and `src/` but never `crates/`, so the workspace cannot resolve
+  `eink-dither`. Releases are unaffected (`Dockerfile.release`, CI-built
+  binaries). Out of scope, untouched.
+- Local `podman build` needs `.dockerignore` to exclude `tools/` (~22 GB VM
+  image). Already fixed.
 
-## Rendering a screen for visual checks
+## Diagnostics available
 
-Fastest loop found this session — no server needed:
+All `#[ignore]`, run with `-- --ignored --nocapture`:
 
-    CONFIG_FILE=<scratch>.yaml SCREENS_DIR=screens \
-      ./target/debug/byonk render --mac "AA:BB:CC:DD:EE:01" --output out.png
-
-with a scratch config defining a panel (incl. `colors_actual`) and a device
-pointing at e.g. `byonk-builtin/calibration/gamut`. Screens are referenced as
-`<handle>/<path>`. Then `Read` the PNG.
+- `test_dither_versus_gamut_bound` — the physical bound. ~82% of the 6-colour
+  panel's hue error is the gamut, not the code.
+- `test_algorithm_ranking_in_and_out_of_gamut` — all nine kernels, split by
+  reachability, swept over saturation.
+- `test_ink_histogram_versus_optimal_recipe` — which ink landed vs the recipe.
+  Says *which way* a patch is wrong, which a dE cannot.
+- `test_noise_scale_against_bound` — the sweep the defaults came from.
+- `test_error_trajectory_decision_regions` — separates matcher faults from
+  diffusion dynamics.
+- `visual_compare` (integration test) — all the imagery.
 
 ## Settled — do not re-derive
 
-- The diffusion maths is correct. In-gamut targets land at dE 0.004.
-- ~82% of the 6-colour panel's hue error is the gamut. Flat blue at 225°–270°
-  is optimal, not a bug.
-- Matching and error both use *actual* colours consistently (`find_nearest` over
-  `actual_oklab`, error against `actual_linear`). No mismatch there.
-- Everything from the previous handover about the measured-colour precedence
-  chain, `/api/display`'s `use_actual=false`, and candidate prepending still
-  holds.
-
-## The thing that actually finds bugs here
-
-**Measure it; do not reason about it.** Every real finding this session came
-from a number or a rendered image, and three confident hypotheses died on
-contact:
-
-1. `error_clamp` starvation "refuted" — because the test hue was pinned by
-   exact-match, masking the effect entirely.
-2. Muted colours would trade off against saturated ones — they do not; both
-   improve together.
-3. The seam test passed on first write — the palette had no measured colours,
-   so there was no seam to find.
-
-Also: render the actual screen. The calibrator regression was invisible to the
-whole test suite and obvious in one PNG.
+- The diffusion maths is correct; in-gamut targets land at dE 0.004.
+- ~82% of the hue error is the gamut. Flat blue at 225°–270° is optimal.
+- Green really is the nearest single ink to dark olive (0.165 vs red 0.203).
+  That is not a matcher defect.
+- The gamut mapper is **not** a prerequisite for the dark-warm defect — those
+  targets are in gamut, so the mapper is identity there.
+- No gamut code has landed. The only gamut-aware code is `best_reachable()`, a
+  test helper.

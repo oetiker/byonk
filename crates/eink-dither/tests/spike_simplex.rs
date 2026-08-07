@@ -115,31 +115,34 @@ struct SupportCache {
     palette: Palette,
     map: HashMap<(u8, u8, u8), Vec<usize>>,
     threshold: f32,
+    levels: f32,
 }
 
 impl SupportCache {
     fn new(palette: Palette, threshold: f32) -> Self {
+        Self::with_levels(palette, threshold, 63.0)
+    }
+
+    fn with_levels(palette: Palette, threshold: f32, levels: f32) -> Self {
         Self {
             palette,
             map: HashMap::new(),
             threshold,
+            levels,
         }
     }
 
     fn support(&mut self, c: Srgb) -> &[usize] {
+        let lv = self.levels;
         let key = (
-            (c.r.clamp(0.0, 1.0) * 63.0).round() as u8,
-            (c.g.clamp(0.0, 1.0) * 63.0).round() as u8,
-            (c.b.clamp(0.0, 1.0) * 63.0).round() as u8,
+            (c.r.clamp(0.0, 1.0) * lv).round() as u8,
+            (c.g.clamp(0.0, 1.0) * lv).round() as u8,
+            (c.b.clamp(0.0, 1.0) * lv).round() as u8,
         );
         let palette = &self.palette;
         let threshold = self.threshold;
         self.map.entry(key).or_insert_with(|| {
-            let q = Srgb::new(
-                key.0 as f32 / 63.0,
-                key.1 as f32 / 63.0,
-                key.2 as f32 / 63.0,
-            );
+            let q = Srgb::new(key.0 as f32 / lv, key.1 as f32 / lv, key.2 as f32 / lv);
             let target = Oklab::from(LinearRgb::from(q));
             let w = best_mixture(palette, target);
             let mut s: Vec<usize> = (0..palette.len()).filter(|&i| w[i] > threshold).collect();
@@ -163,6 +166,7 @@ fn dither_restricted(
     h: usize,
     restrict: bool,
     full_propagation: bool,
+    jitter: f32,
 ) -> Vec<u8> {
     // Atkinson: 6 neighbours of weight 1, divisor 8 (25% discarded).
     const K: [(i32, i32, f32); 6] = [
@@ -229,7 +233,29 @@ fn dither_restricted(
 
             let c = palette.actual_linear(best);
             let diff = [px.r - c.r, px.g - c.g, px.b - c.b];
+            // Production applies blue-noise jitter (now 8.0); the spike ran
+            // with none, which on its own is known to make error diffusion
+            // worm. A hash is white noise, not blue, so this understates the
+            // real cure -- but it is enough to see how much of the mess is
+            // simply the missing jitter.
+            let hshift = if jitter > 0.0 {
+                let mut hsh =
+                    (x as u32).wrapping_mul(0x9E3779B1) ^ (y as u32).wrapping_mul(0x85EBCA77);
+                hsh ^= hsh >> 15;
+                hsh = hsh.wrapping_mul(0x2545F491);
+                hsh ^= hsh >> 13;
+                ((hsh & 0xFFFF) as f32 / 65535.0 - 0.5) * jitter
+            } else {
+                0.0
+            };
             for &(dx, dy, wt) in kern {
+                let wt = if (dx, dy) == (1, 0) {
+                    (wt - hshift).max(0.0)
+                } else if (dx, dy) == (0, 1) {
+                    (wt + hshift).max(0.0)
+                } else {
+                    wt
+                };
                 let ex = if reverse { -dx } else { dx };
                 let nx = x as i32 + ex;
                 let ny = y + dy as usize;
@@ -296,17 +322,22 @@ fn out_dir() -> PathBuf {
     d
 }
 
+const SUPPORT_THRESHOLD: f32 = 0.02;
+
 #[test]
 #[ignore = "spike; run with --ignored --nocapture"]
 fn spike_arcs_under_support_restriction() {
     const W: usize = 480;
     const H: usize = 320;
+    // Sweeping both suspected confounds: the missing jitter, and the support
+    // threshold, whose hard on/off is what could band a smooth gradient.
+    const ARM_JITTER: f32 = 2.0;
     let palette = panel();
     let px = muted_field(W, H);
-    let mut cache = SupportCache::new(palette.clone(), 0.02);
+    let mut cache = SupportCache::new(palette.clone(), SUPPORT_THRESHOLD);
 
-    let base = dither_restricted(&palette, &mut cache, &px, W, H, false, false);
-    let restr = dither_restricted(&palette, &mut cache, &px, W, H, true, true);
+    let base = dither_restricted(&palette, &mut cache, &px, W, H, false, false, 0.0);
+    let restr = dither_restricted(&palette, &mut cache, &px, W, H, true, true, ARM_JITTER);
     eprintln!("  support cache entries: {}", cache.map.len());
 
     // Stacked crops of the band that holds the scalloped front, unrestricted
@@ -383,7 +414,7 @@ fn spike_patches_under_support_restriction() {
             ("floyd           ", false, true),
             ("restricted+floyd", true, true),
         ] {
-            let out = dither_restricted(&palette, &mut cache, &px, P, P, restrict, fullprop);
+            let out = dither_restricted(&palette, &mut cache, &px, P, P, restrict, fullprop, 0.0);
             let mut hist = vec![0usize; palette.len()];
             for &i in &out {
                 hist[i as usize] += 1;
@@ -418,7 +449,7 @@ fn spike_patches_under_support_restriction() {
     // the gradient would both go flat. Report the ink count actually used.
     let px = muted_field(240, 160);
     for (label, restrict) in [("production", false), ("restricted", true)] {
-        let out = dither_restricted(&palette, &mut cache, &px, 240, 160, restrict, false);
+        let out = dither_restricted(&palette, &mut cache, &px, 240, 160, restrict, false, 0.0);
         let mut seen = vec![0usize; palette.len()];
         for &i in &out {
             seen[i as usize] += 1;
@@ -428,4 +459,56 @@ fn spike_patches_under_support_restriction() {
     }
 
     let _ = EinkDitherer::new(palette).algorithm(DitherAlgorithm::Atkinson);
+}
+
+/// Is the horizontal banding intrinsic to hard candidate restriction, or an
+/// artifact of quantising the support lookup?
+///
+/// Lightness is constant along a row, so a band is a locus where the support
+/// set changes. If it is the 64-level grid, refining to 255 levels moves the
+/// bands and multiplies them into invisibility. If it is intrinsic -- the
+/// support genuinely switching on and off at a real boundary -- refining
+/// changes nothing, and hard restriction cannot be used on smooth content.
+#[test]
+#[ignore = "spike; run with --ignored --nocapture"]
+fn spike_is_the_banding_intrinsic() {
+    const W: usize = 480;
+    const H: usize = 320;
+    let palette = panel();
+    let px = muted_field(W, H);
+
+    let mut out = Vec::new();
+    for (label, levels, threshold) in [
+        ("q64  t0.02", 63.0f32, 0.02f32),
+        ("q255 t0.02", 255.0, 0.02),
+        ("q255 t0.001", 255.0, 0.001),
+    ] {
+        let mut cache = SupportCache::with_levels(palette.clone(), threshold, levels);
+        let idx = dither_restricted(&palette, &mut cache, &px, W, H, true, true, 2.0);
+        eprintln!("  {label}: {} cache entries", cache.map.len());
+        out.push(rgb_of(&palette, &idx));
+    }
+
+    // Magnified crop of the teal band, where the horizontal red segments sit.
+    // Stacked, one arm per row.
+    const GAP: usize = 8;
+    const ZOOM: usize = 4;
+    let (x0, x1, y0, y1) = (200usize, 400usize, 85usize, 150usize);
+    let (cw, ch) = (x1 - x0, y1 - y0);
+    let ow = cw * ZOOM;
+    let oh = ch * ZOOM * out.len() + GAP * (out.len() - 1);
+    let mut buf = vec![0x80u8; ow * oh * 3];
+    for (i, img) in out.iter().enumerate() {
+        let y_off = i * (ch * ZOOM + GAP);
+        for y in 0..ch * ZOOM {
+            for x in 0..ow {
+                let s = ((y0 + y / ZOOM) * W + x0 + x / ZOOM) * 3;
+                let d = ((y_off + y) * ow + x) * 3;
+                buf[d..d + 3].copy_from_slice(&img[s..s + 3]);
+            }
+        }
+    }
+    let p = out_dir().join("SPIKE-banding.png");
+    image::save_buffer(&p, &buf, ow as u32, oh as u32, image::ColorType::Rgb8).unwrap();
+    eprintln!("  wrote {}", p.display());
 }

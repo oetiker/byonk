@@ -6,6 +6,15 @@ local height = layout.height
 local colors = layout.colors or {"#000000", "#555555", "#AAAAAA", "#FFFFFF"}
 local color_count = #colors
 
+-- For the solid patches, draw the panel's MEASURED colour where we have one.
+-- The patches exist to show what each ink actually looks like, and a measured
+-- colour is by definition an exact palette entry, so it quantises with zero
+-- error and comes out as that ink and nothing else. Drawing the official
+-- colour instead would ask the ditherer to reproduce, say, bright #00FF00 --
+-- which it best approximates with a yellow-green mixture, since the panel's
+-- own green is much darker. Correct, but useless for judging the ink.
+local ink = (device and device.colors_actual) or colors
+
 -- Uniform grid line width
 local grid = scale_pixel(4)
 
@@ -90,7 +99,7 @@ local w_remainder = avail_w - color_count * patch_w
 local patches = {}
 local px = grid
 for i = 1, color_count do
-  local color = colors[i]
+  local color = ink[i] or colors[i]
   local w = patch_w + ((i <= w_remainder) and 1 or 0)
   local center_x = px + math.floor(w / 2)
 
@@ -108,7 +117,9 @@ for i = 1, color_count do
     color = color,
     text_color = text_color,
     label_x = px + 2,
-    label = color,
+    -- Label with the OFFICIAL colour: that is the value a screen author
+    -- writes in their SVG, which is what they need to look up.
+    label = colors[i],
   })
   px = px + w + grid
 end

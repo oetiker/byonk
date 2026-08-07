@@ -79,6 +79,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Saturated colours are no longer rendered flat.** The dithering error cap
+  (`error_clamp`) used to limit the resulting pixel value rather than the error
+  itself, so how much error could accumulate depended on how close a colour
+  already sat to full intensity. Saturated colours sit at that limit by
+  definition, so they were starved of the very thing that lets the ditherer mix
+  inks — the same colour won every pixel and whole areas came out as one flat
+  block. On a 6-colour panel, 16 of 24 hues were affected. Muted colours got
+  markedly more accurate too.
+
+  If you set `error_clamp` in `config.yaml` or a script, its meaning has
+  changed: it is now a cap on accumulated error, and the useful range is around
+  1.0 rather than around 0.1. Old values will look flat. Remove the setting to
+  take the new default.
+- **The colour calibrator's patches show the panel's inks again.** They are now
+  drawn in the panel's measured colours, so each patch is that ink and nothing
+  else; the label still shows the official value you write in a screen.
 - **Gradients no longer get a hard seam where they cross a palette colour.**
   Byonk used to detect pixels whose value exactly matched one of the panel's
   colours and pin them to that ink, discarding their dithering error, to keep

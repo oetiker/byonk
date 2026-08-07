@@ -2088,7 +2088,7 @@ mod domain_tests {
         let mut sum_bound = 0.0f32;
         let mut sum_got = [0.0f32; 5];
         let mut count = 0usize;
-        let mut worst: Vec<(f32, i32, f32, f32, f32, String)> = Vec::new();
+        let mut worst: Vec<(f32, i32, f32, f32, [f32; 5], String)> = Vec::new();
 
         for &l in &lightnesses {
             for hue_deg in (0..360).step_by(15) {
@@ -2134,7 +2134,7 @@ mod domain_tests {
                     hue_deg as i32,
                     l,
                     bound,
-                    got[0],
+                    got,
                     recipe_s.join(" "),
                 ));
             }
@@ -2161,16 +2161,16 @@ mod domain_tests {
         }
 
         worst.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-        eprintln!("\nWorst 12 targets by gap (production):");
+        eprintln!("\nWorst 12 targets by production gap, dE under each config:");
         eprintln!(
-            "{:>5} {:>5} | {:>6} {:>6} {:>6} | best possible mixture",
-            "hue", "L", "bound", "got", "gap"
+            "{:>5} {:>5} | {:>6} | {:>6} {:>6} {:>6} {:>6} | best possible mixture",
+            "hue", "L", "bound", "prod", "noex", "clmp2", "floyd2"
         );
-        eprintln!("{}", "-".repeat(72));
-        for (gap, hue, l, bound, got, recipe) in worst.iter().take(12) {
+        eprintln!("{}", "-".repeat(88));
+        for (_gap, hue, l, bound, got, recipe) in worst.iter().take(12) {
             eprintln!(
-                "{hue:>4}\u{00b0} {:>5.2} | {bound:>6.3} {got:>6.3} {gap:>6.3} | {recipe}",
-                l
+                "{hue:>4}\u{00b0} {:>5.2} | {bound:>6.3} | {:>6.3} {:>6.3} {:>6.3} {:>6.3} | {recipe}",
+                l, got[0], got[1], got[2], got[4]
             );
         }
 

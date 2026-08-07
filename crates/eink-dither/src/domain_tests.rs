@@ -2195,6 +2195,101 @@ mod domain_tests {
         eprintln!("\n{at_bound}/{count} targets are already within 0.02 dE of the physical bound.");
     }
 
+    /// Walk the error trajectory and print which ink the matcher returns.
+    ///
+    /// At 45deg L0.32 the target is fully in gamut, so there is no permanent
+    /// residual to run away, yet Atkinson still fills 41% of the patch with
+    /// green -- an ink the optimal recipe does not use. Either the matcher
+    /// picks green for the unperturbed target (a matching bug), or diffusion
+    /// walks the accumulator into a region where green wins (a dynamics bug).
+    /// Those have opposite fixes, so this separates them: it steps along the
+    /// error each ink choice creates and reports the decision region entered.
+    #[test]
+    #[ignore = "diagnostic; run with --ignored --nocapture"]
+    fn test_error_trajectory_decision_regions() {
+        let official = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(255, 0, 0),
+            Srgb::from_u8(255, 255, 0),
+            Srgb::from_u8(0, 0, 255),
+            Srgb::from_u8(0, 255, 0),
+        ];
+        let actual = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(0xB5, 0x03, 0x03),
+            Srgb::from_u8(0xFF, 0xEE, 0x00),
+            Srgb::from_u8(0x20, 0x54, 0x97),
+            Srgb::from_u8(0x0D, 0x87, 0x6B),
+        ];
+        let names = ["blk", "wht", "red", "yel", "blu", "grn"];
+        // The ditherer matches through for_error_diffusion(), so the probe
+        // must too -- the builder swaps the metric to Euclidean there, and
+        // probing the HyAB default would answer a question nobody asked.
+        let palette = Palette::new(&official, Some(&actual))
+            .unwrap()
+            .for_error_diffusion();
+
+        for &(hue_deg, l) in &[(45i32, 0.32f32), (30, 0.20)] {
+            let (r, g, b) = hsl_to_rgb(hue_deg as f32 / 360.0, 1.0, l);
+            let src = LinearRgb::from(Srgb::new(r, g, b));
+            let (nearest, _) = palette.find_nearest(Oklab::from(src));
+            eprintln!("\n=== hue {hue_deg}deg L {l:.2} ===");
+            eprintln!(
+                "  unperturbed target matches: {} (linear {:.3} {:.3} {:.3})",
+                names[nearest], src.r, src.g, src.b
+            );
+            let t_ok = Oklab::from(src);
+            let mut d: Vec<(f32, usize)> = (0..palette.len())
+                .map(|k| {
+                    let p = palette.actual_oklab(k);
+                    (t_ok.distance_squared(p).sqrt(), k)
+                })
+                .collect();
+            d.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            let ranked: Vec<String> = d
+                .iter()
+                .map(|&(dist, k)| format!("{}:{dist:.3}", names[k]))
+                .collect();
+            eprintln!(
+                "  euclidean OKLab distance, nearest first: {}",
+                ranked.join("  ")
+            );
+            let (bound, recipe) = best_reachable(&palette, t_ok);
+            let want: Vec<String> = recipe
+                .iter()
+                .enumerate()
+                .filter(|(_, &w)| w > 0.02)
+                .map(|(i, &w)| format!("{}:{:.0}%", names[i], w * 100.0))
+                .collect();
+            eprintln!("  optimal mixture (bound {bound:.3}): {}", want.join("  "));
+
+            // Choosing ink k leaves error (target - ink). The next pixel is
+            // presented with target + that error, and so on if the same ink
+            // keeps winning. Stepping t along it traces where that leads.
+            for k in 0..palette.len() {
+                let ink = palette.actual_linear(k);
+                let e = [src.r - ink.r, src.g - ink.g, src.b - ink.b];
+                let mut regions: Vec<String> = Vec::new();
+                let mut last = usize::MAX;
+                for step in 0..=20 {
+                    let t = step as f32 * 0.1;
+                    // apply_error bounds the accumulated error, not the value.
+                    let acc: Vec<f32> = e.iter().map(|c| (c * t).clamp(-1.0, 1.0)).collect();
+                    let p = LinearRgb::new(src.r + acc[0], src.g + acc[1], src.b + acc[2]);
+                    let (idx, _) = palette.find_nearest(Oklab::from(p));
+                    if idx != last {
+                        regions.push(format!("t={t:.1}->{}", names[idx]));
+                        last = idx;
+                    }
+                }
+                eprintln!("  after picking {:<4}: {}", names[k], regions.join("  "));
+            }
+        }
+        eprintln!();
+    }
+
     /// Rank every algorithm separately on reachable and gamut-limited targets.
     ///
     /// A single mean over the hue circle hides the decision, because the two
@@ -2380,6 +2475,7 @@ mod domain_tests {
                 ("floyd   ", DitherAlgorithm::FloydSteinberg),
                 ("burkes  ", DitherAlgorithm::Burkes),
                 ("jarvis  ", DitherAlgorithm::JarvisJudiceNinke),
+                ("atk-hybr", DitherAlgorithm::AtkinsonHybrid),
             ] {
                 let out = EinkDitherer::new(palette.clone())
                     .algorithm(algo)

@@ -7,7 +7,7 @@ _Last updated: 2026-08-07 — **Plan A and Plan B are merged; the branch is veri
 | | |
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
-| HEAD | `df3e444` |
+| HEAD | `d61a7d3` |
 | Worktree | `/Users/oetiker/checkouts/byonk` (the two plan worktrees are **removed**) |
 | Ahead of `main` | 114 commits |
 | State | `make check` green ("All checks passed!"), `make docs` green, tree clean |
@@ -21,6 +21,7 @@ Plan A (`feat/plan-a-measured-colours`) merged at `840a6c9`; Plan B (`feat/plan-
 3. **Removed both worktrees** and both SDD workspaces.
 4. **Did all three outstanding validation items** — see below.
 5. **Fixed two real defects the validation surfaced** (`df3e444`).
+6. **Fixed the MCP rough edges and made `render_screen`'s response size caller-controlled** (`d61a7d3`).
 
 ## The A/B seam test — `4fa616e`
 
@@ -49,10 +50,9 @@ So it is a 2×2 over `{color, color_measured} × {palette_aware off, on}`, and t
 
 ## Known gaps carried forward (triaged, none blocking)
 
-Two MCP API rough edges, **found only because a real client was driven** — direct JSON-RPC tests cannot surface them. Neither is fixed; both are cheap:
+**The two MCP rough edges below were FIXED** in `d61a7d3` — kept here only as the record of what direct JSON-RPC testing cannot catch. `create_screen`/`copy_screen`/`rename_screen` now take honest `path`/`to_path`/`new_path` names with full schema descriptions, and `assign_screen`'s description and error message state the real rule (a device is accepted if configured **or** registry-seen; `list_devices` shows only the latter). The same commit made `render_screen`'s response size caller-controlled — `image` (dithered|raw|both|none), `image_max_width`, `include_data` — taking a default render from 65 KB to 0.3 KB when only diagnostics are wanted. Watch out for `image: "raw"`/`"both"`: the pre-dither PNG is full-colour and ~10× the dithered one (648 KB / 710 KB), so pair them with `image_max_width`.
 
-- **`copy_screen`'s `to_handle` / `to_name` have no doc comments**, so they reach the client with empty schema descriptions. A real client guessed `to_handle="local/mcpval"` and failed twice before landing on `to_handle="local"`, `to_name="mcpval"`. `to_name` is also a path segment, **not** the title — the copy keeps the source's `meta.yaml` title.
-- **`assign_screen`'s description is misleading**: it says a MAC `list_devices` never reported is rejected, but `list_devices` only reports registry-*seen* devices while `assign_screen` also accepts any MAC already in `config.devices`. So a configured-but-never-connected device is assignable yet invisible to the tool the error text tells you to call. A genuinely unknown MAC *is* correctly rejected (verified).
+**Still open — the LLM cannot see the expanded SVG.** `render_screen` returns the PNG and the script's `data`, and `read_screen_file` returns the `screen.svg` *source*, but the Tera-expanded markup that resvg actually parsed — after `{% extends %}` resolution and data interpolation — is exposed nowhere. `RenderResult` does not even carry it. That is precisely the artefact most likely to contain a layout bug, so an agent debugging a wrong-looking screen has to mentally run Tera over the template. Adding an `include_svg` flag means threading a `String` through `RenderResult`; discussed with the owner, not yet decided.
 
 Carried over from the plans, unchanged:
 

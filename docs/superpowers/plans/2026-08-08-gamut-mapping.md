@@ -226,7 +226,7 @@ module for now:
 mod tests {
     use super::*;
     use crate::gamut::test_support::{four_grey, six_colour};
-    use crate::LinearRgb;
+    use crate::{LinearRgb, Srgb};
 
     #[test]
     fn palette_vertices_are_inside_their_own_hull() {

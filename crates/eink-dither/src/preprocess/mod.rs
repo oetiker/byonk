@@ -77,12 +77,9 @@
 //! // All pixels match palette exactly
 //! ```
 
-mod oklch;
 mod options;
 mod preprocessor;
 mod resize;
 
-#[cfg(test)]
-pub(crate) use oklch::Oklch;
 pub use options::PreprocessOptions;
 pub use preprocessor::{PreprocessResult, Preprocessor};

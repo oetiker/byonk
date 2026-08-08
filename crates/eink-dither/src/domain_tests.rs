@@ -12,7 +12,7 @@ mod domain_tests {
         JARVIS_JUDICE_NINKE, SIERRA, SIERRA_LITE, SIERRA_TWO_ROW,
     };
     use crate::palette::Palette;
-    use crate::preprocess::Oklch;
+    use crate::Oklch;
 
     // ========================================================================
     // GAP 1: Gamma correctness -- dithering must happen in linear RGB space

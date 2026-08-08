@@ -39,8 +39,8 @@
 
 use crate::color::{LinearRgb, Oklab, Srgb};
 use crate::preprocess::PreprocessOptions;
+use crate::Oklch;
 
-use super::oklch::Oklch;
 use super::resize::resize_lanczos;
 
 /// Result of preprocessing an image.

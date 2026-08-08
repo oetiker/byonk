@@ -9,18 +9,19 @@
 //! Unlike HSL/HSV, Oklch is perceptually uniform, so scaling chroma doesn't
 //! cause hue shifts.
 //!
-//! # Internal Use
+//! # Use
 //!
-//! This type is `pub(crate)` because it's an implementation detail of the
-//! preprocessing pipeline. Users interact with it indirectly through
-//! [`PreprocessOptions::saturation`](super::PreprocessOptions::saturation).
+//! Polar form of Oklab. Chroma scaling preserves hue and lightness exactly,
+//! which is what both the saturation boost in
+//! [`PreprocessOptions::saturation`](crate::PreprocessOptions::saturation) and
+//! the gamut mapper in `crate::gamut` rely on.
 //!
 //! # References
 //!
 //! Bjorn Ottosson, "A perceptual color space for image processing"
 //! <https://bottosson.github.io/posts/oklab/>
 
-use crate::Oklab;
+use super::Oklab;
 
 /// Oklch: Polar form of Oklab (Lightness, Chroma, Hue).
 ///
@@ -39,7 +40,7 @@ use crate::Oklab;
 /// sets h to 0.0 in this case, which is harmless since chroma scaling
 /// on zero chroma produces zero chroma regardless of hue.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Oklch {
+pub struct Oklch {
     /// Lightness: 0.0 (black) to 1.0 (white) for in-gamut colors
     pub l: f32,
     /// Chroma: distance from neutral axis (0.0 = gray)

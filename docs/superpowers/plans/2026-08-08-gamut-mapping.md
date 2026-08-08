@@ -43,7 +43,7 @@ The spec was written on 2026-08-07. Two of its statements are now stale, verifie
 Three design decisions the spec left open, resolved here and implemented as specified below:
 
 3. **CSS is a real hazard and is handled by stripping, not by precedence.** Screen templates set `fill` from `<style>` rules (e.g. `screens/examples/hello/screen.svg` has `.date { fill: #555555; }`), and a CSS rule beats a presentation attribute. Rather than depend on whether usvg honours the `style` attribute over a stylesheet, the rewriter **removes paint declarations from `<style>` blocks** in the mask document and sets both the presentation attribute and the inline `style`. Geometry-affecting declarations (`font-*`, `stroke-width`, `text-anchor`, `letter-spacing`, `dominant-baseline`, `display`, `visibility`) are preserved, because they change what area is covered. **The declaration match must be case-insensitive and tolerate whitespace before the colon** — CSS allows `FILL: red` and `fill : red`, and measurement showed both survived an exact-match stripper, where they beat the presentation attribute and silently invert that element's mask polarity.
-4. **Known over-marking, accepted and documented.** `<image>` elements become a `<rect>` over their layout box, so a non-opaque or letterboxed image marks its whole box; and an element painted `none` only via CSS becomes painted in the mask. Both only ever *grow* the marked region. Growing it into an unmarked area is harmless (the mask background is already black); growing it inside a marked region maps a few extra background pixels, and mapping in-gamut content is identity. Documented in the rewriter's module docs, not silently absorbed.
+4. **Known mis-marking, accepted and documented.** `<image>` elements become a `<rect>` over their layout box, so a non-opaque or letterboxed image marks its whole box; an element painted `none` only via CSS becomes painted in the mask; and a stroke set only by a stylesheet rule is lost from the mask. The first two only ever *grow* the marked region, which is harmless (the mask background is already black); the third *shrinks* it, which is the deliberate fail-safe direction. Documented in the rewriter's module docs, not silently absorbed.
 5. **`<defs>` content has its paint attributes stripped rather than rewritten**, so a `<use>` inherits paint from its use site and lands in the correct mask polarity. No screen in the tree uses `<use>` today; this keeps it correct if one does.
 
 ## File structure
@@ -2135,18 +2135,26 @@ Prepend to `src/rendering/tone_mask.rs`:
 //! paint on the elements. Geometry-affecting declarations are preserved,
 //! because they change what area is covered.
 //!
-//! # Known over-marking
+//! # Known mis-marking
 //!
-//! Two cases grow the marked region slightly. Both are accepted:
+//! Three cases move the mask edge slightly. All three are accepted:
 //!
 //! - An `<image>` becomes a `<rect>` over its layout box, so a transparent or
 //!   letterboxed image marks its whole box. This applies to both the
 //!   self-closing form and `<image>…</image>`, whose subtree is dropped.
 //! - An element painted `none` only via CSS becomes painted here.
+//! - A stroke set only by a stylesheet rule is lost, because paint
+//!   declarations are stripped before the stroke is resolved. That element
+//!   under-marks by half its stroke width.
 //!
-//! Growing the region into unmarked territory is harmless — the mask
-//! background is already black. Growing it inside a marked region maps a few
-//! extra background pixels, and mapping in-gamut content is the identity.
+//! The first two only ever *grow* the region, which is harmless: the mask
+//! background is already black, and growing it inside a marked region maps a
+//! few extra background pixels, where mapping in-gamut content is the identity.
+//!
+//! The third *shrinks* it, and that is the deliberate fail-safe direction. The
+//! alternative — painting `stroke` unconditionally — invents a stroke on every
+//! unstroked shape, since SVG's initial `stroke` is `none`, and moves edges by
+//! an unbounded `stroke-width / 2`.
 
 use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, BytesText, Event};

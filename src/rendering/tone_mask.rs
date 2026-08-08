@@ -17,25 +17,26 @@
 //! paint on the elements. Geometry-affecting declarations are preserved,
 //! because they change what area is covered.
 //!
-//! # Known over-marking
+//! # Known mis-marking
 //!
-//! Two cases grow the marked region slightly. Both are accepted:
+//! Three cases move the mask edge slightly. All three are accepted:
 //!
 //! - An `<image>` becomes a `<rect>` over its layout box, so a transparent or
 //!   letterboxed image marks its whole box. This applies to both the
 //!   self-closing form and `<image>…</image>`, whose subtree is dropped.
 //! - An element painted `none` only via CSS becomes painted here.
-//!
-//! Growing the region into unmarked territory is harmless — the mask
-//! background is already black. Growing it inside a marked region maps a few
-//! extra background pixels, and mapping in-gamut content is the identity.
-//!
 //! - A stroke set only by a stylesheet rule is lost, because paint
 //!   declarations are stripped before the stroke is resolved. That element
-//!   under-marks by half its stroke width. This is the one case that shrinks
-//!   the region rather than growing it, and it is the fail-safe direction:
-//!   the alternative, painting `stroke` unconditionally, invents a stroke on
-//!   every unstroked shape and moves edges by an unbounded `stroke-width / 2`.
+//!   under-marks by half its stroke width.
+//!
+//! The first two only ever *grow* the region, which is harmless: the mask
+//! background is already black, and growing it inside a marked region maps a
+//! few extra background pixels, where mapping in-gamut content is the identity.
+//!
+//! The third *shrinks* it, and that is the deliberate fail-safe direction. The
+//! alternative — painting `stroke` unconditionally — invents a stroke on every
+//! unstroked shape, since SVG's initial `stroke` is `none`, and moves edges by
+//! an unbounded `stroke-width / 2`.
 
 use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, BytesText, Event};

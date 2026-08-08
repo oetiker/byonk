@@ -96,6 +96,10 @@ regex = "1"
 fast_qr = { version = "0.13", features = ["svg"] }
 percent-encoding = "2"
 oxipng = { version = "10.1.0", default-features = false, features = ["zopfli", "parallel"] }
+# Streaming XML read+write for the tone-mask rewriter (src/rendering/tone_mask.rs).
+# Needed because the mask document must round-trip everything it does not touch;
+# roxmltree (already present via usvg) is read-only.
+quick-xml = "0.41.0"
 
 [dev-dependencies]
 # HTTP testing

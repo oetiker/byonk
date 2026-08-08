@@ -2725,6 +2725,391 @@ git commit -m "feat(rendering): rasterize the tone mask with the frame's exact t
 
 ---
 
+### Task 9b: Never invent a stroke in the mask document
+
+**Why this task exists.** Task 9 was the first code to *rasterize* a mask, and
+that immediately exposed a defect in Task 8's rewriter that no rewriter test
+could see — every `tone_mask` test asserts on the mask **document text**, and
+this defect is only observable in pixels.
+
+`rewrite_start` sets `stroke` unconditionally to the tone paint. SVG's initial
+`stroke` is `none`, so **every marked shape that declared no stroke gains one**,
+at the initial `stroke-width` of 1, centred on its edge. Measured on a shape
+spanning `x = 50..=149` at a 200x200 spec:
+
+| document | mask span before | should be |
+|---|---|---|
+| plain unstroked rect | `50..=150` | `50..=149` |
+| `<style>.p{stroke:none;stroke-width:20}</style>` | `40..=159` | `50..=149` |
+
+The second row is the important one: the error is **not sub-pixel and not
+bounded**. `stroke` is a paint property, so the author's `stroke: none` is
+*stripped* from the stylesheet, while `stroke-width` is deliberately *preserved*
+as geometry. The two rules combine into a mask error of `stroke-width / 2`.
+
+The harmful direction is not the over-mark (mapping in-gamut content is the
+identity). It is that an **unmarked** shape drawn over a marked photo gains a
+**black** stroke and *erodes* the photo mask by `stroke-width / 2` all round —
+a visible unmapped band around every label on a photo.
+
+**Owner ruling (2026-08-08): stroke-evidence stack, fixed before Task 10.**
+Set `stroke` to the tone paint only where the element actually has stroke
+evidence, tracked through an inheritance stack exactly like the existing tone
+stack. Two traps this must avoid, and which a blanket `stroke="none"` would
+fall into:
+
+- **Stroke-only shapes.** A `<line>`, or a `<path fill="none" stroke="…">`, has
+  no fill area at all. Drop its stroke and it vanishes from the mask entirely —
+  a marked one is never mapped, an unmarked one never occludes.
+- **Inherited stroke.** `<g stroke="black"><line/></g>` is legal: the line has
+  no stroke of its own but inherits one. Writing an explicit `stroke="none"` on
+  it would *override* the inherited paint and erase it.
+
+A stroke set **only** by a stylesheet rule cannot be seen, because paint
+declarations are stripped before this runs. Such an element loses its stroke and
+therefore *under*-marks by half its stroke width. That is the fail-safe
+direction, and it becomes the third documented known case.
+
+**Files:**
+- Modify: `src/rendering/tone_mask.rs`
+- Modify: `src/rendering/svg_to_png.rs` (one rasterization regression test)
+
+**A validated reference implementation** — this exact design, built and passing
+the full gate — is saved at
+`.superpowers/sdd/2026-08-08-gamut-mapping/task-9b-validated.diff`. Read it and
+follow it; the code below is the same thing.
+
+- [ ] **Step 1: Add the `Stroke` type**
+
+After `impl Tone { … }` in `src/rendering/tone_mask.rs`:
+
+```rust
+/// Whether an element paints a stroke, as far as the mask can tell.
+///
+/// The mask must not *introduce* a stroke where the document has none. SVG's
+/// initial `stroke` is `none`, so painting `stroke` unconditionally would widen
+/// every marked shape by half its stroke-width — and `stroke-width` survives
+/// into the mask as geometry, so that error is unbounded, not sub-pixel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stroke {
+    /// This element or an ancestor declares a stroke that is not `none`.
+    Painted,
+    /// No stroke declaration up the tree, or the nearest one is `none`.
+    Absent,
+}
+```
+
+- [ ] **Step 2: Add the resolver and its two helpers**
+
+Immediately before `fn resolve_tone`:
+
+```rust
+/// An element's effective stroke: its own declaration if it has one, else its
+/// parent's.
+///
+/// Only presentation attributes and inline styles count as evidence. A stroke
+/// set solely by a stylesheet rule cannot be seen here, because paint
+/// declarations are stripped from stylesheets before this runs. Such an element
+/// loses its stroke in the mask and therefore *under*-marks by half its stroke
+/// width — the fail-safe direction, and the third known case in the module docs.
+fn resolve_stroke(e: &BytesStart, inherited: Stroke) -> Stroke {
+    let mut from_attr: Option<Stroke> = None;
+    let mut from_style: Option<Stroke> = None;
+
+    for attr in e.attributes().with_checks(false).flatten() {
+        let key = String::from_utf8_lossy(attr.key.as_ref()).to_ascii_lowercase();
+        let value = String::from_utf8_lossy(attr.value.as_ref()).into_owned();
+        match key.as_str() {
+            "stroke" => from_attr = Some(stroke_from_value(&value)),
+            "style" => {
+                from_style = declaration_value(&value, "stroke").map(|v| stroke_from_value(&v));
+            }
+            _ => {}
+        }
+    }
+
+    // An inline style beats a presentation attribute, whatever the source order.
+    from_style.or(from_attr).unwrap_or(inherited)
+}
+
+fn stroke_from_value(value: &str) -> Stroke {
+    if value.trim().eq_ignore_ascii_case("none") {
+        Stroke::Absent
+    } else {
+        Stroke::Painted
+    }
+}
+
+/// The value of `prop` in an inline `style="..."`.
+///
+/// Uses the same property-name normalisation as [`is_paint_declaration`]:
+/// names are case-insensitive and whitespace before the colon is legal. The
+/// last declaration wins, as in CSS, and a trailing `!important` is dropped.
+fn declaration_value(style: &str, prop: &str) -> Option<String> {
+    let mut found = None;
+    for decl in style.split(';') {
+        let Some((name, value)) = decl.split_once(':') else {
+            continue;
+        };
+        if name.trim().to_ascii_lowercase() == prop {
+            let value = value.trim();
+            let value = value
+                .strip_suffix("!important")
+                .map(str::trim_end)
+                .unwrap_or(value);
+            found = Some(value.trim().to_string());
+        }
+    }
+    found
+}
+```
+
+- [ ] **Step 3: Thread the stack through `build_mask_svg`**
+
+Four edits in the event loop, each mirroring what `tone_stack` already does:
+
+1. Next to the `tone_stack` declaration:
+
+```rust
+    // Effective stroke for each open element, innermost last. The root default
+    // is SVG's initial value, `none`.
+    let mut stroke_stack: Vec<Stroke> = vec![Stroke::Absent];
+```
+
+2. In `Event::Start`, directly after the `let tone = resolve_tone(…)` line:
+
+```rust
+                let stroke = resolve_stroke(&e, *stroke_stack.last().unwrap());
+```
+
+   This must sit **before** the `if name == b"image"` branch, which `continue`s.
+
+3. In `Event::Start`, after `tone_stack.push(tone);` add `stroke_stack.push(stroke);`,
+   and change the call to `rewrite_start(&e, tone, defs_depth > 0, stroke)?`.
+
+4. In `Event::End`, after the `tone_stack` pop:
+
+```rust
+                if stroke_stack.len() > 1 {
+                    stroke_stack.pop();
+                }
+```
+
+5. In `Event::Empty`, add the same `resolve_stroke` line after `resolve_tone`
+   (no push — a self-closing element's stroke applies to itself only), and pass
+   `stroke` to `rewrite_start`.
+
+`image_to_rect` already writes `stroke="none"` and is correct unchanged.
+
+- [ ] **Step 4: Use the evidence in `rewrite_start`**
+
+Change the signature to take `stroke_state: Stroke`, and replace the
+`fill_none` / `stroke_none` sniffing. The `fill` detection moves to the same
+`declaration_value` helper: the old `value.contains("fill:none")` was an exact
+match that missed `fill : none` and `FILL: NONE`, the identical defect class the
+owner already ruled on in `ba8859c`. Its failure direction flips from
+over-marking to the fail-safe under-marking.
+
+```rust
+    let mut fill_none_attr: Option<bool> = None;
+    let mut fill_none_style: Option<bool> = None;
+```
+
+in place of the two `bool`s, then in the attribute loop:
+
+```rust
+        if PAINT_PROPS.contains(&key.as_str()) {
+            if key == "fill" {
+                fill_none_attr = Some(value.trim().eq_ignore_ascii_case("none"));
+            }
+            continue;
+        }
+        if key == "style" {
+            // Held back until the paint is known, so both land in one attribute.
+            kept_style = strip_paint_declarations_inline(&value);
+            // Same normalisation as the stylesheet stripper: `fill : NONE` is
+            // a legal way to write it, and the old exact-match check missed it.
+            fill_none_style =
+                declaration_value(&value, "fill").map(|v| v.eq_ignore_ascii_case("none"));
+            continue;
+        }
+```
+
+and in the `if !in_defs` block:
+
+```rust
+        let paint = tone.paint();
+        // An inline style beats a presentation attribute.
+        let fill_none = fill_none_style.or(fill_none_attr).unwrap_or(false);
+        let fill = if fill_none { "none" } else { paint };
+        // Never introduce a stroke the document does not have: SVG's initial
+        // stroke is `none`, and `stroke-width` survives into the mask, so
+        // painting unconditionally would move every edge by stroke-width/2.
+        let stroke = match stroke_state {
+            Stroke::Painted => paint,
+            Stroke::Absent => "none",
+        };
+```
+
+The rest of the function is unchanged.
+
+- [ ] **Step 5: Update the one test that encoded the old behaviour**
+
+`paint_is_written_to_the_inline_style_as_well` asserts `stroke:#ffffff` on
+`<rect id="a"/>` — an element with no stroke. That assertion **is** the defect,
+written down. Give the fixture a stroked sibling and split the assertion:
+
+```rust
+        let out = mask_of(
+            r##"<svg xmlns="http://www.w3.org/2000/svg"><g data-byonk-tone="continuous"><rect id="a"/><rect id="s" stroke="#123456"/></g><rect id="b"/></svg>"##,
+        );
+```
+
+then replace the `stroke:#ffffff` assertion on `a` with:
+
+```rust
+        // `#a` declares no stroke, and SVG's initial stroke is `none`. The mask
+        // must not invent one: a stroke here would widen the marked area by
+        // half the stroke-width, which `stroke-width` in the document can make
+        // arbitrarily large.
+        assert!(
+            a.contains("stroke:none"),
+            "an unstroked element must not gain a stroke: {a}"
+        );
+        // A genuinely stroked element keeps its stroke, repainted.
+        let s = out
+            .split(r#"id="s""#)
+            .nth(1)
+            .unwrap()
+            .split('>')
+            .next()
+            .unwrap();
+        assert!(
+            s.contains("stroke:#ffffff"),
+            "a stroked element must keep its stroke, repainted: {s}"
+        );
+```
+
+Every other existing test is unaffected and must keep passing unchanged.
+
+- [ ] **Step 6: Add six rewriter tests**
+
+Append to `mod tests` in `tone_mask.rs`. **`r##"…"##` delimiters are
+load-bearing** wherever an assertion contains `stroke="#ffffff"` — the sequence
+`"#` terminates a `r#"…"#` string. This bit during authoring; do not "simplify"
+them.
+
+| test | asserts |
+|---|---|
+| `an_unstroked_shape_gains_no_stroke_in_the_mask` | a marked `<rect>` with no stroke gets `stroke="none"`, and *not* `stroke="#ffffff"` |
+| `a_stroked_shape_keeps_its_stroke_repainted` | `<path fill="none" stroke="#123456">` keeps `stroke="#ffffff"` and `fill="none"` |
+| `stroke_is_inherited_from_an_ancestor_group` | `<g stroke="#000000"><line id="l"/></g>` → the line gets `stroke="#ffffff"` |
+| `an_explicit_stroke_none_still_suppresses_the_stroke` | `stroke="none"` on a child of a stroked `<g>` wins over the inherited stroke |
+| `inline_style_stroke_is_recognised_around_case_and_whitespace` | each of `stroke:#123456`, `STROKE: #123456`, `Stroke : #123456`, `stroke\t: #123456`, `stroke: #123456 !important` is seen as a stroke |
+| `an_inline_style_stroke_beats_the_presentation_attribute` | `stroke="none" style="stroke:#123456"` → painted; `stroke="#123456" style="stroke:none"` → none |
+
+- [ ] **Step 7: Add the rasterization regression test**
+
+Append to `mod tests` in `src/rendering/svg_to_png.rs`. This is the only test
+that could have caught the original defect, and the C case is the control that
+proves the fix is an *evidence* fix rather than blanket stroke removal:
+
+```rust
+    /// The mask must not invent a stroke. This is the only kind of test that
+    /// can catch it: the rewriter's own tests assert on the mask *document*,
+    /// and an added `stroke` is only visible once the document is rasterized.
+    ///
+    /// Measured before the fix: case A marked 50..=150 and case B 40..=159.
+    #[test]
+    fn tone_mask_edge_does_not_spill_past_an_unstroked_shape() {
+        let renderer = SvgRenderer::new();
+        let spec = DisplaySpec::from_dimensions(200, 200).unwrap();
+        let span = |svg: &str| {
+            let mask = renderer.rasterize_tone_mask(svg.as_bytes(), spec).unwrap();
+            let row = 100usize;
+            let first = (0..200).find(|&x| mask[row * 200 + x]).unwrap();
+            let last = (0..200).rev().find(|&x| mask[row * 200 + x]).unwrap();
+            (first, last)
+        };
+
+        // A: a plain unstroked shape. SVG's initial stroke is `none`, so the
+        // mask edge must land exactly on the geometry.
+        let plain = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+            <rect width="200" height="200" fill="#ffffff"/>
+            <g data-byonk-tone="continuous">
+              <rect x="50" y="50" width="100" height="100" fill="#336699"/>
+            </g>
+          </svg>"##;
+        assert_eq!(span(plain), (50, 149), "an unstroked shape must not widen");
+
+        // B: `stroke` is a paint property, so the stylesheet's `stroke: none`
+        // is stripped — while `stroke-width` survives as geometry. Inventing a
+        // stroke here would widen the mask by half of it, unboundedly.
+        let css_width = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+            <style>.p { stroke: none; stroke-width: 20; }</style>
+            <rect width="200" height="200" fill="#ffffff"/>
+            <g data-byonk-tone="continuous">
+              <rect class="p" x="50" y="50" width="100" height="100" fill="#336699"/>
+            </g>
+          </svg>"##;
+        assert_eq!(
+            span(css_width),
+            (50, 149),
+            "a stripped stroke must not resurrect via stroke-width"
+        );
+
+        // C: the control. A shape that genuinely IS stroked must still mark its
+        // stroke, or the fix would just be deleting strokes.
+        let stroked = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+            <rect width="200" height="200" fill="#ffffff"/>
+            <g data-byonk-tone="continuous">
+              <rect x="50" y="50" width="100" height="100" fill="#336699" stroke="#336699" stroke-width="20"/>
+            </g>
+          </svg>"##;
+        assert_eq!(
+            span(stroked),
+            (40, 159),
+            "a real stroke must still be marked"
+        );
+    }
+```
+
+- [ ] **Step 8: Document the third known case**
+
+In the module docs of `tone_mask.rs`, the "Known over-marking" section says
+"Two cases grow the marked region slightly." Make it three, and note that this
+one *shrinks* it:
+
+```rust
+//! - A stroke set only by a stylesheet rule is lost, because paint
+//!   declarations are stripped before the stroke is resolved. That element
+//!   under-marks by half its stroke width. This is the one case that shrinks
+//!   the region rather than growing it, and it is the fail-safe direction:
+//!   the alternative, painting `stroke` unconditionally, invents a stroke on
+//!   every unstroked shape and moves edges by an unbounded `stroke-width / 2`.
+```
+
+- [ ] **Step 9: Verify**
+
+```
+CARGO_BUILD_JOBS=2 cargo test --lib tone_mask
+```
+Expected: **27 pass** (18 existing rewriter + 6 new rewriter + 3 rasterization).
+
+```
+make check
+```
+Expected: fully green; byonk lib suite **429 -> 436**.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add src/rendering/tone_mask.rs src/rendering/svg_to_png.rs
+git commit -m "fix(rendering): the tone mask must not invent a stroke"
+```
+
+---
+
 ### Task 10: Wire gamut mapping into the render path
 
 **Files:**

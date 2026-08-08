@@ -625,10 +625,16 @@ mod tests {
                 if c <= 0.0 {
                     continue;
                 }
-                // Sit just inside the reported limit; bilinear sampling can
-                // overshoot the true boundary slightly between bins, so allow
-                // a small margin.
-                let probe = Oklch { l, c: c * 0.92, h };
+                // Sit just inside the reported limit. The sample may overshoot
+                // the true boundary between bins: by a small relative amount at
+                // ordinary chroma, and by a small absolute amount in the
+                // near-black rows where Cmax itself is tiny. Back off by
+                // whichever is larger before probing.
+                let probe_c = c - (0.08 * c).max(0.0015);
+                if probe_c <= 0.0 {
+                    continue;
+                }
+                let probe = Oklch { l, c: probe_c, h };
                 assert!(
                     hull.contains(LinearRgb::from(Oklab::from(probe))),
                     "sample(h={h:.3}, l={l:.3}) = {c:.4} is not reachable"
@@ -810,6 +816,13 @@ fn hue_of_bin(hi: usize) -> f32 {
 /// Largest chroma at this (hue, lightness) whose Oklch point is still inside
 /// the hull. Zero when even the neutral at this lightness is unreachable.
 fn max_chroma(hull: &Hull, h: f32, l: f32) -> f32 {
+    // At pure black (L = 0), the Oklab-to-linear cubic map degenerates, causing
+    // `contains` to admit a spurious non-zero chroma. Handle this explicitly
+    // since black is a hull vertex.
+    if l <= 0.001 {
+        return 0.0;
+    }
+
     let inside = |c: f32| hull.contains(LinearRgb::from(Oklab::from(Oklch { l, c, h })));
 
     if !inside(0.0) {

@@ -1737,34 +1737,68 @@ Append to the module in `crates/eink-dither/src/domain_tests.rs` that already co
                 }
                 checked += 1;
 
-                // Just inside the reported limit: must be reachable.
+                // Just inside the reported limit: must be reachable. Compared
+                // RELATIVE to c_max — see the ruling below.
                 let inside = Oklab::from(Oklch { l, c: c_max * 0.9, h });
                 let (d_in, _) = best_reachable(&palette, inside);
-                at_limit_worst = at_limit_worst.max(d_in);
+                at_limit_worst = at_limit_worst.max(d_in / c_max);
 
                 // Well beyond: must not be.
                 let outside = Oklab::from(Oklch { l, c: c_max * 2.5, h });
                 let (d_out, _) = best_reachable(&palette, outside);
-                beyond_limit_min = beyond_limit_min.min(d_out);
+                beyond_limit_min = beyond_limit_min.min(d_out / c_max);
             }
         }
 
         eprintln!(
-            "cmax oracle: checked {checked} bins, worst in-limit dE {at_limit_worst:.4}, \
-             smallest beyond-limit dE {beyond_limit_min:.4}"
+            "cmax oracle: checked {checked} bins, worst in-limit ratio {at_limit_worst:.4}, \
+             smallest beyond-limit ratio {beyond_limit_min:.4}"
         );
         assert!(checked > 100, "grid produced too few usable bins: {checked}");
         assert!(
-            at_limit_worst < 0.02,
-            "table over-reports Cmax: a point at 0.9*Cmax was {at_limit_worst:.4} from the hull"
+            at_limit_worst < IN_LIMIT_MAX_RATIO,
+            "table over-reports Cmax: a point at 0.9*Cmax was {at_limit_worst:.4}*Cmax from the hull"
         );
         assert!(
-            beyond_limit_min > 0.02,
+            beyond_limit_min > BEYOND_LIMIT_MIN_RATIO,
             "table under-reports Cmax: a point at 2.5*Cmax was only \
-             {beyond_limit_min:.4} from the hull"
+             {beyond_limit_min:.4}*Cmax from the hull"
         );
     }
 ```
+
+**Ruling (2026-08-08): the thresholds are RELATIVE to `Cmax`, and the oracle is
+fixed — `cmax.rs` is NOT.** The first draft of this task asserted absolute dE
+(`< 0.02` / `> 0.02`) and instructed that a failure meant the table was wrong.
+Both halves were mistaken, and measurement settled it:
+
+1. **The absolute threshold is structurally wrong.** Both statistics scale with
+   `Cmax`, and `Cmax → 0` at both lightness extremes. Even discounting the
+   darkest row, `beyond_limit_min` was `0.02100` against a `0.02` threshold — a
+   1.05× margin. Note also that `d_out` is a 3-D distance whose nearest hull
+   point need not be radial, so `d_out < 1.5*Cmax` never demonstrated
+   under-reporting; the check only establishes "not on the hull". Keep it
+   generous.
+2. **The dark-row failure was the ORACLE, not the table.** `best_reachable` is
+   coordinate descent; from a pure-black start, growing the diluting weight is a
+   zero-gradient move (the cost normalises by the weight sum) and the smallest
+   ink step overshoots `L = 0.0625`, so the descent halts at pure black and
+   reports the target's own chroma as the distance. Witness: at
+   `(L=0.06250, C=0.01219, h=1.571)` the stock oracle returns `0.01219`
+   ("nothing reachable"); with dilute near-black starts and the ladder extended
+   to `0.0001` it returns `0.00007` — 163× better — landing at `C=0.01225`,
+   which is 90.5% of the table's reported `0.01354` and so **vindicates the
+   table**. Task 3 stands; `cmax.rs` is unchanged.
+
+Therefore this task must **first repair `best_reachable` in place** (add dilute
+near-black starts; extend the step ladder with `0.001, 0.0005, 0.0001`), which
+strictly improves every caller. Measured effect: the worst `d_in/Cmax` ratio is
+`0.90` at `L=0.0625` and `0.0916` at `L=0.125` with the stock ladder, and
+`≤0.0083` on every row once repaired. All six existing callers are `#[ignore]`d
+diagnostics, so the default suite is unaffected.
+
+`IN_LIMIT_MAX_RATIO` and `BEYOND_LIMIT_MIN_RATIO` are named constants whose
+values are **measured after the oracle repair**, not guessed — see Step 3.
 
 If a `six_color_palette()` helper does not already exist in that module, add it directly above the test:
 
@@ -1789,15 +1823,34 @@ If a `six_color_palette()` helper does not already exist in that module, add it 
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `CARGO_BUILD_JOBS=2 cargo test -p eink-dither test_cmax_table_agrees -- --ignored --nocapture`
-Expected: FAIL to compile if `six_color_palette` collides with an existing helper — resolve by reusing the existing one. Otherwise the test should compile and **pass** on the first run, since Tasks 2–3 already implement the table. If it fails, the table is wrong: fix `cmax.rs`, not the thresholds.
+
+`six_color_palette()` does **not** exist in that module and there is no
+equivalent to reuse, so add it — there is no collision to resolve.
+
+Expected once `best_reachable` is repaired: **PASS**. If it still fails, do
+**not** adjust a threshold and do **not** edit `cmax.rs` — report it. The table
+has been independently validated against a repaired oracle (see the ruling
+above), so a further failure means something not yet understood.
 
 - [ ] **Step 3: Record the measured numbers**
 
-Copy the `eprintln!` output into the test's doc comment as a baseline, e.g.:
+Set the two named constants from the **repaired** oracle's measured extremes,
+with margin, and record the real observed values — never the illustrative
+figures a draft of this plan once carried. Reference points measured on
+2026-08-08: with the stock oracle the worst in-limit ratio was `0.90`
+(`L = 0.0625`); repaired, every row is `≤ 0.0083`. The smallest beyond-limit
+ratio was `0.4582` with the stock oracle, and **will decrease** once the oracle
+is repaired, because a better optimiser finds closer points — so it must be
+re-measured, not carried over.
+
+Choose each constant to clear its measured extreme by a stated margin (aim for
+≥3× on the in-limit ratio, ≥1.5× on the beyond-limit ratio), rounded to a clean
+value, and put the measurement and the margin in the doc comment, e.g.:
 
 ```rust
-    /// Measured 2026-08-08 on the six-ink official palette: 312 bins,
-    /// worst in-limit dE 0.0041, smallest beyond-limit dE 0.0387.
+    /// Measured 2026-08-08 on the six-ink official palette, repaired oracle:
+    /// N bins, worst in-limit ratio X (constant A, M× margin), smallest
+    /// beyond-limit ratio Y (constant B, M× margin).
 ```
 
 - [ ] **Step 4: Run again to confirm**

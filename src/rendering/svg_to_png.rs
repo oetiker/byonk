@@ -672,4 +672,62 @@ mod tests {
             "the occluding unmarked rect must punch through the mask"
         );
     }
+
+    /// The mask must not invent a stroke. This is the only kind of test that
+    /// can catch it: the rewriter's own tests assert on the mask *document*,
+    /// and an added `stroke` is only visible once the document is rasterized.
+    ///
+    /// Measured before the fix: case A marked 50..=150 and case B 40..=159.
+    #[test]
+    fn tone_mask_edge_does_not_spill_past_an_unstroked_shape() {
+        let renderer = SvgRenderer::new();
+        let spec = DisplaySpec::from_dimensions(200, 200).unwrap();
+        let span = |svg: &str| {
+            let mask = renderer.rasterize_tone_mask(svg.as_bytes(), spec).unwrap();
+            let row = 100usize;
+            let first = (0..200).find(|&x| mask[row * 200 + x]).unwrap();
+            let last = (0..200).rev().find(|&x| mask[row * 200 + x]).unwrap();
+            (first, last)
+        };
+
+        // A: a plain unstroked shape. SVG's initial stroke is `none`, so the
+        // mask edge must land exactly on the geometry.
+        let plain = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+            <rect width="200" height="200" fill="#ffffff"/>
+            <g data-byonk-tone="continuous">
+              <rect x="50" y="50" width="100" height="100" fill="#336699"/>
+            </g>
+          </svg>"##;
+        assert_eq!(span(plain), (50, 149), "an unstroked shape must not widen");
+
+        // B: `stroke` is a paint property, so the stylesheet's `stroke: none`
+        // is stripped — while `stroke-width` survives as geometry. Inventing a
+        // stroke here would widen the mask by half of it, unboundedly.
+        let css_width = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+            <style>.p { stroke: none; stroke-width: 20; }</style>
+            <rect width="200" height="200" fill="#ffffff"/>
+            <g data-byonk-tone="continuous">
+              <rect class="p" x="50" y="50" width="100" height="100" fill="#336699"/>
+            </g>
+          </svg>"##;
+        assert_eq!(
+            span(css_width),
+            (50, 149),
+            "a stripped stroke must not resurrect via stroke-width"
+        );
+
+        // C: the control. A shape that genuinely IS stroked must still mark its
+        // stroke, or the fix would just be deleting strokes.
+        let stroked = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+            <rect width="200" height="200" fill="#ffffff"/>
+            <g data-byonk-tone="continuous">
+              <rect x="50" y="50" width="100" height="100" fill="#336699" stroke="#336699" stroke-width="20"/>
+            </g>
+          </svg>"##;
+        assert_eq!(
+            span(stroked),
+            (40, 159),
+            "a real stroke must still be marked"
+        );
+    }
 }

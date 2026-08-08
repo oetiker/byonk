@@ -29,6 +29,13 @@
 //! Growing the region into unmarked territory is harmless — the mask
 //! background is already black. Growing it inside a marked region maps a few
 //! extra background pixels, and mapping in-gamut content is the identity.
+//!
+//! - A stroke set only by a stylesheet rule is lost, because paint
+//!   declarations are stripped before the stroke is resolved. That element
+//!   under-marks by half its stroke width. This is the one case that shrinks
+//!   the region rather than growing it, and it is the fail-safe direction:
+//!   the alternative, painting `stroke` unconditionally, invents a stroke on
+//!   every unstroked shape and moves edges by an unbounded `stroke-width / 2`.
 
 use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, BytesText, Event};
@@ -89,6 +96,20 @@ impl Tone {
     }
 }
 
+/// Whether an element paints a stroke, as far as the mask can tell.
+///
+/// The mask must not *introduce* a stroke where the document has none. SVG's
+/// initial `stroke` is `none`, so painting `stroke` unconditionally would widen
+/// every marked shape by half its stroke-width — and `stroke-width` survives
+/// into the mask as geometry, so that error is unbounded, not sub-pixel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stroke {
+    /// This element or an ancestor declares a stroke that is not `none`.
+    Painted,
+    /// No stroke declaration up the tree, or the nearest one is `none`.
+    Absent,
+}
+
 /// Rewrite `svg` into its mask document.
 pub fn build_mask_svg(svg: &[u8]) -> Result<Vec<u8>, ToneMaskError> {
     let mut reader = Reader::from_reader(svg);
@@ -97,6 +118,9 @@ pub fn build_mask_svg(svg: &[u8]) -> Result<Vec<u8>, ToneMaskError> {
 
     // Effective tone for each open element, innermost last.
     let mut tone_stack: Vec<Tone> = vec![Tone::Graphic];
+    // Effective stroke for each open element, innermost last. The root default
+    // is SVG's initial value, `none`.
+    let mut stroke_stack: Vec<Stroke> = vec![Stroke::Absent];
     // Depth of open `<defs>` elements — content there is stripped, not painted.
     let mut defs_depth: usize = 0;
     // Depth of open `<style>` elements — text there is a stylesheet.
@@ -123,6 +147,7 @@ pub fn build_mask_svg(svg: &[u8]) -> Result<Vec<u8>, ToneMaskError> {
                 }
                 let name = e.name().as_ref().to_vec();
                 let tone = resolve_tone(&e, *tone_stack.last().unwrap());
+                let stroke = resolve_stroke(&e, *stroke_stack.last().unwrap());
                 if name == b"image" {
                     // Start-form image: emit the rect and swallow the subtree.
                     // No tone_stack push — the matching End is swallowed too.
@@ -135,13 +160,14 @@ pub fn build_mask_svg(svg: &[u8]) -> Result<Vec<u8>, ToneMaskError> {
                     continue;
                 }
                 tone_stack.push(tone);
+                stroke_stack.push(stroke);
                 if name == b"defs" {
                     defs_depth += 1;
                 }
                 if name == b"style" {
                     style_depth += 1;
                 }
-                let out = rewrite_start(&e, tone, defs_depth > 0)?;
+                let out = rewrite_start(&e, tone, defs_depth > 0, stroke)?;
                 writer
                     .write_event(Event::Start(out))
                     .map_err(|e| ToneMaskError::Xml(e.to_string()))?;
@@ -163,6 +189,9 @@ pub fn build_mask_svg(svg: &[u8]) -> Result<Vec<u8>, ToneMaskError> {
                 if tone_stack.len() > 1 {
                     tone_stack.pop();
                 }
+                if stroke_stack.len() > 1 {
+                    stroke_stack.pop();
+                }
                 writer
                     .write_event(Event::End(e))
                     .map_err(|e| ToneMaskError::Xml(e.to_string()))?;
@@ -176,13 +205,14 @@ pub fn build_mask_svg(svg: &[u8]) -> Result<Vec<u8>, ToneMaskError> {
                 // Self-closing: its tone applies to itself only, never to its
                 // siblings.
                 let tone = resolve_tone(&e, *tone_stack.last().unwrap());
+                let stroke = resolve_stroke(&e, *stroke_stack.last().unwrap());
                 if e.name().as_ref() == b"image" {
                     let rect = image_to_rect(&e, tone, defs_depth > 0)?;
                     writer
                         .write_event(Event::Empty(rect))
                         .map_err(|e| ToneMaskError::Xml(e.to_string()))?;
                 } else {
-                    let out = rewrite_start(&e, tone, defs_depth > 0)?;
+                    let out = rewrite_start(&e, tone, defs_depth > 0, stroke)?;
                     writer
                         .write_event(Event::Empty(out))
                         .map_err(|e| ToneMaskError::Xml(e.to_string()))?;
@@ -235,6 +265,65 @@ pub fn build_mask_svg(svg: &[u8]) -> Result<Vec<u8>, ToneMaskError> {
     Ok(writer.into_inner().into_inner())
 }
 
+/// An element's effective stroke: its own declaration if it has one, else its
+/// parent's.
+///
+/// Only presentation attributes and inline styles count as evidence. A stroke
+/// set solely by a stylesheet rule cannot be seen here, because paint
+/// declarations are stripped from stylesheets before this runs. Such an element
+/// loses its stroke in the mask and therefore *under*-marks by half its stroke
+/// width — the fail-safe direction, and the third known case in the module docs.
+fn resolve_stroke(e: &BytesStart, inherited: Stroke) -> Stroke {
+    let mut from_attr: Option<Stroke> = None;
+    let mut from_style: Option<Stroke> = None;
+
+    for attr in e.attributes().with_checks(false).flatten() {
+        let key = String::from_utf8_lossy(attr.key.as_ref()).to_ascii_lowercase();
+        let value = String::from_utf8_lossy(attr.value.as_ref()).into_owned();
+        match key.as_str() {
+            "stroke" => from_attr = Some(stroke_from_value(&value)),
+            "style" => {
+                from_style = declaration_value(&value, "stroke").map(|v| stroke_from_value(&v));
+            }
+            _ => {}
+        }
+    }
+
+    // An inline style beats a presentation attribute, whatever the source order.
+    from_style.or(from_attr).unwrap_or(inherited)
+}
+
+fn stroke_from_value(value: &str) -> Stroke {
+    if value.trim().eq_ignore_ascii_case("none") {
+        Stroke::Absent
+    } else {
+        Stroke::Painted
+    }
+}
+
+/// The value of `prop` in an inline `style="..."`.
+///
+/// Uses the same property-name normalisation as [`is_paint_declaration`]:
+/// names are case-insensitive and whitespace before the colon is legal. The
+/// last declaration wins, as in CSS, and a trailing `!important` is dropped.
+fn declaration_value(style: &str, prop: &str) -> Option<String> {
+    let mut found = None;
+    for decl in style.split(';') {
+        let Some((name, value)) = decl.split_once(':') else {
+            continue;
+        };
+        if name.trim().to_ascii_lowercase() == prop {
+            let value = value.trim();
+            let value = value
+                .strip_suffix("!important")
+                .map(str::trim_end)
+                .unwrap_or(value);
+            found = Some(value.trim().to_string());
+        }
+    }
+    found
+}
+
 /// An element's effective tone: its own attribute if present, else its parent's.
 fn resolve_tone(e: &BytesStart, inherited: Tone) -> Tone {
     for attr in e.attributes().with_checks(false).flatten() {
@@ -256,17 +345,18 @@ fn rewrite_start(
     e: &BytesStart,
     tone: Tone,
     in_defs: bool,
+    stroke_state: Stroke,
 ) -> Result<BytesStart<'static>, ToneMaskError> {
     let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
     let mut out = BytesStart::new(name);
 
-    let mut fill_none = false;
-    let mut stroke_none = false;
+    let mut fill_none_attr: Option<bool> = None;
+    let mut fill_none_style: Option<bool> = None;
     let mut kept_style = String::new();
 
     for attr in e.attributes().with_checks(false) {
         let attr = attr.map_err(|e| ToneMaskError::Xml(e.to_string()))?;
-        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        let key = String::from_utf8_lossy(attr.key.as_ref()).to_ascii_lowercase();
         let value = String::from_utf8_lossy(attr.value.as_ref()).into_owned();
 
         // The markers are ours; they must not survive into the mask document.
@@ -275,23 +365,18 @@ fn rewrite_start(
         }
         // Paint we are about to set ourselves.
         if PAINT_PROPS.contains(&key.as_str()) {
-            if key == "fill" && value.trim() == "none" {
-                fill_none = true;
-            }
-            if key == "stroke" && value.trim() == "none" {
-                stroke_none = true;
+            if key == "fill" {
+                fill_none_attr = Some(value.trim().eq_ignore_ascii_case("none"));
             }
             continue;
         }
         if key == "style" {
             // Held back until the paint is known, so both land in one attribute.
             kept_style = strip_paint_declarations_inline(&value);
-            if value.contains("fill:none") || value.contains("fill: none") {
-                fill_none = true;
-            }
-            if value.contains("stroke:none") || value.contains("stroke: none") {
-                stroke_none = true;
-            }
+            // Same normalisation as the stylesheet stripper: `fill : NONE` is
+            // a legal way to write it, and the old exact-match check missed it.
+            fill_none_style =
+                declaration_value(&value, "fill").map(|v| v.eq_ignore_ascii_case("none"));
             continue;
         }
         out.push_attribute(Attribute::from((key.as_str(), value.as_str())));
@@ -299,8 +384,16 @@ fn rewrite_start(
 
     if !in_defs {
         let paint = tone.paint();
+        // An inline style beats a presentation attribute.
+        let fill_none = fill_none_style.or(fill_none_attr).unwrap_or(false);
         let fill = if fill_none { "none" } else { paint };
-        let stroke = if stroke_none { "none" } else { paint };
+        // Never introduce a stroke the document does not have: SVG's initial
+        // stroke is `none`, and `stroke-width` survives into the mask, so
+        // painting unconditionally would move every edge by stroke-width/2.
+        let stroke = match stroke_state {
+            Stroke::Painted => paint,
+            Stroke::Absent => "none",
+        };
         out.push_attribute(Attribute::from(("fill", fill)));
         out.push_attribute(Attribute::from(("stroke", stroke)));
         out.push_attribute(Attribute::from(("fill-opacity", "1")));
@@ -645,7 +738,7 @@ mod tests {
         // A stylesheet rule beats a presentation attribute, so the paint must
         // also be in the inline style, which beats both.
         let out = mask_of(
-            r##"<svg xmlns="http://www.w3.org/2000/svg"><g data-byonk-tone="continuous"><rect id="a"/></g><rect id="b"/></svg>"##,
+            r##"<svg xmlns="http://www.w3.org/2000/svg"><g data-byonk-tone="continuous"><rect id="a"/><rect id="s" stroke="#123456"/></g><rect id="b"/></svg>"##,
         );
         let a = out
             .split(r#"id="a""#)
@@ -662,9 +755,25 @@ mod tests {
             a.contains("fill:#ffffff"),
             "inline style must carry paint: {a}"
         );
+        // `#a` declares no stroke, and SVG's initial stroke is `none`. The mask
+        // must not invent one: a stroke here would widen the marked area by
+        // half the stroke-width, which `stroke-width` in the document can make
+        // arbitrarily large.
         assert!(
-            a.contains("stroke:#ffffff"),
-            "inline style must carry stroke: {a}"
+            a.contains("stroke:none"),
+            "an unstroked element must not gain a stroke: {a}"
+        );
+        // A genuinely stroked element keeps its stroke, repainted.
+        let s = out
+            .split(r#"id="s""#)
+            .nth(1)
+            .unwrap()
+            .split('>')
+            .next()
+            .unwrap();
+        assert!(
+            s.contains("stroke:#ffffff"),
+            "a stroked element must keep its stroke, repainted: {s}"
         );
         let b = out
             .split(r#"id="b""#)
@@ -713,5 +822,147 @@ mod tests {
             "geometry must survive in defs: {sr}"
         );
         assert!(!sr.contains("fill:"), "defs must gain no paint: {sr}");
+    }
+
+    #[test]
+    fn an_unstroked_shape_gains_no_stroke_in_the_mask() {
+        // The defect this guards: SVG's initial stroke is `none`, so painting
+        // `stroke` unconditionally invented a stroke-width/2 border on every
+        // marked shape. Measured before the fix: a shape spanning x=50..=149
+        // rasterized to 50..=150, and to 40..=159 with a stroke-width of 20.
+        let out = mask_of(
+            r##"<svg xmlns="http://www.w3.org/2000/svg"><g data-byonk-tone="continuous"><rect id="r" width="10" height="10"/></g></svg>"##,
+        );
+        let r = out
+            .split(r#"id="r""#)
+            .nth(1)
+            .unwrap()
+            .split('>')
+            .next()
+            .unwrap();
+        assert!(r.contains(r#"stroke="none""#), "no invented stroke: {r}");
+        assert!(
+            !r.contains(r##"stroke="#ffffff""##),
+            "no invented stroke: {r}"
+        );
+    }
+
+    #[test]
+    fn a_stroked_shape_keeps_its_stroke_repainted() {
+        let out = mask_of(
+            r##"<svg xmlns="http://www.w3.org/2000/svg"><g data-byonk-tone="continuous"><path id="p" fill="none" stroke="#123456" d="M0 0 L10 10"/></g></svg>"##,
+        );
+        let p = out
+            .split(r#"id="p""#)
+            .nth(1)
+            .unwrap()
+            .split('>')
+            .next()
+            .unwrap();
+        // A stroke-only shape has no fill area at all — dropping its stroke
+        // would erase it from the mask entirely.
+        assert!(
+            p.contains(r##"stroke="#ffffff""##),
+            "stroke kept and repainted: {p}"
+        );
+        assert!(p.contains(r#"fill="none""#), "fill:none preserved: {p}");
+    }
+
+    #[test]
+    fn stroke_is_inherited_from_an_ancestor_group() {
+        // `<g stroke="..."><line/></g>` is legal and common: the line has no
+        // stroke of its own but inherits one. Writing stroke="none" on it
+        // would override the inherited paint and erase the line.
+        let out = mask_of(
+            r##"<svg xmlns="http://www.w3.org/2000/svg"><g data-byonk-tone="continuous" stroke="#000000"><line id="l" x1="0" y1="0" x2="10" y2="10"/></g></svg>"##,
+        );
+        let l = out
+            .split(r#"id="l""#)
+            .nth(1)
+            .unwrap()
+            .split('>')
+            .next()
+            .unwrap();
+        assert!(
+            l.contains(r##"stroke="#ffffff""##),
+            "inherited stroke kept: {l}"
+        );
+    }
+
+    #[test]
+    fn an_explicit_stroke_none_still_suppresses_the_stroke() {
+        let out = mask_of(
+            r##"<svg xmlns="http://www.w3.org/2000/svg"><g data-byonk-tone="continuous" stroke="#000000"><rect id="r" stroke="none" width="10" height="10"/></g></svg>"##,
+        );
+        let r = out
+            .split(r#"id="r""#)
+            .nth(1)
+            .unwrap()
+            .split('>')
+            .next()
+            .unwrap();
+        assert!(
+            r.contains(r#"stroke="none""#),
+            "explicit none wins over inherited: {r}"
+        );
+    }
+
+    #[test]
+    fn inline_style_stroke_is_recognised_around_case_and_whitespace() {
+        // Same normalisation the stylesheet stripper uses. An unrecognised
+        // declaration here would drop a real stroke from the mask.
+        for decl in [
+            "stroke:#123456",
+            "STROKE: #123456",
+            "Stroke : #123456",
+            "stroke\t: #123456",
+            "stroke: #123456 !important",
+        ] {
+            let svg = format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg"><g data-byonk-tone="continuous"><rect id="r" style="{decl}" width="10" height="10"/></g></svg>"##
+            );
+            let out = mask_of(&svg);
+            let r = out
+                .split(r#"id="r""#)
+                .nth(1)
+                .unwrap()
+                .split('>')
+                .next()
+                .unwrap();
+            assert!(
+                r.contains(r##"stroke="#ffffff""##),
+                "{decl} must be seen as a stroke: {r}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_inline_style_stroke_beats_the_presentation_attribute() {
+        // CSS cascade: the inline style wins whatever the attribute order.
+        let out = mask_of(
+            r##"<svg xmlns="http://www.w3.org/2000/svg"><g data-byonk-tone="continuous"><rect id="r" stroke="none" style="stroke:#123456" width="10" height="10"/><rect id="q" stroke="#123456" style="stroke:none" width="10" height="10"/></g></svg>"##,
+        );
+        let r = out
+            .split(r#"id="r""#)
+            .nth(1)
+            .unwrap()
+            .split('>')
+            .next()
+            .unwrap();
+        assert!(
+            r.contains(r##"stroke="#ffffff""##),
+            "style beats attribute: {r}"
+        );
+        let q = out
+            .split(r#"id="q""#)
+            .nth(1)
+            .unwrap()
+            .split('>')
+            .next()
+            .unwrap();
+        assert!(
+            q.contains(r#"stroke="none""#),
+            "style:none beats attribute: {q}"
+        );
     }
 }

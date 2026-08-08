@@ -14,6 +14,16 @@
 - **The hull is built from the colours the ditherer targets** — `Palette::actual_linear(i)`, which falls back to official colours when no measured set resolved. The hull and the dither target must never diverge.
 - **Hue is never modified.** Only chroma is compressed, at clamped lightness.
 - **Strict monotonicity of the chroma map is a correctness property**, asserted on the float chroma function (8-bit sRGB quantisation legitimately collapses adjacent values; do not assert monotonicity on bytes).
+- **Clamp linear RGB to `[0, 1]` before `Srgb::from`.** An `Oklch → Oklab → LinearRgb`
+  round trip can land a hair outside the cube, and `color::lut::linear_to_srgb`
+  carries an epsilon-free `debug_assert!(0.0..=1.0)` before clamping for release.
+  So an unclamped conversion panics in debug (i.e. under `cargo test`) while
+  behaving identically in release. Measured over a 421k-colour sweep with the
+  six-ink palette at `R = 2.5`, the only excursion is pure white at `1.0000001`
+  — one ULP. Excursions are larger and genuine, not fp noise, when chroma
+  compression targets a hue outside sRGB (worst `-4.7e-4` at `r = 1.0`), where
+  clamping is the correct response rather than a workaround. Task 6 does this in
+  `map_color`; any later task converting `Oklch` back to `Srgb` must too.
 - **No silent fallback on mask failure.** A mask rasterization error returns `RenderError`. Rendering something materially different while reporting success is the failure mode this design exists to avoid.
 - Defaults: `knee = 0.8`, `amount = 1.0`, `max_compression = 2.5`. The knee
   matches the ACES 1.3 RGC threshold band and is measurement-backed; see the

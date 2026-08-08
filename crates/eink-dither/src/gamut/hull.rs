@@ -202,11 +202,7 @@ fn classify(pts: &[[f32; 3]]) -> HullShape {
     }
     let p0 = pts[0];
     // First independent direction.
-    let Some(u) = pts
-        .iter()
-        .map(|p| sub(*p, p0))
-        .find(|v| norm(*v) > EPS)
-    else {
+    let Some(u) = pts.iter().map(|p| sub(*p, p0)).find(|v| norm(*v) > EPS) else {
         return HullShape::Line;
     };
     // Second independent direction: a point off the line through p0 + u.
@@ -310,8 +306,14 @@ mod tests {
             c[1] += e.g / p.len() as f32;
             c[2] += e.b / p.len() as f32;
         }
-        assert!(hull.contains(LinearRgb::new(c[0], c[1], c[2])), "centroid must be inside");
-        assert!(!hull.contains(LinearRgb::new(5.0, -3.0, 2.0)), "far exterior must be outside");
+        assert!(
+            hull.contains(LinearRgb::new(c[0], c[1], c[2])),
+            "centroid must be inside"
+        );
+        assert!(
+            !hull.contains(LinearRgb::new(5.0, -3.0, 2.0)),
+            "far exterior must be outside"
+        );
     }
 
     #[test]
@@ -352,7 +354,14 @@ mod tests {
         )
         .unwrap();
         let hull = Hull::from_palette(&p);
-        assert_eq!(hull.shape(), HullShape::Volume, "fixture must be a real volume");
-        assert!(!hull.is_mappable(), "no neutral is reachable, so it must decline");
+        assert_eq!(
+            hull.shape(),
+            HullShape::Volume,
+            "fixture must be a real volume"
+        );
+        assert!(
+            !hull.is_mappable(),
+            "no neutral is reachable, so it must decline"
+        );
     }
 }

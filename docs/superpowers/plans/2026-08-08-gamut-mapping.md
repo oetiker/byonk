@@ -174,18 +174,20 @@ The achievable set of a dithered patch is the convex hull of the palette's actua
   ```
   `lightness_range` returns the min and max Oklab L reachable **on the achromatic axis** (`a = b = 0`) inside the hull. For a degenerate hull it returns the L range of the palette points themselves.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Write the shared test fixtures and the failing tests**
 
-Create `crates/eink-dither/src/gamut/hull.rs` containing only this test module for now:
+Tasks 2, 3 and 6 all need the same two palettes. Define them **once** in
+`crates/eink-dither/src/gamut/mod.rs` so the three test modules share them
+rather than each carrying a copy:
 
 ```rust
+/// Palettes shared by the gamut modules' unit tests.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{LinearRgb, Palette, Srgb};
+pub(crate) mod test_support {
+    use crate::{Palette, Srgb};
 
-    /// The six-ink panel palette (official colours).
-    fn six_colour() -> Palette {
+    /// The six-ink panel palette, official colours.
+    pub(crate) fn six_colour() -> Palette {
         Palette::new(
             &[
                 Srgb::from_u8(0, 0, 0),
@@ -199,6 +201,32 @@ mod tests {
         )
         .unwrap()
     }
+
+    /// A four-level greyscale panel — the degenerate-hull case.
+    pub(crate) fn four_grey() -> Palette {
+        Palette::new(
+            &[
+                Srgb::from_u8(0, 0, 0),
+                Srgb::from_u8(85, 85, 85),
+                Srgb::from_u8(170, 170, 170),
+                Srgb::from_u8(255, 255, 255),
+            ],
+            None,
+        )
+        .unwrap()
+    }
+}
+```
+
+Then create `crates/eink-dither/src/gamut/hull.rs` containing only this test
+module for now:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gamut::test_support::{four_grey, six_colour};
+    use crate::LinearRgb;
 
     #[test]
     fn palette_vertices_are_inside_their_own_hull() {
@@ -238,17 +266,7 @@ mod tests {
 
     #[test]
     fn greyscale_palette_collapses_to_a_line() {
-        let p = Palette::new(
-            &[
-                Srgb::from_u8(0, 0, 0),
-                Srgb::from_u8(85, 85, 85),
-                Srgb::from_u8(170, 170, 170),
-                Srgb::from_u8(255, 255, 255),
-            ],
-            None,
-        )
-        .unwrap();
-        let hull = Hull::from_palette(&p);
+        let hull = Hull::from_palette(&four_grey());
         assert_eq!(hull.shape(), HullShape::Line);
     }
 
@@ -264,7 +282,7 @@ mod tests {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Add `pub mod gamut;` to `crates/eink-dither/src/lib.rs` after `pub mod dither;`, and create `crates/eink-dither/src/gamut/mod.rs`:
+Add `pub mod gamut;` to `crates/eink-dither/src/lib.rs` after `pub mod dither;`, and create `crates/eink-dither/src/gamut/mod.rs` with `pub mod hull;` above the `test_support` module from Step 1:
 
 ```rust
 //! Gamut mapping for continuous-tone regions.
@@ -592,22 +610,8 @@ Create `crates/eink-dither/src/gamut/cmax.rs` with only this test module:
 mod tests {
     use super::*;
     use crate::gamut::hull::Hull;
-    use crate::{LinearRgb, Oklab, Oklch, Palette, Srgb};
-
-    fn six_colour() -> Palette {
-        Palette::new(
-            &[
-                Srgb::from_u8(0, 0, 0),
-                Srgb::from_u8(255, 255, 255),
-                Srgb::from_u8(255, 0, 0),
-                Srgb::from_u8(0, 255, 0),
-                Srgb::from_u8(0, 0, 255),
-                Srgb::from_u8(255, 255, 0),
-            ],
-            None,
-        )
-        .unwrap()
-    }
+    use crate::gamut::test_support::{four_grey, six_colour};
+    use crate::{LinearRgb, Oklab, Oklch};
 
     #[test]
     fn sampled_chroma_is_inside_the_hull_everywhere() {
@@ -661,17 +665,7 @@ mod tests {
 
     #[test]
     fn greyscale_palette_reports_achromatic_and_zero_chroma() {
-        let p = Palette::new(
-            &[
-                Srgb::from_u8(0, 0, 0),
-                Srgb::from_u8(85, 85, 85),
-                Srgb::from_u8(170, 170, 170),
-                Srgb::from_u8(255, 255, 255),
-            ],
-            None,
-        )
-        .unwrap();
-        let table = CmaxTable::build(&Hull::from_palette(&p));
+        let table = CmaxTable::build(&Hull::from_palette(&four_grey()));
         assert!(table.is_achromatic());
         assert_eq!(table.sample(1.0, 0.5), 0.0);
     }
@@ -1186,22 +1180,8 @@ Create `crates/eink-dither/src/gamut/mapper.rs` with only this test module:
 mod tests {
     use super::*;
     use crate::gamut::hull::Hull;
+    use crate::gamut::test_support::{four_grey, six_colour};
     use crate::{LinearRgb, Oklab, Oklch, Srgb};
-
-    fn six_colour() -> Palette {
-        Palette::new(
-            &[
-                Srgb::from_u8(0, 0, 0),
-                Srgb::from_u8(255, 255, 255),
-                Srgb::from_u8(255, 0, 0),
-                Srgb::from_u8(0, 255, 0),
-                Srgb::from_u8(0, 0, 255),
-                Srgb::from_u8(255, 255, 0),
-            ],
-            None,
-        )
-        .unwrap()
-    }
 
     /// A spread of saturated colours, well outside a six-ink gamut.
     fn vivid_frame() -> Vec<Srgb> {
@@ -1351,17 +1331,7 @@ mod tests {
 
     #[test]
     fn greyscale_palette_desaturates_rather_than_flinging_at_an_ink() {
-        let p = Palette::new(
-            &[
-                Srgb::from_u8(0, 0, 0),
-                Srgb::from_u8(85, 85, 85),
-                Srgb::from_u8(170, 170, 170),
-                Srgb::from_u8(255, 255, 255),
-            ],
-            None,
-        )
-        .unwrap();
-        let m = GamutMapper::new(&p);
+        let m = GamutMapper::new(&four_grey());
         let mut pixels = vec![Srgb::from_u8(220, 30, 40)];
         m.map_frame(&mut pixels, &[true], GamutOptions::default());
         let (r, g, b) = {
@@ -2816,18 +2786,28 @@ Add `gamut,` to the `ScriptResult { .. }` literal.
 
 In `src/models/mod.rs`, add `GamutTuningValues` to the `pub use config::{...}` list.
 
+**Keep the tree compiling.** Adding a field to `DitherTuningValues` breaks every
+struct literal that does not use `..Default::default()`. Run the build and add
+`gamut: Default::default(),` to each site the compiler names — as of `81ba62b`
+those are `src/api/display.rs` (~lines 814, 927) and `src/main.rs` (~lines 385,
+404). These are placeholders that carry no value yet; **Task 12 replaces each
+one with the real source**. Do not wire any actual value here — that is Task
+12's reviewable deliverable, and doing it now would leave Task 12 with nothing
+to review.
+
+Every task in this plan ends on a green `cargo test`; a commit that does not
+build is never acceptable, even mid-plan.
+
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `CARGO_BUILD_JOBS=2 cargo test gamut_values script_can_return_gamut a_partial_gamut no_gamut_table`
-Expected: PASS, 6 tests. The crate will not fully build yet — Task 12 fills the
-struct literals that now miss a field. If the compiler lists exactly the sites
-in the table above, that is the expected state; if it lists others, add them to
-Task 12's list before proceeding.
+Run: `CARGO_BUILD_JOBS=2 cargo test -p byonk gamut_values script_can_return_gamut a_partial_gamut no_gamut_table`
+Expected: PASS, 6 tests, and the whole crate builds.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/models/config.rs src/models/mod.rs src/services/lua_runtime.rs
+git add src/models/config.rs src/models/mod.rs src/services/lua_runtime.rs \
+        src/api/display.rs src/main.rs
 git commit -m "feat(config): GamutTuningValues type and the script-side gamut table"
 ```
 

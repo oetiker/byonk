@@ -15,7 +15,9 @@
 - **Hue is never modified.** Only chroma is compressed, at clamped lightness.
 - **Strict monotonicity of the chroma map is a correctness property**, asserted on the float chroma function (8-bit sRGB quantisation legitimately collapses adjacent values; do not assert monotonicity on bytes).
 - **No silent fallback on mask failure.** A mask rasterization error returns `RenderError`. Rendering something materially different while reporting success is the failure mode this design exists to avoid.
-- Defaults: `knee = 0.6`, `amount = 1.0`, `max_compression = 2.5`.
+- Defaults: `knee = 0.8`, `amount = 1.0`, `max_compression = 2.5`. The knee
+  matches the ACES 1.3 RGC threshold band and is measurement-backed; see the
+  `GamutOptions::knee` doc comment in Task 6 for the derivation.
 - English for all comments, identifiers and docs.
 - Build with `make check` and **pass `timeout: 600000`** — it exceeds the Bash tool's 120 s default. Cap parallelism with `CARGO_BUILD_JOBS=2` (shared machine).
 - **Never `git add -A` or `git add .`** — add by explicit path and verify `git diff --cached` before committing.
@@ -1223,7 +1225,7 @@ Ties hull, table, adaptation and knee together, and asserts the four design prop
   ```rust
   #[derive(Debug, Clone, Copy, PartialEq)]
   pub struct GamutOptions {
-      pub knee: f32,            // default 0.6
+      pub knee: f32,            // default 0.8
       pub amount: f32,          // default 1.0
       pub max_compression: f32, // default 2.5
   }
@@ -1502,10 +1504,25 @@ use crate::{LinearRgb, Oklab, Oklch, Palette, Srgb};
 pub struct GamutOptions {
     /// Where compression begins, as a fraction of `Cmax`.
     ///
-    /// Expected low — around 0.5–0.7 rather than the ~0.9 typical in print
-    /// work — because this gamut is small enough that almost everything is
-    /// outside it, and a high knee would crush the whole vivid range into a
-    /// sliver near `Cmax` and reintroduce the flatness.
+    /// The default sits in the same band as the ACES 1.3 Reference Gamut
+    /// Compression thresholds (`0.815`, `0.803`, `0.880`), which are expressed
+    /// in the same normalised units.
+    ///
+    /// An earlier draft chose 0.6, reasoning that this gamut is small enough
+    /// that almost everything falls outside it, so a high knee would crush the
+    /// vivid range into a sliver near `Cmax`. Measurement does not support
+    /// either half of that. Across every sRGB colour with non-zero chroma,
+    /// `rho = C/Cmax` has a median of 0.91 and a p90 of 1.30 — about half the
+    /// cube is outside the hull, not almost all of it. And because `map_frame`
+    /// normalises by `R`, the 99th percentile of `rho`, the "sliver" only ever
+    /// holds the top ~1% of a region's pixels.
+    ///
+    /// Measured against that, a low knee is a bad trade. At `knee = 0.6` the
+    /// frame's vivid end (`rho/R = 1`) renders at 82.4% of the achievable
+    /// chroma; at 0.8 it renders at 91.2%. What the lower knee buys back is
+    /// separation in the out-of-gamut tail of 0.005 in Oklab chroma and below
+    /// — against roughly 0.02 for one JND, on a panel that dithers six inks.
+    /// It spends visible chroma to preserve differences nothing can render.
     pub knee: f32,
     /// Interpolation between input and mapped chroma:
     /// `C_out = C + amount * (C' - C)`.
@@ -1529,7 +1546,7 @@ pub struct GamutOptions {
 impl Default for GamutOptions {
     fn default() -> Self {
         Self {
-            knee: 0.6,
+            knee: 0.8,
             amount: 1.0,
             max_compression: 2.5,
         }
@@ -3480,7 +3497,7 @@ On the script return, alongside `dither` and the other tuning keys:
 return {
   data = data,
   gamut = {
-    knee            = 0.6,   -- where compression begins, as a fraction of the limit
+    knee            = 0.8,   -- where compression begins, as a fraction of the limit
     amount          = 1.0,   -- 0 = no mapping, 1 = full
     max_compression = 2.5,   -- never squeeze chroma by more than this
   },
@@ -3488,8 +3505,12 @@ return {
 ```
 
 - **`knee`** — content below this fraction of the reachable limit passes
-  through untouched. Low values (0.5–0.7) suit this small a gamut; a high knee
-  crushes the whole vivid range into a sliver and reintroduces the flatness.
+  through untouched. The default, 0.8, sits in the same band as the ACES
+  gamut-compression thresholds. Lowering it protects separation between the
+  most out-of-gamut colours, at the cost of desaturating everything vivid:
+  at 0.6 the most saturated content in a region renders at 82% of what the
+  panel can show, against 91% at 0.8. Raising it toward 1.0 does the reverse
+  and eventually compresses the whole out-of-gamut range into a sliver.
 - **`amount`** — interpolates between the input and the mapped chroma, so
   `amount = 0` is a clean A/B switch for judging the effect on a real panel.
   Note that only `amount = 1` guarantees in-gamut output; lower values can leave

@@ -952,15 +952,22 @@ Prepend to `crates/eink-dither/src/gamut/knee.rs`:
 //! The chroma compression curve.
 //!
 //! Below `knee * c_max` the input passes through untouched, so low-chroma
-//! content — the bulk of most images — is never desaturated. Above it, an
-//! exponential shoulder maps the whole remaining half-line into
+//! content — the bulk of most images — is never desaturated. Above it, a
+//! rational shoulder maps the whole remaining half-line into
 //! `[knee * c_max, c_max)`:
 //!
 //! ```text
 //! C <= k*Cmax :  C' = C
-//! C >  k*Cmax :  C' = k*Cmax + (1-k)*Cmax * (1 - exp(-t)),
+//! C >  k*Cmax :  C' = k*Cmax + (1-k)*Cmax * t/(1+t),
 //!                t  = (C - k*Cmax) / ((1-k)*Cmax)
 //! ```
+//!
+//! The shoulder is rational rather than exponential for a concrete reason:
+//! `1 - exp(-t)` reaches 1.0 in `f32` at modest `t`, so an exponential shoulder
+//! returns *exactly* `c_max` for every input above `c ≈ 0.94` (at `Cmax = 0.20`,
+//! `k = 0.6`) — silently becoming the clipping this design rejects. `t/(1+t)`
+//! decays polynomially and stays strictly below 1.0 even at `1000 * Cmax`.
+//! The trade is that it compresses harder just above the knee.
 //!
 //! The curve is continuous at the knee and **strictly increasing everywhere**,
 //! approaching `c_max` asymptotically without reaching it. That property is
@@ -990,7 +997,7 @@ pub fn compress_chroma(c: f32, c_max: f32, knee: f32) -> f32 {
     }
     let span = (1.0 - k) * c_max;
     let t = (c - threshold) / span;
-    threshold + span * (1.0 - (-t).exp())
+    threshold + span * (t / (1.0 + t))
 }
 ```
 

@@ -356,7 +356,7 @@ fn rewrite_start(
 
     for attr in e.attributes().with_checks(false) {
         let attr = attr.map_err(|e| ToneMaskError::Xml(e.to_string()))?;
-        let key = String::from_utf8_lossy(attr.key.as_ref()).to_ascii_lowercase();
+        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
         let value = String::from_utf8_lossy(attr.value.as_ref()).into_owned();
 
         // The markers are ours; they must not survive into the mask document.

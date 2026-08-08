@@ -673,6 +673,38 @@ mod tests {
         );
     }
 
+    /// A camelCase attribute must survive the rewrite. XML attribute names are
+    /// case-sensitive, so emitting `viewbox` silently drops the coordinate
+    /// system and the mask rasterizes empty — while every test whose viewBox
+    /// matches its width/height still passes.
+    #[test]
+    fn tone_mask_preserves_camelcase_attributes() {
+        let renderer = SvgRenderer::new();
+        // viewBox deliberately differs from width/height.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="400" height="400">
+            <rect width="100" height="100" fill="#ffffff"/>
+            <g data-byonk-tone="continuous">
+              <rect x="0" y="0" width="50" height="100" fill="#336699"/>
+            </g>
+          </svg>"##;
+        let mask_doc = crate::rendering::tone_mask::build_mask_svg(svg.as_bytes()).unwrap();
+        let text = String::from_utf8_lossy(&mask_doc);
+        assert!(
+            text.contains("viewBox"),
+            "viewBox must keep its case: {text}"
+        );
+
+        let spec = DisplaySpec::from_dimensions(400, 400).unwrap();
+        let mask = renderer.rasterize_tone_mask(svg.as_bytes(), spec).unwrap();
+        let row = 200usize;
+        let last = (0..400).rev().find(|&x| mask[row * 400 + x]);
+        assert_eq!(
+            last,
+            Some(199),
+            "the marked half must scale with the viewBox"
+        );
+    }
+
     /// The mask must not invent a stroke. This is the only kind of test that
     /// can catch it: the rewriter's own tests assert on the mask *document*,
     /// and an added `stroke` is only visible once the document is rasterized.

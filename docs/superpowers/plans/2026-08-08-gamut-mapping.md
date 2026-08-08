@@ -1910,6 +1910,12 @@ Then add a comment above the new line in `Cargo.toml`:
 
 Create `src/rendering/tone_mask.rs` with only this test module:
 
+> **The `r##"…"##` delimiters below are load-bearing, not a style choice.** A
+> plain `r#"…"#` raw string is terminated by the first `"#` sequence, and SVG is
+> full of them (`fill="#ff0000"`, `href="#sym"`). Every literal that contains
+> `"#` must use `r##"…"##`. Verified empirically — with `r#"…"#` these tests do
+> not compile. Do not "simplify" the delimiters.
+
 ```rust
 #[cfg(test)]
 mod tests {
@@ -1931,7 +1937,7 @@ mod tests {
 
     #[test]
     fn unmarked_shapes_become_black() {
-        let out = mask_of(r#"<svg xmlns="http://www.w3.org/2000/svg"><g data-byonk-tone="continuous"><rect id="a"/></g><rect id="b" fill="#ff0000"/></svg>"#);
+        let out = mask_of(r##"<svg xmlns="http://www.w3.org/2000/svg"><g data-byonk-tone="continuous"><rect id="a"/></g><rect id="b" fill="#ff0000"/></svg>"##);
         let b = out.split(r#"id="b""#).nth(1).unwrap();
         assert!(b.contains("#000000"), "unmarked rect must be black: {b}");
         assert!(!b.contains("#ff0000"), "original paint must be gone: {b}");
@@ -1939,7 +1945,7 @@ mod tests {
 
     #[test]
     fn marked_shapes_become_white() {
-        let out = mask_of(r#"<svg xmlns="http://www.w3.org/2000/svg"><g data-byonk-tone="continuous"><rect id="a" fill="#123456"/></g></svg>"#);
+        let out = mask_of(r##"<svg xmlns="http://www.w3.org/2000/svg"><g data-byonk-tone="continuous"><rect id="a" fill="#123456"/></g></svg>"##);
         let a = out.split(r#"id="a""#).nth(1).unwrap();
         assert!(a.contains("#ffffff"), "marked rect must be white: {a}");
     }
@@ -1979,10 +1985,10 @@ mod tests {
 
     #[test]
     fn fill_none_is_preserved() {
-        let out = mask_of(r#"<svg xmlns="http://www.w3.org/2000/svg"><g data-byonk-tone="continuous"><rect id="a" fill="none" stroke="#f00"/></g></svg>"#);
+        let out = mask_of(r##"<svg xmlns="http://www.w3.org/2000/svg"><g data-byonk-tone="continuous"><rect id="a" fill="none" stroke="#f00"/></g></svg>"##);
         let a = out.split(r#"id="a""#).nth(1).unwrap();
         assert!(a.contains(r#"fill="none""#), "fill:none must survive: {a}");
-        assert!(a.contains(r#"stroke="#ffffff""#), "stroke must be marked: {a}");
+        assert!(a.contains(r##"stroke="#ffffff""##), "stroke must be marked: {a}");
     }
 
     #[test]
@@ -2006,11 +2012,34 @@ mod tests {
 
     #[test]
     fn defs_content_loses_paint_so_use_sites_decide() {
-        let out = mask_of(r#"<svg xmlns="http://www.w3.org/2000/svg"><defs><g id="sym"><rect id="sr" fill="#abcdef"/></g></defs><use href="#sym" id="u"/></svg>"#);
-        let sr = out.split(r#"id="sr""#).nth(1).unwrap();
+        let out = mask_of(r##"<svg xmlns="http://www.w3.org/2000/svg"><defs><g id="sym"><rect id="sr" fill="#abcdef"/></g></defs><use href="#sym" id="u"/></svg>"##);
+        // Scope to this element's own tag — the rest of the document legitimately
+        // contains painted elements, and an unscoped tail would match them.
+        let sr = out.split(r#"id="sr""#).nth(1).unwrap().split('>').next().unwrap();
         assert!(!sr.contains("#abcdef"), "defs paint must be stripped: {sr}");
-        assert!(!sr.contains(r#"fill="#"#), "defs must not gain paint either: {sr}");
+        assert!(!sr.contains(r##"fill="#"##), "defs must not gain paint either: {sr}");
         assert!(out.split(r#"id="u""#).nth(1).unwrap().contains("#000000"));
+    }
+
+    #[test]
+    fn start_form_image_is_replaced_and_its_subtree_dropped() {
+        // `<image>…</image>` is legal SVG (it may carry `<title>`/`<desc>`).
+        // It must be replaced exactly like the self-closing form; leaving it
+        // intact would put the real photograph into the mask document, where
+        // its pixels would threshold into an arbitrary mask.
+        let out = mask_of(
+            r##"<svg xmlns="http://www.w3.org/2000/svg"><g data-byonk-tone="continuous"><image id="p" x="10" y="20" width="100" height="50" href="p.png"><title>a caption</title></image></g><rect id="after"/></svg>"##,
+        );
+        assert!(!out.contains("<image"), "start-form image must be replaced: {out}");
+        assert!(!out.contains("</image>"), "no orphan end tag: {out}");
+        assert!(!out.contains("a caption"), "image subtree must be dropped: {out}");
+        let p = out.split(r#"id="p""#).nth(1).unwrap();
+        assert!(p.contains(r#"width="100""#), "box must survive: {p}");
+        assert!(p.contains("#ffffff"), "image box must be marked: {p}");
+        assert!(
+            out.split(r#"id="after""#).nth(1).unwrap().contains("#000000"),
+            "swallowing the subtree must not disturb later siblings: {out}"
+        );
     }
 
     #[test]
@@ -2055,7 +2084,8 @@ Prepend to `src/rendering/tone_mask.rs`:
 //! Two cases grow the marked region slightly. Both are accepted:
 //!
 //! - An `<image>` becomes a `<rect>` over its layout box, so a transparent or
-//!   letterboxed image marks its whole box.
+//!   letterboxed image marks its whole box. This applies to both the
+//!   self-closing form and `<image>…</image>`, whose subtree is dropped.
 //! - An element painted `none` only via CSS becomes painted here.
 //!
 //! Growing the region into unmarked territory is harmless — the mask
@@ -2099,9 +2129,10 @@ pub enum ToneMaskError {
 /// the mask rasterization entirely and the document renders exactly as it does
 /// today.
 pub fn has_tone_markup(svg: &[u8]) -> bool {
-    svg.windows(TONE_ATTR.len() + 1)
-        .any(|w| w[..TONE_ATTR.len()] == *TONE_ATTR.as_bytes() && (w[TONE_ATTR.len()] == b'='
-            || w[TONE_ATTR.len()] == b' '))
+    svg.windows(TONE_ATTR.len() + 1).any(|w| {
+        w[..TONE_ATTR.len()] == *TONE_ATTR.as_bytes()
+            && (w[TONE_ATTR.len()] == b'=' || w[TONE_ATTR.len()] == b' ')
+    })
 }
 
 /// Effective tone of an element.
@@ -2132,6 +2163,10 @@ pub fn build_mask_svg(svg: &[u8]) -> Result<Vec<u8>, ToneMaskError> {
     let mut defs_depth: usize = 0;
     // Depth of open `<style>` elements — text there is a stylesheet.
     let mut style_depth: usize = 0;
+    // Depth inside a start-form `<image>` whose subtree we are swallowing.
+    // `<image>…</image>` is legal and may hold `<title>`/`<desc>`; the element
+    // is replaced by a rect, so nothing inside it may reach the mask.
+    let mut image_skip_depth: usize = 0;
     let mut buf = Vec::new();
 
     loop {
@@ -2142,8 +2177,25 @@ pub fn build_mask_svg(svg: &[u8]) -> Result<Vec<u8>, ToneMaskError> {
             Event::Eof => break,
 
             Event::Start(e) => {
+                // Anything nested inside a replaced `<image>` is dropped.
+                if image_skip_depth > 0 {
+                    image_skip_depth += 1;
+                    buf.clear();
+                    continue;
+                }
                 let name = e.name().as_ref().to_vec();
                 let tone = resolve_tone(&e, *tone_stack.last().unwrap());
+                if name == b"image" {
+                    // Start-form image: emit the rect and swallow the subtree.
+                    // No tone_stack push — the matching End is swallowed too.
+                    let rect = image_to_rect(&e, tone, defs_depth > 0)?;
+                    writer
+                        .write_event(Event::Empty(rect))
+                        .map_err(|e| ToneMaskError::Xml(e.to_string()))?;
+                    image_skip_depth = 1;
+                    buf.clear();
+                    continue;
+                }
                 tone_stack.push(tone);
                 if name == b"defs" {
                     defs_depth += 1;
@@ -2158,6 +2210,11 @@ pub fn build_mask_svg(svg: &[u8]) -> Result<Vec<u8>, ToneMaskError> {
             }
 
             Event::End(e) => {
+                if image_skip_depth > 0 {
+                    image_skip_depth -= 1;
+                    buf.clear();
+                    continue;
+                }
                 let name = e.name().as_ref().to_vec();
                 if name == b"defs" {
                     defs_depth = defs_depth.saturating_sub(1);
@@ -2174,6 +2231,10 @@ pub fn build_mask_svg(svg: &[u8]) -> Result<Vec<u8>, ToneMaskError> {
             }
 
             Event::Empty(e) => {
+                if image_skip_depth > 0 {
+                    buf.clear();
+                    continue;
+                }
                 // Self-closing: its tone applies to itself only, never to its
                 // siblings.
                 let tone = resolve_tone(&e, *tone_stack.last().unwrap());
@@ -2191,8 +2252,16 @@ pub fn build_mask_svg(svg: &[u8]) -> Result<Vec<u8>, ToneMaskError> {
             }
 
             Event::Text(t) => {
+                if image_skip_depth > 0 {
+                    buf.clear();
+                    continue;
+                }
                 if style_depth > 0 {
-                    let css = t.unescape().map_err(|e| ToneMaskError::Xml(e.to_string()))?;
+                    // `xml10_content` is quick-xml 0.41's unescaping accessor;
+                    // the older `unescape()` no longer exists.
+                    let css = t
+                        .xml10_content()
+                        .map_err(|e| ToneMaskError::Xml(e.to_string()))?;
                     let cleaned = strip_paint_declarations(&css);
                     writer
                         .write_event(Event::Text(BytesText::new(&cleaned)))
@@ -2213,6 +2282,10 @@ pub fn build_mask_svg(svg: &[u8]) -> Result<Vec<u8>, ToneMaskError> {
             }
 
             other => {
+                if image_skip_depth > 0 {
+                    buf.clear();
+                    continue;
+                }
                 writer
                     .write_event(other)
                     .map_err(|e| ToneMaskError::Xml(e.to_string()))?;
@@ -2323,14 +2396,7 @@ fn image_to_rect(
         // Geometry and placement carry over; the pixel source does not.
         if matches!(
             key.as_str(),
-            "x" | "y"
-                | "width"
-                | "height"
-                | "transform"
-                | "clip-path"
-                | "mask"
-                | "id"
-                | "class"
+            "x" | "y" | "width" | "height" | "transform" | "clip-path" | "mask" | "id" | "class"
         ) {
             rect.push_attribute(Attribute::from((key.as_str(), value.as_str())));
         }
@@ -2393,7 +2459,7 @@ Add `pub mod tone_mask;` to `src/rendering/mod.rs`.
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `CARGO_BUILD_JOBS=2 cargo test tone_mask`
-Expected: PASS, 13 tests
+Expected: PASS, 14 tests
 
 - [ ] **Step 5: Commit**
 

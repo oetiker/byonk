@@ -42,10 +42,17 @@ pub fn adaptation_factor(rhos: &mut [f32], max_compression: f32) -> f32 {
         .min(n - 1);
     let idx = n - 1 - discard;
 
-    // NaN cannot arise from `C / Cmax` with non-negative operands (0/0 is
-    // guarded by the caller, which emits 0.0), but sort defensively rather
-    // than risk a panic in `select_nth_unstable_by`.
-    rhos.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    // `total_cmp` is a genuine total order over every f32, including NaN, so
+    // the selection cannot violate its comparator contract. It also makes the
+    // degenerate cases coherent with the design: NaN and infinity sort above
+    // every real value, so they are discarded by the same percentile guard
+    // that discards any other outlier, and only reach `R` when more than
+    // `1 - PERCENTILE` of the region is contaminated.
+    //
+    // Selection, not a sort: one order statistic is read, so this is O(n)
+    // expected rather than O(n log n) over an adaptation group that can be
+    // the whole frame.
+    rhos.select_nth_unstable_by(idx, |a, b| a.total_cmp(b));
     let r = rhos[idx];
 
     if !r.is_finite() {

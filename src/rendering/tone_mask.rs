@@ -262,6 +262,7 @@ fn rewrite_start(
 
     let mut fill_none = false;
     let mut stroke_none = false;
+    let mut kept_style = String::new();
 
     for attr in e.attributes().with_checks(false) {
         let attr = attr.map_err(|e| ToneMaskError::Xml(e.to_string()))?;
@@ -283,15 +284,13 @@ fn rewrite_start(
             continue;
         }
         if key == "style" {
-            let cleaned = strip_paint_declarations_inline(&value);
+            // Held back until the paint is known, so both land in one attribute.
+            kept_style = strip_paint_declarations_inline(&value);
             if value.contains("fill:none") || value.contains("fill: none") {
                 fill_none = true;
             }
             if value.contains("stroke:none") || value.contains("stroke: none") {
                 stroke_none = true;
-            }
-            if !cleaned.trim().is_empty() {
-                out.push_attribute(Attribute::from(("style", cleaned.as_str())));
             }
             continue;
         }
@@ -300,20 +299,42 @@ fn rewrite_start(
 
     if !in_defs {
         let paint = tone.paint();
-        out.push_attribute(Attribute::from((
-            "fill",
-            if fill_none { "none" } else { paint },
-        )));
-        out.push_attribute(Attribute::from((
-            "stroke",
-            if stroke_none { "none" } else { paint },
-        )));
+        let fill = if fill_none { "none" } else { paint };
+        let stroke = if stroke_none { "none" } else { paint };
+        out.push_attribute(Attribute::from(("fill", fill)));
+        out.push_attribute(Attribute::from(("stroke", stroke)));
         out.push_attribute(Attribute::from(("fill-opacity", "1")));
         out.push_attribute(Attribute::from(("stroke-opacity", "1")));
         out.push_attribute(Attribute::from(("opacity", "1")));
+        // Belt and braces: a stylesheet rule beats a presentation attribute, so
+        // the paint goes in the inline style too. Stripping is the first line of
+        // defence; this is what holds if a paint declaration ever survives it.
+        push_style(&mut out, &kept_style, Some((fill, stroke)));
+    } else {
+        push_style(&mut out, &kept_style, None);
     }
 
     Ok(out)
+}
+
+/// Write the `style` attribute, merging the document's surviving declarations
+/// with our paint. Omitted entirely when there is nothing to say.
+fn push_style(out: &mut BytesStart<'static>, kept: &str, paint: Option<(&str, &str)>) {
+    let mut style = String::new();
+    let kept = kept.trim().trim_end_matches(';');
+    if !kept.is_empty() {
+        style.push_str(kept);
+        style.push(';');
+    }
+    if let Some((fill, stroke)) = paint {
+        style.push_str(&format!(
+            "fill:{fill};stroke:{stroke};fill-opacity:1;stroke-opacity:1;opacity:1"
+        ));
+    }
+    let style = style.trim_end_matches(';');
+    if !style.is_empty() {
+        out.push_attribute(Attribute::from(("style", style)));
+    }
 }
 
 /// Replace an `<image>` with a solid rect over its layout box.
@@ -346,6 +367,7 @@ fn image_to_rect(
         rect.push_attribute(Attribute::from(("stroke", "none")));
         rect.push_attribute(Attribute::from(("fill-opacity", "1")));
         rect.push_attribute(Attribute::from(("opacity", "1")));
+        push_style(&mut rect, "", Some((paint, "none")));
     }
 
     Ok(rect)
@@ -383,12 +405,18 @@ fn is_paint_declaration(decl: &str) -> bool {
     };
     // The property name is the last token before the colon — everything
     // before it is a selector or the tail of a previous declaration.
+    // CSS property names are case-insensitive, and whitespace is legal before
+    // the colon (`fill : red`). Both forms must be recognised: a paint
+    // declaration that survives into the mask beats our presentation attribute
+    // and silently inverts that element's mask polarity.
     let prop = prop
+        .trim_end()
         .rsplit([' ', '\t', '\n', '{', '}', ';'])
         .next()
         .unwrap_or("")
-        .trim();
-    PAINT_PROPS.contains(&prop)
+        .trim()
+        .to_ascii_lowercase();
+    PAINT_PROPS.contains(&prop.as_str())
 }
 
 #[cfg(test)]
@@ -590,5 +618,100 @@ mod tests {
             !out.contains("data-byonk-tone"),
             "marker must not survive: {out}"
         );
+    }
+
+    #[test]
+    fn css_paint_is_stripped_case_insensitively_and_around_whitespace() {
+        // CSS property names are case-insensitive and allow whitespace before
+        // the colon. A paint declaration that survives into the mask beats the
+        // presentation attribute and silently inverts that element's polarity.
+        for decl in [
+            "FILL: red;",
+            "Fill: red;",
+            "fill : red;",
+            "STROKE: red;",
+            "fill\t: red;",
+        ] {
+            let svg = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg"><style>.d {{ {decl} }}</style><rect class="d" id="r"/></svg>"#
+            );
+            let out = mask_of(&svg);
+            assert!(!out.contains("red"), "{decl} must be stripped: {out}");
+        }
+    }
+
+    #[test]
+    fn paint_is_written_to_the_inline_style_as_well() {
+        // A stylesheet rule beats a presentation attribute, so the paint must
+        // also be in the inline style, which beats both.
+        let out = mask_of(
+            r##"<svg xmlns="http://www.w3.org/2000/svg"><g data-byonk-tone="continuous"><rect id="a"/></g><rect id="b"/></svg>"##,
+        );
+        let a = out
+            .split(r#"id="a""#)
+            .nth(1)
+            .unwrap()
+            .split('>')
+            .next()
+            .unwrap();
+        assert!(
+            a.contains("style="),
+            "marked element needs an inline style: {a}"
+        );
+        assert!(
+            a.contains("fill:#ffffff"),
+            "inline style must carry paint: {a}"
+        );
+        assert!(
+            a.contains("stroke:#ffffff"),
+            "inline style must carry stroke: {a}"
+        );
+        let b = out
+            .split(r#"id="b""#)
+            .nth(1)
+            .unwrap()
+            .split('>')
+            .next()
+            .unwrap();
+        assert!(
+            b.contains("fill:#000000"),
+            "unmarked element inline style: {b}"
+        );
+    }
+
+    #[test]
+    fn inline_style_keeps_geometry_and_replaces_only_paint() {
+        let out = mask_of(
+            r##"<svg xmlns="http://www.w3.org/2000/svg"><g data-byonk-tone="continuous"><text id="t" style="font-size:11px;fill:#555555">x</text></g></svg>"##,
+        );
+        let t = out
+            .split(r#"id="t""#)
+            .nth(1)
+            .unwrap()
+            .split('>')
+            .next()
+            .unwrap();
+        assert!(t.contains("font-size:11px"), "geometry must survive: {t}");
+        assert!(!t.contains("#555555"), "original paint must be gone: {t}");
+        assert!(t.contains("fill:#ffffff"), "our paint must be present: {t}");
+    }
+
+    #[test]
+    fn defs_content_gets_no_inline_paint() {
+        let out = mask_of(
+            r##"<svg xmlns="http://www.w3.org/2000/svg"><defs><rect id="sr" style="font-size:9px;fill:#abcdef"/></defs></svg>"##,
+        );
+        let sr = out
+            .split(r#"id="sr""#)
+            .nth(1)
+            .unwrap()
+            .split('>')
+            .next()
+            .unwrap();
+        assert!(
+            sr.contains("font-size:9px"),
+            "geometry must survive in defs: {sr}"
+        );
+        assert!(!sr.contains("fill:"), "defs must gain no paint: {sr}");
     }
 }

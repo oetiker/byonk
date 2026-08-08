@@ -2567,16 +2567,22 @@ git commit -m "feat(rendering): SVG tone-mask rewriter for continuous-tone regio
 
 Append to the `mod tests` in `src/rendering/svg_to_png.rs`:
 
+**The `r##"…"##` delimiters are load-bearing.** Both literals contain
+`fill="#ffffff"` / `fill="#336699"` / `fill="#000000"`, and the sequence `"#`
+terminates a `r#"…"#` raw string — with single hashes the test module is a
+syntax error. Do not "simplify" the delimiters, and do not change the SVG
+content to avoid them.
+
 ```rust
     #[test]
     fn tone_mask_marks_only_the_marked_region() {
         let renderer = SvgRenderer::new();
-        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
             <rect width="100" height="100" fill="#ffffff"/>
             <g data-byonk-tone="continuous">
               <rect x="0" y="0" width="50" height="100" fill="#336699"/>
             </g>
-          </svg>"#;
+          </svg>"##;
         let spec = DisplaySpec::from_dimensions(100, 100).unwrap();
         let mask = renderer
             .rasterize_tone_mask(svg.as_bytes(), spec)
@@ -2591,13 +2597,13 @@ Append to the `mod tests` in `src/rendering/svg_to_png.rs`:
     fn tone_mask_respects_occlusion_by_unmarked_shapes() {
         let renderer = SvgRenderer::new();
         // A marked photo area with an unmarked label drawn over its middle.
-        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
             <rect width="100" height="100" fill="#ffffff"/>
             <g data-byonk-tone="continuous">
               <rect x="0" y="0" width="100" height="100" fill="#336699"/>
             </g>
             <rect x="40" y="40" width="20" height="20" fill="#000000"/>
-          </svg>"#;
+          </svg>"##;
         let spec = DisplaySpec::from_dimensions(100, 100).unwrap();
         let mask = renderer.rasterize_tone_mask(svg.as_bytes(), spec).unwrap();
         assert!(mask[10 * 100 + 10], "photo area must be marked");
@@ -2630,6 +2636,12 @@ Add to `impl SvgRenderer` in `src/rendering/svg_to_png.rs`, after `rasterize_svg
     /// paint values changed — so the realistic failure paths are all our own
     /// bugs in the rewriter. Silently rendering something materially different
     /// while reporting success is the failure mode that costs hours.
+    // Task 10 wires this into `render_to_palette_png`; until then the lib
+    // build has no caller and `clippy --all-targets -D warnings` rejects it
+    // as dead code. `#[expect]` is wrong here — the cfg(test) build *does*
+    // use it, so the expectation goes unfulfilled and that is a warning too.
+    // Task 10 removes this attribute.
+    #[allow(dead_code)]
     fn rasterize_tone_mask(
         &self,
         svg_data: &[u8],
@@ -2670,7 +2682,7 @@ Add to `impl SvgRenderer` in `src/rendering/svg_to_png.rs`, after `rasterize_svg
     }
 ```
 
-Note the scale/offset computation duplicates `rasterize_svg`'s; that is intentional and load-bearing — the mask must use **exactly** the same transform as the frame. Extract it into a shared private helper `fn fit_transform(svg_size: usvg::Size, spec: DisplaySpec) -> Transform` and call it from both, so they cannot drift:
+Note the scale/offset computation duplicates `rasterize_svg`'s; that is intentional and load-bearing — the mask must use **exactly** the same transform as the frame. Extract it into a shared private helper and call it from both, so they cannot drift. It takes plain floats, not a size type:
 
 ```rust
     /// The scale-and-centre transform that fits an SVG of `svg_w` x `svg_h`
@@ -2697,8 +2709,12 @@ Replace the inline computation in both `rasterize_svg` and `rasterize_tone_mask`
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `CARGO_BUILD_JOBS=2 cargo test tone_mask`
-Expected: PASS, 15 tests (13 rewriter + 2 rasterization)
+Run: `CARGO_BUILD_JOBS=2 cargo test --lib tone_mask`
+Expected: PASS, 20 tests (18 rewriter + 2 rasterization).
+
+Then confirm the tree stays green for the lib build too, which is where the
+dead-code allow earns its place:
+`CARGO_BUILD_JOBS=2 cargo clippy --workspace --all-targets -- -D warnings`
 
 - [ ] **Step 5: Commit**
 

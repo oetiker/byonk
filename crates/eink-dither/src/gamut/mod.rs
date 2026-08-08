@@ -3,6 +3,7 @@
 pub mod adapt;
 pub mod cmax;
 pub mod hull;
+pub mod knee;
 
 /// Palettes shared by the gamut modules' unit tests.
 #[cfg(test)]

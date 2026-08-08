@@ -1,5 +1,6 @@
 //! Gamut mapping for continuous-tone regions.
 
+pub mod adapt;
 pub mod cmax;
 pub mod hull;
 

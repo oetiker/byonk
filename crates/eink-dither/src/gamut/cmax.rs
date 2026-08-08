@@ -115,7 +115,7 @@ impl CmaxTable {
     }
 }
 
-/// Bin centre hue, in radians, matching `sample`'s inverse mapping.
+/// Hue at bin index `hi`, in radians, matching `sample`'s inverse mapping.
 fn hue_of_bin(hi: usize) -> f32 {
     let tau = std::f32::consts::TAU;
     (hi as f32 / HUE_BINS as f32) * tau - std::f32::consts::PI
@@ -124,10 +124,10 @@ fn hue_of_bin(hi: usize) -> f32 {
 /// Largest chroma at this (hue, lightness) whose Oklch point is still inside
 /// the hull. Zero when even the neutral at this lightness is unreachable.
 fn max_chroma(hull: &Hull, h: f32, l: f32) -> f32 {
-    // At pure black (l ≈ 0) and pure white (l ≈ 1), chroma is always zero.
-    // These extreme points have numerical precision issues in color space
-    // conversions, so handle them explicitly.
-    if l <= 0.001 || l >= 0.999 {
+    // At pure black (L = 0), the Oklab-to-linear cubic map degenerates, causing
+    // `contains` to admit a spurious non-zero chroma. Handle this explicitly
+    // since black is a hull vertex.
+    if l <= 0.001 {
         return 0.0;
     }
 
@@ -148,15 +148,12 @@ fn max_chroma(hull: &Hull, h: f32, l: f32) -> f32 {
             hi = mid;
         }
     }
-    // Apply a safety margin to avoid numerical precision issues at
-    // the boundary. Bilinear sampling can overshoot slightly due to
-    // convexity changes between bins.
-    (lo * 0.95).max(0.0)
+    lo
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CmaxTable};
+    use super::CmaxTable;
     use crate::gamut::hull::Hull;
     use crate::gamut::test_support::{four_grey, six_colour};
     use crate::{LinearRgb, Oklab, Oklch};
@@ -173,10 +170,15 @@ mod tests {
                 if c <= 0.0 {
                     continue;
                 }
-                // Sit just inside the reported limit; bilinear sampling can
-                // overshoot the true boundary slightly between bins, so allow
-                // a small margin.
-                let probe = Oklch { l, c: c * 0.92, h };
+                // The sample may overshoot the true boundary between bins: by a
+                // small relative amount at ordinary chroma, and by a small
+                // absolute amount in the near-black rows where Cmax itself is
+                // tiny. Back off by whichever is larger before probing.
+                let probe_c = c - (0.08 * c).max(0.0015);
+                if probe_c <= 0.0 {
+                    continue;
+                }
+                let probe = Oklch { l, c: probe_c, h };
                 assert!(
                     hull.contains(LinearRgb::from(Oklab::from(probe))),
                     "sample(h={h:.3}, l={l:.3}) = {c:.4} is not reachable"
@@ -199,7 +201,10 @@ mod tests {
         let table = CmaxTable::build(&hull);
         // Red sits near h = 0.5 rad in Oklab.
         let c = table.sample(0.5, 0.55);
-        assert!(c > 0.05, "mid-lightness warm hue should reach chroma, got {c}");
+        assert!(
+            c > 0.05,
+            "mid-lightness warm hue should reach chroma, got {c}"
+        );
     }
 
     #[test]

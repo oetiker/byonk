@@ -221,23 +221,82 @@ impl SvgRenderer {
             .map_err(|e| RenderError::SvgParse(e.to_string()))?;
 
         let svg_size = tree.size();
-        let scale_x = spec.width as f32 / svg_size.width();
-        let scale_y = spec.height as f32 / svg_size.height();
-        let scale = scale_x.min(scale_y);
-
-        let scaled_width = svg_size.width() * scale;
-        let scaled_height = svg_size.height() * scale;
-        let offset_x = (spec.width as f32 - scaled_width) / 2.0;
-        let offset_y = (spec.height as f32 - scaled_height) / 2.0;
+        let transform = Self::fit_transform(svg_size.width(), svg_size.height(), spec);
 
         let mut pixmap =
             Pixmap::new(spec.width, spec.height).ok_or(RenderError::PixmapAllocation)?;
         pixmap.fill(tiny_skia::Color::WHITE);
 
-        let transform = Transform::from_scale(scale, scale).post_translate(offset_x, offset_y);
         resvg::render(&tree, transform, &mut pixmap.as_mut());
 
         Ok(pixmap)
+    }
+
+    /// The scale-and-centre transform that fits an SVG of `svg_w` x `svg_h`
+    /// into `spec`.
+    ///
+    /// Shared by the frame and the tone mask: if these two ever disagreed the
+    /// mask would be offset from the pixels it selects. Takes plain floats
+    /// rather than a size type so it does not depend on which crate
+    /// `usvg::Tree::size` currently returns.
+    fn fit_transform(svg_w: f32, svg_h: f32, spec: DisplaySpec) -> Transform {
+        let scale = (spec.width as f32 / svg_w).min(spec.height as f32 / svg_h);
+        let offset_x = (spec.width as f32 - svg_w * scale) / 2.0;
+        let offset_y = (spec.height as f32 - svg_h * scale) / 2.0;
+        Transform::from_scale(scale, scale).post_translate(offset_x, offset_y)
+    }
+
+    /// Rasterize the tone mask for `svg_data`.
+    ///
+    /// The mask document is the original with paint forced to white inside
+    /// `data-byonk-tone="continuous"` subtrees and black elsewhere, drawn over
+    /// a black background so unpainted area reads as unmarked. Edge
+    /// antialiasing produces greys; threshold at 0.5.
+    ///
+    /// Failure is a hard error, deliberately. The mask comes from a document
+    /// that just rasterized successfully, by the same renderer, with only
+    /// paint values changed — so the realistic failure paths are all our own
+    /// bugs in the rewriter. Silently rendering something materially different
+    /// while reporting success is the failure mode that costs hours.
+    // Task 10 wires this into `render_to_palette_png`; until then the lib
+    // build has no caller and `clippy --all-targets -D warnings` rejects it
+    // as dead code. `#[expect]` is wrong here — the cfg(test) build *does*
+    // use it, so the expectation goes unfulfilled and that is a warning too.
+    // Task 10 removes this attribute.
+    #[allow(dead_code)]
+    fn rasterize_tone_mask(
+        &self,
+        svg_data: &[u8],
+        spec: DisplaySpec,
+    ) -> Result<Vec<bool>, RenderError> {
+        let mask_svg = crate::rendering::tone_mask::build_mask_svg(svg_data)
+            .map_err(|e| RenderError::SvgParse(format!("tone mask: {e}")))?;
+
+        let options = usvg::Options {
+            fontdb: self.fontdb.clone(),
+            ..Default::default()
+        };
+        let tree = usvg::Tree::from_data(&mask_svg, &options)
+            .map_err(|e| RenderError::SvgParse(format!("tone mask: {e}")))?;
+
+        let svg_size = tree.size();
+        let transform = Self::fit_transform(svg_size.width(), svg_size.height(), spec);
+
+        let mut pixmap =
+            Pixmap::new(spec.width, spec.height).ok_or(RenderError::PixmapAllocation)?;
+        pixmap.fill(tiny_skia::Color::BLACK);
+
+        resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+        Ok(pixmap
+            .data()
+            .chunks_exact(4)
+            .map(|px| {
+                // Premultiplied RGBA over an opaque black fill: the green
+                // channel alone separates white from black cleanly.
+                px[1] >= 128
+            })
+            .collect())
     }
 }
 
@@ -572,6 +631,45 @@ mod tests {
         println!(
             "Wrote /tmp/byonk-bitmap-font-test2.png ({} bytes)",
             png.len()
+        );
+    }
+
+    #[test]
+    fn tone_mask_marks_only_the_marked_region() {
+        let renderer = SvgRenderer::new();
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+            <rect width="100" height="100" fill="#ffffff"/>
+            <g data-byonk-tone="continuous">
+              <rect x="0" y="0" width="50" height="100" fill="#336699"/>
+            </g>
+          </svg>"##;
+        let spec = DisplaySpec::from_dimensions(100, 100).unwrap();
+        let mask = renderer
+            .rasterize_tone_mask(svg.as_bytes(), spec)
+            .expect("mask must rasterize");
+
+        assert_eq!(mask.len(), 100 * 100);
+        assert!(mask[50 * 100 + 25], "left half must be marked");
+        assert!(!mask[50 * 100 + 75], "right half must not be marked");
+    }
+
+    #[test]
+    fn tone_mask_respects_occlusion_by_unmarked_shapes() {
+        let renderer = SvgRenderer::new();
+        // A marked photo area with an unmarked label drawn over its middle.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+            <rect width="100" height="100" fill="#ffffff"/>
+            <g data-byonk-tone="continuous">
+              <rect x="0" y="0" width="100" height="100" fill="#336699"/>
+            </g>
+            <rect x="40" y="40" width="20" height="20" fill="#000000"/>
+          </svg>"##;
+        let spec = DisplaySpec::from_dimensions(100, 100).unwrap();
+        let mask = renderer.rasterize_tone_mask(svg.as_bytes(), spec).unwrap();
+        assert!(mask[10 * 100 + 10], "photo area must be marked");
+        assert!(
+            !mask[50 * 100 + 50],
+            "the occluding unmarked rect must punch through the mask"
         );
     }
 }

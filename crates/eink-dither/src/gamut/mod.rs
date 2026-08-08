@@ -4,6 +4,9 @@ pub mod adapt;
 pub mod cmax;
 pub mod hull;
 pub mod knee;
+pub mod mapper;
+
+pub use mapper::{GamutMapper, GamutOptions};
 
 /// Palettes shared by the gamut modules' unit tests.
 #[cfg(test)]

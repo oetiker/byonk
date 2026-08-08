@@ -217,6 +217,7 @@ mod domain_tests;
 pub use api::{DitherError, EinkDitherer};
 pub use color::{LinearRgb, Oklab, Oklch, Srgb};
 pub use dither::{DitherAlgorithm, DitherOptions};
+pub use gamut::{GamutMapper, GamutOptions};
 pub use output::DitheredImage;
 pub use palette::{DistanceMetric, Palette, PaletteError, ParseColorError};
 pub use preprocess::{PreprocessOptions, PreprocessResult, Preprocessor};

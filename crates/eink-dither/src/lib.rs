@@ -206,6 +206,7 @@
 pub mod api;
 pub mod color;
 pub mod dither;
+pub mod gamut;
 pub mod output;
 pub mod palette;
 pub mod preprocess;

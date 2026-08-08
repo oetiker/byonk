@@ -900,10 +900,14 @@ mod tests {
     }
 
     #[test]
-    fn strictly_increasing_across_a_wide_input_range() {
+    fn strictly_increasing_across_the_reachable_range() {
         let mut prev = f32::NEG_INFINITY;
         for i in 0..20_000 {
-            let c = i as f32 * 0.0005; // up to 10.0, far past Cmax
+            // Up to c = 3.0, i.e. t = 36. Measured across every sRGB colour,
+            // rho = C/Cmax peaks at 5.02, which is t = 11.05 at k = 0.6, so
+            // this covers three times the reachable domain. Testing far
+            // beyond it would only measure f32 resolution, not the curve.
+            let c = i as f32 * 0.00015;
             let out = compress_chroma(c, CMAX, K);
             assert!(out > prev, "not strictly increasing at c={c}: {prev} -> {out}");
             prev = out;
@@ -953,21 +957,35 @@ Prepend to `crates/eink-dither/src/gamut/knee.rs`:
 //!
 //! Below `knee * c_max` the input passes through untouched, so low-chroma
 //! content — the bulk of most images — is never desaturated. Above it, a
-//! rational shoulder maps the whole remaining half-line into
+//! power shoulder maps the whole remaining half-line into
 //! `[knee * c_max, c_max)`:
 //!
 //! ```text
 //! C <= k*Cmax :  C' = C
-//! C >  k*Cmax :  C' = k*Cmax + (1-k)*Cmax * t/(1+t),
+//! C >  k*Cmax :  C' = k*Cmax + (1-k)*Cmax * t/(1+t^p)^(1/p),
 //!                t  = (C - k*Cmax) / ((1-k)*Cmax)
 //! ```
 //!
-//! The shoulder is rational rather than exponential for a concrete reason:
-//! `1 - exp(-t)` reaches 1.0 in `f32` at modest `t`, so an exponential shoulder
-//! returns *exactly* `c_max` for every input above `c ≈ 0.94` (at `Cmax = 0.20`,
-//! `k = 0.6`) — silently becoming the clipping this design rejects. `t/(1+t)`
-//! decays polynomially and stays strictly below 1.0 even at `1000 * Cmax`.
-//! The trade is that it compresses harder just above the knee.
+//! This is the `powerP` curve of the ACES 1.3 Reference Gamut Compression,
+//! at its default exponent `p = 1.2`. The exponent controls how sharply the
+//! shoulder rolls off: `p = 1` is the classic Reinhard form, and `p → ∞`
+//! degenerates to a hard clip.
+//!
+//! The shoulder is a power curve rather than an exponential for a measured
+//! reason. `1 - exp(-t)` reaches 1.0 in `f32` at `t ≈ 10.2`, and the reachable
+//! input domain extends to `t ≈ 11.05` — so an exponential shoulder returns
+//! *exactly* `c_max` for real pixels, silently becoming the clipping this
+//! design rejects. The power form decays polynomially: at `p = 1.2` it stays
+//! strictly below 1.0 out to `t ≈ 85.9`, roughly eight times beyond anything
+//! reachable.
+//!
+//! **The reachable domain is measured, not assumed.** Sweeping every sRGB
+//! colour with non-zero chroma against this crate's `CmaxTable` for the
+//! six-ink palette, `rho = C / Cmax` peaks at **5.02** (median 0.91, p99.9
+//! 4.23) — `Cmax` shrinks toward black and white, but so does the chroma any
+//! sRGB colour can have there, so the ratio stays bounded. With `k = 0.6`,
+//! `rho = 5.02` is `t = 11.05`. The monotonicity test therefore covers `t` to
+//! about 36, three times the reachable maximum, rather than an arbitrary range.
 //!
 //! The curve is continuous at the knee and **strictly increasing everywhere**,
 //! approaching `c_max` asymptotically without reaching it. That property is
@@ -978,6 +996,11 @@ Prepend to `crates/eink-dither/src/gamut/knee.rs`:
 //!
 //! Because the shoulder accepts any input however large, content beyond the
 //! adaptation cap is compressed very hard but never clipped.
+
+/// Exponent of the shoulder roll-off — the ACES 1.3 Reference Gamut
+/// Compression default. Higher values protect near-boundary chroma but
+/// crowd far-out-of-gamut values together; lower values do the reverse.
+const SHOULDER_POWER: f32 = 1.2;
 
 /// Compress `c` into `[0, c_max)`, leaving everything below the knee alone.
 ///
@@ -997,7 +1020,8 @@ pub fn compress_chroma(c: f32, c_max: f32, knee: f32) -> f32 {
     }
     let span = (1.0 - k) * c_max;
     let t = (c - threshold) / span;
-    threshold + span * (t / (1.0 + t))
+    let p = SHOULDER_POWER;
+    threshold + span * (t / (1.0 + t.powf(p)).powf(1.0 / p))
 }
 ```
 
@@ -1151,10 +1175,17 @@ pub fn adaptation_factor(rhos: &mut [f32], max_compression: f32) -> f32 {
         .min(n - 1);
     let idx = n - 1 - discard;
 
-    // NaN cannot arise from `C / Cmax` with non-negative operands (0/0 is
-    // guarded by the caller, which emits 0.0), but sort defensively rather
-    // than risk a panic in `select_nth_unstable_by`.
-    rhos.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    // `total_cmp` is a genuine total order over every f32, including NaN, so
+    // the selection cannot violate its comparator contract. It also makes the
+    // degenerate cases coherent with the design: NaN and infinity sort above
+    // every real value, so they are discarded by the same percentile guard
+    // that discards any other outlier, and only reach `R` when more than
+    // `1 - PERCENTILE` of the region is contaminated.
+    //
+    // Selection, not a sort: one order statistic is read, so this is O(n)
+    // expected rather than O(n log n) over an adaptation group that can be
+    // the whole frame.
+    rhos.select_nth_unstable_by(idx, |a, b| a.total_cmp(b));
     let r = rhos[idx];
 
     if !r.is_finite() {

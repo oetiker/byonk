@@ -41,6 +41,7 @@ pub struct Hull {
     shape: HullShape,
     l_min: f32,
     l_max: f32,
+    neutral_found: bool,
 }
 
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -85,10 +86,12 @@ impl Hull {
             shape,
             l_min: 0.0,
             l_max: 1.0,
+            neutral_found: false,
         };
-        let (l_min, l_max) = hull.compute_lightness_range(&pts);
+        let (l_min, l_max, neutral_found) = hull.compute_lightness_range(&pts);
         hull.l_min = l_min;
         hull.l_max = l_max;
+        hull.neutral_found = neutral_found;
         hull
     }
 
@@ -115,10 +118,22 @@ impl Hull {
         (self.l_min, self.l_max)
     }
 
+    /// Can chroma be mapped through this hull at all?
+    ///
+    /// True only for a full 3-D hull in which a reachable neutral was
+    /// actually found. A degenerate hull, or one whose grey axis lies
+    /// entirely outside it, cannot support chroma compression: mapping
+    /// through it would crush content onto a lightness the panel cannot
+    /// render. Callers decline to map rather than guess.
+    pub fn is_mappable(&self) -> bool {
+        self.shape == HullShape::Volume && self.neutral_found
+    }
+
     /// Binary-search the grey axis for the darkest and lightest neutral inside
     /// the hull. For a degenerate hull, fall back to the palette points' own L
-    /// range, which is exactly right for a greyscale ramp.
-    fn compute_lightness_range(&self, pts: &[[f32; 3]]) -> (f32, f32) {
+    /// range, which is exactly right for a greyscale ramp; `neutral_found` is
+    /// always false in that case, since a degenerate hull cannot map chroma.
+    fn compute_lightness_range(&self, pts: &[[f32; 3]]) -> (f32, f32, bool) {
         if self.shape != HullShape::Volume {
             let mut lo = f32::MAX;
             let mut hi = f32::MIN;
@@ -127,7 +142,7 @@ impl Hull {
                 lo = lo.min(l);
                 hi = hi.max(l);
             }
-            return (lo, hi);
+            return (lo, hi, false);
         }
 
         let grey_inside = |l: f32| self.contains(LinearRgb::from(Oklab::new(l, 0.0, 0.0)));
@@ -142,8 +157,11 @@ impl Hull {
             }
         }
         let Some(seed) = seed else {
-            // No neutral is reachable at all. Degenerate for our purposes.
-            return (0.0, 1.0);
+            // No neutral is reachable: `neutral_found` is false, so
+            // `is_mappable()` returns false and callers decline to map. The
+            // range returned here is never relied upon; it is a harmless
+            // placeholder, not a claim about reachability.
+            return (0.0, 1.0, false);
         };
 
         // Walk down, then up, by bisection.
@@ -173,7 +191,7 @@ impl Hull {
                 }
             }
         }
-        (lo_in, hi_in)
+        (lo_in, hi_in, true)
     }
 }
 
@@ -266,7 +284,7 @@ fn enumerate_facets(pts: &[[f32; 3]]) -> Vec<Facet> {
 mod tests {
     use super::*;
     use crate::gamut::test_support::{four_grey, six_colour};
-    use crate::{LinearRgb, Srgb};
+    use crate::{LinearRgb, Palette, Srgb};
 
     #[test]
     fn palette_vertices_are_inside_their_own_hull() {
@@ -316,5 +334,25 @@ mod tests {
         let (lo, hi) = hull.lightness_range();
         assert!(lo < 0.02, "black must be reachable, got {lo}");
         assert!(hi > 0.98, "white must be reachable, got {hi}");
+        assert!(hull.is_mappable(), "six_colour hull must be mappable");
+    }
+
+    #[test]
+    fn a_volume_hull_that_misses_the_grey_axis_is_not_mappable() {
+        // All-red inks: every convex combination keeps r far above g and b,
+        // so no neutral is reachable even though the hull is a full volume.
+        let p = Palette::new(
+            &[
+                Srgb::from_u8(255, 0, 0),
+                Srgb::from_u8(255, 51, 0),
+                Srgb::from_u8(255, 0, 51),
+                Srgb::from_u8(204, 26, 26),
+            ],
+            None,
+        )
+        .unwrap();
+        let hull = Hull::from_palette(&p);
+        assert_eq!(hull.shape(), HullShape::Volume, "fixture must be a real volume");
+        assert!(!hull.is_mappable(), "no neutral is reachable, so it must decline");
     }
 }

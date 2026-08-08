@@ -1986,10 +1986,44 @@ mod domain_tests {
             }
         }
 
+        // Dilute near-black starts. From a pure single-ink vertex (e.g. pure
+        // black), growing another ink's weight is a zero-gradient move at
+        // first because the cost normalises by the weight sum -- and the
+        // coarsest ladder step overshoots targets that sit close to that
+        // vertex before a gradient becomes visible. Without a foothold,
+        // coordinate descent halts right at the vertex and reports the
+        // target's own distance from it. Seeding starts that are already
+        // slightly diluted with every other ink, at several dilution levels,
+        // gives descent a direction to follow from step 1.
+        let darkest = (0..n)
+            .min_by(|&a, &b| {
+                let la = Oklab::from(palette.actual_linear(a)).l;
+                let lb = Oklab::from(palette.actual_linear(b)).l;
+                la.total_cmp(&lb)
+            })
+            .unwrap();
+        for i in 0..n {
+            if i == darkest {
+                continue;
+            }
+            for &eps in &[0.1f32, 0.03, 0.01, 0.003, 0.001, 0.0003, 0.0001] {
+                let mut w = vec![0.0; n];
+                w[darkest] = 1.0 - eps;
+                w[i] = eps;
+                starts.push(w);
+            }
+        }
+
         let mut best = (f32::MAX, vec![0.0; n]);
         for mut w in starts {
             let mut cur = cost(&w);
-            for &step in &[0.4f32, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002] {
+            // The tail (0.001, 0.0005, 0.0001) matters near the darkest
+            // vertex: Cmax is tiny there, so the target itself is only a
+            // few thousandths of chroma away and coarser steps can't resolve
+            // it.
+            for &step in &[
+                0.4f32, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001, 0.0005, 0.0001,
+            ] {
                 loop {
                     let mut improved = false;
                     for i in 0..n {
@@ -2869,5 +2903,115 @@ mod domain_tests {
             }
             eprintln!("{ec:>6} | {worst:>12.4} | {:>12.4}", tot / cnt);
         }
+    }
+
+    /// The six-ink panel palette, official colours.
+    fn six_color_palette() -> Palette {
+        Palette::new(
+            &[
+                Srgb::from_u8(0, 0, 0),
+                Srgb::from_u8(255, 255, 255),
+                Srgb::from_u8(255, 0, 0),
+                Srgb::from_u8(0, 255, 0),
+                Srgb::from_u8(0, 0, 255),
+                Srgb::from_u8(255, 255, 0),
+            ],
+            None,
+        )
+        .unwrap()
+    }
+
+    /// The fast `Cmax` table must agree with the slow exact oracle.
+    ///
+    /// `best_reachable` finds the closest point in the hull by optimisation.
+    /// For a target sitting exactly at the table's reported chroma limit, that
+    /// distance must be near zero — the point is on the boundary, so it is
+    /// reachable. For a target well beyond the limit it must be clearly
+    /// non-zero. If the table over-reports, the first check fails; if it
+    /// under-reports, the second does.
+    ///
+    /// Both statistics are compared as a **ratio to `Cmax`**, not as an
+    /// absolute dE: `Cmax -> 0` at both lightness extremes, so an absolute
+    /// bound is structurally wrong there.
+    ///
+    /// Measured 2026-08-08 on the six-ink official palette, repaired oracle
+    /// (dilute near-black starts + step ladder extended to 0.0001, see
+    /// `best_reachable`): 360 bins checked, worst in-limit ratio `0.0128`
+    /// (limit `IN_LIMIT_MAX_RATIO = 0.05`, ~3.9x margin), smallest
+    /// beyond-limit ratio `0.4582` (limit `BEYOND_LIMIT_MIN_RATIO = 0.3`,
+    /// ~1.5x margin). For reference, the stock (unrepaired) oracle measured
+    /// worst in-limit ratio `0.9002` on the same grid; the beyond-limit
+    /// statistic was unaffected by the repair (`0.4582` both before and
+    /// after) — the fix only matters near the pure-black trap, which the
+    /// `2.5*Cmax` targets never approach.
+    #[test]
+    #[ignore = "sweeps the hue/lightness grid against an optimiser; slow"]
+    fn test_cmax_table_agrees_with_reachability_oracle() {
+        use crate::gamut::cmax::CmaxTable;
+        use crate::gamut::hull::Hull;
+
+        /// A point at `0.9 * Cmax` must be reachable within this fraction of
+        /// `Cmax`. Measured worst case (repaired oracle): `0.0128`.
+        const IN_LIMIT_MAX_RATIO: f32 = 0.05;
+        /// A point at `2.5 * Cmax` must be at least this fraction of `Cmax`
+        /// away from the hull. Measured smallest case (repaired oracle):
+        /// `0.4582`.
+        const BEYOND_LIMIT_MIN_RATIO: f32 = 0.3;
+
+        let palette = six_color_palette();
+        let table = CmaxTable::build(&Hull::from_palette(&palette));
+
+        let mut at_limit_worst = 0.0f32;
+        let mut beyond_limit_min = f32::MAX;
+        let mut checked = 0;
+
+        for hi in 0..24 {
+            let h = -std::f32::consts::PI + (hi as f32 / 24.0) * std::f32::consts::TAU;
+            for li in 1..16 {
+                let l = li as f32 / 16.0;
+                let c_max = table.sample(h, l);
+                if c_max < 1e-3 {
+                    continue;
+                }
+                checked += 1;
+
+                // Just inside the reported limit: must be reachable. Compared
+                // RELATIVE to c_max -- see the doc comment above.
+                let inside = Oklab::from(Oklch {
+                    l,
+                    c: c_max * 0.9,
+                    h,
+                });
+                let (d_in, _) = best_reachable(&palette, inside);
+                at_limit_worst = at_limit_worst.max(d_in / c_max);
+
+                // Well beyond: must not be.
+                let outside = Oklab::from(Oklch {
+                    l,
+                    c: c_max * 2.5,
+                    h,
+                });
+                let (d_out, _) = best_reachable(&palette, outside);
+                beyond_limit_min = beyond_limit_min.min(d_out / c_max);
+            }
+        }
+
+        eprintln!(
+            "cmax oracle: checked {checked} bins, worst in-limit ratio {at_limit_worst:.4}, \
+             smallest beyond-limit ratio {beyond_limit_min:.4}"
+        );
+        assert!(
+            checked > 100,
+            "grid produced too few usable bins: {checked}"
+        );
+        assert!(
+            at_limit_worst < IN_LIMIT_MAX_RATIO,
+            "table over-reports Cmax: a point at 0.9*Cmax was {at_limit_worst:.4}*Cmax from the hull"
+        );
+        assert!(
+            beyond_limit_min > BEYOND_LIMIT_MIN_RATIO,
+            "table under-reports Cmax: a point at 2.5*Cmax was only \
+             {beyond_limit_min:.4}*Cmax from the hull"
+        );
     }
 }

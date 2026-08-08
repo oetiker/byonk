@@ -715,16 +715,30 @@ pub struct CmaxTable {
     l_min: f32,
     l_max: f32,
     achromatic: bool,
+    unmappable: bool,
 }
 
 impl CmaxTable {
     /// Build the table by bisecting the hull boundary in each bin.
+    ///
+    /// Two degenerate cases are deliberately distinguished, because they call
+    /// for opposite behaviour:
+    ///
+    /// - **Greyscale palette** (`HullShape::Line`) — no chroma is reachable, so
+    ///   every limit is zero and marked content desaturates to grey. That is
+    ///   the correct result on a four-level panel, not a bug.
+    /// - **Unmappable hull** — coplanar, or a full volume whose grey axis lies
+    ///   entirely outside it (`!Hull::is_mappable()`). Chroma compression has
+    ///   no meaningful target here, so the mapper declines and leaves the
+    ///   content untouched rather than crushing it onto a lightness the panel
+    ///   cannot render.
     pub fn build(hull: &Hull) -> Self {
         let (l_min, l_max) = hull.lightness_range();
-        let achromatic = hull.shape() != HullShape::Volume;
+        let achromatic = hull.shape() == HullShape::Line;
+        let unmappable = !achromatic && !hull.is_mappable();
 
         let mut data = vec![0.0f32; HUE_BINS * LIGHTNESS_BINS];
-        if !achromatic {
+        if !achromatic && !unmappable {
             for hi in 0..HUE_BINS {
                 let h = hue_of_bin(hi);
                 for li in 0..LIGHTNESS_BINS {
@@ -739,12 +753,13 @@ impl CmaxTable {
             l_min,
             l_max,
             achromatic,
+            unmappable,
         }
     }
 
     /// Sample the limit, bilinearly, wrapping hue and clamping lightness.
     pub fn sample(&self, h: f32, l: f32) -> f32 {
-        if self.achromatic {
+        if self.achromatic || self.unmappable {
             return 0.0;
         }
 
@@ -772,10 +787,17 @@ impl CmaxTable {
         (self.l_min, self.l_max)
     }
 
-    /// True when the palette admits no chroma at all (greyscale, or a
-    /// degenerate hull we decline to map through).
+    /// True when the palette admits no chroma at all — a greyscale panel.
+    /// Marked content desaturates to grey, which is the correct result.
     pub fn is_achromatic(&self) -> bool {
         self.achromatic
+    }
+
+    /// True when chroma compression has no meaningful target: a coplanar hull,
+    /// or a volume whose grey axis lies entirely outside it. The mapper leaves
+    /// such content untouched rather than guessing.
+    pub fn is_unmappable(&self) -> bool {
+        self.unmappable
     }
 }
 
@@ -1343,6 +1365,35 @@ mod tests {
             "expected a neutral, got {r},{g},{b}"
         );
     }
+
+    #[test]
+    fn an_unmappable_hull_leaves_content_untouched() {
+        // A full-volume hull whose grey axis lies entirely outside it. There
+        // is no meaningful chroma target, so the mapper must decline rather
+        // than desaturate — the opposite of the greyscale case above.
+        let p = Palette::new(
+            &[
+                Srgb::from_u8(255, 0, 0),
+                Srgb::from_u8(255, 51, 0),
+                Srgb::from_u8(255, 0, 51),
+                Srgb::from_u8(204, 26, 26),
+            ],
+            None,
+        )
+        .unwrap();
+        let m = GamutMapper::new(&p);
+        let mut pixels = vivid_frame();
+        let before = pixels.clone();
+        let mask = vec![true; pixels.len()];
+        m.map_frame(&mut pixels, &mask, GamutOptions::default());
+        for (i, (a, b)) in before.iter().zip(pixels.iter()).enumerate() {
+            assert_eq!(
+                a.to_bytes(),
+                b.to_bytes(),
+                "unmappable hull must be the identity, pixel {i} changed"
+            );
+        }
+    }
 }
 ```
 
@@ -1512,6 +1563,12 @@ impl GamutMapper {
     pub fn map_frame(&self, pixels: &mut [Srgb], mask: &[bool], opts: GamutOptions) {
         debug_assert_eq!(pixels.len(), mask.len(), "mask must match the frame");
         if opts.amount == 0.0 {
+            return;
+        }
+        // No meaningful compression target: leave the content alone rather
+        // than crushing it onto a lightness the panel cannot render. See
+        // `CmaxTable::is_unmappable`.
+        if self.table.is_unmappable() {
             return;
         }
 

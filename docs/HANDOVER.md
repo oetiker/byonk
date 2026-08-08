@@ -1,144 +1,127 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-07 — **One real fix landed (blue-noise defaults, plus a build-system hole that was hiding it). The selector work is three-for-three refuted and should not be resumed without a new idea.** `feat/screen-store-authoring-core` is still **HELD** by standing owner decision — no PR, no merge to `main`._
+_Last updated: 2026-08-08 — **Gamut mapping is under way.** A 14-task plan is written and Tasks 1–2 are landed and reviewed clean. Resume by executing Task 3. `feat/screen-store-authoring-core` remains **HELD** by standing owner decision — no PR, no merge to `main`._
 
 ## Where the work lives
 
 | | |
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
-| HEAD | `37efbe7` |
+| HEAD | `2916286` |
 | Worktree | `/Users/oetiker/checkouts/byonk` (working in place, no worktree) |
-| State | `make check` green, tree clean, pushed to origin |
+| State | `cargo test -p eink-dither` green, workspace clippy clean, tree clean |
+| Plan | `docs/superpowers/plans/2026-08-08-gamut-mapping.md` |
+| Spec | `docs/superpowers/specs/2026-08-07-gamut-mapping-design.md` (approved) |
+| Ledger | `.superpowers/sdd/2026-08-08-gamut-mapping/progress.md` (git-ignored) |
 
 ## Next action
 
-**Nothing is half-finished. Pick a direction deliberately.**
+**Resume the plan at Task 3** using the `superpowers:subagent-driven-development`
+skill. Read the ledger first — it is the recovery map, and it records the owner
+ruling and two mid-flight plan amendments that the plan text alone does not
+explain.
 
-The dithering defects that remain are real but every attempt to fix them has
-made the rendered output worse. Do not resume the selector work by trying
-another variant of the same idea — see "The refuted family" below, which
-records what has already died so it is not re-derived.
-
-Candidates, in the order I would weigh them:
-
-1. **Stop here and consolidate.** The noise-defaults fix is a genuine,
-   measured, visible improvement. The remaining defects have survived every
-   attempt; they may not be worth further regression risk.
-2. **Gamut mapping.** Its spec is approved and untouched
-   (`docs/superpowers/specs/2026-08-07-gamut-mapping-design.md`), it is
-   independent of the selector, and no gamut code has landed yet.
-3. **Reconsider the default algorithm** — `AtkinsonHybrid` is measured better
-   than Atkinson on both axes (see below). Small, and still unlanded.
-
-## ⚠️ Read this before trusting any dithering measurement
-
-**`make check` did not run this crate's tests until `de9f605`.** `cargo test`
-and `cargo clippy` without `--workspace` cover only the root package, so
-nothing under `crates/` was ever checked. A failing `eink-dither` test still
-printed "All checks passed!". Coverage went 484 → 951 tests when fixed. Any
-"green" claim about dithering in a handover older than this is worthless.
-
-**Flat-patch dE is actively misleading, and it misled this whole session.**
-A flat patch is a single colour; every artifact that matters is at a boundary
-*between* colours. Every arm that improved patch dE made the rendered image
-worse — one of them scored the best numbers ever measured here and looks
-abysmal. Never conclude from patch dE alone. Render the field and look.
-
-- `cargo test -p eink-dither --test visual_compare -- --ignored --nocapture`
-  writes original/dithered pairs, magnified crops and before/after triptychs
-  to `target/dither-compare/`. Use it for every rendering change.
+The loop that worked, per task: `scripts/task-brief` → dispatch implementer →
+verify the build yourself → `scripts/review-package` → dispatch task reviewer →
+fix loop if needed → ledger line → next task. All three scripts live in the
+skill's directory.
 
 ## What landed
 
-**`6a16ac8` — blue-noise jitter defaults, tuned per kernel.** Error diffusion
-on smooth content locks into a limit cycle instead of staying stochastic,
-producing a herringbone weave over flat areas and solid lines drawn clean
-across gradients. Atkinson shipped with the jitter **off** (0.0).
+| Commit | What |
+|---|---|
+| `dcbad30` | Plan + two pre-flight fixes (shared test fixtures; Task 11 must keep the tree compiling) |
+| `7bfe866` | **Task 1** — `Oklch` promoted from `preprocess` (`pub(crate)`) to `color::Oklch` (`pub`) |
+| `d06a7d3` | **Task 2** — `gamut::hull`: convex hull of the palette in linear RGB |
+| `c45eeca` | Plan fix: Task 2's test module was missing `use crate::Srgb;` |
+| `aab2f4a` | Plan amendment for the owner ruling below — **Tasks 3 and 6 requirements changed** |
+| `2916286` | **Task 2 fix** — decline to map when the hull misses the grey axis |
 
-The optimum tracks **kernel width**, and it is not "turn it up everywhere" —
-the jitter is clamped to the right/below weights, so on a narrow kernel a large
-scale saturates that clamp and degenerates into a deterministic toggle:
+New public surface so far: `eink_dither::Oklch`, and `gamut::hull::{Hull, HullShape}`
+with `from_palette`, `shape`, `contains`, `lightness_range`, `is_mappable`.
+Shared test fixtures live in `gamut::test_support::{six_colour, four_grey}` —
+Tasks 3 and 6 import them; do not add local copies.
 
-    sierra-lite (3 neighbours)   optimum 2.0, degrades to 0.0120 by 24 — kept at 2.5
-    floyd-steinberg (4)          optimum 8.0, degrades after            — 4.0 → 8.0
-    atkinson (6)                 0.0384 → 0.0363                        — 0.0 → 8.0
-    burkes, sierra-2row (7)      0.0132 → 0.0125                        — → 16.0
-    stucki, jjn, sierra (10–12)  still improving at 24                  — → 16.0
+## The owner ruling — carry this forward
 
-Wide kernels stop at 16, not 24: the remaining gain is ~0.0002 dE and 16 is the
-largest value checked by eye for damage to thin strokes and text-scale detail
-(there is none — a 1px stroke, a 1px checkerboard and text bars render as
-crisply at 16 as at 0).
+The plan originally had `compute_lightness_range` return `(0.0, 1.0)` when no
+reachable neutral was found — asserting full black-to-white reachability at the
+moment it proved the opposite. The review caught it; because the defect was in
+the plan text, it went to the owner, who ruled: **decline to map.**
 
-Both 6-colour panel presets pinned `sierra-lite: noise_scale: 5`, past its
-optimum; removed so they follow the default. Same class of stale pin as the
-`error_clamp: 0.11` removed earlier.
+`Hull::is_mappable()` now gates it. The consequences reach two unbuilt tasks,
+and `aab2f4a` already amended the plan for both:
 
-**`de9f605` — `make check` now covers the workspace.** See the warning above.
+- **Task 3** — `CmaxTable` must separate two degenerate cases that call for
+  opposite behaviour: a **greyscale** palette (`HullShape::Line`) desaturates
+  marked content to grey, which the spec explicitly wants; an **unmappable**
+  hull (coplanar, or a volume whose grey axis lies outside it) must leave
+  content untouched. Hence both `is_achromatic()` and `is_unmappable()`.
+- **Task 6** — `GamutMapper::map_frame` returns early on an unmappable hull,
+  with a test asserting the identity.
 
-## The refuted family — do not re-derive
+## What remains
 
-The diagnosis was sound and is unchanged: **greedy nearest-ink selection
-answers the wrong question.** At 45° L0.32 the optimal mixture is
-blk 47% / red 30% / yel 23%, and black is the *farthest* of the six inks
-(0.617, dead last) while green — weight zero — is the nearest (0.165). The ink
-the mixture needs most is the one greedy matching reaches last, so Atkinson's
-25% error discard starves it and green fills in.
+Tasks 3–14, unchanged from the plan except as noted above:
 
-Three attempts to act on that, all refuted **on rendered output**, all with
-excellent patch numbers:
+3. `CmaxTable` — precomputed `Cmax(hue, lightness)`, bilinear sampling
+4. The knee curve — continuous, strictly increasing, asymptotic to `Cmax`
+5. Content adaptation — `R` from a percentile with an absolute discard floor
+6. `GamutMapper` — assembles 2–5; idempotence, hue, monotonicity properties
+7. Validate the fast table against `best_reachable()`, the slow exact oracle
+8. `src/rendering/tone_mask.rs` — the SVG rewriter (adds a `quick-xml` dep)
+9. Rasterize the mask, sharing the frame's exact fit transform
+10. Wire into `render_to_palette_png` between rasterization and dithering
+11. `GamutTuningValues` + the Lua `gamut` table
+12. Thread the knobs through eight structs on the display path
+13. Regression metrics + the visual golden — **includes a real stop point**
+14. Docs + `CHANGES.md`
 
-| attempt | patch result | render result |
-|---|---|---|
-| restrict candidates to the mixture's support | worse (dE 0.0496 → 0.0616) — black still unreachable, red absorbs the slack | arcs unchanged |
-| restriction **+ full propagation** | excellent — blk 1% → 42% (optimal 47%), blue held exactly at the bound | horizontal contours through gradients |
-| soft bias (distance reduced by mixture weight) | best ever measured — dE 0.0050 at 45° | flat regions; "does not even try" reintroduced |
+**Task 13 needs the owner.** It renders the calibration screen with and without
+mapping and asks whether the marker stays. Mean dE is *expected to worsen*;
+present both images rather than deciding alone. Everything before it is
+mechanical enough for subagents.
 
-Mechanisms established, so they need not be retested:
+## ⚠️ Read this before trusting any dithering measurement
 
-- **Green was standing in for the missing black.** It is dark, so it was
-  covering the luminance. Removing the symptom without curing the cause makes
-  the patch worse.
-- **Restriction is what makes full propagation safe** — black is not a
-  candidate for a blue target, so it cannot be run to. Floyd alone collapses
-  saturated blue to ~80% black; with restriction it sits at the bound.
-- **Hard gating bands gradients intrinsically.** Support membership is binary,
-  so an ink appears across a locus; in a vertical gradient those are horizontal
-  lines. Refining the lookup 64 → 255 levels (8k → 120k entries) changes
-  nothing.
-- **Soft biasing has no usable λ.** ≤ 0.10 and blue still collapses; ≥ 0.20 and
-  the dominant ink wins outright over whole regions and the output goes flat.
-  Quantisation excluded here too.
-- **Mixture weights are genuinely continuous** in the target (largest step
-  0.090 down a constant-hue column). The premise was right; it was not enough.
+**Flat-patch dE is actively misleading.** A flat patch is a single colour;
+every artifact that matters is at a boundary *between* colours. In the previous
+initiative, every arm that improved patch dE made the rendered image worse —
+one scored the best numbers ever measured here and looks abysmal. Never
+conclude from patch dE alone. Render the field and look.
 
-Spike code is `crates/eink-dither/tests/spike_simplex.rs`, kept deliberately —
-it is the record of what does not work.
+- `cargo test -p eink-dither --test visual_compare -- --ignored --nocapture`
+  writes pairs, crops and triptychs to `target/dither-compare/`.
 
-## Open defects
+**IDE diagnostics lied twice during this session**, reporting unresolved
+imports and missing modules in a tree that built cleanly. They were stale
+mid-edit LSP state. Verify with an actual `cargo` run before acting on them —
+and equally, do not take a subagent's "all green" at face value; both Task 1
+and Task 2 were independently re-verified before review.
 
-1. **Dark warm under-mixing.** At 45° L0.32 black lands at 1% against an
-   optimal 47%. In gamut, bound 0.000, so no gamut excuse.
-2. **Blue collapse under full propagation.** Not a live defect at the current
-   defaults (Atkinson holds blue at 98–100%); it is the constraint that blocks
-   adopting any 100%-propagation kernel.
-3. **Scalloped arcs at ink-set boundaries.** Survives every kernel, every noise
-   scale, and candidate restriction. **No working hypothesis.**
-4. **Flat fills collapse to one ink** — a `#C06020` swatch renders solid red
-   rather than mixing. Visible in the sharp-structure scene.
+## Two deviations from the spec, already settled
 
-## The unlanded candidate
+1. **Exact-match pinning and the `preserve_exact` API change are obsolete.**
+   Pinning was removed from the crate entirely (`preprocess/preprocessor.rs`
+   doc comment: "That is gone"). No `eink-dither` API change is needed for it.
+2. **Both of the spec's prerequisites are satisfied** — pinning is gone and
+   `error_clamp` now defaults to `1.0`.
 
-`AtkinsonHybrid` (100% achromatic / 75% chromatic propagation) beats Atkinson
-on both axes: in-gamut mean 0.025 vs 0.038, out-of-gamut worst case 0.050 vs
-0.072 (best of all nine). On the calibration photo Atkinson is **9.4% too
-light** and the hybrid lands within 1.4%; the owner judged it "the best nuance
-of all the photo samples". It does not fully fix defect 1 (black reaches 20%,
-not 47%).
+Also settled during planning: **CSS is a real hazard.** Screen templates set
+`fill` from `<style>` blocks (`screens/examples/hello/screen.svg` has
+`.date { fill: #555555; }`) and a CSS rule beats a presentation attribute, so
+Task 8 strips paint declarations from stylesheets rather than relying on
+precedence.
 
-Changing the default alters rendering for every device — owner's call, not
-taken.
+## Deferred minors (for the final whole-branch review)
+
+- Two pre-existing rustdoc warnings in `eink-dither` — a private intra-doc link
+  to `apply_error`, and an unresolved link to `with_distance_metric`. Neither is
+  from this work.
+- `gamut/hull.rs` uses three different epsilon tolerances (`EPS` as a raw
+  linear-RGB distance; `EPS` scaled by `norm(n)` in `classify`; a hard-coded
+  `1e-4` for facet dedup). Each is locally defensible; the reviewer wants a
+  comment saying they are deliberately different.
 
 ## Build / verify
 
@@ -151,31 +134,20 @@ taken.
   `Cargo.lock` and `src/` but never `crates/`, so the workspace cannot resolve
   `eink-dither`. Releases are unaffected (`Dockerfile.release`, CI-built
   binaries). Out of scope, untouched.
-- Local `podman build` needs `.dockerignore` to exclude `tools/` (~22 GB VM
-  image). Already fixed.
 
-## Diagnostics available
+## Open dithering defects — independent of this work
 
-All `#[ignore]`, run with `-- --ignored --nocapture`:
+Gamut mapping is the identity on in-gamut targets, so it neither fixes nor
+worsens these:
 
-- `test_dither_versus_gamut_bound` — the physical bound. ~82% of the 6-colour
-  panel's hue error is the gamut, not the code.
-- `test_algorithm_ranking_in_and_out_of_gamut` — all nine kernels, split by
-  reachability, swept over saturation.
-- `test_ink_histogram_versus_optimal_recipe` — which ink landed vs the recipe.
-  Says *which way* a patch is wrong, which a dE cannot.
-- `test_noise_scale_against_bound` — the sweep the defaults came from.
-- `test_error_trajectory_decision_regions` — separates matcher faults from
-  diffusion dynamics.
-- `visual_compare` (integration test) — all the imagery.
+1. **Dark warm under-mixing.** At 45° L0.32 black lands at 1% against an
+   optimal 47%. In gamut, bound 0.000, so no gamut excuse.
+2. **Scalloped arcs at ink-set boundaries.** Survives every kernel and noise
+   scale. **No working hypothesis.**
+3. **Flat fills collapse to one ink** — `#C06020` renders solid red.
 
-## Settled — do not re-derive
-
-- The diffusion maths is correct; in-gamut targets land at dE 0.004.
-- ~82% of the hue error is the gamut. Flat blue at 225°–270° is optimal.
-- Green really is the nearest single ink to dark olive (0.165 vs red 0.203).
-  That is not a matcher defect.
-- The gamut mapper is **not** a prerequisite for the dark-warm defect — those
-  targets are in gamut, so the mapper is identity there.
-- No gamut code has landed. The only gamut-aware code is `best_reachable()`, a
-  test helper.
+The selector work that tried to fix these is **three-for-three refuted** and
+should not be resumed without a new idea; `crates/eink-dither/tests/spike_simplex.rs`
+is the deliberate record of what does not work. `AtkinsonHybrid` remains an
+unlanded candidate that beats Atkinson on both axes — changing the default
+alters rendering for every device, so it is the owner's call.

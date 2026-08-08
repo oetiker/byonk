@@ -1,5 +1,6 @@
 //! Gamut mapping for continuous-tone regions.
 
+pub mod cmax;
 pub mod hull;
 
 /// Palettes shared by the gamut modules' unit tests.

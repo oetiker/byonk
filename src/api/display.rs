@@ -186,6 +186,7 @@ pub fn resolve_dither_tuning(
         chroma_clamp: render_params.chroma_clamp,
         noise_scale: render_params.noise_scale,
         strength: render_params.strength,
+        gamut: None,
     };
     let has_tuning = tuning.error_clamp.is_some()
         || tuning.chroma_clamp.is_some()
@@ -1145,6 +1146,7 @@ pub async fn handle_image<R: DeviceRegistry>(
         chroma_clamp: cached.chroma_clamp,
         noise_scale: cached.noise_scale,
         strength: cached.strength,
+        gamut: None,
     };
     let has_tuning = tuning.error_clamp.is_some()
         || tuning.chroma_clamp.is_some()

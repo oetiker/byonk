@@ -1,8 +1,15 @@
 use crate::error::RenderError;
 use crate::models::DisplaySpec;
-use eink_dither::{DitherAlgorithm, EinkDitherer, Palette as EinkPalette, Srgb as EinkSrgb};
+use eink_dither::{
+    DitherAlgorithm, EinkDitherer, GamutMapper, GamutOptions, Palette as EinkPalette,
+    Srgb as EinkSrgb,
+};
 
-/// Optional dithering parameter overrides (dev mode tuning).
+/// Optional per-render tuning overrides (dev mode, script, device config).
+///
+/// `gamut` belongs here rather than in a separate parameter because gamut
+/// mapping runs in the same stage as dithering, against the same palette, and
+/// is configured from the same places in the priority chain.
 #[derive(Debug, Default)]
 pub struct DitherTuning {
     pub serpentine: Option<bool>,
@@ -10,6 +17,9 @@ pub struct DitherTuning {
     pub chroma_clamp: Option<f32>,
     pub noise_scale: Option<f32>,
     pub strength: Option<f32>,
+    /// Gamut mapping knobs. `None` uses [`GamutOptions::default`]; mapping
+    /// still only happens where the document marks a continuous-tone region.
+    pub gamut: Option<GamutOptions>,
 }
 use resvg::usvg::{self, Transform};
 use std::io::Cursor;
@@ -116,7 +126,37 @@ impl SvgRenderer {
         };
 
         // Convert RGBA pixmap to eink-dither Srgb pixels
-        let pixels = rgba_to_eink_srgb(pixmap.data());
+        let mut pixels = rgba_to_eink_srgb(pixmap.data());
+
+        // Gamut mapping, opt-in per region. An unmarked document skips the
+        // second rasterization entirely and renders exactly as it did before
+        // this feature existed.
+        if crate::rendering::tone_mask::has_tone_markup(svg_data) {
+            let gamut_opts = tuning.and_then(|t| t.gamut).unwrap_or_default();
+            if gamut_opts.amount != 0.0 {
+                let mask = self.rasterize_tone_mask(svg_data, spec)?;
+                if mask.len() == pixels.len() {
+                    let marked = mask.iter().filter(|m| **m).count();
+                    tracing::debug!(
+                        marked_pixels = marked,
+                        total_pixels = pixels.len(),
+                        knee = gamut_opts.knee,
+                        amount = gamut_opts.amount,
+                        max_compression = gamut_opts.max_compression,
+                        "applying gamut mapping to continuous-tone regions"
+                    );
+                    GamutMapper::new(&eink_palette).map_frame(&mut pixels, &mask, gamut_opts);
+                } else {
+                    // Cannot happen: both rasterize to `spec`. Loud rather
+                    // than silently skipped.
+                    return Err(RenderError::Dither(format!(
+                        "tone mask length {} does not match frame {}",
+                        mask.len(),
+                        pixels.len()
+                    )));
+                }
+            }
+        }
 
         // Dither using eink-dither
         let mut ditherer = EinkDitherer::new(eink_palette).algorithm(algorithm);
@@ -258,12 +298,6 @@ impl SvgRenderer {
     /// paint values changed — so the realistic failure paths are all our own
     /// bugs in the rewriter. Silently rendering something materially different
     /// while reporting success is the failure mode that costs hours.
-    // Task 10 wires this into `render_to_palette_png`; until then the lib
-    // build has no caller and `clippy --all-targets -D warnings` rejects it
-    // as dead code. `#[expect]` is wrong here — the cfg(test) build *does*
-    // use it, so the expectation goes unfulfilled and that is a warning too.
-    // Task 10 removes this attribute.
-    #[allow(dead_code)]
     fn rasterize_tone_mask(
         &self,
         svg_data: &[u8],
@@ -761,5 +795,78 @@ mod tests {
             (40, 159),
             "a real stroke must still be marked"
         );
+    }
+
+    /// The opt-in guarantee: an unmarked document must render byte-identically
+    /// whether or not the gamut knobs are present.
+    #[test]
+    fn unmarked_document_renders_byte_identically() {
+        let renderer = SvgRenderer::new();
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+            <rect width="100" height="100" fill="#ffffff"/>
+            <rect x="10" y="10" width="60" height="60" fill="#c06020"/>
+          </svg>"##;
+        let spec = DisplaySpec::from_dimensions(100, 100).unwrap();
+        let palette = vec![
+            (0, 0, 0),
+            (255, 255, 255),
+            (255, 0, 0),
+            (0, 255, 0),
+            (0, 0, 255),
+            (255, 255, 0),
+        ];
+
+        let plain = renderer
+            .render_to_palette_png(svg.as_bytes(), spec, &palette, None, false, None, None)
+            .unwrap();
+
+        let tuning = DitherTuning {
+            gamut: Some(eink_dither::GamutOptions::default()),
+            ..Default::default()
+        };
+        let with_knobs = renderer
+            .render_to_palette_png(
+                svg.as_bytes(),
+                spec,
+                &palette,
+                None,
+                false,
+                None,
+                Some(&tuning),
+            )
+            .unwrap();
+
+        assert_eq!(plain, with_knobs, "unmarked document must be unaffected");
+    }
+
+    /// A marked vivid region must actually change.
+    #[test]
+    fn marked_region_is_altered_by_mapping() {
+        let renderer = SvgRenderer::new();
+        let marked = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+            <rect width="100" height="100" fill="#ffffff"/>
+            <g data-byonk-tone="continuous">
+              <rect x="0" y="0" width="100" height="100" fill="#ff00aa"/>
+            </g>
+          </svg>"##;
+        let unmarked = marked.replace(r#" data-byonk-tone="continuous""#, "");
+        let spec = DisplaySpec::from_dimensions(100, 100).unwrap();
+        let palette = vec![
+            (0, 0, 0),
+            (255, 255, 255),
+            (255, 0, 0),
+            (0, 255, 0),
+            (0, 0, 255),
+            (255, 255, 0),
+        ];
+
+        let a = renderer
+            .render_to_palette_png(marked.as_bytes(), spec, &palette, None, false, None, None)
+            .unwrap();
+        let b = renderer
+            .render_to_palette_png(unmarked.as_bytes(), spec, &palette, None, false, None, None)
+            .unwrap();
+
+        assert_ne!(a, b, "marking a vivid region must change the output");
     }
 }

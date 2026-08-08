@@ -450,6 +450,7 @@ fn run_render_command(
         chroma_clamp: cli_chroma_clamp,
         noise_scale: cli_noise_scale,
         strength: cli_strength,
+        gamut: None,
     };
     let has_cli_tuning = cli_tuning.error_clamp.is_some()
         || cli_tuning.chroma_clamp.is_some()

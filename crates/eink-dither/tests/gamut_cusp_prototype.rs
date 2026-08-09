@@ -561,6 +561,55 @@ fn photographs_under_each_anchor() {
             "\n{name} ({w}x{h}): mean Oklab chroma source = {:.4}",
             mean_chroma(&source)
         );
+
+        // Does dithering preserve mean brightness? Error diffusion should, to
+        // within the kernel's edge losses. Measured in *linear* light, which is
+        // where averaging is physical; averaging gamma-encoded sRGB answers a
+        // different question. Reported because the rendered photos look far
+        // darker than the source and it is worth knowing whether that is real
+        // or an artefact of the measured inks simply being dark.
+        let lum_srgb = |v: &[Srgb]| -> f32 {
+            v.iter()
+                .map(|c| {
+                    let l = LinearRgb::from(*c);
+                    0.2126 * l.r + 0.7152 * l.g + 0.0722 * l.b
+                })
+                .sum::<f32>()
+                / v.len() as f32
+        };
+        let lum_bytes = |v: &[u8]| -> f32 {
+            v.chunks(3)
+                .map(|c| {
+                    let l = LinearRgb::from(Srgb::from_u8(c[0], c[1], c[2]));
+                    0.2126 * l.r + 0.7152 * l.g + 0.0722 * l.b
+                })
+                .sum::<f32>()
+                / (v.len() / 3) as f32
+        };
+        let unmapped_dither = EinkDitherer::new(p.clone())
+            .dither(&source, w, h)
+            .to_rgb_actual();
+        let (buf, ow, oh) = grid(&[to_rgb(&source), unmapped_dither.clone()], 2, w, h);
+        write(&format!("photo-{name}-brightness.png"), &buf, ow, oh);
+        println!(
+            "  mean LINEAR luminance: source {:.4}  -> unmapped dither {:.4}  ({:+.1}%)",
+            lum_srgb(&source),
+            lum_bytes(&unmapped_dither),
+            (lum_bytes(&unmapped_dither) / lum_srgb(&source) - 1.0) * 100.0
+        );
+        // The same average taken in gamma space — which is what an image viewer
+        // does when it downscales a PNG without linearising. If this diverges
+        // from the linear figure, the dither is physically correct and only
+        // *looks* dark when viewed shrunk.
+        let byte_mean_src: f32 =
+            to_rgb(&source).iter().map(|b| *b as f32).sum::<f32>() / to_rgb(&source).len() as f32;
+        let byte_mean_dit: f32 =
+            unmapped_dither.iter().map(|b| *b as f32).sum::<f32>() / unmapped_dither.len() as f32;
+        println!(
+            "  mean GAMMA-SPACE byte:  source {byte_mean_src:.1}  -> unmapped dither \
+             {byte_mean_dit:.1}  ({:+.1}%)",
+            (byte_mean_dit / byte_mean_src - 1.0) * 100.0
+        );
         let mut mapped_panels = vec![to_rgb(&source)];
         let mut dithered_panels = vec![EinkDitherer::new(p.clone())
             .dither(&source, w, h)

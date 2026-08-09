@@ -123,6 +123,8 @@ pub struct RenderOpts {
     pub error_clamp: Option<f32>,
     pub chroma_clamp: Option<f32>,
     pub noise_scale: Option<f32>,
+    /// Optional gamut mapping overrides for dithering
+    pub gamut: crate::models::GamutTuningValues,
     pub timestamp: Option<i64>,
     /// Also render a pre-dither, full-color PNG alongside the palette-
     /// restricted `png` (see `RenderResult::raw_png`).
@@ -156,6 +158,7 @@ impl Default for RenderOpts {
             error_clamp: None,
             chroma_clamp: None,
             noise_scale: None,
+            gamut: Default::default(),
             timestamp: None,
             include_raw: false,
             include_svg: false,
@@ -1057,6 +1060,9 @@ impl ScreenStore {
             dither_noise_scale: pre_panel_tuning.noise_scale,
             dither_chroma_clamp: pre_panel_tuning.chroma_clamp,
             dither_strength: pre_panel_tuning.strength,
+            dither_gamut_knee: pre_panel_tuning.gamut.knee,
+            dither_gamut_amount: pre_panel_tuning.gamut.amount,
+            dither_gamut_max_compression: pre_panel_tuning.gamut.max_compression,
             ..Default::default()
         };
 
@@ -1141,14 +1147,14 @@ impl ScreenStore {
             noise_scale: opts.noise_scale,
             chroma_clamp: opts.chroma_clamp,
             strength: None,
-            gamut: Default::default(),
+            gamut: opts.gamut.clone(),
         };
         let script_tuning = DitherTuningValues {
             error_clamp: script_result.script_error_clamp,
             noise_scale: script_result.script_noise_scale,
             chroma_clamp: script_result.script_chroma_clamp,
             strength: script_result.script_strength,
-            gamut: Default::default(),
+            gamut: script_result.script_gamut.clone().unwrap_or_default(),
         };
         let tuning = crate::api::display::resolve_effective_tuning(
             &opts_tuning,

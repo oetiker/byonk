@@ -86,6 +86,7 @@ pub struct RenderParams {
     pub noise_scale: Option<f32>,
     pub chroma_clamp: Option<f32>,
     pub strength: Option<f32>,
+    pub gamut: crate::models::GamutTuningValues,
 }
 
 /// Resolve dither tuning parameters.
@@ -166,6 +167,7 @@ pub fn resolve_effective_tuning(
         || override_tuning.noise_scale.is_some()
         || override_tuning.chroma_clamp.is_some()
         || override_tuning.strength.is_some()
+        || !override_tuning.gamut.is_empty()
     {
         override_tuning.clone()
     } else {
@@ -186,12 +188,13 @@ pub fn resolve_dither_tuning(
         chroma_clamp: render_params.chroma_clamp,
         noise_scale: render_params.noise_scale,
         strength: render_params.strength,
-        gamut: None,
+        gamut: Some(render_params.gamut.resolve()),
     };
     let has_tuning = tuning.error_clamp.is_some()
         || tuning.chroma_clamp.is_some()
         || tuning.noise_scale.is_some()
-        || tuning.strength.is_some();
+        || tuning.strength.is_some()
+        || !render_params.gamut.is_empty();
     (tuning, has_tuning)
 }
 
@@ -375,6 +378,7 @@ pub fn resolve_render_params(
         noise_scale: tuning.noise_scale,
         chroma_clamp: tuning.chroma_clamp,
         strength: tuning.strength,
+        gamut: tuning.gamut.clone(),
     }
 }
 
@@ -817,7 +821,7 @@ pub async fn handle_display<R: DeviceRegistry>(
         noise_scale: device_config.and_then(|dc| dc.noise_scale),
         chroma_clamp: device_config.and_then(|dc| dc.chroma_clamp),
         strength: device_config.and_then(|dc| dc.strength),
-        gamut: Default::default(),
+        gamut: device_config.map(|dc| dc.gamut.clone()).unwrap_or_default(),
     };
 
     // Resolve panel dither config for pre-script algorithm
@@ -859,6 +863,9 @@ pub async fn handle_display<R: DeviceRegistry>(
         dither_noise_scale: pre_script_tuning.noise_scale,
         dither_chroma_clamp: pre_script_tuning.chroma_clamp,
         dither_strength: pre_script_tuning.strength,
+        dither_gamut_knee: pre_script_tuning.gamut.knee,
+        dither_gamut_amount: pre_script_tuning.gamut.amount,
+        dither_gamut_max_compression: pre_script_tuning.gamut.max_compression,
         refresh_override: None,
     };
 
@@ -931,7 +938,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                         noise_scale: result.script_noise_scale,
                         chroma_clamp: result.script_chroma_clamp,
                         strength: result.script_strength,
-                        gamut: Default::default(),
+                        gamut: result.script_gamut.clone().unwrap_or_default(),
                     };
 
                     // Resolve tuning: dev override > script > device config > panel > algorithm defaults
@@ -1148,12 +1155,13 @@ pub async fn handle_image<R: DeviceRegistry>(
         chroma_clamp: cached.chroma_clamp,
         noise_scale: cached.noise_scale,
         strength: cached.strength,
-        gamut: None,
+        gamut: Some(cached.gamut.resolve()),
     };
     let has_tuning = tuning.error_clamp.is_some()
         || tuning.chroma_clamp.is_some()
         || tuning.noise_scale.is_some()
-        || tuning.strength.is_some();
+        || tuning.strength.is_some()
+        || !cached.gamut.is_empty();
 
     let png_bytes = content_pipeline.render_png_from_svg(
         &cached.rendered_svg,
@@ -1550,5 +1558,85 @@ mod tests {
         assert!(warning.is_none());
         // A render must still produce a palette even with no measured colors.
         assert_eq!(params.palette, vec![(0, 0, 0), (255, 255, 255)]);
+    }
+
+    #[test]
+    fn gamut_follows_the_script_over_device_over_panel_priority() {
+        let script = DitherTuningValues {
+            gamut: crate::models::GamutTuningValues {
+                knee: Some(0.4),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let device = DitherTuningValues {
+            gamut: crate::models::GamutTuningValues {
+                knee: Some(0.7),
+                amount: Some(0.5),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let panel = DitherTuningValues {
+            gamut: crate::models::GamutTuningValues {
+                knee: Some(0.9),
+                amount: Some(1.0),
+                max_compression: Some(4.0),
+            },
+            ..Default::default()
+        };
+
+        let resolved = resolve_tuning(&script, &device, &panel);
+        assert_eq!(resolved.gamut.knee, Some(0.4), "script must win");
+        assert_eq!(resolved.gamut.amount, Some(0.5), "device fills the gap");
+        assert_eq!(
+            resolved.gamut.max_compression,
+            Some(4.0),
+            "panel fills what neither set"
+        );
+    }
+
+    #[test]
+    fn a_gamut_only_override_counts_as_an_override() {
+        // `resolve_effective_tuning` short-circuits when any override field is
+        // set. A gamut-only override must not be silently ignored.
+        let over = DitherTuningValues {
+            gamut: crate::models::GamutTuningValues {
+                amount: Some(0.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let other = DitherTuningValues {
+            error_clamp: Some(0.5),
+            ..Default::default()
+        };
+        let resolved = resolve_effective_tuning(&over, &other, &other, &other);
+        assert_eq!(resolved.gamut.amount, Some(0.0));
+        assert_eq!(
+            resolved.error_clamp, None,
+            "an explicit override replaces the whole struct"
+        );
+    }
+
+    #[test]
+    fn render_params_carry_gamut_into_the_dither_tuning() {
+        let params = RenderParams {
+            palette: vec![(0, 0, 0), (255, 255, 255)],
+            measured_colors: None,
+            measured_source: SRC_NONE,
+            dither: None,
+            error_clamp: None,
+            noise_scale: None,
+            chroma_clamp: None,
+            strength: None,
+            gamut: crate::models::GamutTuningValues {
+                knee: Some(0.45),
+                ..Default::default()
+            },
+        };
+        let (tuning, has_tuning) = resolve_dither_tuning(&params);
+        assert!(has_tuning, "a gamut knob is a tuning override");
+        assert_eq!(tuning.gamut.expect("gamut must be set").knee, 0.45);
     }
 }

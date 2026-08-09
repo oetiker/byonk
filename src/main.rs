@@ -309,6 +309,7 @@ fn run_render_command(
         cli_strength,
         measured_colors,
         measured_source,
+        cli_gamut,
     ) = if is_unregistered {
         let code = device_context.registration_code.as_deref().unwrap();
 
@@ -372,6 +373,7 @@ fn run_render_command(
             None,
             measured.colors,
             measured.source,
+            byonk::models::GamutTuningValues::default(),
         )
     } else {
         // Normal render path
@@ -387,7 +389,7 @@ fn run_render_command(
             noise_scale: device_config.and_then(|dc| dc.noise_scale),
             chroma_clamp: device_config.and_then(|dc| dc.chroma_clamp),
             strength: device_config.and_then(|dc| dc.strength),
-            gamut: Default::default(),
+            gamut: device_config.map(|dc| dc.gamut.clone()).unwrap_or_default(),
         };
 
         // Resolve panel dither tuning for the effective algorithm
@@ -407,7 +409,7 @@ fn run_render_command(
             noise_scale: script_result.script_noise_scale,
             chroma_clamp: script_result.script_chroma_clamp,
             strength: script_result.script_strength,
-            gamut: Default::default(),
+            gamut: script_result.script_gamut.clone().unwrap_or_default(),
         };
         let tuning = byonk::api::display::resolve_tuning(&script_tuning, &dc_tuning, &panel_tuning);
 
@@ -442,6 +444,7 @@ fn run_render_command(
             render_params.strength,
             render_params.measured_colors,
             render_params.measured_source,
+            render_params.gamut,
         )
     };
 
@@ -452,12 +455,13 @@ fn run_render_command(
         chroma_clamp: cli_chroma_clamp,
         noise_scale: cli_noise_scale,
         strength: cli_strength,
-        gamut: None,
+        gamut: Some(cli_gamut.resolve()),
     };
     let has_cli_tuning = cli_tuning.error_clamp.is_some()
         || cli_tuning.chroma_clamp.is_some()
         || cli_tuning.noise_scale.is_some()
-        || cli_tuning.strength.is_some();
+        || cli_tuning.strength.is_some()
+        || !cli_gamut.is_empty();
 
     // Measured colours always steer the dithering when they resolve; the
     // flag governs only the palette the file is written in. The rule itself

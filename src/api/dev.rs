@@ -348,6 +348,7 @@ pub async fn handle_render(
         dc_noise_scale,
         dc_chroma_clamp,
         dc_strength,
+        dc_gamut,
     ) = if let Some(ref mac) = query.mac {
         // Try MAC lookup first, then registration code lookup
         match state
@@ -369,6 +370,7 @@ pub async fn handle_render(
                     dc.noise_scale,
                     dc.chroma_clamp,
                     dc.strength,
+                    dc.gamut.clone(),
                 )
             }
             None => {
@@ -395,6 +397,7 @@ pub async fn handle_render(
             None,
             None,
             None,
+            crate::models::GamutTuningValues::default(),
         )
     } else {
         return (
@@ -461,7 +464,7 @@ pub async fn handle_render(
         noise_scale: dc_noise_scale,
         chroma_clamp: dc_chroma_clamp,
         strength: dc_strength,
-        gamut: Default::default(),
+        gamut: dc_gamut.clone(),
     };
     let pre_script_tuning = pre_dc_tuning.or(&pre_panel_tuning);
 
@@ -513,6 +516,9 @@ pub async fn handle_render(
         dither_noise_scale: pre_script_tuning.noise_scale,
         dither_chroma_clamp: pre_script_tuning.chroma_clamp,
         dither_strength: pre_script_tuning.strength,
+        dither_gamut_knee: pre_script_tuning.gamut.knee,
+        dither_gamut_amount: pre_script_tuning.gamut.amount,
+        dither_gamut_max_compression: pre_script_tuning.gamut.max_compression,
         ..Default::default()
     };
 
@@ -546,6 +552,7 @@ pub async fn handle_render(
                 Option<f32>,
                 Option<f32>,
                 Option<f32>,
+                Option<crate::models::GamutTuningValues>,
             ),
             String,
         >((
@@ -557,6 +564,7 @@ pub async fn handle_render(
             script_result.script_noise_scale,
             script_result.script_chroma_clamp,
             script_result.script_strength,
+            script_result.script_gamut,
         ))
     })
     .await;
@@ -570,6 +578,7 @@ pub async fn handle_render(
         script_noise_scale,
         script_chroma_clamp,
         script_strength,
+        script_gamut,
     ) = match result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
@@ -678,10 +687,14 @@ pub async fn handle_render(
         noise_scale: dc_noise_scale,
         chroma_clamp: dc_chroma_clamp,
         strength: dc_strength,
-        gamut: Default::default(),
+        gamut: dc_gamut.clone(),
     };
 
     // Resolve tuning: query params (dev UI) > script > device config > panel > None
+    // `gamut` deliberately keeps its `Default::default()` placeholder here:
+    // there are no gamut query parameters, so a dev-UI tuning override never
+    // carries gamut knobs. Adding that would be new query-string surface,
+    // not threading (see Task 12's amendment F).
     let query_tuning = crate::models::DitherTuningValues {
         error_clamp: query.error_clamp,
         noise_scale: query.noise_scale,
@@ -694,7 +707,7 @@ pub async fn handle_render(
         noise_scale: script_noise_scale,
         chroma_clamp: script_chroma_clamp,
         strength: script_strength,
-        gamut: Default::default(),
+        gamut: script_gamut.clone().unwrap_or_default(),
     };
     let tuning = crate::api::display::resolve_effective_tuning(
         &query_tuning,

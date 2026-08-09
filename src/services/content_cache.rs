@@ -34,6 +34,8 @@ pub struct CachedContent {
     pub chroma_clamp: Option<f32>,
     /// Optional dither strength
     pub strength: Option<f32>,
+    /// Optional gamut mapping knobs for dithering
+    pub gamut: crate::models::GamutTuningValues,
 }
 
 impl CachedContent {
@@ -54,6 +56,7 @@ impl CachedContent {
             noise_scale: None,
             chroma_clamp: None,
             strength: None,
+            gamut: Default::default(),
         }
     }
 
@@ -81,6 +84,7 @@ impl CachedContent {
         self.noise_scale = tuning.noise_scale;
         self.chroma_clamp = tuning.chroma_clamp;
         self.strength = tuning.strength;
+        self.gamut = tuning.gamut.clone();
         self
     }
 }

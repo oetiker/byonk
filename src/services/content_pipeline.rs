@@ -54,6 +54,8 @@ pub struct ScriptResult {
     pub script_chroma_clamp: Option<f32>,
     /// Optional dither strength override from Lua script
     pub script_strength: Option<f32>,
+    /// Gamut mapping knobs from the script return, if it set any.
+    pub script_gamut: Option<crate::models::GamutTuningValues>,
     /// Messages captured from the script's `log_info`/`log_warn`/`log_error`
     /// calls, in call order. See `lua_runtime::ScriptResult::logs`.
     pub logs: Vec<String>,
@@ -97,6 +99,12 @@ pub struct DeviceContext {
     pub dither_chroma_clamp: Option<f32>,
     /// Pre-script resolved dither strength
     pub dither_strength: Option<f32>,
+    /// Pre-script resolved gamut knee
+    pub dither_gamut_knee: Option<f32>,
+    /// Pre-script resolved gamut amount
+    pub dither_gamut_amount: Option<f32>,
+    /// Pre-script resolved gamut max compression
+    pub dither_gamut_max_compression: Option<f32>,
     /// Per-device refresh override (seconds) from DeviceConfig; 0/None = no override.
     pub refresh_override: Option<u32>,
 }
@@ -307,6 +315,7 @@ impl ContentPipeline {
             script_noise_scale: lua_result.noise_scale,
             script_chroma_clamp: lua_result.chroma_clamp,
             script_strength: lua_result.strength,
+            script_gamut: lua_result.gamut,
             logs: lua_result.logs,
         })
     }

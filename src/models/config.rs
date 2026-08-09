@@ -319,6 +319,10 @@ pub struct DeviceConfig {
     /// Optional dither strength override (0.0 = no diffusion, 1.0 = standard)
     pub strength: Option<f32>,
 
+    /// Optional gamut mapping overrides for continuous-tone regions
+    #[serde(default)]
+    pub gamut: GamutTuningValues,
+
     /// Optional per-device refresh override in seconds (0/absent = use Lua/screen default)
     #[serde(default)]
     pub refresh: Option<u32>,

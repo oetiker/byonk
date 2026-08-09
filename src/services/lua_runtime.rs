@@ -612,6 +612,17 @@ impl LuaRuntime {
             if let Some(st) = ctx.dither_strength {
                 dither_table.set("strength", st)?;
             }
+            let gamut_table = lua.create_table()?;
+            if let Some(v) = ctx.dither_gamut_knee {
+                gamut_table.set("knee", v)?;
+            }
+            if let Some(v) = ctx.dither_gamut_amount {
+                gamut_table.set("amount", v)?;
+            }
+            if let Some(v) = ctx.dither_gamut_max_compression {
+                gamut_table.set("max_compression", v)?;
+            }
+            dither_table.set("gamut", gamut_table)?;
             device_table.set("dither", dither_table)?;
         }
         globals.set("device", device_table)?;

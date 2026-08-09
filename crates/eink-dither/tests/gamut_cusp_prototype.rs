@@ -360,6 +360,259 @@ fn ink_swatches(w: usize, h: usize) -> Vec<Srgb> {
     v
 }
 
+/// Why don't the panel's own inks dither to themselves?
+///
+/// Two separate questions, and only one of them is the mapper's fault.
+///
+/// 1. **Unmapped, they do.** A flat fill of a measured ink dithers to that
+///    single ink with zero error. Asserted below, because it is the premise of
+///    everything else here.
+/// 2. **Mapped, they do not** — and that is structural. The knee bends at
+///    `k*Cmax` and the shoulder above it is asymptotic to `Cmax`, so no input
+///    can ever be mapped *onto* the boundary. A panel ink sits exactly on the
+///    boundary (`rho = 1`), lands above the knee, and comes back at roughly
+///    `0.82*Cmax` at the shipped `k = 0.8`. Then the ditherer, asked for a
+///    colour that is not an ink, has to mix — hence the speckle.
+///
+/// The asymptote is not gratuitous: it is what stops distinct out-of-gamut
+/// colours collapsing onto a shared value. So the knee is a genuine trade, and
+/// this measures both sides of it rather than asserting one.
+#[test]
+#[ignore = "prototype; prints"]
+fn what_the_knee_costs_the_panels_own_inks() {
+    let p = panel();
+    let inks = [
+        ("red", Srgb::from_u8(0xB5, 0x03, 0x03)),
+        ("yellow", Srgb::from_u8(0xFF, 0xEE, 0x00)),
+        ("blue", Srgb::from_u8(0x20, 0x54, 0x97)),
+        ("green", Srgb::from_u8(0x0D, 0x87, 0x6B)),
+    ];
+
+    // (1) The premise: unmapped, a flat ink fill dithers to itself exactly.
+    println!("unmapped flat fills of the measured inks:");
+    for (name, ink) in inks {
+        const N: usize = 32;
+        let px = vec![ink; N * N];
+        let out = EinkDitherer::new(p.clone())
+            .dither(&px, N, N)
+            .to_rgb_actual();
+        let first = [out[0], out[1], out[2]];
+        let uniform = out.chunks(3).all(|c| c == first);
+        let want = ink.to_bytes();
+        println!(
+            "  {name:6}: #{:02X}{:02X}{:02X} -> #{:02X}{:02X}{:02X}  {}",
+            want[0],
+            want[1],
+            want[2],
+            first[0],
+            first[1],
+            first[2],
+            if uniform { "solid" } else { "MIXED" }
+        );
+        assert!(uniform, "{name} did not dither to a single ink");
+        assert_eq!(
+            first,
+            [want[0], want[1], want[2]],
+            "{name} dithered to the wrong ink"
+        );
+    }
+
+    // (2) What the knee costs them, and what raising it costs the tail.
+    let m = RayMapper::new(&p, Anchor::HalfWay);
+    println!("\nhalf-way anchor, R pinned at 2.5 — chroma kept by each ink:");
+    print!("  {:<10}", "knee");
+    for (n, _) in inks {
+        print!(" {n:>8}");
+    }
+    println!("   {:>17}   {:>7}", "tail span", "distinct");
+    for knee in [0.8f32, 0.9, 0.95, 0.99] {
+        let opts = GamutOptions {
+            knee,
+            ..Default::default()
+        };
+        print!("  {knee:<10.2}");
+        for (_, ink) in inks {
+            let kept = chroma_of(m.map_color(ink, opts.max_compression, opts)) / chroma_of(ink);
+            print!(" {:>7.0}%", kept * 100.0);
+        }
+        // Does the out-of-gamut tail still hold detail, or does it band?
+        //
+        // Measured on *real sRGB colours* — a saturation ramp at one hue —
+        // because that is the only input the mapper ever sees. An earlier
+        // version of this probe synthesised colours at rho = 4, which lie far
+        // outside sRGB and were pulled back by the clamp, so it compared two
+        // colours that had both already collapsed.
+        //
+        // Swept over 24 hues x 5 lightnesses, not one leaf: a single ramp had
+        // only 5 out-of-gamut steps, far too thin to generalise from. Reported
+        // as the mean output-chroma span within a leaf's tail, and the widest
+        // single leaf.
+        // `distinct` is the banding metric and the one that matters: a wide
+        // total span says nothing if the steps inside it have collapsed onto
+        // shared values. Counted on the 8-bit output, which is what the
+        // ditherer is handed.
+        let mut spans: Vec<f32> = Vec::new();
+        let (mut steps, mut distinct) = (0usize, 0usize);
+        for hi in 0..24 {
+            for li in 1..=5 {
+                let l = li as f32 / 6.0;
+                let mut outs: Vec<f32> = Vec::new();
+                let mut bytes: Vec<[u8; 3]> = Vec::new();
+                for i in 0..=64 {
+                    let (r, g, b) = hsl(hi as f32 / 24.0, i as f32 / 64.0, l);
+                    let src = Srgb::new(r, g, b);
+                    if m.rho(src) <= 1.0 {
+                        continue; // in gamut; the tail is what is under test
+                    }
+                    let out = m.map_color(src, opts.max_compression, opts);
+                    outs.push(chroma_of(out));
+                    let b = out.to_bytes();
+                    bytes.push([b[0], b[1], b[2]]);
+                }
+                if outs.len() < 2 {
+                    continue;
+                }
+                steps += outs.len();
+                bytes.sort_unstable();
+                bytes.dedup();
+                distinct += bytes.len();
+                spans.push(
+                    outs.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+                        - outs.iter().cloned().fold(f32::INFINITY, f32::min),
+                );
+            }
+        }
+        let mean = spans.iter().sum::<f32>() / spans.len() as f32;
+        println!(
+            "   {:>17}   {:>6.1}%",
+            format!("{mean:.4}"),
+            distinct as f32 * 100.0 / steps as f32
+        );
+    }
+    println!(
+        "\n  One JND in Oklab chroma is roughly 0.02, so a separation well under\n  \
+         that is a difference the panel cannot show anyway."
+    );
+}
+
+/// Compose panels into a grid, row-major.
+fn grid(panels: &[Vec<u8>], cols: usize, w: usize, h: usize) -> (Vec<u8>, usize, usize) {
+    const GAP: usize = 6;
+    let rows = panels.len().div_ceil(cols);
+    let out_w = cols * w + GAP * (cols - 1);
+    let out_h = rows * h + GAP * (rows - 1);
+    let mut buf = vec![0x60u8; out_w * out_h * 3];
+    for (i, p) in panels.iter().enumerate() {
+        let (cx, cy) = (i % cols, i / cols);
+        let (x0, y0) = (cx * (w + GAP), cy * (h + GAP));
+        for y in 0..h {
+            let src = y * w * 3;
+            let dst = ((y0 + y) * out_w + x0) * 3;
+            buf[dst..dst + w * 3].copy_from_slice(&p[src..src + w * 3]);
+        }
+    }
+    (buf, out_w, out_h)
+}
+
+/// The real test: photographs, where the lightness excursion is judged.
+///
+/// Swatches and hue fields cannot answer this. Mid-grey anchoring moves
+/// lightness by up to 0.26 on saturated brights, and whether that reads as
+/// "more colourful" or "muddy and flat" is a question only continuous-tone
+/// content with recognisable subject matter can settle. Both images here are
+/// byonk's own shipping assets, so they are exactly what the panel renders.
+#[test]
+#[ignore = "prototype; reads shipping assets and writes PNGs"]
+fn photographs_under_each_anchor() {
+    const SIDE: u32 = 400;
+    let p = panel();
+    let opts = GamutOptions::default();
+    let anchors = [
+        Anchor::FixedL,
+        Anchor::CuspL,
+        Anchor::MidGrey,
+        Anchor::HalfWay,
+    ];
+    let mappers: Vec<RayMapper> = anchors.iter().map(|a| RayMapper::new(&p, *a)).collect();
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for (name, rel) in [
+        ("portrait", "screens/builtin/calibration/color/photo.png"),
+        ("background", "screens/builtin/default/background.jpg"),
+    ] {
+        let path = root.join(rel);
+        let img = match image::open(&path) {
+            Ok(i) => i,
+            Err(e) => {
+                eprintln!("  skipping {name}: {e}");
+                continue;
+            }
+        };
+        let img = img
+            .resize_to_fill(SIDE, SIDE, image::imageops::FilterType::Lanczos3)
+            .to_rgb8();
+        let (w, h) = (img.width() as usize, img.height() as usize);
+        let source: Vec<Srgb> = img
+            .pixels()
+            .map(|px| Srgb::from_u8(px[0], px[1], px[2]))
+            .collect();
+
+        println!(
+            "\n{name} ({w}x{h}): mean Oklab chroma source = {:.4}",
+            mean_chroma(&source)
+        );
+        let mut mapped_panels = vec![to_rgb(&source)];
+        let mut dithered_panels = vec![EinkDitherer::new(p.clone())
+            .dither(&source, w, h)
+            .to_rgb_actual()];
+
+        for (m, a) in mappers.iter().zip(anchors.iter()) {
+            let mut mapped = source.clone();
+            let r = m.map_frame(&mut mapped, opts);
+            // Mean absolute lightness shift: the cost that only photos reveal.
+            let dl = source
+                .iter()
+                .zip(mapped.iter())
+                .map(|(s, o)| {
+                    (Oklch::from(Oklab::from(LinearRgb::from(*o))).l
+                        - Oklch::from(Oklab::from(LinearRgb::from(*s))).l)
+                        .abs()
+                })
+                .sum::<f32>()
+                / source.len() as f32;
+            // Whole-image mean chroma is a poor metric here: only a minority of
+            // pixels are out of gamut, so the majority that pass through
+            // untouched swamp the difference. The pixels the mapper actually
+            // acts on are the ones worth measuring.
+            let oog: Vec<usize> = (0..source.len())
+                .filter(|&i| mappers[0].rho(source[i]) > 1.0)
+                .collect();
+            let oog_src = oog.iter().map(|&i| chroma_of(source[i])).sum::<f32>() / oog.len() as f32;
+            let oog_out = oog.iter().map(|&i| chroma_of(mapped[i])).sum::<f32>() / oog.len() as f32;
+            println!(
+                "  {:<22} R={r:.3}  mean chroma {:.4}  mean |dL| {dl:.4}   \
+                 out-of-gamut pixels ({:.0}%): {oog_src:.4} -> {oog_out:.4} ({:.0}% kept)",
+                a.name(),
+                mean_chroma(&mapped),
+                oog.len() as f32 * 100.0 / source.len() as f32,
+                oog_out / oog_src * 100.0
+            );
+            mapped_panels.push(to_rgb(&mapped));
+            dithered_panels.push(
+                EinkDitherer::new(p.clone())
+                    .dither(&mapped, w, h)
+                    .to_rgb_actual(),
+            );
+        }
+
+        let (buf, ow, oh) = grid(&mapped_panels, 3, w, h);
+        write(&format!("photo-{name}-mapped.png"), &buf, ow, oh);
+        let (buf, ow, oh) = grid(&dithered_panels, 3, w, h);
+        write(&format!("photo-{name}-dithered.png"), &buf, ow, oh);
+        eprintln!("    grid order: source, fixed-L (production), cusp-L / mid-grey, half-way");
+    }
+}
+
 #[test]
 #[ignore = "prototype; prints and writes PNGs"]
 fn cusp_anchored_vs_fixed_lightness() {

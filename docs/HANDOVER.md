@@ -115,7 +115,15 @@ Session 6 adds the sharpest version yet:
   written *because* the suite was silent. Both of session 6's were: the mutated
   build failed on that test and only that test.
 
-## The twelve owner rulings — carry these forward
+## Twelve standing rulings — carry these forward
+
+> **Provenance matters here.** Rulings **1-9 are genuine owner rulings**, made
+> with the owner in session. Rulings **10-12 were made in session 6 by the task
+> reviewers and the controller while the owner was absent** — the only owner
+> input all session was "go on" / "continue" / "keep going". Do not present them
+> to the owner as already settled. **Ruling 10 in particular (silent `.ok()`
+> coercion of a mistyped script value) is one the owner may well want to
+> reopen.**
 
 1. **Task 3 — tolerance belongs in the test, not the table** (`aa2615f`).
 2. **Task 4 — ACES 1.3 RGC `powerP` curve, `t/(1+t^p)^(1/p)`, `SHOULDER_POWER = 1.2`** (`b986caf`, `0d7053d`).

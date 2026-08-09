@@ -7,6 +7,46 @@ use std::collections::HashMap;
 /// former `default_screen` + `registration.screen` settings.
 pub const RESERVED_DEFAULT_KEY: &str = "DEFAULT";
 
+/// Gamut mapping knobs, at every level of the tuning priority chain.
+///
+/// Frame-level, not per adaptation group: groups change only which pixels are
+/// measured together to derive the compression factor, not the curve's shape.
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
+pub struct GamutTuningValues {
+    /// Where compression begins, as a fraction of the reachable chroma limit.
+    pub knee: Option<f32>,
+    /// 0 = no mapping, 1 = full. Only 1 guarantees in-gamut output.
+    pub amount: Option<f32>,
+    /// Cap on the compression factor.
+    pub max_compression: Option<f32>,
+}
+
+impl GamutTuningValues {
+    /// Merge: self takes priority, other fills gaps.
+    pub fn or(&self, other: &GamutTuningValues) -> GamutTuningValues {
+        GamutTuningValues {
+            knee: self.knee.or(other.knee),
+            amount: self.amount.or(other.amount),
+            max_compression: self.max_compression.or(other.max_compression),
+        }
+    }
+
+    /// Returns true if all fields are None.
+    pub fn is_empty(&self) -> bool {
+        self.knee.is_none() && self.amount.is_none() && self.max_compression.is_none()
+    }
+
+    /// Fill the gaps from the crate defaults.
+    pub fn resolve(&self) -> eink_dither::GamutOptions {
+        let d = eink_dither::GamutOptions::default();
+        eink_dither::GamutOptions {
+            knee: self.knee.unwrap_or(d.knee),
+            amount: self.amount.unwrap_or(d.amount),
+            max_compression: self.max_compression.unwrap_or(d.max_compression),
+        }
+    }
+}
+
 /// Dither tuning values for error_clamp, noise_scale, chroma_clamp, strength.
 ///
 /// Used at every level of the tuning priority chain:
@@ -17,6 +57,8 @@ pub struct DitherTuningValues {
     pub noise_scale: Option<f32>,
     pub chroma_clamp: Option<f32>,
     pub strength: Option<f32>,
+    #[serde(default)]
+    pub gamut: GamutTuningValues,
 }
 
 impl DitherTuningValues {
@@ -27,6 +69,7 @@ impl DitherTuningValues {
             noise_scale: self.noise_scale.or(other.noise_scale),
             chroma_clamp: self.chroma_clamp.or(other.chroma_clamp),
             strength: self.strength.or(other.strength),
+            gamut: self.gamut.or(&other.gamut),
         }
     }
 
@@ -36,6 +79,7 @@ impl DitherTuningValues {
             && self.noise_scale.is_none()
             && self.chroma_clamp.is_none()
             && self.strength.is_none()
+            && self.gamut.is_empty()
     }
 }
 
@@ -111,6 +155,9 @@ impl<'de> Deserialize<'de> for PanelDitherConfig {
                         }
                         "strength" => {
                             defaults.strength = Some(map.next_value()?);
+                        }
+                        "gamut" => {
+                            defaults.gamut = map.next_value()?;
                         }
                         _ => {
                             // Treat as algorithm name with sub-map of tuning values
@@ -616,12 +663,14 @@ sierra-lite:
             noise_scale: None,
             chroma_clamp: Some(2.0),
             strength: None,
+            gamut: Default::default(),
         };
         let b = DitherTuningValues {
             error_clamp: Some(0.2),
             noise_scale: Some(5.0),
             chroma_clamp: None,
             strength: Some(0.8),
+            gamut: Default::default(),
         };
         let merged = a.or(&b);
         assert_eq!(merged.error_clamp, Some(0.1)); // a wins
@@ -850,5 +899,58 @@ colors: "#000000,#FFFFFF"
             config.default_device_screen(),
             Some("byonk-builtin/default")
         );
+    }
+
+    #[test]
+    fn gamut_values_resolve_against_the_crate_defaults() {
+        let defaults = eink_dither::GamutOptions::default();
+        assert_eq!(GamutTuningValues::default().resolve(), defaults);
+
+        let partial = GamutTuningValues {
+            knee: Some(0.4),
+            ..Default::default()
+        };
+        let resolved = partial.resolve();
+        assert_eq!(resolved.knee, 0.4);
+        assert_eq!(resolved.amount, defaults.amount);
+        assert_eq!(resolved.max_compression, defaults.max_compression);
+    }
+
+    #[test]
+    fn gamut_values_merge_with_self_winning() {
+        let hi = GamutTuningValues {
+            knee: Some(0.4),
+            ..Default::default()
+        };
+        let lo = GamutTuningValues {
+            knee: Some(0.9),
+            amount: Some(0.5),
+            max_compression: None,
+        };
+        let merged = hi.or(&lo);
+        assert_eq!(merged.knee, Some(0.4), "self must win");
+        assert_eq!(merged.amount, Some(0.5), "other must fill the gap");
+    }
+
+    #[test]
+    fn dither_tuning_carries_gamut_through_the_chain() {
+        let script = DitherTuningValues {
+            gamut: GamutTuningValues {
+                amount: Some(0.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let panel = DitherTuningValues {
+            gamut: GamutTuningValues {
+                knee: Some(0.55),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let merged = script.or(&panel);
+        assert_eq!(merged.gamut.amount, Some(0.0));
+        assert_eq!(merged.gamut.knee, Some(0.55));
+        assert!(!merged.is_empty());
     }
 }

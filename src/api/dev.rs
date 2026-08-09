@@ -461,6 +461,7 @@ pub async fn handle_render(
         noise_scale: dc_noise_scale,
         chroma_clamp: dc_chroma_clamp,
         strength: dc_strength,
+        gamut: Default::default(),
     };
     let pre_script_tuning = pre_dc_tuning.or(&pre_panel_tuning);
 
@@ -652,6 +653,7 @@ pub async fn handle_render(
                     noise_scale: query.noise_scale,
                     chroma_clamp: query.chroma_clamp,
                     strength: query.strength,
+                    gamut: Default::default(),
                 },
             );
         } else {
@@ -676,6 +678,7 @@ pub async fn handle_render(
         noise_scale: dc_noise_scale,
         chroma_clamp: dc_chroma_clamp,
         strength: dc_strength,
+        gamut: Default::default(),
     };
 
     // Resolve tuning: query params (dev UI) > script > device config > panel > None
@@ -684,12 +687,14 @@ pub async fn handle_render(
         noise_scale: query.noise_scale,
         chroma_clamp: query.chroma_clamp,
         strength: query.strength,
+        gamut: Default::default(),
     };
     let script_tuning = crate::models::DitherTuningValues {
         error_clamp: script_error_clamp,
         noise_scale: script_noise_scale,
         chroma_clamp: script_chroma_clamp,
         strength: script_strength,
+        gamut: Default::default(),
     };
     let tuning = crate::api::display::resolve_effective_tuning(
         &query_tuning,

@@ -387,6 +387,7 @@ fn run_render_command(
             noise_scale: device_config.and_then(|dc| dc.noise_scale),
             chroma_clamp: device_config.and_then(|dc| dc.chroma_clamp),
             strength: device_config.and_then(|dc| dc.strength),
+            gamut: Default::default(),
         };
 
         // Resolve panel dither tuning for the effective algorithm
@@ -406,6 +407,7 @@ fn run_render_command(
             noise_scale: script_result.script_noise_scale,
             chroma_clamp: script_result.script_chroma_clamp,
             strength: script_result.script_strength,
+            gamut: Default::default(),
         };
         let tuning = byonk::api::display::resolve_tuning(&script_tuning, &dc_tuning, &panel_tuning);
 

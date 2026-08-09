@@ -1141,12 +1141,14 @@ impl ScreenStore {
             noise_scale: opts.noise_scale,
             chroma_clamp: opts.chroma_clamp,
             strength: None,
+            gamut: Default::default(),
         };
         let script_tuning = DitherTuningValues {
             error_clamp: script_result.script_error_clamp,
             noise_scale: script_result.script_noise_scale,
             chroma_clamp: script_result.script_chroma_clamp,
             strength: script_result.script_strength,
+            gamut: Default::default(),
         };
         let tuning = crate::api::display::resolve_effective_tuning(
             &opts_tuning,

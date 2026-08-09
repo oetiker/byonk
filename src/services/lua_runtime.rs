@@ -36,6 +36,9 @@ pub struct ScriptResult {
     pub chroma_clamp: Option<f32>,
     /// Optional dither strength override from script
     pub strength: Option<f32>,
+    /// Optional gamut mapping knobs from the script return. Only takes effect
+    /// where the SVG marks a region `data-byonk-tone="continuous"`.
+    pub gamut: Option<crate::models::GamutTuningValues>,
     /// Messages captured from `log_info`/`log_warn`/`log_error` calls during
     /// this run, in call order (each prefixed with its level, e.g.
     /// `"[warn] ..."`). In addition to — not a replacement for — the
@@ -401,6 +404,16 @@ impl LuaRuntime {
         let chroma_clamp = result.get::<f32>("chroma_clamp").ok();
         let strength = result.get::<f32>("strength").ok();
 
+        // Parse the optional gamut sub-table from the script return.
+        let gamut = result
+            .get::<Table>("gamut")
+            .ok()
+            .map(|t| crate::models::GamutTuningValues {
+                knee: t.get::<f32>("knee").ok(),
+                amount: t.get::<f32>("amount").ok(),
+                max_compression: t.get::<f32>("max_compression").ok(),
+            });
+
         let logs = log_sink.lock().map(|g| g.clone()).unwrap_or_default();
 
         Ok(ScriptResult {
@@ -414,6 +427,7 @@ impl LuaRuntime {
             noise_scale,
             chroma_clamp,
             strength,
+            gamut,
             logs,
         })
     }
@@ -1754,5 +1768,70 @@ mod require_tests {
             err.to_string().contains("Failed to read asset"),
             "unexpected error: {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod gamut_tests {
+    use super::*;
+    use crate::services::screen_repo_loader::ScreenRepoSource;
+    use std::sync::Arc;
+
+    /// Screen repo source with no files: these scripts never `require()`.
+    struct EmptySource;
+    impl ScreenRepoSource for EmptySource {
+        fn read(&self, _rel: &str) -> Option<Vec<u8>> {
+            None
+        }
+        fn screen_paths(&self) -> Vec<String> {
+            vec![]
+        }
+        fn svg_files(&self) -> Vec<String> {
+            vec![]
+        }
+        fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
+            unreachable!("manifest() not used by these tests")
+        }
+        fn screen_files(&self, _screen_path: &str) -> Vec<String> {
+            vec![]
+        }
+    }
+
+    fn run_test_script(script: &str) -> Result<ScriptResult, ScriptError> {
+        let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(EmptySource);
+        rt.run_script(script, &src, "t", "", &Default::default(), None, None, None)
+    }
+
+    #[test]
+    fn script_can_return_gamut_knobs() {
+        let result = run_test_script(
+            r#"
+            return {
+                data = {},
+                gamut = { knee = 0.45, amount = 0.8, max_compression = 3.0 },
+            }
+            "#,
+        )
+        .expect("script must run");
+        let g = result.gamut.expect("gamut table must be parsed");
+        assert_eq!(g.knee, Some(0.45));
+        assert_eq!(g.amount, Some(0.8));
+        assert_eq!(g.max_compression, Some(3.0));
+    }
+
+    #[test]
+    fn a_partial_gamut_table_leaves_the_rest_unset() {
+        let result = run_test_script(r#"return { data = {}, gamut = { amount = 0 } }"#)
+            .expect("script must run");
+        let g = result.gamut.expect("gamut table must be parsed");
+        assert_eq!(g.amount, Some(0.0));
+        assert_eq!(g.knee, None);
+    }
+
+    #[test]
+    fn no_gamut_table_means_none() {
+        let result = run_test_script(r#"return { data = {} }"#).expect("script must run");
+        assert!(result.gamut.is_none());
     }
 }

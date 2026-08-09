@@ -817,6 +817,7 @@ pub async fn handle_display<R: DeviceRegistry>(
         noise_scale: device_config.and_then(|dc| dc.noise_scale),
         chroma_clamp: device_config.and_then(|dc| dc.chroma_clamp),
         strength: device_config.and_then(|dc| dc.strength),
+        gamut: Default::default(),
     };
 
     // Resolve panel dither config for pre-script algorithm
@@ -930,6 +931,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                         noise_scale: result.script_noise_scale,
                         chroma_clamp: result.script_chroma_clamp,
                         strength: result.script_strength,
+                        gamut: Default::default(),
                     };
 
                     // Resolve tuning: dev override > script > device config > panel > algorithm defaults

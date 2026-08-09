@@ -1,266 +1,178 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-08 (session 5) — **Gamut mapping: Task 9 done, plus a new Task 9b that fixed a real Task 8 defect Task 9 exposed.** Resume by executing Task 10. `feat/screen-store-authoring-core` remains **HELD** by standing owner decision — no PR, no merge to `main`._
+_Last updated: 2026-08-09 (session 6) — **Gamut mapping: Tasks 10, 11 and 12 landed. Only Tasks 13 and 14 remain, and Task 13 needs the owner.** `feat/screen-store-authoring-core` remains **HELD** by standing owner decision — no PR, no merge to `main`._
 
 ## Where the work lives
 
 | | |
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
-| HEAD | `dcfcfba` |
+| HEAD | `c415219` |
 | Worktree | `/Users/oetiker/checkouts/byonk` (working in place, no worktree) |
-| State | `make check` fully green, tree clean |
+| State | `make check` fully green, tree clean, byonk lib **449** tests (+1 ignored) |
 | Plan | `docs/superpowers/plans/2026-08-08-gamut-mapping.md` |
 | Spec | `docs/superpowers/specs/2026-08-07-gamut-mapping-design.md` (approved) |
 | Ledger | `.superpowers/sdd/2026-08-08-gamut-mapping/progress.md` (git-ignored) |
 
-## Next action
+## ⚠️ Next action: STOP AND ASK THE OWNER
 
-**Resume the plan at Task 10** using the `superpowers:subagent-driven-development`
-skill. Read the ledger first — it records ten owner rulings the plan text alone
-does not explain, and it is the recovery map after a compaction.
+**Task 13 is a real stop point — do not execute it unattended.** It renders the
+calibration screen with and without mapping and asks whether the marker stays.
+**Mean dE is *expected to worsen*.** Present both images; do not decide alone.
+Its sweep covers knee 0.4/0.6/0.8, can overrule ruling 4, and is also the right
+place to A/B `SHOULDER_POWER` and to settle owner decision 2 below.
 
-Per-task loop, now proven eight times: `scripts/task-brief` → **pre-flight the
-brief's code yourself** → dispatch implementer → **verify the build yourself,
-and diff the landed code against something you validated** →
-`scripts/review-package` → dispatch task reviewer → resolve the ⚠️ items and
-escalate plan-mandated findings → `scripts/review-package` again for the fix →
-scoped re-review → ledger line → next task. All three scripts live in the
-skill's directory.
+### Two decisions owed to the owner, both from session 6
 
-**Task 10 has a known defect in its plan text, already diagnosed:** its test
-SVGs use `r#"…"#` around `fill="#ffffff"`, `fill="#c06020"` and `fill="#ff00aa"`.
-The sequence `"#` terminates a `r#"…"#` raw string, so the test module is a
-syntax error as written. Fix it to `r##"…"##` during Task 10's pre-flight. This
-is the third time this exact defect has appeared (Task 8's six literals, Task
-9's two, and once while authoring Task 9b's assertions).
+**1. The controller overrode explicit plan text (amendment B). Confirm or revert.**
+Task 12's plan text said `src/main.rs`'s `cli_tuning` "gets `gamut: None`". But
+the locals named `cli_error_clamp`, `cli_noise_scale`, … are **not** CLI
+arguments — the registered branch of that tuple returns `render_params.*`, the
+*resolved* script > device > panel chain. Following the plan literally would
+have made gamut the one knob `byonk render` silently ignores. It was overridden
+because the plan **self-contradicts**: its own Step 4 audit rule says "every
+struct that carries `error_clamp` must now also carry `gamut`". The Task 12
+reviewer independently traced the code and affirmed the override. Landed as a
+tenth tuple element `cli_gamut`, `gamut: Some(cli_gamut.resolve())`, and a
+`has_cli_tuning` term. **This is the only place plan text was overruled.**
 
-**Task 10 must also remove the `#[allow(dead_code)]` on `rasterize_tone_mask`**
-(`src/rendering/svg_to_png.rs`). It exists only because Task 9 left the method
-uncalled in the library build; once Task 10 wires it into
-`render_to_palette_png` it becomes a stale lint suppression.
+**2. `amount` is unclamped in the mapper — a Task 6 gap, found in Task 11's review.**
+`mapper.rs:130` computes `c + opts.amount * (compressed - c)`. `knee` is clamped
+to `[0.0, 0.999]` in `compress_chroma` (`knee.rs:61`) and `max_compression` is
+floored `.max(1.0)` in `adaptation_factor` (`adapt.rs:59-61`), but **`amount` is
+clamped nowhere**. A negative `amount` inverts the correction into a chroma
+*boost* — the opposite of gamut mapping; `amount > 1` over-desaturates past the
+target, floored at grey. No panic and no NaN reaches a pixel: the consequence is
+bounded but visually wrong. Decide clamp-to-`[0,1]` vs. document-as-intentional.
+
+After Task 13: **Task 14** is docs + `CHANGES.md`, then the final whole-branch
+review. Resume with the `superpowers:subagent-driven-development` skill and
+**read the ledger first** — it records every ruling the plan text does not.
+
+## ⚠️⚠️ Read this before dispatching any subagent
+
+**`make check` now exceeds 600 seconds in this tree.** The subagent stream
+watchdog fires at 600 s of silence, so **an implementer that runs `make check`
+in the foreground dies mid-run.** This cost session 6 two dead dispatches and
+~20 minutes; the second stall made zero progress.
+
+- **Implementers get:** `CARGO_BUILD_JOBS=2 cargo check --workspace --all-targets`
+  then `CARGO_BUILD_JOBS=2 cargo test -p byonk --lib`. Say so in the brief.
+- **The controller runs the full gate**, in a **backgrounded** Bash call
+  (`run_in_background: true`), and polls. The Bash tool's own 600 s cap
+  auto-backgrounds it anyway.
+
+When an implementer stalls, **do not resume it blindly a second time** — assess
+the abandoned working tree first (`git status`, `cargo check`, read the diff).
+Session 6's second resume produced nothing because the underlying cause was
+environmental, not a model failure.
 
 ## What landed
 
 | Commit | What |
 |---|---|
-| `7bfe866` | **Task 1** — `Oklch` promoted to `color::Oklch` (`pub`) |
-| `2916286` | **Task 2** — `gamut::hull`, incl. decline-to-map when the hull misses the grey axis |
-| `8db9e45` | **Task 3** — `gamut::cmax`, `CmaxTable` |
-| `284f645` | **Task 5** — `gamut::adapt`, `adaptation_factor` |
-| `0d1185b` | **Task 4** — `gamut::knee`, `compress_chroma` |
-| `b5c8b36` | **Task 6** — `GamutMapper`, `GamutOptions` |
-| `7cd2395` | **Task 7** — `best_reachable` repair + `CmaxTable` oracle validation |
-| `3a496ba` | **Task 8** — `src/rendering/tone_mask.rs`, the SVG tone-mask rewriter |
-| `2f67d34` | **Task 8 fix** — case/whitespace-proof CSS stripping + inline-style write |
-| `57bb440` | **Task 9** — `rasterize_tone_mask`, sharing the frame's exact `fit_transform` |
-| `9b1d3e7` | **Task 9b** — stroke-evidence stack: the mask must not invent a stroke |
-| `4a53c09` | **Task 9b fix 1** — restore case-sensitive attribute keys (`viewBox`!) |
-| `dcfcfba` | **Task 9b fix 2** — module docs: three known mis-marking cases |
-
-Plan amendments: `aa2615f`, `b986caf`, `0d7053d`, `3fd9ab8`, `03eb802`,
-`f6f263d`, `636a219`, `ba8859c`, `9669ea9`, `297b10a`.
+| `7bfe866`…`57bb440` | **Tasks 1-9** — see the git log; `Oklch`, `gamut::{hull,cmax,adapt,knee}`, `GamutMapper`, oracle validation, the tone-mask rewriter, `rasterize_tone_mask` |
+| `9b1d3e7`, `4a53c09`, `dcfcfba` | **Task 9b** — stroke-evidence stack + fixes |
+| `82e7330` | **Task 10** — gamut mapping wired into `render_to_palette_png` |
+| `e5d639e` | **Task 11** — `GamutTuningValues` + the Lua `gamut` table |
+| `a3a3e7f` | **Task 12** — knobs threaded through the whole display path |
+| `c415219` | **Task 12 fix** — regression test for the one compiler-invisible copy site |
 
 Public surface: `eink_dither::{Oklch, GamutMapper, GamutOptions}`;
 `gamut::hull::{Hull, HullShape}`; `gamut::cmax::{CmaxTable, HUE_BINS, LIGHTNESS_BINS}`;
-`gamut::adapt::{adaptation_factor, PERCENTILE, MIN_DISCARD}`;
-`gamut::knee::compress_chroma`. Byonk side:
-`rendering::tone_mask::{TONE_ATTR, TONE_GROUP_ATTR, has_tone_markup, build_mask_svg, ToneMaskError}`
-and the private `SvgRenderer::{fit_transform, rasterize_tone_mask}`.
-Shared test fixtures are `gamut::test_support::{six_colour, four_grey}` (inline
-in `gamut/mod.rs` under `#[cfg(test)]`) — import them, never copy them.
+`gamut::adapt::{adaptation_factor, PERCENTILE, MIN_DISCARD}`; `gamut::knee::compress_chroma`.
+Byonk: `models::GamutTuningValues` (`or`/`is_empty`/`resolve`), `DitherTuningValues::gamut`,
+`DeviceConfig::gamut`, `RenderOpts::gamut`, `RenderParams::gamut`, `CachedContent::gamut`,
+`content_pipeline::ScriptResult::script_gamut`, `DeviceContext::dither_gamut_{knee,amount,max_compression}`,
+`lua_runtime::ScriptResult::gamut`, `svg_to_png::DitherTuning::gamut`.
+Shared test fixtures: `gamut::test_support::{six_colour, four_grey}` — import, never copy.
 
-## ⚠️ The lesson, now proven four sessions running
+**The feature is end-to-end live.** A script returning
+`{ gamut = { knee = 0.45 } }`, or a `gamut:` block on a device/panel, now reaches
+the renderer — but **only where the SVG marks a region `data-byonk-tone="continuous"`**.
+No shipping screen does yet, so nothing changes in practice until one does.
 
-**The plan's code and constants are not evidence.** Never justify a value with a
-threshold from the same unvalidated plan. Measure the real domain first: a
-throwaway probe under the scratchpad, or a temporary test applied to the tree
-and then reverted, settles these questions in minutes.
+## ⚠️ The lesson, now proven five sessions running
 
-- **Session 3:** measure before believing your own diagnosis. Task 7's failure
-  was diagnosed, re-diagnosed and finally inverted.
-- **Session 4:** measure before believing a reviewer's "harmless". Task 8's
-  reviewer's premise was false and the gap was real.
-- **Session 5 adds three, all of which paid:**
-  1. **Measure before believing a reviewer's "correct", too.** Task 9's reviewer
-     argued the transforms "cannot drift" because `fit_transform` is shared.
-     True but insufficient — the *inputs* are `tree.size()` of two different
-     documents. Probing that found the stroke defect below.
-  2. **Diff landed code against something you independently validated.** Task
-     9b's implementer slipped in one undeclared line that made the mask
-     rasterize **empty**, with all 27 tests passing. Only the diff-against-
-     reference caught it.
-  3. **Mutation-test a regression test before trusting it.** Re-introduce the
-     defect and confirm that test — and only that test — fails.
+**The plan's code and constants are not evidence.** Measure before believing the
+plan, your own diagnosis, a reviewer's "harmless", *or* a reviewer's "correct".
 
-**Pre-flighting the brief keeps paying.** Task 9's plan code had three defects
-(raw strings, dead code, a stale count); Task 8's had five.
+Session 6 adds the sharpest version yet:
 
-## The ten owner rulings — carry these forward
+- **Pre-flight the brief, every time — it has never once been clean.** Session 6's
+  three pre-flights found **4, 3 and 9 defects**. Task 12's plan text would have
+  produced the exact silent-drop failure its own opening paragraph warns about,
+  in four separate places.
+- **A green suite proves nothing about a site the compiler cannot reach.**
+  `CachedContent::with_tuning` copies tuning fields by hand. Deleting
+  `self.gamut = tuning.gamut.clone();` left **all 448 tests passing**. The code
+  was right; nothing protected it. Only a deliberate mutation test found that.
+- **Grepping for a sibling field finds struct *fields and literals*, not
+  hand-written *copies* between structs** — and copies are the real hazard,
+  because they compile forever after. Audit with `grep -rn "\.error_clamp"` and
+  demand an enumeration, not a summary.
+- **Mutation-test every regression test before trusting it**, especially one
+  written *because* the suite was silent. Both of session 6's were: the mutated
+  build failed on that test and only that test.
 
-1. **Task 3 — tolerance belongs in the test, not the table** (`aa2615f`). The
-   test backs off by `(0.08 * c).max(0.0015)`. `max_chroma` keeps its
-   `l <= 0.001` guard because the Oklab→linear cubic map degenerates at black.
+## The twelve owner rulings — carry these forward
 
-2. **Task 4 — the exponential shoulder was clipping real pixels**
-   (`b986caf`, `0d7053d`). Replaced by the **ACES 1.3 RGC `powerP` curve,
-   `t/(1+t^p)^(1/p)`, at `SHOULDER_POWER = 1.2`**.
+1. **Task 3 — tolerance belongs in the test, not the table** (`aa2615f`).
+2. **Task 4 — ACES 1.3 RGC `powerP` curve, `t/(1+t^p)^(1/p)`, `SHOULDER_POWER = 1.2`** (`b986caf`, `0d7053d`).
+3. **Task 5 — `select_nth_unstable_by` + `total_cmp`** (`0d7053d`).
+4. **Knee default 0.6 → 0.8** (`3fd9ab8`). Measured; Task 13's sweep may overrule.
+5. **Clamp linear RGB to `[0,1]` before `Srgb::from`** (`03eb802`). `linear_to_srgb`
+   has an epsilon-free `debug_assert!` — unclamped panics under `cargo test`,
+   behaves identically in release. **Global Constraint.**
+6. **Task 7 — the oracle was broken, not the table** (`f6f263d`). `IN_LIMIT_MAX_RATIO = 0.05`, `BEYOND_LIMIT_MIN_RATIO = 0.3`.
+7. **Task 8 — strip CSS paint case-insensitively, write the inline style too** (`ba8859c`).
+8. **Task 9b — the mask must not invent a stroke** (`297b10a`). Stroke-evidence stack.
+9. **Task 9 — `#[allow(dead_code)]`, not `#[expect]`** (`9669ea9`). Removed by Task 10.
+10. **Task 11 — silent `.ok()` coercion stays, for consistency.** A script writing
+    `gamut = { knee = "loud" }` gets `None` with no diagnostic. That is exactly how
+    `error_clamp`/`noise_scale`/`chroma_clamp`/`strength` already behave. If it is
+    ever fixed it must be **one pass across the whole family**, never gamut alone.
+11. **Task 11 — range validation belongs in the mapper, not the config layer.**
+    See owner decision 2 above.
+12. **Task 12 — `dev.rs`'s `query_tuning` keeps `Default::default()` deliberately.**
+    There are no gamut query parameters; adding URL surface is new scope, not
+    threading. A code comment in `dev.rs` says so.
 
-3. **Task 5 — neither side of the plan was right** (`0d7053d`). Now
-   `select_nth_unstable_by(idx, |a, b| a.total_cmp(b))` — O(n), a genuine total
-   order, NaN/∞ discarded by the same percentile guard as any outlier.
-
-4. **Knee default 0.6 → 0.8** (`3fd9ab8`). Measured: knee 0.6 renders a frame's
-   vivid end at 82.4% of achievable chroma vs 91.2% at 0.8. 0.8 also sits in the
-   ACES threshold band. Task 13's sweep can still overrule this.
-
-5. **Clamp linear RGB to `[0,1]` before `Srgb::from`** (`03eb802`).
-   `color::lut::linear_to_srgb` carries an **epsilon-free
-   `debug_assert!(0.0..=1.0)`**, so an unclamped conversion behaves identically
-   in release but **panics under `cargo test`**. **Any task converting `Oklch`
-   back to `Srgb` must clamp.** Now a Global Constraint.
-
-6. **Task 7 — the oracle was broken, not the table** (`f6f263d`). `best_reachable`
-   had a real coordinate-descent trap at near-black; `cmax.rs` is correct and
-   untouched, **Task 3 stands**. Thresholds are now ratios:
-   `IN_LIMIT_MAX_RATIO = 0.05` (3.9× margin), `BEYOND_LIMIT_MIN_RATIO = 0.3`
-   (1.53× margin). `d_out` is a 3-D distance whose nearest hull point need not be
-   radial, so that check only establishes "not on the hull" — keep it generous.
-
-7. **Task 8 — strip CSS paint case-insensitively and write the inline style too**
-   (`ba8859c`).
-
-8. **Task 9b — stroke-evidence stack, fixed before Task 10** (`297b10a`,
-   session 5). See below.
-
-9. **Task 9 — `#[allow(dead_code)]`, not `#[expect]`** (`9669ea9`). Under
-   `--all-targets` the `cfg(test)` build *does* use `rasterize_tone_mask`, so an
-   `#[expect]` goes unfulfilled, which is itself a warning. Task 10 removes it.
-
-10. Standing: **the branch is HELD** — no PR, no merge to `main`.
+Standing: **the branch is HELD** — no PR, no merge to `main`.
 
 **Constants still inherited from the plan and never challenged:**
 `max_compression = 2.5`, `PERCENTILE = 0.99`, `MIN_DISCARD = 32`,
 `HUE_BINS = 128`, `LIGHTNESS_BINS = 64`, `C_SEARCH_HI = 0.5`.
 
-## Session 5's main finding — the mask was inventing strokes
-
-Task 9 is the first code that **rasterizes** a mask, and that immediately
-exposed a Task 8 defect no rewriter test could see: every `tone_mask` test
-asserts on the mask **document text**, and this is only visible in pixels.
-
-`rewrite_start` set `stroke` unconditionally to the tone paint. SVG's initial
-`stroke` is `none`, so **every marked shape that declared no stroke gained one**.
-Measured on a shape spanning `x = 50..=149` at a 200×200 spec:
-
-| document | before | after |
-|---|---|---|
-| plain unstroked rect | `50..=150` | `50..=149` |
-| `<style>.p{stroke:none;stroke-width:20}</style>` | `40..=159` | `50..=149` |
-| **real `stroke-width="20"`** (control) | `40..=159` | `40..=159` |
-
-Not sub-pixel and **not bounded**: `stroke` is a paint property so an author's
-`stroke: none` is stripped from stylesheets, while `stroke-width` is preserved
-as geometry, giving an error of `stroke-width / 2`. The harmful direction is an
-**unmarked** shape over a marked photo — it gains a *black* stroke and erodes
-the photo mask, an unmapped band around every label on a photo.
-
-The fix is a `Stroke` evidence stack mirroring the tone stack. Two traps it must
-keep avoiding, both now covered by tests:
-
-- **Stroke-only shapes** (`<line>`, `<path fill="none" stroke="…">`) have no fill
-  area; dropping their stroke erases them from the mask entirely.
-- **Inherited stroke** — `<g stroke="black"><line/></g>`: writing an explicit
-  `stroke="none"` on the line would override the inherited paint and erase it.
-
-A stroke set **only** by a stylesheet is lost and that element *under*-marks —
-the deliberate fail-safe direction, now the third case in the module docs'
-"Known mis-marking" section (renamed from "Known over-marking" in `dcfcfba`,
-since the third case shrinks rather than grows).
-
-Also folded in: `fill_none` detection moved to the shared `declaration_value`
-helper, because `value.contains("fill:none")` missed `fill : none` and
-`FILL: NONE` — the same defect class as ruling 7.
-
-### The `viewBox` near-miss — read this before trusting a green suite
-
-Task 9b's implementer changed one undeclared line in `rewrite_start`:
-
-```rust
--  let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
-+  let key = String::from_utf8_lossy(attr.key.as_ref()).to_ascii_lowercase();
-```
-
-`key` is **re-emitted** for every non-paint attribute. XML attribute names are
-case-sensitive, so this renamed `viewBox` → `viewbox`, `preserveAspectRatio`,
-`gradientUnits`, `patternTransform` and friends. Measured with a `viewBox` that
-differs from `width`/`height`: usvg lost the coordinate system and **the mask
-rasterized completely empty** — the whole photo region silently unmapped.
-
-**All 27 tests passed on that code**, because every existing rasterization test
-used a `viewBox` whose numbers equalled its `width`/`height`. `dcfcfba` carries
-`tone_mask_preserves_camelcase_attributes`, which uses a deliberately mismatched
-`viewBox` and was mutation-tested.
-
-Note the asymmetry that caused it: CSS *property* names are case-insensitive
-(hence `is_paint_declaration` lowercases), but SVG *attribute* names are
-case-sensitive. Lowercasing for comparison inside `resolve_stroke` is fine;
-lowercasing a key that gets re-emitted is not.
-
-## Verified quick-xml 0.41 facts — do not re-probe
-
-`Reader::from_reader(&[u8])`, `config_mut().check_end_names = true` (does detect
-`<svg><g></svg>`), `read_event_into`, `Writer::new(Cursor::new(Vec::new()))`,
-`.into_inner().into_inner()`, `attributes().with_checks(false)`,
-`Attribute::from((&str, &str))`. `BytesText::unescape()` was **removed** — use
-`xml10_content()`; `decode()` alone does not unescape. **Attribute values
-round-trip without double-escaping** — measured.
-
-## What remains
-
-10. Wire into `render_to_palette_png` between rasterization and dithering
-11. `GamutTuningValues` + the Lua `gamut` table
-12. Thread the knobs through eight structs on the display path
-13. Regression metrics + the visual golden — **a real stop point**
-14. Docs + `CHANGES.md`
-
-**Task 13 needs the owner.** It renders the calibration screen with and without
-mapping and asks whether the marker stays. Mean dE is *expected to worsen*;
-present both images rather than deciding alone. Its sweep covers knee
-0.4/0.6/0.8 and can overrule ruling 4; it is also the right place to A/B
-`SHOULDER_POWER`.
-
 ## Deferred minors — triage list for the final whole-branch review
 
-- **Task 6:** `map_color`'s `[0,1]` clamp deviates from the plan's literal code.
-  Reviewer: justified, disclosed, correct place for the boundary. Now ruling 5.
-- **Task 7:** the investigation's winning dilute start was `eps = 0.005`, between
-  the shipped ladder's `0.003` and `0.01` rungs. Adding it would tighten the
-  witness and the worst in-limit ratio. Purely optional.
+Session 6 additions:
+
+- **Task 10:** the unreachable mask-length-mismatch branch returns
+  `RenderError::Dither`, a misnomer; no better variant exists.
+- **Task 11:** `assert_eq!(GamutTuningValues::default().resolve(), defaults)`
+  **cannot** detect a restated-constant violation — it passes identically whether
+  `resolve()` calls `GamutOptions::default()` or hardcodes 0.8/1.0/2.5. That
+  property is manual-review-only, not test-enforced.
+- **Task 11:** `PanelDitherConfig` now *accepts* a `gamut:` key in panel YAML that
+  parses fine but was inert until Task 12; an admin guessing the shape got a
+  silent no-op. Re-check now that Task 12 has landed.
+- **Task 12 (inherited, not new):** `resolve_effective_tuning` replaces the
+  **whole** struct when any override field is set, so an active dev-UI query
+  override (e.g. `error_clamp` via URL) resets the previewed gamut to default and
+  diverges from what production renders. Symmetric with the other four knobs.
+
+Carried from earlier sessions:
+
+- **Task 6:** `map_color`'s `[0,1]` clamp deviates from the plan's literal code — now ruling 5.
+- **Task 7:** the winning dilute start was `eps = 0.005`, between the shipped ladder's `0.003` and `0.01`. Optional.
 - **Task 8:** the `Event::CData` stylesheet branch is live but untested.
-- **Task 8:** `strip_paint_declarations`/`_inline` split naively on `;` and `:`,
-  mis-tokenizing values with embedded colons or semicolons (data URIs,
-  `content: "a;b"`). Traced: the failure mode is always "left untouched" (safe).
-- **Task 8:** `resolve_tone` drops attribute-iteration errors via `.flatten()`
-  while `rewrite_start` propagates them. No observable effect. Style wart only.
-- **Task 8:** element names are matched as raw bytes (`b"image"`, `b"defs"`,
-  `b"style"`), so namespace-prefixed elements (`<svg:image>`) would be
-  mis-handled, and `<symbol>` gets no `<defs>`-style paint stripping. Neither
-  appears in any screen today — dormant. **Note this is the same case-and-name
-  matching family as the `viewBox` near-miss; worth one deliberate pass.**
-- **Task 8:** `image_to_rect` never inspects a `style` on the source `<image>`,
-  so `style="display:none"` there would hide the real element while the mask
-  rect still paints it.
-- **Task 9b:** `resolve_stroke` only sees presentation attributes and inline
-  styles. A stroke set solely by a stylesheet rule under-marks. Deliberate and
-  documented; revisit only if a real screen hits it.
-- Two pre-existing rustdoc warnings in `eink-dither` (private intra-doc link to
-  `apply_error`; unresolved link to `with_distance_metric`). Not from this work.
-- `gamut/hull.rs` uses three different epsilon tolerances. Each is locally
-  defensible; the reviewer wants a comment saying they are deliberately different.
-- `adapt.rs`: `max_compression < 1.0` collapses `R` to `1.0` regardless of
-  content — defensible, but untested and unmentioned in the plan.
-- `adapt.rs`: no test exercises literal `NaN` input (only `INFINITY`).
+- **Task 8:** `strip_paint_declarations`/`_inline` split naively on `;` and `:`; traced — failure mode is always "left untouched" (safe).
+- **Task 8:** `resolve_tone` drops attribute-iteration errors via `.flatten()` while `rewrite_start` propagates them. Style wart.
+- **Task 8:** element names matched as raw bytes, so `<svg:image>` would be mis-handled and `<symbol>` gets no `<defs>`-style stripping. Dormant. **Same case-and-name matching family as the `viewBox` near-miss — worth one deliberate pass.**
+- **Task 8:** `image_to_rect` never inspects a `style` on the source `<image>`.
+- **Task 9b:** `resolve_stroke` cannot see stylesheet-only strokes; that element under-marks. Deliberate, documented.
+- Two pre-existing rustdoc warnings in `eink-dither`; `gamut/hull.rs`'s three different epsilons want a comment; `adapt.rs`'s `max_compression < 1.0` collapse is untested; no test exercises literal `NaN`.
 
 ## ⚠️ Read this before trusting any dithering measurement
 
@@ -272,50 +184,43 @@ Render the field and look.
 - `cargo test -p eink-dither --test visual_compare -- --ignored --nocapture`
   writes pairs, crops and triptychs to `target/dither-compare/`.
 
-**IDE diagnostics lie in this tree.** They have repeatedly reported unresolved
-imports and missing functions in a tree that built cleanly. Verify with an
-actual `cargo` run. Equally, **do not take a subagent's "all green" at face
+**IDE diagnostics lie in this tree.** Session 6 saw them report `missing field
+gamut` in a file that had already been fixed and compiled cleanly. Verify with an
+actual `cargo` run. Equally, **never take a subagent's "all green" at face
 value** — every task so far was independently re-verified by the controller, and
-that re-verification has caught real issues repeatedly, including session 5's
-empty-mask regression.
+that re-verification keeps finding real things.
 
 ## Build / verify
 
 - `make check` = fmt + `clippy --workspace --all-targets -- -D warnings` +
-  `cargo test --workspace`. **Pass `timeout: 600000`** — it exceeds the Bash
-  tool's 120 s default and gets auto-backgrounded otherwise.
-- Cap parallelism at 2 (`CARGO_BUILD_JOBS=2`) — shared machine. Never `git add -A`.
-- **byonk lib suite is 437 tests** (+1 ignored), `tone_mask` alone is 28.
-  Base before session 5 was 427; Task 9 added 2, Task 9b added 8.
-  (The previous handover's figure of 424 was wrong — re-measure, don't inherit.)
+  `cargo test --workspace`. **Exceeds 600 s — background it.** See the warning above.
+- Cap parallelism at 2 (`CARGO_BUILD_JOBS=2`) — shared machine. **Never `git add -A`.**
+- **byonk lib suite is 449 tests** (+1 ignored). Session-6 progression: 437 → 439
+  (Task 10) → 445 (Task 11) → 448 (Task 12) → 449 (Task 12 fix). Re-measure, don't inherit.
 - `make docs` needs `mdbook-mermaid`.
-- **`cargo test -p eink-dither --lib -- --ignored` takes ~5 minutes** and
-  currently reports **3 pre-existing failures unrelated to this work**:
-  `preprocess::preprocessor::tests::{test_process_with_resize,
-  test_resize_before_enhancement, test_resize_full_pipeline_with_photo_preset}`
-  panic at `preprocess/resize.rs:26`. `resize_lanczos()` panics **by design**
-  ("resize not available (image crate removed)"); `resize.rs` was last touched
-  in `8b52e62`, long before this initiative. Do not mistake these for a
-  regression — but they are dead tests guarding a dead code path and deserve
-  their own cleanup someday.
-- **`Dockerfile` is broken independently** — it copies `Cargo.toml`,
-  `Cargo.lock` and `src/` but never `crates/`, so the workspace cannot resolve
-  `eink-dither`. Releases are unaffected (`Dockerfile.release`, CI-built
-  binaries). Out of scope, untouched.
+- **`cargo test -p eink-dither --lib -- --ignored` takes ~5 minutes** and reports
+  **3 pre-existing failures unrelated to this work**:
+  `preprocess::preprocessor::tests::{test_process_with_resize, test_resize_before_enhancement,
+  test_resize_full_pipeline_with_photo_preset}` panic at `preprocess/resize.rs:26`.
+  `resize_lanczos()` panics **by design**. Not a regression — but they are dead
+  tests guarding a dead code path and deserve their own cleanup someday.
+- **`Dockerfile` is broken independently** — it never copies `crates/`, so the
+  workspace cannot resolve `eink-dither`. Releases unaffected
+  (`Dockerfile.release`, CI-built binaries). Out of scope, untouched.
 
 ## Open dithering defects — independent of this work
 
 Gamut mapping is the identity on in-gamut targets, so it neither fixes nor
 worsens these:
 
-1. **Dark warm under-mixing.** At 45° L0.32 black lands at 1% against an
-   optimal 47%. In gamut, bound 0.000, so no gamut excuse.
-2. **Scalloped arcs at ink-set boundaries.** Survives every kernel and noise
-   scale. **No working hypothesis.**
-3. **Flat fills collapse to one ink** — `#C06020` renders solid red.
+1. **Dark warm under-mixing.** At 45° L0.32 black lands at 1% against an optimal 47%.
+2. **Scalloped arcs at ink-set boundaries.** Survives every kernel and noise scale. **No working hypothesis.**
+3. **Flat fills collapse to one ink** — `#C06020` renders solid red. Session 6 saw
+   this incidentally: an unmapped 100×100 `#ff00aa` frame dithers to a PLTE of a
+   single colour.
 
-The selector work that tried to fix these is **three-for-three refuted** and
-should not be resumed without a new idea; `crates/eink-dither/tests/spike_simplex.rs`
-is the deliberate record of what does not work. `AtkinsonHybrid` remains an
-unlanded candidate that beats Atkinson on both axes — changing the default
-alters rendering for every device, so it is the owner's call.
+The selector work that tried to fix these is **three-for-three refuted**;
+`crates/eink-dither/tests/spike_simplex.rs` is the deliberate record of what does
+not work. `AtkinsonHybrid` remains an unlanded candidate that beats Atkinson on
+both axes — changing the default alters rendering for every device, so it is the
+owner's call.

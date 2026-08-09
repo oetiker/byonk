@@ -10,7 +10,7 @@ default is 0.99. `make check` is green. `feat/screen-store-authoring-core` remai
 | | |
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
-| HEAD | `6c555de` (plus the uncommitted handover + one prototype label fix) |
+| HEAD | `6fae34c` — tree clean |
 | Worktree | `/Users/oetiker/checkouts/byonk` (working in place, no worktree) |
 | State | **`make check` green (exit 0)** at `6c555de` |
 | Spec | `docs/superpowers/specs/2026-08-07-gamut-mapping-design.md` — **current**, rewritten onto the ray geometry this session |

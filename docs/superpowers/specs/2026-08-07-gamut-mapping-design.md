@@ -117,7 +117,8 @@ keys:
 
 ```lua
 gamut = {
-  knee            = 0.6,   -- where compression begins, as a fraction of Cmax
+  knee            = 0.99,  -- where compression begins, as a fraction of the
+                           -- distance to the boundary along the ray
   amount          = 1.0,   -- 0 = no mapping, 1 = full
   max_compression = 2.5,   -- cap on R; beyond it the knee's tail takes over
 }
@@ -241,16 +242,24 @@ absolute floor on the discard count as well as the percentage.
 
 ### Per pixel
 
-sRGB -> linear -> OKLab -> OKLCh, compress chroma, and back. **Hue is
-carried through untouched**, which is what fixes the ordering inversions.
+sRGB -> linear -> OKLab -> OKLCh, compress **along a ray converging on
+mid-grey**, and back. **Hue is carried through untouched**, which is what
+fixes the ordering inversions. Lightness is not: it gives way together with
+chroma, in the ratio the ray sets. See "Which way colours are compressed"
+below for why the original fixed-lightness form had to go.
 
-With `Cmax = Cmax(h, L)`, knee fraction `k` and adaptation factor `R >= 1`:
+The colour sits at ray parameter `t = 1`, the hull boundary along that same
+ray at `t_max` (found by bisection). With knee fraction `k` and adaptation
+factor `R >= 1`, applied to the ray parameter rather than to chroma — the
+curve is homogeneous, so it applies to either identically:
 
 ```
-C <= k*Cmax :  C' = C
-C >  k*Cmax :  C' = k*Cmax + (1-k)*Cmax * shoulder(t),
-               t  = (C - k*Cmax) / ((R-k)*Cmax)
+1 <= k*t_max :  t' = 1
+1 >  k*t_max :  t' = k*t_max + (1-k)*t_max * shoulder(s),
+                s  = (1 - k*t_max) / ((R-k)*t_max)
 ```
+
+and the output is `anchor + t' * (source - anchor)`.
 
 The output span is always `(1-k)*Cmax`; only the *input* span widens with
 `R`. At `R = 1` the two coincide and this is the unadapted curve.
@@ -267,30 +276,50 @@ statement of the goal: two colours that differed before still differ after.
 Nothing collapses onto a shared value — which is exactly what a clipping
 approach (HPMINDE) would do, and why it was rejected.
 
-`k` is expected to be low, around 0.5–0.7 rather than the ~0.9 typical in
-print work, because this gamut is small enough that almost everything is
-outside it; a high knee would crush the entire vivid range into a sliver
-near `Cmax` and reintroduce the flatness.
+`k` was expected to be low, around 0.5–0.7 rather than the ~0.9 typical in
+print work, on the reasoning that this gamut is small enough that almost
+everything is outside it and a high knee would crush the vivid range into a
+sliver near the boundary. **Measurement contradicted this and the default is
+now 0.99** (ruling 17). Because the shoulder is asymptotic, nothing can ever
+be mapped *onto* the boundary — and a palette ink is the boundary, so `k` is
+in effect the fraction of its own chroma an ink comes back with. Over 24 hues
+x 5 lightnesses, raising `k` from 0.80 to 0.99 costs the tail 0.0004 of Oklab
+chroma (the whole tail span is about one JND) and *raises* the count of
+surviving distinct 8-bit outputs from 76.4% to 81.3%.
 
-### Why chroma-only suffices
+### Which way colours are compressed
 
-Because the palette contains both pure black and pure white, every `(L, h)`
-has a non-empty achievable range `[0, Cmax]`, so compressing chroma at fixed
-lightness always lands in gamut. No lightness compression is needed and the
-map cannot fail.
+Along a ray converging on mid-grey (`L = 0.5`) on the neutral axis, clamped
+into the hull's achievable lightness range.
 
-This is palette-dependent. A palette lacking a near-black or near-white has
-unreachable lightnesses, so the implementation clamps `L` into the hull's
-achievable range first, then compresses chroma. The four-colour panels are
-closer to that case than the six-colour ones.
+The original design compressed chroma at fixed lightness, justified as: the
+palette contains both black and white, so every `(L, h)` has a non-empty
+`[0, Cmax]` and a horizontal move always lands in gamut. That is true and
+insufficient — landing *somewhere* in gamut is not the same as the palette's
+own inks surviving. Where the hull's constant-`L` slice pinches, the
+horizontal ray leaves the hull long before reaching the ink. The panel's
+yellow was the proof: at its own lightness the reachable chroma is 0.073
+against the ink's 0.197, so it came back at 42% where red, green and blue
+managed 82% — **the panel could not render its own ink**.
 
-### Known simplification
+Anchoring at each hue's cusp is the textbook answer (GCUSP, CAM16, ACES) and
+was prototyped and measured at 40%: the cusps sit within 0.012 of the inks'
+own lightness, so the ray still climbs into the pinched region. Mid-grey
+restores all four measured panel inks to `t_max = 1.000` exactly.
 
-Real GCUSP also migrates lightness toward the gamut cusp, where more chroma
-is available, trading a little lightness accuracy for noticeably more
-colourfulness. Deliberately out of scope for the first cut: it is a second
-free parameter, and one knob tuned against the calibration screen is worth
-more than two tuned against each other.
+The cost is that lightness now moves, which for an out-of-gamut colour is the
+point and for an in-gamut one is a liability: a high-`L`, low-chroma colour's
+ray exits the hull at the *white point*, so it reads as boundary-saturated
+though its chroma was never out of gamut. The knee bounds this — everything
+with `t_max > 1/k` is returned untouched — which is the second reason `k` is
+high. At `k = 0.8` a faintly warm near-white darkens by up to 0.10 in `L`; at
+0.99, by 0.003. Whole-image mean `|dL|` hides this effect entirely; it has to
+be measured on the affected population.
+
+A palette lacking a near-black or near-white has unreachable lightnesses, so
+the implementation clamps `L` into the hull's achievable range before
+mapping. The four-colour panels are closer to that case than the six-colour
+ones.
 
 ## Pipeline
 

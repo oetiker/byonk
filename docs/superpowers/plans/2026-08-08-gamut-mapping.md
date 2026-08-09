@@ -1,5 +1,20 @@
 # Gamut Mapping Implementation Plan
 
+> **SUPERSEDED IN PART — read this first.** Tasks 1–13 are implemented and
+> merged into `feat/screen-store-authoring-core`. Two owner rulings landed
+> afterwards and changed the design this plan describes:
+>
+> - **Ruling 16** — compression runs along a ray converging on **mid-grey**,
+>   not at fixed lightness. Every statement below about "compressing chroma at
+>   clamped lightness" is obsolete, including the Global Constraint "Hue is
+>   never modified. Only chroma is compressed" — hue is still never modified,
+>   but lightness now moves too.
+> - **Ruling 17** — the knee default is **0.99**, not 0.6/0.8.
+>
+> The design of record is `docs/superpowers/specs/2026-08-07-gamut-mapping-design.md`
+> and the module docs in `crates/eink-dither/src/gamut/mapper.rs`. This file is
+> kept for the task history; do not implement from it without checking both.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let a screen mark continuous-tone regions with `data-byonk-tone="continuous"` so those pixels are compressed into the panel's physically reachable colour hull before dithering, trading colorimetric accuracy for preserved differences (gradients, hue order, local contrast).

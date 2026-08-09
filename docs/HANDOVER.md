@@ -7,7 +7,7 @@ _Last updated: 2026-08-09 (session 6) — **Gamut mapping: Tasks 10, 11 and 12 l
 | | |
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
-| HEAD | `c415219` |
+| Last code commit | `c415219` (Task 12 fix). Any commits after it on this branch are this handover's own docs commits — verify with `git log --oneline -5`. |
 | Worktree | `/Users/oetiker/checkouts/byonk` (working in place, no worktree) |
 | State | `make check` fully green, tree clean, byonk lib **449** tests (+1 ignored) |
 | Plan | `docs/superpowers/plans/2026-08-08-gamut-mapping.md` |

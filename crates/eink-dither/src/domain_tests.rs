@@ -3083,22 +3083,49 @@ mod domain_tests {
         let mapper = GamutMapper::new(&palette);
         let opts = GamutOptions::default();
 
-        // A saturation ramp at fixed hue and lightness, spanning the full
-        // sRGB chroma range. `r = 1.0` deliberately: normalising by a larger
-        // `r` shrinks the ramp below `Cmax`, so the shoulder is never reached
-        // and the test passes even against a mapper that *clips*. Verified by
-        // mutation — replacing the knee with `c_max.min(c)` must fail here.
-        let steps: Vec<f32> = (0..64).map(|i| i as f32 / 63.0 * 0.32).collect();
+        // The ramp runs **along one compression ray**, not across a row of
+        // fixed lightness. That is what makes it discriminating under ruling
+        // 16: every sample shares a single direction from the anchor, so a
+        // mapper that clips sends all of the out-of-gamut ones to the *same*
+        // boundary point and the ramp collapses outright. A ramp at fixed `L`
+        // gives each step its own ray direction and therefore its own boundary
+        // point, so clipping keeps them accidentally distinct — the previous
+        // form of this test passed against a clipping mutant. Verified by
+        // mutation both ways.
+        //
+        // `r = 1.0` deliberately: a larger `r` widens the tail's input span so
+        // the shoulder is never reached.
+        //
+        // Separation is measured between the mapped *points*. Under ruling 16
+        // the map moves lightness as well, so chroma alone no longer describes
+        // the output — past the shoulder chroma asymptotes and drifts back by
+        // ~5e-5 while the points stay cleanly separated in `L`.
+        let (dir_l, dir_c) = (0.55f32 - 0.5, 0.32f32);
         let mut collapsed = 0;
-        let mut prev_c = f32::NEG_INFINITY;
-        for &c in &steps {
-            let out = mapper.mapped_chroma(c, 0.6, 0.55, 1.0, opts);
-            if out <= prev_c {
-                collapsed += 1;
-                eprintln!("ramp collapsed at c={c:.4}: {prev_c:.6} -> {out:.6}");
+        let mut min_sep = f32::INFINITY;
+        let mut prev: Option<Oklch> = None;
+        for i in 1..=64 {
+            // Out to 3x the boundary distance, so most samples need the tail.
+            let s = i as f32 / 64.0 * 3.0;
+            let src = Oklch {
+                l: 0.5 + s * dir_l,
+                c: s * dir_c,
+                h: 0.6,
+            };
+            let out = mapper.mapped_point(src, 1.0, opts);
+            if let Some(p) = prev {
+                // Distance in Oklab: at fixed hue the ramp is planar, so this
+                // is the (L, C) separation.
+                let sep = ((out.l - p.l).powi(2) + (out.c - p.c).powi(2)).sqrt();
+                min_sep = min_sep.min(sep);
+                if sep <= 0.0 {
+                    collapsed += 1;
+                    eprintln!("ramp collapsed at s={s:.4}: {p:?} -> {out:?}");
+                }
             }
-            prev_c = out;
+            prev = Some(out);
         }
+        eprintln!("minimum step separation in Oklab: {min_sep:.2e}");
         assert_eq!(collapsed, 0, "every ramp step must stay distinct");
     }
 }

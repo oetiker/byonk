@@ -12,16 +12,19 @@
 //! identity at every `R`. This file is kept as the **standing guard** on that
 //! property, and as the place the per-ink numbers are printed.
 //!
-//! One ink is deliberately excluded from the guard: **yellow**. That is not an
-//! adaptation artifact. At yellow's own lightness (L = 0.933) the constant-`L`,
-//! constant-hue chroma ray leaves the hull at C ~ 0.073 and touches it again
-//! only at the vertex itself — a measure-zero graze, confirmed by scanning
-//! `Hull::contains` along the ray at 1e-4 resolution. So `Cmax ~ 0.073` is
-//! geometrically correct, and `rho(yellow) ~ 2.1` is a true statement about a
-//! **chroma-only** mapper: compressing chroma at fixed lightness genuinely
-//! cannot reach the yellow ink. Preserving it would require a mapper that also
-//! moves lightness (cusp-anchored, as in CAM16/ACES), which is a different
-//! design. See the owner note in `docs/HANDOVER.md`.
+//! **Yellow used to be excluded from this guard and no longer is.** At its own
+//! lightness (L = 0.933) the constant-`L`, constant-hue chroma ray leaves the
+//! hull at C ~ 0.073 and touches it again only at the vertex itself — a
+//! measure-zero graze, confirmed by scanning `Hull::contains` along the ray at
+//! 1e-4 resolution. So `Cmax ~ 0.073` was geometrically correct and
+//! `rho(yellow) ~ 2.1` was a true statement about a **chroma-only** mapper:
+//! compressing chroma at fixed lightness genuinely could not reach the ink,
+//! which came back at 42% where red, blue and green managed 82%.
+//!
+//! Ruling 16 replaced that geometry with a ray converging on mid-grey, which
+//! moves lightness as well. Yellow now measures `rho = 1.000` — on the boundary,
+//! as an ink should be — and keeps 82% like the rest, so it is guarded here on
+//! the same terms as the others.
 //!
 //! Run with:
 //!     cargo test -p eink-dither --test gamut_adaptation_diag -- --ignored --nocapture
@@ -174,11 +177,13 @@ fn adaptation_factor_does_not_reach_in_gamut_colours() {
     //
     // Before the session-8 redesign every one of them kept 40%.
     //
-    // Yellow is excluded on purpose; see the module docs. It is unreachable at
-    // its own lightness for any chroma-only mapper, which is a design
-    // limitation, not a regression.
+    // Yellow is **included** since ruling 16. Under the old fixed-lightness
+    // mapper it was excluded as an admitted design limitation, keeping 42%
+    // where the others managed 82%; the mid-grey ray reaches it and it now
+    // measures `rho = 1.000` and 82% like every other ink.
     for (name, ink) in [
         ("red", Srgb::from_u8(0xB5, 0x03, 0x03)),
+        ("yellow", Srgb::from_u8(0xFF, 0xEE, 0x00)),
         ("blue", Srgb::from_u8(0x20, 0x54, 0x97)),
         ("green", Srgb::from_u8(0x0D, 0x87, 0x6B)),
     ] {

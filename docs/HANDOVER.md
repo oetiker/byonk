@@ -11,7 +11,7 @@ done, green, and committed. **One new owner decision is open: yellow.** Task 14
 | | |
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
-| Last code commit | see `git log --oneline -5`; session 8's fix is the adaptation redesign |
+| Last code commit | `23a1e39` — the adaptation redesign. `f48c42e` and later are docs only. |
 | Worktree | `/Users/oetiker/checkouts/byonk` (working in place, no worktree) |
 | State | `make check` green, tree clean |
 | Plan | `docs/superpowers/plans/2026-08-08-gamut-mapping.md` |
@@ -179,7 +179,7 @@ the abandoned working tree first.
 | `5d14fd3` | **Ruling 14** — `amount` clamped to `[0,1]` in `mapped_chroma` |
 | `e0d85b7` | **Task 13** — hue-order + local-contrast metrics and the visual goldens |
 | `2f4a2a6` | **The adaptation diagnostic** — evidence for session 7's finding |
-| session 8 | **The adaptation redesign** — `R` moved into the tail's input span |
+| `23a1e39` | **Session 8 — the adaptation redesign** — `R` moved into the tail's input span |
 
 Public surface: `eink_dither::{Oklch, GamutMapper, GamutOptions}`;
 `gamut::hull::{Hull, HullShape}`; `gamut::cmax::{CmaxTable, HUE_BINS, LIGHTNESS_BINS}`;

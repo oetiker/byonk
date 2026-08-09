@@ -16,10 +16,15 @@
 //!   neon sign filling 2% of the frame sits above the percentile cut). It does
 //!   not eliminate it.
 //!
-//! Content beyond the cap is deliberately **not** clipped: normalising by the
-//! capped `R` leaves it above `Cmax` going into the knee, whose asymptotic
-//! shoulder maps any input to just under the limit while staying strictly
-//! increasing.
+//! `R` reaches the pixel **only through the knee's tail**: it widens the input
+//! span of the shoulder to `(R - k) * Cmax` and appears nowhere else. It cannot
+//! touch chroma below the knee, which is identity at every `R`. See
+//! [`super::knee`] for the curve and for what went wrong when an earlier
+//! revision divided chroma by `R` before the knee instead.
+//!
+//! Content beyond the cap is deliberately **not** clipped: it simply enters the
+//! knee with a large `t`, and the asymptotic shoulder maps any input to just
+//! under `Cmax` while staying strictly increasing.
 
 /// Fraction of the distribution kept below the cut.
 pub const PERCENTILE: f32 = 0.99;

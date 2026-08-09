@@ -828,6 +828,126 @@ fn visual_gamut_mapping_before_after() {
     eprintln!("original | unmapped | mapped — inspect by eye");
 }
 
+/// Mixed content: the case the adaptation factor is supposed to handle, and
+/// the case the superseded `c / R` form got wrong.
+///
+/// Saturation rises left to right, so the left half is comfortably inside the
+/// gamut and the right half is well outside it, and a vivid block is planted
+/// in the middle to pin `R` at its cap. Under the old curve the whole frame
+/// was divided by `R` and the in-gamut left half went flat along with
+/// everything else. Under the current curve it must come through untouched.
+///
+/// Rendered **before dithering** so the mapping is visible on its own — dither
+/// noise otherwise masks exactly the difference being judged.
+#[test]
+#[ignore = "writes PNGs; run with --ignored"]
+fn visual_gamut_mixed_content() {
+    use eink_dither::gamut::adapt::adaptation_factor;
+    use eink_dither::gamut::cmax::CmaxTable;
+    use eink_dither::gamut::hull::Hull;
+    use eink_dither::gamut::knee::compress_chroma;
+    use eink_dither::{GamutMapper, GamutOptions, Oklab, Oklch};
+
+    const W: usize = 480;
+    const H: usize = 320;
+    let palette = panel();
+
+    let mut pixels = Vec::with_capacity(W * H);
+    for y in 0..H {
+        let l = 0.20 + 0.60 * (y as f32 / (H - 1) as f32);
+        for x in 0..W {
+            let s = x as f32 / (W - 1) as f32;
+            // Hue sweeps slowly so the frame stays readable as colour, not as
+            // a rainbow; saturation is the axis under test.
+            let (r, g, b) = hsl_to_rgb(0.08 + 0.5 * (y as f32 / (H - 1) as f32), s, l);
+            pixels.push(Srgb::new(r, g, b));
+        }
+    }
+    // The vivid intruder: one saturated block, enough of the frame to survive
+    // the 99th-percentile guard and drive R to its cap.
+    for y in 40..120 {
+        for x in 40..200 {
+            let (r, g, b) = hsl_to_rgb(0.95, 1.0, 0.5);
+            pixels[y * W + x] = Srgb::new(r, g, b);
+        }
+    }
+
+    let mapper = GamutMapper::new(&palette);
+    let opts = GamutOptions::default();
+
+    let mut mapped = pixels.clone();
+    let mask = vec![true; mapped.len()];
+    mapper.map_frame(&mut mapped, &mask, opts);
+
+    // The superseded curve, reconstructed here so the two can be seen side by
+    // side: chroma divided by R *before* the knee, which is what made the
+    // in-gamut left half go flat.
+    let table = CmaxTable::build(&Hull::from_palette(&palette));
+    let r = adaptation_factor(
+        &mut pixels.iter().map(|c| mapper.rho(*c)).collect::<Vec<_>>(),
+        opts.max_compression,
+    );
+    let old: Vec<Srgb> = pixels
+        .iter()
+        .map(|p| {
+            let lch = Oklch::from(Oklab::from(LinearRgb::from(*p)));
+            let c_max = table.sample(lch.h, lch.l);
+            let c = compress_chroma(lch.c / r.max(1.0), c_max, opts.knee, 1.0);
+            let lin = LinearRgb::from(Oklab::from(Oklch {
+                l: lch.l,
+                c: c.max(0.0),
+                h: lch.h,
+            }));
+            Srgb::from(LinearRgb::new(
+                lin.r.clamp(0.0, 1.0),
+                lin.g.clamp(0.0, 1.0),
+                lin.b.clamp(0.0, 1.0),
+            ))
+        })
+        .collect();
+
+    let to_rgb = |v: &[Srgb]| -> Vec<u8> {
+        v.iter()
+            .flat_map(|c| {
+                let b = c.to_bytes();
+                [b[0], b[1], b[2]]
+            })
+            .collect()
+    };
+
+    let (buf, ow, oh) = triptych(&pixels, &to_rgb(&old), &to_rgb(&mapped), W, H);
+    write("gamut-mixed-content.png", &buf, ow, oh);
+    eprintln!("source | OLD curve (c/R before knee) | NEW curve — R = {r:.3}");
+
+    // Quantify it, because a 1.7% difference is not a judgement the eye makes
+    // reliably — the lesson session 7 paid for.
+    let chroma = |v: &[Srgb]| -> f32 {
+        v.iter()
+            .map(|c| Oklch::from(Oklab::from(LinearRgb::from(*c))).c)
+            .sum::<f32>()
+            / v.len() as f32
+    };
+    // The in-gamut left third, where the promise lives.
+    let left = |v: &[Srgb]| -> Vec<Srgb> {
+        (0..H)
+            .flat_map(|y| (0..W / 3).map(move |x| (y, x)))
+            .map(|(y, x)| v[y * W + x])
+            .collect()
+    };
+    eprintln!(
+        "  mean Oklab chroma  whole frame: source {:.4}  old {:.4}  new {:.4}",
+        chroma(&pixels),
+        chroma(&old),
+        chroma(&mapped)
+    );
+    eprintln!(
+        "  mean Oklab chroma  low-saturation left third: source {:.4}  old {:.4}  new {:.4}",
+        chroma(&left(&pixels)),
+        chroma(&left(&old)),
+        chroma(&left(&mapped))
+    );
+}
+
 /// The same comparison at three knee values, to pick one by eye.
 #[test]
 #[ignore = "writes PNGs; run with --ignored"]

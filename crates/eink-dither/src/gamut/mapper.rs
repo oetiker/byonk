@@ -39,16 +39,19 @@ pub struct GamutOptions {
     /// vivid range into a sliver near `Cmax`. Measurement does not support
     /// either half of that. Across every sRGB colour with non-zero chroma,
     /// `rho = C/Cmax` has a median of 0.91 and a p90 of 1.30 — about half the
-    /// cube is outside the hull, not almost all of it. And because `map_frame`
-    /// normalises by `R`, the 99th percentile of `rho`, the "sliver" only ever
-    /// holds the top ~1% of a region's pixels.
+    /// cube is outside the hull, not almost all of it.
     ///
-    /// Measured against that, a low knee is a bad trade. At `knee = 0.6` the
-    /// frame's vivid end (`rho/R = 1`) renders at 82.4% of the achievable
-    /// chroma; at 0.8 it renders at 91.2%. What the lower knee buys back is
-    /// separation in the out-of-gamut tail of 0.005 in Oklab chroma and below
-    /// — against roughly 0.02 for one JND, on a panel that dithers six inks.
-    /// It spends visible chroma to preserve differences nothing can render.
+    /// Measured against that, a low knee is a bad trade: it starts compressing
+    /// well inside the gamut in order to buy separation in the out-of-gamut
+    /// tail, and that separation is on the order of 0.005 in Oklab chroma —
+    /// against roughly 0.02 for one JND, on a panel that dithers six inks. It
+    /// spends visible chroma to preserve differences nothing can render.
+    ///
+    /// The percentages an earlier revision quoted here (82.4% at `knee = 0.6`,
+    /// 91.2% at 0.8) were computed against the superseded curve, which divided
+    /// chroma by `R` before the knee. They are not restated because they have
+    /// not been re-measured. The knee default is a standing owner ruling and
+    /// re-opening it is a separate question from this correction.
     pub knee: f32,
     /// Interpolation between input and mapped chroma:
     /// `C_out = C + amount * (C' - C)`.
@@ -66,12 +69,16 @@ pub struct GamutOptions {
     /// clips as it does today. It is a comparison and taste control, not a
     /// correctness one.
     pub amount: f32,
-    /// Cap on `R` — literally "never compress chroma by more than this".
+    /// Cap on `R` — how far out of gamut the curve is willing to stretch its
+    /// tail to accommodate a region's most extreme content.
     ///
-    /// Raising it lets an extremely vivid image adapt further, at the cost of
-    /// flattening everything else; lowering it protects the bulk of the image
-    /// and pushes the extremes into the knee's asymptotic tail instead, where
-    /// they stay distinguishable but heavily compressed.
+    /// Raising it lets an extremely vivid image spread its tail across a wider
+    /// input range, at the cost of compressing everything *above the knee*
+    /// harder; lowering it protects near-boundary chroma and pushes the
+    /// extremes further into the asymptotic tail, where they stay
+    /// distinguishable but heavily compressed. It has **no effect at all**
+    /// below the knee — that region is identity at every `R`, which is the
+    /// property `sub_knee_chroma_is_untouched_however_large_r_is` guards.
     pub max_compression: f32,
 }
 
@@ -132,7 +139,7 @@ impl GamutMapper {
     pub(crate) fn mapped_chroma(&self, c: f32, h: f32, l: f32, r: f32, opts: GamutOptions) -> f32 {
         let l = l.clamp(self.l_min, self.l_max);
         let c_max = self.table.sample(h, l);
-        let compressed = compress_chroma(c / r.max(1.0), c_max, opts.knee);
+        let compressed = compress_chroma(c, c_max, opts.knee, r);
         c + opts.amount.clamp(0.0, 1.0) * (compressed - c)
     }
 
@@ -259,6 +266,51 @@ mod tests {
         for (i, (a, b)) in before.iter().zip(pixels.iter()).enumerate() {
             assert_eq!(a.to_bytes(), b.to_bytes(), "in-gamut pixel {i} was altered");
         }
+    }
+
+    #[test]
+    fn sub_knee_chroma_is_untouched_however_large_r_is() {
+        // The spec's stated promise: "compression only bites above k*Cmax, so
+        // low-chroma content passes through untouched however large R becomes.
+        // A mostly-grey photo with one vivid flower does not go flat."
+        //
+        // This is the absolute property the suite never asserted, and the one
+        // that the adaptation step broke.
+        let m = GamutMapper::new(&six_colour());
+        let opts = GamutOptions::default();
+        let (h, l) = (0.7f32, 0.55f32);
+        let c_max = m.table.sample(h, l);
+        assert!(c_max > 0.0, "test fixture must admit chroma here");
+
+        // Half way to the knee — unambiguously in the identity region.
+        let c = 0.5 * opts.knee * c_max;
+        for r in [1.0f32, 1.5, 2.0, opts.max_compression] {
+            let out = m.mapped_chroma(c, h, l, r, opts);
+            assert!(
+                (out - c).abs() < 1e-6,
+                "R = {r} altered sub-knee chroma: {c} -> {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_colour_on_the_gamut_boundary_keeps_most_of_its_chroma() {
+        // A colour at exactly Cmax is perfectly renderable and needs no
+        // compression at all. It sits above the knee, so a knee at k < 1 must
+        // move it a little — but only within the top (1-k) of its range, not
+        // most of the way to grey.
+        let m = GamutMapper::new(&six_colour());
+        let opts = GamutOptions::default();
+        let (h, l) = (0.7f32, 0.55f32);
+        let c_max = m.table.sample(h, l);
+        assert!(c_max > 0.0, "test fixture must admit chroma here");
+
+        let out = m.mapped_chroma(c_max, h, l, opts.max_compression, opts);
+        assert!(
+            out > 0.75 * c_max,
+            "boundary colour kept only {:.0}% of its chroma",
+            100.0 * out / c_max
+        );
     }
 
     #[test]

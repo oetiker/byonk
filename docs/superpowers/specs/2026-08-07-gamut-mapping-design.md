@@ -192,18 +192,32 @@ whole image).
 
 - `R <= 1` — the content is already in gamut. **Identity. No mapping at
   all.** Nothing is needlessly desaturated.
-- `R > 1` — compress `[0, R] -> [0, 1]` through the knee below.
+- `R > 1` — the knee below squeezes the out-of-gamut tail harder.
 
 `R` is then capped at `max_compression` (default 2.5), so no image can
 squeeze the rest of its colours arbitrarily hard to accommodate its most
 extreme region.
 
-Content beyond the cap is **not** clipped. Normalising by the capped `R`
-simply leaves it above `Cmax` going into the knee, and because the knee is
-asymptotic it maps any input, however large, to just under `Cmax` while
-staying strictly increasing. So the extreme tail is compressed very hard but
-never collapses onto a shared value, and the monotonicity property below
-holds for all inputs. Clipping at the cap would have broken it.
+**`R` enters only the input span of the knee's tail**, never the chroma
+itself — see the per-pixel formula below, where it appears in the denominator
+of `t` and nowhere else. This placement is load-bearing, not incidental. An
+earlier revision of this section instead said the chroma was "normalised by
+the capped `R`" before the knee was consulted, and the implementation
+followed it. That divides *every* pixel, so on saturated content — where `R`
+pins at its cap — the panel's own inks, which lie exactly on the hull and
+need no compression at all, came out with **40% of their chroma**: red became
+a muddy brown. It also made adaptation contagious, since one `R` covers a
+whole marked region and a single vivid element dragged its neutral
+surroundings down with it. Both effects contradicted the guarantee stated
+three paragraphs below. The `t`-denominator form is the one that satisfies
+it, and it degenerates to the unadapted curve exactly at `R = 1`.
+
+Content beyond the cap is **not** clipped. It simply enters the knee with a
+large `t`, and because the knee is asymptotic it maps any input, however
+large, to just under `Cmax` while staying strictly increasing. So the extreme
+tail is compressed very hard but never collapses onto a shared value, and the
+monotonicity property below holds for all inputs. Clipping at the cap would
+have broken it.
 
 Both guards exist because a single scalar can be hijacked by a small region.
 Their limits are worth stating plainly:
@@ -230,13 +244,22 @@ absolute floor on the discard count as well as the percentage.
 sRGB -> linear -> OKLab -> OKLCh, compress chroma, and back. **Hue is
 carried through untouched**, which is what fixes the ordering inversions.
 
-With `Cmax = Cmax(h, L)` and knee fraction `k`:
+With `Cmax = Cmax(h, L)`, knee fraction `k` and adaptation factor `R >= 1`:
 
 ```
 C <= k*Cmax :  C' = C
-C >  k*Cmax :  C' = k*Cmax + (1-k)*Cmax * (1 - exp(-t)),
-               t  = (C - k*Cmax) / ((1-k)*Cmax)
+C >  k*Cmax :  C' = k*Cmax + (1-k)*Cmax * shoulder(t),
+               t  = (C - k*Cmax) / ((R-k)*Cmax)
 ```
+
+The output span is always `(1-k)*Cmax`; only the *input* span widens with
+`R`. At `R = 1` the two coincide and this is the unadapted curve.
+
+`shoulder` is the ACES 1.3 Reference Gamut Compression `powerP` curve,
+`t/(1+t^p)^(1/p)` at `p = 1.2`, rather than the `1 - exp(-t)` of an earlier
+draft: the exponential reaches 1.0 in `f32` at `t ~ 10.2`, inside the
+reachable input domain, so it would silently become the clipping this design
+rejects. See `crates/eink-dither/src/gamut/knee.rs` for the measurement.
 
 Continuous at the knee and **strictly increasing everywhere**, approaching
 `Cmax` asymptotically without reaching it. That property is the formal

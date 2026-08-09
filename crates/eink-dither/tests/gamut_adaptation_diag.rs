@@ -1,20 +1,27 @@
 //! Diagnostic: what the content-adaptation factor `R` actually does to colour.
 //!
-//! Written in session 7 to answer "why does everything look subdued?", and kept
-//! because the answer is a live design question, not a settled one.
+//! Written in session 7 to answer "why does everything look subdued?". The
+//! answer was a real defect: `mapped_chroma` computed
+//! `compress_chroma(c / R, c_max, knee)`, dividing **before** the knee was
+//! consulted, so adaptation applied to every pixel unconditionally — including
+//! the palette's own inks, which sit on the hull and need no compression at
+//! all. They came out with 40% of their chroma.
 //!
-//! `mapped_chroma` computes `compress_chroma(c / R, c_max, knee)`. The division
-//! happens *before* the knee is consulted, so it applies to every pixel —
-//! including colours already inside the gamut, including the palette's own inks,
-//! which sit exactly on the hull (`rho = 1`) and need no compression at all.
+//! Session 8 redesigned it: `R` now scales only the input span of the tail
+//! (`t = (C - k*Cmax) / ((R-k)*Cmax)`), so the sub-knee region is exact
+//! identity at every `R`. This file is kept as the **standing guard** on that
+//! property, and as the place the per-ink numbers are printed.
 //!
-//! The spec (`docs/superpowers/specs/2026-08-07-gamut-mapping-design.md`)
-//! contains BOTH readings and they are not compatible:
-//!
-//!   - "Normalising by the capped `R`" (line ~201) — what the code implements.
-//!   - "compression only bites above `k*Cmax`, so low-chroma content passes
-//!     through untouched however large `R` becomes" (line ~217), and a per-pixel
-//!     formula (line ~233) with no `R` in it whatsoever.
+//! One ink is deliberately excluded from the guard: **yellow**. That is not an
+//! adaptation artifact. At yellow's own lightness (L = 0.933) the constant-`L`,
+//! constant-hue chroma ray leaves the hull at C ~ 0.073 and touches it again
+//! only at the vertex itself — a measure-zero graze, confirmed by scanning
+//! `Hull::contains` along the ray at 1e-4 resolution. So `Cmax ~ 0.073` is
+//! geometrically correct, and `rho(yellow) ~ 2.1` is a true statement about a
+//! **chroma-only** mapper: compressing chroma at fixed lightness genuinely
+//! cannot reach the yellow ink. Preserving it would require a mapper that also
+//! moves lightness (cusp-anchored, as in CAM16/ACES), which is a different
+//! design. See the owner note in `docs/HANDOVER.md`.
 //!
 //! Run with:
 //!     cargo test -p eink-dither --test gamut_adaptation_diag -- --ignored --nocapture
@@ -63,8 +70,8 @@ fn hsl(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
 }
 
 #[test]
-#[ignore = "diagnostic; prints, asserts only the headline finding"]
-fn adaptation_factor_desaturates_in_gamut_colours() {
+#[ignore = "diagnostic; prints the per-ink numbers, guards the sub-knee promise"]
+fn adaptation_factor_does_not_reach_in_gamut_colours() {
     const W: usize = 480;
     const H: usize = 320;
     let p = panel();
@@ -94,7 +101,9 @@ fn adaptation_factor_desaturates_in_gamut_colours() {
 
     let r = adaptation_factor(&mut rhos, 2.5);
     println!("\nADAPTATION FACTOR R = {r:.4}  (max_compression cap = 2.5)");
-    println!("  -> every chroma is divided by {r:.3} BEFORE the knee is consulted");
+    println!(
+        "  -> R widens the knee's tail input span to (R-k)*Cmax; sub-knee chroma is untouched"
+    );
 
     // How many pixels actually reach the knee's shoulder?
     for knee in [0.4f32, 0.6, 0.8] {
@@ -102,7 +111,7 @@ fn adaptation_factor_desaturates_in_gamut_colours() {
         for c in &px {
             let lch = Oklch::from(Oklab::from(LinearRgb::from(*c)));
             let cmax = table.sample(lch.h, lch.l);
-            if cmax > 0.0 && lch.c / r > knee * cmax {
+            if cmax > 0.0 && lch.c > knee * cmax {
                 above += 1;
             }
         }
@@ -152,27 +161,40 @@ fn adaptation_factor_desaturates_in_gamut_colours() {
         let after_s = mapper.map_color(ink, r, GamutOptions::default());
         let after = Oklch::from(Oklab::from(LinearRgb::from(after_s)));
         let b = after_s.to_bytes();
-        println!("  {name:6}: chroma {:.4} -> {:.4}  ({:.0}% kept)   #{:02X}{:02X}{:02X} -> #{:02X}{:02X}{:02X}",
+        println!("  {name:6}: L={:.3} rho={:.3}  chroma {:.4} -> {:.4}  ({:.0}% kept)   #{:02X}{:02X}{:02X} -> #{:02X}{:02X}{:02X}",
+                 before.l, mapper.rho(ink),
                  before.c, after.c, after.c / before.c * 100.0,
                  ink.to_bytes()[0], ink.to_bytes()[1], ink.to_bytes()[2], b[0], b[1], b[2]);
     }
 
-    // The headline finding, asserted so it cannot silently change: the palette's
-    // own inks are on the hull and need no compression, yet lose most of their
-    // chroma. If a redesign fixes the adaptation, THIS ASSERTION SHOULD FAIL.
-    let ink = Srgb::from_u8(0xB5, 0x03, 0x03);
-    let before = Oklch::from(Oklab::from(LinearRgb::from(ink))).c;
-    let after = Oklch::from(Oklab::from(LinearRgb::from(mapper.map_color(
-        ink,
-        r,
-        GamutOptions::default(),
-    ))))
-    .c;
-    assert!(
-        after < before * 0.5,
-        "measured red ink kept {:.0}% of its chroma — if this now passes through \
-         nearly untouched the adaptation was redesigned, and this diagnostic \
-         (and the handover section it backs) needs rewriting",
-        after / before * 100.0
-    );
+    // The standing guard. These three inks are reachable at their own lightness
+    // (rho ~ 1.02-1.04), so a correct mapper must leave them very nearly alone
+    // however hard the *rest* of the region is being compressed — here R is
+    // pinned at its 2.5 cap by a deliberately saturated field.
+    //
+    // Before the session-8 redesign every one of them kept 40%.
+    //
+    // Yellow is excluded on purpose; see the module docs. It is unreachable at
+    // its own lightness for any chroma-only mapper, which is a design
+    // limitation, not a regression.
+    for (name, ink) in [
+        ("red", Srgb::from_u8(0xB5, 0x03, 0x03)),
+        ("blue", Srgb::from_u8(0x20, 0x54, 0x97)),
+        ("green", Srgb::from_u8(0x0D, 0x87, 0x6B)),
+    ] {
+        let before = Oklch::from(Oklab::from(LinearRgb::from(ink))).c;
+        let after = Oklch::from(Oklab::from(LinearRgb::from(mapper.map_color(
+            ink,
+            r,
+            GamutOptions::default(),
+        ))))
+        .c;
+        assert!(
+            after > before * 0.7,
+            "the {name} ink is on the hull and needs no compression, yet kept \
+             only {:.0}% of its chroma. The adaptation factor must not reach \
+             colours that are already renderable.",
+            after / before * 100.0
+        );
+    }
 }

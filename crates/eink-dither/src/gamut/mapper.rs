@@ -10,13 +10,39 @@
 //! preservation of differences — gradients that used to band, hues that used
 //! to collapse onto one ink, and hue ordering that used to invert.
 //!
-//! # Why chroma-only suffices
+//! # Which way colours are compressed
 //!
-//! Because a six-ink palette contains both pure black and pure white, every
-//! `(L, h)` has a non-empty achievable range `[0, Cmax]`, so compressing
-//! chroma at fixed lightness always lands in gamut. For a palette lacking a
-//! near-black or near-white, lightness is first clamped into the hull's
-//! achievable range.
+//! Along a ray converging on **mid-grey** on the neutral axis — lightness and
+//! chroma give way together — rather than horizontally at fixed lightness.
+//!
+//! An earlier revision compressed chroma alone, reasoning that because a
+//! six-ink palette contains both black and white, every `(L, h)` has a
+//! non-empty `[0, Cmax]`, so a fixed-lightness move always lands in gamut.
+//! That is true and insufficient: landing *somewhere* in gamut is not the same
+//! as the palette's own inks surviving. The hull's constant-`L` slice pinches,
+//! and where it does, the horizontal ray leaves the hull long before it reaches
+//! the ink. The panel's yellow was the proof — at its own lightness the
+//! reachable chroma is 0.073 against the ink's 0.197, so saturated yellow
+//! washed out to cream and **the panel could not render its own ink**, coming
+//! back at 42% of its chroma while red, green and blue managed 82%.
+//!
+//! Anchoring at each hue's cusp is the textbook answer and was measured at 40%:
+//! the cusps sit within 0.012 of the inks' own lightness, so the ray still
+//! climbs into the pinched region. Mid-grey restores all four panel inks to the
+//! knee's design point exactly (`t_max = 1.000`).
+//!
+//! The cost is that lightness now moves. For a colour that is genuinely out of
+//! gamut that is the point. For an in-gamut one it is a liability, and it is
+//! bounded by the knee: a high-`L`, low-chroma colour's ray exits the hull at
+//! the *white point*, so it reads as boundary-saturated even though its chroma
+//! was never out of gamut. Every colour with `t_max > 1/knee` is returned
+//! untouched, so the higher the knee the thinner that shell — at `knee = 0.8` a
+//! faintly warm near-white darkens by up to 0.10 in `L`, at `0.99` by 0.003.
+//! `ray_geometry_diagnostic` measures this; `a_tinted_near_white_keeps_its_lightness`
+//! guards it.
+//!
+//! Lightness is clamped into the hull's achievable range before mapping, which
+//! also covers palettes lacking a near-black or near-white.
 
 use super::adapt::adaptation_factor;
 use super::cmax::CmaxTable;
@@ -92,9 +118,32 @@ impl Default for GamutOptions {
     }
 }
 
+/// Where on the neutral axis the compression lines converge (ruling 16).
+///
+/// Mid-grey, not the source lightness and not the hue's cusp. Anchoring at the
+/// cusp is the textbook answer and was measured at 40% survival on the panel's
+/// yellow against mid-grey's 82%: the cusps sit within 0.012 of the inks' own
+/// lightness, so the ray still climbs into the pinched region.
+const ANCHOR_L: f32 = 0.5;
+
+/// How far past the source the boundary search looks. The source sits at
+/// `t = 1`, so this admits boundaries up to 6x further out than the colour.
+const T_HI: f32 = 6.0;
+
+/// Bisection steps for the boundary search. 24 halvings of `[0, 6]` resolve
+/// `t_max` to about 4e-7 — far below 8-bit output quantisation.
+const T_STEPS: usize = 24;
+
+/// Below this chroma a colour is treated as neutral and left alone. Its
+/// compression ray would be the neutral axis itself, whose "boundary" is the
+/// white or black point — a colour that is perfectly renderable and must not
+/// be compressed toward grey.
+const ACHROMATIC_C: f32 = 1e-6;
+
 /// Maps colours into a palette's reachable hull. Build once per palette.
 #[derive(Debug, Clone)]
 pub struct GamutMapper {
+    hull: Hull,
     table: CmaxTable,
     l_min: f32,
     l_max: f32,
@@ -109,51 +158,119 @@ impl GamutMapper {
         let table = CmaxTable::build(&hull);
         let (l_min, l_max) = table.lightness_range();
         Self {
+            hull,
             table,
             l_min,
             l_max,
         }
     }
 
-    /// `C / Cmax(h, L)` — how far out of gamut this colour is, 1.0 being
-    /// exactly on the boundary. Infinite when the palette admits no chroma at
-    /// this hue and lightness but the colour has some.
-    pub fn rho(&self, c: Srgb) -> f32 {
-        let lch = Oklch::from(Oklab::from(LinearRgb::from(c)));
-        let l = lch.l.clamp(self.l_min, self.l_max);
-        let c_max = self.table.sample(lch.h, l);
-        if c_max <= 0.0 {
-            if lch.c <= 0.0 {
-                0.0
-            } else {
-                f32::INFINITY
-            }
-        } else {
-            lch.c / c_max
+    /// Where this colour's compression ray converges, clamped into the hull's
+    /// achievable lightness range so the anchor is itself renderable.
+    fn anchor_l(&self) -> f32 {
+        ANCHOR_L.clamp(self.l_min, self.l_max)
+    }
+
+    fn inside(&self, l: f32, c: f32, h: f32) -> bool {
+        self.hull.contains(LinearRgb::from(Oklab::from(Oklch {
+            l,
+            c: c.max(0.0),
+            h,
+        })))
+    }
+
+    /// Largest `t` for which `anchor + t * (source - anchor)` is still in the
+    /// hull, with the source at `t = 1`.
+    ///
+    /// Bisection, so it finds the *first* exit. Where the locus leaves and
+    /// re-enters this returns the conservative answer rather than jumping the
+    /// gap — the constant-`L` version of exactly that re-entry is what stranded
+    /// the panel's yellow.
+    ///
+    /// `f32::INFINITY` for an achromatic input: it needs no mapping, and the
+    /// degenerate ray straight up the neutral axis would otherwise report a
+    /// boundary at the white point.
+    fn t_max(&self, lch: Oklch) -> f32 {
+        if lch.c <= ACHROMATIC_C {
+            return f32::INFINITY;
         }
+        let a_l = self.anchor_l();
+        let dl = lch.l - a_l;
+        let at = |t: f32| self.inside(a_l + t * dl, t * lch.c, lch.h);
+        if !at(0.0) {
+            return 0.0;
+        }
+        if at(T_HI) {
+            return T_HI;
+        }
+        let (mut lo, mut hi) = (0.0f32, T_HI);
+        for _ in 0..T_STEPS {
+            let mid = 0.5 * (lo + hi);
+            if at(mid) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    }
+
+    /// How far out of gamut this colour is along its compression ray, 1.0 being
+    /// exactly on the boundary. The source sits at `t = 1`, so this is
+    /// `1 / t_max`. Infinite when the ray leaves the hull immediately.
+    pub fn rho(&self, c: Srgb) -> f32 {
+        let mut lch = Oklch::from(Oklab::from(LinearRgb::from(c)));
+        lch.l = lch.l.clamp(self.l_min, self.l_max);
+        Self::rho_from(self.t_max(lch))
+    }
+
+    fn rho_from(t_max: f32) -> f32 {
+        if t_max <= 0.0 {
+            f32::INFINITY
+        } else {
+            1.0 / t_max
+        }
+    }
+
+    /// The ray parameter the mapper produces for a source at `t = 1`.
+    ///
+    /// `compress_chroma` is homogeneous, so it applies to a ray parameter
+    /// exactly as it does to a chroma.
+    fn mapped_t(&self, t_max: f32, r: f32, opts: GamutOptions) -> f32 {
+        let t = compress_chroma(1.0, t_max, opts.knee, r);
+        1.0 + opts.amount.clamp(0.0, 1.0) * (t - 1.0)
     }
 
     /// The chroma the mapper would produce, in float. Separate from
     /// [`GamutMapper::map_color`] so monotonicity can be asserted without 8-bit
     /// quantisation in the way.
+    ///
+    /// Note this reports only half the operation: under ruling 16 the mapping
+    /// moves lightness too. Use [`GamutMapper::mapped_point`] where that
+    /// matters.
+    #[cfg(test)]
     pub(crate) fn mapped_chroma(&self, c: f32, h: f32, l: f32, r: f32, opts: GamutOptions) -> f32 {
-        let l = l.clamp(self.l_min, self.l_max);
-        let c_max = self.table.sample(h, l);
-        let compressed = compress_chroma(c, c_max, opts.knee, r);
-        c + opts.amount.clamp(0.0, 1.0) * (compressed - c)
+        self.mapped_point(Oklch { l, c, h }, r, opts).c
+    }
+
+    /// Map a point along its compression ray. The lightness is clamped into the
+    /// hull's achievable range first, as the old fixed-`L` mapper did.
+    pub(crate) fn mapped_point(&self, src: Oklch, r: f32, opts: GamutOptions) -> Oklch {
+        let l = src.l.clamp(self.l_min, self.l_max);
+        let src = Oklch { l, ..src };
+        self.mapped_from_cache(src, self.t_max(src), r, opts)
     }
 
     /// Map one colour with an explicit adaptation factor.
     pub fn map_color(&self, color: Srgb, r: f32, opts: GamutOptions) -> Srgb {
-        let lch = Oklch::from(Oklab::from(LinearRgb::from(color)));
-        let l = lch.l.clamp(self.l_min, self.l_max);
-        let c_out = self.mapped_chroma(lch.c, lch.h, l, r, opts);
-        let linear = LinearRgb::from(Oklab::from(Oklch {
-            l,
-            c: c_out.max(0.0),
-            h: lch.h,
-        }));
-        // Clamp to [0, 1] to handle floating-point precision errors from color space conversions
+        let src = Oklch::from(Oklab::from(LinearRgb::from(color)));
+        Self::to_srgb(self.mapped_point(src, r, opts))
+    }
+
+    /// Ruling 5: `linear_to_srgb` carries an epsilon-free `debug_assert!`, so
+    /// conversion rounding must be clamped away before it is reached.
+    fn to_srgb(c: Oklch) -> Srgb {
+        let linear = LinearRgb::from(Oklab::from(c));
         Srgb::from(LinearRgb::new(
             linear.r.clamp(0.0, 1.0),
             linear.g.clamp(0.0, 1.0),
@@ -178,26 +295,56 @@ impl GamutMapper {
             return;
         }
 
-        let mut rhos: Vec<f32> = pixels
+        // The boundary search is the expensive part of the whole operation, so
+        // it is done once per masked pixel and reused: the adaptation pass and
+        // the mapping pass need the same `t_max`.
+        let srcs: Vec<(Oklch, f32)> = pixels
             .iter()
             .zip(mask.iter())
             .filter(|(_, &m)| m)
-            .map(|(p, _)| self.rho(*p))
+            .map(|(p, _)| {
+                let mut lch = Oklch::from(Oklab::from(LinearRgb::from(*p)));
+                lch.l = lch.l.clamp(self.l_min, self.l_max);
+                (lch, self.t_max(lch))
+            })
             .collect();
-        if rhos.is_empty() {
+        if srcs.is_empty() {
             return;
         }
 
+        // `adaptation_factor` reorders what it is given, so the cache is copied
+        // rather than lent.
+        let mut rhos: Vec<f32> = srcs.iter().map(|&(_, t)| Self::rho_from(t)).collect();
         let r = adaptation_factor(&mut rhos, opts.max_compression);
         // Identity: content already fits. Skip rather than desaturate.
         if r <= 1.0 && !self.table.is_achromatic() {
             return;
         }
 
+        let mut src = srcs.into_iter();
         for (p, &m) in pixels.iter_mut().zip(mask.iter()) {
-            if m {
-                *p = self.map_color(*p, r, opts);
+            if !m {
+                continue;
             }
+            let (lch, t_max) = src.next().expect("one cache entry per masked pixel");
+            *p = Self::to_srgb(self.mapped_from_cache(lch, t_max, r, opts));
+        }
+    }
+
+    /// [`GamutMapper::mapped_point`] with the boundary search already done.
+    fn mapped_from_cache(&self, src: Oklch, t_max: f32, r: f32, opts: GamutOptions) -> Oklch {
+        if src.c <= ACHROMATIC_C {
+            return src;
+        }
+        if t_max <= 0.0 {
+            return Oklch { c: 0.0, ..src };
+        }
+        let a_l = self.anchor_l();
+        let t = self.mapped_t(t_max, r, opts);
+        Oklch {
+            l: a_l + t * (src.l - a_l),
+            c: (t * src.c).max(0.0),
+            h: src.h,
         }
     }
 }
@@ -206,7 +353,7 @@ impl GamutMapper {
 mod tests {
     use super::*;
     use crate::gamut::hull::Hull;
-    use crate::gamut::test_support::{four_grey, six_colour};
+    use crate::gamut::test_support::{four_grey, panel_measured, six_colour};
     use crate::{LinearRgb, Oklab, Oklch, Srgb};
 
     /// A spread of saturated colours, well outside a six-ink gamut.
@@ -311,6 +458,195 @@ mod tests {
             "boundary colour kept only {:.0}% of its chroma",
             100.0 * out / c_max
         );
+    }
+
+    #[test]
+    fn every_palette_ink_survives_at_the_knees_design_point() {
+        // A palette ink *is* the gamut boundary. Compressing it is compressing
+        // a colour that needs no compression, so the only loss it may suffer is
+        // the knee's own shoulder — `compress_chroma(1, 1, k, R)`, the value an
+        // on-boundary colour is designed to come back at.
+        //
+        // Fixed-lightness compression cannot honour this: where the hull's
+        // constant-`L` slice pinches, the horizontal ray from the neutral axis
+        // leaves the hull long before it reaches the ink. Ruling 16 replaces
+        // that ray with one anchored at mid-grey.
+        let opts = GamutOptions::default();
+        let r = opts.max_compression;
+        let design = compress_chroma(1.0, 1.0, opts.knee, r);
+
+        // Every ink is reported, not just the first to fail: the spread across
+        // inks is the diagnosis. One ink far below the rest means a geometric
+        // limitation, not a curve that is uniformly slightly too eager.
+        let mut failures = Vec::new();
+        for (name, p, floor) in [
+            // `six_colour`'s idealised sRGB primaries are not the ruling's
+            // subject and cannot meet the design point: its blue vertex sits
+            // where the constant-hue OKLch ray bulges outside the linear-RGB
+            // hull, so bisection finds the boundary at t_max = 0.861 and the
+            // ink reads as out of gamut. That is a measured geometric fact
+            // about a palette this project does not ship, not a slack
+            // threshold — the shipping palette below gets the real claim.
+            ("six_colour", six_colour(), 0.70 * design),
+            ("panel_measured", panel_measured(), 0.95 * design),
+        ] {
+            let m = GamutMapper::new(&p);
+            for i in 0..p.len() {
+                let ink = Srgb::from(p.actual_linear(i));
+                let c_in = Oklch::from(Oklab::from(LinearRgb::from(ink))).c;
+                if c_in < 0.01 {
+                    continue; // black and white carry no chroma to lose
+                }
+                let out = m.map_color(ink, r, opts);
+                let c_out = Oklch::from(Oklab::from(LinearRgb::from(out))).c;
+                let kept = c_out / c_in;
+                if kept < floor {
+                    failures.push(format!(
+                        "{name} ink {i} {:?} kept {:.0}%, floor {:.0}%",
+                        ink.to_bytes(),
+                        100.0 * kept,
+                        100.0 * floor
+                    ));
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "design point is {:.0}%; below it: {}",
+            100.0 * design,
+            failures.join(", ")
+        );
+    }
+
+    #[test]
+    fn a_tinted_near_white_keeps_its_lightness_at_the_shipping_knee() {
+        // The ray geometry's one liability: a high-`L`, low-chroma colour's
+        // ray leaves the hull at the white point, so it reads as
+        // boundary-saturated and the knee pulls it toward mid-grey — darkening
+        // a highlight whose chroma was never out of gamut. Photographs are full
+        // of these, and whole-image mean |dL| hides them completely.
+        //
+        // The knee is what bounds it: everything with `t_max > 1/knee` is
+        // returned untouched. This is asserted at 0.99 rather than at whatever
+        // `default()` currently says, because it is a statement about the knee
+        // we intend to ship. It is not vacuous — the same pixel moves -0.084 at
+        // knee 0.8, twenty-four times this tolerance. See
+        // `ray_geometry_diagnostic` for the sweep.
+        let m = GamutMapper::new(&panel_measured());
+        let opts = GamutOptions {
+            knee: 0.99,
+            ..GamutOptions::default()
+        };
+        // RGB (250, 246, 246) — a faintly warm near-white, in gamut.
+        let src = Oklch::from(Oklab::from(LinearRgb::from(Srgb::from_u8(250, 246, 246))));
+        let out = m.mapped_point(src, opts.max_compression, opts);
+        let dl = out.l - src.l;
+        assert!(
+            dl.abs() < 0.01,
+            "a tinted near-white moved {dl:+.4} in lightness"
+        );
+    }
+
+    /// The ray geometry replaced one table lookup per pixel with a bisection of
+    /// the hull, which was the port's main unmeasured risk. Run with
+    /// `--release`; a debug build is not the shipping cost.
+    #[test]
+    #[ignore = "benchmark"]
+    fn map_frame_cost_on_a_panel_sized_frame() {
+        let m = GamutMapper::new(&panel_measured());
+        // 800x480, the panel's own resolution, filled with a saturated hue
+        // sweep so nothing short-circuits on the achromatic path.
+        let (w, h) = (800usize, 480usize);
+        let mut pixels: Vec<Srgb> = (0..w * h)
+            .map(|i| {
+                let (x, y) = ((i % w) as u8, (i / w) as u8);
+                Srgb::from_u8(x.wrapping_mul(3), y.wrapping_mul(5), 200)
+            })
+            .collect();
+        let mask = vec![true; pixels.len()];
+
+        let start = std::time::Instant::now();
+        m.map_frame(&mut pixels, &mask, GamutOptions::default());
+        let dt = start.elapsed();
+        println!(
+            "map_frame over {}x{} = {} px: {:?} ({:.2} us/px)",
+            w,
+            h,
+            w * h,
+            dt,
+            dt.as_secs_f64() * 1e6 / (w * h) as f64
+        );
+    }
+
+    /// Evidence for ruling 16, not a guard. Prints where each ink's boundary
+    /// actually sits along its compression ray, and what the map does to
+    /// neutrals — the two populations the ray geometry changes most.
+    #[test]
+    #[ignore = "diagnostic"]
+    fn ray_geometry_diagnostic() {
+        let opts = GamutOptions::default();
+        let r = opts.max_compression;
+        println!(
+            "design point for an on-boundary colour: {:.3}",
+            compress_chroma(1.0, 1.0, opts.knee, r)
+        );
+
+        for (name, p) in [
+            ("six_colour", six_colour()),
+            ("panel_measured", panel_measured()),
+        ] {
+            let m = GamutMapper::new(&p);
+            println!("\n{name}  (anchor L = {:.3})", m.anchor_l());
+            for i in 0..p.len() {
+                let ink = Srgb::from(p.actual_linear(i));
+                let src = Oklch::from(Oklab::from(LinearRgb::from(ink)));
+                if src.c < 0.01 {
+                    continue;
+                }
+                let t_max = m.t_max(src);
+                let out = m.mapped_point(src, r, opts);
+                println!(
+                    "  ink {i} {:?}  L {:.3} C {:.3}  t_max {:.3}  \
+                     kept {:.0}%  dL {:+.3}",
+                    ink.to_bytes(),
+                    src.l,
+                    src.c,
+                    t_max,
+                    100.0 * out.c / src.c,
+                    out.l - src.l
+                );
+            }
+
+            // Neutrals: rho is 0 under fixed-L geometry, but a mid-grey ray
+            // sees the white/black point as "the boundary". If that pulls
+            // highlights toward grey it is a new defect, not a fix.
+            // Near-neutrals are the ray's risk population. A high-`L`, low-`C`
+            // colour's ray exits the hull at the *white point*, so `rho ~ 1`
+            // and the knee treats it as boundary-saturated — but its chroma was
+            // never out of gamut. The knee is what decides whether that costs
+            // anything, so sweep it.
+            println!("  near-neutrals, dL by knee:");
+            println!(
+                "    {:>22}  {:>8} {:>8} {:>8}",
+                "", "k=0.80", "k=0.95", "k=0.99"
+            );
+            for v in [16u8, 64, 128, 192, 230, 250] {
+                for tint in [0u8, 4, 12] {
+                    let g = Srgb::from_u8(v, v.saturating_sub(tint), v.saturating_sub(tint));
+                    let src = Oklch::from(Oklab::from(LinearRgb::from(g)));
+                    let t_max = m.t_max(src);
+                    let dl =
+                        |k: f32| m.mapped_point(src, r, GamutOptions { knee: k, ..opts }).l - src.l;
+                    println!(
+                        "    grey {v:>3} tint {tint:>2} t_max {t_max:>5.3}  \
+                         {:>+8.4} {:>+8.4} {:>+8.4}",
+                        dl(0.80),
+                        dl(0.95),
+                        dl(0.99)
+                    );
+                }
+            }
+        }
     }
 
     #[test]

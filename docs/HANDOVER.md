@@ -1,35 +1,67 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-09 (session 7) — **Gamut mapping: Tasks 1-12 landed and both decisions owed to the owner are settled (rulings 13 and 14). Only Tasks 13 and 14 remain, and Task 13 needs the owner.** `feat/screen-store-authoring-core` remains **HELD** by standing owner decision — no PR, no merge to `main`._
+_Last updated: 2026-08-09 (session 7) — **Gamut mapping: Tasks 1-13 landed, rulings 13 and 14 settled. Only Task 14 remains, plus one open owner decision: does the gamut calibration screen keep the continuous-tone marker?** `feat/screen-store-authoring-core` remains **HELD** by standing owner decision — no PR, no merge to `main`._
 
 ## Where the work lives
 
 | | |
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
-| Last code commit | the ruling-14 `amount` clamp, committed together with this handover — it is the newest commit that touches `crates/`. Verify with `git log --oneline -5`; anything after it is docs only. |
+| Last code commit | `e0d85b7` (Task 13 metrics + goldens). Verify with `git log --oneline -5`; anything after it is docs only. |
 | Worktree | `/Users/oetiker/checkouts/byonk` (working in place, no worktree) |
-| State | `make check` fully green, tree clean, byonk lib **449** tests (+1 ignored), eink-dither lib **194** (+17 ignored) |
+| State | `make check` fully green, tree clean, byonk lib **449** tests (+1 ignored), eink-dither lib **194** (+19 ignored) |
 | Plan | `docs/superpowers/plans/2026-08-08-gamut-mapping.md` |
 | Spec | `docs/superpowers/specs/2026-08-07-gamut-mapping-design.md` (approved) |
 | Ledger | `.superpowers/sdd/2026-08-08-gamut-mapping/progress.md` (git-ignored) |
 
-## ⚠️ Next action: STOP AND ASK THE OWNER
+## ⚠️ Next action: ONE OWNER DECISION, THEN TASK 14
 
-**Task 13 is a real stop point — do not execute it unattended.** It renders the
-calibration screen with and without mapping and asks whether the marker stays.
-**Mean dE is *expected to worsen*.** Present both images; do not decide alone.
-Its sweep covers knee 0.4/0.6/0.8, can overrule ruling 4, and is also the right
-place to A/B `SHOULDER_POWER`.
+**Task 13 has been executed and judged** (session 7, owner in session). The
+renders exist, the metrics landed as `e0d85b7`, and the knee sweep **did not**
+overturn ruling 4. **Do not re-run the sweep.** Exactly one thing is open:
 
-### Both decisions owed to the owner are now SETTLED (session 7, owner in session)
+> **Does `screens/builtin/calibration/gamut/screen.svg` keep the
+> `data-byonk-tone="continuous"` marker?**
+>
+> The controller **recommends NO**, against the plan's assumption. `meta.yaml`
+> says that screen "shows which hues the panel can actually mix and which
+> collapse to a single flat colour" — marking it destroys exactly the
+> diagnostic it exists to provide. It is the right test *subject* for
+> validating the feature and a bad permanent home for the marker.
+>
+> `screen.svg` is **reverted, tree clean**. If the owner says keep, re-apply is
+> a one-line `<g data-byonk-tone="continuous">` wrap around the patch-grid
+> `{% for p in data.patches %}` loop (**not** the labels), committed on its own
+> per the plan's Step 5.
 
-They are rulings **13** and **14** below. Nothing is owed to the owner any more
-except Task 13 itself.
+**What the images showed** (all in `target/dither-compare/`, regenerate with the
+commands in Build / verify):
 
-After Task 13: **Task 14** is docs + `CHANGES.md`, then the final whole-branch
-review. Resume with the `superpowers:subagent-driven-development` skill and
-**read the ledger first** — it records every ruling the plan text does not.
+- `gamut-unmapped.png` — at L=56, hues 45-165 are **nine identical flat yellow
+  patches**; 0-30 and 285-345 identical flat red.
+- `gamut-mapped.png` — those nine separate (60 yellow, 90-165 pale green to
+  teal) and the red slabs break into distinguishable steps. **The cost is large
+  and visible:** mid/light rows go pastel, L=56 h60-120 is near-white with
+  sparse speckle, L=80 is washed out nearly end to end.
+- Objective corroboration: mapped PNG 78860 B vs unmapped 59403 B — more dither
+  noise, fewer flat areas, consistent with blobs turning into gradation.
+- `gamut-mapping-field.png` — same story, more favourable on synthetic content.
+- `gamut-knee-{0.4,0.6,0.8}.png` — 0.4 clearly flattest and most washed out,
+  0.8 keeps the most chroma while still breaking up the blobs; 0.6 vs 0.8 is
+  subtle. **Knee 0.8 stands on eye as well as on measurement.**
+
+This was also the **first end-to-end proof** that the SVG marker → rewriter →
+mask → mapper chain is live: the two renders differ, and only because of the
+marker.
+
+### Both decisions owed to the owner are SETTLED (session 7)
+
+They are rulings **13** and **14** below.
+
+After the marker decision: **Task 14** is docs + `CHANGES.md`, then the final
+whole-branch review. Resume with the `superpowers:subagent-driven-development`
+skill and **read the ledger first** — it records every ruling the plan text does
+not.
 
 ## ⚠️⚠️ Read this before dispatching any subagent
 
@@ -59,7 +91,8 @@ environmental, not a model failure.
 | `e5d639e` | **Task 11** — `GamutTuningValues` + the Lua `gamut` table |
 | `a3a3e7f` | **Task 12** — knobs threaded through the whole display path |
 | `c415219` | **Task 12 fix** — regression test for the one compiler-invisible copy site |
-| _newest_ | **Ruling 14** — `amount` clamped to `[0,1]` in `mapped_chroma`, a Task 6 gap; two tests, both watched RED |
+| `5d14fd3` | **Ruling 14** — `amount` clamped to `[0,1]` in `mapped_chroma`, a Task 6 gap; two tests, both watched RED |
+| `e0d85b7` | **Task 13** — hue-order + local-contrast metrics and the visual goldens. Marker deliberately excluded |
 
 Public surface: `eink_dither::{Oklch, GamutMapper, GamutOptions}`;
 `gamut::hull::{Hull, HullShape}`; `gamut::cmax::{CmaxTable, HUE_BINS, LIGHTNESS_BINS}`;
@@ -75,7 +108,7 @@ Shared test fixtures: `gamut::test_support::{six_colour, four_grey}` — import,
 the renderer — but **only where the SVG marks a region `data-byonk-tone="continuous"`**.
 No shipping screen does yet, so nothing changes in practice until one does.
 
-## ⚠️ The lesson, now proven five sessions running
+## ⚠️ The lesson, now proven six sessions running
 
 **The plan's code and constants are not evidence.** Measure before believing the
 plan, your own diagnosis, a reviewer's "harmless", *or* a reviewer's "correct".
@@ -97,6 +130,22 @@ Session 6 adds the sharpest version yet:
 - **Mutation-test every regression test before trusting it**, especially one
   written *because* the suite was silent. Both of session 6's were: the mutated
   build failed on that test and only that test.
+
+Session 7 adds the case where the *test itself* was the defect:
+
+- **A test can pass for the right reason and still guard nothing.** The plan's
+  `test_gamut_mapping_preserves_local_contrast` passed — and went on passing
+  with `compress_chroma` replaced by pure clipping, **the exact failure it
+  claims to detect**. Its ramp normalised by `r = 2.0`, so `c/r` topped out at
+  0.16 while `Cmax` there is 0.196: the knee's shoulder was never reached.
+  Nothing about the green run hinted at it. **Mutation-test the assertions you
+  inherit from the plan, not only the ones you write.**
+- **Say "I verified" only after verifying.** That test was reported to the owner
+  as "the one with teeth" on the strength of reading it. The mutation run
+  disproved that in 30 seconds. Reading a test is not evidence about the test.
+- **Pre-flight caught a plan defect that would have panicked**, again: the plan's
+  own test code violated ruling 5 (`Srgb::from` an out-of-sRGB `Oklch`). Three
+  defects found in Task 13's brief. Still never once clean.
 
 ## Fourteen standing rulings — carry these forward
 
@@ -152,6 +201,12 @@ Standing: **the branch is HELD** — no PR, no merge to `main`.
 `HUE_BINS = 128`, `LIGHTNESS_BINS = 64`, `C_SEARCH_HI = 0.5`.
 
 ## Deferred minors — triage list for the final whole-branch review
+
+Session 7 additions:
+
+- **Task 13:** `test_gamut_mapping_preserves_hue_order` would also pass against
+  an **identity** mapper — hue preservation is all it asserts. Weak guard, kept
+  deliberately; consider strengthening it to assert that chroma actually moved.
 
 Session 6 additions:
 
@@ -211,6 +266,24 @@ that re-verification keeps finding real things.
   test_resize_full_pipeline_with_photo_preset}` panic at `preprocess/resize.rs:26`.
   `resize_lanczos()` panics **by design**. Not a regression — but they are dead
   tests guarding a dead code path and deserve their own cleanup someday.
+- **Rendering a builtin screen needs a device, and the plan's CLI is wrong.**
+  There is no `render --screen X --out Y`; it is `render --mac <MAC> --output
+  <PATH>`, resolved through config. Do **not** edit the tracked `config.yaml` —
+  copy it and point `CONFIG_FILE` at the copy, adding a throwaway device:
+  ```yaml
+    "AA:BB:CC:DD:EE:01":
+      panel: reterminal_e1002          # WITHOUT this you get a GREYSCALE render
+      screen: byonk-builtin/calibration/gamut
+  ```
+  ```
+  CONFIG_FILE=/tmp/x.yaml cargo run -- render --mac AA:BB:CC:DD:EE:01 --output /tmp/out.png
+  ```
+  **The missing-panel trap is silent** — it renders happily, just in greyscale,
+  which looks like a gamut result and is not one.
+- Regenerate the Task 13 imagery with
+  `cargo test -p eink-dither --test visual_compare visual_gamut -- --ignored --nocapture`
+  and the metrics with
+  `cargo test -p eink-dither test_gamut_mapping -- --ignored --nocapture`.
 - **`Dockerfile` is broken independently** — it never copies `crates/`, so the
   workspace cannot resolve `eink-dither`. Releases unaffected
   (`Dockerfile.release`, CI-built binaries). Out of scope, untouched.

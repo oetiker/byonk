@@ -227,6 +227,38 @@ mod tests {
     }
 
     #[test]
+    fn with_tuning_carries_gamut() {
+        // `with_tuning` copies its fields by hand rather than deriving from
+        // `DitherTuningValues`, so adding a field to `CachedContent` doesn't
+        // force this method to be updated — a struct-copy site the compiler
+        // can't flag. This test exists to catch a regression there: without
+        // it, `self.gamut = tuning.gamut.clone();` could be deleted and the
+        // full suite would still pass.
+        let content = CachedContent::new(
+            "<svg></svg>".to_string(),
+            "test_screen".to_string(),
+            800,
+            480,
+        )
+        .with_tuning(&crate::models::DitherTuningValues {
+            error_clamp: Some(0.1),
+            noise_scale: Some(5.0),
+            chroma_clamp: Some(2.0),
+            strength: Some(0.8),
+            gamut: crate::models::GamutTuningValues {
+                knee: Some(0.3),
+                ..Default::default()
+            },
+        });
+
+        assert_eq!(content.error_clamp, Some(0.1));
+        assert_eq!(content.noise_scale, Some(5.0));
+        assert_eq!(content.chroma_clamp, Some(2.0));
+        assert_eq!(content.strength, Some(0.8));
+        assert_eq!(content.gamut.knee, Some(0.3));
+    }
+
+    #[test]
     fn test_cached_content_hash_differs_for_different_content() {
         let content1 =
             CachedContent::new("<svg>A</svg>".to_string(), "screen".to_string(), 800, 480);

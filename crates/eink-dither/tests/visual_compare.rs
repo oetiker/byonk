@@ -788,3 +788,85 @@ fn visual_before_after_noise_defaults() {
         }
     }
 }
+
+/// Visual golden: the hue x lightness field with and without gamut mapping.
+///
+/// Mean dE is *expected to worsen*; what to look for is banding turning into
+/// gradation, and hue bands that used to collapse onto one ink separating.
+/// Render the field and look — flat-patch dE cannot tell you this.
+#[test]
+#[ignore = "writes PNGs; run with --ignored"]
+fn visual_gamut_mapping_before_after() {
+    use eink_dither::{GamutMapper, GamutOptions};
+
+    const W: usize = 480;
+    const H: usize = 320;
+    let palette = panel();
+
+    let mut pixels = Vec::with_capacity(W * H);
+    for y in 0..H {
+        let l = 0.12 + 0.76 * (y as f32 / (H - 1) as f32);
+        for x in 0..W {
+            let (r, g, b) = hsl_to_rgb(x as f32 / W as f32, 1.0, l);
+            pixels.push(Srgb::new(r, g, b));
+        }
+    }
+
+    let before = EinkDitherer::new(palette.clone())
+        .dither(&pixels, W, H)
+        .to_rgb_actual();
+
+    let mut mapped = pixels.clone();
+    let mask = vec![true; mapped.len()];
+    GamutMapper::new(&palette).map_frame(&mut mapped, &mask, GamutOptions::default());
+    let after = EinkDitherer::new(palette.clone())
+        .dither(&mapped, W, H)
+        .to_rgb_actual();
+
+    let (buf, ow, oh) = triptych(&pixels, &before, &after, W, H);
+    write("gamut-mapping-field.png", &buf, ow, oh);
+    eprintln!("original | unmapped | mapped — inspect by eye");
+}
+
+/// The same comparison at three knee values, to pick one by eye.
+#[test]
+#[ignore = "writes PNGs; run with --ignored"]
+fn visual_gamut_knee_sweep() {
+    use eink_dither::{GamutMapper, GamutOptions};
+
+    const W: usize = 480;
+    const H: usize = 320;
+    let palette = panel();
+    let mapper = GamutMapper::new(&palette);
+
+    let mut pixels = Vec::with_capacity(W * H);
+    for y in 0..H {
+        let l = 0.12 + 0.76 * (y as f32 / (H - 1) as f32);
+        for x in 0..W {
+            let (r, g, b) = hsl_to_rgb(x as f32 / W as f32, 1.0, l);
+            pixels.push(Srgb::new(r, g, b));
+        }
+    }
+
+    let baseline = EinkDitherer::new(palette.clone())
+        .dither(&pixels, W, H)
+        .to_rgb_actual();
+
+    for knee in [0.4f32, 0.6, 0.8] {
+        let mut mapped = pixels.clone();
+        let mask = vec![true; mapped.len()];
+        mapper.map_frame(
+            &mut mapped,
+            &mask,
+            GamutOptions {
+                knee,
+                ..GamutOptions::default()
+            },
+        );
+        let out = EinkDitherer::new(palette.clone())
+            .dither(&mapped, W, H)
+            .to_rgb_actual();
+        let (buf, ow, oh) = triptych(&pixels, &baseline, &out, W, H);
+        write(&format!("gamut-knee-{knee:.1}.png"), &buf, ow, oh);
+    }
+}

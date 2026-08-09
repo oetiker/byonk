@@ -3014,4 +3014,91 @@ mod domain_tests {
              {beyond_limit_min:.4}*Cmax from the hull"
         );
     }
+
+    // ========================================================================
+    // Gamut mapping: preserved differences, not mean accuracy
+    // ========================================================================
+
+    /// Hue ordering around the circle must be preserved.
+    ///
+    /// The gamut mapper carries hue through untouched — it only ever changes
+    /// chroma — so the ordering of the *mapped* targets must stay monotonic
+    /// even where the dithered result is not. This measures the mapper, not
+    /// the ditherer.
+    #[test]
+    #[ignore = "diagnostic sweep"]
+    fn test_gamut_mapping_preserves_hue_order() {
+        use crate::{GamutMapper, GamutOptions};
+
+        let palette = six_color_palette();
+        let mapper = GamutMapper::new(&palette);
+        let opts = GamutOptions::default();
+
+        let mut inversions = 0;
+        let mut prev: Option<f32> = None;
+        for deg in (0..360).step_by(15) {
+            let h = (deg as f32).to_radians() - std::f32::consts::PI;
+            // Ruling 5 (Global Constraint): clamp linear RGB before `Srgb::from`.
+            // `l = 0.55, c = 0.20` is outside sRGB for part of the circle, and
+            // `linear_to_srgb` has an epsilon-free `debug_assert!`. Clamping is
+            // not a workaround: `map_color` only accepts colours the source
+            // image could actually contain, so this is the real input domain.
+            let lin = LinearRgb::from(Oklab::from(Oklch {
+                l: 0.55,
+                c: 0.20,
+                h,
+            }));
+            let src = Srgb::from(LinearRgb::new(
+                lin.r.clamp(0.0, 1.0),
+                lin.g.clamp(0.0, 1.0),
+                lin.b.clamp(0.0, 1.0),
+            ));
+            let mapped = mapper.map_color(src, 2.0, opts);
+            let h_out = Oklch::from(Oklab::from(LinearRgb::from(mapped))).h;
+            if let Some(p) = prev {
+                // Both sequences advance around the circle; a decrease that is
+                // not the single wrap point is an inversion.
+                let step = h_out - p;
+                if step < 0.0 && step > -std::f32::consts::PI {
+                    inversions += 1;
+                    eprintln!("hue inversion at {deg}\u{b0}: {p:.3} -> {h_out:.3}");
+                }
+            }
+            prev = Some(h_out);
+        }
+        assert_eq!(inversions, 0, "gamut mapping must not reorder hues");
+    }
+
+    /// Local contrast across a saturation ramp must survive mapping.
+    ///
+    /// The point of the knee's strict monotonicity: adjacent steps of a ramp
+    /// stay distinct. A clipping approach would collapse the top of the ramp
+    /// to a single value.
+    #[test]
+    #[ignore = "diagnostic sweep"]
+    fn test_gamut_mapping_preserves_local_contrast() {
+        use crate::{GamutMapper, GamutOptions};
+
+        let palette = six_color_palette();
+        let mapper = GamutMapper::new(&palette);
+        let opts = GamutOptions::default();
+
+        // A saturation ramp at fixed hue and lightness, spanning the full
+        // sRGB chroma range. `r = 1.0` deliberately: normalising by a larger
+        // `r` shrinks the ramp below `Cmax`, so the shoulder is never reached
+        // and the test passes even against a mapper that *clips*. Verified by
+        // mutation — replacing the knee with `c_max.min(c)` must fail here.
+        let steps: Vec<f32> = (0..64).map(|i| i as f32 / 63.0 * 0.32).collect();
+        let mut collapsed = 0;
+        let mut prev_c = f32::NEG_INFINITY;
+        for &c in &steps {
+            let out = mapper.mapped_chroma(c, 0.6, 0.55, 1.0, opts);
+            if out <= prev_c {
+                collapsed += 1;
+                eprintln!("ramp collapsed at c={c:.4}: {prev_c:.6} -> {out:.6}");
+            }
+            prev_c = out;
+        }
+        assert_eq!(collapsed, 0, "every ramp step must stay distinct");
+    }
 }

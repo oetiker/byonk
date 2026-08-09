@@ -418,8 +418,12 @@ fn what_the_knee_costs_the_panels_own_inks() {
     }
 
     // (2) What the knee costs them, and what raising it costs the tail.
-    let m = RayMapper::new(&p, Anchor::HalfWay);
-    println!("\nhalf-way anchor, R pinned at 2.5 — chroma kept by each ink:");
+    // Measured against **production**, which since ruling 16 is the mid-grey
+    // ray. The first pass at this table ran on `Anchor::HalfWay` — not the
+    // anchor that was ruled — and the two rulings act on the same tail, so the
+    // numbers had to be retaken rather than carried over.
+    let m = GamutMapper::new(&p);
+    println!("\nproduction mapper (mid-grey ray), R pinned at 2.5 — chroma kept by each ink:");
     print!("  {:<10}", "knee");
     for (n, _) in inks {
         print!(" {n:>8}");

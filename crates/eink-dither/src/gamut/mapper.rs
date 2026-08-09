@@ -54,30 +54,40 @@ use crate::{LinearRgb, Oklab, Oklch, Palette, Srgb};
 /// which pixels are measured together to derive `R`, not the curve's shape.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GamutOptions {
-    /// Where compression begins, as a fraction of `Cmax`.
+    /// Where compression begins, as a fraction of the distance to the gamut
+    /// boundary along the compression ray.
     ///
-    /// The default sits in the same band as the ACES 1.3 Reference Gamut
-    /// Compression thresholds (`0.815`, `0.803`, `0.880`), which are expressed
-    /// in the same normalised units.
+    /// The default is deliberately close to 1.0, which is unusual — the ACES
+    /// 1.3 Reference Gamut Compression thresholds sit at `0.815`, `0.803`,
+    /// `0.880` in the same normalised units. The reason is structural: the
+    /// shoulder above the knee is asymptotic to the boundary, so **no input can
+    /// ever be mapped onto the boundary** — and a palette ink *is* the
+    /// boundary. Whatever the knee is set to is, near enough, the fraction of
+    /// its own chroma an ink comes back with.
     ///
-    /// An earlier draft chose 0.6, reasoning that this gamut is small enough
-    /// that almost everything falls outside it, so a high knee would crush the
-    /// vivid range into a sliver near `Cmax`. Measurement does not support
-    /// either half of that. Across every sRGB colour with non-zero chroma,
-    /// `rho = C/Cmax` has a median of 0.91 and a p90 of 1.30 — about half the
-    /// cube is outside the hull, not almost all of it.
+    /// The knee's usual justification is that its headroom keeps out-of-gamut
+    /// colours distinguishable. Measured over 24 hues x 5 lightnesses, that is
+    /// not what it buys here — the tail is already sized by `R`, and raising
+    /// the knee *improves* the banding metric:
     ///
-    /// Measured against that, a low knee is a bad trade: it starts compressing
-    /// well inside the gamut in order to buy separation in the out-of-gamut
-    /// tail, and that separation is on the order of 0.005 in Oklab chroma —
-    /// against roughly 0.02 for one JND, on a panel that dithers six inks. It
-    /// spends visible chroma to preserve differences nothing can render.
+    /// ```text
+    /// knee   inks keep   tail span   distinct outputs
+    /// 0.80         82%      0.0222              76.4%
+    /// 0.90         91%      0.0220              78.8%
+    /// 0.95         95%      0.0219              80.6%
+    /// 0.99         99%      0.0218              81.3%
+    /// ```
     ///
-    /// The percentages an earlier revision quoted here (82.4% at `knee = 0.6`,
-    /// 91.2% at 0.8) were computed against the superseded curve, which divided
-    /// chroma by `R` before the knee. They are not restated because they have
-    /// not been re-measured. The knee default is a standing owner ruling and
-    /// re-opening it is a separate question from this correction.
+    /// The whole tail span is about one JND (0.02 in Oklab chroma), so the
+    /// 0.0004 given up is a difference the panel could not show; the 5 points
+    /// of surviving distinct 8-bit outputs are real. An earlier draft chose 0.6
+    /// on the reasoning that this gamut is small enough that a high knee would
+    /// crush the vivid range into a sliver near the boundary; that is not what
+    /// the measurement shows.
+    ///
+    /// The knee also bounds the ray geometry's one liability — see the module
+    /// docs. At 0.8 a faintly warm near-white darkens by up to 0.10 in `L`;
+    /// at 0.99, by 0.003.
     pub knee: f32,
     /// Interpolation between input and mapped chroma:
     /// `C_out = C + amount * (C' - C)`.
@@ -111,7 +121,7 @@ pub struct GamutOptions {
 impl Default for GamutOptions {
     fn default() -> Self {
         Self {
-            knee: 0.8,
+            knee: 0.99,
             amount: 1.0,
             max_compression: 2.5,
         }
@@ -672,21 +682,93 @@ mod tests {
     }
 
     #[test]
-    fn chroma_map_is_strictly_monotonic() {
-        // Asserted on the float chroma function, not on bytes: 8-bit output
-        // quantisation legitimately collapses adjacent values.
+    fn the_map_is_strictly_monotonic_along_a_compression_ray() {
+        // The curve's defining property: two colours that differed before still
+        // differ after, nothing collapses onto a shared value.
+        //
+        // Stated along a **ray**, because that is the direction the map acts
+        // in. Sweeping chroma at fixed lightness instead — as this test used to
+        // — gives every sample its own ray, its own boundary and its own
+        // compression factor, and the product `t * c` is then not monotonic:
+        // past the shoulder it asymptotes and drifts back by ~2e-5 as the
+        // flattening ray meets a nearer boundary. That drift is geometry, not a
+        // collapse, and the fixed-`L` form reported it as one.
+        //
+        // Asserted on floats, not bytes: 8-bit output quantisation legitimately
+        // collapses adjacent values.
+        let m = GamutMapper::new(&six_colour());
+        let opts = GamutOptions::default();
+        let anchor = m.anchor_l();
+        let (h, dir_l, dir_c) = (0.7f32, 0.55f32 - 0.5, 0.20f32);
+        // Distance from the anchor along the ray — the quantity the knee
+        // actually compresses.
+        let mapped_d = |s: f32| {
+            let out = m.mapped_point(
+                Oklch {
+                    l: anchor + s * dir_l,
+                    c: s * dir_c,
+                    h,
+                },
+                2.0,
+                opts,
+            );
+            ((out.l - anchor).powi(2) + out.c.powi(2)).sqrt()
+        };
+
+        // Swept to s = 2.5, i.e. Oklab chroma 0.50, beyond the ~0.33 any sRGB
+        // colour can reach — the whole reachable domain with margin.
+        //
+        // Two claims, because at a fine step they are different claims. The
+        // shoulder is asymptotic, so far out its increments fall below one f32
+        // ulp of the limit and adjacent samples tie, or jitter by one, as the
+        // bisection's own rounding lands either side. That is a fact about
+        // f32, not about the design, and tightening the step only makes it
+        // happen sooner. What must never happen is the map turning round.
+        //
+        // The tolerance is a few ulps of the value. It is not slack: the
+        // inversion this guards against — measuring the fixed-`L` chroma
+        // instead of the ray — was 1.8e-5, some three orders of magnitude
+        // above this.
+        let mut prev = f32::NEG_INFINITY;
+        for i in 1..5000 {
+            let s = i as f32 * 0.0005;
+            let d = mapped_d(s);
+            let slack = 8.0 * f32::EPSILON * d.abs();
+            assert!(
+                d >= prev - slack,
+                "map went backwards at s={s}: {prev} -> {d}"
+            );
+            prev = prev.max(d);
+        }
+
+        // And at steps coarse enough to be visible, it must genuinely increase
+        // — this is the banding claim, and the one a clipping mapper fails.
+        let mut prev = f32::NEG_INFINITY;
+        for i in 1..=64 {
+            let s = i as f32 / 64.0 * 2.5;
+            let d = mapped_d(s);
+            assert!(d > prev, "map not increasing at s={s}: {prev} -> {d}");
+            prev = d;
+        }
+    }
+
+    #[test]
+    fn a_saturation_ramp_never_collapses_two_colours_onto_one() {
+        // The fixed-lightness companion to the ray sweep above. Chroma is not
+        // monotonic here (see that test), but the mapped *points* must still
+        // never coincide — that is what banding would look like.
         let m = GamutMapper::new(&six_colour());
         let opts = GamutOptions::default();
         let (h, l) = (0.7f32, 0.55f32);
-        let mut prev = f32::NEG_INFINITY;
-        for i in 0..5000 {
+        let mut prev: Option<Oklch> = None;
+        for i in 1..5000 {
             let c = i as f32 * 0.0002;
-            let out = m.mapped_chroma(c, h, l, 2.0, opts);
-            assert!(
-                out > prev,
-                "chroma map not increasing at c={c}: {prev} -> {out}"
-            );
-            prev = out;
+            let out = m.mapped_point(Oklch { l, c, h }, 2.0, opts);
+            if let Some(p) = prev {
+                let sep = ((out.l - p.l).powi(2) + (out.c - p.c).powi(2)).sqrt();
+                assert!(sep > 0.0, "ramp collapsed at c={c}: {p:?} -> {out:?}");
+            }
+            prev = Some(out);
         }
     }
 

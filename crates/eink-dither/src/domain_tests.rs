@@ -3105,8 +3105,14 @@ mod domain_tests {
         let mut min_sep = f32::INFINITY;
         let mut prev: Option<Oklch> = None;
         for i in 1..=64 {
-            // Out to 3x the boundary distance, so most samples need the tail.
-            let s = i as f32 / 64.0 * 3.0;
+            // Bounded so the source stays within the ~0.33 Oklab chroma any
+            // sRGB colour can reach. Sweeping further would synthesise colours
+            // no input can produce, and at a high knee those all land on the
+            // asymptote and tie in f32 — comparing two colours that have both
+            // already collapsed, which says nothing about banding. The boundary
+            // along this ray sits near s = 0.56, so the tail is still most of
+            // the sweep.
+            let s = i as f32 / 64.0 * 1.03;
             let src = Oklch {
                 l: 0.5 + s * dir_l,
                 c: s * dir_c,

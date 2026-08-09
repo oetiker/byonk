@@ -72,7 +72,9 @@ enum Anchor {
 impl Anchor {
     fn name(self) -> &'static str {
         match self {
-            Anchor::FixedL => "fixed-L (production)",
+            // Production is `MidGrey` since ruling 16; this is the superseded
+            // geometry, kept as the comparison baseline.
+            Anchor::FixedL => "fixed-L (was production)",
             Anchor::CuspL => "cusp-L",
             Anchor::MidGrey => "mid-grey",
             Anchor::HalfWay => "half-way to mid",

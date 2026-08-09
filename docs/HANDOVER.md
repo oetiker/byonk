@@ -10,9 +10,9 @@ default is 0.99. `make check` is green. `feat/screen-store-authoring-core` remai
 | | |
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
-| HEAD | `6fae34c` — tree clean |
+| Last production commit | `868544c` — the knee default; everything after is docs and test evidence |
 | Worktree | `/Users/oetiker/checkouts/byonk` (working in place, no worktree) |
-| State | **`make check` green (exit 0)** at `6c555de` |
+| State | **`make check` green (exit 0)**; `cargo fmt --all --check` and `clippy --workspace --all-targets -D warnings` re-run clean on the final tree |
 | Spec | `docs/superpowers/specs/2026-08-07-gamut-mapping-design.md` — **current**, rewritten onto the ray geometry this session |
 | Plan | `docs/superpowers/plans/2026-08-08-gamut-mapping.md` — **superseded in part**, carries a header saying so |
 | Ledger | `.superpowers/sdd/2026-08-08-gamut-mapping/progress.md` (git-ignored) |
@@ -58,6 +58,17 @@ and 68%, at mean `|dL|` of 0.0015 and 0.0041. Visually confirmed in
 `target/dither-compare/photo-background-mapped.png` (grid: source, fixed-L,
 cusp-L / mid-grey, half-way): the departure boards' orange, visibly muddy under
 fixed-`L`, is close to source under mid-grey, with no highlight crush.
+
+**The port is proven equivalent to the prototype, pointwise.**
+`cusp_anchored_vs_fixed_lightness` carries the self-check the previous handover
+demanded, now repointed from `Anchor::FixedL` to `Anchor::MidGrey` — production
+is mid-grey, so comparing it against fixed-`L` would have printed a huge
+divergence reading as "the prototype is broken". Swept over **5832 colours
+across the sRGB cube: worst channel diff 0**. Its old 6/255 tolerance was the
+`CmaxTable` bilinear error, from when production read the table and the harness
+bisected; both bisect the same ray now, so the tolerance is 1/255 for rounding
+and nothing else. **Keep this check working** — it is what makes every other
+number in that file trustworthy.
 
 ### The one thing to know about the new geometry
 

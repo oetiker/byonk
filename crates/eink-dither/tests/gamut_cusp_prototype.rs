@@ -788,11 +788,18 @@ fn cusp_anchored_vs_fixed_lightness() {
         Srgb::from_u8(200, 40, 160),
         Srgb::from_u8(40, 180, 90),
     ];
-    println!("self-check — Anchor::FixedL against GamutMapper (R = 2.5):");
+    // Repointed at `MidGrey` when ruling 16 landed. While production
+    // compressed at fixed lightness this compared `Anchor::FixedL`, and the
+    // tolerance below was the `CmaxTable` bilinear error, because production
+    // read `Cmax` from the table while the harness bisected the hull. Production
+    // now bisects too, along the same mid-grey ray, so the two should agree
+    // outright — and this is the check that makes every other number in this
+    // file trustworthy.
+    println!("self-check — Anchor::MidGrey against GamutMapper (R = 2.5):");
     let mut worst = 0.0f32;
     for c in probes {
         let a = production.map_color(c, 2.5, opts).to_bytes();
-        let b = mappers[0].map_color(c, 2.5, opts).to_bytes();
+        let b = mappers[2].map_color(c, 2.5, opts).to_bytes();
         let d = (0..3)
             .map(|i| (a[i] as i32 - b[i] as i32).abs())
             .max()
@@ -804,16 +811,34 @@ fn cusp_anchored_vs_fixed_lightness() {
             a[0], a[1], a[2], b[0], b[1], b[2]
         );
     }
-    // Not bit-exact, and shouldn't be: production reads `Cmax` from the
-    // bilinear 128x64 table while this harness bisects the hull directly, so
-    // they differ by the table's interpolation error (measured at ~5% of Cmax
-    // in the ordinary case, more where the hull pinches). A few 1/255 steps is
-    // that error and nothing else; a large divergence would mean the ray
-    // geometry is wrong and every number below with it.
+    // Four probes is not a proof, so sweep the cube as well.
+    let mut swept = 0usize;
+    for r8 in (0..=255).step_by(15) {
+        for g8 in (0..=255).step_by(15) {
+            for b8 in (0..=255).step_by(15) {
+                let c = Srgb::from_u8(r8 as u8, g8 as u8, b8 as u8);
+                let a = production.map_color(c, 2.5, opts).to_bytes();
+                let b = mappers[2].map_color(c, 2.5, opts).to_bytes();
+                let d = (0..3)
+                    .map(|i| (a[i] as i32 - b[i] as i32).abs())
+                    .max()
+                    .unwrap() as f32;
+                worst = worst.max(d);
+                swept += 1;
+            }
+        }
+    }
+    println!("  swept {swept} colours across the sRGB cube, worst channel diff {worst}");
+
+    // This used to allow 6/255: production read `Cmax` from the bilinear
+    // 128x64 table while the harness bisected the hull, and the slack was that
+    // interpolation error. Both bisect the same ray now, so they agree
+    // outright — measured at 0 across the sweep. One step of slack is left for
+    // rounding, not for drift; anything more means the harness and production
+    // have diverged and none of the numbers below can be trusted.
     assert!(
-        worst <= 6.0,
-        "the ray harness does not reproduce production at fixed L (max channel diff {worst}) — \
-         the harness is wrong, so none of its other numbers can be trusted"
+        worst <= 1.0,
+        "the ray harness no longer reproduces production (max channel diff {worst})"
     );
 
     // ---- where are the cusps? -------------------------------------------

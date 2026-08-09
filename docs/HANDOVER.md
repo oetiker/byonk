@@ -1,15 +1,15 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-09 (session 6) — **Gamut mapping: Tasks 10, 11 and 12 landed. Only Tasks 13 and 14 remain, and Task 13 needs the owner.** `feat/screen-store-authoring-core` remains **HELD** by standing owner decision — no PR, no merge to `main`._
+_Last updated: 2026-08-09 (session 7) — **Gamut mapping: Tasks 1-12 landed and both decisions owed to the owner are settled (rulings 13 and 14). Only Tasks 13 and 14 remain, and Task 13 needs the owner.** `feat/screen-store-authoring-core` remains **HELD** by standing owner decision — no PR, no merge to `main`._
 
 ## Where the work lives
 
 | | |
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
-| Last code commit | `c415219` (Task 12 fix). Any commits after it on this branch are this handover's own docs commits — verify with `git log --oneline -5`. |
+| Last code commit | the ruling-14 `amount` clamp, committed together with this handover — it is the newest commit that touches `crates/`. Verify with `git log --oneline -5`; anything after it is docs only. |
 | Worktree | `/Users/oetiker/checkouts/byonk` (working in place, no worktree) |
-| State | `make check` fully green, tree clean, byonk lib **449** tests (+1 ignored) |
+| State | `make check` fully green, tree clean, byonk lib **449** tests (+1 ignored), eink-dither lib **194** (+17 ignored) |
 | Plan | `docs/superpowers/plans/2026-08-08-gamut-mapping.md` |
 | Spec | `docs/superpowers/specs/2026-08-07-gamut-mapping-design.md` (approved) |
 | Ledger | `.superpowers/sdd/2026-08-08-gamut-mapping/progress.md` (git-ignored) |
@@ -20,30 +20,12 @@ _Last updated: 2026-08-09 (session 6) — **Gamut mapping: Tasks 10, 11 and 12 l
 calibration screen with and without mapping and asks whether the marker stays.
 **Mean dE is *expected to worsen*.** Present both images; do not decide alone.
 Its sweep covers knee 0.4/0.6/0.8, can overrule ruling 4, and is also the right
-place to A/B `SHOULDER_POWER` and to settle owner decision 2 below.
+place to A/B `SHOULDER_POWER`.
 
-### Two decisions owed to the owner, both from session 6
+### Both decisions owed to the owner are now SETTLED (session 7, owner in session)
 
-**1. The controller overrode explicit plan text (amendment B). Confirm or revert.**
-Task 12's plan text said `src/main.rs`'s `cli_tuning` "gets `gamut: None`". But
-the locals named `cli_error_clamp`, `cli_noise_scale`, … are **not** CLI
-arguments — the registered branch of that tuple returns `render_params.*`, the
-*resolved* script > device > panel chain. Following the plan literally would
-have made gamut the one knob `byonk render` silently ignores. It was overridden
-because the plan **self-contradicts**: its own Step 4 audit rule says "every
-struct that carries `error_clamp` must now also carry `gamut`". The Task 12
-reviewer independently traced the code and affirmed the override. Landed as a
-tenth tuple element `cli_gamut`, `gamut: Some(cli_gamut.resolve())`, and a
-`has_cli_tuning` term. **This is the only place plan text was overruled.**
-
-**2. `amount` is unclamped in the mapper — a Task 6 gap, found in Task 11's review.**
-`mapper.rs:130` computes `c + opts.amount * (compressed - c)`. `knee` is clamped
-to `[0.0, 0.999]` in `compress_chroma` (`knee.rs:61`) and `max_compression` is
-floored `.max(1.0)` in `adaptation_factor` (`adapt.rs:59-61`), but **`amount` is
-clamped nowhere**. A negative `amount` inverts the correction into a chroma
-*boost* — the opposite of gamut mapping; `amount > 1` over-desaturates past the
-target, floored at grey. No panic and no NaN reaches a pixel: the consequence is
-bounded but visually wrong. Decide clamp-to-`[0,1]` vs. document-as-intentional.
+They are rulings **13** and **14** below. Nothing is owed to the owner any more
+except Task 13 itself.
 
 After Task 13: **Task 14** is docs + `CHANGES.md`, then the final whole-branch
 review. Resume with the `superpowers:subagent-driven-development` skill and
@@ -77,6 +59,7 @@ environmental, not a model failure.
 | `e5d639e` | **Task 11** — `GamutTuningValues` + the Lua `gamut` table |
 | `a3a3e7f` | **Task 12** — knobs threaded through the whole display path |
 | `c415219` | **Task 12 fix** — regression test for the one compiler-invisible copy site |
+| _newest_ | **Ruling 14** — `amount` clamped to `[0,1]` in `mapped_chroma`, a Task 6 gap; two tests, both watched RED |
 
 Public surface: `eink_dither::{Oklch, GamutMapper, GamutOptions}`;
 `gamut::hull::{Hull, HullShape}`; `gamut::cmax::{CmaxTable, HUE_BINS, LIGHTNESS_BINS}`;
@@ -115,7 +98,7 @@ Session 6 adds the sharpest version yet:
   written *because* the suite was silent. Both of session 6's were: the mutated
   build failed on that test and only that test.
 
-## Twelve standing rulings — carry these forward
+## Fourteen standing rulings — carry these forward
 
 > **Provenance matters here.** Rulings **1-9 are genuine owner rulings**, made
 > with the owner in session. Rulings **10-12 were made in session 6 by the task
@@ -141,10 +124,26 @@ Session 6 adds the sharpest version yet:
     `error_clamp`/`noise_scale`/`chroma_clamp`/`strength` already behave. If it is
     ever fixed it must be **one pass across the whole family**, never gamut alone.
 11. **Task 11 — range validation belongs in the mapper, not the config layer.**
-    See owner decision 2 above.
+    Ruling 14 is that decision carried out.
 12. **Task 12 — `dev.rs`'s `query_tuning` keeps `Default::default()` deliberately.**
     There are no gamut query parameters; adding URL surface is new scope, not
     threading. A code comment in `dev.rs` says so.
+13. **Amendment B confirmed — the CLI is gamut-aware** (owner, session 7).
+    Task 12's plan text said `src/main.rs`'s `cli_tuning` "gets `gamut: None`",
+    but those locals (`cli_error_clamp`, `cli_noise_scale`, …) are **not** CLI
+    arguments — the registered branch of that tuple returns the *resolved*
+    script > device > panel chain. Following the plan literally would have made
+    gamut the one knob `byonk render` silently ignores, and the plan's own
+    Step 4 audit rule contradicts it. The override stands; no revert. **It
+    remains the only place plan text was overruled.**
+14. **`amount` is clamped to `[0,1]` in the mapper** (owner, session 7).
+    `mapped_chroma` now applies `opts.amount.clamp(0.0, 1.0)`, `map_frame`'s
+    early return widened from `== 0.0` to `<= 0.0`, and the `GamutOptions::amount`
+    doc states the clamp. Out of range the expression stopped being an
+    interpolation: negative `amount` inverted the correction into a chroma
+    *boost*, `amount > 1` desaturated past the target towards grey. Two tests,
+    both watched RED first. This matches how `knee` (`knee.rs:61`) and
+    `max_compression` (`adapt.rs:59-61`) are already clamped at point of use.
 
 Standing: **the branch is HELD** — no PR, no merge to `main`.
 

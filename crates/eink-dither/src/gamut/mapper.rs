@@ -53,6 +53,12 @@ pub struct GamutOptions {
     /// Interpolation between input and mapped chroma:
     /// `C_out = C + amount * (C' - C)`.
     ///
+    /// Clamped to `[0.0, 1.0]` at the point of use, as `knee` and
+    /// `max_compression` are. Outside that range the expression stops being an
+    /// interpolation: a negative `amount` inverts the correction into a chroma
+    /// *boost*, and `amount > 1` desaturates past the mapped target, towards
+    /// grey. Neither is a gamut mapping, so neither is reachable.
+    ///
     /// At `1.0` the output is the mapped chroma; at `0.0` the region is
     /// untouched, which makes it a clean A/B switch for judging the effect on
     /// a real panel. **Only `amount = 1.0` guarantees in-gamut output** —
@@ -127,7 +133,7 @@ impl GamutMapper {
         let l = l.clamp(self.l_min, self.l_max);
         let c_max = self.table.sample(h, l);
         let compressed = compress_chroma(c / r.max(1.0), c_max, opts.knee);
-        c + opts.amount * (compressed - c)
+        c + opts.amount.clamp(0.0, 1.0) * (compressed - c)
     }
 
     /// Map one colour with an explicit adaptation factor.
@@ -155,7 +161,7 @@ impl GamutMapper {
     /// the identity and nothing is needlessly desaturated.
     pub fn map_frame(&self, pixels: &mut [Srgb], mask: &[bool], opts: GamutOptions) {
         debug_assert_eq!(pixels.len(), mask.len(), "mask must match the frame");
-        if opts.amount == 0.0 {
+        if opts.amount <= 0.0 {
             return;
         }
         // No meaningful compression target: leave the content alone rather
@@ -350,6 +356,56 @@ mod tests {
         );
         for (i, (a, b)) in before.iter().zip(pixels.iter()).enumerate() {
             assert_eq!(a.to_bytes(), b.to_bytes(), "amount=0 altered pixel {i}");
+        }
+    }
+
+    #[test]
+    fn negative_amount_is_clamped_to_a_no_op() {
+        // Unclamped, `c + amount * (compressed - c)` with a negative amount
+        // inverts the correction into a chroma *boost* — the opposite of
+        // gamut mapping.
+        let m = GamutMapper::new(&six_colour());
+        let mut pixels = vivid_frame();
+        let before = pixels.clone();
+        let mask = vec![true; pixels.len()];
+        m.map_frame(
+            &mut pixels,
+            &mask,
+            GamutOptions {
+                amount: -1.0,
+                ..GamutOptions::default()
+            },
+        );
+        for (i, (a, b)) in before.iter().zip(pixels.iter()).enumerate() {
+            assert_eq!(a.to_bytes(), b.to_bytes(), "amount<0 altered pixel {i}");
+        }
+    }
+
+    #[test]
+    fn amount_above_one_is_clamped_to_full_mapping() {
+        // Unclamped, amount > 1 over-desaturates past the mapped target.
+        let m = GamutMapper::new(&six_colour());
+        let mask = vec![true; 64 * 64];
+
+        let mut full = vivid_frame();
+        m.map_frame(&mut full, &mask, GamutOptions::default());
+
+        let mut over = vivid_frame();
+        m.map_frame(
+            &mut over,
+            &mask,
+            GamutOptions {
+                amount: 4.0,
+                ..GamutOptions::default()
+            },
+        );
+
+        for (i, (a, b)) in full.iter().zip(over.iter()).enumerate() {
+            assert_eq!(
+                a.to_bytes(),
+                b.to_bytes(),
+                "amount=4 differs from amount=1 at pixel {i}"
+            );
         }
     }
 

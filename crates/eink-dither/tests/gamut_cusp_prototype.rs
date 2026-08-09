@@ -662,6 +662,102 @@ fn photographs_under_each_anchor() {
     }
 }
 
+/// Judge the knee by eye, on the mid-grey anchor the owner chose.
+///
+/// The measured claim is that raising the knee from 0.80 to 0.99 restores the
+/// panel's inks from 82% to 99% of their chroma while costing the out-of-gamut
+/// tail nothing — tail span flat at 0.017, surviving distinct outputs actually
+/// up from 74.5% to 77.2%. Those are aggregate numbers. Banding is a local
+/// artefact, so it has to be looked at as well as counted.
+#[test]
+#[ignore = "prototype; writes PNGs"]
+fn knee_sweep_on_the_chosen_anchor() {
+    const KNEES: [f32; 4] = [0.8, 0.9, 0.95, 0.99];
+    let p = panel();
+    let m = RayMapper::new(&p, Anchor::MidGrey);
+
+    // --- swatches: the inks themselves, where the claim is stated ----------
+    {
+        const W: usize = 512;
+        const H: usize = 110;
+        let source = ink_swatches(W, H);
+        let mut mapped_panels = vec![to_rgb(&source)];
+        let mut dithered_panels = vec![EinkDitherer::new(p.clone())
+            .dither(&source, W, H)
+            .to_rgb_actual()];
+        for knee in KNEES {
+            let opts = GamutOptions {
+                knee,
+                ..Default::default()
+            };
+            let mut mapped = source.clone();
+            m.map_frame(&mut mapped, opts);
+            mapped_panels.push(to_rgb(&mapped));
+            dithered_panels.push(
+                EinkDitherer::new(p.clone())
+                    .dither(&mapped, W, H)
+                    .to_rgb_actual(),
+            );
+        }
+        let (buf, ow, oh) = stack(&mapped_panels, W, H);
+        write("knee-swatches-mapped.png", &buf, ow, oh);
+        let (buf, ow, oh) = stack(&dithered_panels, W, H);
+        write("knee-swatches-dithered.png", &buf, ow, oh);
+        eprintln!("    rows: source | knee 0.80 | 0.90 | 0.95 | 0.99");
+        eprintln!(
+            "    columns: panel red, yellow, blue, green, then sRGB red, yellow, blue, green"
+        );
+    }
+
+    // --- photographs: where banding would actually show ---------------------
+    const SIDE: u32 = 380;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for (name, rel) in [
+        ("portrait", "screens/builtin/calibration/color/photo.png"),
+        ("background", "screens/builtin/default/background.jpg"),
+    ] {
+        let img = match image::open(root.join(rel)) {
+            Ok(i) => i,
+            Err(e) => {
+                eprintln!("  skipping {name}: {e}");
+                continue;
+            }
+        };
+        let img = img
+            .resize_to_fill(SIDE, SIDE, image::imageops::FilterType::Lanczos3)
+            .to_rgb8();
+        let (w, h) = (img.width() as usize, img.height() as usize);
+        let source: Vec<Srgb> = img
+            .pixels()
+            .map(|px| Srgb::from_u8(px[0], px[1], px[2]))
+            .collect();
+
+        let mut mapped_panels = vec![to_rgb(&source)];
+        let mut dithered_panels = vec![EinkDitherer::new(p.clone())
+            .dither(&source, w, h)
+            .to_rgb_actual()];
+        for knee in KNEES {
+            let opts = GamutOptions {
+                knee,
+                ..Default::default()
+            };
+            let mut mapped = source.clone();
+            m.map_frame(&mut mapped, opts);
+            mapped_panels.push(to_rgb(&mapped));
+            dithered_panels.push(
+                EinkDitherer::new(p.clone())
+                    .dither(&mapped, w, h)
+                    .to_rgb_actual(),
+            );
+        }
+        let (buf, ow, oh) = grid(&mapped_panels, 3, w, h);
+        write(&format!("knee-{name}-mapped.png"), &buf, ow, oh);
+        let (buf, ow, oh) = grid(&dithered_panels, 3, w, h);
+        write(&format!("knee-{name}-dithered.png"), &buf, ow, oh);
+        eprintln!("    grid order: source, knee 0.80, 0.90 / 0.95, 0.99");
+    }
+}
+
 #[test]
 #[ignore = "prototype; prints and writes PNGs"]
 fn cusp_anchored_vs_fixed_lightness() {

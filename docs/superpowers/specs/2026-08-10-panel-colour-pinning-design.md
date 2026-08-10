@@ -2,6 +2,14 @@
 
 _Status: spike. Written 2026-08-10 (session 10), branch `feat/screen-store-authoring-core`._
 
+> ⚠️ **Amended 2026-08-10 (session 11) by owner ruling 22 — read
+> [Amendment 1](#amendment-1--the-unmapped-path-assumes-actual--nominal-owner-ruling-22)
+> at the end of this document before implementing anything.** The amendment changes what
+> the unmarked region *is*, not just how it is pinned, and it supersedes parts of
+> **Division of responsibility** and **Plumbing** below. Tasks 1 and 2 of the plan are
+> already implemented against the unamended text and remain valid; Task 3 as planned does
+> not.
+
 ## The defect
 
 In the `calibration/tone` screen's **unmapped control column** — no gamut mapping
@@ -292,3 +300,186 @@ other screen's text unfixed).
 - Rendering a builtin screen needs a device with a `panel:` set, or the render is
   silently greyscale. Copy `config.yaml`, point `CONFIG_FILE` at the copy, and use
   `render --mac <MAC> --output <PATH>`. Never edit the tracked `config.yaml`.
+
+---
+
+# Amendment 1 — the unmapped path assumes actual == nominal (owner ruling 22)
+
+_Written 2026-08-10 (session 11), after Tasks 1 and 2 were implemented and reviewed._
+
+## The ruling
+
+**One mask selects the colour model, and it selects three behaviours at once:**
+
+| Region | Colour model | Gamut mapping | Pinning |
+|---|---|---|---|
+| **Unmarked** (structure) | **nominal** (`official`), used as if it were the ink | off | **on**, against `official` |
+| **Marked** `continuous` | **measured** (`actual`) | on | **off** |
+
+The body of this document already says pinning matches the *nominal* entry "because an
+SVG author writes the nominal colour". Ruling 22 extends that principle from the
+exact-match test to **the whole matching operation** in unmarked regions: outside a
+`continuous` region, the panel's inks *are* the nominal colours, by assumption.
+
+## What forced it
+
+`builtin/default` paints its palette swatches in **nominal** colours (`layout.colors`).
+`builtin/calibration/color` paints its patches in **measured** ones
+(`screens/builtin/calibration/color/script.lua:16`, `device.colors_actual`, with a comment
+saying the patches exist to show what each ink actually looks like). Measured on renders
+at 800×480, panel `reterminal_e1002`:
+
+| Swatch fill (nominal) | Nearest measured ink | Rendered result |
+|---|---|---|
+| `#FF0000` | `#B50303` | 85% red (≈100% on non-label rows) |
+| `#FFFF00` | `#FFEE00` | 89.5% yellow (≈100% on non-label rows) |
+| `#00FF00` | `#0D876B` | **51% black, 27% red, 17% teal-green** |
+| `#0000FF` | `#205497` | **81% black, 13% white, 5% blue** |
+
+`calibration/color`'s measured-value patches are **>99% pure**. Red and yellow survive
+only because they happen to sit near their measured inks; pure green and pure blue are
+chased toward a dark teal and a mid navy they cannot reach, and speckle.
+
+**Under ruling 22 that speckle is a defect, not the ditherer correctly approximating an
+unreachable colour.** On the unmapped path `#00FF00` *is* green.
+
+The single site responsible: `crates/eink-dither/src/palette/palette.rs:442` —
+`find_nearest` scans `self.actual_oklab` unconditionally, mapped or not.
+
+## The accepted tradeoff
+
+**A photograph left unmarked will look pretty scary**, because nominal matching aims
+continuous-tone content at primaries the panel cannot produce. **In exchange, graphical
+elements become simple to author**: panel colours render as themselves, and simple
+transitions between them behave predictably.
+
+This makes the marking discipline **load-bearing**. Before ruling 22, a missed mark cost
+gamut mapping — mild, invisible on most content. Now it costs the colour model, on exactly
+the content least able to survive it. The failure mode goes from mild to severe, which is
+a documentation obligation for screen authors (`docs/src/`), not just an internal note.
+
+## What this supersedes in the body of this document
+
+- **Division of responsibility** — "eink-dither owns *is this a pure panel colour*" is now
+  too narrow. eink-dither owns **which colour model applies**, of which the exact-match
+  test is one consequence.
+- **Plumbing** — `dither_with_pinning(pin_eligible: Option<&[bool]>)` as shipped in Task 2
+  carries the wrong quantity (see below). Everything else in that section stands: `None`
+  still means off, λ still lives in `DitherOptions`, the mask still must not live in
+  `DitherOptions`, byonk still rasterizes the tone mask whenever the document carries
+  markup.
+- **Where the match is decided** — unchanged and still correct. The exact-match test still
+  resolves on the caller's `Srgb` bytes before preprocessing.
+
+Nothing about λ, the decay argument, the seam argument, or the tone screen's re-marking
+(Task 4) changes.
+
+## Design
+
+### The mask byonk passes is the tone mask itself, not its inverse
+
+Task 2 shipped `pin_eligible`, which byonk was to build as the **inverse** of the tone
+mask. Under ruling 22 the same mask drives three behaviours, so passing the inverse of one
+of them is a naming trap that will eventually be inverted twice. The mask crossing the
+crate boundary becomes the tone mask as rasterized:
+
+```rust
+pub fn dither_with_regions(
+    &self,
+    pixels: &[Srgb],
+    width: usize,
+    height: usize,
+    continuous: Option<&[bool]>,
+) -> DitheredImage
+```
+
+- `continuous[i] == true` → measured model, not pin-eligible.
+- `continuous[i] == false` → nominal model, pin-eligible.
+- `continuous: None` → **today's behaviour exactly**: measured model everywhere, no
+  pinning. `dither()` delegates here, and the ruling that `None` is never "eligible
+  everywhere" is unchanged and still load-bearing.
+
+**Migration hazard to guard explicitly:** `pin_eligible` and `continuous` are boolean
+inverses of each other with adjacent call sites. A test must assert that a frame passed
+an all-`true` `continuous` mask is *not* pinned — the polarity slip is silent otherwise,
+and it produces a plausible-looking image either way.
+
+### The colour model is a per-pixel choice inside `Palette`, not a second palette
+
+`Palette` already stores both sets in matchable form — `official_linear`/`official_oklab`
+alongside `actual_linear`/`actual_oklab` (`palette/palette.rs:105-111`). So this needs no
+second palette and no second dedup:
+
+```rust
+pub enum ColourModel { Nominal, Measured }
+```
+
+`find_nearest` and `find_second_nearest` take a `ColourModel` and consult the matching
+arrays. Two consequences to implement deliberately:
+
+- **`Palette` currently caches `actual_chroma` only** (`palette.rs:205`). The HyAB
+  distance's chroma-coupling term needs the equivalent for the nominal set, so
+  `official_chroma` must be cached alongside it. Computing it per pixel would put a
+  `sqrt` in the inner loop.
+- **`for_error_diffusion()` is orthogonal** and unchanged — it swaps the *metric*
+  (Euclidean for error diffusion, HyAB for blue noise), not the colour set. The two
+  choices compose.
+
+### The model selects the representative colour EVERYWHERE for that pixel
+
+This is the part that is easy to get half-right. A pixel's model chooses:
+
+1. the array `find_nearest` scans, **and**
+2. the colour subtracted from the pixel to form the quantisation error that gets diffused.
+
+Using nominal for the match and measured for the error term — or the reverse — injects a
+constant per-ink bias into the diffused error, which error diffusion will faithfully
+spread across the whole region. **A test must pin this**: a flat field of a nominal ink in
+an unmarked region must diffuse **zero** error, which is only true when both halves use
+the same model.
+
+### Indices and output are unaffected
+
+`build_eink_palette` dedups on **official** bytes (`svg_to_png.rs:414`; `kept_indices`
+drives `output_palette`), so both models share one index space. The output PLTE is
+therefore valid whichever model matched a given pixel, and `use_actual` — which selects
+what goes in the PLTE for dev preview — is a separate concern that ruling 22 does not
+touch.
+
+### Pinning is still required, and its job is now sharper
+
+Under nominal matching an exact official colour matches itself at distance zero, so absent
+interference it would already quantise to itself. **Pinning's remaining job is purely to
+resist error diffused *into* it from neighbours** — which is the original defect this
+document exists for, and it is unchanged by which model is matched. Tasks 1 and 2 stand.
+
+## Consequences that need measuring, not assuming
+
+- **The unmarked photograph is now the feature's main downside and nobody has looked at
+  it.** `calibration/tone`'s left column is unmarked by design as the raw-behaviour
+  control and contains a photograph; it will get markedly worse. Confirm it remains
+  legible enough to still function as a control.
+- **Two colour models meet at every structure/continuous boundary.** Error computed in
+  nominal space diffuses into pixels evaluated in measured space and vice versa. Both are
+  linear RGB so this is numerically well-defined, but the *meaning* of the carried error
+  changes across the seam. Measure for a visible artefact at a marked/unmarked boundary —
+  this is a new risk that did not exist before ruling 22.
+- **The swatch case is the headline win** and should be measured as such: nominal `#00FF00`
+  and `#0000FF` in an unmarked region must render as solid ink, against today's 51%/81%
+  black.
+- **User-authored screens with photographs are not marked** and their rendering changes.
+  The shipped collection was marked in `fe66ee6`; third-party screens were not.
+
+## Verification additions
+
+Beyond the existing plan's Task 5 sweep:
+
+1. Flat nominal ink in an unmarked region diffuses zero error (the representative-colour
+   test above).
+2. An all-`true` `continuous` mask disables pinning (the polarity guard).
+3. `continuous: None` reproduces today's output bit-for-bit on a frame with no marking —
+   the backward-compatibility guard, which must fail against a mutant that defaults to
+   the nominal model.
+4. The unmarked-photograph cost, measured on `screens/builtin/calibration/color/photo.png`
+   at the pixels the model change touches — **not** as a whole-image mean, which this
+   project has twice shown hides the effect entirely.

@@ -111,8 +111,13 @@ Consequences to work through when re-planning:
   and gradients-through-hue, or they will render badly. Previously this was an
   optimisation; now it is a requirement.
 
-**Next session: write the spec amendment and re-plan Tasks 3–5 before dispatching
-anything.** Do not dispatch Task 3 from the existing brief — it builds the wrong thing.
+**The spec amendment is WRITTEN** — `docs/superpowers/specs/2026-08-10-panel-colour-pinning-design.md`,
+"Amendment 1", with a banner at the top of that file pointing to it. It carries the API
+design (`dither_with_regions` + `ColourModel`), the representative-colour rule, the
+polarity hazard, and four verification additions.
+
+**Next session: re-plan Tasks 3–5 against Amendment 1 before dispatching anything.** Do
+not dispatch Task 3 from the existing `task-3-brief.md` — it builds the wrong thing.
 
 # The active initiative
 

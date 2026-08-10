@@ -2373,7 +2373,12 @@ mod tests {
                 .as_array()
                 .expect("patches must be an array")
                 .iter()
-                .map(|p| p["color"].as_str().expect("color must be a string").to_string())
+                .map(|p| {
+                    p["color"]
+                        .as_str()
+                        .expect("color must be a string")
+                        .to_string()
+                })
                 .collect()
         };
         let left = &res.data["left"];
@@ -2424,8 +2429,8 @@ mod tests {
         // marked subtree, black outside, over a black ground.
         let mask_svg = crate::rendering::tone_mask::build_mask_svg(svg.as_bytes())
             .expect("mask rewrite must succeed");
-        let tree = usvg::Tree::from_data(&mask_svg, &usvg::Options::default())
-            .expect("mask must parse");
+        let tree =
+            usvg::Tree::from_data(&mask_svg, &usvg::Options::default()).expect("mask must parse");
         let (w, h) = (800u32, 480u32);
         let size = tree.size();
         let scale = (w as f32 / size.width()).min(h as f32 / size.height());

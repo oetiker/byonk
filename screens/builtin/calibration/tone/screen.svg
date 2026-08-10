@@ -14,8 +14,8 @@
 
   <!-- White ground; the gutter between the columns is simply background, and
        it is load-bearing: error diffusion runs across the whole frame after
-       mapping, so the gutter absorbs the seam's error instead of letting the
-       mapped column bleed into the control. -->
+       mapping, so the gutter limits the seam's error to the gap rather than
+       letting it bleed further into the control. -->
   <rect width="{{ data.width }}" height="{{ data.height }}" fill="#FFFFFF"/>
 
   <!-- Column headers. Text is graphic content and is deliberately left

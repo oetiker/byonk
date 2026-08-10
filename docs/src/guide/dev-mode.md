@@ -149,8 +149,8 @@ It renders the same content — a photograph, a hue sweep, and a colour patch
 grid, top to bottom — twice, side by side. The two columns are identical
 markup with one difference: only the right-hand column is marked
 `data-byonk-tone="continuous"`, so only it is gamut-mapped. The left column is
-the untouched control. Whatever differs between the two columns on your
-device is exactly what the gamut mapper is doing to your content. The hue
+the untouched control. Whatever visibly differs between the two columns on
+your device is what the gamut mapper is doing to your content. The hue
 sweep is a fixed gradient of 12 equal hue steps, not driven by either param.
 
 There are no gamut-mapping knobs on this screen — it deliberately shows you

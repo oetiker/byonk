@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
+  <defs>
+    <style>
+      text {
+        {% include "byonk-base-v1/hinting.svg" %}
+      }
+    </style>
+    <linearGradient id="huesweep" x1="0%" y1="0%" x2="100%" y2="0%">
+      {% for stop in data.hue_stops %}
+      <stop offset="{{ stop.offset }}" style="stop-color:{{ stop.color }}"/>
+      {% endfor %}
+    </linearGradient>
+  </defs>
+
+  <!-- White ground; the gutter between the columns is simply background, and
+       it is load-bearing: error diffusion runs across the whole frame after
+       mapping, so the gutter absorbs the seam's error instead of letting the
+       mapped column bleed into the control. -->
+  <rect width="{{ data.width }}" height="{{ data.height }}" fill="#FFFFFF"/>
+
+  <!-- Column headers. Text is graphic content and is deliberately left
+       outside the tone group. -->
+  <text x="{{ data.left.label_x }}" y="{{ data.label_y }}" font-family="X11Misc6x" font-size="{{ data.font_size }}" fill="#000000">{{ data.left.label }}</text>
+  <text x="{{ data.right.label_x }}" y="{{ data.label_y }}" font-family="X11Misc6x" font-size="{{ data.font_size }}" fill="#000000">{{ data.right.label }}</text>
+
+  <!-- LEFT COLUMN — the control, never marked -->
+  <image x="{{ data.left.photo.x }}" y="{{ data.left.photo.y }}" width="{{ data.left.photo.width }}" height="{{ data.left.photo.height }}" href="photo.jpg" preserveAspectRatio="xMidYMid slice"/>
+  <rect x="{{ data.left.sweep.x }}" y="{{ data.left.sweep.y }}" width="{{ data.left.sweep.width }}" height="{{ data.left.sweep.height }}" fill="url(#huesweep)"/>
+  <rect x="{{ data.left.patch_bg.x }}" y="{{ data.left.patch_bg.y }}" width="{{ data.left.patch_bg.width }}" height="{{ data.left.patch_bg.height }}" fill="#000000"/>
+  {% for p in data.left.patches %}
+  <rect x="{{ p.x }}" y="{{ p.y }}" width="{{ p.width }}" height="{{ p.height }}" fill="{{ p.color }}" shape-rendering="crispEdges"/>
+  {% endfor %}
+
+  <!-- RIGHT COLUMN — Task 2 wraps these three bands in the tone group -->
+  <image x="{{ data.right.photo.x }}" y="{{ data.right.photo.y }}" width="{{ data.right.photo.width }}" height="{{ data.right.photo.height }}" href="photo.jpg" preserveAspectRatio="xMidYMid slice"/>
+  <rect x="{{ data.right.sweep.x }}" y="{{ data.right.sweep.y }}" width="{{ data.right.sweep.width }}" height="{{ data.right.sweep.height }}" fill="url(#huesweep)"/>
+  <rect x="{{ data.right.patch_bg.x }}" y="{{ data.right.patch_bg.y }}" width="{{ data.right.patch_bg.width }}" height="{{ data.right.patch_bg.height }}" fill="#000000"/>
+  {% for p in data.right.patches %}
+  <rect x="{{ p.x }}" y="{{ p.y }}" width="{{ p.width }}" height="{{ p.height }}" fill="{{ p.color }}" shape-rendering="crispEdges"/>
+  {% endfor %}
+</svg>

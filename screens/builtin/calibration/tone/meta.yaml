@@ -1,0 +1,21 @@
+title: Tone Marker A/B
+description: The same photograph, hue sweep and patch grid rendered twice — left untouched, right marked as continuous-tone so the gamut mapper compresses it into the panel's reachable colours. Shows what the tone marker actually changes.
+byonk: "0.17"
+refresh: 3600
+params:
+  hues:
+    type: int
+    label: "Hue columns"
+    description: "Hue columns in the patch grid. Lower than the full-width Gamut Patches screen because each column here is half as wide."
+    default: 12
+    min: 2
+    max: 48
+    mode: box
+  levels:
+    type: int
+    label: "Lightness rows"
+    description: "Lightness rows in the patch grid"
+    default: 5
+    min: 1
+    max: 12
+    mode: box

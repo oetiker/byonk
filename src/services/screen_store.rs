@@ -2337,6 +2337,62 @@ mod tests {
     }
 
     #[test]
+    fn the_tone_screen_renders_both_columns() {
+        let (store, _root) = test_store_with_local();
+        let res = store.render(
+            "byonk-builtin/calibration/tone",
+            RenderOpts {
+                width: Some(800),
+                height: Some(480),
+                include_svg: true,
+                ..Default::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert!(!res.png.is_empty(), "no PNG produced");
+
+        let svg = res.svg.expect("include_svg was requested");
+        // `TemplateService::resolve_image_refs` rewrites relative <image href>
+        // values to base64 data URIs before the SVG is captured, so the literal
+        // string "photo.jpg" is gone by this point. Count the inlined images.
+        assert_eq!(
+            svg.matches("data:image/jpeg;base64,").count(),
+            2,
+            "expected the photograph in both columns"
+        );
+        assert!(svg.contains("UNMAPPED (control)"));
+        assert!(svg.contains("GAMUT MAPPED"));
+
+        // Both columns must carry identical content: the adaptation factor is
+        // derived from the marked column alone, so a comparison against a
+        // different control would be meaningless. Asserted on the script's
+        // returned data, where the two columns are directly comparable, rather
+        // than by string-matching the expanded SVG.
+        let colours = |col: &serde_json::Value| -> Vec<String> {
+            col["patches"]
+                .as_array()
+                .expect("patches must be an array")
+                .iter()
+                .map(|p| p["color"].as_str().expect("color must be a string").to_string())
+                .collect()
+        };
+        let left = &res.data["left"];
+        let right = &res.data["right"];
+        assert!(!colours(left).is_empty(), "no patches were generated");
+        assert_eq!(
+            colours(left),
+            colours(right),
+            "the two columns must request the same colours in the same order"
+        );
+        assert_eq!(left["photo"]["width"], right["photo"]["width"]);
+        assert_eq!(left["photo"]["height"], right["photo"]["height"]);
+        assert_ne!(
+            left["photo"]["x"], right["photo"]["x"],
+            "the columns must sit at different x offsets"
+        );
+    }
+
+    #[test]
     fn render_works_for_read_only_source() {
         // render is a read operation, like validate — it must work against
         // the embedded (read-only) byonk-builtin handle too.

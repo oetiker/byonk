@@ -151,7 +151,7 @@ markup with one difference: only the right-hand column is marked
 `data-byonk-tone="continuous"`, so only it is gamut-mapped. The left column is
 the untouched control. Whatever differs between the two columns on your
 device is exactly what the gamut mapper is doing to your content. The hue
-sweep is a fixed 12-stop gradient, not driven by either param.
+sweep is a fixed gradient of 12 equal hue steps, not driven by either param.
 
 There are no gamut-mapping knobs on this screen — it deliberately shows you
 what a real screen gets, not a tuning surface.

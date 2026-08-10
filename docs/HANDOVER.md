@@ -2,7 +2,9 @@
 
 _Last updated: 2026-08-10 (session 10). The gamut initiative is **paused, complete
 and committed**. A new initiative — **panel-colour pinning** — is **1 of 5 tasks
-done** and under SDD subagent execution. `feat/screen-store-authoring-core` remains
+done** and under SDD subagent execution. Separately, **the whole shipped screen
+collection has now been marked** (`fe66ee6`), so the gamut feature reaches real
+content screens for the first time. `feat/screen-store-authoring-core` remains
 **HELD** — no PR, no merge to `main`._
 
 ## Where the work lives
@@ -10,17 +12,20 @@ done** and under SDD subagent execution. `feat/screen-store-authoring-core` rema
 | | |
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
-| HEAD | `f82eedc` — Task 1 of panel-colour pinning, reviewed clean |
+| HEAD | `fe66ee6` — continuous-tone marking across the screen collection |
+| Pinning Task 1 | `f82eedc`, reviewed clean |
 | Worktree | `/Users/oetiker/checkouts/byonk` (working in place, no worktree) |
-| State | tree clean; eink-dither lib **207 passed, 0 failed, 21 ignored** |
+| State | tree clean; eink-dither lib **207 passed, 0 failed, 21 ignored**; byonk lib **451 passed, 0 failed, 1 ignored** |
 | Active spec | `docs/superpowers/specs/2026-08-10-panel-colour-pinning-design.md` |
 | Active plan | `docs/superpowers/plans/2026-08-10-panel-colour-pinning.md` |
 | Active ledger | `.superpowers/sdd/2026-08-10-panel-colour-pinning/progress.md` (git-ignored) |
 | Prior initiative | `docs/superpowers/specs/2026-08-07-gamut-mapping-design.md` — complete |
 
-**Resume by:** reading the active ledger, then `git log f82eedc..HEAD`, then
+**Resume by:** reading the active ledger, then `git log fe66ee6..HEAD`, then
 dispatching **Task 2** via `superpowers:subagent-driven-development`. The ledger is
-the recovery map; trust it and `git log` over memory.
+the recovery map; trust it and `git log` over memory. Note the ledger covers the
+pinning plan only — the screen marking (`fe66ee6`) landed outside it and is recorded
+here instead.
 
 # ⚠️ START HERE — the active initiative
 
@@ -137,11 +142,74 @@ the live default; it misled a reviewer this session.
 Other deferred minors from Task 1, all in the ledger: no length/range `debug_assert!`
 on the pin map (belongs in Task 2, which builds it); `f32::clamp` does not trap NaN.
 
+# The screen collection is marked (`fe66ee6`) — done, out of plan
+
+**This landed outside the pinning plan, at the owner's request, after Task 1.** It
+resolves the long-standing "should a real content screen be marked?" decision by
+marking the whole collection at once, applying ruling 19.
+
+The owner's framing, which held: *most screens have no continuous tone; only ones
+with gradients or photos need this.* Surveyed all 13 shipped screens — **10 needed
+nothing.**
+
+| Screen | Marked | Why |
+|---|---|---|
+| `builtin/default` | background photograph | ~12% of its pixels out of gamut |
+| `builtin/calibration/color` | each gradient bar, hue sweep, photo | owner chose full marking over keeping it as a raw reference |
+| `examples/gphoto` | the full-screen photo | real user photography |
+| `builtin/calibration/tone` | unchanged | already marked, deliberately |
+| `builtin/calibration/grey` | **nothing** | both gradients run white→black |
+| `builtin/default`'s vertical bar | **nothing** | same — white→black |
+| `examples/mandelbrot` | **nothing** | rects already palette-exact from `layout.colors` |
+| 7 others + `byonk-base` | **nothing** | no continuous tone at all |
+
+**The argument for leaving an achromatic gradient unmarked is the one to remember.**
+Grey is always in gamut, so mapping it is a *no-op* — while marking it switches
+exact-match pinning *off* across a deliberate dithering test pattern. Marking costs
+something and buys nothing. Any future "should this be marked?" question should start
+by asking whether the content can even be out of gamut.
+
+**Marking goes on the element that IS continuous-tone, never on a group around a
+band.** On `calibration/color` the gradient bar and its label are emitted from the
+same loop body, so a `<g>` wrapper would have swallowed the label; a per-element
+attribute needs no restructuring and cannot catch structure by accident.
+`tone_mask.rs`'s `self_closing_marked_element_does_not_leak_scope` proves a leaf
+element can carry the attribute without marking its siblings.
+
+### ⚠️ The mask rasterizes in document order, and that does real work
+
+Measured at 800×480: `calibration/color` marks **262,672 / 384,000** px;
+`default` marks **309,125 / 384,000 (80.5%)** — even though its photo is
+*full-screen*. The shortfall is not a bug. Unmarked elements drawn **after** a marked
+one paint black back over it in the mask document, so `default`'s hero text, palette
+swatches and white info bar punch themselves out of the photo's marked area. Those
+pixels are opaquely covered, so excluding them is correct.
+
+**Consequence for authors:** text over a photo does not need special handling as long
+as it comes later in document order. A group wrapper around the region would still
+capture it — document order saves the element-level marking, not the group approach.
+
+### What this changes for a user
+
+`default`, `calibration/color` and `gphoto` now render differently. This is the first
+time the gamut work alters output anyone actually looks at. **`calibration/color` no
+longer has an unmapped photo reference** — the raw-behaviour comparison for a
+photograph now exists only on `calibration/tone`, whose left column is unmarked by
+design.
+
+**Not yet looked at on a panel.** That is the outstanding action.
+
+### Untracked duplicate — do not sweep it in
+
+`/Users/oetiker/checkouts/byonk/examples/` is an **untracked** byte-identical copy of
+`screens/examples/`. It was left alone and will now drift by one file
+(`gphoto/screen.svg`). This is exactly the kind of local file that makes
+`git add -A` dangerous here.
+
 ## Open owner decisions
 
-1. **Should a real content screen be marked?** The first change altering output a
-   user actually looks at. The tone screen exists to inform exactly this — look at it
-   on the panel first.
+1. **Look at the three newly-marked screens on the panel.** The marking is committed
+   but unjudged.
 2. **The branch.** Still HELD. Ten sessions of work sitting unmerged.
 
 # The prior initiative: gamut mapping (complete)
@@ -170,8 +238,9 @@ sibling to `CmaxTable` would have inherited its bilinear *overshoot at the pinch
 (yellow: exact 0.073 vs sampled 0.093), and an overshot `t_max` maps pixels outside
 the hull in exactly the region the change exists to fix.
 
-**The feature reaches exactly one shipping screen: `calibration/tone`.** Every other
-screen is untouched.
+**As of `fe66ee6` the feature reaches four shipping screens** — `calibration/tone`,
+`calibration/color`, `default` and `examples/gphoto`. Before that commit it reached
+exactly one, and that sentence is still what most of this file was written against.
 
 # ⚠️⚠️ Read this before trusting any dithering picture
 
@@ -374,7 +443,7 @@ passing).
 18. **Pinning is eligible everywhere outside a `continuous` region, in every document**
     (owner, session 10).
 19. **The mask marks content that is continuous-tone, not regions of the layout**
-    (owner, session 10).
+    (owner, session 10). **Applied across the whole shipped collection in `fe66ee6`.**
 20. **Task 5's `#[ignore]` diagnostics stay non-asserting** (owner, session 10).
 21. **CHANGES.md is not touched by the pinning plan** (owner, session 10).
 

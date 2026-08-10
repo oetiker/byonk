@@ -506,27 +506,38 @@ already resident per-pixel for model selection.
 **The pinned carry obeys the same stop.** A pinned pixel emits `λ · accumulated`; that
 carry is distributed through the same loop and is subject to the same boundary test.
 
-### The error at a stopped tap is DROPPED, not redistributed
+### The governing analogy: a model boundary IS a screen border
 
-Two readings of "hard stop" are possible and they differ materially:
+**Owner, session 11: "it should behave as if the border was a border — nothing from one
+side goes through to the other, like the border of the screen."**
 
-- **Drop** — the tap's share of the error vanishes. Total error is not conserved across
-  the boundary.
-- **Renormalise** — the surviving taps' weights are scaled up so the region retains the
-  full error.
+This is the whole of the rule, and it settles every sub-question by reference to behaviour
+the crate already has rather than by fresh invention. A tap that crosses a model boundary
+is treated exactly as a tap that leaves the frame:
 
-**This spec specifies drop.** Rationale: Atkinson, the default algorithm, already discards
-1/4 of every pixel's error by design (it distributes 6/8), so dropping is consistent with
-the behaviour the tree already ships and tunes against. Renormalising would concentrate a
-boundary pixel's full error into fewer taps, which piles error up along the seam — the
-opposite of what a hard stop is for — and it changes the kernel's spatial character only at
-boundaries, making the seam a special case in a loop whose whole design is that a pinned or
-bounded pixel stays an ordinary pixel.
+- **The error is DROPPED, not redistributed.** The screen border does not renormalise the
+  surviving taps to conserve error, and neither does this. (Independently consistent with
+  Atkinson, the default algorithm, which already discards 1/4 of every pixel's error by
+  design. Renormalising would concentrate a boundary pixel's full error into fewer taps,
+  piling it onto the seam — the opposite of what a hard stop is for.)
+- **The stop is symmetric.** Nothing leaves and nothing enters, in either direction.
+- **Each region is dithered as if it were its own frame**, with everything outside it out
+  of bounds.
 
-**This is the one sub-decision of ruling 23 that the owner has not explicitly made.** It is
-recorded here as specified-with-rationale, not as inherited-from-nowhere; if drop measures
-badly at a large marked/unmarked boundary, renormalise is the fallback and the change is
-local to the distribution loop.
+### The analogy is exact, not merely evocative
+
+Worth stating because it is what makes the one-line implementation correct rather than
+approximate: **the per-pixel accumulated-error buffer is the only state carried between
+pixels** in `dither_with_kernel_noise`. There is no running per-row or per-region
+accumulator. So skipping the crossing taps is *sufficient* to realise "own frame" — a
+pixel inside region B can never have received anything from region A, because the only
+channel by which it could have was the tap that was skipped.
+
+One property falls out of this for free and needs no special case: **a scanline that
+leaves a region and later re-enters it resumes with zero inherited error**, exactly as if
+it had started at a fresh frame edge. An irregular or disjoint region therefore needs no
+separate traversal, no region labelling, and no second pass — the global raster/serpentine
+order is retained and each region still behaves as its own frame.
 
 ### What this does and does not fix
 

@@ -538,11 +538,15 @@ passing).
     over the review rubric; their printed output is the spike's deliverable.
 21. **CHANGES.md is not touched by the pinning plan** (owner, session 10). One entry gets
     written at merge prep, covering gamut and pinning together.
-23. **A hard stop at every model boundary — no bleeding** (owner, session 11). Error does
-    not diffuse between a nominal-model pixel and a measured-model pixel, in either
-    direction; the pinned λ-carry obeys the same stop. Spec specifies **drop**, not
-    renormalise (Atkinson already discards 1/4 by design; renormalising piles error onto
-    the seam) — that sub-decision is the one part not explicitly owner-ruled.
+23. **A model boundary IS a screen border** (owner, session 11): _"nothing from one side
+    goes through to the other, like the border of the screen."_ Error does not diffuse
+    between a nominal-model pixel and a measured-model pixel, in either direction; the
+    pinned λ-carry obeys the same stop. **Dropped, not renormalised** — the screen border
+    does not conserve error either. Each region is dithered as if it were its own frame.
+    The analogy is exact: the per-pixel accumulated buffer is the ONLY state carried
+    between pixels, so skipping the crossing taps is sufficient — a scanline that leaves
+    and re-enters a region resumes with zero inherited error for free, so irregular and
+    disjoint regions need no labelling, no separate traversal, no second pass.
     **Complementary to pinning, not a replacement:** the hard stop protects across a
     marked/unmarked boundary; pinning protects *within* one model, which is where the
     original 73.2% defect lives (the unmapped control column, where grid and patches are

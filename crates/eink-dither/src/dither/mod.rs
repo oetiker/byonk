@@ -789,7 +789,7 @@ mod tests {
         // hops over it and the isolation claim is void.
         let max_dx = kernel.entries.iter().map(|&(dx, _, _)| dx).max().unwrap();
         assert!(
-            (BAR.end - BAR.start) as i32 > max_dx as i32,
+            (BAR.end - BAR.start) as i32 > max_dx,
             "pinned bar ({}px) is not wider than the kernel reach ({max_dx})",
             BAR.end - BAR.start
         );

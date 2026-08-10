@@ -319,6 +319,41 @@ mod tests {
             .collect()
     }
 
+    // Shared geometry for the pinning tests below: a 2 px vertical `line`
+    // running through a `field` that is saturated and far from every ink in
+    // `test_palette()`, so it diffuses hard into the line. Single source of
+    // truth for both the frame and the region every test measures, so the
+    // scenario can't silently drift apart between call sites.
+    const HOSTILE_W: usize = 32;
+    const HOSTILE_H: usize = 32;
+    const HOSTILE_LINE_COLS: std::ops::Range<usize> = 15..17;
+
+    /// Build the hostile-field frame: `field` everywhere except a 2 px
+    /// vertical line of `line` at `HOSTILE_LINE_COLS`.
+    fn hostile_line_field(field: Srgb, line: Srgb) -> Vec<Srgb> {
+        let mut px = vec![field; HOSTILE_W * HOSTILE_H];
+        for y in 0..HOSTILE_H {
+            for x in HOSTILE_LINE_COLS {
+                px[y * HOSTILE_W + x] = line;
+            }
+        }
+        px
+    }
+
+    /// Fraction of the line's pixels (see `hostile_line_field`) that
+    /// quantized to `ink` in `img`.
+    fn line_ink_share(img: &DitheredImage, ink: u8) -> f64 {
+        let mut n = 0usize;
+        for y in 0..HOSTILE_H {
+            for x in HOSTILE_LINE_COLS {
+                if img.indices()[y * HOSTILE_W + x] == ink {
+                    n += 1;
+                }
+            }
+        }
+        n as f64 / (HOSTILE_H * HOSTILE_LINE_COLS.len()) as f64
+    }
+
     #[test]
     fn test_new_defaults() {
         let palette = test_palette();
@@ -483,17 +518,10 @@ mod tests {
             .noise_scale(0.0)
             .serpentine(false);
 
-        // Saturated and not close to any ink in test_palette(), so it
-        // diffuses hard into its neighbours.
         let field = Srgb::from_u8(192, 96, 32);
         let black = Srgb::from_u8(0, 0, 0);
-        let (w, h) = (32usize, 32usize);
-        let mut px = vec![field; w * h];
-        for y in 0..h {
-            for x in 15..17 {
-                px[y * w + x] = black;
-            }
-        }
+        let px = hostile_line_field(field, black);
+        let (w, h) = (HOSTILE_W, HOSTILE_H);
 
         let eligible = vec![true; w * h];
         let ineligible = vec![false; w * h];
@@ -501,20 +529,8 @@ mod tests {
         let pinned = ditherer.dither_with_pinning(&px, w, h, Some(&eligible));
         let unpinned = ditherer.dither_with_pinning(&px, w, h, Some(&ineligible));
 
-        let black_share = |img: &DitheredImage| {
-            let mut n = 0usize;
-            for y in 0..h {
-                for x in 15..17 {
-                    if img.indices()[y * w + x] == 0 {
-                        n += 1;
-                    }
-                }
-            }
-            n as f64 / (h * 2) as f64
-        };
-
-        let unpinned_share = black_share(&unpinned);
-        let pinned_share = black_share(&pinned);
+        let unpinned_share = line_ink_share(&unpinned, 0);
+        let pinned_share = line_ink_share(&pinned, 0);
 
         // The scenario must actually be hostile, or the pinned result below
         // proves nothing.
@@ -556,34 +572,17 @@ mod tests {
             .noise_scale(0.0)
             .serpentine(false);
 
-        let (w, h) = (32usize, 32usize);
         let field = Srgb::from_u8(0, 255, 0);
         let red = Srgb::from_u8(255, 0, 0);
-        let mut px = vec![field; w * h];
-        for y in 0..h {
-            for x in 15..17 {
-                px[y * w + x] = red;
-            }
-        }
+        let px = hostile_line_field(field, red);
+        let (w, h) = (HOSTILE_W, HOSTILE_H);
         let eligible = vec![true; w * h];
 
         let pinned = ditherer.dither_with_pinning(&px, w, h, Some(&eligible));
         let unpinned = ditherer.dither_with_pinning(&px, w, h, None);
 
-        let red_share = |img: &DitheredImage| {
-            let mut n = 0usize;
-            for y in 0..h {
-                for x in 15..17 {
-                    if img.indices()[y * w + x] == 2 {
-                        n += 1;
-                    }
-                }
-            }
-            n as f64 / (h * 2) as f64
-        };
-
-        let unpinned_share = red_share(&unpinned);
-        let pinned_share = red_share(&pinned);
+        let unpinned_share = line_ink_share(&unpinned, 2);
+        let pinned_share = line_ink_share(&pinned, 2);
 
         // The scenario must actually be hostile, or the pinned result below
         // proves nothing.
@@ -613,10 +612,15 @@ mod tests {
     /// isolated near-black pixel to black; there was no error in flight for
     /// a wrongly-tolerant pin to change. Replaced with the same hostile 2 px
     /// line geometry used above: near-black surrounded by a saturated field
-    /// that erodes an unpinned line to 84.4% black. A tolerant match would
-    /// pin the near-miss line to 100% black — visibly different from the
-    /// correctly-unpinned 84.4% — so this version actually exercises the
+    /// that erodes an unpinned line. A tolerant match would pin the
+    /// near-miss line to 100% black — visibly different from the erosion an
+    /// exact match leaves it at — so this version actually exercises the
     /// exactness of the comparison rather than just its wiring.
+    ///
+    /// The `without` erosion is asserted directly (not just documented):
+    /// a mutant that disables the pin path entirely, or a future change
+    /// that stops this scene being hostile, must fail loudly here rather
+    /// than pass a now-tautological `with == without`.
     #[test]
     fn a_near_miss_is_not_pinned() {
         let palette = test_palette();
@@ -624,20 +628,24 @@ mod tests {
             .noise_scale(0.0)
             .serpentine(false);
 
-        let (w, h) = (32usize, 32usize);
         let field = Srgb::from_u8(192, 96, 32);
         // One byte off black in one channel.
         let near_black = Srgb::from_u8(1, 0, 0);
-        let mut px = vec![field; w * h];
-        for y in 0..h {
-            for x in 15..17 {
-                px[y * w + x] = near_black;
-            }
-        }
+        let px = hostile_line_field(field, near_black);
+        let (w, h) = (HOSTILE_W, HOSTILE_H);
         let eligible = vec![true; w * h];
 
         let with = ditherer.dither_with_pinning(&px, w, h, Some(&eligible));
         let without = ditherer.dither_with_pinning(&px, w, h, None);
+
+        let without_share = line_ink_share(&without, 0);
+        assert!(
+            without_share < 0.99,
+            "the unpinned near-miss line came back {:.1}% black — this \
+             scenario is not hostile, so the equality below would prove \
+             nothing",
+            without_share * 100.0
+        );
         assert_eq!(
             with.indices(),
             without.indices(),
@@ -646,36 +654,43 @@ mod tests {
     }
 
     /// dither() is dither_with_pinning(None) and neither pins.
+    ///
+    /// The brief's original version used a smooth (i*4, 128, 255-i*4)
+    /// gradient, which never lands exactly on any test_palette() ink — so a
+    /// mutant that has `dither()` build an all-true mask internally has
+    /// nothing to pin either, and the two calls agree by accident. Reuse the
+    /// hostile black-line-in-a-saturated-field geometry so an
+    /// internally-fabricated mask would visibly rescue the line and this
+    /// test would catch it. The erosion of `b` (the definitely-unpinned
+    /// baseline) is asserted directly, not just documented, so a mutant
+    /// that removes the pin path entirely can't collapse this into a
+    /// tautology without being caught.
     #[test]
     fn plain_dither_is_unchanged_by_this_feature() {
-        // The brief's original version used a smooth (i*4, 128, 255-i*4)
-        // gradient, which never lands exactly on any test_palette() ink —
-        // so a mutant that has `dither()` build an all-true mask internally
-        // has nothing to pin either, and the two calls agree by accident.
-        // Reuse the hostile black-line-in-a-saturated-field geometry so an
-        // internally-fabricated mask would visibly rescue the line and this
-        // test would catch it.
         let palette = test_palette();
         let ditherer = EinkDitherer::new(palette)
             .noise_scale(0.0)
             .serpentine(false);
-        let (w, h) = (32usize, 32usize);
         let field = Srgb::from_u8(192, 96, 32);
         let black = Srgb::from_u8(0, 0, 0);
-        let mut px = vec![field; w * h];
-        for y in 0..h {
-            for x in 15..17 {
-                px[y * w + x] = black;
-            }
-        }
+        let px = hostile_line_field(field, black);
+        let (w, h) = (HOSTILE_W, HOSTILE_H);
 
         let a = ditherer.dither(&px, w, h);
         let b = ditherer.dither_with_pinning(&px, w, h, None);
+
+        let b_share = line_ink_share(&b, 0);
+        assert!(
+            b_share < 0.99,
+            "the unpinned baseline came back {:.1}% black — this scenario \
+             is not hostile, so the equality below would prove nothing",
+            b_share * 100.0
+        );
         assert_eq!(a.indices(), b.indices());
     }
 
-    /// Resize destroys exact matches and index correspondence, so pinning is
-    /// refused rather than silently misaligned.
+    /// Pinning is refused whenever a resize is *configured*, not only when
+    /// it would actually misalign indices.
     ///
     /// The brief's original version used `.resize(2, 2)` on a 4x4 all-black
     /// input — a real dimension change. In this vendored build the `image`
@@ -689,35 +704,49 @@ mod tests {
     /// guard firing correctly — an all-black frame dithers to all-index-0
     /// either way.
     ///
-    /// Fixed on both counts: `.resize(w, h)` here equals the input's own
+    /// Fixed the "never reaches the guard" and "content can't distinguish
+    /// the mutant" problems: `.resize(w, h)` here equals the input's own
     /// dimensions, so `resize_lanczos` takes its no-op branch and does not
     /// panic, while `target_width`/`target_height` are still `Some` and the
-    /// guard is still exercised purely from that configuration — refusal is
-    /// specified in terms of a resize being *configured*, not of dimensions
-    /// actually differing. The content is the same hostile 2 px black line
-    /// between saturated fields used in `eligibility_decides_where_pinning_applies`,
-    /// which that test already proves pinning would visibly change if the
-    /// guard let it through.
+    /// guard is still exercised purely from that configuration. The content
+    /// is the same hostile 2 px black line used in
+    /// `eligibility_decides_where_pinning_applies`, and its erosion is
+    /// asserted directly below rather than only documented.
+    ///
+    /// What this test does NOT cover, and cannot in this vendored build:
+    /// the brief's other stated reason for the guard is that resampling
+    /// breaks *index correspondence* between the caller's pixels and the
+    /// preprocessed frame — a real dimension change reindexes the frame out
+    /// from under a pin map built against the original size. Because
+    /// `resize_lanczos` has no resampling backend here and panics on any
+    /// actual dimension change, that misalignment scenario cannot be
+    /// exercised at all in this build. A mutant that drops the `!resizing`
+    /// guard is still caught below (refusal-by-configuration is verified),
+    /// but a reader should not take this green test as evidence that
+    /// index misalignment across a real resize is also covered — it isn't.
     #[test]
     fn pinning_is_refused_when_resizing() {
         let palette = test_palette();
         let ditherer = EinkDitherer::new(palette)
             .noise_scale(0.0)
             .serpentine(false)
-            .resize(32, 32);
-        let (w, h) = (32usize, 32usize);
+            .resize(HOSTILE_W as u32, HOSTILE_H as u32);
         let field = Srgb::from_u8(192, 96, 32);
         let black = Srgb::from_u8(0, 0, 0);
-        let mut px = vec![field; w * h];
-        for y in 0..h {
-            for x in 15..17 {
-                px[y * w + x] = black;
-            }
-        }
+        let px = hostile_line_field(field, black);
+        let (w, h) = (HOSTILE_W, HOSTILE_H);
         let eligible = vec![true; w * h];
 
         let with = ditherer.dither_with_pinning(&px, w, h, Some(&eligible));
         let without = ditherer.dither_with_pinning(&px, w, h, None);
+
+        let without_share = line_ink_share(&without, 0);
+        assert!(
+            without_share < 0.99,
+            "the unpinned line came back {:.1}% black — this scenario is \
+             not hostile, so the equality below would prove nothing",
+            without_share * 100.0
+        );
         assert_eq!(
             with.indices(),
             without.indices(),

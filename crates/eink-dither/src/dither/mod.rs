@@ -774,6 +774,12 @@ mod tests {
     /// claim here.
     #[test]
     fn a_fully_absorbing_pin_isolates_what_lies_beyond_it() {
+        // Single source of truth for the bar's geometry: the width guard below
+        // and every loop that fills or reads around the bar all derive from
+        // this range, so editing it can't silently desynchronize the guard
+        // from what it's meant to guard.
+        const BAR: std::ops::Range<usize> = 30..34;
+
         let palette = pin_test_palette();
         let (w, h) = (64usize, 64usize);
         let black = LinearRgb::from(Srgb::from_u8(0, 0, 0));
@@ -783,8 +789,9 @@ mod tests {
         // hops over it and the isolation claim is void.
         let max_dx = kernel.entries.iter().map(|&(dx, _, _)| dx).max().unwrap();
         assert!(
-            (34 - 30) > max_dx as i32,
-            "pinned bar (4px) is not wider than the kernel reach ({max_dx})"
+            (BAR.end - BAR.start) as i32 > max_dx as i32,
+            "pinned bar ({}px) is not wider than the kernel reach ({max_dx})",
+            BAR.end - BAR.start
         );
 
         // Everything right of the bar is identical between the two variants;
@@ -795,10 +802,10 @@ mod tests {
             let mut image = vec![right_px; w * h];
             let mut pinned: Vec<Option<u8>> = vec![None; w * h];
             for y in 0..h {
-                for x in 0..30 {
+                for x in 0..BAR.start {
                     image[y * w + x] = left_px;
                 }
-                for x in 30..34 {
+                for x in BAR.clone() {
                     image[y * w + x] = black;
                     pinned[y * w + x] = Some(0);
                 }
@@ -807,12 +814,12 @@ mod tests {
             let out =
                 dither_with_kernel_noise(&image, w, h, &palette, kernel, &opts, Some(&pinned));
             for y in 0..h {
-                for x in 30..34 {
+                for x in BAR.clone() {
                     assert_eq!(out[y * w + x], 0, "pinned bar broke at ({x},{y})");
                 }
             }
             (0..h)
-                .flat_map(|y| (34..w).map(move |x| (y, x)))
+                .flat_map(|y| (BAR.end..w).map(move |x| (y, x)))
                 .map(|(y, x)| out[y * w + x])
                 .collect()
         };

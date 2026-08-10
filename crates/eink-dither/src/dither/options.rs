@@ -229,6 +229,7 @@ impl DitherOptions {
     /// Clamped to `[0.0, 1.0]`. Values outside that range have no physical
     /// meaning: below zero would invert the error, above one would amplify it
     /// with depth.
+    #[inline]
     pub fn pin_carry(mut self, value: f32) -> Self {
         self.pin_carry = value.clamp(0.0, 1.0);
         self
@@ -298,5 +299,22 @@ mod tests {
         // Other values unchanged
         assert!(opts.serpentine);
         assert!((opts.error_clamp - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn pin_carry_defaults_to_the_shipping_value() {
+        assert!(
+            (DitherOptions::default().pin_carry - 0.9).abs() < f32::EPSILON,
+            "pin_carry default changed; the sweep in the plan's Task 5 chose 0.9 \
+             provisionally and any change needs re-measuring"
+        );
+    }
+
+    #[test]
+    fn pin_carry_is_clamped_to_a_meaningful_range() {
+        // Above 1.0 the carry would amplify error with depth into a pinned
+        // region rather than decaying it; below 0.0 it would invert the sign.
+        assert!((DitherOptions::new().pin_carry(2.0).pin_carry - 1.0).abs() < f32::EPSILON);
+        assert!((DitherOptions::new().pin_carry(-1.0).pin_carry - 0.0).abs() < f32::EPSILON);
     }
 }

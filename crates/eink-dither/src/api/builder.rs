@@ -208,6 +208,7 @@ impl EinkDitherer {
             &photo_palette,
             kernel,
             &dither_opts,
+            None,
         );
 
         // 4. Wrap in DitheredImage

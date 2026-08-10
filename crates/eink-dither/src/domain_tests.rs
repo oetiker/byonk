@@ -39,7 +39,7 @@ mod domain_tests {
         let gray_186 = LinearRgb::from(Srgb::from_u8(186, 186, 186));
         let image_186 = vec![gray_186; total];
         let result_186 =
-            dither_with_kernel_noise(&image_186, size, size, &palette, &ATKINSON, &options);
+            dither_with_kernel_noise(&image_186, size, size, &palette, &ATKINSON, &options, None);
         let white_count_186 = result_186.iter().filter(|&&idx| idx == 1).count();
         let ratio_186 = white_count_186 as f64 / total as f64;
 
@@ -54,7 +54,7 @@ mod domain_tests {
         let gray_128 = LinearRgb::from(Srgb::from_u8(128, 128, 128));
         let image_128 = vec![gray_128; total];
         let result_128 =
-            dither_with_kernel_noise(&image_128, size, size, &palette, &ATKINSON, &options);
+            dither_with_kernel_noise(&image_128, size, size, &palette, &ATKINSON, &options, None);
         let white_count_128 = result_128.iter().filter(|&&idx| idx == 1).count();
         let ratio_128 = white_count_128 as f64 / total as f64;
 
@@ -150,6 +150,7 @@ mod domain_tests {
                     &palette,
                     algorithm.kernel(),
                     &options,
+                    None,
                 );
 
                 assert_eq!(
@@ -388,6 +389,7 @@ mod domain_tests {
                 &palette,
                 &FLOYD_STEINBERG,
                 &options,
+                None,
             );
 
             assert_eq!(
@@ -880,8 +882,15 @@ mod domain_tests {
 
             for &(name, color) in test_colors {
                 let image = vec![LinearRgb::from(color); 255 * 255];
-                let indices =
-                    dither_with_kernel_noise(&image, 255, 255, &photo_palette, &ATKINSON, &options);
+                let indices = dither_with_kernel_noise(
+                    &image,
+                    255,
+                    255,
+                    &photo_palette,
+                    &ATKINSON,
+                    &options,
+                    None,
+                );
 
                 // Average in linear RGB + per-entry counts
                 let n = indices.len() as f32;
@@ -1161,8 +1170,15 @@ mod domain_tests {
         };
 
         // Test Atkinson -- chroma_clamp prevents green tint from 25% error loss
-        let result =
-            dither_with_kernel_noise(&image, width, height, &photo_palette, &ATKINSON, &options);
+        let result = dither_with_kernel_noise(
+            &image,
+            width,
+            height,
+            &photo_palette,
+            &ATKINSON,
+            &options,
+            None,
+        );
         check_neutrality(&result, "Atkinson");
 
         // Test FloydSteinberg -- 100% propagation naturally cancels
@@ -1173,6 +1189,7 @@ mod domain_tests {
             &photo_palette,
             &FLOYD_STEINBERG,
             &options,
+            None,
         );
         check_neutrality(&result, "FloydSteinberg");
     }
@@ -1221,6 +1238,7 @@ mod domain_tests {
             &photo_palette,
             &FLOYD_STEINBERG,
             &options,
+            None,
         );
         let blue_count = result.iter().filter(|&&idx| idx == 4).count();
         let blue_pct = blue_count as f64 / result.len() as f64 * 100.0;
@@ -1231,8 +1249,15 @@ mod domain_tests {
         );
 
         // Test Atkinson
-        let result =
-            dither_with_kernel_noise(&image, width, height, &photo_palette, &ATKINSON, &options);
+        let result = dither_with_kernel_noise(
+            &image,
+            width,
+            height,
+            &photo_palette,
+            &ATKINSON,
+            &options,
+            None,
+        );
         let blue_count = result.iter().filter(|&&idx| idx == 4).count();
         let blue_pct = blue_count as f64 / result.len() as f64 * 100.0;
         assert!(
@@ -1329,6 +1354,7 @@ mod domain_tests {
             &photo_palette,
             &FLOYD_STEINBERG,
             &options,
+            None,
         );
         print_column_dominance(
             &result, width, height, &palette, &names, hue_start, hue_step,
@@ -1336,8 +1362,15 @@ mod domain_tests {
 
         // Atkinson
         eprintln!("\n=== Atkinson: per-column dominant palette entry ===");
-        let result =
-            dither_with_kernel_noise(&image, width, height, &photo_palette, &ATKINSON, &options);
+        let result = dither_with_kernel_noise(
+            &image,
+            width,
+            height,
+            &photo_palette,
+            &ATKINSON,
+            &options,
+            None,
+        );
         print_column_dominance(
             &result, width, height, &palette, &names, hue_start, hue_step,
         );
@@ -1351,6 +1384,7 @@ mod domain_tests {
             &photo_palette,
             &JARVIS_JUDICE_NINKE,
             &options,
+            None,
         );
         print_column_dominance(
             &result, width, height, &palette, &names, hue_start, hue_step,
@@ -1358,8 +1392,15 @@ mod domain_tests {
 
         // Sierra (full)
         eprintln!("\n=== Sierra: per-column dominant palette entry ===");
-        let result =
-            dither_with_kernel_noise(&image, width, height, &photo_palette, &SIERRA, &options);
+        let result = dither_with_kernel_noise(
+            &image,
+            width,
+            height,
+            &photo_palette,
+            &SIERRA,
+            &options,
+            None,
+        );
         print_column_dominance(
             &result, width, height, &palette, &names, hue_start, hue_step,
         );
@@ -1373,6 +1414,7 @@ mod domain_tests {
             &photo_palette,
             &SIERRA_TWO_ROW,
             &options,
+            None,
         );
         print_column_dominance(
             &result, width, height, &palette, &names, hue_start, hue_step,
@@ -1387,6 +1429,7 @@ mod domain_tests {
             &photo_palette,
             &SIERRA_LITE,
             &options,
+            None,
         );
         print_column_dominance(
             &result, width, height, &palette, &names, hue_start, hue_step,
@@ -1582,8 +1625,10 @@ mod domain_tests {
 
         let options = DitherOptions::new().error_clamp(0.08).noise_scale(0.0);
 
-        let result1 = dither_with_kernel_noise(&image, 4, 4, &photo_palette, &ATKINSON, &options);
-        let result2 = dither_with_kernel_noise(&image, 4, 4, &photo_palette, &ATKINSON, &options);
+        let result1 =
+            dither_with_kernel_noise(&image, 4, 4, &photo_palette, &ATKINSON, &options, None);
+        let result2 =
+            dither_with_kernel_noise(&image, 4, 4, &photo_palette, &ATKINSON, &options, None);
 
         assert_eq!(
             result1, result2,

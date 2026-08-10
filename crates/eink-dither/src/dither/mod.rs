@@ -263,6 +263,13 @@ pub(crate) fn apply_error(channel: f32, error: f32, max_error: f32) -> f32 {
 /// The jitter shifts weight between the kernel's `(1,0)` ("right") and
 /// `(0,1)` ("below") entries per pixel using a blue noise value, breaking
 /// directional "worm" artifacts while preserving total error propagation.
+///
+/// `pinned`, when supplied, is one entry per pixel in the same layout as
+/// `image`. `Some(i)` marks a pixel that already sits exactly on ink `i` in a
+/// region the caller allows pinning in: it outputs that ink, ignores the error
+/// diffused into it, and hands `options.pin_carry` of that error on to its
+/// neighbours in place of its own (zero) quantisation error. `None` for the
+/// whole slice, or `None` for the outer option, is the unpinned behaviour.
 pub(crate) fn dither_with_kernel_noise(
     image: &[LinearRgb],
     width: usize,
@@ -270,6 +277,7 @@ pub(crate) fn dither_with_kernel_noise(
     palette: &Palette,
     kernel: &Kernel,
     options: &DitherOptions,
+    pinned: Option<&[Option<u8>]>,
 ) -> Vec<u8> {
     use blue_noise_matrix::BLUE_NOISE_64;
 
@@ -317,48 +325,69 @@ pub(crate) fn dither_with_kernel_noise(
 
             // Add accumulated error to input pixel
             let accumulated = error_buf.get_accumulated(x);
-            let pixel = LinearRgb::new(
-                apply_error(image[idx].r, accumulated[0], options.error_clamp),
-                apply_error(image[idx].g, accumulated[1], options.error_clamp),
-                apply_error(image[idx].b, accumulated[2], options.error_clamp),
-            );
 
-            // Chroma of original pixel (for chromatic damping)
-            let original_oklab = Oklab::from(image[idx]);
-            let original_chroma_sq =
-                original_oklab.a * original_oklab.a + original_oklab.b * original_oklab.b;
+            // A pinned pixel already IS a palette ink. It outputs that ink and
+            // ignores the error diffused into it — its own quantisation error is
+            // zero. The comment this replaces claimed error diffusion reproduced
+            // such a pixel exactly "without a special case"; that is true of the
+            // pixel's own error and ignores the error arriving from neighbours,
+            // which is what speckles black grid lines and text next to saturated
+            // content.
+            let pin = pinned.and_then(|p| p[idx]);
 
-            let oklab = Oklab::from(pixel);
-            let (nearest_idx, _dist) = palette.find_nearest(oklab);
-            output[idx] = nearest_idx as u8;
-
-            let nearest_linear = palette.actual_linear(nearest_idx);
-            let error = [
-                pixel.r - nearest_linear.r,
-                pixel.g - nearest_linear.g,
-                pixel.b - nearest_linear.b,
-            ];
-
-            // Chromatic error damping
-            let damped_error = if options.chroma_clamp < f32::INFINITY {
-                let ratio_sq = (original_chroma_sq / threshold_sq).min(1.0);
-                let alpha = ratio_sq * ratio_sq;
-                let err_mean = (error[0] + error[1] + error[2]) * (1.0 / 3.0);
+            let strength_error = if let Some(ink) = pin {
+                output[idx] = ink;
+                // Carry the incoming error onward, attenuated. See
+                // DitherOptions::pin_carry for why the decay is per pinned pixel.
                 [
-                    err_mean + alpha * (error[0] - err_mean),
-                    err_mean + alpha * (error[1] - err_mean),
-                    err_mean + alpha * (error[2] - err_mean),
+                    accumulated[0] * options.pin_carry,
+                    accumulated[1] * options.pin_carry,
+                    accumulated[2] * options.pin_carry,
                 ]
             } else {
-                error
-            };
+                let pixel = LinearRgb::new(
+                    apply_error(image[idx].r, accumulated[0], options.error_clamp),
+                    apply_error(image[idx].g, accumulated[1], options.error_clamp),
+                    apply_error(image[idx].b, accumulated[2], options.error_clamp),
+                );
 
-            // Apply strength scaling
-            let strength_error = [
-                damped_error[0] * options.strength,
-                damped_error[1] * options.strength,
-                damped_error[2] * options.strength,
-            ];
+                // Chroma of original pixel (for chromatic damping)
+                let original_oklab = Oklab::from(image[idx]);
+                let original_chroma_sq =
+                    original_oklab.a * original_oklab.a + original_oklab.b * original_oklab.b;
+
+                let oklab = Oklab::from(pixel);
+                let (nearest_idx, _dist) = palette.find_nearest(oklab);
+                output[idx] = nearest_idx as u8;
+
+                let nearest_linear = palette.actual_linear(nearest_idx);
+                let error = [
+                    pixel.r - nearest_linear.r,
+                    pixel.g - nearest_linear.g,
+                    pixel.b - nearest_linear.b,
+                ];
+
+                // Chromatic error damping
+                let damped_error = if options.chroma_clamp < f32::INFINITY {
+                    let ratio_sq = (original_chroma_sq / threshold_sq).min(1.0);
+                    let alpha = ratio_sq * ratio_sq;
+                    let err_mean = (error[0] + error[1] + error[2]) * (1.0 / 3.0);
+                    [
+                        err_mean + alpha * (error[0] - err_mean),
+                        err_mean + alpha * (error[1] - err_mean),
+                        err_mean + alpha * (error[2] - err_mean),
+                    ]
+                } else {
+                    error
+                };
+
+                // Apply strength scaling
+                [
+                    damped_error[0] * options.strength,
+                    damped_error[1] * options.strength,
+                    damped_error[2] * options.strength,
+                ]
+            };
 
             // Diffuse error to neighbors using jittered kernel
             let divisor = kernel.divisor as f32;
@@ -590,9 +619,9 @@ mod tests {
         let strength_1_opts = default_opts.clone().strength(1.0);
 
         let result_default =
-            dither_with_kernel_noise(&image, 4, 4, &palette, kernel, &default_opts);
+            dither_with_kernel_noise(&image, 4, 4, &palette, kernel, &default_opts, None);
         let result_strength_1 =
-            dither_with_kernel_noise(&image, 4, 4, &palette, kernel, &strength_1_opts);
+            dither_with_kernel_noise(&image, 4, 4, &palette, kernel, &strength_1_opts, None);
 
         assert_eq!(
             result_default, result_strength_1,
@@ -610,7 +639,7 @@ mod tests {
             .noise_scale(0.0)
             .strength(0.0);
 
-        let result = dither_with_kernel_noise(&image, 4, 4, &palette, kernel, &opts);
+        let result = dither_with_kernel_noise(&image, 4, 4, &palette, kernel, &opts, None);
 
         // With strength=0, no error diffusion occurs. Every pixel gets the
         // same nearest-color mapping (mid-grey is closer to white in linear space).
@@ -636,12 +665,208 @@ mod tests {
             .noise_scale(0.0)
             .strength(0.5);
 
-        let result_1 = dither_with_kernel_noise(&image, 4, 4, &palette, kernel, &opts_1);
-        let result_half = dither_with_kernel_noise(&image, 4, 4, &palette, kernel, &opts_half);
+        let result_1 = dither_with_kernel_noise(&image, 4, 4, &palette, kernel, &opts_1, None);
+        let result_half =
+            dither_with_kernel_noise(&image, 4, 4, &palette, kernel, &opts_half, None);
 
         assert_ne!(
             result_1, result_half,
             "strength=0.5 should produce a different pattern than strength=1.0"
+        );
+    }
+
+    /// Black, white and a saturated red, with `actual` equal to `official` so
+    /// the error arithmetic in these tests is exact and readable.
+    fn pin_test_palette() -> Palette {
+        let inks = [
+            Srgb::from_u8(0, 0, 0),
+            Srgb::from_u8(255, 255, 255),
+            Srgb::from_u8(181, 3, 3),
+        ];
+        Palette::new(&inks, None).unwrap()
+    }
+
+    /// The measured panel inks. The reported defect is specific to a real
+    /// palette with saturated chromatic entries; an idealised three-ink palette
+    /// does not reproduce it.
+    fn panel_palette() -> Palette {
+        Palette::from_hex(
+            &[
+                "#000000", "#FFFFFF", "#B50303", "#0D876B", "#205497", "#D8C40E",
+            ],
+            None,
+        )
+        .expect("panel palette")
+    }
+
+    /// A 2 px pure-black line between saturated content — the reported defect,
+    /// reduced. Chromatic error diffused OUT of the saturated field lands IN the
+    /// black line and takes pixels over; pinning holds them.
+    ///
+    /// The unpinned measurement is part of the assertion, not context. A test
+    /// that claims pinning rescues a pixel must prove the pixel needed rescuing,
+    /// or it passes against a mutant that never pins — which is exactly what an
+    /// earlier version of this test did.
+    #[test]
+    fn a_pinned_line_keeps_its_ink_where_an_unpinned_one_does_not() {
+        let palette = panel_palette();
+        let (w, h) = (64usize, 64usize);
+        // #C06020 — saturated, and not close to any ink, so it diffuses hard.
+        let field = LinearRgb::from(Srgb::from_u8(192, 96, 32));
+        let black = LinearRgb::from(Srgb::from_u8(0, 0, 0));
+
+        let mut image = vec![field; w * h];
+        let mut pinned: Vec<Option<u8>> = vec![None; w * h];
+        for y in 0..h {
+            for x in 31..33 {
+                image[y * w + x] = black;
+                pinned[y * w + x] = Some(0);
+            }
+        }
+
+        let kernel = DitherAlgorithm::Atkinson.kernel();
+        let opts = DitherOptions::default();
+
+        let black_share = |pin: Option<&[Option<u8>]>| {
+            let out = dither_with_kernel_noise(&image, w, h, &palette, kernel, &opts, pin);
+            let mut n = 0usize;
+            for y in 0..h {
+                for x in 31..33 {
+                    if out[y * w + x] == 0 {
+                        n += 1;
+                    }
+                }
+            }
+            n as f64 / (h * 2) as f64
+        };
+
+        let unpinned = black_share(None);
+        let with_pin = black_share(Some(&pinned));
+
+        // The scenario must actually be hostile, or this test guards nothing.
+        assert!(
+            unpinned < 0.99,
+            "the unpinned line came back {:.1}% black — this scenario is not \
+             hostile, so the pinned result below would prove nothing",
+            unpinned * 100.0
+        );
+        assert_eq!(
+            with_pin,
+            1.0,
+            "pinned pure-black line came back only {:.1}% black (unpinned: {:.1}%)",
+            with_pin * 100.0,
+            unpinned * 100.0
+        );
+    }
+
+    /// What `pin_carry` controls is whether information crosses a pinned region.
+    ///
+    /// A pinned bar wider than the kernel's horizontal reach is a perfect
+    /// barrier at carry 0.0: no error from its left can reach its right, so the
+    /// output beyond it is bit-identical no matter what the left field contains.
+    /// At carry 1.0 the error crosses, so it must differ.
+    ///
+    /// This is exact in both directions. An earlier version of this test claimed
+    /// that absorbing the error left the field beyond the bar darker; that was
+    /// wrong. Accumulated error in error diffusion has ~zero mean in steady
+    /// state, so destroying it shifts nothing systematically — measured, 530 vs
+    /// 523 white pixels, a wobble with no sign. Do not reintroduce a brightness
+    /// claim here.
+    #[test]
+    fn a_fully_absorbing_pin_isolates_what_lies_beyond_it() {
+        let palette = pin_test_palette();
+        let (w, h) = (64usize, 64usize);
+        let black = LinearRgb::from(Srgb::from_u8(0, 0, 0));
+        let kernel = DitherAlgorithm::Atkinson.kernel();
+
+        // The bar must be wider than the kernel's horizontal reach, or error
+        // hops over it and the isolation claim is void.
+        let max_dx = kernel.entries.iter().map(|&(dx, _, _)| dx).max().unwrap();
+        assert!(
+            (34 - 30) > max_dx as i32,
+            "pinned bar (4px) is not wider than the kernel reach ({max_dx})"
+        );
+
+        // Everything right of the bar is identical between the two variants;
+        // only the field left of the bar differs.
+        let beyond = |left: u8, carry: f32| -> Vec<u8> {
+            let left_px = LinearRgb::from(Srgb::from_u8(left, left, left));
+            let right_px = LinearRgb::from(Srgb::from_u8(128, 128, 128));
+            let mut image = vec![right_px; w * h];
+            let mut pinned: Vec<Option<u8>> = vec![None; w * h];
+            for y in 0..h {
+                for x in 0..30 {
+                    image[y * w + x] = left_px;
+                }
+                for x in 30..34 {
+                    image[y * w + x] = black;
+                    pinned[y * w + x] = Some(0);
+                }
+            }
+            let opts = DitherOptions::default().serpentine(false).pin_carry(carry);
+            let out =
+                dither_with_kernel_noise(&image, w, h, &palette, kernel, &opts, Some(&pinned));
+            for y in 0..h {
+                for x in 30..34 {
+                    assert_eq!(out[y * w + x], 0, "pinned bar broke at ({x},{y})");
+                }
+            }
+            (0..h)
+                .flat_map(|y| (34..w).map(move |x| (y, x)))
+                .map(|(y, x)| out[y * w + x])
+                .collect()
+        };
+
+        assert_eq!(
+            beyond(128, 0.0),
+            beyond(200, 0.0),
+            "at carry 0.0 the pinned bar must absorb everything: the field beyond \
+             it changed when only the field BEFORE it changed"
+        );
+        assert_ne!(
+            beyond(128, 1.0),
+            beyond(200, 1.0),
+            "at carry 1.0 error must cross the bar: the field beyond it was \
+             unaffected by a completely different field before it"
+        );
+    }
+
+    /// `pinned: None` must reproduce the pre-pinning output exactly. This is the
+    /// guard that keeps every other eink-dither test meaningful.
+    #[test]
+    fn no_pin_map_reproduces_the_unpinned_output_exactly() {
+        let palette = pin_test_palette();
+        let image: Vec<LinearRgb> = (0..64)
+            .map(|i| LinearRgb::from(Srgb::from_u8(i as u8 * 4, 128, 255 - i as u8 * 4)))
+            .collect();
+        let opts = DitherOptions::default();
+        let kernel = DitherAlgorithm::Atkinson.kernel();
+
+        let without = dither_with_kernel_noise(&image, 8, 8, &palette, kernel, &opts, None);
+        let all_unpinned: Vec<Option<u8>> = vec![None; 64];
+        let with_empty_map =
+            dither_with_kernel_noise(&image, 8, 8, &palette, kernel, &opts, Some(&all_unpinned));
+
+        assert_eq!(
+            without, with_empty_map,
+            "an all-None pin map changed the output; the pinning branch is \
+             firing when it must not"
+        );
+
+        // Comparing two runs proves nothing if both are degenerate. A mutant
+        // that pins every pixel to ink 0 regardless of the map collapses both
+        // sides to a uniform frame, and the equality above holds trivially.
+        let distinct = {
+            let mut seen = without.clone();
+            seen.sort_unstable();
+            seen.dedup();
+            seen.len()
+        };
+        assert!(
+            distinct > 1,
+            "the reference output uses only {distinct} ink — this comparison \
+             cannot distinguish a correct implementation from one that forces \
+             every pixel to the same ink"
         );
     }
 }

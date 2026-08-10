@@ -109,6 +109,33 @@ pub struct DitherOptions {
     ///
     /// Default: `false`
     pub hybrid_propagation: bool,
+
+    /// Fraction of accumulated error a pinned pixel passes on to its neighbours.
+    ///
+    /// A pinned pixel is one that already sits exactly on a palette ink in a
+    /// region the caller marked as eligible. It outputs that ink and ignores the
+    /// error diffused into it, so its own quantisation error is zero. This value
+    /// decides what happens to the error that arrived:
+    ///
+    /// - `1.0` — pass it on unchanged. Total error is conserved, so no seam, but
+    ///   error can travel the full width of a large pinned region and dump as a
+    ///   fringe at its far edge.
+    /// - `0.0` — absorb it. Crisp, but a coincidental match mid-gradient drops
+    ///   its neighbours' error and leaves a seam across a smooth ramp.
+    /// - between — the error decays geometrically with depth into the region.
+    ///   At depth `n` the surviving fraction is `pin_carry^n`. A 2 px grid line
+    ///   or a text stroke is crossed in one or two steps and passes error through
+    ///   nearly intact; a wide flat area absorbs it within a few pixels of its
+    ///   edge.
+    ///
+    /// The count of pinned pixels the error has crossed IS its distance into the
+    /// region, measured along the path the error actually travelled. That is why
+    /// no distance transform is needed.
+    ///
+    /// Has no effect unless the caller supplies a pin map.
+    ///
+    /// Default: `0.9`
+    pub pin_carry: f32,
 }
 
 impl Default for DitherOptions {
@@ -120,6 +147,7 @@ impl Default for DitherOptions {
             noise_scale: 5.0,
             strength: 1.0,
             hybrid_propagation: false,
+            pin_carry: 0.9,
         }
     }
 }
@@ -193,6 +221,16 @@ impl DitherOptions {
     #[inline]
     pub fn hybrid_propagation(mut self, enabled: bool) -> Self {
         self.hybrid_propagation = enabled;
+        self
+    }
+
+    /// Set the fraction of accumulated error a pinned pixel passes on.
+    ///
+    /// Clamped to `[0.0, 1.0]`. Values outside that range have no physical
+    /// meaning: below zero would invert the error, above one would amplify it
+    /// with depth.
+    pub fn pin_carry(mut self, value: f32) -> Self {
+        self.pin_carry = value.clamp(0.0, 1.0);
         self
     }
 }

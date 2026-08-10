@@ -538,6 +538,15 @@ passing).
     over the review rubric; their printed output is the spike's deliverable.
 21. **CHANGES.md is not touched by the pinning plan** (owner, session 10). One entry gets
     written at merge prep, covering gamut and pinning together.
+23. **A hard stop at every model boundary — no bleeding** (owner, session 11). Error does
+    not diffuse between a nominal-model pixel and a measured-model pixel, in either
+    direction; the pinned λ-carry obeys the same stop. Spec specifies **drop**, not
+    renormalise (Atkinson already discards 1/4 by design; renormalising piles error onto
+    the seam) — that sub-decision is the one part not explicitly owner-ruled.
+    **Complementary to pinning, not a replacement:** the hard stop protects across a
+    marked/unmarked boundary; pinning protects *within* one model, which is where the
+    original 73.2% defect lives (the unmapped control column, where grid and patches are
+    both unmarked).
 22. **The unmapped path assumes actual == nominal** (owner, session 11). Unmarked content
     is matched against **official** colours and pinned against them; marked `continuous`
     content keeps **actual/measured** colours and is not pinned. One mask, three

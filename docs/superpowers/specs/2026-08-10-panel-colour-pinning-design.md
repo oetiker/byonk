@@ -483,3 +483,73 @@ Beyond the existing plan's Task 5 sweep:
 4. The unmarked-photograph cost, measured on `screens/builtin/calibration/color/photo.png`
    at the pixels the model change touches — **not** as a whole-image mean, which this
    project has twice shown hides the effect entirely.
+
+## Ruling 23 — a hard stop at every model boundary, no bleeding
+
+_Owner, 2026-08-10 (session 11), immediately following ruling 22._
+
+**Error must not diffuse across a boundary between the two colour models.** Where a
+nominal-model pixel and a measured-model pixel are neighbours, the kernel does not carry
+error between them, in either direction.
+
+This closes the boundary risk raised above rather than merely measuring it. Error computed
+against a nominal representative colour has no meaning for a pixel evaluated against a
+measured one; carrying it across was never well-defined, only numerically harmless.
+
+### Implementation
+
+In `dither_with_kernel_noise`'s distribution loop, a kernel tap from pixel `i` to neighbour
+`j` is skipped when `continuous[i] != continuous[j]`. This is the same mechanism the frame
+edge already uses for out-of-bounds taps, so it needs no new machinery — the mask is
+already resident per-pixel for model selection.
+
+**The pinned carry obeys the same stop.** A pinned pixel emits `λ · accumulated`; that
+carry is distributed through the same loop and is subject to the same boundary test.
+
+### The error at a stopped tap is DROPPED, not redistributed
+
+Two readings of "hard stop" are possible and they differ materially:
+
+- **Drop** — the tap's share of the error vanishes. Total error is not conserved across
+  the boundary.
+- **Renormalise** — the surviving taps' weights are scaled up so the region retains the
+  full error.
+
+**This spec specifies drop.** Rationale: Atkinson, the default algorithm, already discards
+1/4 of every pixel's error by design (it distributes 6/8), so dropping is consistent with
+the behaviour the tree already ships and tunes against. Renormalising would concentrate a
+boundary pixel's full error into fewer taps, which piles error up along the seam — the
+opposite of what a hard stop is for — and it changes the kernel's spatial character only at
+boundaries, making the seam a special case in a loop whose whole design is that a pinned or
+bounded pixel stays an ordinary pixel.
+
+**This is the one sub-decision of ruling 23 that the owner has not explicitly made.** It is
+recorded here as specified-with-rationale, not as inherited-from-nowhere; if drop measures
+badly at a large marked/unmarked boundary, renormalise is the fallback and the change is
+local to the distribution loop.
+
+### What this does and does not fix
+
+The two mechanisms are **complementary, not overlapping** — this is worth being precise
+about, because it is easy to conclude the hard stop makes pinning redundant:
+
+- **Across a model boundary** — a marked photograph beside unmarked text — the hard stop
+  does the work. No error reaches the text at all, whatever its colour.
+- **Within a single model** — black text beside a saturated *graphic*, both unmarked
+  structure — both pixels are nominal-model, no boundary exists, and error diffuses
+  normally. **Pinning is what protects the text here, and nothing else does.**
+
+The defect that motivated this document is the second case, not the first:
+`calibration/tone`'s 73.2% was measured in the **unmapped control column**, where the
+patches and the grid are both unmarked. The hard stop does not touch it. In the *marked*
+column the grid gains a second layer of protection once Task 4 moves the backing rect out
+of the marked group.
+
+### Verification additions
+
+5. Error does not cross a model boundary in either direction: a saturated marked region
+   adjacent to an unmarked field must leave that field bit-identical to the same field
+   rendered with the marked region replaced by a flat in-gamut colour. Assert the
+   comparison is non-degenerate — the unstopped version must differ.
+6. The pinned carry respects the stop: a pinned pixel on the boundary emits nothing across
+   it, at any λ including 1.0.

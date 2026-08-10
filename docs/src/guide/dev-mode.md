@@ -141,7 +141,7 @@ devices:
     screen: byonk-builtin/calibration/tone
     panel: my_panel
     params:
-      hues: 12      # hue sweep columns (2-48)
+      hues: 12      # patch grid hue columns (2-48)
       levels: 5     # patch grid rows (1-12)
 ```
 
@@ -150,7 +150,8 @@ grid, top to bottom — twice, side by side. The two columns are identical
 markup with one difference: only the right-hand column is marked
 `data-byonk-tone="continuous"`, so only it is gamut-mapped. The left column is
 the untouched control. Whatever differs between the two columns on your
-device is exactly what the gamut mapper is doing to your content.
+device is exactly what the gamut mapper is doing to your content. The hue
+sweep is a fixed 12-stop gradient, not driven by either param.
 
 There are no gamut-mapping knobs on this screen — it deliberately shows you
 what a real screen gets, not a tuning surface.

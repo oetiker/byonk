@@ -53,7 +53,8 @@ pub struct EinkDitherer {
 impl EinkDitherer {
     /// Create a new ditherer with the given palette.
     ///
-    /// Default algorithm is Atkinson with error_clamp=0.08.
+    /// Default algorithm and its error_clamp/noise_scale come from
+    /// [`DitherAlgorithm::default`]/[`DitherAlgorithm::defaults`], not restated here.
     /// Preprocessing defaults: saturation 1.0, contrast 1.0 (no enhancement).
     ///
     /// # Example
@@ -146,6 +147,15 @@ impl EinkDitherer {
         self
     }
 
+    /// Set the fraction of accumulated error a pinned pixel passes on.
+    ///
+    /// See [`DitherOptions::pin_carry`]. Has no effect without a pin map.
+    #[inline]
+    pub fn pin_carry(mut self, value: f32) -> Self {
+        self.dither_opts = self.dither_opts.pin_carry(value);
+        self
+    }
+
     /// Set the dithering algorithm.
     ///
     /// Applies per-algorithm defaults for error_clamp and noise_scale.
@@ -184,6 +194,70 @@ impl EinkDitherer {
     ///
     /// The builder is reusable -- `dither()` takes `&self`.
     pub fn dither(&self, pixels: &[Srgb], width: usize, height: usize) -> DitheredImage {
+        self.dither_with_pinning(pixels, width, height, None)
+    }
+
+    /// Dither, holding pixels that already sit exactly on a palette ink.
+    ///
+    /// `pin_eligible`, when supplied, is one `bool` per input pixel: `true`
+    /// where the caller permits pinning. A pixel is pinned when it is eligible
+    /// AND its bytes equal a nominal palette entry exactly. Such a pixel renders
+    /// as that ink and hands `DitherOptions::pin_carry` of the error diffused
+    /// into it on to its neighbours.
+    ///
+    /// `None` means no pinning at all — identical output to [`Self::dither`]. A
+    /// caller wanting frame-wide pinning passes an all-`true` slice.
+    ///
+    /// The match is resolved on these `Srgb` bytes, BEFORE preprocessing:
+    /// saturation or contrast at anything but identity would move a pure ink off
+    /// its palette entry and the match would silently never fire. A pinned pixel
+    /// is therefore not enhanced — it renders the colour the author wrote, which
+    /// is the right answer for the structural content pinning exists for.
+    ///
+    /// Pinning is refused when a resize is configured: resampling destroys exact
+    /// matches and breaks the index correspondence between `pixels` and the
+    /// preprocessed frame.
+    pub fn dither_with_pinning(
+        &self,
+        pixels: &[Srgb],
+        width: usize,
+        height: usize,
+        pin_eligible: Option<&[bool]>,
+    ) -> DitheredImage {
+        let resizing =
+            self.preprocess.target_width.is_some() || self.preprocess.target_height.is_some();
+
+        let pin_map: Option<Vec<Option<u8>>> = match pin_eligible {
+            Some(mask) if !resizing && mask.len() == pixels.len() => {
+                let inks: Vec<[u8; 3]> = (0..self.palette.len())
+                    .map(|i| self.palette.official(i).to_bytes())
+                    .collect();
+                Some(
+                    pixels
+                        .iter()
+                        .zip(mask.iter())
+                        .map(|(px, &ok)| {
+                            if !ok {
+                                return None;
+                            }
+                            let bytes = px.to_bytes();
+                            inks.iter().position(|ink| *ink == bytes).map(|i| i as u8)
+                        })
+                        .collect(),
+                )
+            }
+            Some(mask) => {
+                debug_assert!(
+                    resizing || mask.len() == pixels.len(),
+                    "pin_eligible mask length ({}) does not match pixel count ({}) — pinning silently disabled",
+                    mask.len(),
+                    pixels.len()
+                );
+                None
+            }
+            None => None,
+        };
+
         // 1. Preprocess
         let preprocessor = Preprocessor::new(self.preprocess.clone());
         let result = preprocessor.process(pixels, width, height);
@@ -208,7 +282,7 @@ impl EinkDitherer {
             &photo_palette,
             kernel,
             &dither_opts,
-            None,
+            pin_map.as_deref(),
         );
 
         // 4. Wrap in DitheredImage
@@ -386,5 +460,268 @@ mod tests {
         let palette = test_palette();
         let ditherer = EinkDitherer::new(palette).strength(0.5);
         assert!((ditherer.dither_opts.strength - 0.5).abs() < f32::EPSILON);
+    }
+
+    /// Eligibility gates pinning. A 2 px pure-black line between saturated
+    /// fields is pinned where the caller allows it and dithered normally
+    /// where it does not.
+    ///
+    /// The brief's original version of this test used a single 4x1 row with
+    /// one vivid pixel ahead of three pure blacks. Measured: even with
+    /// pinning fully disabled (`ineligible`), the blacks came back all-black
+    /// — the vivid pixel's residual error was too small, and Atkinson's
+    /// down-row taps had no second row to land in, so the "ineligible" mask
+    /// and the "eligible" mask produced identical output and the test passed
+    /// against a mutant that ignores the mask entirely. Replaced with the
+    /// geometry the real defect has: a 2 px pinned line wide enough, and long
+    /// enough, for diffused error from a genuinely hostile saturated field to
+    /// erode it when pinning is off.
+    #[test]
+    fn eligibility_decides_where_pinning_applies() {
+        let palette = test_palette();
+        let ditherer = EinkDitherer::new(palette)
+            .noise_scale(0.0)
+            .serpentine(false);
+
+        // Saturated and not close to any ink in test_palette(), so it
+        // diffuses hard into its neighbours.
+        let field = Srgb::from_u8(192, 96, 32);
+        let black = Srgb::from_u8(0, 0, 0);
+        let (w, h) = (32usize, 32usize);
+        let mut px = vec![field; w * h];
+        for y in 0..h {
+            for x in 15..17 {
+                px[y * w + x] = black;
+            }
+        }
+
+        let eligible = vec![true; w * h];
+        let ineligible = vec![false; w * h];
+
+        let pinned = ditherer.dither_with_pinning(&px, w, h, Some(&eligible));
+        let unpinned = ditherer.dither_with_pinning(&px, w, h, Some(&ineligible));
+
+        let black_share = |img: &DitheredImage| {
+            let mut n = 0usize;
+            for y in 0..h {
+                for x in 15..17 {
+                    if img.indices()[y * w + x] == 0 {
+                        n += 1;
+                    }
+                }
+            }
+            n as f64 / (h * 2) as f64
+        };
+
+        let unpinned_share = black_share(&unpinned);
+        let pinned_share = black_share(&pinned);
+
+        // The scenario must actually be hostile, or the pinned result below
+        // proves nothing.
+        assert!(
+            unpinned_share < 0.99,
+            "the ineligible line came back {:.1}% black — this scenario is \
+             not hostile, so the pinned result below would prove nothing",
+            unpinned_share * 100.0
+        );
+        assert_eq!(
+            pinned_share,
+            1.0,
+            "pinned line came back only {:.1}% black (ineligible: {:.1}%)",
+            pinned_share * 100.0,
+            unpinned_share * 100.0
+        );
+    }
+
+    /// The match is against the NOMINAL palette entry, not the measured ink.
+    /// test_palette()'s red is official (255,0,0) / actual (200,50,50).
+    ///
+    /// The brief's original version dithered a flat 2 px row of official red
+    /// with no neighbours and asserted the output was ink 2. Measured: it is
+    /// ink 2 even completely unpinned (`dither_with_pinning(..., None)`),
+    /// because red is still the nearest palette entry to (255,0,0) by plain
+    /// distance — matching against `actual(i)` instead of `official(i)`
+    /// would make the exact-match check fail to fire for every pixel in this
+    /// scene, and the test could not tell, since ordinary nearest-match
+    /// dithering lands on the same ink anyway. Replaced with a 2 px line of
+    /// official red between a hostile green field — far enough from every
+    /// ink in `test_palette()` to diffuse hard. Since official red's bytes
+    /// never equal its *actual* bytes, a match against `actual(i)` never
+    /// pins this line at all, so it is exactly as eroded as the unpinned
+    /// baseline; matching against `official(i)` holds it exactly.
+    #[test]
+    fn the_exact_match_is_against_the_nominal_entry() {
+        let palette = test_palette();
+        let ditherer = EinkDitherer::new(palette)
+            .noise_scale(0.0)
+            .serpentine(false);
+
+        let (w, h) = (32usize, 32usize);
+        let field = Srgb::from_u8(0, 255, 0);
+        let red = Srgb::from_u8(255, 0, 0);
+        let mut px = vec![field; w * h];
+        for y in 0..h {
+            for x in 15..17 {
+                px[y * w + x] = red;
+            }
+        }
+        let eligible = vec![true; w * h];
+
+        let pinned = ditherer.dither_with_pinning(&px, w, h, Some(&eligible));
+        let unpinned = ditherer.dither_with_pinning(&px, w, h, None);
+
+        let red_share = |img: &DitheredImage| {
+            let mut n = 0usize;
+            for y in 0..h {
+                for x in 15..17 {
+                    if img.indices()[y * w + x] == 2 {
+                        n += 1;
+                    }
+                }
+            }
+            n as f64 / (h * 2) as f64
+        };
+
+        let unpinned_share = red_share(&unpinned);
+        let pinned_share = red_share(&pinned);
+
+        // The scenario must actually be hostile, or the pinned result below
+        // proves nothing.
+        assert!(
+            unpinned_share < 0.99,
+            "the unpinned red line came back {:.1}% red — this scenario is \
+             not hostile, so the pinned result below would prove nothing",
+            unpinned_share * 100.0
+        );
+        assert_eq!(
+            pinned_share,
+            1.0,
+            "an author-written nominal red line came back only {:.1}% \
+             recognised as ink 2 (unpinned: {:.1}%)",
+            pinned_share * 100.0,
+            unpinned_share * 100.0
+        );
+    }
+
+    /// A pixel that is not exactly an ink is never pinned, however eligible.
+    ///
+    /// The brief's original version used a flat, isolated `(1,0,0)` row with
+    /// no neighbours. Measured: with a correct exact match this row never
+    /// pins (as intended), so `with == without` trivially — but a "compare
+    /// with a tolerance instead of `==`" mutant makes the same assertion
+    /// pass too, because normal nearest-match dithering *also* quantizes an
+    /// isolated near-black pixel to black; there was no error in flight for
+    /// a wrongly-tolerant pin to change. Replaced with the same hostile 2 px
+    /// line geometry used above: near-black surrounded by a saturated field
+    /// that erodes an unpinned line to 84.4% black. A tolerant match would
+    /// pin the near-miss line to 100% black — visibly different from the
+    /// correctly-unpinned 84.4% — so this version actually exercises the
+    /// exactness of the comparison rather than just its wiring.
+    #[test]
+    fn a_near_miss_is_not_pinned() {
+        let palette = test_palette();
+        let ditherer = EinkDitherer::new(palette)
+            .noise_scale(0.0)
+            .serpentine(false);
+
+        let (w, h) = (32usize, 32usize);
+        let field = Srgb::from_u8(192, 96, 32);
+        // One byte off black in one channel.
+        let near_black = Srgb::from_u8(1, 0, 0);
+        let mut px = vec![field; w * h];
+        for y in 0..h {
+            for x in 15..17 {
+                px[y * w + x] = near_black;
+            }
+        }
+        let eligible = vec![true; w * h];
+
+        let with = ditherer.dither_with_pinning(&px, w, h, Some(&eligible));
+        let without = ditherer.dither_with_pinning(&px, w, h, None);
+        assert_eq!(
+            with.indices(),
+            without.indices(),
+            "a near-miss pixel was pinned; the match is not exact"
+        );
+    }
+
+    /// dither() is dither_with_pinning(None) and neither pins.
+    #[test]
+    fn plain_dither_is_unchanged_by_this_feature() {
+        // The brief's original version used a smooth (i*4, 128, 255-i*4)
+        // gradient, which never lands exactly on any test_palette() ink —
+        // so a mutant that has `dither()` build an all-true mask internally
+        // has nothing to pin either, and the two calls agree by accident.
+        // Reuse the hostile black-line-in-a-saturated-field geometry so an
+        // internally-fabricated mask would visibly rescue the line and this
+        // test would catch it.
+        let palette = test_palette();
+        let ditherer = EinkDitherer::new(palette)
+            .noise_scale(0.0)
+            .serpentine(false);
+        let (w, h) = (32usize, 32usize);
+        let field = Srgb::from_u8(192, 96, 32);
+        let black = Srgb::from_u8(0, 0, 0);
+        let mut px = vec![field; w * h];
+        for y in 0..h {
+            for x in 15..17 {
+                px[y * w + x] = black;
+            }
+        }
+
+        let a = ditherer.dither(&px, w, h);
+        let b = ditherer.dither_with_pinning(&px, w, h, None);
+        assert_eq!(a.indices(), b.indices());
+    }
+
+    /// Resize destroys exact matches and index correspondence, so pinning is
+    /// refused rather than silently misaligned.
+    ///
+    /// The brief's original version used `.resize(2, 2)` on a 4x4 all-black
+    /// input — a real dimension change. In this vendored build the `image`
+    /// crate is removed and `resize_lanczos` unconditionally panics when
+    /// target dimensions differ from the input's (see
+    /// `preprocess::resize::resize_lanczos`), so that call never reached the
+    /// pinning guard at all: it panicked in preprocessing before comparing
+    /// `with`/`without`, for a reason that has nothing to do with this
+    /// guard. It was also all-black, so even had it run, an "ignore the
+    /// `!resizing` guard" mutant could not have been told apart from the
+    /// guard firing correctly — an all-black frame dithers to all-index-0
+    /// either way.
+    ///
+    /// Fixed on both counts: `.resize(w, h)` here equals the input's own
+    /// dimensions, so `resize_lanczos` takes its no-op branch and does not
+    /// panic, while `target_width`/`target_height` are still `Some` and the
+    /// guard is still exercised purely from that configuration — refusal is
+    /// specified in terms of a resize being *configured*, not of dimensions
+    /// actually differing. The content is the same hostile 2 px black line
+    /// between saturated fields used in `eligibility_decides_where_pinning_applies`,
+    /// which that test already proves pinning would visibly change if the
+    /// guard let it through.
+    #[test]
+    fn pinning_is_refused_when_resizing() {
+        let palette = test_palette();
+        let ditherer = EinkDitherer::new(palette)
+            .noise_scale(0.0)
+            .serpentine(false)
+            .resize(32, 32);
+        let (w, h) = (32usize, 32usize);
+        let field = Srgb::from_u8(192, 96, 32);
+        let black = Srgb::from_u8(0, 0, 0);
+        let mut px = vec![field; w * h];
+        for y in 0..h {
+            for x in 15..17 {
+                px[y * w + x] = black;
+            }
+        }
+        let eligible = vec![true; w * h];
+
+        let with = ditherer.dither_with_pinning(&px, w, h, Some(&eligible));
+        let without = ditherer.dither_with_pinning(&px, w, h, None);
+        assert_eq!(
+            with.indices(),
+            without.indices(),
+            "pinning was applied across a configured resize"
+        );
     }
 }

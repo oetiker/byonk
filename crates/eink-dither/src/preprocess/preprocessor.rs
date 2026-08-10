@@ -86,12 +86,22 @@ pub struct PreprocessResult {
 /// 3. **Adjust contrast** (linear RGB)
 ///
 /// Enhancement is applied uniformly to every pixel. Pixels that already sit
-/// exactly on a palette colour used to be detected and passed through
-/// untouched, to keep text and logos crisp. That is gone: such a pixel has
-/// zero quantisation error, so error diffusion reproduces it exactly without
-/// a special case, and the exemption did active harm mid-gradient, where it
-/// pinned pixels whose value merely happened to coincide with a palette
-/// entry and discarded their error, leaving a seam across a smooth ramp.
+/// exactly on a palette colour used to be detected here and passed through
+/// untouched, to keep text and logos crisp. That detection is gone from this
+/// stage, but the concern was real and the reason first given for dropping it
+/// was wrong: such a pixel does have zero quantisation error of its own, but
+/// error diffused INTO it from saturated neighbours still takes it over. In the
+/// tone calibration screen, pure-black grid lines abutting saturated patches
+/// came back only 73.2% black.
+///
+/// The half of that reasoning which does hold is the seam: pinning also caught
+/// pixels whose value merely happened to coincide with a palette entry
+/// mid-gradient, and discarding their error left a seam across a smooth ramp.
+///
+/// Both are addressed where the error actually moves, not here — see
+/// [`crate::api::EinkDitherer::dither_with_pinning`] and
+/// [`crate::dither::DitherOptions::pin_carry`], which hold the exact-match pixel
+/// AND carry its incoming error onward rather than dropping it.
 ///
 /// # Thread Safety
 ///

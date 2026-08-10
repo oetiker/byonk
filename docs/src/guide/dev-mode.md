@@ -130,6 +130,31 @@ something. Here each patch stands alone, so you can read it directly:
 Rows vary lightness because reachability depends on it — a hue may mix cleanly
 when dark and collapse when light.
 
+### Tone Marker A/B Screen
+
+`byonk-builtin/calibration/tone` answers a different question again: what does
+the gamut mapper actually change on real content, on your real panel?
+
+```yaml
+devices:
+  "ABCDE-FGHJK":
+    screen: byonk-builtin/calibration/tone
+    panel: my_panel
+    params:
+      hues: 12      # hue sweep columns (2-48)
+      levels: 5     # patch grid rows (1-12)
+```
+
+It renders the same content — a photograph, a hue sweep, and a colour patch
+grid, top to bottom — twice, side by side. The two columns are identical
+markup with one difference: only the right-hand column is marked
+`data-byonk-tone="continuous"`, so only it is gamut-mapped. The left column is
+the untouched control. Whatever differs between the two columns on your
+device is exactly what the gamut mapper is doing to your content.
+
+There are no gamut-mapping knobs on this screen — it deliberately shows you
+what a real screen gets, not a tuning surface.
+
 ### Calibration Workflow
 
 1. **Assign the `byonk-builtin/calibration/color` screen** to your device in `config.yaml`

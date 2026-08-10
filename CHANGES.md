@@ -56,6 +56,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   single flat colour. Complements the existing colour calibrator, whose smooth
   gradient hides exactly this. Tune the grid with the `hues` and `levels`
   params.
+- New builtin calibration screen **Tone Marker A/B** (`byonk-builtin/calibration/tone`):
+  renders a photograph, hue sweep and colour patch grid twice side by side, with the
+  right half marked as continuous-tone. Shows on a real panel what gamut mapping
+  changes.
 
 ### Changed
 

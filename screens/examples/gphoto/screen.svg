@@ -22,8 +22,9 @@
   <rect width="{{ data.width }}" height="{{ data.height }}" fill="#ffffff"/>
   <text x="{{ data.width / 2 }}" y="{{ data.height / 2 }}" font-family="Outfit" font-size="24" font-weight="700" text-anchor="middle" fill="#000000">{{ data.error }}</text>
   {% else %}
-  <!-- Full-screen photo -->
-  <image x="0" y="0" width="{{ data.width }}" height="{{ data.height }}" href="{{ data.image_src }}" preserveAspectRatio="xMidYMid slice"/>
+  <!-- Full-screen photo. Marked continuous-tone; the status bar below stays
+       outside the mark, so its flat black bar and white text are unaffected. -->
+  <image data-byonk-tone="continuous" x="0" y="0" width="{{ data.width }}" height="{{ data.height }}" href="{{ data.image_src }}" preserveAspectRatio="xMidYMid slice"/>
 
   {% if data.show_status %}
   <!-- Status bar - opaque black with white text -->

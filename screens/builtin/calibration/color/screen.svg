@@ -21,17 +21,22 @@
   <!-- Black background = uniform grid -->
   <rect width="{{ data.width }}" height="{{ data.height }}" fill="#000000"/>
 
-  <!-- White-to-color gradient bars -->
+  <!-- White-to-color gradient bars.
+
+       The mark goes on each bar, never on a group around this loop: the bar and
+       its label are emitted from the same loop body, so any wrapper would
+       swallow the label text too. Marking the element that IS continuous-tone
+       needs no restructuring and cannot catch structure by accident. -->
   {% for g in data.gradients %}
-  <rect x="{{ data.grid }}" y="{{ g.y }}" width="{{ data.bar_w }}" height="{{ data.bar_h }}" fill="url(#{{ g.id }})"/>
+  <rect data-byonk-tone="continuous" x="{{ data.grid }}" y="{{ g.y }}" width="{{ data.bar_w }}" height="{{ data.bar_h }}" fill="url(#{{ g.id }})"/>
   <text x="{{ g.label_x }}" y="{{ g.label_y }}" font-family="X11Misc6x" font-size="{{ data.font_size }}" fill="black">{{ g.name }}</text>
   {% endfor %}
 
   <!-- Hue sweep bar -->
-  <rect x="{{ data.grid }}" y="{{ data.rainbow_y }}" width="{{ data.bar_w }}" height="{{ data.bar_h }}" fill="url(#huesweep)"/>
+  <rect data-byonk-tone="continuous" x="{{ data.grid }}" y="{{ data.rainbow_y }}" width="{{ data.bar_w }}" height="{{ data.bar_h }}" fill="url(#huesweep)"/>
 
   <!-- Photo in right half of gradient area -->
-  <image x="{{ data.img_x }}" y="{{ data.img_y }}" width="{{ data.img_w }}" height="{{ data.img_h }}" href="photo.png" preserveAspectRatio="xMidYMid slice"/>
+  <image data-byonk-tone="continuous" x="{{ data.img_x }}" y="{{ data.img_y }}" width="{{ data.img_w }}" height="{{ data.img_h }}" href="photo.png" preserveAspectRatio="xMidYMid slice"/>
 
   <!-- Color patches -->
   {% for patch in data.patches %}

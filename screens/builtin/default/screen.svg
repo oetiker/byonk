@@ -28,8 +28,18 @@
     </filter>
   </defs>
 
-  <!-- Full background image -->
-  <image x="0" y="0" width="{{ data.width }}" height="{{ data.height }}" href="background.jpg" preserveAspectRatio="xMidYMid slice"/>
+  <!-- Full background image.
+
+       Marked continuous-tone: it is a photograph, and about 12% of its pixels
+       fall outside the panel's gamut. The mark goes on the image itself, not on
+       a group around this area, because the hero text below is drawn over it —
+       marking by layout region would pull those glyphs in, and structure must
+       stay unmarked wherever it sits.
+
+       The vertical gradient bar further down is deliberately NOT marked: it runs
+       white to black, so it is achromatic, always in gamut, and mapping it would
+       be a no-op. -->
+  <image data-byonk-tone="continuous" x="0" y="0" width="{{ data.width }}" height="{{ data.height }}" href="background.jpg" preserveAspectRatio="xMidYMid slice"/>
 
   <!-- Hero title - semi-transparent white text with shadow -->
   <text x="{{ data.center_x }}" y="{{ data.title_y }}" font-size="{{ data.font_hero }}" class="font-black" fill="#ffffff" opacity="0.8"

@@ -26,7 +26,95 @@ already extracted at `.superpowers/sdd/2026-08-10-panel-colour-pinning/task-3-br
 and **pre-flighted — see the findings below, they are not optional**. The ledger is
 the recovery map; trust it and `git log` over memory.
 
-# ⚠️ START HERE — the active initiative
+# ⚠️⚠️ START HERE — owner ruling 22 supersedes Task 3 as planned (2026-08-10, session 11)
+
+**The unmapped path assumes the actual colours ARE the nominal colours.** One mask
+selects the colour model, and it selects three things at once:
+
+| Region | Colour model | Gamut mapping | Pinning |
+|---|---|---|---|
+| **Unmarked** (structure) | **official/nominal**, substituted for actual | off | **on**, against official |
+| **Marked** `continuous` | **actual/measured** | on | **off** |
+
+This is not what the code does today, and it is not what the plan's Task 3 builds.
+`palette/palette.rs:442` — `find_nearest` scans `self.actual_oklab` **unconditionally**,
+mapped or not. That single site is why today's unmapped structure is matched against
+measured inks.
+
+### The evidence that produced the ruling
+
+`builtin/default` paints its palette swatches in **nominal** colours (`layout.colors`);
+`builtin/calibration/color` paints its patches in **measured** ones
+(`screens/builtin/calibration/color/script.lua:16`, `device.colors_actual`). Measured off
+the current renders at 800×480:
+
+| Swatch fill (nominal) | Nearest measured ink | Rendered result |
+|---|---|---|
+| `#FF0000` | `#B50303` | 85% red (≈100% on non-label rows) |
+| `#FFFF00` | `#FFEE00` | 89.5% yellow (≈100% on non-label rows) |
+| `#00FF00` | `#0D876B` | **51% black, 27% red, 17% teal-green** |
+| `#0000FF` | `#205497` | **81% black, 13% white, 5% blue** |
+
+`calibration/color`'s patches, painted in measured values, are **>99% pure**. Red and
+yellow survive only because they happen to sit near their measured inks. Pure green and
+pure blue are chased toward a dark teal and a mid navy they cannot reach, and speckle.
+**Under ruling 22 that is a bug, not the ditherer correctly approximating an unreachable
+colour** — on the unmapped path `#00FF00` *is* green.
+
+### What makes this cheap, already verified
+
+- **`Palette::new(&official, None)` yields a nominal palette** — `actual` defaults to
+  `official` (`palette/palette.rs:167`). No new constructor needed.
+- **`build_eink_palette` dedups on official bytes** (`svg_to_png.rs:414`, `kept_indices`
+  drives the output palette), so nominal and measured palettes built from the same
+  official list have **identical index spaces**. Output PLTE stays valid whichever
+  palette matched a pixel.
+
+### What it costs
+
+The dither loop needs **per-pixel palette selection driven by the mask**;
+`dither_with_kernel_noise` currently takes a single `&Palette`, and
+`EinkDitherer::dither_with_pinning` currently takes only `pin_eligible`. So this
+**extends Task 2's API and rewrites Task 3** — it is not a byonk-side wiring change.
+
+**Pinning is still required under ruling 22.** Nominal matching makes an exact official
+colour match itself at distance zero, but error diffused *into* it can still take it
+over. That is the original defect and it is unaffected by which palette is matched.
+
+### The accepted tradeoff (owner, session 11)
+
+**A photograph left unmarked will look pretty scary**, because nominal matching aims a
+continuous-tone image at primaries the panel cannot produce. **In exchange, graphical
+elements become simple to work with**: panel colours render as themselves, and even
+simple transitions between them behave predictably. That is the trade the owner has
+taken — it is not a defect to be fixed later.
+
+**⚠️ This makes ruling 19's marking discipline load-bearing in a way it was not before.**
+Until now, forgetting to mark continuous-tone content cost you gamut mapping — mild, and
+invisible on most content. Under ruling 22 it costs you the *colour model*, on exactly
+the content least able to survive it. The failure mode of a missed mark goes from mild to
+severe.
+
+Consequences to work through when re-planning:
+
+- **`calibration/tone`'s left column is unmarked by design** as the raw-behaviour control,
+  and it contains a photograph. It will now look markedly worse. That is the control doing
+  its job, but confirm it is still legible enough to serve as a comparison.
+- **The shipped collection is already covered** (`fe66ee6` marked `default`,
+  `calibration/color`, `gphoto`; `tone` was already marked; the other 10 have no
+  continuous tone). **User-authored screens with photographs are not**, and their
+  rendering changes. This is a documentation and possibly a release-notes obligation —
+  see ruling 21, which defers the CHANGES.md entry to merge prep.
+- **Task 5 must measure the unmarked-photograph case**, not just the pinning sweep. It is
+  now the feature's main downside and nobody has looked at it.
+- **Screen-authoring docs (`docs/src/`) need to state the rule plainly**: mark photographs
+  and gradients-through-hue, or they will render badly. Previously this was an
+  optimisation; now it is a requirement.
+
+**Next session: write the spec amendment and re-plan Tasks 3–5 before dispatching
+anything.** Do not dispatch Task 3 from the existing brief — it builds the wrong thing.
+
+# The active initiative
 
 ## Panel-colour pinning: 2 of 5 tasks done
 
@@ -445,6 +533,13 @@ passing).
     over the review rubric; their printed output is the spike's deliverable.
 21. **CHANGES.md is not touched by the pinning plan** (owner, session 10). One entry gets
     written at merge prep, covering gamut and pinning together.
+22. **The unmapped path assumes actual == nominal** (owner, session 11). Unmarked content
+    is matched against **official** colours and pinned against them; marked `continuous`
+    content keeps **actual/measured** colours and is not pinned. One mask, three
+    consumers. **Supersedes Task 3 as planned and extends Task 2's API** — see the
+    section at the top of this file. Accepted cost: an unmarked photograph looks bad;
+    accepted gain: graphical elements and transitions between panel colours are simple
+    and predictable.
 
 **Constants inherited from the plan and never challenged:** `PERCENTILE = 0.99`,
 `MIN_DISCARD = 32`, `HUE_BINS = 128`, `LIGHTNESS_BINS = 64`, `C_SEARCH_HI = 0.5`,

@@ -175,6 +175,79 @@ diffusion lands differently in each. The columns are not pixel-comparable; they
 are *perceptually* comparable (8×8 block delta 2.42 off vs 9.71 on, a 4× margin
 over the dither noise floor). The docs say "visibly differs" for this reason.
 
+# ⚠️ START HERE — the next initiative
+
+## Pure panel colours are not protected from dithering, and the code says they are
+
+Found 2026-08-10 by the owner looking at the new tone screen and asking why the
+black grid between the swatches was speckled. **This is the next piece of work
+and the owner has asked for it to be investigated.** Nothing is implemented.
+
+**The measurement.** In the tone screen's **unmapped control column** — no gamut
+mapping involved at all — the 2 px pure-black grid lines between patches come
+back as:
+
+| ink | share of grid pixels |
+|---|---|
+| black `#000000` | **73.2%** |
+| red `#B50303` | 10.7% |
+| blue `#205497` | 8.6% |
+| green `#0D876B` | 7.6% |
+
+No white, no grey, so this is not antialiasing. It is chromatic error diffused
+*out of* the neighbouring saturated patches *into* pure-black pixels. The mapped
+column measures 71.4% — so **gamut mapping costs under 2 points; this is a
+dithering effect, not a tone-mapping one.**
+
+**The code comment is wrong.** `crates/eink-dither/src/preprocess/preprocessor.rs:88`
+justifies removing exact-match pinning by saying such a pixel "has zero
+quantisation error, so error diffusion reproduces it exactly without a special
+case". That is true of the pixel's **own** error and ignores the error diffused
+**into** it from neighbours. **Correct this comment regardless of what gets
+built.** The other half of the note is sound and must not be discarded: pinning
+also *did* cause seams across smooth ramps, by pinning pixels that merely
+coincided with a palette entry and dropping their error.
+
+**Where the mechanism lives.** One site: `dither/mod.rs:319-324`, where the
+accumulated error is added to the source pixel before `find_nearest`:
+
+```rust
+let pixel = LinearRgb::new(apply_error(image[idx].r, accumulated[0], ...), ...);
+```
+
+**Two variants, and the second is the interesting one:**
+
+- **A — absorb.** Skip the accumulated error, match the source exactly, drop the
+  error. Crisp, but this is the variant that caused the seams.
+- **B — pass through.** Match the source exactly but keep propagating the
+  accumulated error to neighbours rather than consuming it. The error flows
+  *around* the graphic element. Total error is conserved, so no seam; and an
+  exact-match pixel emits zero error of its own, so a logo cannot smear outward.
+  **Spike B first.** Its risk is error piling up and dumping as a fringe at the
+  far edge of a large graphic region — measure that, do not assume it away.
+
+**The trap that would have bitten an implementer.** The obvious design is "pin
+everything outside a `data-byonk-tone="continuous"` region". **That is wrong
+today.** The mask is opt-in and almost nothing uses it, so *unmarked* does not
+mean *graphic* — it means *unlabelled*. Gating on the mask's inverse would pin
+the entire frame of every unmarked screen, including `calibration/color`'s
+photograph, which is exactly the continuous-tone content the seam bug came from.
+Any rollout must be conditional on the document actually carrying tone markup;
+`has_tone_markup()` already exists for that kind of gating and is used to skip
+mask rasterization.
+
+So this is a three-way owner decision, not a fix: pin nowhere / pin only in
+documents that carry tone markup / pin by default everywhere.
+
+**Scope.** This is not about the calibration screen. Pinning existed "to keep
+text and logos crisp" — any black text or logo abutting saturated content on any
+screen is being speckled the same way.
+
+**Rejected as symptom-treatment:** widening the tone screen's patch gap. Measured
+2 px → 73.2% black, 3 px → 81.5%, 4 px → 86.1%, 6 px → 90.5% (roughly one
+contaminated pixel per side regardless of width). It would leave every other
+screen's text unfixed.
+
 ## Open owner decisions
 
 **1. Should a real content screen be marked?** That is the first change that
@@ -486,7 +559,9 @@ Earlier sessions:
    scale. **No working hypothesis.**
 3. **Flat fills collapse to one ink** — `#C06020` renders solid red. The benign
    half is established and asserted: a flat fill of a *measured ink* dithers to
-   that single ink exactly, which is correct.
+   that single ink exactly, which is correct — **but only in isolation.** Set
+   next to saturated content, 27% of those same pure-ink pixels are taken over
+   by diffused error; see the initiative at the top of this file.
 
 The selector work that tried to fix these is **three-for-three refuted**;
 `crates/eink-dither/tests/spike_simplex.rs` is the deliberate record of what does

@@ -170,9 +170,13 @@ That is the reasoning. It is not the evidence. Measurement 2 is the evidence.
 
 ### Plumbing
 
-- `EinkDitherer::dither(&pixels, w, h)` gains a per-pixel eligibility argument:
-  `dither(&pixels, w, h, pin_eligible: Option<&[bool]>)`. `None` means "eligible
-  everywhere", which keeps existing callers and tests meaningful.
+- `EinkDitherer::dither(&pixels, w, h)` keeps its signature and delegates to a new
+  `dither_with_pinning(&pixels, w, h, pin_eligible: Option<&[bool]>)` passing `None`.
+- **`None` means pinning is off entirely, not "eligible everywhere".** The inverse
+  would silently change the output of every existing eink-dither caller and test,
+  which is precisely the class of change that makes a green suite meaningless. A
+  caller that wants frame-wide pinning passes an explicit all-true slice, and byonk
+  does exactly that for unmarked documents.
 - **The per-pixel mask must not live in `DitherOptions`.** That struct is `Clone` and
   is cloned on every `dither()` call (`crates/eink-dither/src/api/builder.rs:199`);
   a `Vec<bool>` there would be copied per frame.
@@ -187,16 +191,30 @@ That is the reasoning. It is not the evidence. Measurement 2 is the evidence.
 - A length mismatch between `pin_eligible` and the frame is a hard error, matching
   the existing mask handling. It cannot happen; it is loud rather than silent.
 
-### The prerequisite that gates everything
+### Where the match is decided, and why not in the dither loop
 
-`Preprocessor::process` runs between the byonk-side Srgb pixels and
-`dither_with_kernel_noise`. If saturation and contrast at their identity settings do
-not round-trip a pixel bit-exactly, exact match never fires, and the feature is a
-silent no-op that still passes any test written against the mechanism in isolation.
+`Preprocessor::process` runs between the caller's `Srgb` pixels and
+`dither_with_kernel_noise`. Matching inside the dither loop would mean matching the
+*preprocessed* `LinearRgb` value, and saturation or contrast at anything other than
+identity moves a pure ink off its palette entry. Exact match would then never fire
+and the feature would be a silent no-op that still passes every test written against
+the mechanism in isolation.
 
-**Task 1 verifies the round-trip before anything else is built.** If it does not
-hold, the exact-match test is computed on the pre-preprocess pixels and carried into
-the dither loop as a resolved index-or-none per pixel.
+**So the match is resolved before preprocessing, on the caller's `Srgb` bytes**, by
+exact `[u8; 3]` equality against `Palette::official(i).to_bytes()`, AND-ed with the
+eligibility mask. The result is a `Vec<Option<u8>>` — the resolved ink index, or
+`None` — handed to the dither loop alongside the pixels.
+
+Two consequences, both deliberate:
+
+- **A pinned pixel is not enhanced.** It renders the colour the author wrote. This is
+  the right answer for structure, which is what pinning is for, and it is moot in
+  byonk's production path, which uses identity saturation and contrast.
+- **Pinning requires no resize.** Resampling destroys exact matches and breaks the
+  index correspondence between the caller's pixels and the preprocessed frame. When
+  `target_width`/`target_height` are set, pinning is refused rather than silently
+  producing a misaligned map. (`resize_lanczos` panics by design today, so this path
+  is unreachable in practice; it is guarded so it stays that way.)
 
 ## Measurements
 

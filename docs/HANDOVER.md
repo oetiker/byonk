@@ -1,18 +1,20 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-09 (session 9). **Rulings 16 and 17 are both implemented,
-measured and committed.** The mapper compresses along a mid-grey ray and the knee
-default is 0.99. `make check` is green. `feat/screen-store-authoring-core` remains
-**HELD** — no PR, no merge to `main`._
+_Last updated: 2026-08-10 (session 9). **Rulings 16 and 17 are both implemented,
+measured and committed**, and the gamut work now **reaches a shipping screen for
+the first time**: the new `calibration/tone` calibration screen marks a region,
+so the feature is no longer inert. The mapper compresses along a mid-grey ray and
+the knee default is 0.99. `make check` is green.
+`feat/screen-store-authoring-core` remains **HELD** — no PR, no merge to `main`._
 
 ## Where the work lives
 
 | | |
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
-| Last production commit | `868544c` — the knee default; everything after is docs and test evidence |
+| Last production commit | `41ffe40` — the tone screen and its inventory-guard fix |
 | Worktree | `/Users/oetiker/checkouts/byonk` (working in place, no worktree) |
-| State | **`make check` green (exit 0)**; `cargo fmt --all --check` and `clippy --workspace --all-targets -D warnings` re-run clean on the final tree |
+| State | **`make check` green (exit 0)** at `41ffe40`, tree clean |
 | Spec | `docs/superpowers/specs/2026-08-07-gamut-mapping-design.md` — **current**, rewritten onto the ray geometry this session |
 | Plan | `docs/superpowers/plans/2026-08-08-gamut-mapping.md` — **superseded in part**, carries a header saying so |
 | Ledger | `.superpowers/sdd/2026-08-08-gamut-mapping/progress.md` (git-ignored) |
@@ -25,6 +27,7 @@ default is 0.99. `make check` is green. `feat/screen-store-authoring-core` remai
 | `140ac3e` | Re-derived the ray-geometry guards; yellow folded back into the standing guard |
 | `868544c` | **Ruling 17** — knee default 0.8 → 0.99 |
 | `6c555de` | Spec brought onto the ray geometry; plan marked superseded |
+| `18d0f31`…`41ffe40` | **The `calibration/tone` screen** — see below |
 
 **Ruling 16.** `GamutMapper` no longer compresses chroma at fixed lightness. It
 bisects the hull for `t_max` along the ray from mid-grey (`ANCHOR_L = 0.5`,
@@ -137,24 +140,49 @@ a high knee those all sit on the asymptote and tie in `f32`, so the test compare
 two colours that have already collapsed. The prototype file had already learned
 this once and written it down.
 
+## The `calibration/tone` screen (new, session 9)
+
+**RESOLVED: the long-open "how should the calibration screen show the marker"
+question.** The owner chose a new screen rather than converting Gamut Patches:
+`byonk-builtin/calibration/tone`, three bands (photograph, hue sweep, patch grid)
+rendered in two columns, **only the right column marked**. Split-cells was
+rejected — it puts a mask boundary through every patch. No gamut knobs are
+exposed: the screen shows what a real screen gets, and a default restated in YAML
+would drift from the Rust constants.
+
+Spec: `docs/superpowers/specs/2026-08-09-tone-calibration-screen-design.md`.
+Plan: `docs/superpowers/plans/2026-08-09-tone-calibration-screen.md`.
+
+**Measured end-to-end**, comparing the unmarked render against the marked one
+through the real CLI path at 800×480:
+
+| | pixels changed |
+|---|---|
+| left column (control) | **0 / 190,560** |
+| right column (marked) | 68,207 / 190,560 (35.8%) |
+| overall diff bounding box | `(403, 18) → (796, 476)` — exactly the right column's content area |
+
+The mask geometry test measures a marked fraction of **0.4605**, the value
+predicted when the plan was written, with zero leak into the control.
+
+Visually: the hue sweep goes from large flat collapsed blocks to a smooth
+dithered gradient, and washed-out cream patches come back as distinct colours —
+the yellow fix, visible. No highlight crush in the photograph.
+
+**Caveat on reading it.** With mapping *off*, 27.4% of pixels already differ
+between the two columns, because the columns sit at different x offsets and error
+diffusion lands differently in each. The columns are not pixel-comparable; they
+are *perceptually* comparable (8×8 block delta 2.42 off vs 9.71 on, a 4× margin
+over the dither noise floor). The docs say "visibly differs" for this reason.
+
 ## Open owner decisions
 
-**1. The gamut calibration screen's marker.** Unchanged from session 8 and still
-unanswered. The owner asked for *"the same content twice, once with marker and
-once without to show the difference."* Two shapes were offered and no reply came:
+**1. Should a real content screen be marked?** That is the first change that
+alters output a user actually looks at, so it stays the owner's call. The tone
+screen exists to inform exactly this decision — look at it on the panel first.
 
-- **Split cells** — each patch halved, left unmapped / right marked. Best
-  comparison; but the tone-mask boundary then runs through all 144 patches, so
-  error diffusion bleeds across each one.
-- **Stacked grids** — six raw rows above six marked rows. One boundary instead of
-  144; but halves patch height and separates the comparison.
-
-`screen.svg` is currently **unmarked and clean**.
-
-**2. Is the gamut work done?** Both rulings are in, measured and documented, and
-the feature is still inert (below). A reasonable next step is to mark a shipping
-screen `data-byonk-tone="continuous"` and look at it on the panel — but that is
-the first change that alters real output, so it is the owner's call.
+**2. The branch.** Still HELD. Nine sessions of gamut work plus this screen are
+sitting unmerged on `feat/screen-store-authoring-core`.
 
 ## ⚠️⚠️ Read this before trusting any dithering picture
 
@@ -212,7 +240,7 @@ working tree first.
 - `make check` = fmt + `clippy --workspace --all-targets -- -D warnings` +
   `cargo test --workspace`. **~10 min — background it.** Green at `6c555de`.
 - Cap parallelism at 2 (`CARGO_BUILD_JOBS=2`) — shared machine. **Never `git add -A`.**
-- **byonk lib 449 tests** (+1 ignored); **eink-dither lib 202** (+21 ignored) as
+- **byonk lib 451 tests** (+1 ignored); **eink-dither lib 202** (+21 ignored) as
   of `6c555de`. Re-measure, don't inherit.
 - **`make check` does not run the `#[ignore]` tests**, and most gamut evidence is
   ignored. Run explicitly:
@@ -269,10 +297,12 @@ Shared test fixtures: `gamut::test_support::{six_colour, four_grey, panel_measur
 — **import, never copy**. `panel_measured` is new: `six_colour`'s idealised
 primaries do not reproduce the hull's pinch, so they cannot guard it.
 
-**The feature is end-to-end live but reaches nothing**: it applies only where an
-SVG marks a region `data-byonk-tone="continuous"`, and **no shipping screen
-does**. So none of this changes rendered output today — no urgency, no user
-impact, and nothing in CHANGES.md (user-facing only).
+**The feature reaches exactly one shipping screen: `calibration/tone`.** Every
+other screen is untouched, because the mapping applies only where an SVG marks
+a region `data-byonk-tone="continuous"`. So rendered output changes for that one
+calibration screen and nothing else — still no user impact on real content, and
+the screen exists precisely so the effect can be judged on a panel before anyone
+marks a content screen.
 
 ## The lesson, now proven nine sessions running
 
@@ -280,7 +310,32 @@ impact, and nothing in CHANGES.md (user-facing only).
 plan, your own diagnosis, a reviewer's "harmless", the spec — or your own eyes on
 a downscaled PNG.
 
-Session 9's additions:
+Session 9's additions, from the `calibration/tone` build:
+
+- **Adding a builtin screen has a fan-out nobody mapped.** Two separate tests
+  hardcode the shipped inventory as an exact count —
+  `tests/builtin_package.rs:44` and `tests/screen_schemas_test.rs:128`. Each cost
+  a ten-minute `make check` cycle, discovered one at a time, because the first
+  failure hid the second. **Before adding a builtin screen, grep for what
+  enumerates the inventory.** Both guards are strict `assert_eq!` on purpose;
+  update them, never loosen them.
+- **`make check` runs `cargo fmt`, not `cargo fmt --check`.** It rewrites files
+  in place and leaves the tree dirty. Code transcribed verbatim from a plan is
+  usually not rustfmt-clean, and no task brief thought to say "run cargo fmt".
+  Add it to the implementer's command list.
+- **Subagent task briefs scoped to `cargo test -p byonk --lib` cannot see
+  integration tests.** That restriction exists for the watchdog, and it is why
+  both inventory guards survived three clean task reviews. The controller's full
+  gate is not a formality.
+- **A reviewer that fact-checks docs against code earns its cost.** Two factual
+  errors in one short docs section — a parameter attributed to the wrong band,
+  then an off-by-one introduced *by the fix for the first one*. Docs that name
+  the wrong knob are worse than absent docs.
+- **Measure the claim you are actually making.** "The two columns differ only by
+  the mapping" is false at pixel level (27.4% differ with mapping off) and true
+  perceptually. Both measurements were right; they answered different questions.
+
+Session 9's gamut-mapping additions:
 
 - **A ruling can carry a latent defect that only a second ruling masks.** The
   mid-grey ray crushes near-white tints by 0.084 at knee 0.8 and 0.0035 at 0.99.

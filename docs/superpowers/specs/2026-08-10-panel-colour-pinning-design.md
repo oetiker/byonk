@@ -107,6 +107,46 @@ came from. The spike measures that directly — see measurement 2.
 Eligibility is therefore the **inverse of the tone mask**. On an unmarked document
 the eligibility mask is all-true and no second rasterization is needed.
 
+### The authoring principle this establishes
+
+The mask is **not** "which region of the layout" — it is "which content is
+continuous-tone". Structure — a grid, text, rules, a logo — stays unmarked *wherever
+it sits*, including in the middle of an otherwise continuous area.
+
+One mask now has two consumers, and they want the same answer: do not gamut-map
+structure, and do pin it. Marking by layout region rather than by content type gets
+both wrong at once. This is the guidance any future screen author needs, and it is
+what makes a single opt-in attribute sufficient for both features.
+
+### The tone screen is currently marked by region, and must be fixed
+
+`screens/builtin/calibration/tone/screen.svg:45` puts the patch grid inside the
+marked group:
+
+```svg
+<g data-byonk-tone="continuous">
+  <image .../>                          <!-- photo -->
+  <rect ... fill="url(#huesweep)"/>     <!-- sweep -->
+  <rect ... fill="#000000"/>            <!-- the grid, INSIDE the group -->
+  {% for p in data.right.patches %}<rect .../>{% endfor %}
+</g>
+```
+
+The grid is not drawn as lines; it is that black backing rect showing through the
+2 px gaps between the patches drawn over it. Inside the group it is ineligible for
+pinning, so the marked column would keep a speckled grid while the unmarked column
+got a crisp one — an artifact of the authoring, not of the design.
+
+**The rect moves out of the group**, kept immediately before it so document order and
+therefore z-order are unchanged. The patches stay marked; they are the content the
+mapping exists to act on.
+
+Pure black is in gamut, so this cannot change the mapped patches. It does remove
+those pixels from the **adaptation group**, and `R` is a 99th-percentile over the
+marked set (`PERCENTILE = 0.99`). The pixel count is small, but a percentile is
+exactly the statistic that moves when the set changes. **Measure `R` before and
+after; do not assume it is unchanged.**
+
 ### Why the seam does not come back
 
 The seam arose because the old pinning **discarded** a coincidentally-matching
@@ -167,10 +207,14 @@ between variants stay valid, absolute judgements need the undithered renders.
 Whole-image means are not evidence here. Measure the pixels the change touches.
 
 1. **Does it fix the reported defect?** Grid-line ink share in the `calibration/tone`
-   screen, both columns. Baseline 73.2% (unmarked) and 71.4% (marked) black. The
-   marked column sits inside a `continuous` region and is therefore **not** eligible
-   for pinning, so it becomes the control for this change. Success: the unmarked
-   column approaches 100% while the marked column stays near 71.4%.
+   screen, both columns, **after the backing rect has been moved out of the marked
+   group**. Baseline 73.2% (unmarked) and 71.4% (marked) black. Success: **both**
+   columns approach 100%. The grid is unmarked on both sides, so both are pinned, and
+   the two columns continue to differ by exactly the mapping — which is the whole
+   point of the screen.
+   Also record `R` (the adaptation factor over the marked set) before and after the
+   SVG change, and the mapped patch colours, to confirm removing the black pixels
+   from the adaptation group moved neither.
 2. **Does it seam the photograph?** Under the ruling above, `calibration/color`'s
    photo is eligible. First count **how many of its pixels are exact ink matches at
    all** — if the count is negligible the question is moot and the measurement is
@@ -199,11 +243,21 @@ misleading on its own — every artifact that matters is at a boundary between c
 
 ## Scope
 
-**This is a spike.** Measured, committed on `feat/screen-store-authoring-core`, not
-wired to configuration and not documented for users. If it lands well it graduates to
-a proper task. If λ around 0.9 seams the photograph, the legitimate outcome is that
-the eligibility ruling needs the narrower "documents with tone markup only" gate
-after all.
+**This is a spike.** Measured, committed on `feat/screen-store-authoring-core`, λ not
+wired to configuration. If it lands well it graduates to a proper task. If λ around
+0.9 seams the photograph, the legitimate outcome is that the eligibility ruling needs
+the narrower "documents with tone markup only" gate after all.
+
+Two things are in scope despite being a spike, because without them the spike cannot
+be judged:
+
+- **The `calibration/tone` SVG change** — moving the backing rect out of the marked
+  group. This alters a shipped screen's output. Without it the measurement is taken
+  on a screen whose markup contradicts the design.
+- **The authoring principle** — "mark content that is continuous-tone, not regions of
+  the layout" — belongs in the tone-markup documentation, because it is now what makes
+  one attribute serve two features. Written when the spike graduates, not before; a
+  documented rule that then changes is worse than an undocumented one.
 
 Out of scope: changing the default dither algorithm, the three open dithering
 defects, widening the tone screen's patch gap (measured and rejected as

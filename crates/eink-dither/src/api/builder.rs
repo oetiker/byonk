@@ -617,10 +617,15 @@ mod tests {
     /// exact match leaves it at — so this version actually exercises the
     /// exactness of the comparison rather than just its wiring.
     ///
-    /// The `without` erosion is asserted directly (not just documented):
-    /// a mutant that disables the pin path entirely, or a future change
-    /// that stops this scene being hostile, must fail loudly here rather
-    /// than pass a now-tautological `with == without`.
+    /// The `without` erosion is asserted directly (not just documented): a
+    /// future change that stops this scene being hostile must fail loudly
+    /// here rather than pass a now-tautological `with == without`. This
+    /// does NOT catch a mutant that disables pinning entirely — "never
+    /// pin" is exactly what this test expects, so it can't tell that apart
+    /// from "correctly never pins this near-miss." That mutant is caught by
+    /// `eligibility_decides_where_pinning_applies` and
+    /// `the_exact_match_is_against_the_nominal_entry` instead, which assert
+    /// pinning DOES fire.
     #[test]
     fn a_near_miss_is_not_pinned() {
         let palette = test_palette();
@@ -662,9 +667,15 @@ mod tests {
     /// hostile black-line-in-a-saturated-field geometry so an
     /// internally-fabricated mask would visibly rescue the line and this
     /// test would catch it. The erosion of `b` (the definitely-unpinned
-    /// baseline) is asserted directly, not just documented, so a mutant
-    /// that removes the pin path entirely can't collapse this into a
-    /// tautology without being caught.
+    /// baseline) is asserted directly, not just documented, so a future
+    /// change that stops this scene being hostile must fail loudly here
+    /// rather than pass a now-tautological equality. This does NOT catch a
+    /// mutant that removes the pin path entirely — `dither()` not pinning
+    /// is exactly what's expected here, so it can't tell that apart from
+    /// correct behaviour. That mutant is caught by
+    /// `eligibility_decides_where_pinning_applies` and
+    /// `the_exact_match_is_against_the_nominal_entry` instead, which assert
+    /// pinning DOES fire.
     #[test]
     fn plain_dither_is_unchanged_by_this_feature() {
         let palette = test_palette();

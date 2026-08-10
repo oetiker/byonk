@@ -2393,6 +2393,92 @@ mod tests {
     }
 
     #[test]
+    fn the_tone_screen_marks_its_right_column_and_nothing_else() {
+        // `tiny_skia` is a direct dependency and is what `svg_to_png.rs` uses.
+        // `usvg` is not a direct dependency; `svg_to_png.rs` reaches it via
+        // `resvg::usvg`, so this test does the same.
+        use resvg::usvg;
+        use tiny_skia::{Pixmap, Transform};
+
+        let (store, _root) = test_store_with_local();
+        let res = store.render(
+            "byonk-builtin/calibration/tone",
+            RenderOpts {
+                // Pinned rather than left to the default: the assertions below are
+                // arithmetic on an 800x480 frame.
+                width: Some(800),
+                height: Some(480),
+                include_svg: true,
+                ..Default::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        let svg = res.svg.expect("include_svg was requested");
+
+        assert!(
+            crate::rendering::tone_mask::has_tone_markup(svg.as_bytes()),
+            "the screen must mark a continuous-tone region"
+        );
+
+        // Rasterize the mask document the renderer would build: white inside the
+        // marked subtree, black outside, over a black ground.
+        let mask_svg = crate::rendering::tone_mask::build_mask_svg(svg.as_bytes())
+            .expect("mask rewrite must succeed");
+        let tree = usvg::Tree::from_data(&mask_svg, &usvg::Options::default())
+            .expect("mask must parse");
+        let (w, h) = (800u32, 480u32);
+        let size = tree.size();
+        let scale = (w as f32 / size.width()).min(h as f32 / size.height());
+        let transform = Transform::from_scale(scale, scale);
+        let mut pixmap = Pixmap::new(w, h).unwrap();
+        resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+        // Edge antialiasing produces greys; threshold at 0.5 as the renderer does.
+        let px = pixmap.data();
+        let mut marked = 0usize;
+        let mut marked_left = 0usize;
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let i = (y * w as usize + x) * 4;
+                if px[i] > 127 {
+                    marked += 1;
+                    if x < (w as usize) / 2 {
+                        marked_left += 1;
+                    }
+                }
+            }
+        }
+
+        assert!(marked > 0, "nothing was marked");
+
+        // The marked region must not reach into the control column. A handful of
+        // pixels at the gutter is antialiasing; a percentage is a bug.
+        let leak = marked_left as f64 / marked as f64;
+        assert!(
+            leak < 0.001,
+            "{:.3}% of marked pixels fall in the left column",
+            leak * 100.0
+        );
+
+        // At 800x480 a correct mask measures 0.4605: one 393px column covering
+        // the 450px of content below the header. The band is wide on purpose —
+        // this guards the marking, not the layout, and a tight bound would fail
+        // every time a band height is adjusted.
+        //
+        // What it discriminates against, measured: marking dropped = 0.0, both
+        // columns marked = 0.921, group hoisted to the root = ~1.0. It does NOT
+        // discriminate "the header got swallowed" (0.483) from correct, and does
+        // not try to — the leak assertion above is what catches misplacement.
+        let fraction = marked as f64 / (w as f64 * h as f64);
+        assert!(
+            (0.35..=0.55).contains(&fraction),
+            "marked fraction {fraction:.4} is outside the plausible band \
+             (expected ~0.46) — 0 means the marking was dropped, ~0.92 means both \
+             columns are marked, ~1.0 means the group was hoisted to the root"
+        );
+    }
+
+    #[test]
     fn render_works_for_read_only_source() {
         // render is a read operation, like validate — it must work against
         // the embedded (read-only) byonk-builtin handle too.

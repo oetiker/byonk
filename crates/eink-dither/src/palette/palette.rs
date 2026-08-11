@@ -123,6 +123,9 @@ pub struct Palette {
     official_linear: Vec<LinearRgb>,
     official_oklab: Vec<Oklab>,
 
+    // Precomputed chroma magnitudes for official palette entries
+    official_chroma: Vec<f32>,
+
     // Actual colors (what display really shows) - used for matching
     actual_srgb: Vec<Srgb>,
     actual_linear: Vec<LinearRgb>,
@@ -130,8 +133,6 @@ pub struct Palette {
 
     // Precomputed chroma magnitudes for actual palette entries
     actual_chroma: Vec<f32>,
-    // Precomputed chroma magnitudes for official palette entries
-    official_chroma: Vec<f32>,
 
     // Distance metric for color matching
     distance_metric: DistanceMetric,
@@ -415,8 +416,8 @@ impl Palette {
     /// (used to look up the precomputed palette chroma). For Euclidean,
     /// these extra parameters are ignored.
     ///
-    /// This is used internally by `find_nearest()` and exposed so that
-    /// other algorithms (e.g., `find_second_nearest`) use the same metric.
+    /// This is used internally by `find_nearest()` and exposed `pub` so that
+    /// other matching algorithms can use the same metric.
     ///
     /// `model` selects which precomputed chroma cache (`official_chroma` or
     /// `actual_chroma`) the HyAB chroma-coupling penalty indexes into. It
@@ -497,45 +498,6 @@ impl Palette {
         }
 
         (best_idx, best_dist)
-    }
-
-    /// Find the second-nearest palette color to the given Oklab color.
-    ///
-    /// Used by blue-noise ordered dithering to blend between the two
-    /// closest palette entries. `model` has the same meaning as in
-    /// [`Palette::find_nearest`], and must match the model used to find the
-    /// nearest entry so both matches are made against the same colour set.
-    #[inline]
-    pub fn find_second_nearest(
-        &self,
-        color: Oklab,
-        pixel_chroma: f32,
-        model: ColourModel,
-    ) -> (usize, f32) {
-        let entries = match model {
-            ColourModel::Nominal => &self.official_oklab,
-            ColourModel::Measured => &self.actual_oklab,
-        };
-
-        let mut best_idx = 0;
-        let mut best_dist = f32::MAX;
-        let mut second_idx = 0;
-        let mut second_dist = f32::MAX;
-
-        for (i, &palette_color) in entries.iter().enumerate() {
-            let dist = self.distance(color, palette_color, pixel_chroma, i, model);
-            if dist < best_dist {
-                second_dist = best_dist;
-                second_idx = best_idx;
-                best_dist = dist;
-                best_idx = i;
-            } else if dist < second_dist {
-                second_dist = dist;
-                second_idx = i;
-            }
-        }
-
-        (second_idx, second_dist)
     }
 
     /// The colour this model says ink `idx` IS.

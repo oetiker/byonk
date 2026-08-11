@@ -184,7 +184,7 @@ impl DitherAlgorithm {
 }
 
 use crate::color::{LinearRgb, Oklab};
-use crate::palette::Palette;
+use crate::palette::{ColourModel, Palette};
 
 /// Error buffer for efficient error diffusion.
 ///
@@ -357,7 +357,7 @@ pub(crate) fn dither_with_kernel_noise(
                     original_oklab.a * original_oklab.a + original_oklab.b * original_oklab.b;
 
                 let oklab = Oklab::from(pixel);
-                let (nearest_idx, _dist) = palette.find_nearest(oklab);
+                let (nearest_idx, _dist) = palette.find_nearest(oklab, ColourModel::Measured);
                 output[idx] = nearest_idx as u8;
 
                 let nearest_linear = palette.actual_linear(nearest_idx);

@@ -53,6 +53,24 @@ pub enum DistanceMetric {
     },
 }
 
+/// Which set of colours the palette's inks are taken to BE.
+///
+/// A panel's inks are measured (`Measured`) — that is what the hardware
+/// produces, and it is what continuous-tone content must be matched against so
+/// gamut mapping and dithering aim at reachable colours.
+///
+/// Outside a continuous-tone region the pipeline assumes instead that the inks
+/// ARE their nominal values (`Nominal`), because that is what an SVG author
+/// writes. A rect filled `#00FF00` is meant to be the green ink, not an
+/// approximation of an unreachable pure green. Owner ruling 22.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColourModel {
+    /// The palette's nominal (`official`) colours.
+    Nominal,
+    /// The panel's measured (`actual`) colours.
+    Measured,
+}
+
 /// Chroma threshold for auto-detecting chromatic palettes.
 /// Any palette entry with OKLab chroma above this is considered chromatic.
 /// Pure greys have chroma=0.0 exactly. Intentional chromatic colors have
@@ -112,6 +130,8 @@ pub struct Palette {
 
     // Precomputed chroma magnitudes for actual palette entries
     actual_chroma: Vec<f32>,
+    // Precomputed chroma magnitudes for official palette entries
+    official_chroma: Vec<f32>,
 
     // Distance metric for color matching
     distance_metric: DistanceMetric,
@@ -196,6 +216,10 @@ impl Palette {
         let official_linear: Vec<LinearRgb> =
             official_srgb.iter().map(|&s| LinearRgb::from(s)).collect();
         let official_oklab: Vec<Oklab> = official_linear.iter().map(|&l| Oklab::from(l)).collect();
+        let official_chroma: Vec<f32> = official_oklab
+            .iter()
+            .map(|c| (c.a * c.a + c.b * c.b).sqrt())
+            .collect();
 
         let actual_srgb: Vec<Srgb> = actual_colors;
         let actual_linear: Vec<LinearRgb> =
@@ -225,6 +249,7 @@ impl Palette {
             official_srgb,
             official_linear,
             official_oklab,
+            official_chroma,
             actual_srgb,
             actual_linear,
             actual_oklab,
@@ -392,15 +417,31 @@ impl Palette {
     ///
     /// This is used internally by `find_nearest()` and exposed so that
     /// other algorithms (e.g., `find_second_nearest`) use the same metric.
+    ///
+    /// `model` selects which precomputed chroma cache (`official_chroma` or
+    /// `actual_chroma`) the HyAB chroma-coupling penalty indexes into. It
+    /// must match the model `palette_idx` was resolved under, or the penalty
+    /// compares the pixel's chroma against the wrong ink's chroma.
     #[inline]
-    pub fn distance(&self, a: Oklab, b: Oklab, pixel_chroma: f32, palette_idx: usize) -> f32 {
+    pub fn distance(
+        &self,
+        a: Oklab,
+        b: Oklab,
+        pixel_chroma: f32,
+        palette_idx: usize,
+        model: ColourModel,
+    ) -> f32 {
         match self.distance_metric {
             DistanceMetric::Euclidean => a.distance_squared(b),
             DistanceMetric::HyAB { kl, kc, kchroma } => {
+                let palette_chroma = match model {
+                    ColourModel::Nominal => self.official_chroma[palette_idx],
+                    ColourModel::Measured => self.actual_chroma[palette_idx],
+                };
                 let dl = (a.l - b.l).abs();
                 let da = a.a - b.a;
                 let db = a.b - b.b;
-                let chroma_penalty = (pixel_chroma - self.actual_chroma[palette_idx]).abs();
+                let chroma_penalty = (pixel_chroma - palette_chroma).abs();
                 kl * dl + kc * (da * da + db * db).sqrt() + kchroma * chroma_penalty
             }
         }
@@ -408,9 +449,12 @@ impl Palette {
 
     /// Find the nearest palette color to the given Oklab color.
     ///
-    /// Matches against ACTUAL colors (what the display really shows),
-    /// not official colors. This produces the best perceptual match
-    /// on the real device.
+    /// `model` selects which colour set the palette's inks are taken to BE:
+    /// [`ColourModel::Measured`] matches against what the display really
+    /// shows (the historical default, and what continuous-tone content
+    /// needs); [`ColourModel::Nominal`] matches against the colours an SVG
+    /// author wrote, for content the pipeline assumes maps onto the inks
+    /// directly (owner ruling 22).
     ///
     /// Returns `(index, distance)` where:
     /// - `index`: palette entry closest to the input color
@@ -419,28 +463,33 @@ impl Palette {
     /// # Example
     ///
     /// ```
-    /// use eink_dither::{Palette, Srgb, Oklab, LinearRgb};
+    /// use eink_dither::{ColourModel, Palette, Srgb, Oklab, LinearRgb};
     ///
     /// let colors = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)];
     /// let palette = Palette::new(&colors, None).unwrap();
     ///
     /// // Find nearest to mid-gray
     /// let gray = Oklab::from(LinearRgb::new(0.5, 0.5, 0.5));
-    /// let (idx, dist) = palette.find_nearest(gray);
+    /// let (idx, dist) = palette.find_nearest(gray, ColourModel::Measured);
     /// // Could be either black or white (equidistant)
     /// assert!(idx == 0 || idx == 1);
     /// ```
     #[inline]
-    pub fn find_nearest(&self, color: Oklab) -> (usize, f32) {
+    pub fn find_nearest(&self, color: Oklab, model: ColourModel) -> (usize, f32) {
         // Compute pixel chroma once before the loop
         let pixel_chroma = (color.a * color.a + color.b * color.b).sqrt();
+
+        let entries = match model {
+            ColourModel::Nominal => &self.official_oklab,
+            ColourModel::Measured => &self.actual_oklab,
+        };
 
         // Linear scan - optimal for small palettes (7-16 colors typical)
         let mut best_idx = 0;
         let mut best_dist = f32::MAX;
 
-        for (i, &palette_color) in self.actual_oklab.iter().enumerate() {
-            let dist = self.distance(color, palette_color, pixel_chroma, i);
+        for (i, &palette_color) in entries.iter().enumerate() {
+            let dist = self.distance(color, palette_color, pixel_chroma, i, model);
             if dist < best_dist {
                 best_dist = dist;
                 best_idx = i;
@@ -448,6 +497,59 @@ impl Palette {
         }
 
         (best_idx, best_dist)
+    }
+
+    /// Find the second-nearest palette color to the given Oklab color.
+    ///
+    /// Used by blue-noise ordered dithering to blend between the two
+    /// closest palette entries. `model` has the same meaning as in
+    /// [`Palette::find_nearest`], and must match the model used to find the
+    /// nearest entry so both matches are made against the same colour set.
+    #[inline]
+    pub fn find_second_nearest(
+        &self,
+        color: Oklab,
+        pixel_chroma: f32,
+        model: ColourModel,
+    ) -> (usize, f32) {
+        let entries = match model {
+            ColourModel::Nominal => &self.official_oklab,
+            ColourModel::Measured => &self.actual_oklab,
+        };
+
+        let mut best_idx = 0;
+        let mut best_dist = f32::MAX;
+        let mut second_idx = 0;
+        let mut second_dist = f32::MAX;
+
+        for (i, &palette_color) in entries.iter().enumerate() {
+            let dist = self.distance(color, palette_color, pixel_chroma, i, model);
+            if dist < best_dist {
+                second_dist = best_dist;
+                second_idx = best_idx;
+                best_dist = dist;
+                best_idx = i;
+            } else if dist < second_dist {
+                second_dist = dist;
+                second_idx = i;
+            }
+        }
+
+        (second_idx, second_dist)
+    }
+
+    /// The colour this model says ink `idx` IS.
+    ///
+    /// The dither loop must use this for the diffused error term with the SAME
+    /// model it matched under. Matching under one model and subtracting the
+    /// other injects a constant per-ink bias that error diffusion then spreads
+    /// across the whole region.
+    #[inline]
+    pub fn representative_linear(&self, idx: usize, model: ColourModel) -> LinearRgb {
+        match model {
+            ColourModel::Nominal => self.official_linear[idx],
+            ColourModel::Measured => self.actual_linear[idx],
+        }
     }
 
     /// Create a palette from hex color strings.
@@ -496,6 +598,113 @@ impl Palette {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gamut::test_support::panel_measured;
+
+    /// The two models disagree about a pure primary, and that disagreement is the
+    /// entire point of ruling 22. Nominal green IS green; measured green is a dark
+    /// teal that pure green does not resemble.
+    #[test]
+    fn the_two_models_disagree_about_a_pure_primary() {
+        let palette = panel_measured();
+        let green_idx = (0..palette.len())
+            .find(|&i| palette.official(i).to_bytes() == [0, 255, 0])
+            .expect("fixture must carry a nominal pure green");
+
+        let pure_green = Oklab::from(LinearRgb::from(Srgb::from_u8(0, 255, 0)));
+
+        let (nominal_hit, _) = palette.find_nearest(pure_green, ColourModel::Nominal);
+        let (measured_hit, _) = palette.find_nearest(pure_green, ColourModel::Measured);
+
+        assert_eq!(
+            nominal_hit, green_idx,
+            "under the nominal model a pure green must match the green ink exactly"
+        );
+        // Non-degeneracy: if both models agreed, this test could not detect a
+        // mutant that ignores the model argument.
+        assert_ne!(
+            nominal_hit, measured_hit,
+            "the models returned the same index, so this test cannot discriminate — \
+             the fixture's measured green is too close to nominal green to test with"
+        );
+    }
+
+    /// The nominal model matches every nominal ink to itself at distance zero.
+    /// This is the property the unmapped path depends on.
+    #[test]
+    fn every_nominal_ink_matches_itself_under_the_nominal_model() {
+        let palette = panel_measured();
+        for i in 0..palette.len() {
+            let ink = Oklab::from(LinearRgb::from(palette.official(i)));
+            let (hit, dist) = palette.find_nearest(ink, ColourModel::Nominal);
+            assert_eq!(hit, i, "nominal ink {i} did not match itself");
+            assert!(
+                dist < 1e-6,
+                "nominal ink {i} matched itself at distance {dist}"
+            );
+        }
+    }
+
+    /// representative_linear returns the colour the model says the ink IS.
+    #[test]
+    fn representative_linear_follows_the_model() {
+        let palette = panel_measured();
+        let red = (0..palette.len())
+            .find(|&i| palette.official(i).to_bytes() == [255, 0, 0])
+            .expect("fixture must carry a nominal pure red");
+
+        let nominal = palette.representative_linear(red, ColourModel::Nominal);
+        let measured = palette.representative_linear(red, ColourModel::Measured);
+
+        assert_eq!(nominal, palette.official_linear(red));
+        assert_eq!(measured, palette.actual_linear(red));
+        assert_ne!(
+            nominal, measured,
+            "fixture's nominal and measured red coincide, so this cannot discriminate"
+        );
+    }
+
+    /// The chroma-coupling term must use the model's own chroma cache.
+    ///
+    /// PLAN DEFECT (measured, not adjusted around): the brief's original hypothesis
+    /// probed this with `find_second_nearest` on a grey pixel, expecting the two
+    /// models to disagree about which entry ranks second. Measured: for every grey
+    /// level 0..=255 on `panel_measured()`, both models rank black/white as
+    /// 1st/2nd regardless of the coupling term, because `kchroma=10` (tuned so
+    /// grey never bleeds into chromatic entries — see `test_hyab_all_greys_map_to_valid_color`)
+    /// keeps every chromatic entry's distance far above either achromatic entry's,
+    /// in both models. The raw distances DO differ per model (verified: nominal
+    /// distance to measured-panel's green entry is 3.776, measured is 1.256 — a
+    /// large gap) but never enough to overturn black's 1.1997 as second-nearest.
+    /// A ranking-based probe cannot discriminate this fixture's coupling term.
+    ///
+    /// Corrected probe: call `distance()` directly, holding pixel, palette color,
+    /// pixel chroma and palette index fixed and varying only `model`. This isolates
+    /// exactly the chroma-cache lookup the property is about, independent of
+    /// whether a ranking downstream happens to flip.
+    #[test]
+    fn the_chroma_coupling_term_follows_the_model() {
+        let palette = panel_measured();
+        let grey = Oklab::from(LinearRgb::from(Srgb::from_u8(128, 128, 128)));
+        let chroma = (grey.a * grey.a + grey.b * grey.b).sqrt();
+
+        let green_idx = (0..palette.len())
+            .find(|&i| palette.official(i).to_bytes() == [0, 255, 0])
+            .expect("fixture must carry a nominal pure green");
+        // Fix `b` to a single Oklab value so only the chroma-cache index (driven
+        // by `model`) can move the result — the base positions are identical.
+        let b = palette.official_oklab(green_idx);
+
+        let nominal_dist = palette.distance(grey, b, chroma, green_idx, ColourModel::Nominal);
+        let measured_dist = palette.distance(grey, b, chroma, green_idx, ColourModel::Measured);
+
+        assert_ne!(
+            nominal_dist, measured_dist,
+            "distance() gave the same result under both models for identical pixel/palette \
+             positions, so it did not consult the model-specific chroma cache — if this \
+             holds after measuring, the probe is wrong for this fixture, report it rather \
+             than adjusting it"
+        );
+    }
 
     // Construction tests
     #[test]
@@ -564,7 +773,7 @@ mod tests {
 
         // Black should match black exactly
         let black_oklab = palette.actual_oklab(0);
-        let (idx, dist) = palette.find_nearest(black_oklab);
+        let (idx, dist) = palette.find_nearest(black_oklab, ColourModel::Measured);
         assert_eq!(idx, 0);
         assert!(dist < 1e-10, "Exact match should have ~zero distance");
     }
@@ -580,12 +789,12 @@ mod tests {
 
         // Dark gray (25%) should match black
         let dark_gray = Oklab::from(LinearRgb::from(Srgb::from_u8(64, 64, 64)));
-        let (idx, _) = palette.find_nearest(dark_gray);
+        let (idx, _) = palette.find_nearest(dark_gray, ColourModel::Measured);
         assert_eq!(idx, 0, "Dark gray should match black");
 
         // Light gray (75%) should match white
         let light_gray = Oklab::from(LinearRgb::from(Srgb::from_u8(192, 192, 192)));
-        let (idx, _) = palette.find_nearest(light_gray);
+        let (idx, _) = palette.find_nearest(light_gray, ColourModel::Measured);
         assert_eq!(idx, 1, "Light gray should match white");
     }
 
@@ -607,7 +816,7 @@ mod tests {
 
         // Input: a dark gray color (closer to black perceptually)
         let dark_gray = Oklab::from(LinearRgb::from(Srgb::from_u8(30, 30, 30)));
-        let (idx, _) = palette.find_nearest(dark_gray);
+        let (idx, _) = palette.find_nearest(dark_gray, ColourModel::Measured);
 
         // If matching used official colors: idx=0 (official black is closer)
         // If matching uses actual colors: idx=1 (actual black is at index 1)
@@ -619,7 +828,7 @@ mod tests {
 
         // Similarly, a light color should match idx=0 (where actual white is)
         let light_gray = Oklab::from(LinearRgb::from(Srgb::from_u8(220, 220, 220)));
-        let (idx, _) = palette.find_nearest(light_gray);
+        let (idx, _) = palette.find_nearest(light_gray, ColourModel::Measured);
         assert_eq!(
             idx, 0,
             "Should match against actual colors (white at idx 0)"
@@ -735,7 +944,7 @@ mod tests {
         // because no chromatic color has similar lightness.
         for &grey_val in &[0u8, 16, 32, 224, 240, 255] {
             let grey = Oklab::from(LinearRgb::from(Srgb::from_u8(grey_val, grey_val, grey_val)));
-            let (idx, _) = palette.find_nearest(grey);
+            let (idx, _) = palette.find_nearest(grey, ColourModel::Measured);
             assert!(
                 idx == 0 || idx == 1,
                 "Grey {} should map to black or white, got index {} ({:?})",
@@ -768,7 +977,7 @@ mod tests {
                 });
 
         let mid_grey = Oklab::from(LinearRgb::from(Srgb::from_u8(128, 128, 128)));
-        let (idx, _) = palette.find_nearest(mid_grey);
+        let (idx, _) = palette.find_nearest(mid_grey, ColourModel::Measured);
         assert!(
             idx == 0 || idx == 1,
             "With high kc, mid-grey should map to achromatic, got index {}",
@@ -782,12 +991,12 @@ mod tests {
 
         // Pure red should still map to red
         let red = Oklab::from(LinearRgb::from(Srgb::from_u8(255, 0, 0)));
-        let (idx, _) = palette.find_nearest(red);
+        let (idx, _) = palette.find_nearest(red, ColourModel::Measured);
         assert_eq!(idx, 2, "Pure red should map to red (index 2), got {}", idx);
 
         // Pure green should still map to green
         let green = Oklab::from(LinearRgb::from(Srgb::from_u8(0, 255, 0)));
-        let (idx, _) = palette.find_nearest(green);
+        let (idx, _) = palette.find_nearest(green, ColourModel::Measured);
         assert_eq!(
             idx, 3,
             "Pure green should map to green (index 3), got {}",
@@ -796,7 +1005,7 @@ mod tests {
 
         // Pure blue should still map to blue
         let blue = Oklab::from(LinearRgb::from(Srgb::from_u8(0, 0, 255)));
-        let (idx, _) = palette.find_nearest(blue);
+        let (idx, _) = palette.find_nearest(blue, ColourModel::Measured);
         assert_eq!(
             idx, 4,
             "Pure blue should map to blue (index 4), got {}",
@@ -812,11 +1021,11 @@ mod tests {
         assert!(palette.is_euclidean());
 
         let dark_gray = Oklab::from(LinearRgb::from(Srgb::from_u8(64, 64, 64)));
-        let (idx, _) = palette.find_nearest(dark_gray);
+        let (idx, _) = palette.find_nearest(dark_gray, ColourModel::Measured);
         assert_eq!(idx, 0, "Dark gray should match black");
 
         let light_gray = Oklab::from(LinearRgb::from(Srgb::from_u8(192, 192, 192)));
-        let (idx, _) = palette.find_nearest(light_gray);
+        let (idx, _) = palette.find_nearest(light_gray, ColourModel::Measured);
         assert_eq!(idx, 1, "Light gray should match white");
     }
 
@@ -833,7 +1042,7 @@ mod tests {
                 grey_val as u8,
                 grey_val as u8,
             )));
-            let (idx, dist) = palette.find_nearest(grey);
+            let (idx, dist) = palette.find_nearest(grey, ColourModel::Measured);
             assert!(
                 idx == 0 || idx == 1,
                 "Grey {} should map to black or white, got index {} ({:?})",
@@ -850,7 +1059,7 @@ mod tests {
         let palette = make_6_color_palette();
         for grey_val in 0..=255u8 {
             let grey = Oklab::from(LinearRgb::from(Srgb::from_u8(grey_val, grey_val, grey_val)));
-            let (idx, _) = palette.find_nearest(grey);
+            let (idx, _) = palette.find_nearest(grey, ColourModel::Measured);
             assert!(
                 idx == 0 || idx == 1,
                 "Grey {} mapped to index {} ({:?}), expected black or white",
@@ -872,7 +1081,7 @@ mod tests {
         ];
         for (color, expected_idx, name) in test_cases {
             let oklab = Oklab::from(LinearRgb::from(color));
-            let (idx, _) = palette.find_nearest(oklab);
+            let (idx, _) = palette.find_nearest(oklab, ColourModel::Measured);
             assert_eq!(
                 idx, expected_idx,
                 "Pure {} should map to index {}, got {}",
@@ -885,7 +1094,7 @@ mod tests {
     fn test_chroma_coupling_orange_maps_to_chromatic() {
         let palette = make_6_color_palette();
         let orange = Oklab::from(LinearRgb::from(Srgb::from_u8(255, 165, 0)));
-        let (idx, _) = palette.find_nearest(orange);
+        let (idx, _) = palette.find_nearest(orange, ColourModel::Measured);
         assert!(
             idx >= 2,
             "Orange should map to a chromatic entry (idx >= 2), got {}",

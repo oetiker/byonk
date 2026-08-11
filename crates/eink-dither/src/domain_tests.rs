@@ -11,7 +11,7 @@ mod domain_tests {
         dither_with_kernel_noise, DitherAlgorithm, DitherOptions, ATKINSON, FLOYD_STEINBERG,
         JARVIS_JUDICE_NINKE, SIERRA, SIERRA_LITE, SIERRA_TWO_ROW,
     };
-    use crate::palette::Palette;
+    use crate::palette::{ColourModel, Palette};
     use crate::Oklch;
 
     // ========================================================================
@@ -491,7 +491,7 @@ mod domain_tests {
         let palette = Palette::new(&palette_colors, None).unwrap();
 
         let brown = Oklab::from(LinearRgb::from(Srgb::from_u8(139, 69, 19)));
-        let (idx, _) = palette.find_nearest(brown);
+        let (idx, _) = palette.find_nearest(brown, ColourModel::Measured);
         assert_eq!(
             idx, 2,
             "REGRESSION (TEST-04): Brown (139,69,19) should map to red (index 2), got index {}",
@@ -518,7 +518,7 @@ mod domain_tests {
 
         // Dark red should map to red, not black
         let dark_red = Oklab::from(LinearRgb::from(Srgb::from_u8(139, 0, 0)));
-        let (idx, _) = palette.find_nearest(dark_red);
+        let (idx, _) = palette.find_nearest(dark_red, ColourModel::Measured);
         assert_eq!(
             idx, 2,
             "REGRESSION (TEST-04): Dark red (139,0,0) should map to red (idx 2), got {}",
@@ -527,7 +527,7 @@ mod domain_tests {
 
         // Dark blue should map to blue, not black
         let dark_blue = Oklab::from(LinearRgb::from(Srgb::from_u8(0, 0, 139)));
-        let (idx, _) = palette.find_nearest(dark_blue);
+        let (idx, _) = palette.find_nearest(dark_blue, ColourModel::Measured);
         assert_eq!(
             idx, 4,
             "REGRESSION (TEST-04): Dark blue (0,0,139) should map to blue (idx 4), got {}",
@@ -536,7 +536,7 @@ mod domain_tests {
 
         // Navy should map to blue, not black
         let navy = Oklab::from(LinearRgb::from(Srgb::from_u8(0, 0, 128)));
-        let (idx, _) = palette.find_nearest(navy);
+        let (idx, _) = palette.find_nearest(navy, ColourModel::Measured);
         assert_eq!(
             idx, 4,
             "REGRESSION (TEST-04): Navy (0,0,128) should map to blue (idx 4), got {}",
@@ -940,7 +940,7 @@ mod domain_tests {
         let palette = Palette::new(&palette_colors, None).unwrap();
 
         let dark_green = Oklab::from(LinearRgb::from(Srgb::from_u8(0, 100, 0)));
-        let (idx, _) = palette.find_nearest(dark_green);
+        let (idx, _) = palette.find_nearest(dark_green, ColourModel::Measured);
 
         // Dark green should map to green (3) or possibly yellow (5) -- both are
         // acceptable chromatic mappings. It must NOT map to black (0) or white (1).
@@ -1303,7 +1303,7 @@ mod domain_tests {
             let srgb = Srgb::new(r, g, b);
             let oklab = Oklab::from(LinearRgb::from(srgb));
             let chroma = (oklab.a * oklab.a + oklab.b * oklab.b).sqrt();
-            let (idx, dist) = photo_palette.find_nearest(oklab);
+            let (idx, dist) = photo_palette.find_nearest(oklab, ColourModel::Measured);
 
             eprintln!(
                 "{hue_deg:>5}\u{00b0} | ({:>3},{:>3},{:>3}) | {:.3} {:.4} {:.4} {:.3} | {}({}) | {:.4}",
@@ -2306,7 +2306,7 @@ mod domain_tests {
         for &(hue_deg, l) in &[(45i32, 0.32f32), (30, 0.20)] {
             let (r, g, b) = hsl_to_rgb(hue_deg as f32 / 360.0, 1.0, l);
             let src = LinearRgb::from(Srgb::new(r, g, b));
-            let (nearest, _) = palette.find_nearest(Oklab::from(src));
+            let (nearest, _) = palette.find_nearest(Oklab::from(src), ColourModel::Measured);
             eprintln!("\n=== hue {hue_deg}deg L {l:.2} ===");
             eprintln!(
                 "  unperturbed target matches: {} (linear {:.3} {:.3} {:.3})",
@@ -2350,7 +2350,7 @@ mod domain_tests {
                     // apply_error bounds the accumulated error, not the value.
                     let acc: Vec<f32> = e.iter().map(|c| (c * t).clamp(-1.0, 1.0)).collect();
                     let p = LinearRgb::new(src.r + acc[0], src.g + acc[1], src.b + acc[2]);
-                    let (idx, _) = palette.find_nearest(Oklab::from(p));
+                    let (idx, _) = palette.find_nearest(Oklab::from(p), ColourModel::Measured);
                     if idx != last {
                         regions.push(format!("t={t:.1}->{}", names[idx]));
                         last = idx;

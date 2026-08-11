@@ -15,9 +15,10 @@ green at `24ce479`. The prior **gamut** initiative is complete and committed.
 | Pinning Task 2 | `89c2069`..`24ce479`, reviewed clean (2 fix rounds) |
 | Worktree | `/Users/oetiker/checkouts/byonk` (working in place, no worktree) |
 | State | tree clean; **full `make check` PASSES, exit 0, zero warnings** |
-| Active spec | `docs/superpowers/specs/2026-08-10-panel-colour-pinning-design.md` |
-| Active plan | `docs/superpowers/plans/2026-08-10-panel-colour-pinning.md` |
-| Active ledger | `.superpowers/sdd/2026-08-10-panel-colour-pinning/progress.md` (git-ignored) |
+| Active spec | `docs/superpowers/specs/2026-08-10-panel-colour-pinning-design.md` — **read Amendment 1 + ruling 23 at the end** |
+| Active plan | `docs/superpowers/plans/2026-08-11-panel-colour-pinning-amended.md` (Tasks 3–8) |
+| Active ledger | `.superpowers/sdd/2026-08-11-panel-colour-pinning-amended/progress.md` (git-ignored) |
+| Superseded | the 2026-08-10 plan (its Tasks 1–2 are done and valid; its `task-3-brief.md` is DEAD) and `.superpowers/sdd/2026-08-10-panel-colour-pinning/progress.md`, kept for history |
 | Prior initiative | `docs/superpowers/specs/2026-08-07-gamut-mapping-design.md` — complete |
 
 **Resume by:** reading the active ledger, then `git log 24ce479..HEAD`, then

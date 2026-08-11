@@ -194,62 +194,78 @@ impl EinkDitherer {
     ///
     /// The builder is reusable -- `dither()` takes `&self`.
     pub fn dither(&self, pixels: &[Srgb], width: usize, height: usize) -> DitheredImage {
-        self.dither_with_pinning(pixels, width, height, None)
+        self.dither_with_regions(pixels, width, height, None)
     }
 
-    /// Dither, holding pixels that already sit exactly on a palette ink.
+    /// Dither, honouring per-pixel continuous-tone regions.
     ///
-    /// `pin_eligible`, when supplied, is one `bool` per input pixel: `true`
-    /// where the caller permits pinning. A pixel is pinned when it is eligible
-    /// AND its bytes equal a nominal palette entry exactly. Such a pixel renders
-    /// as that ink and hands `DitherOptions::pin_carry` of the error diffused
-    /// into it on to its neighbours.
+    /// `continuous`, when supplied, is one `bool` per input pixel: `true` where
+    /// the content is continuous-tone. That bit selects three behaviours at
+    /// once (owner rulings 22 and 23):
     ///
-    /// `None` means no pinning at all — identical output to [`Self::dither`]. A
-    /// caller wanting frame-wide pinning passes an all-`true` slice.
+    /// - **Colour model.** Unmarked content is matched against the NOMINAL
+    ///   palette entries and is taken to BE them; marked content is matched
+    ///   against the measured inks.
+    /// - **Pinning.** Unmarked pixels whose bytes equal a nominal entry exactly
+    ///   are pinned; marked pixels never are. A pinned pixel renders as that ink
+    ///   and hands `DitherOptions::pin_carry` of the error diffused into it on
+    ///   to its neighbours.
+    /// - **Error diffusion.** No error crosses between marked and unmarked
+    ///   pixels, in either direction, exactly as none crosses the frame edge.
     ///
-    /// The match is resolved on these `Srgb` bytes, BEFORE preprocessing:
+    /// `None` means none of the three: measured model everywhere, no pinning,
+    /// no boundary stops — identical output to [`Self::dither`].
+    ///
+    /// NOTE the polarity: this is the tone mask as rasterized, not the
+    /// pin-eligibility mask. An all-`true` slice means "everything is
+    /// continuous-tone", which disables pinning.
+    ///
+    /// The pin match is resolved on these `Srgb` bytes, BEFORE preprocessing:
     /// saturation or contrast at anything but identity would move a pure ink off
     /// its palette entry and the match would silently never fire. A pinned pixel
     /// is therefore not enhanced — it renders the colour the author wrote, which
     /// is the right answer for the structural content pinning exists for.
     ///
-    /// Pinning is refused when a resize is configured: resampling destroys exact
-    /// matches and breaks the index correspondence between `pixels` and the
-    /// preprocessed frame.
-    pub fn dither_with_pinning(
+    /// The whole region map is refused when a resize is configured: resampling
+    /// destroys exact matches and breaks the index correspondence between
+    /// `pixels` and the preprocessed frame. A resizing call therefore behaves
+    /// exactly like `None`, colour model included.
+    pub fn dither_with_regions(
         &self,
         pixels: &[Srgb],
         width: usize,
         height: usize,
-        pin_eligible: Option<&[bool]>,
+        continuous: Option<&[bool]>,
     ) -> DitheredImage {
         let resizing =
             self.preprocess.target_width.is_some() || self.preprocess.target_height.is_some();
 
-        let pin_map: Option<Vec<Option<u8>>> = match pin_eligible {
+        // The tone mask is borrowed as-is; only the derived pin map is
+        // allocated. (Deviation from the brief, which cloned the mask into a
+        // `Vec<bool>` for no reason the borrow checker requires: `continuous`
+        // outlives every use of `regions` below.)
+        let maps: Option<(&[bool], Vec<Option<u8>>)> = match continuous {
             Some(mask) if !resizing && mask.len() == pixels.len() => {
                 let inks: Vec<[u8; 3]> = (0..self.palette.len())
                     .map(|i| self.palette.official(i).to_bytes())
                     .collect();
-                Some(
-                    pixels
-                        .iter()
-                        .zip(mask.iter())
-                        .map(|(px, &ok)| {
-                            if !ok {
-                                return None;
-                            }
-                            let bytes = px.to_bytes();
-                            inks.iter().position(|ink| *ink == bytes).map(|i| i as u8)
-                        })
-                        .collect(),
-                )
+                let pinned: Vec<Option<u8>> = pixels
+                    .iter()
+                    .zip(mask.iter())
+                    .map(|(px, &is_continuous)| {
+                        if is_continuous {
+                            return None;
+                        }
+                        let bytes = px.to_bytes();
+                        inks.iter().position(|ink| *ink == bytes).map(|i| i as u8)
+                    })
+                    .collect();
+                Some((mask, pinned))
             }
             Some(mask) => {
                 debug_assert!(
                     resizing || mask.len() == pixels.len(),
-                    "pin_eligible mask length ({}) does not match pixel count ({}) — pinning silently disabled",
+                    "continuous mask length ({}) does not match pixel count ({}) — regions silently disabled",
                     mask.len(),
                     pixels.len()
                 );
@@ -275,29 +291,9 @@ impl EinkDitherer {
         // 3. Dither using unified kernel dispatch
         let photo_palette = self.palette.for_error_diffusion();
         let kernel = self.algorithm.kernel();
-        // Deviation from the Task 4 brief: the brief's Step 5 says to pass
-        // `None` here, which would disable pinning outright and break three
-        // existing tests (`eligibility_decides_where_pinning_applies`,
-        // `the_exact_match_is_against_the_nominal_entry`,
-        // `a_near_miss_is_not_pinned`) that assert pinning changes the
-        // output. Instead, build a uniform `continuous: true` mask alongside
-        // the existing pin map: a uniform mask means `RegionMap::model`
-        // always resolves to `Measured` and the boundary stop can never
-        // fire (both sides of every tap agree), so behaviour is unchanged
-        // bit-for-bit while pinning stays wired up. Task 5 is expected to
-        // build the real per-pixel `continuous` mask from tone markup.
-        // Only allocate the uniform mask when there is a pin map to pair it
-        // with — the common `pin_eligible: None` case must not pay for a
-        // full-frame Vec<bool> it never reads.
-        let all_marked_and_pins: Option<(Vec<bool>, &[Option<u8>])> = pin_map
-            .as_deref()
-            .map(|pins| (vec![true; pins.len()], pins));
-        let regions = all_marked_and_pins
+        let regions = maps
             .as_ref()
-            .map(|(continuous, pins)| RegionMap {
-                continuous,
-                pinned: pins,
-            });
+            .map(|(continuous, pinned)| RegionMap { continuous, pinned });
         let indices = dither_with_kernel_noise(
             &result.pixels,
             result.width,
@@ -363,18 +359,30 @@ mod tests {
         px
     }
 
-    /// Fraction of the line's pixels (see `hostile_line_field`) that
-    /// quantized to `ink` in `img`.
-    fn line_ink_share(img: &DitheredImage, ink: u8) -> f64 {
+    /// One row of `img`, left to right.
+    fn row(img: &DitheredImage, y: usize) -> &[u8] {
+        &img.indices()[y * HOSTILE_W..(y + 1) * HOSTILE_W]
+    }
+
+    /// Fraction of the line's pixels (see `hostile_line_field`) in rows
+    /// `rows` that quantized to `ink` in `img`.
+    fn line_ink_share_in_rows(img: &DitheredImage, rows: std::ops::Range<usize>, ink: u8) -> f64 {
+        let total = rows.len() * HOSTILE_LINE_COLS.len();
         let mut n = 0usize;
-        for y in 0..HOSTILE_H {
+        for y in rows {
             for x in HOSTILE_LINE_COLS {
                 if img.indices()[y * HOSTILE_W + x] == ink {
                     n += 1;
                 }
             }
         }
-        n as f64 / (HOSTILE_H * HOSTILE_LINE_COLS.len()) as f64
+        n as f64 / total as f64
+    }
+
+    /// Fraction of the line's pixels (see `hostile_line_field`) that
+    /// quantized to `ink` in `img`.
+    fn line_ink_share(img: &DitheredImage, ink: u8) -> f64 {
+        line_ink_share_in_rows(img, 0..HOSTILE_H, ink)
     }
 
     #[test]
@@ -534,6 +542,16 @@ mod tests {
     /// geometry the real defect has: a 2 px pinned line wide enough, and long
     /// enough, for diffused error from a genuinely hostile saturated field to
     /// erode it when pinning is off.
+    ///
+    /// Task 5 changed the hostile field from (192,96,32) to (255,128,0), and
+    /// added the `nominal_no_pin` control. Both because the two arms now differ
+    /// in COLOUR MODEL as well as in pinning (ruling 22: unmarked implies
+    /// nominal). Measured at (192,96,32) with the nominal model: a line of
+    /// (1,0,0), which cannot pin, still comes back 100% black — the nominal
+    /// model alone holds it, so `pinned_share == 1.0` proved nothing about
+    /// pinning and the test passed against an implementation that never pins.
+    /// At (255,128,0) the same unpinnable line measures 85.9%, so the control
+    /// below is a real discriminator: 100% for exact black there IS the pin.
     #[test]
     fn eligibility_decides_where_pinning_applies() {
         let palette = test_palette();
@@ -541,19 +559,29 @@ mod tests {
             .noise_scale(0.0)
             .serpentine(false);
 
-        let field = Srgb::from_u8(192, 96, 32);
+        let field = Srgb::from_u8(255, 128, 0);
         let black = Srgb::from_u8(0, 0, 0);
         let px = hostile_line_field(field, black);
         let (w, h) = (HOSTILE_W, HOSTILE_H);
 
-        let eligible = vec![true; w * h];
-        let ineligible = vec![false; w * h];
+        // Polarity: `false` = not continuous-tone = pin-eligible.
+        let eligible = vec![false; w * h];
+        let ineligible = vec![true; w * h];
 
-        let pinned = ditherer.dither_with_pinning(&px, w, h, Some(&eligible));
-        let unpinned = ditherer.dither_with_pinning(&px, w, h, Some(&ineligible));
+        let pinned = ditherer.dither_with_regions(&px, w, h, Some(&eligible));
+        let unpinned = ditherer.dither_with_regions(&px, w, h, Some(&ineligible));
+        // Same mask, same colour model as `pinned`; one byte off black, so it
+        // cannot pin. Isolates the pin from the model flip.
+        let nominal_no_pin = ditherer.dither_with_regions(
+            &hostile_line_field(field, Srgb::from_u8(1, 0, 0)),
+            w,
+            h,
+            Some(&eligible),
+        );
 
         let unpinned_share = line_ink_share(&unpinned, 0);
         let pinned_share = line_ink_share(&pinned, 0);
+        let control_share = line_ink_share(&nominal_no_pin, 0);
 
         // The scenario must actually be hostile, or the pinned result below
         // proves nothing.
@@ -563,12 +591,161 @@ mod tests {
              not hostile, so the pinned result below would prove nothing",
             unpinned_share * 100.0
         );
+        // ...and hostile under the *same* colour model the pinned arm runs in,
+        // or `pinned_share == 1.0` would be the nominal model's doing.
+        assert!(
+            control_share < 0.99,
+            "an unpinnable line came back {:.1}% black under the very mask \
+             the pinned arm uses — the nominal colour model alone is holding \
+             this line, so the pinned result below is not attributable to \
+             pinning",
+            control_share * 100.0
+        );
         assert_eq!(
             pinned_share,
             1.0,
-            "pinned line came back only {:.1}% black (ineligible: {:.1}%)",
+            "pinned line came back only {:.1}% black (ineligible: {:.1}%, \
+             same-model unpinnable control: {:.1}%)",
             pinned_share * 100.0,
-            unpinned_share * 100.0
+            unpinned_share * 100.0,
+            control_share * 100.0
+        );
+    }
+
+    /// The polarity guard. `continuous` is the tone mask, NOT its inverse: an
+    /// all-true mask means "all continuous-tone", which must disable pinning.
+    /// Inverting this is silent and produces a plausible image either way.
+    ///
+    /// Field changed from the brief's (0xC0,0x60,0x20) to (255,128,0). Measured
+    /// at the brief's field: an unpinnable (1,0,0) line comes back 100% black
+    /// under the nominal model, so `unmarked_share > 0.99` was satisfied by the
+    /// colour model rather than by the pin, and both assertions passed against
+    /// an implementation that pins nothing at all. At (255,128,0) that same
+    /// unpinnable line measures 85.9%, so `unmarked_share > 0.99` can only be
+    /// met by the pin actually firing. See
+    /// `eligibility_decides_where_pinning_applies` for the explicit control.
+    #[test]
+    fn an_all_continuous_mask_disables_pinning() {
+        let palette = test_palette();
+        let ditherer = EinkDitherer::new(palette)
+            .noise_scale(0.0)
+            .serpentine(false);
+        let px = hostile_line_field(Srgb::from_u8(255, 128, 0), Srgb::from_u8(0, 0, 0));
+
+        let all_continuous = vec![true; px.len()];
+        let none_continuous = vec![false; px.len()];
+
+        let marked = ditherer.dither_with_regions(&px, HOSTILE_W, HOSTILE_H, Some(&all_continuous));
+        let unmarked =
+            ditherer.dither_with_regions(&px, HOSTILE_W, HOSTILE_H, Some(&none_continuous));
+
+        let marked_share = line_ink_share(&marked, 0);
+        let unmarked_share = line_ink_share(&unmarked, 0);
+
+        assert!(
+            unmarked_share > 0.99,
+            "an unmarked line was not pinned ({:.1}%) — polarity may be inverted",
+            unmarked_share * 100.0
+        );
+        assert!(
+            marked_share < 0.99,
+            "an all-continuous mask still pinned the line ({:.1}%) — the mask is \
+             being read as pin_eligible rather than as the tone mask",
+            marked_share * 100.0
+        );
+    }
+
+    /// The mask is read per pixel, not once for the frame.
+    ///
+    /// Added in Task 5, not in the brief. Every other test in this module
+    /// passes a UNIFORM mask, so all of them — the polarity guard included —
+    /// are satisfied by an implementation that reads the mask once and applies
+    /// it frame-wide. Measured: a mutant handing `RegionMap.continuous` a
+    /// uniform all-false slice, and a mutant zipping the pin map against
+    /// `mask[0]` instead of the mask, both survived the whole module (15/15
+    /// green) before this test existed. The first of those two mutants is
+    /// exactly the Task-4 placeholder this task removes, so nothing would have
+    /// caught its return; and the per-pixel claims in `dither_with_regions`'
+    /// own doc comment were, until this test, unverified at this level.
+    ///
+    /// The split is HORIZONTAL, not vertical. Measured with a vertical split:
+    /// containment shields the pinned column outright — no error can cross the
+    /// boundary into it, so it comes back solid black whether or not it was
+    /// pinned, and the pin assertion could not be attributed to pinning. With a
+    /// horizontal split, the pinned pixels in the bottom half still receive
+    /// error from the hostile field of their own region.
+    ///
+    /// Two claims, one per behaviour the mask drives here:
+    ///
+    /// - Colour model: with the top half marked continuous, a row deep in the
+    ///   top half must dither exactly as it does under an all-marked frame, and
+    ///   NOT as under an all-unmarked one. The kernel reaches at most two rows
+    ///   down and `serpentine(false)` keeps the scan forward, so row 2 depends
+    ///   only on rows 0..=2 — all marked — and the equality is exact.
+    /// - Pinning: the same call gives the line's top half a marked bit and its
+    ///   bottom half an unmarked one. The bottom half is pinned solid; the top
+    ///   half is not.
+    ///
+    /// Note what the model claim can and cannot attribute: a mutant that
+    /// flattens the model for EVERY call also flattens the two reference runs,
+    /// so it trips the non-degeneracy assertion rather than the equality. That
+    /// is still a catch, and the reference runs are the only baseline available
+    /// in-process, but the failure message will name degeneracy, not the model.
+    ///
+    /// The third behaviour, error containment at the boundary, is Task 4's and
+    /// is tested there against the dither loop directly; this test does not
+    /// re-assert it.
+    #[test]
+    fn the_mask_is_applied_per_pixel_not_frame_wide() {
+        let palette = test_palette();
+        let ditherer = EinkDitherer::new(palette)
+            .noise_scale(0.0)
+            .serpentine(false);
+
+        let field = Srgb::from_u8(255, 128, 0);
+        let px = hostile_line_field(field, Srgb::from_u8(0, 0, 0));
+        let (w, h) = (HOSTILE_W, HOSTILE_H);
+        let split = HOSTILE_H / 2;
+
+        // Top half continuous-tone, bottom half not.
+        let mixed: Vec<bool> = (0..w * h).map(|i| i / w < split).collect();
+        let all_marked = vec![true; w * h];
+        let all_unmarked = vec![false; w * h];
+
+        let mixed_img = ditherer.dither_with_regions(&px, w, h, Some(&mixed));
+        let marked_img = ditherer.dither_with_regions(&px, w, h, Some(&all_marked));
+        let unmarked_img = ditherer.dither_with_regions(&px, w, h, Some(&all_unmarked));
+
+        // Non-degeneracy: the two colour models must actually disagree about
+        // this row, or the equality below is vacuous.
+        assert_ne!(
+            row(&marked_img, 2),
+            row(&unmarked_img, 2),
+            "the measured and nominal models agree on row 2 of this field, so \
+             the model comparison below proves nothing"
+        );
+        assert_eq!(
+            row(&mixed_img, 2),
+            row(&marked_img, 2),
+            "a row inside the marked half did not dither as marked content — \
+             the mask is not being read per pixel"
+        );
+
+        let unmarked_half = line_ink_share_in_rows(&mixed_img, split..h, 0);
+        let marked_half = line_ink_share_in_rows(&mixed_img, 0..split, 0);
+        assert_eq!(
+            unmarked_half,
+            1.0,
+            "the unmarked half of the line came back only {:.1}% black in the \
+             same call whose marked half measured {:.1}%",
+            unmarked_half * 100.0,
+            marked_half * 100.0
+        );
+        assert!(
+            marked_half < 0.99,
+            "the marked half of the line was held at {:.1}% black — the mask's \
+             per-pixel structure is not reaching the pin map",
+            marked_half * 100.0
         );
     }
 
@@ -577,17 +754,23 @@ mod tests {
     ///
     /// The brief's original version dithered a flat 2 px row of official red
     /// with no neighbours and asserted the output was ink 2. Measured: it is
-    /// ink 2 even completely unpinned (`dither_with_pinning(..., None)`),
-    /// because red is still the nearest palette entry to (255,0,0) by plain
-    /// distance — matching against `actual(i)` instead of `official(i)`
-    /// would make the exact-match check fail to fire for every pixel in this
-    /// scene, and the test could not tell, since ordinary nearest-match
-    /// dithering lands on the same ink anyway. Replaced with a 2 px line of
-    /// official red between a hostile green field — far enough from every
-    /// ink in `test_palette()` to diffuse hard. Since official red's bytes
-    /// never equal its *actual* bytes, a match against `actual(i)` never
-    /// pins this line at all, so it is exactly as eroded as the unpinned
-    /// baseline; matching against `official(i)` holds it exactly.
+    /// ink 2 even completely unpinned, because red is still the nearest
+    /// palette entry to (255,0,0) by plain distance — matching against
+    /// `actual(i)` instead of `official(i)` would make the exact-match check
+    /// fail to fire for every pixel in this scene, and the test could not
+    /// tell, since ordinary nearest-match dithering lands on the same ink
+    /// anyway. Replaced with a 2 px line of official red between a hostile
+    /// green field — far enough from every ink in `test_palette()` to
+    /// diffuse hard.
+    ///
+    /// Ruling 22 revives that exact hazard, because the eligible arm is now
+    /// also matched against the NOMINAL palette, in which (255,0,0) IS entry 2
+    /// at distance zero. So the baseline is no longer `None` (that would be
+    /// the *measured* model, a different scene). It is a line of (254,0,0)
+    /// under the SAME all-unmarked mask: visually the same red, nominally
+    /// still nearest to entry 2, but one byte off, so it cannot pin. Measured:
+    /// 53.1% ink 2. An `actual(i)` mutant makes the exact line behave exactly
+    /// like that control; `official(i)` holds it at 100%.
     #[test]
     fn the_exact_match_is_against_the_nominal_entry() {
         let palette = test_palette();
@@ -597,58 +780,79 @@ mod tests {
 
         let field = Srgb::from_u8(0, 255, 0);
         let red = Srgb::from_u8(255, 0, 0);
-        let px = hostile_line_field(field, red);
+        // One byte off official red: same colour model, same mask, no pin.
+        let near_red = Srgb::from_u8(254, 0, 0);
         let (w, h) = (HOSTILE_W, HOSTILE_H);
-        let eligible = vec![true; w * h];
+        let eligible = vec![false; w * h];
 
-        let pinned = ditherer.dither_with_pinning(&px, w, h, Some(&eligible));
-        let unpinned = ditherer.dither_with_pinning(&px, w, h, None);
+        let pinned =
+            ditherer.dither_with_regions(&hostile_line_field(field, red), w, h, Some(&eligible));
+        let unpinnable = ditherer.dither_with_regions(
+            &hostile_line_field(field, near_red),
+            w,
+            h,
+            Some(&eligible),
+        );
 
-        let unpinned_share = line_ink_share(&unpinned, 2);
+        let control_share = line_ink_share(&unpinnable, 2);
         let pinned_share = line_ink_share(&pinned, 2);
 
-        // The scenario must actually be hostile, or the pinned result below
-        // proves nothing.
+        // The scenario must be hostile under the very colour model the pinned
+        // arm runs in, or the pinned result below proves nothing: nominal red
+        // is entry 2 at distance zero, so nearest-match alone could hold this
+        // line at 100% with no pin involved.
         assert!(
-            unpinned_share < 0.99,
-            "the unpinned red line came back {:.1}% red — this scenario is \
-             not hostile, so the pinned result below would prove nothing",
-            unpinned_share * 100.0
+            control_share < 0.99,
+            "a one-byte-off red line came back {:.1}% ink 2 under the pinned \
+             arm's own mask — nearest-match alone is holding this line, so \
+             the pinned result below is not attributable to the nominal \
+             exact match",
+            control_share * 100.0
         );
         assert_eq!(
             pinned_share,
             1.0,
             "an author-written nominal red line came back only {:.1}% \
-             recognised as ink 2 (unpinned: {:.1}%)",
+             recognised as ink 2 (same-model unpinnable control: {:.1}%)",
             pinned_share * 100.0,
-            unpinned_share * 100.0
+            control_share * 100.0
         );
     }
 
     /// A pixel that is not exactly an ink is never pinned, however eligible.
     ///
-    /// The brief's original version used a flat, isolated `(1,0,0)` row with
-    /// no neighbours. Measured: with a correct exact match this row never
-    /// pins (as intended), so `with == without` trivially — but a "compare
-    /// with a tolerance instead of `==`" mutant makes the same assertion
-    /// pass too, because normal nearest-match dithering *also* quantizes an
-    /// isolated near-black pixel to black; there was no error in flight for
-    /// a wrongly-tolerant pin to change. Replaced with the same hostile 2 px
-    /// line geometry used above: near-black surrounded by a saturated field
-    /// that erodes an unpinned line. A tolerant match would pin the
-    /// near-miss line to 100% black — visibly different from the erosion an
-    /// exact match leaves it at — so this version actually exercises the
-    /// exactness of the comparison rather than just its wiring.
+    /// Task 2's history, still relevant: the brief's original version used a
+    /// flat, isolated `(1,0,0)` row with no neighbours. Measured then: with a
+    /// correct exact match that row never pins (as intended), so the assertion
+    /// held trivially — and a "compare with a tolerance instead of `==`" mutant
+    /// made it pass too, because normal nearest-match dithering *also*
+    /// quantizes an isolated near-black pixel to black; there was no error in
+    /// flight for a wrongly-tolerant pin to change. Hence the hostile 2 px line
+    /// geometry, kept here: a tolerant match pins the near-miss line to 100%
+    /// black, visibly different from the erosion an exact match leaves.
     ///
-    /// The `without` erosion is asserted directly (not just documented): a
-    /// future change that stops this scene being hostile must fail loudly
-    /// here rather than pass a now-tautological `with == without`. This
-    /// does NOT catch a mutant that disables pinning entirely — "never
-    /// pin" is exactly what this test expects, so it can't tell that apart
-    /// from "correctly never pins this near-miss." That mutant is caught by
-    /// `eligibility_decides_where_pinning_applies` and
-    /// `the_exact_match_is_against_the_nominal_entry` instead, which assert
-    /// pinning DOES fire.
+    /// Task 5 restructure (deviation, declared in the report). Task 2's shape
+    /// was `dither_with_regions(Some(eligible)) == dither_with_regions(None)`.
+    /// Under ruling 22 the eligible arm is ALSO the nominal colour model while
+    /// the `None` arm is the measured one, so the two arms now differ for a
+    /// reason that has nothing to do with pinning: measured, the field
+    /// (192,96,32) sits near actual red (200,50,50); nominal, its nearest ink
+    /// is (255,0,0), which is much further away and mixes far more black into
+    /// the field. The equality failed on the very first run with the two arms
+    /// differing across the whole frame, field included. There is no longer any
+    /// way to spell "same colour model, pinning off" — unmarked implies nominal
+    /// implies pin-eligible, by design — so no same-model baseline exists.
+    ///
+    /// Replaced with a within-arm comparison at fixed colour model: both scenes
+    /// run under the SAME all-unmarked mask, differing only in the line colour.
+    /// The exact-black line is the control and must be held at exactly 100%;
+    /// the one-byte-off line must not be. That control is what lets this test
+    /// attribute the near-miss erosion to the inexactness of the match rather
+    /// than to pinning being off, mis-wired, or the scene not being hostile —
+    /// it is the non-degeneracy assertion in its strongest available form.
+    ///
+    /// Consequently this version DOES catch a pinning-disabled mutant too (the
+    /// control fails), which Task 2's version explicitly could not.
     #[test]
     fn a_near_miss_is_not_pinned() {
         let palette = test_palette();
@@ -656,28 +860,48 @@ mod tests {
             .noise_scale(0.0)
             .serpentine(false);
 
-        let field = Srgb::from_u8(192, 96, 32);
+        // (255,128,0), not Task 2's (192,96,32): under the nominal colour
+        // model that older field holds even an unpinnable (1,0,0) line at
+        // 100% black, so a tolerant match would have been indistinguishable
+        // from an exact one. Measured at (255,128,0): 85.9%.
+        let field = Srgb::from_u8(255, 128, 0);
+        let black = Srgb::from_u8(0, 0, 0);
         // One byte off black in one channel.
         let near_black = Srgb::from_u8(1, 0, 0);
-        let px = hostile_line_field(field, near_black);
         let (w, h) = (HOSTILE_W, HOSTILE_H);
-        let eligible = vec![true; w * h];
+        // All unmarked: nominal model, pin-eligible everywhere. Identical for
+        // both scenes, so the only variable is the line colour.
+        let unmarked = vec![false; w * h];
 
-        let with = ditherer.dither_with_pinning(&px, w, h, Some(&eligible));
-        let without = ditherer.dither_with_pinning(&px, w, h, None);
-
-        let without_share = line_ink_share(&without, 0);
-        assert!(
-            without_share < 0.99,
-            "the unpinned near-miss line came back {:.1}% black — this \
-             scenario is not hostile, so the equality below would prove \
-             nothing",
-            without_share * 100.0
+        let exact =
+            ditherer.dither_with_regions(&hostile_line_field(field, black), w, h, Some(&unmarked));
+        let near = ditherer.dither_with_regions(
+            &hostile_line_field(field, near_black),
+            w,
+            h,
+            Some(&unmarked),
         );
+
+        let exact_share = line_ink_share(&exact, 0);
+        let near_share = line_ink_share(&near, 0);
+
+        // Control: at this exact model and mask, a line that IS the ink is
+        // held completely. Without this the assertion below cannot tell
+        // "correctly refused to pin a near-miss" from "pinned nothing at all".
         assert_eq!(
-            with.indices(),
-            without.indices(),
-            "a near-miss pixel was pinned; the match is not exact"
+            exact_share,
+            1.0,
+            "the exact-black control line came back only {:.1}% black — \
+             pinning is not firing here, so the near-miss result below \
+             would prove nothing",
+            exact_share * 100.0
+        );
+        assert!(
+            near_share < 0.99,
+            "a line one byte off black was held at {:.1}% black under the \
+             same mask that holds exact black at 100% — the match is not \
+             exact",
+            near_share * 100.0
         );
     }
 
@@ -711,7 +935,7 @@ mod tests {
         let (w, h) = (HOSTILE_W, HOSTILE_H);
 
         let a = ditherer.dither(&px, w, h);
-        let b = ditherer.dither_with_pinning(&px, w, h, None);
+        let b = ditherer.dither_with_regions(&px, w, h, None);
 
         let b_share = line_ink_share(&b, 0);
         assert!(
@@ -769,10 +993,10 @@ mod tests {
         let black = Srgb::from_u8(0, 0, 0);
         let px = hostile_line_field(field, black);
         let (w, h) = (HOSTILE_W, HOSTILE_H);
-        let eligible = vec![true; w * h];
+        let eligible = vec![false; w * h];
 
-        let with = ditherer.dither_with_pinning(&px, w, h, Some(&eligible));
-        let without = ditherer.dither_with_pinning(&px, w, h, None);
+        let with = ditherer.dither_with_regions(&px, w, h, Some(&eligible));
+        let without = ditherer.dither_with_regions(&px, w, h, None);
 
         let without_share = line_ink_share(&without, 0);
         assert!(

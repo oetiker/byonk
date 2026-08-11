@@ -99,7 +99,7 @@ pub struct PreprocessResult {
 /// mid-gradient, and discarding their error left a seam across a smooth ramp.
 ///
 /// Both are addressed where the error actually moves, not here — see
-/// [`crate::api::EinkDitherer::dither_with_pinning`] and
+/// [`crate::api::EinkDitherer::dither_with_regions`] and
 /// [`crate::dither::DitherOptions::pin_carry`], which hold the exact-match pixel
 /// AND carry its incoming error onward rather than dropping it.
 ///

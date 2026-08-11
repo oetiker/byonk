@@ -1086,4 +1086,143 @@ mod tests {
             marked * 100.0
         );
     }
+
+    /// Diagnostic (ruling 20: non-asserting; the printed output is the
+    /// deliverable): the content-adaptation factor `R` for a **real screen**,
+    /// derived from the pixels its tone mask actually marks.
+    ///
+    /// `crates/eink-dither/tests/gamut_adaptation_diag.rs` prints `R` for a
+    /// synthetic `rho` field only. It cannot do this one: `eink-dither` has no
+    /// dependencies at all and so cannot parse or rasterize an SVG. This lives
+    /// in `byonk`, where `resvg`/`usvg` and `rasterize_tone_mask` are.
+    ///
+    /// Run with:
+    ///     cargo test -p byonk --lib tone_screen_adaptation_factor -- --ignored --nocapture
+    #[test]
+    #[ignore = "diagnostic; prints R for the tone calibration screen"]
+    fn tone_screen_adaptation_factor() {
+        use crate::assets::AssetLoader;
+        use crate::services::screen_repo_cache::ScreenRepoCache;
+        use crate::services::screen_repo_manager::ScreenRepoManager;
+        use crate::services::{ContentPipeline, DeviceContext, RenderService};
+        use eink_dither::gamut::adapt::{adaptation_factor, MIN_DISCARD, PERCENTILE};
+
+        // The screen as a device sees it: reterminal_e1002, 800x480.
+        let spec = DisplaySpec::from_dimensions(800, 480).unwrap();
+        let official: Vec<(u8, u8, u8)> = vec![
+            (0, 0, 0),
+            (255, 255, 255),
+            (255, 0, 0),
+            (255, 255, 0),
+            (0, 0, 255),
+            (0, 255, 0),
+        ];
+        let actual: Vec<(u8, u8, u8)> = vec![
+            (0, 0, 0),
+            (255, 255, 255),
+            (0xB5, 0x03, 0x03),
+            (0xFF, 0xEE, 0x00),
+            (0x20, 0x54, 0x97),
+            (0x0D, 0x87, 0x6B),
+        ];
+
+        let loader = Arc::new(AssetLoader::new(None, None, None));
+        let shared: crate::server::SharedConfig = Arc::new(arc_swap::ArcSwap::from(Arc::new(
+            crate::models::AppConfig::default(),
+        )));
+        let render_service = Arc::new(RenderService::new(&loader).unwrap());
+        let cache_root = std::env::temp_dir().join(format!(
+            "byonk_tone_diag_cache_{}_{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let pm = ScreenRepoManager::new(
+            loader.clone(),
+            shared.clone(),
+            ScreenRepoCache::new(cache_root.clone()),
+            Default::default(),
+            None,
+            None,
+        );
+        pm.rebuild_loader();
+        let pipeline = ContentPipeline::new(shared, loader, render_service, pm).unwrap();
+
+        let ctx = DeviceContext {
+            mac: "AA:BB:CC:DD:EE:01".to_string(),
+            model: Some("og".to_string()),
+            width: Some(spec.width),
+            height: Some(spec.height),
+            colors: Some(
+                official
+                    .iter()
+                    .map(|&(r, g, b)| format!("#{r:02X}{g:02X}{b:02X}"))
+                    .collect(),
+            ),
+            colors_actual: Some(
+                actual
+                    .iter()
+                    .map(|&(r, g, b)| format!("#{r:02X}{g:02X}{b:02X}"))
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+
+        let script = pipeline
+            .run_screen_by_name(
+                "byonk-builtin/calibration/tone",
+                Default::default(),
+                Some(ctx.clone()),
+            )
+            .expect("tone screen runs");
+        let svg = pipeline
+            .render_svg_from_script(&script, Some(&ctx))
+            .expect("tone screen templates");
+
+        let renderer = SvgRenderer::new();
+        let pixmap = renderer.rasterize_svg(svg.as_bytes(), spec).unwrap();
+        let pixels = rgba_to_eink_srgb(pixmap.data());
+        let mask = renderer.rasterize_tone_mask(svg.as_bytes(), spec).unwrap();
+        assert_eq!(mask.len(), pixels.len());
+
+        let (eink_palette, _) = build_eink_palette(&official, Some(&actual), false).unwrap();
+        let mapper = GamutMapper::new(&eink_palette);
+        let opts = GamutOptions::default();
+
+        let mut rhos: Vec<f32> = pixels
+            .iter()
+            .zip(mask.iter())
+            .filter(|(_, m)| **m)
+            .map(|(p, _)| mapper.rho(*p))
+            .collect();
+
+        let marked = rhos.len();
+        let mut sorted = rhos.clone();
+        sorted.sort_by(f32::total_cmp);
+        let q = |f: f32| sorted[((sorted.len() - 1) as f32 * f) as usize];
+        println!(
+            "tone screen {}x{}: {marked} marked pixels of {} ({:.1}%)",
+            spec.width,
+            spec.height,
+            pixels.len(),
+            marked as f32 * 100.0 / pixels.len() as f32
+        );
+        println!(
+            "  rho over the marked set: p50={:.4} p90={:.4} p99={:.4} max={:.4}",
+            q(0.5),
+            q(0.9),
+            q(0.99),
+            q(1.0)
+        );
+        let discard = MIN_DISCARD
+            .max((marked as f32 * (1.0 - PERCENTILE)).ceil() as usize)
+            .min(marked.saturating_sub(1));
+        println!("  PERCENTILE={PERCENTILE} MIN_DISCARD={MIN_DISCARD} -> discarding {discard}");
+        let r = adaptation_factor(&mut rhos, opts.max_compression);
+        println!(
+            "ADAPTATION FACTOR R = {r:.4}   (max_compression cap = {})",
+            opts.max_compression
+        );
+
+        let _ = std::fs::remove_dir_all(&cache_root);
+    }
 }

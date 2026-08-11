@@ -39,10 +39,17 @@
        one adaptation group, so R is derived from all of these pixels
        together. `data-byonk-tone-group` exists as an attribute but is not
        implemented, and this screen must not become the reason it gets built. -->
+  <!-- The patch grid is not drawn as lines: it is this black backing rect
+       showing through the 2 px gaps between the patches painted over it. That
+       makes it structure, not continuous tone, so it stays OUTSIDE the group —
+       immediately before it, which keeps paint order and therefore the grid
+       unchanged. Inside the group it was matched against the measured inks and
+       left unpinned, and the grid came out speckled: 74% black against the
+       control column's 100%. -->
+  <rect x="{{ data.right.patch_bg.x }}" y="{{ data.right.patch_bg.y }}" width="{{ data.right.patch_bg.width }}" height="{{ data.right.patch_bg.height }}" fill="#000000"/>
   <g data-byonk-tone="continuous">
     <image x="{{ data.right.photo.x }}" y="{{ data.right.photo.y }}" width="{{ data.right.photo.width }}" height="{{ data.right.photo.height }}" href="photo.jpg" preserveAspectRatio="xMidYMid slice"/>
     <rect x="{{ data.right.sweep.x }}" y="{{ data.right.sweep.y }}" width="{{ data.right.sweep.width }}" height="{{ data.right.sweep.height }}" fill="url(#huesweep)"/>
-    <rect x="{{ data.right.patch_bg.x }}" y="{{ data.right.patch_bg.y }}" width="{{ data.right.patch_bg.width }}" height="{{ data.right.patch_bg.height }}" fill="#000000"/>
     {% for p in data.right.patches %}
     <rect x="{{ p.x }}" y="{{ p.y }}" width="{{ p.width }}" height="{{ p.height }}" fill="{{ p.color }}" shape-rendering="crispEdges"/>
     {% endfor %}

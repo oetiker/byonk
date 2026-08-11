@@ -2465,12 +2465,16 @@ mod tests {
             leak * 100.0
         );
 
-        // At 800x480 a correct mask measures 0.4605: one 393px column covering
-        // the 450px of content below the header. The band is wide on purpose —
+        // At 800x480 a correct mask measures 0.4352: one 393px column covering
+        // the 450px of content below the header, less the patch grid's backing
+        // rect, which is structure and sits outside the group (measured
+        // 167,116 of 384,000 px; it was 0.4605 while the rect was inside). The
+        // band is wide on purpose —
         // this guards the marking, not the layout, and a tight bound would fail
         // every time a band height is adjusted.
         //
-        // What it discriminates against, measured: marking dropped = 0.0, both
+        // What it discriminates against, measured against the document as it
+        // stood before the backing rect moved out: marking dropped = 0.0, both
         // columns marked = 0.921, group hoisted to the root = ~1.0. It does NOT
         // discriminate "the header got swallowed" (0.483) from correct, and does
         // not try to — the leak assertion above is what catches misplacement.
@@ -2478,7 +2482,7 @@ mod tests {
         assert!(
             (0.35..=0.55).contains(&fraction),
             "marked fraction {fraction:.4} is outside the plausible band \
-             (expected ~0.46) — 0 means the marking was dropped, ~0.92 means both \
+             (expected ~0.44) — 0 means the marking was dropped, ~0.92 means both \
              columns are marked, ~1.0 means the group was hoisted to the root"
         );
     }

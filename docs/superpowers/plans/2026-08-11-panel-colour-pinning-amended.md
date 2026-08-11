@@ -388,8 +388,16 @@ struct rather than as three parameters that could disagree.
 behaviour, bit-for-bit. This is the same ruling that governed `pinned: None` and it is
 load-bearing: the inverse silently changes every existing caller's output.
 
-The hard stop is ruling 23, in the owner's words: *"it should behave as if the border was a
-border — nothing from one side goes through to the other, like the border of the screen."*
+The hard stop is ruling 23. **⚠️ Task 4 is COMPLETE (`3711dea`..`0d73dda`) and the owner
+re-framed this ruling during it — the paragraph below is the superseded session-11 wording,
+kept as the record of what the task was built against. The spec carries the current text;
+the shipped code comments carry the corrected version.** Under the current framing the
+governing property is **containment** (neither model's error is ever *deposited* into the
+other's pixels), and "a scanline that re-enters a region resumes with zero inherited error"
+is true **only** when the intervening region is at least as wide as the kernel's reach.
+
+_Superseded wording:_ *"it should behave as if the border was a border — nothing from one
+side goes through to the other, like the border of the screen."*
 The error at a stopped tap is **dropped**, not redistributed, because the screen border
 does not conserve error either. The per-pixel accumulated buffer is the only state carried
 between pixels, so skipping the crossing taps is sufficient — a scanline that leaves and
@@ -1236,10 +1244,18 @@ the panel.
 
 - [ ] **Step 3: The boundary artefact**
 
-Ruling 23 makes each region dither as its own frame, so a seam is possible where they meet.
-Render a marked photograph directly abutting an unmarked flat field, and print the ink
-distribution of the 4 px band on each side of the boundary. **Look for a visible
-discontinuity; this risk did not exist before ruling 23.**
+Ruling 23 stops error at a model boundary and **drops** it rather than redistributing it,
+so a seam is possible where two regions meet. Render a marked photograph directly abutting
+an unmarked flat field, and print the ink distribution of the 4 px band on each side of the
+boundary. **Look for a visible discontinuity; this risk did not exist before ruling 23.**
+
+**⚠️ Ruling 23 was re-framed by the owner in session 12 and the spec is the current text.**
+The governing property is **containment** — neither model's error is ever *deposited* into
+the other's pixels — **not** "each region dithers as its own frame", which was the
+session-11 wording and has been retracted. It matters here: a region of the other model
+**narrower than the kernel's reach** is skipped over rather than acting as an edge, so the
+same-model system stays *connected* across it. Do not expect frame-edge behaviour at a
+sliver, and do not report its absence as a defect.
 
 - [ ] **Step 4: The swatch win**
 

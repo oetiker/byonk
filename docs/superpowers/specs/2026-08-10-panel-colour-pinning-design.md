@@ -9,6 +9,14 @@ _Status: spike. Written 2026-08-10 (session 10), branch `feat/screen-store-autho
 > **Division of responsibility** and **Plumbing** below. Tasks 1 and 2 of the plan are
 > already implemented against the unamended text and remain valid; Task 3 as planned does
 > not.
+>
+> ⚠️ **Ruling 23 was RE-FRAMED by the owner on 2026-08-12 (session 12).** Its governing
+> property is **containment** — "errors from a mapped region do not go into an unmapped
+> region and the other way round" — **not** the session-11 "a model boundary IS a screen
+> border" analogy, which is stronger than the rule requires and is false in one specific
+> way. If you remember this ruling as "each region is its own frame", **re-read
+> [Ruling 23](#ruling-23--a-hard-stop-at-every-model-boundary-no-bleeding)**: that sentence
+> has been retracted.
 
 ## The defect
 
@@ -501,45 +509,99 @@ measured one; carrying it across was never well-defined, only numerically harmle
 ### Implementation
 
 In `dither_with_kernel_noise`'s distribution loop, a kernel tap from pixel `i` to neighbour
-`j` is skipped when `continuous[i] != continuous[j]`. This is the same mechanism the frame
-edge already uses for out-of-bounds taps, so it needs no new machinery — the mask is
-already resident per-pixel for model selection.
+`j` is skipped when `continuous[i] != continuous[j]`. This joins the frame-edge bounds
+check in the same nested guard, so it needs no new machinery — the mask is already
+resident per-pixel for model selection. **The test looks at the tap's two endpoints only,
+which is exactly sufficient for containment** — see below for why, and for the one thing
+it does not give you.
 
 **The pinned carry obeys the same stop.** A pinned pixel emits `λ · accumulated`; that
 carry is distributed through the same loop and is subject to the same boundary test.
+**There is no separate emit path** — both the pinned carry and an ordinary pixel's
+quantisation error are assigned to the same `strength_error` binding and flow through the
+same single distribution loop with the same single guard, so the stop covers the pinned
+carry *by construction*. (A consequence worth recording: a mutant that makes only the
+pinned carry skip the boundary test cannot be written against this structure.)
 
-### The governing analogy: a model boundary IS a screen border
+**Implemented in Task 4** (`3711dea`..`0d73dda`) as
+`RegionMap { continuous: &[bool], pinned: &[Option<u8>] }`, replacing the `pinned`
+parameter Task 1 added. `regions: None` means the feature is off — measured model
+everywhere, no pinning, no stops.
 
-**Owner, session 11: "it should behave as if the border was a border — nothing from one
-side goes through to the other, like the border of the screen."**
+### ⚠️ The governing property: CONTAINMENT (re-framed by the owner, session 12)
 
-This is the whole of the rule, and it settles every sub-question by reference to behaviour
-the crate already has rather than by fresh invention. A tap that crosses a model boundary
-is treated exactly as a tap that leaves the frame:
+**Owner, session 12: "errors from a mapped region do not go into an unmapped region and
+the other way round … two dither systems both active and supposed not to step on each
+other's feet."**
 
-- **The error is DROPPED, not redistributed.** The screen border does not renormalise the
-  surviving taps to conserve error, and neither does this. (Independently consistent with
-  Atkinson, the default algorithm, which already discards 1/4 of every pixel's error by
-  design. Renormalising would concentrate a boundary pixel's full error into fewer taps,
-  piling it onto the seam — the opposite of what a hard stop is for.)
+**This supersedes the session-11 framing**, which was: _"it should behave as if the border
+was a border — nothing from one side goes through to the other, like the border of the
+screen."_ The border analogy is recorded here because it is what the implementation was
+built against, and because it is **stronger than what the rule actually requires** — a
+distinction that turned a review finding into a non-finding (see below). Where the two
+disagree, **containment governs.**
+
+The rule is that the two colour models are two dither systems running at once, and neither
+may write into the other's pixels:
+
+- **The error is DROPPED, not redistributed.** Nothing renormalises the surviving taps to
+  conserve error. (Independently consistent with Atkinson, the default algorithm, which
+  already discards 1/4 of every pixel's error by design. Renormalising would concentrate a
+  boundary pixel's full error into fewer taps, piling it onto the seam — the opposite of
+  what a hard stop is for.)
 - **The stop is symmetric.** Nothing leaves and nothing enters, in either direction.
-- **Each region is dithered as if it were its own frame**, with everything outside it out
-  of bounds.
+- **No pixel is ever assigned error computed under the other model.** That is the whole of
+  the requirement.
 
-### The analogy is exact, not merely evocative
+### Why the endpoint-only test is exactly sufficient
 
 Worth stating because it is what makes the one-line implementation correct rather than
 approximate: **the per-pixel accumulated-error buffer is the only state carried between
 pixels** in `dither_with_kernel_noise`. There is no running per-row or per-region
-accumulator. So skipping the crossing taps is *sufficient* to realise "own frame" — a
-pixel inside region B can never have received anything from region A, because the only
-channel by which it could have was the tap that was skipped.
+accumulator. And `ErrorBuffer::add_error` **deposits only at the tap's endpoint** —
+nothing is written to the pixels a tap passes over.
 
-One property falls out of this for free and needs no special case: **a scanline that
-leaves a region and later re-enters it resumes with zero inherited error**, exactly as if
-it had started at a fresh frame edge. An irregular or disjoint region therefore needs no
-separate traversal, no region labelling, and no second pass — the global raster/serpentine
-order is retained and each region still behaves as its own frame.
+So testing the tap's two endpoints is *sufficient* for containment: a pixel inside region
+B can never have received anything from region A, because the only channel by which it
+could have was the tap that was skipped. **This holds at every region width**, including
+regions 1 px wide.
+
+### ⚠️ What containment does NOT give you: connectivity is width-dependent
+
+This is where the border analogy overclaimed, and it is the correction the session-12
+re-framing produced.
+
+Atkinson's kernel includes `(2,0)` and `(0,2)` taps, so it reaches two pixels away. Where
+a region of the *other* model is **narrower than that reach** — 1 px wide, or 1 px tall —
+a tap can originate and land on the same side, skipping clean over the sliver. Both its
+endpoints are same-model, so the tap is not dropped.
+
+**That is not a containment violation**: nothing was deposited in the sliver, and the
+error stayed inside its own system. But it means two claims in the session-11 framing are
+**false as written and must not be relied on**:
+
+- ~~"Each region is dithered as if it were its own frame."~~ It is not, across a
+  sub-kernel-width sliver of the other model.
+- ~~"A scanline that leaves a region and later re-enters it resumes with zero inherited
+  error."~~ It resumes with zero **only when** the intervening region is at least as wide
+  as the kernel's reach. Across a narrower one, the same-model system stays **connected**
+  and error carries over the gap.
+
+The behaviour is therefore width-dependent in **connectivity**, not in containment:
+
+| Intervening region of the other model | Containment | Connectivity of the same-model system |
+|---|---|---|
+| **narrower** than the kernel's reach | holds — nothing deposited in it | **stays connected**; error hops the gap |
+| **at least** the kernel's reach | holds | severed; every aimed tap is dropped, error lost |
+
+Both rows satisfy the ruling. The connected case is arguably the better of the two — the
+system keeps diffusing within itself rather than dumping error — but it is not what "its
+own frame" describes, so the code comment states the width-dependence explicitly rather
+than leaving the metaphor to imply otherwise.
+
+An irregular or disjoint region still needs **no separate traversal, no region labelling
+and no second pass** — the global raster/serpentine order is retained. That part of the
+session-11 reasoning survives intact.
 
 ### What this does and does not fix
 
@@ -565,4 +627,13 @@ of the marked group.
    rendered with the marked region replaced by a flat in-gamut colour. Assert the
    comparison is non-degenerate — the unstopped version must differ.
 6. The pinned carry respects the stop: a pinned pixel on the boundary emits nothing across
-   it, at any λ including 1.0.
+   it, at any λ including 1.0. **Pin every column within the kernel's horizontal reach of
+   the seam**, deriving the width from the kernel rather than hard-coding it — otherwise an
+   unpinned column still inside that reach taps across too, and the test silently measures
+   ordinary diffusion instead of the pinned carry. (This is what the first version of that
+   test did.)
+7. **Containment holds for a region narrower than the kernel's reach**: hold a 1 px-wide
+   marked sliver's content fixed, vary the *unmarked* field around it, and assert the
+   sliver's output does not move. This is the case the border framing wrongly predicted to
+   be broken, and it is the direct assertion of the property ruling 23 actually names.
+   Verify it discriminates — it must fail with the guard removed.

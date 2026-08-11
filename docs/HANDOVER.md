@@ -2,8 +2,8 @@
 
 _Last updated: 2026-08-12 (session 12). **Task 4 — the biggest task in the amended plan —
 is DONE, reviewed clean, gate green.** Owner **re-framed ruling 23 mid-task from "screen
-border" to CONTAINMENT**, which dissolved a review finding and is not yet reflected in the
-spec. **Tasks 5–8 remain.** Full `make check` green at `0d73dda` (1056 passed, 0 failed,
+border" to CONTAINMENT**, which dissolved a review finding; the spec and plan are amended
+to match. **Tasks 5–8 remain.** Full `make check` green at `0d73dda` (1056 passed, 0 failed,
 0 warnings). `feat/screen-store-authoring-core` remains **HELD** — no PR, no merge to
 `main`._
 
@@ -19,7 +19,7 @@ spec. **Tasks 5–8 remain.** Full `make check` green at `0d73dda` (1056 passed,
 | **Amended Task 4** | **`3711dea`..`0d73dda`, reviewed clean (1 fix round)** |
 | Worktree | `/Users/oetiker/checkouts/byonk` (working in place, no worktree) |
 | State | tree clean; **full `make check` PASSES: 1056 passed, 0 failed, 0 warnings** |
-| Active spec | `docs/superpowers/specs/2026-08-10-panel-colour-pinning-design.md` — **read Amendment 1 + ruling 23 at the end, and see the ⚠️ below: ruling 23's wording there is now STALE** |
+| Active spec | `docs/superpowers/specs/2026-08-10-panel-colour-pinning-design.md` — **read Amendment 1 + ruling 23 at the end; both are current as of session 12** |
 | Active plan | `docs/superpowers/plans/2026-08-11-panel-colour-pinning-amended.md` (Tasks 5–8 remain) |
 | Active ledger | `.superpowers/sdd/2026-08-11-panel-colour-pinning-amended/progress.md` (git-ignored) |
 | Superseded | the 2026-08-10 plan (its Tasks 1–2 are done and valid; its `task-3-brief.md` is DEAD) and `.superpowers/sdd/2026-08-10-panel-colour-pinning/progress.md`, kept for history |
@@ -50,7 +50,7 @@ call site — `api/builder.rs:294` — still passes a uniform all-`true` mask, s
 behaviour is still measured-everywhere, bit-for-bit unchanged.** Task 5 exposes the real
 API; Task 6 feeds it a real mask. **Nothing a user sees has changed yet.**
 
-## ⚠️ Ruling 23 was RE-FRAMED by the owner in session 12 — the spec is stale
+## ⚠️ Ruling 23 was RE-FRAMED by the owner in session 12 — spec amended to match
 
 The owner rejected the controller's "screen border" framing and restated the ruling:
 
@@ -78,13 +78,16 @@ the kernel's reach the same-model system stays **connected** (error hops the gap
 diffusing within itself); across a wider one no aimed tap can reach and that error is
 dropped, mirroring the frame edge. **Both satisfy containment.**
 
-**⚠️ OPEN, OWNER'S CALL — the spec still carries the old wording.**
-`docs/superpowers/specs/2026-08-10-panel-colour-pinning-design.md`'s ruling 23 still says
-_"like the border of the screen"_ and _"each region is dithered as if it were its own
-frame."_ Under containment the second sentence is **actively misleading** — a region is not
-its own frame when a tap can hop a 1 px sliver. **Do not silently reword an owner ruling.**
-Put the amended wording to the owner, plausibly alongside the Task 6 re-render they already
-have queued.
+**✅ The spec and plan now carry the corrected wording** (session 12, at the owner's
+instruction). `docs/superpowers/specs/2026-08-10-panel-colour-pinning-design.md`'s ruling 23
+leads with containment, records the superseded border analogy as history, **retracts by
+strikethrough** the two sentences that were false under it ("each region is dithered as if
+it were its own frame" and "a scanline that re-enters resumes with zero inherited error"),
+and carries a width-dependence table plus a new verification item 7 for the sliver case. A
+banner at the top of the spec catches anyone who remembers the old framing. The amended
+plan's Task 8 Step 3 is corrected too, since it drives a measurement; Task 4's background
+block keeps the old wording clearly labelled as the superseded text the completed task was
+built against.
 
 ### The evidence that produced rulings 22 and 23
 
@@ -307,14 +310,12 @@ that makes `git add -A` dangerous here.
 
 ## Open owner decisions
 
-1. **Ruling 23's stale spec wording** — see the ⚠️ at the top. Needs the owner's sign-off on
-   the containment re-wording; do not reword unilaterally.
-2. **The panel judgement on the marked screens — deliberately DEFERRED to after Task 6.**
+1. **The panel judgement on the marked screens — deliberately DEFERRED to after Task 6.**
    The owner's look at the session-11 renders (`~/byonk-marked-screens/`) is **what produced
    rulings 22 and 23**, so the review already paid for itself. Judging them now would measure
    a build about to change: Task 6 makes every unmarked screen match nominal inks. Re-render
    after Task 6 and judge then. **Sequenced, not stale.**
-3. **The branch.** Still HELD. Twelve sessions of work sitting unmerged.
+2. **The branch.** Still HELD. Twelve sessions of work sitting unmerged.
 
 # The prior initiative: gamut mapping (complete)
 
@@ -577,7 +578,7 @@ Session 6's: a green suite proves nothing about a site the compiler cannot reach
     resulting behaviour is width-dependent in **connectivity**, not containment — see the ⚠️
     section at the top. **Complementary to pinning, not a replacement:** the stop protects
     across a marked/unmarked boundary; pinning protects *within* one model, which is where the
-    original 73.2% defect lives. **⚠️ The spec still carries the superseded wording.**
+    original 73.2% defect lives. **The spec and plan carry this corrected wording as of session 12.**
 
 **Constants inherited from the plan and never challenged:** `PERCENTILE = 0.99`,
 `MIN_DISCARD = 32`, `HUE_BINS = 128`, `LIGHTNESS_BINS = 64`, `C_SEARCH_HI = 0.5`, `T_HI = 6.0`,

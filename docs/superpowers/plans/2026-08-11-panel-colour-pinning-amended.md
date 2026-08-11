@@ -74,7 +74,7 @@ and remain valid. Do not re-run them. Do not use its `task-3-brief.md`.
 
 **Files:**
 - Modify: `crates/eink-dither/src/palette/palette.rs` (struct fields ~105-111, constructor
-  ~196-231, accessors ~256-295, `find_nearest` ~434, `find_second_nearest`)
+  ~196-231, accessors ~256-295, `find_nearest` ~434)
 - Modify: `crates/eink-dither/src/lib.rs` (re-export `ColourModel`)
 - Test: `crates/eink-dither/src/palette/palette.rs` (in-file `#[cfg(test)] mod tests`)
 
@@ -85,7 +85,6 @@ and remain valid. Do not re-run them. Do not use its `task-3-brief.md`.
 - Produces:
   - `pub enum ColourModel { Nominal, Measured }` — `Copy + Clone + Debug + PartialEq + Eq`
   - `Palette::find_nearest(&self, color: Oklab, model: ColourModel) -> (usize, f32)`
-  - `Palette::find_second_nearest(&self, color: Oklab, pixel_chroma: f32, model: ColourModel) -> (usize, f32)`
   - `Palette::representative_linear(&self, idx: usize, model: ColourModel) -> LinearRgb`
 
 **Background the implementer needs:**
@@ -171,23 +170,37 @@ cannot reproduce the real hull.
         );
     }
 
-    /// The chroma-coupling term must use the model's own chroma cache. A grey
-    /// probe is the sensitive case: chromatic entries are penalised by their
-    /// chroma, and nominal primaries are far more chromatic than measured inks.
+    /// The chroma-coupling term must use the model's own chroma cache.
+    ///
+    /// NOTE: a RANKING-based probe (comparing which entry comes second under each
+    /// model) was tried first and MEASURED UNFOUNDED on this fixture at every grey
+    /// level — kchroma=10 keeps every chromatic entry's distance above black/white's
+    /// regardless of which chroma cache is read, so the ranking can never flip.
+    /// This probe calls `distance()` directly instead, holding pixel, palette colour,
+    /// pixel chroma and palette index fixed and varying only `model`, which isolates
+    /// exactly the chroma-cache lookup the property is about. Do not "simplify" it
+    /// back into a ranking comparison.
     #[test]
     fn the_chroma_coupling_term_follows_the_model() {
         let palette = panel_measured();
         let grey = Oklab::from(LinearRgb::from(Srgb::from_u8(128, 128, 128)));
         let chroma = (grey.a * grey.a + grey.b * grey.b).sqrt();
 
-        let (nominal_second, _) = palette.find_second_nearest(grey, chroma, ColourModel::Nominal);
-        let (measured_second, _) =
-            palette.find_second_nearest(grey, chroma, ColourModel::Measured);
+        let green_idx = (0..palette.len())
+            .find(|&i| palette.official(i).to_bytes() == [0, 255, 0])
+            .expect("fixture must carry a nominal pure green");
+        // Fix `b` to a single Oklab value so only the chroma-cache index (driven
+        // by `model`) can move the result — the base positions are identical.
+        let b = palette.official_oklab(green_idx);
+
+        let nominal_dist = palette.distance(grey, b, chroma, green_idx, ColourModel::Nominal);
+        let measured_dist = palette.distance(grey, b, chroma, green_idx, ColourModel::Measured);
 
         assert_ne!(
-            nominal_second, measured_second,
-            "second-nearest agreed across models; if this holds after measuring, the \
-             probe is wrong for this fixture — report it rather than adjusting it"
+            nominal_dist, measured_dist,
+            "distance() gave the same result under both models for identical \
+             pixel/palette positions, so it did not consult the model-specific \
+             chroma cache"
         );
     }
 ```
@@ -286,7 +299,7 @@ Store it in the struct literal alongside the other fields.
     }
 ```
 
-Apply the same selection to `find_second_nearest`. Add the accessor:
+Add the accessor:
 
 ```rust
     /// The colour this model says ink `idx` IS.
@@ -308,9 +321,9 @@ Re-export `ColourModel` from `lib.rs` beside the other palette exports.
 
 - [ ] **Step 5: Update every existing call site to `ColourModel::Measured`**
 
-This preserves today's behaviour exactly. **`grep -rn "find_nearest\|find_second_nearest" crates/eink-dither/src crates/eink-dither/tests`
-and pass `ColourModel::Measured` at every site.** There are call sites in the dither loop,
-the gamut code and the test modules; the compiler will find them all, but grep first so you
+This preserves today's behaviour exactly. **`grep -rn "find_nearest" crates/eink-dither/src crates/eink-dither/tests`
+and pass `ColourModel::Measured` at every site.** There are call sites in the dither loop
+and the test modules (the gamut code has NONE — verified); the compiler will find them all, but grep first so you
 know how many to expect and can tell a missed one from a mis-edited one.
 
 - [ ] **Step 6: Run the tests to verify they pass**

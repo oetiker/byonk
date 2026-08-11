@@ -414,8 +414,10 @@ second palette and no second dedup:
 pub enum ColourModel { Nominal, Measured }
 ```
 
-`find_nearest` and `find_second_nearest` take a `ColourModel` and consult the matching
-arrays. Two consequences to implement deliberately:
+`find_nearest` takes a `ColourModel` and consults the matching arrays. (An earlier draft
+also named `find_second_nearest`; no such method existed and no consumer for one exists —
+`dither/blue_noise.rs` is gone from the tree — so it is not part of this work. Owner ruling,
+session 11.) Two consequences to implement deliberately:
 
 - **`Palette` currently caches `actual_chroma` only** (`palette.rs:205`). The HyAB
   distance's chroma-coupling term needs the equivalent for the nominal set, so

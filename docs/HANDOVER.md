@@ -33,7 +33,7 @@ with four tests that each need real measurement. **Pre-flight its brief before d
 (that has never once been clean) and put the fixture trap in the dispatch, not just the
 brief.
 
-# ⚠️⚠️ START HERE — owner ruling 22 supersedes Task 3 as planned (2026-08-10, session 11)
+# ⚠️⚠️ START HERE — the design, set by owner rulings 22 and 23 (session 11)
 
 **The unmapped path assumes the actual colours ARE the nominal colours.** One mask
 selects the colour model, and it selects three things at once:
@@ -43,10 +43,11 @@ selects the colour model, and it selects three things at once:
 | **Unmarked** (structure) | **official/nominal**, substituted for actual | off | **on**, against official |
 | **Marked** `continuous` | **actual/measured** | on | **off** |
 
-This is not what the code does today, and it is not what the plan's Task 3 builds.
-`palette/palette.rs:442` — `find_nearest` scans `self.actual_oklab` **unconditionally**,
-mapped or not. That single site is why today's unmapped structure is matched against
-measured inks.
+**Status:** `find_nearest` used to scan `self.actual_oklab` unconditionally — that single
+site was why unmapped structure was matched against measured inks. **Task 3 fixed the
+capability**: it now takes a `ColourModel`. But every call site still passes `Measured`, so
+**the behaviour below is still what ships today**. Task 4 is what selects the model
+per pixel, and Task 6 is what feeds it a real mask.
 
 ### The evidence that produced the ruling
 
@@ -79,10 +80,10 @@ colour** — on the unmapped path `#00FF00` *is* green.
 
 ### What it costs
 
-The dither loop needs **per-pixel palette selection driven by the mask**;
-`dither_with_kernel_noise` currently takes a single `&Palette`, and
-`EinkDitherer::dither_with_pinning` currently takes only `pin_eligible`. So this
-**extends Task 2's API and rewrites Task 3** — it is not a byonk-side wiring change.
+The dither loop needs **per-pixel palette selection driven by the mask**.
+`dither_with_kernel_noise` still takes a single `&Palette` and a `pinned` slice, and
+`EinkDitherer::dither_with_pinning` still takes only `pin_eligible` — **Tasks 4 and 5
+replace both**. This was never a byonk-side wiring change.
 
 **Pinning is still required under ruling 22.** Nominal matching makes an exact official
 colour match itself at distance zero, but error diffused *into* it can still take it
@@ -102,7 +103,7 @@ invisible on most content. Under ruling 22 it costs you the *colour model*, on e
 the content least able to survive it. The failure mode of a missed mark goes from mild to
 severe.
 
-Consequences to work through when re-planning:
+Consequences, all now carried by the amended plan:
 
 - **`calibration/tone`'s left column is unmarked by design** as the raw-behaviour control,
   and it contains a photograph. It will now look markedly worse. That is the control doing
@@ -112,7 +113,7 @@ Consequences to work through when re-planning:
   continuous tone). **User-authored screens with photographs are not**, and their
   rendering changes. This is a documentation and possibly a release-notes obligation —
   see ruling 21, which defers the CHANGES.md entry to merge prep.
-- **Task 5 must measure the unmarked-photograph case**, not just the pinning sweep. It is
+- **Task 8 must measure the unmarked-photograph case**, not just the pinning sweep. It is
   now the feature's main downside and nobody has looked at it.
 - **Screen-authoring docs (`docs/src/`) need to state the rule plainly**: mark photographs
   and gradients-through-hue, or they will render badly. Previously this was an

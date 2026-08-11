@@ -1,8 +1,9 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-10 (session 11). The **panel-colour pinning** initiative is
-**2 of 5 tasks done**, under SDD subagent execution, with the full `make check` gate
-green at `24ce479`. The prior **gamut** initiative is complete and committed.
+_Last updated: 2026-08-11 (session 11). The **panel-colour pinning** initiative was
+**redirected mid-flight by owner rulings 22 and 23**, re-specified and re-planned. Old
+Tasks 1–2 and new Task 3 are done; **Tasks 4–8 remain**. Full `make check` green at
+`574d8c5` (1051 passed, 0 failed, 0 warnings). The prior **gamut** initiative is complete.
 `feat/screen-store-authoring-core` remains **HELD** — no PR, no merge to `main`._
 
 ## Where the work lives
@@ -10,22 +11,27 @@ green at `24ce479`. The prior **gamut** initiative is complete and committed.
 | | |
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
-| HEAD | `24ce479` — Task 2 fix round 2 |
+| HEAD | `574d8c5` — Task 3 fix round 1 |
 | Pinning Task 1 | `c74312f`..`f82eedc`, reviewed clean |
 | Pinning Task 2 | `89c2069`..`24ce479`, reviewed clean (2 fix rounds) |
+| Amended Task 3 | `7c09875`..`574d8c5`, reviewed clean (1 fix round) |
 | Worktree | `/Users/oetiker/checkouts/byonk` (working in place, no worktree) |
-| State | tree clean; **full `make check` PASSES, exit 0, zero warnings** |
+| State | tree clean; **full `make check` PASSES: 1051 passed, 0 failed, 0 warnings** |
 | Active spec | `docs/superpowers/specs/2026-08-10-panel-colour-pinning-design.md` — **read Amendment 1 + ruling 23 at the end** |
 | Active plan | `docs/superpowers/plans/2026-08-11-panel-colour-pinning-amended.md` (Tasks 3–8) |
 | Active ledger | `.superpowers/sdd/2026-08-11-panel-colour-pinning-amended/progress.md` (git-ignored) |
 | Superseded | the 2026-08-10 plan (its Tasks 1–2 are done and valid; its `task-3-brief.md` is DEAD) and `.superpowers/sdd/2026-08-10-panel-colour-pinning/progress.md`, kept for history |
 | Prior initiative | `docs/superpowers/specs/2026-08-07-gamut-mapping-design.md` — complete |
 
-**Resume by:** reading the active ledger, then `git log 24ce479..HEAD`, then
-dispatching **Task 3** via `superpowers:subagent-driven-development`. Its brief is
-already extracted at `.superpowers/sdd/2026-08-10-panel-colour-pinning/task-3-brief.md`
-and **pre-flighted — see the findings below, they are not optional**. The ledger is
-the recovery map; trust it and `git log` over memory.
+**Resume by:** reading the active ledger, then `git log 574d8c5..HEAD`, then dispatching
+**Task 4** via `superpowers:subagent-driven-development` from the **amended** plan. The
+ledger is the recovery map; trust it and `git log` over memory.
+
+**⚠️ Task 4 is the biggest task in the plan** — `RegionMap`, per-pixel model selection, the
+representative-colour rule and the boundary hard stop, all in the dither loop's inner code,
+with four tests that each need real measurement. **Pre-flight its brief before dispatching**
+(that has never once been clean) and put the fixture trap in the dispatch, not just the
+brief.
 
 # ⚠️⚠️ START HERE — owner ruling 22 supersedes Task 3 as planned (2026-08-10, session 11)
 
@@ -112,13 +118,24 @@ Consequences to work through when re-planning:
   and gradients-through-hue, or they will render badly. Previously this was an
   optimisation; now it is a requirement.
 
-**The spec amendment is WRITTEN** — `docs/superpowers/specs/2026-08-10-panel-colour-pinning-design.md`,
-"Amendment 1", with a banner at the top of that file pointing to it. It carries the API
-design (`dither_with_regions` + `ColourModel`), the representative-colour rule, the
-polarity hazard, and four verification additions.
+**The spec amendment is WRITTEN and the re-plan is DONE.**
+`docs/superpowers/specs/2026-08-10-panel-colour-pinning-design.md` carries "Amendment 1"
+plus ruling 23, with a banner at the top pointing to them.
+`docs/superpowers/plans/2026-08-11-panel-colour-pinning-amended.md` carries Tasks 3–8.
+**Task 3 is done.** Tasks 4–8 remain.
 
-**Next session: re-plan Tasks 3–5 against Amendment 1 before dispatching anything.** Do
-not dispatch Task 3 from the existing `task-3-brief.md` — it builds the wrong thing.
+### Where Task 3 got to, and what it means for Task 4
+
+Task 3 made the colour model a *parameter* and nothing more: `ColourModel::{Nominal,
+Measured}`, an `official_chroma` cache built once in the constructor, and
+`representative_linear(idx, model)`. **All 26 pre-existing call sites pass `Measured`, so
+behaviour is unchanged** — the reviewer checked every one individually. Task 4 is what
+actually turns the feature on.
+
+`find_second_nearest` was **dropped by owner ruling**. My plan's Interfaces block had
+mandated it from stale knowledge of a `dither/blue_noise.rs` that no longer exists; it had
+no caller, no test, and no mutant that actually probed it. Plan and spec are corrected. **Do
+not re-add it without a consumer.**
 
 # The active initiative
 
@@ -170,7 +187,26 @@ on the path where `Some` is passed. It also noted the resize guard is **stricter
 the hazard (trips if *either* dimension is set; `process` only resamples when *both*
 are) — safe direction.
 
-### ⚠️⚠️ Nine plan-authored tests have now measured unfounded — four in Task 1, five in Task 2
+### ⚠️⚠️ THE FIXTURE TRAP — the single highest-value warning for Task 4
+
+**Several palette helpers in `eink-dither` are built with `Palette::new(x, None)`, which
+sets `actual = official` (`palette.rs:167`). Under any of them the two colour models are
+IDENTICAL, so a test written against one passes against every mutant, silently.**
+
+`dither/mod.rs`'s own test module has two such helpers — `pin_test_palette()` (:680) and
+`panel_palette()` (:692) — and Task 4's tests live in that very file. A fresh implementer
+reaches for the module's own helper by default. **That is the trap, and it would produce a
+task that passes review while testing nothing.**
+
+The only fixture whose official and actual sets genuinely differ is
+`crate::gamut::test_support::panel_measured()` (`gamut/mod.rs:40`). Probe indices 2–5
+(red/yellow/blue/green); **black and white are degenerate even there**, because
+`build_eink_palette` forces measured B/W to match official.
+
+Task 3's reviewer verified this fixture-by-fixture and it is why that task's tests are
+trustworthy. Put it in Task 4's dispatch verbatim.
+
+### ⚠️⚠️ Ten plan-authored tests have now measured unfounded — four in Task 1, five in Task 2, one in Task 3
 
 **This is the single most important thing in this file.** Every one was caught only
 because an implementer or reviewer refused to accept the plan's premise.
@@ -203,10 +239,23 @@ cannot drift from the constructed one.
   both counts", then two comments introduced *by the fix for the first two*. Each time
   the disproving measurement was already sitting in the implementer's own report.
 
-**Corollary for writing Task 3–5 briefs:** put the plan's test bodies in as
-*hypotheses to measure*, and say so explicitly in the dispatch. Tell the implementer
-that a mutant surviving its named test is a plan defect to report, not a value to tune.
-That instruction is what has caught all nine.
+Task 3's addition: `the_chroma_coupling_term_follows_the_model` as I wrote it was a
+*ranking* probe through `find_second_nearest`, and it is structurally unfounded on this
+fixture **at every grey level** — kchroma=10 keeps every chromatic entry's distance above
+black/white's regardless of which chroma cache is read, so the ranking can never flip. The
+implementer replaced it with a direct `distance()` call holding pixel, palette colour,
+pixel chroma and index fixed and varying only `model`. **The plan now carries the corrected
+probe with a note not to "simplify" it back into a ranking.**
+
+**Corollary for writing Task 4–8 briefs:** put the plan's test bodies in as *hypotheses to
+measure*, and say so explicitly in the dispatch. Tell the implementer that a mutant
+surviving its named test is a plan defect to report, not a value to tune. **That single
+instruction has caught all ten.**
+
+**And a mutation-table lesson from Task 3:** a row that mutates several sites at once
+proves nothing about any one of them. Row 4 flipped all three `match model` arms together,
+so its failures were attributable to the other two methods and `find_second_nearest`'s
+selection was never actually probed. **Write one mutant per site.**
 
 ### ⚠️ NEW environment fact: this build cannot resample
 
@@ -248,13 +297,20 @@ Two findings to hand the implementer:
    That asserts non-degeneracy **and** covers the mask-inversion mutant the brief
    otherwise punts to Task 4. Offer it as a hypothesis to measure, not a mandate.
 
-### Tasks 4–5 — NOT STARTED
+### Tasks 4–8 of the AMENDED plan — NOT STARTED
 
-- **Task 4** — move the tone screen's black backing rect out of its marked group. Pure
-  black is in gamut so the mapped patches cannot move, but those pixels leave the
-  adaptation group and **`R` is a 99th percentile over that set — measure it.**
-- **Task 5** — the measurement pass: λ sweep (0.0/0.5/0.8/0.9/0.95/1.0), far-edge dump,
-  the photograph's exact-match share, text on a real screen, cost.
+- **Task 4** — `RegionMap` in `dither/mod.rs`: per-pixel model, the representative-colour
+  rule, and the boundary hard stop. **The big one.** Replaces Task 1's `pinned` parameter.
+- **Task 5** — `dither_with_regions` on the builder, replacing `dither_with_pinning`.
+  **Polarity flips here**: the crate now takes the tone mask itself, not its inverse. That
+  slip is silent and produces a plausible image either way, so it has its own guard.
+- **Task 6** — byonk passes the mask through unchanged. **This changes the rendering of
+  every unmarked screen**, since unmarked content now matches nominal inks.
+- **Task 7** — the tone screen's backing rect leaves the marked group. Pure black is in
+  gamut so the mapped patches cannot move, but those pixels leave the adaptation group and
+  **`R` is a 99th percentile over that set — measure it before and after.**
+- **Task 8** — the measurement pass: λ sweep, the unmarked-photograph cost, the boundary
+  artefact, the swatch win, per-frame cost.
 
 ### Carried forward as a deliberate decision, not an omission
 

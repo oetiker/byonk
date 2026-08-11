@@ -356,8 +356,14 @@ kind of local file that makes `git add -A` dangerous here.
 
 ## Open owner decisions
 
-1. **Look at the three newly-marked screens on the panel.** Committed but unjudged. This
-   is the outstanding action and has been for two sessions.
+1. **The panel judgement on the marked screens — now deliberately DEFERRED to after
+   Task 6, not merely outstanding.** The owner looked at the session-11 renders
+   (`~/byonk-marked-screens/`) and that look is **what produced rulings 22 and 23** — the
+   `#00FF00` swatch rendering as 51% black is what exposed that unmapped structure was
+   being matched against measured inks. So the review already paid for itself.
+   **Judging them on the panel now would be measuring a build that is about to change:**
+   Task 6 makes every unmarked screen match nominal inks, which alters all of them. Re-render
+   after Task 6 and judge then. Do not treat this as a stale to-do; it is sequenced.
 2. **The branch.** Still HELD. Eleven sessions of work sitting unmerged.
 
 # The prior initiative: gamut mapping (complete)
@@ -546,6 +552,11 @@ Session 8's, still true:
 - **A surprising number is a lead, not noise.**
 - **The owner's question was better than the controller's plan.** "Why do panel colours not
   dither to themselves?" produced ruling 17 — and, a session later, this whole initiative.
+  **It happened again in session 11**: the owner looked at a render, asked why one screen's
+  swatches were clean and another's were not, and that question produced rulings 22 and 23
+  and a re-plan. Twice now the highest-value input has been an owner looking at a picture
+  and asking a plain question about it. **Budget for that, and render something to look at
+  early** — the controller's measurements found none of this on their own.
 - **Fixing the code is not fixing the cause.**
 
 Session 7's, still true:

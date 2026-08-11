@@ -128,35 +128,51 @@ impl SvgRenderer {
         // Convert RGBA pixmap to eink-dither Srgb pixels
         let mut pixels = rgba_to_eink_srgb(pixmap.data());
 
-        // Gamut mapping, opt-in per region. An unmarked document skips the
-        // second rasterization entirely and renders exactly as it did before
-        // this feature existed.
-        if crate::rendering::tone_mask::has_tone_markup(svg_data) {
+        // The tone mask has three consumers: gamut mapping acts INSIDE marked
+        // regions; outside them the colour model is nominal and exact matches
+        // are pinned; and no error crosses between the two. So it is rasterized
+        // whenever the document carries markup, and only the mapping is skipped
+        // when amount is zero. An unmarked document skips the second
+        // rasterization entirely: every pixel is structure.
+        let tone_mask: Option<Vec<bool>> = if crate::rendering::tone_mask::has_tone_markup(svg_data)
+        {
+            let mask = self.rasterize_tone_mask(svg_data, spec)?;
+            if mask.len() != pixels.len() {
+                // Cannot happen: both rasterize to `spec`. Loud rather than
+                // silently skipped.
+                return Err(RenderError::Dither(format!(
+                    "tone mask length {} does not match frame {}",
+                    mask.len(),
+                    pixels.len()
+                )));
+            }
+            Some(mask)
+        } else {
+            None
+        };
+
+        if let Some(mask) = tone_mask.as_ref() {
             let gamut_opts = tuning.and_then(|t| t.gamut).unwrap_or_default();
             if gamut_opts.amount != 0.0 {
-                let mask = self.rasterize_tone_mask(svg_data, spec)?;
-                if mask.len() == pixels.len() {
-                    let marked = mask.iter().filter(|m| **m).count();
-                    tracing::debug!(
-                        marked_pixels = marked,
-                        total_pixels = pixels.len(),
-                        knee = gamut_opts.knee,
-                        amount = gamut_opts.amount,
-                        max_compression = gamut_opts.max_compression,
-                        "applying gamut mapping to continuous-tone regions"
-                    );
-                    GamutMapper::new(&eink_palette).map_frame(&mut pixels, &mask, gamut_opts);
-                } else {
-                    // Cannot happen: both rasterize to `spec`. Loud rather
-                    // than silently skipped.
-                    return Err(RenderError::Dither(format!(
-                        "tone mask length {} does not match frame {}",
-                        mask.len(),
-                        pixels.len()
-                    )));
-                }
+                let marked = mask.iter().filter(|m| **m).count();
+                tracing::debug!(
+                    marked_pixels = marked,
+                    total_pixels = pixels.len(),
+                    knee = gamut_opts.knee,
+                    amount = gamut_opts.amount,
+                    max_compression = gamut_opts.max_compression,
+                    "applying gamut mapping to continuous-tone regions"
+                );
+                GamutMapper::new(&eink_palette).map_frame(&mut pixels, mask, gamut_opts);
             }
         }
+
+        // Passed through unchanged: this IS the tone mask, not its inverse.
+        // A document with no markup is all-structure.
+        let continuous: Vec<bool> = match tone_mask {
+            Some(mask) => mask,
+            None => vec![false; pixels.len()],
+        };
 
         // Dither using eink-dither
         let mut ditherer = EinkDitherer::new(eink_palette).algorithm(algorithm);
@@ -177,7 +193,12 @@ impl SvgRenderer {
                 ditherer = ditherer.strength(st);
             }
         }
-        let result = ditherer.dither(&pixels, spec.width as usize, spec.height as usize);
+        let result = ditherer.dither_with_regions(
+            &pixels,
+            spec.width as usize,
+            spec.height as usize,
+            Some(&continuous),
+        );
 
         // eink-dither indices are into the deduped palette, which matches output_palette
         let indices: Vec<u8> = result.indices().to_vec();
@@ -868,5 +889,201 @@ mod tests {
             .unwrap();
 
         assert_ne!(a, b, "marking a vivid region must change the output");
+    }
+
+    // ---- Tone-mask fixtures shared by the pinning/containment tests ----
+
+    /// The panel's six nominal inks, in the order byonk ships them.
+    fn six_ink_official() -> Vec<(u8, u8, u8)> {
+        vec![
+            (0, 0, 0),
+            (255, 255, 255),
+            (255, 0, 0),
+            (255, 255, 0),
+            (0, 0, 255),
+            (0, 255, 0),
+        ]
+    }
+
+    /// A 32x32 document: a saturated field with one 1 px vertical line of
+    /// `line` at x = 15, optionally marked continuous.
+    ///
+    /// `#FF00AA` is far from every ink in `six_ink_official`, so it diffuses
+    /// hard into the line — measured below: an *unpinnable* line here keeps
+    /// only 12.5% of its colour.
+    fn line_in_hostile_field(line: &str, marked: bool) -> String {
+        let attr = if marked {
+            r#" data-byonk-tone="continuous""#
+        } else {
+            ""
+        };
+        format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
+<rect x="0" y="0" width="32" height="32" fill="#FF00AA"/>
+<rect{attr} x="15" y="0" width="1" height="32" fill="{line}"/>
+</svg>"##
+        )
+    }
+
+    /// Fraction of the 1 px line in `line_in_hostile_field` that came out
+    /// pure black.
+    fn line_black_share(svg: &str) -> f64 {
+        let spec = DisplaySpec {
+            width: 32,
+            height: 32,
+            max_size_bytes: 200_000,
+        };
+        let png = SvgRenderer::new()
+            .render_to_palette_png(
+                svg.as_bytes(),
+                spec,
+                &six_ink_official(),
+                None,
+                false,
+                None,
+                None,
+            )
+            .expect("render failed");
+        let img = image::load_from_memory(&png)
+            .expect("decode failed")
+            .to_rgb8();
+        let black = (0..32u32)
+            .filter(|&y| img.get_pixel(15, y).0 == [0, 0, 0])
+            .count();
+        black as f64 / 32.0
+    }
+
+    /// Structural content keeps its pure inks (ruling 18's pinning), and a
+    /// marked region is shielded from the field's error (ruling 23's
+    /// containment).
+    ///
+    /// Three renders of the same geometry — a 1 px line through a field that
+    /// diffuses hard into it — differing only in the line's fill (`#000000`
+    /// vs `#010101`, one 8-bit step apart and visually identical) and in
+    /// whether the line is marked:
+    ///
+    /// - **pure, unmarked**: pinnable, so it must survive.
+    /// - **near-black, unmarked**: the control. Same geometry, same field,
+    ///   but `(1,1,1)` is not a palette entry so it cannot be pinned. It must
+    ///   still be eroded — that is what proves the pure line *needed*
+    ///   rescuing and that pinning, not the geometry, is what rescued it.
+    /// - **near-black, marked**: differs from the control only by the mark.
+    ///   Still unpinnable, so its survival can only come from error
+    ///   containment at the region boundary.
+    ///
+    /// Note the marked arm is NOT a "must be eroded" control: containment
+    /// protects a marked region from outside error too. See the task report.
+    #[test]
+    fn structural_pure_ink_is_pinned_and_marked_regions_are_shielded() {
+        let pure_unmarked = line_black_share(&line_in_hostile_field("#000000", false));
+        let near_unmarked = line_black_share(&line_in_hostile_field("#010101", false));
+        let near_marked = line_black_share(&line_in_hostile_field("#010101", true));
+
+        assert!(
+            near_unmarked < 0.5,
+            "the unpinnable control line kept {:.1}% of its black, so this field does not \
+             erode anything and the test cannot attribute the pure line's survival to \
+             pinning — report it",
+            near_unmarked * 100.0
+        );
+        assert!(
+            pure_unmarked > 0.99,
+            "only {:.1}% of the unmarked pure-black line stayed black (the unpinnable \
+             control in the same geometry kept {:.1}%) — it is not being pinned",
+            pure_unmarked * 100.0,
+            near_unmarked * 100.0
+        );
+        assert!(
+            near_marked > 0.99,
+            "the marked line kept only {:.1}% of its black against the unmarked control's \
+             {:.1}% — error is still crossing into the marked region",
+            near_marked * 100.0,
+            near_unmarked * 100.0
+        );
+    }
+
+    /// Unmarked content is matched against the NOMINAL inks; marked content
+    /// against the MEASURED ones (ruling 22).
+    ///
+    /// The fill is `#00FE00` — one 8-bit step off the nominal green — so it is
+    /// **not** a palette entry and can never be pinned. Whatever difference the
+    /// two arms show is therefore the colour model and nothing else.
+    ///
+    /// The marked arm sets `gamut.amount = 0.0` so that gamut mapping, the
+    /// mask's other consumer, cannot contribute to the difference either.
+    #[test]
+    fn unmarked_content_is_matched_against_nominal_inks() {
+        let official = six_ink_official();
+        // byonk's shipped measured inks for this panel.
+        let measured: Vec<(u8, u8, u8)> = vec![
+            (0, 0, 0),
+            (255, 255, 255),
+            (0xB5, 0x03, 0x03),
+            (0xFF, 0xEE, 0x00),
+            (0x20, 0x54, 0x97),
+            (0x0D, 0x87, 0x6B),
+        ];
+        assert_ne!(
+            official[5], measured[5],
+            "the two colour models are identical for green, so this test cannot see the switch"
+        );
+
+        let green_share = |marked: bool| -> f64 {
+            let attr = if marked {
+                r#" data-byonk-tone="continuous""#
+            } else {
+                ""
+            };
+            let svg = format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
+<rect{attr} x="0" y="0" width="32" height="32" fill="#00FE00"/>
+</svg>"##
+            );
+            let tuning = DitherTuning {
+                gamut: Some(GamutOptions {
+                    amount: 0.0,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let spec = DisplaySpec {
+                width: 32,
+                height: 32,
+                max_size_bytes: 200_000,
+            };
+            let png = SvgRenderer::new()
+                .render_to_palette_png(
+                    svg.as_bytes(),
+                    spec,
+                    &official,
+                    Some(&measured),
+                    false,
+                    None,
+                    Some(&tuning),
+                )
+                .expect("render failed");
+            let img = image::load_from_memory(&png)
+                .expect("decode failed")
+                .to_rgb8();
+            let green = img.pixels().filter(|p| p.0 == [0, 255, 0]).count();
+            green as f64 / (32.0 * 32.0)
+        };
+
+        let unmarked = green_share(false);
+        let marked = green_share(true);
+
+        assert!(
+            marked < 0.10,
+            "the marked arm came out {:.1}% green, so measured matching is not sending this \
+             fill to yellow and the comparison proves nothing — report it",
+            marked * 100.0
+        );
+        assert!(
+            unmarked > 0.99,
+            "the unmarked arm came out only {:.1}% green against the marked arm's {:.1}%: \
+             unmarked content is not being matched against the nominal inks",
+            unmarked * 100.0,
+            marked * 100.0
+        );
     }
 }

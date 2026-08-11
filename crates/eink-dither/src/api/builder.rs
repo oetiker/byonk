@@ -286,11 +286,18 @@ impl EinkDitherer {
         // fire (both sides of every tap agree), so behaviour is unchanged
         // bit-for-bit while pinning stays wired up. Task 5 is expected to
         // build the real per-pixel `continuous` mask from tone markup.
-        let all_marked: Vec<bool> = vec![true; result.pixels.len()];
-        let regions = pin_map.as_deref().map(|pins| RegionMap {
-            continuous: &all_marked,
-            pinned: pins,
-        });
+        // Only allocate the uniform mask when there is a pin map to pair it
+        // with — the common `pin_eligible: None` case must not pay for a
+        // full-frame Vec<bool> it never reads.
+        let all_marked_and_pins: Option<(Vec<bool>, &[Option<u8>])> = pin_map
+            .as_deref()
+            .map(|pins| (vec![true; pins.len()], pins));
+        let regions = all_marked_and_pins
+            .as_ref()
+            .map(|(continuous, pins)| RegionMap {
+                continuous,
+                pinned: pins,
+            });
         let indices = dither_with_kernel_noise(
             &result.pixels,
             result.width,

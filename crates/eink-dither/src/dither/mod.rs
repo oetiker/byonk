@@ -255,16 +255,27 @@ pub(crate) fn apply_error(channel: f32, error: f32, max_error: f32) -> f32 {
 }
 
 /// The per-pixel region information the dither loop needs, travelling together
-/// because one mask drives all three behaviours (owner rulings 22 and 23).
+/// because one mask drives colour model and boundary containment together
+/// (owner rulings 22 and 23), and `pinned` rides alongside as the caller's
+/// separately-resolved pinning decision.
 ///
-/// `continuous[i]` is true where the content is continuous-tone. That single bit
-/// selects the colour model for the pixel, decides whether the pixel may be
-/// pinned, and decides whether a kernel tap may cross to it.
+/// `continuous[i]` is true where the content is continuous-tone. That bit
+/// selects the colour model for the pixel and decides whether a kernel tap
+/// may cross to it.
+///
+/// `pinned[i]` is NOT derived from `continuous` here — pin eligibility is
+/// resolved upstream, by the caller, before this struct is built. This loop
+/// reads `pinned` as-given and never consults `continuous` to decide whether
+/// a pixel is allowed to be pinned. A `RegionMap` with `continuous: false` and
+/// `pinned: Some(_)` at the same index pins that pixel; nothing here rejects
+/// it.
 pub(crate) struct RegionMap<'a> {
     /// One entry per pixel of the frame: true where the content is
     /// continuous-tone (marked `data-byonk-tone="continuous"`).
     pub continuous: &'a [bool],
-    /// One entry per pixel: `Some(ink)` where the pixel is to be pinned.
+    /// One entry per pixel: `Some(ink)` where the caller has already decided
+    /// the pixel is to be pinned. Eligibility (including any relationship to
+    /// `continuous`) is resolved upstream; not re-checked here.
     pub pinned: &'a [Option<u8>],
 }
 
@@ -291,17 +302,19 @@ impl RegionMap<'_> {
 /// `(0,1)` ("below") entries per pixel using a blue noise value, breaking
 /// directional "worm" artifacts while preserving total error propagation.
 ///
-/// `regions`, when supplied, drives three behaviours from one mask (owner
-/// rulings 22 and 23): which colour model a pixel is matched and diffused
-/// under, whether it may be pinned, and whether a kernel tap may cross into
-/// it. `None` means measured model everywhere, no pinning, no boundary
-/// stops — today's behaviour, bit-for-bit.
+/// `regions`, when supplied, drives two behaviours from its `continuous`
+/// mask (owner rulings 22 and 23): which colour model a pixel is matched and
+/// diffused under, and whether a kernel tap may cross into it. `None` means
+/// measured model everywhere, no pinning, no boundary stops — today's
+/// behaviour, bit-for-bit.
 ///
-/// Within `regions`, `pinned[i] == Some(ink)` marks a pixel that already sits
-/// exactly on `ink` in a region the caller allows pinning in: it outputs that
-/// ink, ignores the error diffused into it, and hands `options.pin_carry` of
-/// that error on to its neighbours in place of its own (zero) quantisation
-/// error.
+/// `regions.pinned` rides alongside as a separate, already-resolved decision:
+/// `pinned[i] == Some(ink)` marks a pixel the caller has determined sits
+/// exactly on `ink` and is eligible to be pinned. It outputs that ink,
+/// ignores the error diffused into it, and hands `options.pin_carry` of that
+/// error on to its neighbours in place of its own (zero) quantisation error.
+/// This function does not check `pinned` against `continuous` — eligibility
+/// is the caller's responsibility.
 pub(crate) fn dither_with_kernel_noise(
     image: &[LinearRgb],
     width: usize,
@@ -434,10 +447,24 @@ pub(crate) fn dither_with_kernel_noise(
                 if nx >= 0 && (nx as usize) < width {
                     let ny = y + dy as usize;
                     if ny < height {
-                        // Ruling 23: a model boundary IS a screen border. Nothing
-                        // crosses, in either direction, and the error at a stopped
-                        // tap is dropped rather than redistributed — the frame edge
-                        // does not conserve error either.
+                        // Ruling 23: two dither systems on either side of a model
+                        // boundary must not step on each other's feet — error from
+                        // a mapped region must never be DEPOSITED into an unmapped
+                        // region, or the other way round. `add_error` below writes
+                        // only to the tap's endpoint (nx, ny), never to pixels the
+                        // tap passes over, so dropping a tap whose endpoints
+                        // straddle the boundary is sufficient: nothing is ever
+                        // deposited on the wrong side, at any region width.
+                        //
+                        // Width matters to a *different* property, connectivity,
+                        // not to containment: a region narrower than the kernel's
+                        // reach can be skipped over by a tap whose endpoints both
+                        // land on the far, same-model side, keeping that system
+                        // connected across the sliver. A region wider than the
+                        // kernel's reach cannot be skipped, so every tap aimed at
+                        // it is dropped and that error is lost rather than
+                        // redistributed (mirrors how the frame edge does not
+                        // conserve error either). Both cases satisfy containment.
                         let nidx = ny * width + nx as usize;
                         let crosses = regions
                             .map(|r| r.continuous[idx] != r.continuous[nidx])
@@ -1004,8 +1031,11 @@ mod tests {
         );
     }
 
-    /// Ruling 23. A model boundary is a screen border: no error crosses it in
-    /// either direction. The unmarked field beyond the boundary must be
+    /// Ruling 23: containment. Error is never deposited across a model
+    /// boundary in either direction — a tap deposits only at its endpoint,
+    /// and a tap whose endpoints straddle the boundary is dropped. Each half
+    /// here is far wider than the kernel's reach, so no tap can skip over
+    /// the boundary either; the unmarked field beyond it must be
     /// bit-identical regardless of what sits on the marked side.
     #[test]
     fn no_error_crosses_a_model_boundary() {
@@ -1070,7 +1100,14 @@ mod tests {
         );
 
         // Non-degeneracy: without the stop these must differ, or the test proves
-        // nothing. `regions: None` is the no-stop path (measured everywhere).
+        // nothing. A uniform `continuous` mask (no boundary at all) isolates
+        // the stop specifically, rather than `regions: None`, which would also
+        // remove the model split and confound the control.
+        let no_seam = vec![true; W * H];
+        let no_seam_regions = RegionMap {
+            continuous: &no_seam,
+            pinned: &pinned,
+        };
         let no_stop_a = dither_with_kernel_noise(
             &a,
             W,
@@ -1078,7 +1115,7 @@ mod tests {
             &palette,
             DitherAlgorithm::Atkinson.kernel(),
             &opts,
-            None,
+            Some(&no_seam_regions),
         );
         let no_stop_b = dither_with_kernel_noise(
             &b,
@@ -1087,7 +1124,7 @@ mod tests {
             &palette,
             DitherAlgorithm::Atkinson.kernel(),
             &opts,
-            None,
+            Some(&no_seam_regions),
         );
         assert_ne!(
             right(&no_stop_a),
@@ -1107,12 +1144,14 @@ mod tests {
     /// version of this test unable to attribute anything to the pinned path
     /// specifically. Measured: pinning every column within the kernel's
     /// horizontal reach of the seam (both `SPLIT - 2` and `SPLIT - 1`) means
-    /// every tap that could reach across the seam originates at a pinned
+    /// every tap that could reach INTO THE RIGHT HALF originates at a pinned
     /// pixel, so a passing assertion here is actually about the pinned
-    /// carry. A named const derived from, and checked against, the kernel's
-    /// own reach keeps the pinned band from silently drifting out of sync
-    /// with the kernel (mirrors the `BAR` pattern used for the absorbing-pin
-    /// test above).
+    /// carry. (`max_dx` below is the kernel's positive/rightward reach only;
+    /// the test never reads the left half, so a leftward tap such as
+    /// `(-1,1)` is irrelevant here.) A named const derived from, and checked
+    /// against, the kernel's own reach keeps the pinned band from silently
+    /// drifting out of sync with the kernel (mirrors the `BAR` pattern used
+    /// for the absorbing-pin test above).
     #[test]
     fn a_pinned_pixel_on_the_boundary_emits_nothing_across_it() {
         // The pinned band's width: pin every column within this many pixels
@@ -1221,6 +1260,76 @@ mod tests {
             "without the boundary stop the two right halves were ALSO identical, \
              so this geometry cannot detect the pinned carry crossing — report \
              it, do not adjust it"
+        );
+    }
+
+    /// Ruling 23's actual invariant, per the owner's re-framing, is
+    /// containment — not "border": error from one model must never be
+    /// DEPOSITED into the other's region, in either direction, however wide
+    /// that region is. A 1px-wide marked sliver, narrower than Atkinson's
+    /// horizontal reach, is exactly the case an endpoint-only guard was
+    /// accused of getting wrong: a tap could in principle skip clean over
+    /// such a sliver. Hold the sliver's own content fixed at an off-palette
+    /// colour (so it genuinely dithers under the Measured model) and vary
+    /// only the surrounding UNMARKED field; if error were leaking in from
+    /// that field, the sliver's own output column would move.
+    #[test]
+    fn a_1px_marked_sliver_is_unaffected_by_the_surrounding_unmarked_field() {
+        let palette = panel_measured();
+        const W: usize = 32;
+        const H: usize = 16;
+        const SLIVER_X: usize = 16;
+
+        let continuous: Vec<bool> = (0..W * H).map(|i| i % W == SLIVER_X).collect();
+        let pinned = vec![None; W * H];
+        let regions = RegionMap {
+            continuous: &continuous,
+            pinned: &pinned,
+        };
+        let opts = DitherOptions::default().serpentine(false).noise_scale(0.0);
+
+        // #8C5A3C — off-palette, so the sliver needs real dithering under
+        // the Measured model rather than landing on an exact match by luck.
+        let sliver_colour = Srgb::from_u8(140, 90, 60);
+        let build = |field: Srgb| -> Vec<LinearRgb> {
+            (0..W * H)
+                .map(|i| {
+                    if i % W == SLIVER_X {
+                        LinearRgb::from(sliver_colour)
+                    } else {
+                        LinearRgb::from(field)
+                    }
+                })
+                .collect()
+        };
+        let a = build(Srgb::from_u8(200, 30, 30));
+        let b = build(Srgb::from_u8(30, 30, 200));
+
+        let out_a = dither_with_kernel_noise(
+            &a,
+            W,
+            H,
+            &palette,
+            DitherAlgorithm::Atkinson.kernel(),
+            &opts,
+            Some(&regions),
+        );
+        let out_b = dither_with_kernel_noise(
+            &b,
+            W,
+            H,
+            &palette,
+            DitherAlgorithm::Atkinson.kernel(),
+            &opts,
+            Some(&regions),
+        );
+
+        let sliver = |out: &[u8]| -> Vec<u8> { (0..H).map(|y| out[y * W + SLIVER_X]).collect() };
+        assert_eq!(
+            sliver(&out_a),
+            sliver(&out_b),
+            "the 1px marked sliver's output moved when only the surrounding \
+             UNMARKED field changed — error was deposited across the boundary"
         );
     }
 

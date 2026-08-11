@@ -4,7 +4,7 @@
 //! and optional preprocessing overrides.
 
 use crate::color::Srgb;
-use crate::dither::{dither_with_kernel_noise, DitherAlgorithm, DitherOptions};
+use crate::dither::{dither_with_kernel_noise, DitherAlgorithm, DitherOptions, RegionMap};
 use crate::output::DitheredImage;
 use crate::palette::Palette;
 use crate::preprocess::{PreprocessOptions, Preprocessor};
@@ -275,6 +275,22 @@ impl EinkDitherer {
         // 3. Dither using unified kernel dispatch
         let photo_palette = self.palette.for_error_diffusion();
         let kernel = self.algorithm.kernel();
+        // Deviation from the Task 4 brief: the brief's Step 5 says to pass
+        // `None` here, which would disable pinning outright and break three
+        // existing tests (`eligibility_decides_where_pinning_applies`,
+        // `the_exact_match_is_against_the_nominal_entry`,
+        // `a_near_miss_is_not_pinned`) that assert pinning changes the
+        // output. Instead, build a uniform `continuous: true` mask alongside
+        // the existing pin map: a uniform mask means `RegionMap::model`
+        // always resolves to `Measured` and the boundary stop can never
+        // fire (both sides of every tap agree), so behaviour is unchanged
+        // bit-for-bit while pinning stays wired up. Task 5 is expected to
+        // build the real per-pixel `continuous` mask from tone markup.
+        let all_marked: Vec<bool> = vec![true; result.pixels.len()];
+        let regions = pin_map.as_deref().map(|pins| RegionMap {
+            continuous: &all_marked,
+            pinned: pins,
+        });
         let indices = dither_with_kernel_noise(
             &result.pixels,
             result.width,
@@ -282,7 +298,7 @@ impl EinkDitherer {
             &photo_palette,
             kernel,
             &dither_opts,
-            pin_map.as_deref(),
+            regions.as_ref(),
         );
 
         // 4. Wrap in DitheredImage

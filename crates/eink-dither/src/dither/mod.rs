@@ -254,6 +254,33 @@ pub(crate) fn apply_error(channel: f32, error: f32, max_error: f32) -> f32 {
     channel + error.clamp(-max_error, max_error)
 }
 
+/// The per-pixel region information the dither loop needs, travelling together
+/// because one mask drives all three behaviours (owner rulings 22 and 23).
+///
+/// `continuous[i]` is true where the content is continuous-tone. That single bit
+/// selects the colour model for the pixel, decides whether the pixel may be
+/// pinned, and decides whether a kernel tap may cross to it.
+pub(crate) struct RegionMap<'a> {
+    /// One entry per pixel of the frame: true where the content is
+    /// continuous-tone (marked `data-byonk-tone="continuous"`).
+    pub continuous: &'a [bool],
+    /// One entry per pixel: `Some(ink)` where the pixel is to be pinned.
+    pub pinned: &'a [Option<u8>],
+}
+
+impl RegionMap<'_> {
+    /// The colour model for a pixel: unmarked content is taken to BE its
+    /// nominal colours (ruling 22).
+    #[inline]
+    fn model(&self, idx: usize) -> ColourModel {
+        if self.continuous[idx] {
+            ColourModel::Measured
+        } else {
+            ColourModel::Nominal
+        }
+    }
+}
+
 /// Core error diffusion algorithm with blue noise jitter, parameterized by kernel.
 ///
 /// This is the single dithering function used by all algorithms. When
@@ -264,12 +291,17 @@ pub(crate) fn apply_error(channel: f32, error: f32, max_error: f32) -> f32 {
 /// `(0,1)` ("below") entries per pixel using a blue noise value, breaking
 /// directional "worm" artifacts while preserving total error propagation.
 ///
-/// `pinned`, when supplied, is one entry per pixel in the same layout as
-/// `image`. `Some(i)` marks a pixel that already sits exactly on ink `i` in a
-/// region the caller allows pinning in: it outputs that ink, ignores the error
-/// diffused into it, and hands `options.pin_carry` of that error on to its
-/// neighbours in place of its own (zero) quantisation error. `None` for the
-/// whole slice, or `None` for the outer option, is the unpinned behaviour.
+/// `regions`, when supplied, drives three behaviours from one mask (owner
+/// rulings 22 and 23): which colour model a pixel is matched and diffused
+/// under, whether it may be pinned, and whether a kernel tap may cross into
+/// it. `None` means measured model everywhere, no pinning, no boundary
+/// stops — today's behaviour, bit-for-bit.
+///
+/// Within `regions`, `pinned[i] == Some(ink)` marks a pixel that already sits
+/// exactly on `ink` in a region the caller allows pinning in: it outputs that
+/// ink, ignores the error diffused into it, and hands `options.pin_carry` of
+/// that error on to its neighbours in place of its own (zero) quantisation
+/// error.
 pub(crate) fn dither_with_kernel_noise(
     image: &[LinearRgb],
     width: usize,
@@ -277,7 +309,7 @@ pub(crate) fn dither_with_kernel_noise(
     palette: &Palette,
     kernel: &Kernel,
     options: &DitherOptions,
-    pinned: Option<&[Option<u8>]>,
+    regions: Option<&RegionMap>,
 ) -> Vec<u8> {
     use blue_noise_matrix::BLUE_NOISE_64;
 
@@ -326,6 +358,10 @@ pub(crate) fn dither_with_kernel_noise(
             // Add accumulated error to input pixel
             let accumulated = error_buf.get_accumulated(x);
 
+            let model = regions
+                .map(|r| r.model(idx))
+                .unwrap_or(ColourModel::Measured);
+
             // A pinned pixel already IS a palette ink. It outputs that ink and
             // ignores the error diffused into it — its own quantisation error is
             // zero. The comment this replaces claimed error diffusion reproduced
@@ -333,7 +369,7 @@ pub(crate) fn dither_with_kernel_noise(
             // pixel's own error and ignores the error arriving from neighbours,
             // which is what speckles black grid lines and text next to saturated
             // content.
-            let pin = pinned.and_then(|p| p[idx]);
+            let pin = regions.and_then(|r| r.pinned[idx]);
 
             let strength_error = if let Some(ink) = pin {
                 output[idx] = ink;
@@ -357,10 +393,10 @@ pub(crate) fn dither_with_kernel_noise(
                     original_oklab.a * original_oklab.a + original_oklab.b * original_oklab.b;
 
                 let oklab = Oklab::from(pixel);
-                let (nearest_idx, _dist) = palette.find_nearest(oklab, ColourModel::Measured);
+                let (nearest_idx, _dist) = palette.find_nearest(oklab, model);
                 output[idx] = nearest_idx as u8;
 
-                let nearest_linear = palette.actual_linear(nearest_idx);
+                let nearest_linear = palette.representative_linear(nearest_idx, model);
                 let error = [
                     pixel.r - nearest_linear.r,
                     pixel.g - nearest_linear.g,
@@ -398,6 +434,18 @@ pub(crate) fn dither_with_kernel_noise(
                 if nx >= 0 && (nx as usize) < width {
                     let ny = y + dy as usize;
                     if ny < height {
+                        // Ruling 23: a model boundary IS a screen border. Nothing
+                        // crosses, in either direction, and the error at a stopped
+                        // tap is dropped rather than redistributed — the frame edge
+                        // does not conserve error either.
+                        let nidx = ny * width + nx as usize;
+                        let crosses = regions
+                            .map(|r| r.continuous[idx] != r.continuous[nidx])
+                            .unwrap_or(false);
+                        if crosses {
+                            continue;
+                        }
+
                         let w = if Some(entry_i) == right_idx {
                             w_right
                         } else if Some(entry_i) == below_idx {
@@ -437,6 +485,7 @@ pub(crate) fn dither_with_kernel_noise(
 mod tests {
     use super::*;
     use crate::color::Srgb;
+    use crate::gamut::test_support::panel_measured;
 
     #[test]
     fn test_error_buffer_creation() {
@@ -726,9 +775,15 @@ mod tests {
 
         let kernel = DitherAlgorithm::Atkinson.kernel();
         let opts = DitherOptions::default();
+        let all_marked = vec![true; w * h];
 
         let black_share = |pin: Option<&[Option<u8>]>| {
-            let out = dither_with_kernel_noise(&image, w, h, &palette, kernel, &opts, pin);
+            let regions = pin.map(|p| RegionMap {
+                continuous: &all_marked,
+                pinned: p,
+            });
+            let out =
+                dither_with_kernel_noise(&image, w, h, &palette, kernel, &opts, regions.as_ref());
             let mut n = 0usize;
             for y in 0..h {
                 for x in 31..33 {
@@ -811,8 +866,13 @@ mod tests {
                 }
             }
             let opts = DitherOptions::default().serpentine(false).pin_carry(carry);
+            let all_marked = vec![true; w * h];
+            let regions = RegionMap {
+                continuous: &all_marked,
+                pinned: &pinned,
+            };
             let out =
-                dither_with_kernel_noise(&image, w, h, &palette, kernel, &opts, Some(&pinned));
+                dither_with_kernel_noise(&image, w, h, &palette, kernel, &opts, Some(&regions));
             for y in 0..h {
                 for x in BAR.clone() {
                     assert_eq!(out[y * w + x], 0, "pinned bar broke at ({x},{y})");
@@ -850,9 +910,14 @@ mod tests {
         let kernel = DitherAlgorithm::Atkinson.kernel();
 
         let without = dither_with_kernel_noise(&image, 8, 8, &palette, kernel, &opts, None);
+        let all_marked = vec![true; 64];
         let all_unpinned: Vec<Option<u8>> = vec![None; 64];
+        let regions = RegionMap {
+            continuous: &all_marked,
+            pinned: &all_unpinned,
+        };
         let with_empty_map =
-            dither_with_kernel_noise(&image, 8, 8, &palette, kernel, &opts, Some(&all_unpinned));
+            dither_with_kernel_noise(&image, 8, 8, &palette, kernel, &opts, Some(&regions));
 
         assert_eq!(
             without, with_empty_map,
@@ -874,6 +939,337 @@ mod tests {
             "the reference output uses only {distinct} ink — this comparison \
              cannot distinguish a correct implementation from one that forces \
              every pixel to the same ink"
+        );
+    }
+
+    /// The representative-colour rule. A flat field of a NOMINAL ink in an
+    /// unmarked region has zero quantisation error under the nominal model, so
+    /// nothing is diffused and every pixel is that ink. Matching under one model
+    /// and subtracting the other would inject a constant bias per pixel.
+    #[test]
+    fn a_flat_nominal_ink_diffuses_nothing_in_an_unmarked_region() {
+        let palette = panel_measured();
+        let red_idx = (0..palette.len())
+            .find(|&i| palette.official(i).to_bytes() == [255, 0, 0])
+            .expect("fixture must carry a nominal pure red");
+
+        const W: usize = 16;
+        const H: usize = 16;
+        let field = vec![LinearRgb::from(palette.official(red_idx)); W * H];
+        let continuous = vec![false; W * H];
+        let pinned = vec![None; W * H]; // pinning OFF: this tests matching, not pinning
+        let regions = RegionMap {
+            continuous: &continuous,
+            pinned: &pinned,
+        };
+
+        let opts = DitherOptions::default().serpentine(false).noise_scale(0.0);
+        let out = dither_with_kernel_noise(
+            &field,
+            W,
+            H,
+            &palette,
+            DitherAlgorithm::Atkinson.kernel(),
+            &opts,
+            Some(&regions),
+        );
+
+        assert!(
+            out.iter().all(|&i| i == red_idx as u8),
+            "a flat nominal ink did not render as that ink with pinning off — the \
+             model is not being applied consistently to match and error term"
+        );
+
+        // Non-degeneracy: the same field under the MEASURED model must NOT come
+        // out uniform, or this test would pass against a mutant that ignores the
+        // model entirely.
+        let all_marked = vec![true; W * H];
+        let measured_regions = RegionMap {
+            continuous: &all_marked,
+            pinned: &pinned,
+        };
+        let measured_out = dither_with_kernel_noise(
+            &field,
+            W,
+            H,
+            &palette,
+            DitherAlgorithm::Atkinson.kernel(),
+            &opts,
+            Some(&measured_regions),
+        );
+        assert!(
+            measured_out.iter().any(|&i| i != red_idx as u8),
+            "the measured model also rendered this field uniformly, so the test \
+             cannot discriminate — report this rather than adjusting it"
+        );
+    }
+
+    /// Ruling 23. A model boundary is a screen border: no error crosses it in
+    /// either direction. The unmarked field beyond the boundary must be
+    /// bit-identical regardless of what sits on the marked side.
+    #[test]
+    fn no_error_crosses_a_model_boundary() {
+        let palette = panel_measured();
+        const W: usize = 32;
+        const H: usize = 16;
+        const SPLIT: usize = 16; // left half marked, right half unmarked
+
+        let continuous: Vec<bool> = (0..W * H).map(|i| i % W < SPLIT).collect();
+        let pinned = vec![None; W * H];
+        let regions = RegionMap {
+            continuous: &continuous,
+            pinned: &pinned,
+        };
+        let opts = DitherOptions::default().serpentine(false).noise_scale(0.0);
+
+        // Same unmarked right half; two very different marked left halves.
+        let build = |left: Srgb| -> Vec<LinearRgb> {
+            (0..W * H)
+                .map(|i| {
+                    if i % W < SPLIT {
+                        LinearRgb::from(left)
+                    } else {
+                        LinearRgb::from(Srgb::from_u8(120, 120, 120))
+                    }
+                })
+                .collect()
+        };
+        let a = build(Srgb::from_u8(200, 30, 30));
+        let b = build(Srgb::from_u8(30, 30, 200));
+
+        let out_a = dither_with_kernel_noise(
+            &a,
+            W,
+            H,
+            &palette,
+            DitherAlgorithm::Atkinson.kernel(),
+            &opts,
+            Some(&regions),
+        );
+        let out_b = dither_with_kernel_noise(
+            &b,
+            W,
+            H,
+            &palette,
+            DitherAlgorithm::Atkinson.kernel(),
+            &opts,
+            Some(&regions),
+        );
+
+        let right = |out: &[u8]| -> Vec<u8> {
+            (0..W * H)
+                .filter(|i| i % W >= SPLIT)
+                .map(|i| out[i])
+                .collect()
+        };
+        assert_eq!(
+            right(&out_a),
+            right(&out_b),
+            "the unmarked half changed when only the MARKED half changed — error \
+             crossed the boundary"
+        );
+
+        // Non-degeneracy: without the stop these must differ, or the test proves
+        // nothing. `regions: None` is the no-stop path (measured everywhere).
+        let no_stop_a = dither_with_kernel_noise(
+            &a,
+            W,
+            H,
+            &palette,
+            DitherAlgorithm::Atkinson.kernel(),
+            &opts,
+            None,
+        );
+        let no_stop_b = dither_with_kernel_noise(
+            &b,
+            W,
+            H,
+            &palette,
+            DitherAlgorithm::Atkinson.kernel(),
+            &opts,
+            None,
+        );
+        assert_ne!(
+            right(&no_stop_a),
+            right(&no_stop_b),
+            "without the boundary stop the two right halves were ALSO identical, so \
+             this geometry cannot detect bleeding — report it, do not adjust it"
+        );
+    }
+
+    /// The pinned carry obeys the stop too, at any lambda including 1.0.
+    ///
+    /// Deviation from the brief: the brief pins only the single column
+    /// immediately left of the seam (`SPLIT - 1`). Atkinson's kernel reaches
+    /// `dx = 2` horizontally, so a tap FROM THE UNPINNED column at
+    /// `SPLIT - 2` can also land across the seam — the same crossing
+    /// `no_error_crosses_a_model_boundary` already guards, which makes that
+    /// version of this test unable to attribute anything to the pinned path
+    /// specifically. Measured: pinning every column within the kernel's
+    /// horizontal reach of the seam (both `SPLIT - 2` and `SPLIT - 1`) means
+    /// every tap that could reach across the seam originates at a pinned
+    /// pixel, so a passing assertion here is actually about the pinned
+    /// carry. A named const derived from, and checked against, the kernel's
+    /// own reach keeps the pinned band from silently drifting out of sync
+    /// with the kernel (mirrors the `BAR` pattern used for the absorbing-pin
+    /// test above).
+    #[test]
+    fn a_pinned_pixel_on_the_boundary_emits_nothing_across_it() {
+        // The pinned band's width: pin every column within this many pixels
+        // of the seam, so no unpinned column sits close enough to tap across
+        // it — only the pinned carry can reach the far side.
+        const PINNED_BAND: i32 = 2;
+
+        let palette = panel_measured();
+        let black_idx = (0..palette.len())
+            .find(|&i| palette.official(i).to_bytes() == [0, 0, 0])
+            .expect("fixture must carry black");
+
+        const W: usize = 32;
+        const H: usize = 8;
+        const SPLIT: usize = 16;
+
+        let kernel = DitherAlgorithm::Atkinson.kernel();
+        let max_dx = kernel.entries.iter().map(|&(dx, _, _)| dx).max().unwrap();
+        assert!(
+            max_dx <= PINNED_BAND,
+            "Atkinson's horizontal reach ({max_dx}) exceeds the pinned band \
+             ({PINNED_BAND}) — an unpinned column could tap across the seam, \
+             confounding this test with no_error_crosses_a_model_boundary"
+        );
+
+        // Unmarked left (pinned black band at the seam), marked right.
+        let continuous: Vec<bool> = (0..W * H).map(|i| i % W >= SPLIT).collect();
+        let pinned: Vec<Option<u8>> = (0..W * H)
+            .map(|i| {
+                let x = (i % W) as i32;
+                if x < SPLIT as i32 && x >= SPLIT as i32 - PINNED_BAND {
+                    Some(black_idx as u8)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let regions = RegionMap {
+            continuous: &continuous,
+            pinned: &pinned,
+        };
+
+        let build = |left: Srgb| -> Vec<LinearRgb> {
+            (0..W * H)
+                .map(|i| {
+                    if i % W < SPLIT {
+                        LinearRgb::from(left)
+                    } else {
+                        LinearRgb::from(Srgb::from_u8(120, 120, 120))
+                    }
+                })
+                .collect()
+        };
+        let opts = DitherOptions::default()
+            .serpentine(false)
+            .noise_scale(0.0)
+            .pin_carry(1.0);
+
+        let img_a = build(Srgb::from_u8(200, 30, 30));
+        let img_b = build(Srgb::from_u8(30, 200, 30));
+
+        let out_a = dither_with_kernel_noise(&img_a, W, H, &palette, kernel, &opts, Some(&regions));
+        let out_b = dither_with_kernel_noise(&img_b, W, H, &palette, kernel, &opts, Some(&regions));
+        let right = |out: &[u8]| -> Vec<u8> {
+            (0..W * H)
+                .filter(|i| i % W >= SPLIT)
+                .map(|i| out[i])
+                .collect()
+        };
+        assert_eq!(
+            right(&out_a),
+            right(&out_b),
+            "a pinned pixel at lambda 1.0 pushed its carry across the boundary"
+        );
+
+        // Non-degeneracy: this scene must actually need rescuing, or the
+        // equality above proves nothing. Same pin map, but with the seam
+        // removed (continuous uniformly true) so nothing stops the carry —
+        // the right halves must then differ.
+        let no_seam = vec![true; W * H];
+        let no_seam_regions = RegionMap {
+            continuous: &no_seam,
+            pinned: &pinned,
+        };
+        let no_stop_a = dither_with_kernel_noise(
+            &img_a,
+            W,
+            H,
+            &palette,
+            kernel,
+            &opts,
+            Some(&no_seam_regions),
+        );
+        let no_stop_b = dither_with_kernel_noise(
+            &img_b,
+            W,
+            H,
+            &palette,
+            kernel,
+            &opts,
+            Some(&no_seam_regions),
+        );
+        assert_ne!(
+            right(&no_stop_a),
+            right(&no_stop_b),
+            "without the boundary stop the two right halves were ALSO identical, \
+             so this geometry cannot detect the pinned carry crossing — report \
+             it, do not adjust it"
+        );
+    }
+
+    /// `regions: None` is today's behaviour, bit-for-bit.
+    #[test]
+    fn regions_none_reproduces_the_measured_unpinned_output_exactly() {
+        let palette = panel_measured();
+        const W: usize = 24;
+        const H: usize = 24;
+        let img: Vec<LinearRgb> = (0..W * H)
+            .map(|i| LinearRgb::from(Srgb::from_u8((i % 256) as u8, 90, 200)))
+            .collect();
+        let opts = DitherOptions::default().serpentine(false).noise_scale(0.0);
+
+        let none_out = dither_with_kernel_noise(
+            &img,
+            W,
+            H,
+            &palette,
+            DitherAlgorithm::Atkinson.kernel(),
+            &opts,
+            None,
+        );
+        let all_marked = vec![true; W * H];
+        let no_pins = vec![None; W * H];
+        let explicit = RegionMap {
+            continuous: &all_marked,
+            pinned: &no_pins,
+        };
+        let explicit_out = dither_with_kernel_noise(
+            &img,
+            W,
+            H,
+            &palette,
+            DitherAlgorithm::Atkinson.kernel(),
+            &opts,
+            Some(&explicit),
+        );
+
+        assert_eq!(
+            none_out, explicit_out,
+            "regions:None diverged from an all-marked unpinned map; None must be \
+             exactly the measured, unpinned, unstopped path"
+        );
+        // Non-degeneracy: the output must not be a constant frame, or a mutant
+        // that zeroes everything satisfies this trivially.
+        assert!(
+            none_out.iter().any(|&i| i != none_out[0]),
+            "reference output is uniform, so the comparison is degenerate"
         );
     }
 }

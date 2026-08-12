@@ -230,6 +230,18 @@ impl EinkDitherer {
     /// destroys exact matches and breaks the index correspondence between
     /// `pixels` and the preprocessed frame. A resizing call therefore behaves
     /// exactly like `None`, colour model included.
+    ///
+    /// # Panics
+    ///
+    /// Debug builds panic if `continuous.len() != pixels.len()`.
+    ///
+    /// **In release builds a wrong-length mask is silently ignored** and the
+    /// call degrades to `None`. Under ruling 22 that is not a small fallback:
+    /// it reverts the COLOUR MODEL for the entire frame, not just the pinning,
+    /// so a caller that gets the length wrong gets a plausible-looking image
+    /// rendered against the wrong palette with nothing in the output to say so.
+    /// Callers must validate the length themselves; byonk's own call site in
+    /// `rendering/svg_to_png.rs` hard-errors before reaching here.
     pub fn dither_with_regions(
         &self,
         pixels: &[Srgb],
@@ -902,6 +914,53 @@ mod tests {
              same mask that holds exact black at 100% — the match is not \
              exact",
             near_share * 100.0
+        );
+    }
+
+    /// A wrong-length mask trips the debug guard rather than passing quietly.
+    ///
+    /// The release-build fallback (silently degrade to `None`, reverting the
+    /// colour model for the whole frame) is deliberately NOT tested here,
+    /// because it cannot be: `cargo test` builds with debug assertions on, so
+    /// the guard fires before the fallback is reachable. This test pins the
+    /// half that is observable, and the documented `# Panics` section carries
+    /// the half that is not. That asymmetry is the reason the fallback is
+    /// worth documenting loudly.
+    #[test]
+    #[should_panic(expected = "does not match pixel count")]
+    fn a_wrong_length_mask_trips_the_debug_guard() {
+        let ditherer = EinkDitherer::new(test_palette()).noise_scale(0.0);
+        let px = hostile_line_field(Srgb::from_u8(192, 96, 32), Srgb::from_u8(0, 0, 0));
+        let short = vec![false; px.len() - 1];
+        let _ = ditherer.dither_with_regions(&px, HOSTILE_W, HOSTILE_H, Some(&short));
+    }
+
+    /// The matching-length case is the other direction: the mask is honoured.
+    ///
+    /// Without this, the guard test above is compatible with a mutant that
+    /// refuses EVERY mask — length-checked or not — and the feature would be
+    /// entirely off with both tests green.
+    #[test]
+    fn a_correct_length_mask_is_honoured() {
+        let ditherer = EinkDitherer::new(test_palette()).noise_scale(0.0);
+        let field = Srgb::from_u8(192, 96, 32);
+        let px = hostile_line_field(field, Srgb::from_u8(0, 0, 0));
+        let unmarked = vec![false; px.len()];
+
+        let with_mask = ditherer.dither_with_regions(&px, HOSTILE_W, HOSTILE_H, Some(&unmarked));
+        let without = ditherer.dither_with_regions(&px, HOSTILE_W, HOSTILE_H, None);
+
+        // All-unmarked pins the black line; None does not. If a correct-length
+        // mask were being dropped, these two would agree.
+        assert_eq!(
+            line_ink_share(&with_mask, 0),
+            1.0,
+            "an all-unmarked mask of the right length did not pin the line"
+        );
+        assert!(
+            line_ink_share(&without, 0) < 0.99,
+            "the None baseline pinned the line too, so this comparison cannot \
+             tell an honoured mask from a dropped one"
         );
     }
 

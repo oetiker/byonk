@@ -1331,6 +1331,32 @@ mod tests {
             "the 1px marked sliver's output moved when only the surrounding \
              UNMARKED field changed — error was deposited across the boundary"
         );
+
+        // Non-degeneracy. Without the control below a mutant that drops EVERY
+        // tap passes this test: with no propagation at all the sliver is
+        // trivially independent of its surroundings, which looks exactly like
+        // containment working. Re-run the same pair with `regions: None`, so
+        // nothing stops error at the boundary, and require the sliver to move.
+        // That proves the field genuinely reaches this column and that the
+        // equality above is containment doing the work.
+        let no_stop = |px: &[LinearRgb]| {
+            dither_with_kernel_noise(
+                px,
+                W,
+                H,
+                &palette,
+                DitherAlgorithm::Atkinson.kernel(),
+                &opts,
+                None,
+            )
+        };
+        assert_ne!(
+            sliver(&no_stop(&a)),
+            sliver(&no_stop(&b)),
+            "without the boundary stop the sliver was ALSO unaffected by the \
+             field, so this geometry cannot detect a leak at all — report it, \
+             do not adjust it"
+        );
     }
 
     /// `regions: None` is today's behaviour, bit-for-bit.

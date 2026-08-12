@@ -239,6 +239,68 @@ pub const BURKES: Kernel = Kernel {
 mod tests {
     use super::*;
 
+    /// No kernel ever deposits error on an earlier row.
+    ///
+    /// Ruling 23's containment argument leans on this directly. A horizontal
+    /// region boundary needs no work in the upward direction *because* no tap
+    /// can reach there: rows above such a boundary come out bit-identical to
+    /// the no-boundary control, which is the strongest form the guarantee
+    /// takes and the reason the horizontal case is cleaner than the vertical
+    /// one. That was argued from the kernel tables by inspection and never
+    /// asserted, so a new kernel with an upward tap would silently weaken
+    /// containment while every containment test kept passing.
+    ///
+    /// Serpentine does not weaken this: it negates `dx` only, never `dy`
+    /// (see `dither/mod.rs`'s `effective_dx`).
+    #[test]
+    fn no_kernel_propagates_error_upwards() {
+        for algo in ALL_ALGORITHMS {
+            let k = algo.kernel();
+            // Non-degeneracy: an empty kernel would satisfy the sweep vacuously.
+            assert!(!k.entries.is_empty(), "{algo:?} dispatches an empty kernel");
+            for &(dx, dy, w) in k.entries {
+                assert!(
+                    dy >= 0,
+                    "{algo:?} has an upward tap ({dx}, {dy}, {w}) — ruling 23's \
+                     horizontal containment argument assumes every tap lands on \
+                     the current row or below"
+                );
+            }
+        }
+    }
+
+    /// Reached through `kernel()` rather than the constants, so this covers
+    /// exactly the kernels the crate can actually dispatch.
+    const ALL_ALGORITHMS: [crate::DitherAlgorithm; 9] = {
+        use crate::DitherAlgorithm::*;
+        [
+            Atkinson,
+            AtkinsonHybrid,
+            FloydSteinberg,
+            JarvisJudiceNinke,
+            Sierra,
+            SierraTwoRow,
+            SierraLite,
+            Stucki,
+            Burkes,
+        ]
+    };
+
+    /// Adding a `DitherAlgorithm` variant must break the build here.
+    ///
+    /// `ALL_ALGORITHMS` is hand-maintained and would otherwise go stale in
+    /// silence — a new kernel with an upward tap would then slip past the
+    /// sweep above while every containment test kept passing. This match has
+    /// no wildcard arm, so the compiler is what keeps the list honest.
+    #[allow(dead_code)]
+    fn exhaustiveness_guard(a: crate::DitherAlgorithm) {
+        use crate::DitherAlgorithm::*;
+        match a {
+            Atkinson | AtkinsonHybrid | FloydSteinberg | JarvisJudiceNinke | Sierra
+            | SierraTwoRow | SierraLite | Stucki | Burkes => {}
+        }
+    }
+
     #[test]
     fn test_atkinson_propagation_75_percent() {
         let sum: u8 = ATKINSON.entries.iter().map(|(_, _, w)| w).sum();

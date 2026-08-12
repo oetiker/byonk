@@ -1108,6 +1108,12 @@ mod tests {
         use eink_dither::gamut::adapt::{adaptation_factor, MIN_DISCARD, PERCENTILE};
 
         // The screen as a device sees it: reterminal_e1002, 800x480.
+        //
+        // Transcribed from `config.yaml`'s `panels: reterminal_e1002:` rather
+        // than read from it, so that a recalibration of that panel — new
+        // `colors_actual`, or a new size — leaves this diagnostic silently
+        // measuring the OLD panel. If these numbers ever matter for a
+        // decision, diff them against the config first.
         let spec = DisplaySpec::from_dimensions(800, 480).unwrap();
         let official: Vec<(u8, u8, u8)> = vec![
             (0, 0, 0),

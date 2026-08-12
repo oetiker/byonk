@@ -33,12 +33,19 @@ pub enum DistanceMetric {
     ///
     /// Formula: `kl * |dL| + kc * sqrt(da² + db²) + kchroma * |C_pixel - C_palette|`
     ///
-    /// Default: `kl: 2.0, kc: 1.0, kchroma: 10.0`. The high `kchroma`
-    /// ensures grey pixels never bleed into chromatic palette entries, which
-    /// is critical for blue-noise ordered dithering (`find_second_nearest`).
-    /// For error-diffusion (Photo intent), use [`Palette::for_error_diffusion()`]
-    /// which lowers `kchroma` to 5.0 so medium-chroma pixels can reach
-    /// chromatic palette entries instead of collapsing to B&W.
+    /// Default: `kl: 2.0, kc: 1.0, kchroma: 10.0`. The high `kchroma` keeps
+    /// grey pixels from bleeding into chromatic palette entries; see
+    /// `test_hyab_all_greys_map_to_valid_color`.
+    ///
+    /// For error diffusion, use [`Palette::for_error_diffusion()`], which
+    /// replaces this metric with [`DistanceMetric::Euclidean`] outright rather
+    /// than retuning `kchroma` — see that method for why no weight is correct
+    /// there.
+    ///
+    /// Note that [`EinkDitherer`](crate::EinkDitherer) matches every dither
+    /// through `for_error_diffusion()`, so this metric is not on the crate's
+    /// dithering path at all. It is reachable through the public
+    /// [`Palette::distance()`] and [`Palette::find_nearest()`].
     HyAB {
         /// Lightness weight. Higher values make lightness differences more
         /// significant relative to chrominance differences.
@@ -347,15 +354,14 @@ impl Palette {
 
     /// Return a copy tuned for error-diffusion (Photo) rendering.
     ///
-    /// Error diffusion accumulates quantisation error and feeds it back,
-    /// so even medium-chroma pixels eventually produce chromatic output.
-    /// A lower `kchroma` lets the initial per-pixel match reach chromatic
-    /// palette entries sooner, producing more faithful colour reproduction.
+    /// Replaces [`DistanceMetric::HyAB`] with [`DistanceMetric::Euclidean`];
+    /// any other metric is returned unchanged.
     ///
-    /// The default `kchroma=10` is needed by the blue-noise ordered
-    /// ditherer (Graphics intent) where `find_second_nearest` can leak
-    /// chromatic entries for grey pixels. Error diffusion only uses
-    /// `find_nearest`, which is grey-safe at `kchroma=5`.
+    /// This is **not** a retuning of `kchroma`. HyAB's chroma coupling term is
+    /// biased for error diffusion at every non-zero weight: it holds muted
+    /// pixels away from chromatic entries, and because the bias is systematic
+    /// rather than random, diffusion cannot correct it. Euclidean OKLab is
+    /// unbiased, so a neighbourhood converges on the input colour.
     pub fn for_error_diffusion(&self) -> Self {
         let mut p = self.clone();
         if let DistanceMetric::HyAB { .. } = p.distance_metric {

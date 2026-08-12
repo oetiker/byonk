@@ -278,7 +278,7 @@ impl EinkDitherer {
         let preprocessor = Preprocessor::new(self.preprocess.clone());
         let result = preprocessor.process(pixels, width, height);
 
-        // 2. Dither using unified kernel dispatch.
+        // 2. Resolve dither options.
         //
         // There used to be a greyscale override raising error_clamp to 0.6
         // here. It compensated for the old clamp semantics, which bounded the
@@ -905,15 +905,25 @@ mod tests {
         );
     }
 
-    /// dither() is dither_with_pinning(None) and neither pins.
+    /// `dither()` is `dither_with_regions(.., None)` and neither pins.
+    ///
+    /// Today that equality is trivially true — `dither()` is a one-line
+    /// delegation (see its definition above). The test exists to catch a
+    /// future change that has `dither()` fabricate a mask of its own.
+    ///
+    /// It catches exactly one such mutant: an all-**false** (all-structure)
+    /// mask, which turns pinning on everywhere and rescues the line. It
+    /// CANNOT catch an all-**true** mask, because an all-continuous mask is
+    /// bit-identical to `None` by construction — asserted separately by
+    /// `an_all_continuous_mask_is_bit_identical_to_no_mask`. Do not read this
+    /// test as covering that case.
     ///
     /// The brief's original version used a smooth (i*4, 128, 255-i*4)
-    /// gradient, which never lands exactly on any test_palette() ink — so a
-    /// mutant that has `dither()` build an all-true mask internally has
-    /// nothing to pin either, and the two calls agree by accident. Reuse the
-    /// hostile black-line-in-a-saturated-field geometry so an
-    /// internally-fabricated mask would visibly rescue the line and this
-    /// test would catch it. The erosion of `b` (the definitely-unpinned
+    /// gradient, which never lands exactly on any test_palette() ink — so
+    /// even the catchable mutant would have had nothing to pin, and the two
+    /// calls would agree by accident. Reuse the hostile
+    /// black-line-in-a-saturated-field geometry so a fabricated mask visibly
+    /// rescues the line. The erosion of `b` (the definitely-unpinned
     /// baseline) is asserted directly, not just documented, so a future
     /// change that stops this scene being hostile must fail loudly here
     /// rather than pass a now-tautological equality. This does NOT catch a

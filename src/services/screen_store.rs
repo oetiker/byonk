@@ -2487,6 +2487,174 @@ mod tests {
         );
     }
 
+    /// The colour calibrator's patches must come out as flat single inks.
+    ///
+    /// This is the regression guard for the defect class ruling 22 created and
+    /// that nothing in the suite could see: a screen that PAINTS a measured
+    /// value into unmarked content. `calibration/color` filled its patch row
+    /// from `device.colors_actual`, which was correct while unmarked content
+    /// was matched against the measured palette (a measured value is an exact
+    /// entry, so it quantised with zero error). Ruling 22 inverted that —
+    /// unmarked content is now matched against the OFFICIAL palette, where
+    /// `#B50303` is not an entry, so it cannot match exactly, pinning never
+    /// fires, and the patch breaks up.
+    ///
+    /// Tasks 5, 6 and 7 all reviewed clean and the full gate was green while
+    /// this screen was visibly broken; it was found by the owner looking at a
+    /// render. The mutation this test exists to catch is reverting
+    /// `script.lua`'s `local ink = colors` to `(device and
+    /// device.colors_actual) or colors`. Applied and measured: the test fails
+    /// on the red patch at **57.1% #FF0000**, reproducing the figure recorded
+    /// in `4eef93e`. That is the only patch value verified here — the
+    /// assertion aborts at the first failure, so the yellow/blue/green shares
+    /// in that commit message are not re-confirmed by this test.
+    ///
+    /// Note the mutation is invisible on the black and white patches: those
+    /// two entries are identical in both colour models, so they pin either
+    /// way. Red is the first entry that can discriminate, which is what the
+    /// non-degeneracy assertion below is counting.
+    ///
+    /// Rendered with `use_actual: false` so the PNG is drawn in the nominal
+    /// palette: the output is then exactly six colours and an ink is an exact
+    /// byte match, so "is this patch flat?" needs no tolerance.
+    #[test]
+    fn the_colour_calibrator_patches_are_flat_single_inks() {
+        const OFFICIAL: &str = "#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00";
+        const MEASURED: &str = "#000000,#FFFFFF,#B50303,#FFEE00,#205497,#0D876B";
+
+        let mut panels = HashMap::new();
+        panels.insert(
+            "sixcolor".to_string(),
+            PanelConfig {
+                name: "Six colour test panel".to_string(),
+                match_pattern: None,
+                width: Some(800),
+                height: Some(480),
+                colors: OFFICIAL.to_string(),
+                colors_actual: Some(MEASURED.to_string()),
+                dither: None,
+            },
+        );
+        let config = AppConfig {
+            panels,
+            ..AppConfig::default()
+        };
+        let (store, _repo_root) = test_store_with_local_and_config(config);
+
+        // THE FIXTURE TRAP: with `colors_actual == colors` the two colour
+        // models coincide, the mutation this test targets becomes a no-op, and
+        // the test would pass against it while looking perfectly healthy.
+        // Assert the fixture can actually discriminate before measuring.
+        let official: Vec<&str> = OFFICIAL.split(',').collect();
+        let measured: Vec<&str> = MEASURED.split(',').collect();
+        let differing = official
+            .iter()
+            .zip(measured.iter())
+            .filter(|(o, m)| o != m)
+            .count();
+        assert!(
+            differing >= 4,
+            "only {differing} of 6 entries differ between the colour models — \
+             this fixture cannot tell the nominal fill from the measured one"
+        );
+
+        let res = store.render(
+            "byonk-builtin/calibration/color",
+            RenderOpts {
+                width: Some(800),
+                height: Some(480),
+                panel: Some("sixcolor".to_string()),
+                // Draw the nominal palette: exactly six colours out, so an ink
+                // is an exact byte match rather than a nearest-neighbour guess.
+                use_actual: Some(false),
+                include_svg: true,
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        let svg = res.svg.expect("include_svg was requested");
+
+        // Take the patch geometry from the document that was actually
+        // rasterized rather than recomputing the Lua layout, which would drift
+        // silently the moment the screen is re-laid-out. The patches are the
+        // only rects carrying BOTH a literal hex fill and an explicit `x`: the
+        // gradient bars are `fill="url(#…)"` and the background rect has no
+        // `x`/`y` (see screen.svg).
+        let attr = |tag: &str, name: &str| -> Option<String> {
+            let pat = format!("{name}=\"");
+            let start = tag.find(&pat)? + pat.len();
+            let rest = &tag[start..];
+            let end = rest.find('"')?;
+            Some(rest[..end].to_string())
+        };
+        let patches: Vec<(u32, u32, u32, u32)> = svg
+            .split("<rect")
+            .skip(1)
+            .filter_map(|t| {
+                let tag = &t[..t.find('>')?];
+                let fill = attr(tag, "fill")?;
+                if !fill.starts_with('#') {
+                    return None;
+                }
+                Some((
+                    attr(tag, "x")?.parse().ok()?,
+                    attr(tag, "y")?.parse().ok()?,
+                    attr(tag, "width")?.parse().ok()?,
+                    attr(tag, "height")?.parse().ok()?,
+                ))
+            })
+            .collect();
+        assert_eq!(
+            patches.len(),
+            6,
+            "expected one rect per ink; found {} — the patch row's markup \
+             changed and this test is no longer looking at it",
+            patches.len()
+        );
+
+        let img = image::load_from_memory(&res.png)
+            .expect("render must be a PNG")
+            .to_rgb8();
+
+        for (x, y, w, h) in patches {
+            // Inset off the grid lines, and stop short of the bottom: the
+            // label baseline sits at `patch_y + patch_inner - 3`, so the last
+            // rows carry glyphs that are legitimately a different ink.
+            let (x0, x1) = (x + 4, x + w - 4);
+            let (y0, y1) = (y + 4, y + h - 24);
+            assert!(
+                x1 > x0 && y1 > y0,
+                "patch {x},{y} {w}x{h} is too small to sample"
+            );
+
+            let mut counts: HashMap<[u8; 3], usize> = HashMap::new();
+            for py in y0..y1 {
+                for px in x0..x1 {
+                    let p = img.get_pixel(px, py).0;
+                    *counts.entry(p).or_default() += 1;
+                }
+            }
+            let total: usize = counts.values().sum();
+            let (top, n) = counts
+                .iter()
+                .max_by_key(|(_, n)| **n)
+                .map(|(c, n)| (*c, *n))
+                .expect("sampled region must be non-empty");
+            let share = n as f64 / total as f64;
+            assert!(
+                share >= 0.99,
+                "patch at {x},{y} is {:.1}% #{:02X}{:02X}{:02X} — it is dithering \
+                 rather than pinning. The usual cause is the fill being painted \
+                 from a MEASURED colour, which is not an official palette entry \
+                 and so can never match exactly (ruling 22).",
+                share * 100.0,
+                top[0],
+                top[1],
+                top[2]
+            );
+        }
+    }
+
     #[test]
     fn render_works_for_read_only_source() {
         // render is a read operation, like validate — it must work against

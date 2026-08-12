@@ -63,6 +63,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Continuous-tone content is now marked, and it changes how a screen renders.**
+  Byonk now treats a screen as two kinds of content. Anything you mark with
+  `data-byonk-tone="continuous"` — photographs, hue gradients — is matched
+  against your panel's *measured* colours and gamut-mapped into what the panel
+  can physically show. Everything else is **structure**, and is matched against
+  the *official* palette: `#FF0000` is simply red, so it pins to that one ink
+  and renders as a flat block with no speckle. Text beside a saturated area
+  stays black instead of picking up diffused colour error, and a flat fill of a
+  palette colour comes out as that colour.
+
+  **Upgrade note — mark your photographs.** This is the one change that can
+  make an existing screen look worse. An *unmarked* photograph is now aimed at
+  primaries the panel cannot produce, and it renders markedly darker: on
+  byonk's own sample images the black ink share goes from roughly 56% to
+  roughly 75%. If a screen of yours draws a photo or a hue gradient, add
+  `data-byonk-tone="continuous"` to that element. Byonk's own bundled screens
+  have already been updated — most needed no change, because most of them draw
+  no continuous-tone content at all.
+
+  Mark the element that *is* continuous-tone, not a `<g>` around it — a wrapper
+  swallows neighbouring labels and turns text into continuous-tone content.
+  Leave grey gradients unmarked: grey is always in gamut, so marking only costs
+  you the pinning. See *Marking continuous-tone content* in the SVG templates
+  guide for the full rules.
+
+  **If your Lua script paints a measured colour, stop.** `device.colors_actual`
+  values are no longer palette entries for unmarked content, so a shape filled
+  with one can no longer match exactly and will dither instead of coming out
+  flat. Decide with the measured value if you need to (contrast, say), but
+  paint with the official one.
 - **Dithered images no longer show weave patterns or stray lines.** Error
   diffusion on smooth content could settle into a repeating pattern instead of
   a random one, printing a herringbone texture across flat areas and, in
@@ -111,26 +141,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changed: it is now a cap on accumulated error, and the useful range is around
   1.0 rather than around 0.1. Old values will look flat. Remove the setting to
   take the new default.
-- **The colour calibrator's patches show the panel's inks again.** They are now
-  drawn in the panel's measured colours, so each patch is that ink and nothing
-  else; the label still shows the official value you write in a screen.
+- **The colour calibrator's patches show the panel's inks again** — each patch is
+  one flat block of a single ink, so you can judge the ink itself instead of a
+  dither pattern. The label still shows the official value you write in a screen.
 - **Gradients no longer get a hard seam where they cross a palette colour.**
-  Byonk used to detect pixels whose value exactly matched one of the panel's
-  colours and pin them to that ink, discarding their dithering error, to keep
-  text and logos crisp. That works for a deliberate flat fill but not for a
-  gradient, where a pixel's value matches only by coincidence — the pinned
-  pixels showed up as a visible stripe across an otherwise smooth ramp. It
-  also made a pure `#00FF00` area render as the panel's dark green when a much
-  closer bright yellow-green mixture was available.
+  Byonk detects pixels whose value exactly matches one of the panel's colours
+  and pins them to that ink, discarding their dithering error, to keep text and
+  logos crisp. That works for a deliberate flat fill but not for a gradient,
+  where a pixel's value matches only by coincidence — the pinned pixels showed
+  up as a visible stripe across an otherwise smooth ramp.
 
-  The mechanism is gone entirely. It turned out to buy nothing: a pixel that
-  already equals a palette colour has no dithering error to begin with, so it
-  is reproduced exactly without any special handling. Text and solid palette
-  colours are unchanged; only the seams disappear.
+  Marking a gradient or photograph as continuous-tone (see *Continuous-tone
+  content is now marked* above) switches pinning off across it, which removes
+  the seam. Structure — text, logos, flat fills — is still pinned, and that is
+  what keeps it crisp.
 
   **Breaking:** the `preserve_exact` key in a screen's Lua return value is
-  removed. Scripts setting it should drop it — the behaviour it disabled no
-  longer exists. Setting it now has no effect.
+  removed. Scripts setting it should drop it; marking your continuous-tone
+  content replaces it. Setting it now has no effect.
 - **`sierra-light` now selects Sierra Lite instead of silently falling back to
   Atkinson.** The misspelling was listed by the admin API as if it were its own
   algorithm and shipped in the panel presets, but nothing understood it: any

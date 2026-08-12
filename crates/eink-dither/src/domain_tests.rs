@@ -3179,4 +3179,787 @@ mod domain_tests {
         eprintln!("minimum step separation in Oklab: {min_sep:.2e}");
         assert_eq!(collapsed, 0, "every ramp step must stay distinct");
     }
+
+    // ========================================================================
+    // Task 8: the region colour-model measurement pass
+    // ========================================================================
+    //
+    // These are DIAGNOSTICS (owner ruling 20): non-asserting, `#[ignore]`d,
+    // and their printed output is the deliverable. The one exception is
+    // `an_all_continuous_mask_is_bit_identical_to_no_mask`, which guards an
+    // invariant rather than a tuned threshold and therefore runs by default.
+    //
+    // They live here, in a lib unit test, and NOT in `tests/`: the only
+    // fixture whose official and actual colour sets genuinely differ is
+    // `crate::gamut::test_support::panel_measured()`, which is
+    // `#[cfg(test)] pub(crate)` and invisible to an integration test. Under
+    // any `Palette::new(x, None)` fixture the two colour models are identical
+    // and every number below would read zero difference while appearing to
+    // work.
+    //
+    // Run:
+    //   cargo test -p eink-dither --lib region_model -- --ignored --nocapture
+    mod region_model {
+        use crate::api::EinkDitherer;
+        use crate::color::{LinearRgb, Oklab, Srgb};
+        use crate::dither::DitherAlgorithm;
+        use crate::gamut::test_support::panel_measured;
+        use crate::output::DitheredImage;
+        use crate::{GamutMapper, GamutOptions};
+        use std::path::PathBuf;
+
+        /// `panel_measured()`'s entries, in index order. Indices 2-5 are the
+        /// probes that can discriminate the two colour models; 0 and 1 are
+        /// degenerate (official == actual) even in this fixture.
+        const INKS: [&str; 6] = ["black", "white", "red", "yellow", "blue", "green"];
+
+        /// The λ values Step 1 sweeps. `pin_carry`'s shipping default is 0.9
+        /// and is PROVISIONAL — this sweep is what informs it.
+        const LAMBDAS: [f32; 6] = [0.0, 0.5, 0.8, 0.9, 0.95, 1.0];
+
+        /// Frame size every real-asset measurement runs at — a TRMNL panel.
+        const FRAME_W: usize = 800;
+        const FRAME_H: usize = 480;
+
+        // ------------------------------------------------------------------
+        // shared helpers
+        // ------------------------------------------------------------------
+
+        /// Load a repo asset and resample it to `w`x`h` with the `image` dev
+        /// dependency. eink-dither's own `resize_lanczos` panics on any real
+        /// dimension change (no image backend in the crate proper), so test
+        /// code resizes here, exactly as `tests/visual_compare.rs` does.
+        ///
+        /// `resize_to_fill` crops to the panel's aspect rather than distorting.
+        fn asset(rel: &str, w: usize, h: usize) -> Option<Vec<Srgb>> {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .join(rel);
+            let img = match image::open(&path) {
+                Ok(i) => i,
+                Err(e) => {
+                    eprintln!("SKIPPING: {} not readable ({e})", path.display());
+                    return None;
+                }
+            };
+            let img = img.resize_to_fill(w as u32, h as u32, image::imageops::FilterType::Lanczos3);
+            Some(
+                img.to_rgb8()
+                    .pixels()
+                    .map(|p| Srgb::from_u8(p[0], p[1], p[2]))
+                    .collect(),
+            )
+        }
+
+        /// Write an RGB buffer into `target/dither-compare/` and return its path.
+        fn write_png(name: &str, rgb: &[u8], w: usize, h: usize) -> String {
+            let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/dither-compare");
+            std::fs::create_dir_all(&dir).expect("create target/dither-compare");
+            let path = dir.join(name);
+            image::save_buffer(
+                &path,
+                rgb,
+                w as u32,
+                h as u32,
+                image::ExtendedColorType::Rgb8,
+            )
+            .expect("write png");
+            path.display().to_string()
+        }
+
+        /// The panel's own appearance of a render: measured inks, whatever
+        /// colour model the matching ran under.
+        fn appearance(img: &DitheredImage) -> Vec<Oklab> {
+            img.to_rgb_actual()
+                .chunks_exact(3)
+                .map(|c| Oklab::from(LinearRgb::from(Srgb::from_u8(c[0], c[1], c[2]))))
+                .collect()
+        }
+
+        /// Mean Oklab ΔE between two renders over a pixel set.
+        fn mean_de(a: &[Oklab], b: &[Oklab], set: &[usize]) -> f64 {
+            if set.is_empty() {
+                return f64::NAN;
+            }
+            let sum: f64 = set
+                .iter()
+                .map(|&i| {
+                    let (p, q) = (a[i], b[i]);
+                    (((p.l - q.l).powi(2) + (p.a - q.a).powi(2) + (p.b - q.b).powi(2)) as f64)
+                        .sqrt()
+                })
+                .sum();
+            sum / set.len() as f64
+        }
+
+        /// Share of a pixel set whose chosen ink differs between two renders.
+        fn changed_share(a: &DitheredImage, b: &DitheredImage, set: &[usize]) -> f64 {
+            if set.is_empty() {
+                return f64::NAN;
+            }
+            let n = set
+                .iter()
+                .filter(|&&i| a.indices()[i] != b.indices()[i])
+                .count();
+            n as f64 / set.len() as f64
+        }
+
+        /// Ink counts over a pixel set.
+        fn hist(img: &DitheredImage, set: &[usize]) -> [usize; 6] {
+            let mut c = [0usize; 6];
+            for &i in set {
+                c[img.indices()[i] as usize] += 1;
+            }
+            c
+        }
+
+        /// Format an ink histogram as shares, largest first, zeroes dropped.
+        fn fmt_hist(c: &[usize; 6]) -> String {
+            let total: usize = c.iter().sum();
+            if total == 0 {
+                return "(empty)".into();
+            }
+            let mut v: Vec<(usize, &str)> = c.iter().copied().zip(INKS).collect();
+            v.sort_by_key(|e| std::cmp::Reverse(e.0));
+            v.iter()
+                .filter(|(n, _)| *n > 0)
+                .map(|(n, name)| format!("{name} {:.1}%", *n as f64 / total as f64 * 100.0))
+                .collect::<Vec<_>>()
+                .join("  ")
+        }
+
+        /// Total-variation distance between two ink histograms, in [0, 1].
+        ///
+        /// A PROXY for "how far this band's ink mix has been dragged from what
+        /// it would have been". It is not a validated quality criterion; it is
+        /// a single number to rank λ by, and the full histograms are printed
+        /// beside it so the owner can disagree with the ranking.
+        fn tvd(a: &[usize; 6], b: &[usize; 6]) -> f64 {
+            let (sa, sb): (usize, usize) = (a.iter().sum(), b.iter().sum());
+            if sa == 0 || sb == 0 {
+                return f64::NAN;
+            }
+            0.5 * a
+                .iter()
+                .zip(b.iter())
+                .map(|(&x, &y)| (x as f64 / sa as f64 - y as f64 / sb as f64).abs())
+                .sum::<f64>()
+        }
+
+        /// Every pixel index of a column range, all rows.
+        fn cols(w: usize, h: usize, r: std::ops::Range<usize>) -> Vec<usize> {
+            (0..h)
+                .flat_map(|y| r.clone().map(move |x| y * w + x))
+                .collect()
+        }
+
+        /// Every pixel index of an axis-aligned rectangle.
+        fn rect(w: usize, xr: std::ops::Range<usize>, yr: std::ops::Range<usize>) -> Vec<usize> {
+            yr.flat_map(|y| xr.clone().map(move |x| y * w + x))
+                .collect()
+        }
+
+        /// Paint a vertical line of `ink` over `px`, `cols` wide.
+        fn paint_line(px: &mut [Srgb], w: usize, h: usize, xr: std::ops::Range<usize>, ink: Srgb) {
+            for y in 0..h {
+                for x in xr.clone() {
+                    px[y * w + x] = ink;
+                }
+            }
+        }
+
+        /// The shipping ditherer for these measurements: the default Atkinson
+        /// configuration, exactly as `svg_to_png.rs` builds it.
+        fn shipping() -> EinkDitherer {
+            EinkDitherer::new(panel_measured()).algorithm(DitherAlgorithm::Atkinson)
+        }
+
+        // ------------------------------------------------------------------
+        // Free consistency check (mandated): polarity is silent if flipped
+        // ------------------------------------------------------------------
+
+        /// An all-`true` mask means "everything is continuous-tone": measured
+        /// colour model, pinning off, and no model boundary anywhere. That is
+        /// precisely what `None` means, so the two must agree bit for bit.
+        ///
+        /// This is an invariant, not a tuned threshold, so unlike the
+        /// diagnostics around it, it asserts and runs by default. It
+        /// independently re-verifies the mask polarity, which is otherwise
+        /// silent if inverted.
+        #[test]
+        fn an_all_continuous_mask_is_bit_identical_to_no_mask() {
+            let ditherer = shipping();
+
+            // A frame with pin-eligible content (exact inks), chromatic
+            // content, and a gradient — so a polarity flip has somewhere to
+            // show up.
+            let (w, h) = (64usize, 64usize);
+            let mut px: Vec<Srgb> = (0..w * h)
+                .map(|i| {
+                    let (x, y) = (i % w, i / w);
+                    Srgb::from_u8((x * 4) as u8, (y * 4) as u8, 128)
+                })
+                .collect();
+            paint_line(&mut px, w, h, 30..32, Srgb::from_u8(0, 0, 0));
+            paint_line(&mut px, w, h, 10..12, Srgb::from_u8(0, 255, 0));
+
+            let all_true = vec![true; px.len()];
+            let with_mask = ditherer.dither_with_regions(&px, w, h, Some(&all_true));
+            let no_mask = ditherer.dither_with_regions(&px, w, h, None);
+
+            assert_eq!(
+                with_mask.indices(),
+                no_mask.indices(),
+                "an all-continuous mask must be bit-identical to no mask; if it \
+                 is not, the mask polarity is inverted or the measured model is \
+                 not the None default"
+            );
+
+            // ...and the opposite mask must actually differ, or the check above
+            // would pass against an implementation that ignores the mask.
+            let all_false = vec![false; px.len()];
+            let unmarked = ditherer.dither_with_regions(&px, w, h, Some(&all_false));
+            assert_ne!(
+                unmarked.indices(),
+                no_mask.indices(),
+                "an all-structure mask produced identical output to no mask — \
+                 the region map is not reaching the dither loop, and the \
+                 bit-identity check above proves nothing"
+            );
+        }
+
+        // ------------------------------------------------------------------
+        // Step 1: the λ (pin_carry) sweep
+        // ------------------------------------------------------------------
+
+        /// Print, for each λ, what a pinned 2 px line does to the 4 px band on
+        /// either side of it.
+        ///
+        /// The line's OWN ink purity is 100% at every λ by construction — a
+        /// pinned pixel outputs its ink unconditionally, and λ only decides
+        /// what it forwards. It is printed anyway because the brief asks for
+        /// it; it is not a discriminator. See the report's plan-defect note.
+        ///
+        /// The discriminator is the band: each band histogram is compared
+        /// against the SAME band rendered from a line-free copy of the same
+        /// frame, i.e. what those pixels would have done undisturbed.
+        #[test]
+        #[ignore] // diagnostic -- run manually
+        fn lambda_sweep_diag() {
+            eprintln!("\n=== Step 1: λ (pin_carry) sweep ===");
+            eprintln!("fixture: gamut::test_support::panel_measured() — the only");
+            eprintln!("fixture whose official and actual sets differ (probes 2-5).\n");
+
+            // -- Scenario A: Task 2's 2 px line in a hostile field ----------
+            let (w, h) = (32usize, 32usize);
+            let field = Srgb::from_u8(255, 128, 0);
+            let clean = vec![field; w * h];
+            let mut lined = clean.clone();
+            paint_line(&mut lined, w, h, 15..17, Srgb::from_u8(0, 0, 0));
+            let unmarked = vec![false; w * h];
+            let left = cols(w, h, 11..15);
+            let right = cols(w, h, 17..21);
+            let line_set = cols(w, h, 15..17);
+
+            eprintln!("-- A: synthetic hostile field 32x32, (255,128,0), 2 px black line");
+            eprintln!("   mask: all-structure (unmarked) everywhere; noise 0, serpentine off");
+            let mk = |lambda: f32| {
+                EinkDitherer::new(panel_measured())
+                    .noise_scale(0.0)
+                    .serpentine(false)
+                    .pin_carry(lambda)
+            };
+            // The reference frame has no line, hence no pinned pixel, so λ
+            // cannot affect it.
+            let ref_img = mk(0.9).dither_with_regions(&clean, w, h, Some(&unmarked));
+            let (ref_l, ref_r) = (hist(&ref_img, &left), hist(&ref_img, &right));
+            eprintln!("   reference (no line) left band : {}", fmt_hist(&ref_l));
+            eprintln!("   reference (no line) right band: {}", fmt_hist(&ref_r));
+            for lambda in LAMBDAS {
+                let img = mk(lambda).dither_with_regions(&lined, w, h, Some(&unmarked));
+                let (hl, hr) = (hist(&img, &left), hist(&img, &right));
+                eprintln!(
+                    "   λ={lambda:.2}  line black {:.1}%  TVD L/R {:.3}/{:.3}",
+                    hist(&img, &line_set)[0] as f64 / line_set.len() as f64 * 100.0,
+                    tvd(&hl, &ref_l),
+                    tvd(&hr, &ref_r)
+                );
+                eprintln!("            left  {}", fmt_hist(&hl));
+                eprintln!("            right {}", fmt_hist(&hr));
+            }
+
+            // -- Scenario B: a real screen render ---------------------------
+            let Some(bg) = asset("screens/builtin/default/background.jpg", FRAME_W, FRAME_H) else {
+                return;
+            };
+            let (w, h) = (FRAME_W, FRAME_H);
+            let mut lined = bg.clone();
+            paint_line(&mut lined, w, h, 400..402, Srgb::from_u8(0, 0, 0));
+            let unmarked = vec![false; w * h];
+            let left = cols(w, h, 396..400);
+            let right = cols(w, h, 402..406);
+            let line_set = cols(w, h, 400..402);
+            let d0 = shipping();
+
+            eprintln!(
+                "\n-- B: background.jpg {w}x{h}, 2 px black line at x=400, whole frame UNMARKED"
+            );
+            eprintln!("   (structure model both sides, so error crosses the line freely)");
+            let ref_img = d0.dither_with_regions(&bg, w, h, Some(&unmarked));
+            let (ref_l, ref_r) = (hist(&ref_img, &left), hist(&ref_img, &right));
+            eprintln!("   reference (no line) left band : {}", fmt_hist(&ref_l));
+            eprintln!("   reference (no line) right band: {}", fmt_hist(&ref_r));
+            for lambda in LAMBDAS {
+                let d = shipping().pin_carry(lambda);
+                let img = d.dither_with_regions(&lined, w, h, Some(&unmarked));
+                let (hl, hr) = (hist(&img, &left), hist(&img, &right));
+                eprintln!(
+                    "   λ={lambda:.2}  line black {:.1}%  TVD L/R {:.3}/{:.3}",
+                    hist(&img, &line_set)[0] as f64 / line_set.len() as f64 * 100.0,
+                    tvd(&hl, &ref_l),
+                    tvd(&hr, &ref_r)
+                );
+                eprintln!("            left  {}", fmt_hist(&hl));
+                eprintln!("            right {}", fmt_hist(&hr));
+            }
+
+            // -- Scenario C: the same line as structure inside a MARKED photo.
+            // Containment (ruling 23) means no error crosses into the line at
+            // all, so λ should have no effect whatsoever. This is the realistic
+            // case for a grid line over a photograph, and it bounds how much λ
+            // can matter in production.
+            eprintln!("\n-- C: same frame, photo MARKED continuous, line unmarked structure");
+            let mut mask = vec![true; w * h];
+            for y in 0..h {
+                for x in 400..402 {
+                    mask[y * w + x] = false;
+                }
+            }
+            let mut first: Option<Vec<u8>> = None;
+            let mut all_same = true;
+            for lambda in LAMBDAS {
+                let d = shipping().pin_carry(lambda);
+                let img = d.dither_with_regions(&lined, w, h, Some(&mask));
+                let (hl, hr) = (hist(&img, &left), hist(&img, &right));
+                eprintln!(
+                    "   λ={lambda:.2}  line black {:.1}%  left {}",
+                    hist(&img, &line_set)[0] as f64 / line_set.len() as f64 * 100.0,
+                    fmt_hist(&hl)
+                );
+                eprintln!("            right {}", fmt_hist(&hr));
+                match &first {
+                    None => first = Some(img.indices().to_vec()),
+                    Some(f) => all_same &= f == img.indices(),
+                }
+            }
+            eprintln!(
+                "   λ-invariant across the whole frame: {all_same}  \
+                 (expected true: containment stops all error at the line)"
+            );
+        }
+
+        // ------------------------------------------------------------------
+        // Step 2: the unmarked-photograph cost
+        // ------------------------------------------------------------------
+
+        /// What it costs to forget to mark a photograph.
+        ///
+        /// Three arms, because "today's behaviour" for a marked photograph in
+        /// byonk is measured model AND gamut mapping (`svg_to_png.rs` maps
+        /// inside marked regions before dithering), and lumping the two
+        /// together would make the colour model answer for the mapper:
+        ///
+        /// - `marked_mapped` — gamut-mapped, all-`true` mask. Today, shipping.
+        /// - `marked_raw`    — all-`true` mask, no mapping. Isolates the mapper.
+        /// - `unmarked`      — all-`false` mask, no mapping. What an author who
+        ///                     does not mark the photo now gets.
+        #[test]
+        #[ignore] // diagnostic -- run manually
+        fn unmarked_photograph_cost_diag() {
+            eprintln!("\n=== Step 2: the unmarked-photograph cost ===");
+            eprintln!("fixture: panel_measured(); ΔE is Oklab distance between the two");
+            eprintln!("renders' MEASURED-ink appearance (what the panel shows).\n");
+
+            for (label, rel) in [
+                ("photo", "screens/builtin/calibration/color/photo.png"),
+                ("background", "screens/builtin/default/background.jpg"),
+            ] {
+                let Some(src) = asset(rel, FRAME_W, FRAME_H) else {
+                    continue;
+                };
+                let (w, h) = (FRAME_W, FRAME_H);
+                let palette = panel_measured();
+                let mapper = GamutMapper::new(&palette);
+
+                let all_true = vec![true; src.len()];
+                let all_false = vec![false; src.len()];
+
+                let oog: Vec<usize> = src
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| mapper.rho(**p) > 1.0)
+                    .map(|(i, _)| i)
+                    .collect();
+                let all: Vec<usize> = (0..src.len()).collect();
+
+                let mut mapped = src.clone();
+                mapper.map_frame(&mut mapped, &all_true, GamutOptions::default());
+
+                let d = shipping();
+                let marked_mapped = d.dither_with_regions(&mapped, w, h, Some(&all_true));
+                let marked_raw = d.dither_with_regions(&src, w, h, Some(&all_true));
+                let unmarked = d.dither_with_regions(&src, w, h, Some(&all_false));
+
+                let (a_mm, a_mr, a_un) = (
+                    appearance(&marked_mapped),
+                    appearance(&marked_raw),
+                    appearance(&unmarked),
+                );
+
+                eprintln!("-- {label} ({rel}) {w}x{h}");
+                eprintln!(
+                    "   out-of-gamut pixels (rho > 1): {} of {} ({:.1}%)",
+                    oog.len(),
+                    all.len(),
+                    oog.len() as f64 / all.len() as f64 * 100.0
+                );
+                for (set_name, set) in [("whole frame", &all), ("out-of-gamut only", &oog)] {
+                    eprintln!("   [{set_name}]  n = {}", set.len());
+                    eprintln!(
+                        "     mean ΔE  unmarked vs marked_mapped : {:.4}",
+                        mean_de(&a_un, &a_mm, set)
+                    );
+                    eprintln!(
+                        "     mean ΔE  unmarked vs marked_raw    : {:.4}",
+                        mean_de(&a_un, &a_mr, set)
+                    );
+                    eprintln!(
+                        "     mean ΔE  marked_raw vs marked_mapped: {:.4}",
+                        mean_de(&a_mr, &a_mm, set)
+                    );
+                    eprintln!(
+                        "     ink changed  unmarked vs marked_mapped: {:.1}%",
+                        changed_share(&unmarked, &marked_mapped, set) * 100.0
+                    );
+                    eprintln!(
+                        "     ink changed  unmarked vs marked_raw   : {:.1}%",
+                        changed_share(&unmarked, &marked_raw, set) * 100.0
+                    );
+                    eprintln!(
+                        "     hist marked_mapped: {}",
+                        fmt_hist(&hist(&marked_mapped, set))
+                    );
+                    eprintln!(
+                        "     hist marked_raw   : {}",
+                        fmt_hist(&hist(&marked_raw, set))
+                    );
+                    eprintln!(
+                        "     hist unmarked     : {}",
+                        fmt_hist(&hist(&unmarked, set))
+                    );
+                }
+
+                let src_rgb: Vec<u8> = src.iter().flat_map(|p| p.to_bytes()).collect();
+                for (name, buf) in [
+                    (format!("{label}_source.png"), src_rgb),
+                    (
+                        format!("{label}_marked_mapped.png"),
+                        marked_mapped.to_rgb_actual(),
+                    ),
+                    (
+                        format!("{label}_marked_raw.png"),
+                        marked_raw.to_rgb_actual(),
+                    ),
+                    (format!("{label}_unmarked.png"), unmarked.to_rgb_actual()),
+                ] {
+                    eprintln!("   wrote {}", write_png(&name, &buf, w, h));
+                }
+                eprintln!(
+                    "   NOTE: a viewer that does not linearise reads these ~30% too dark; \
+                     the judgement is on the panel."
+                );
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Step 3: the boundary artefact
+        // ------------------------------------------------------------------
+
+        /// A marked photograph abutting an unmarked flat field.
+        ///
+        /// Containment (ruling 23, as re-framed) drops every kernel tap that
+        /// crosses the model boundary, so error that would have been deposited
+        /// across it is lost rather than redistributed — the same thing the
+        /// frame edge does. This prints the ink mix of the 4 px band on each
+        /// side against a no-boundary control, which is what a seam would show
+        /// up in.
+        #[test]
+        #[ignore] // diagnostic -- run manually
+        fn boundary_artefact_diag() {
+            eprintln!("\n=== Step 3: the model-boundary artefact ===");
+            eprintln!("fixture: panel_measured(); left half = photo MARKED, right half =");
+            eprintln!("unmarked flat field; boundary at x = 400.\n");
+
+            let Some(photo) = asset(
+                "screens/builtin/calibration/color/photo.png",
+                FRAME_W,
+                FRAME_H,
+            ) else {
+                return;
+            };
+            let (w, h) = (FRAME_W, FRAME_H);
+
+            for (name, flat) in [
+                ("mid-grey #808080", Srgb::from_u8(0x80, 0x80, 0x80)),
+                ("steel blue #3366AA", Srgb::from_u8(0x33, 0x66, 0xAA)),
+            ] {
+                let mut px = photo.clone();
+                let mut mask = vec![true; w * h];
+                for y in 0..h {
+                    for x in 400..w {
+                        px[y * w + x] = flat;
+                        mask[y * w + x] = false;
+                    }
+                }
+                let d = shipping();
+                let split = d.dither_with_regions(&px, w, h, Some(&mask));
+                // Control: the same frame with no boundary at all (everything
+                // measured-model, error crosses freely).
+                let control = d.dither_with_regions(&px, w, h, None);
+
+                let marked_band = cols(w, h, 396..400);
+                let unmarked_band = cols(w, h, 400..404);
+                let unmarked_far = cols(w, h, 700..704);
+
+                eprintln!("-- unmarked field = {name}");
+                eprintln!(
+                    "   marked side, 4 px band  x396..400: {}",
+                    fmt_hist(&hist(&split, &marked_band))
+                );
+                eprintln!(
+                    "     same band, no-boundary control : {}",
+                    fmt_hist(&hist(&control, &marked_band))
+                );
+                eprintln!(
+                    "     TVD band vs control            : {:.3}",
+                    tvd(&hist(&split, &marked_band), &hist(&control, &marked_band))
+                );
+                eprintln!(
+                    "   unmarked side, 4 px band x400..404: {}",
+                    fmt_hist(&hist(&split, &unmarked_band))
+                );
+                eprintln!(
+                    "     same flat field, far  x700..704 : {}",
+                    fmt_hist(&hist(&split, &unmarked_far))
+                );
+                eprintln!(
+                    "     TVD band vs far flat field      : {:.3}  \
+                     (a seam in the flat field would show here)",
+                    tvd(&hist(&split, &unmarked_band), &hist(&split, &unmarked_far))
+                );
+
+                // Column-by-column: a seam is a localised spike, which a 4 px
+                // aggregate can hide. Printed against the no-boundary control
+                // in the same column, and against a far column, so a global
+                // difference can be told apart from an edge effect.
+                let black_share = |img: &DitheredImage, x: usize| {
+                    let c = cols(w, h, x..x + 1);
+                    hist(img, &c)[0] as f64 / c.len() as f64 * 100.0
+                };
+                eprintln!(
+                    "   far reference x=200 (marked side): split {:.1}% black, control {:.1}%",
+                    black_share(&split, 200),
+                    black_share(&control, 200)
+                );
+                eprintln!("   per-column black share  x  split / no-boundary control:");
+                for x in (384..400).chain(400..416) {
+                    eprintln!(
+                        "     x={x:3}  {:5.1}% / {:5.1}%",
+                        black_share(&split, x),
+                        black_share(&control, x)
+                    );
+                }
+
+                // Calibration: the SAME flat field filling the whole frame,
+                // all unmarked. Its left FRAME edge is the reference for how
+                // big an onset transient an ordinary edge already produces, so
+                // the boundary's transient can be judged against something
+                // that ships today rather than against zero.
+                let flat_frame = vec![flat; w * h];
+                let all_structure = vec![false; w * h];
+                let flat_only =
+                    shipping().dither_with_regions(&flat_frame, w, h, Some(&all_structure));
+                let edge: Vec<String> = (0..8)
+                    .map(|x| format!("{:.1}", black_share(&flat_only, x)))
+                    .collect();
+                eprintln!(
+                    "   frame-edge calibration, same field full-frame unmarked: \
+                     x0..8 black {}%  (steady state x=700: {:.1}%)",
+                    edge.join("/"),
+                    black_share(&flat_only, 700)
+                );
+
+                let tag = if name.starts_with("mid") {
+                    "grey"
+                } else {
+                    "blue"
+                };
+                eprintln!(
+                    "   wrote {}",
+                    write_png(&format!("boundary_{tag}.png"), &split.to_rgb_actual(), w, h)
+                );
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Step 4: the swatch win
+        // ------------------------------------------------------------------
+
+        /// The headline case: nominal `#00FF00` and `#0000FF` patches.
+        ///
+        /// The brief quotes a baseline ("51% black / 27% red / 17% teal") from
+        /// the session-11 handover, measured over a different pixel set (a
+        /// screen crop that includes label text). It is NOT used here — every
+        /// before-value below is derived in this same harness, over the stated
+        /// pixel set: the patch interiors only, no labels, no margins.
+        #[test]
+        #[ignore] // diagnostic -- run manually
+        fn swatch_win_diag() {
+            eprintln!("\n=== Step 4: the swatch win ===");
+            eprintln!("fixture: panel_measured(). Nominal green (0,255,0) is measured ink");
+            eprintln!("(0x0D,0x87,0x6B) and nominal blue (0,0,255) is (0x20,0x54,0x97) —");
+            eprintln!("probes 4 and 5, where the two colour models genuinely differ.\n");
+
+            let (w, h) = (256usize, 128usize);
+            let green_rect = rect(w, 16..112, 16..112);
+            let blue_rect = rect(w, 144..240, 16..112);
+
+            let build = |green: Srgb, blue: Srgb| {
+                let mut px = vec![Srgb::from_u8(255, 255, 255); w * h];
+                for &i in &green_rect {
+                    px[i] = green;
+                }
+                for &i in &blue_rect {
+                    px[i] = blue;
+                }
+                px
+            };
+
+            let exact = build(Srgb::from_u8(0, 255, 0), Srgb::from_u8(0, 0, 255));
+            // One byte off each nominal ink: same colour model as the unmarked
+            // arm, but cannot pin. Separates "the nominal model did it" from
+            // "the pin did it".
+            let near = build(Srgb::from_u8(1, 255, 0), Srgb::from_u8(0, 1, 255));
+
+            let all_true = vec![true; w * h];
+            let all_false = vec![false; w * h];
+            let palette = panel_measured();
+            let mapper = GamutMapper::new(&palette);
+            let mut mapped = exact.clone();
+            mapper.map_frame(&mut mapped, &all_true, GamutOptions::default());
+
+            let d = shipping();
+            let arms: [(&str, DitheredImage); 4] = [
+                (
+                    "marked, gamut-mapped (today, shipping)",
+                    d.dither_with_regions(&mapped, w, h, Some(&all_true)),
+                ),
+                (
+                    "marked, unmapped (measured model only)",
+                    d.dither_with_regions(&exact, w, h, Some(&all_true)),
+                ),
+                (
+                    "UNMARKED, exact ink (nominal model + pin)",
+                    d.dither_with_regions(&exact, w, h, Some(&all_false)),
+                ),
+                (
+                    "UNMARKED, one byte off (nominal model, no pin)",
+                    d.dither_with_regions(&near, w, h, Some(&all_false)),
+                ),
+            ];
+            eprintln!(
+                "pixel set: patch interiors only — green x16..112, blue x144..240, y16..112 \
+                 ({} px each)",
+                green_rect.len()
+            );
+            for (label, img) in &arms {
+                eprintln!("-- {label}");
+                eprintln!("   green patch: {}", fmt_hist(&hist(img, &green_rect)));
+                eprintln!("   blue  patch: {}", fmt_hist(&hist(img, &blue_rect)));
+            }
+            eprintln!(
+                "   wrote {}",
+                write_png("swatch_unmarked.png", &arms[2].1.to_rgb_actual(), w, h)
+            );
+            eprintln!(
+                "   wrote {}",
+                write_png("swatch_marked_mapped.png", &arms[0].1.to_rgb_actual(), w, h)
+            );
+        }
+
+        // ------------------------------------------------------------------
+        // Step 5: cost
+        // ------------------------------------------------------------------
+
+        /// Per-frame cost of the region map on a worst-case 800x480 frame.
+        ///
+        /// Run in release:
+        ///   cargo test --release -p eink-dither --lib region_map_cost_diag \
+        ///     -- --ignored --nocapture
+        ///
+        /// `None` is "without a RegionMap"; `Some(..)` is "with" — `RegionMap`
+        /// itself is `pub(crate)` and is deliberately NOT widened for this.
+        /// The `Some(..)` arms include building the pin map, which is part of
+        /// what the caller pays.
+        #[test]
+        #[ignore] // diagnostic -- run manually
+        fn region_map_cost_diag() {
+            use std::hint::black_box;
+            use std::time::Instant;
+
+            eprintln!("\n=== Step 5: per-frame cost ===");
+            let Some(src) = asset(
+                "screens/builtin/calibration/color/photo.png",
+                FRAME_W,
+                FRAME_H,
+            ) else {
+                return;
+            };
+            let (w, h) = (FRAME_W, FRAME_H);
+            let d = shipping();
+
+            let all_true = vec![true; w * h];
+            let all_false = vec![false; w * h];
+            // Worst case for the boundary check: every horizontal neighbour is
+            // on the other side of a model boundary, so every tap compares and
+            // most are dropped.
+            let stripes: Vec<bool> = (0..w * h).map(|i| (i % w) % 2 == 0).collect();
+            // Worst case for pinning: every pixel is an exact ink AND unmarked.
+            let ink_palette = panel_measured();
+            let inked: Vec<Srgb> = (0..w * h).map(|i| ink_palette.official(i % 6)).collect();
+
+            let runs = 10;
+            for (label, px, mask) in [
+                ("no region map (None)", &src, None),
+                ("all-continuous (measured, no pins)", &src, Some(&all_true)),
+                ("all-structure (nominal + pins)", &src, Some(&all_false)),
+                ("1 px stripes (every tap crosses)", &src, Some(&stripes)),
+                (
+                    "all-structure, every pixel pinned",
+                    &inked,
+                    Some(&all_false),
+                ),
+            ] {
+                // warm-up
+                black_box(d.dither_with_regions(px, w, h, mask.map(|m| m.as_slice())));
+                let t = Instant::now();
+                for _ in 0..runs {
+                    black_box(d.dither_with_regions(px, w, h, mask.map(|m| m.as_slice())));
+                }
+                let ms = t.elapsed().as_secs_f64() * 1000.0 / runs as f64;
+                eprintln!("   {ms:8.2} ms/frame   {label}");
+            }
+            eprintln!("   (gamut mapping's comparable figure was 218 ms and was accepted)");
+        }
+    }
 }

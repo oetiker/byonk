@@ -2360,8 +2360,22 @@ mod tests {
             2,
             "expected the photograph in both columns"
         );
-        assert!(svg.contains("UNMAPPED (control)"));
-        assert!(svg.contains("GAMUT MAPPED"));
+        // The labels name all three things the mask drives, deliberately. They
+        // used to read "UNMAPPED (control)" / "GAMUT MAPPED", which promised a
+        // single-variable comparison the screen cannot deliver: one mask drives
+        // colour model, gamut mapping AND pinning together (ruling 22), and the
+        // colour model dominates the visible gap — Task 8 measured the mapper's
+        // own contribution at roughly 1/14 of it. If you are tempted to shorten
+        // these back, read the header comment in the screen's script.lua first.
+        assert!(
+            svg.contains("UNMARKED - nominal, pinned"),
+            "the left column's label must name the colour model and the pinning, \
+             not claim to be a gamut-mapping control"
+        );
+        assert!(
+            svg.contains("MARKED - measured, mapped"),
+            "the right column's label must name the colour model and the mapping"
+        );
 
         // Both columns must carry identical content: the adaptation factor is
         // derived from the marked column alone, so a comparison against a
@@ -2483,7 +2497,11 @@ mod tests {
             (0.35..=0.55).contains(&fraction),
             "marked fraction {fraction:.4} is outside the plausible band \
              (expected ~0.44) — 0 means the marking was dropped, ~0.92 means both \
-             columns are marked, ~1.0 means the group was hoisted to the root"
+             columns are marked, ~1.0 means the group was hoisted to the root. \
+             The 0.92 and 1.0 figures were measured against the document as it \
+             stood BEFORE the patch grid's backing rect moved out of the group, \
+             so treat them as indicative of the failure mode, not as exact \
+             present-day values"
         );
     }
 

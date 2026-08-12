@@ -1,12 +1,26 @@
 -- Tone marker A/B.
 --
--- The same three bands twice: the left column untouched, the right column
--- wrapped in `data-byonk-tone="continuous"` so the gamut mapper acts on it.
--- Everything else about the two columns is identical, and that is what makes
--- the comparison fair. The mask is frame-level -- there is exactly one
--- adaptation group -- so the adaptation factor R is derived from the marked
--- pixels alone. The mapped column therefore adapts to precisely the content
--- it displays.
+-- The same three bands twice: the left column unmarked, the right column
+-- wrapped in `data-byonk-tone="continuous"`.
+--
+-- THIS IS NOT A GAMUT-MAPPER CONTROL, and the labels must not say it is.
+-- One mask drives THREE things at once (ruling 22), so the two columns differ
+-- in all of them: the left is matched against the OFFICIAL palette, is not
+-- gamut mapped, and IS exact-match pinned; the right is matched against the
+-- MEASURED inks, is mapped, and is not pinned. Nothing here isolates the
+-- mapper, and the gap the eye sees is dominated by the colour model rather
+-- than by mapping -- measured at roughly 14x the mapper's own contribution
+-- (Task 8: block-averaged dE 0.107 vs 0.008). Labelling the left column
+-- "UNMAPPED (control)" overstated the mapper by about that factor.
+--
+-- What the screen DOES show, honestly, is what byonk does to marked versus
+-- unmarked content -- which is exactly what an author has to understand in
+-- order to mark their own screens correctly.
+--
+-- Everything else about the two columns is identical. The mask is frame-level
+-- -- there is exactly one adaptation group -- so the adaptation factor R is
+-- derived from the marked pixels alone. The marked column therefore adapts to
+-- precisely the content it displays.
 --
 -- The bands answer different questions: the photograph shows the everyday
 -- benefit on real content, the hue sweep shows banding and tail separation
@@ -142,8 +156,8 @@ return {
     font_size = font_size,
     label_y = margin + font_size,
     hue_stops = hue_stops,
-    left = column(margin, "UNMAPPED (control)"),
-    right = column(margin + col_w + gutter, "GAMUT MAPPED"),
+    left = column(margin, "UNMARKED - nominal, pinned"),
+    right = column(margin + col_w + gutter, "MARKED - measured, mapped"),
   },
   refresh_rate = 3600,
 }

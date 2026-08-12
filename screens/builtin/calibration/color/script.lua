@@ -6,14 +6,19 @@ local height = layout.height
 local colors = layout.colors or {"#000000", "#555555", "#AAAAAA", "#FFFFFF"}
 local color_count = #colors
 
--- For the solid patches, draw the panel's MEASURED colour where we have one.
--- The patches exist to show what each ink actually looks like, and a measured
--- colour is by definition an exact palette entry, so it quantises with zero
--- error and comes out as that ink and nothing else. Drawing the official
--- colour instead would ask the ditherer to reproduce, say, bright #00FF00 --
--- which it best approximates with a yellow-green mixture, since the panel's
--- own green is much darker. Correct, but useless for judging the ink.
-local ink = (device and device.colors_actual) or colors
+-- For the solid patches, draw the panel's OFFICIAL/nominal colour.
+-- The patches exist to show what each ink actually looks like, and on the
+-- unmapped path a nominal colour IS that ink: unmarked content is matched
+-- against the official palette, so #00FF00 matches official green at distance
+-- zero, pins, and comes out as the green ink and nothing else.
+--
+-- Drawing the MEASURED colour instead -- which this screen used to do, back
+-- when unmarked content was matched against the measured palette -- now makes
+-- the patches dither. #B50303 is not an official entry, so it cannot match
+-- exactly, pinning never fires, and the patch breaks up (measured at HEAD:
+-- the blue patch came back 48% black / 38% blue / 11% green). Correct for the
+-- palette it was matched against, but useless for judging the ink.
+local ink = colors
 
 -- Uniform grid line width
 local grid = scale_pixel(4)
@@ -99,12 +104,17 @@ local w_remainder = avail_w - color_count * patch_w
 local patches = {}
 local px = grid
 for i = 1, color_count do
-  local color = ink[i] or colors[i]
+  local color = ink[i]
   local w = patch_w + ((i <= w_remainder) and 1 or 0)
   local center_x = px + math.floor(w / 2)
 
-  -- Pick contrasting text color
-  local hex = color:gsub("#", "")
+  -- Pick contrasting text color from the MEASURED ink, not the nominal fill.
+  -- The patch is filled nominal so it pins, but it RENDERS as the measured
+  -- ink, and that is what the label has to be legible against. Judging
+  -- contrast on the fill would put black text on nominal #00FF00 (bright,
+  -- lum 182) and then paint it onto the green ink (#0D876B, lum 107).
+  local shown = (device and device.colors_actual and device.colors_actual[i]) or color
+  local hex = shown:gsub("#", "")
   local cr = tonumber(hex:sub(1, 2), 16) or 0
   local cg = tonumber(hex:sub(3, 4), 16) or 0
   local cb = tonumber(hex:sub(5, 6), 16) or 0

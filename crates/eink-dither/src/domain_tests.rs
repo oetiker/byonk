@@ -3292,6 +3292,83 @@ mod domain_tests {
             sum / set.len() as f64
         }
 
+        /// The same appearance, kept in linear light so blocks of it can be
+        /// averaged before the perceptual distance is taken.
+        fn appearance_linear(img: &DitheredImage) -> Vec<LinearRgb> {
+            img.to_rgb_actual()
+                .chunks_exact(3)
+                .map(|c| LinearRgb::from(Srgb::from_u8(c[0], c[1], c[2])))
+                .collect()
+        }
+
+        /// Mean Oklab ΔE after averaging both renders in LINEAR light over
+        /// `k` x `k` blocks; `k = 1` reproduces `mean_de` exactly.
+        ///
+        /// A per-pixel ΔE between two halftones is dominated by dot-pattern
+        /// decorrelation: two dithers of the SAME image score a large per-pixel
+        /// distance while being visually identical, because the dots land in
+        /// different places. Only the block-averaged figure is on a scale where
+        /// "one JND ~ 0.02" means anything, because only it measures the
+        /// spatially-integrated colour the eye and the panel actually deliver.
+        ///
+        /// `keep` restricts the measurement to blocks that are at least half
+        /// made of marked pixels (used for the out-of-gamut subset, which is
+        /// not block-aligned).
+        fn block_de(
+            a: &[LinearRgb],
+            b: &[LinearRgb],
+            w: usize,
+            h: usize,
+            k: usize,
+            keep: Option<&[bool]>,
+        ) -> f64 {
+            let mut sum = 0.0f64;
+            let mut blocks = 0usize;
+            for by in (0..h).step_by(k) {
+                for bx in (0..w).step_by(k) {
+                    let (mut sa, mut sb) = ([0.0f64; 3], [0.0f64; 3]);
+                    let (mut n, mut kept) = (0usize, 0usize);
+                    for y in by..(by + k).min(h) {
+                        for x in bx..(bx + k).min(w) {
+                            let i = y * w + x;
+                            sa[0] += a[i].r as f64;
+                            sa[1] += a[i].g as f64;
+                            sa[2] += a[i].b as f64;
+                            sb[0] += b[i].r as f64;
+                            sb[1] += b[i].g as f64;
+                            sb[2] += b[i].b as f64;
+                            n += 1;
+                            if keep.is_none_or(|m| m[i]) {
+                                kept += 1;
+                            }
+                        }
+                    }
+                    if n == 0 || kept * 2 < n {
+                        continue;
+                    }
+                    let inv = 1.0 / n as f64;
+                    let pa = Oklab::from(LinearRgb::new(
+                        (sa[0] * inv) as f32,
+                        (sa[1] * inv) as f32,
+                        (sa[2] * inv) as f32,
+                    ));
+                    let pb = Oklab::from(LinearRgb::new(
+                        (sb[0] * inv) as f32,
+                        (sb[1] * inv) as f32,
+                        (sb[2] * inv) as f32,
+                    ));
+                    sum += (((pa.l - pb.l).powi(2) + (pa.a - pb.a).powi(2) + (pa.b - pb.b).powi(2))
+                        as f64)
+                        .sqrt();
+                    blocks += 1;
+                }
+            }
+            if blocks == 0 {
+                return f64::NAN;
+            }
+            sum / blocks as f64
+        }
+
         /// Share of a pixel set whose chosen ink differs between two renders.
         fn changed_share(a: &DitheredImage, b: &DitheredImage, set: &[usize]) -> f64 {
             if set.is_empty() {
@@ -3443,6 +3520,16 @@ mod domain_tests {
         /// The discriminator is the band: each band histogram is compared
         /// against the SAME band rendered from a line-free copy of the same
         /// frame, i.e. what those pixels would have done undisturbed.
+        ///
+        /// NOTE on the left band in scenario A, which measures 0.000 at every
+        /// λ: that is a measured result, NOT a structural guarantee. Atkinson
+        /// has a `(-1, 1)` bottom-left tap (`kernel.rs`), as do Floyd-Steinberg,
+        /// JJN and Sierra, so with the line at x = 15..17 the column at x = 14
+        /// is exactly one tap upstream-left of it and λ does change the error
+        /// landing there. On a uniform orange field that perturbation flips no
+        /// ink, so the histogram is unchanged; on other content it could.
+        /// Histograms are all that is compared here — equal histograms are not
+        /// pixel-for-pixel equality.
         #[test]
         #[ignore] // diagnostic -- run manually
         fn lambda_sweep_diag() {
@@ -3623,6 +3710,32 @@ mod domain_tests {
                     all.len(),
                     oog.len() as f64 / all.len() as f64 * 100.0
                 );
+
+                // The unmarked arm switches pinning on as well as the colour
+                // model, so this is its exposure to the second mechanism:
+                // source pixels that are byte-exact nominal inks and therefore
+                // pinned. Photographs have almost none, but "almost" is worth
+                // a number rather than an assumption.
+                let ink_bytes: Vec<[u8; 3]> = (0..palette.len())
+                    .map(|i| palette.official(i).to_bytes())
+                    .collect();
+                let mut pin_hist = [0usize; 6];
+                for p in &src {
+                    if let Some(i) = ink_bytes.iter().position(|b| *b == p.to_bytes()) {
+                        pin_hist[i] += 1;
+                    }
+                }
+                let pinned: usize = pin_hist.iter().sum();
+                eprintln!(
+                    "   pixels byte-exact on a nominal ink (pinned in the unmarked arm): \
+                     {pinned} ({:.3}%)  {}",
+                    pinned as f64 / all.len() as f64 * 100.0,
+                    if pinned == 0 {
+                        "—".to_string()
+                    } else {
+                        fmt_hist(&pin_hist)
+                    }
+                );
                 for (set_name, set) in [("whole frame", &all), ("out-of-gamut only", &oog)] {
                     eprintln!("   [{set_name}]  n = {}", set.len());
                     eprintln!(
@@ -3657,6 +3770,43 @@ mod domain_tests {
                         "     hist unmarked     : {}",
                         fmt_hist(&hist(&unmarked, set))
                     );
+                }
+
+                // Block-averaged ΔE. The per-pixel figures above compare one
+                // hard ink against another and are dominated by halftone
+                // pattern decorrelation — two dithers of the same image score
+                // large per-pixel ΔE while looking identical. Averaging in
+                // linear light over k x k blocks first is what makes the
+                // number comparable to a JND, and it is the honest basis for
+                // ranking the colour model against the gamut mapper.
+                let (l_mm, l_mr, l_un) = (
+                    appearance_linear(&marked_mapped),
+                    appearance_linear(&marked_raw),
+                    appearance_linear(&unmarked),
+                );
+                let oog_mask: Vec<bool> = {
+                    let mut m = vec![false; src.len()];
+                    for &i in &oog {
+                        m[i] = true;
+                    }
+                    m
+                };
+                eprintln!("   [block-averaged ΔE, linear light, k x k blocks]");
+                for (pair_name, a, b) in [
+                    ("unmarked vs marked_mapped ", &l_un, &l_mm),
+                    ("unmarked vs marked_raw    ", &l_un, &l_mr),
+                    ("marked_raw vs marked_mapped", &l_mr, &l_mm),
+                ] {
+                    let whole: Vec<String> = [1usize, 4, 8, 16]
+                        .iter()
+                        .map(|&k| format!("k={k}: {:.4}", block_de(a, b, w, h, k, None)))
+                        .collect();
+                    eprintln!("     {pair_name} whole frame   {}", whole.join("  "));
+                    let sub: Vec<String> = [1usize, 4, 8, 16]
+                        .iter()
+                        .map(|&k| format!("k={k}: {:.4}", block_de(a, b, w, h, k, Some(&oog_mask))))
+                        .collect();
+                    eprintln!("     {pair_name} oog blocks    {}", sub.join("  "));
                 }
 
                 let src_rgb: Vec<u8> = src.iter().flat_map(|p| p.to_bytes()).collect();
@@ -3809,6 +3959,97 @@ mod domain_tests {
                     write_png(&format!("boundary_{tag}.png"), &split.to_rgb_actual(), w, h)
                 );
             }
+
+            // ----------------------------------------------------------------
+            // HORIZONTAL boundary. Atkinson's reach is asymmetric — 2 rows
+            // down, 0 rows up — so a horizontal boundary drops EVERY downward
+            // tap that crosses it, a strictly larger loss than the vertical
+            // case above, where only the sideways taps of one serpentine
+            // direction are affected. "No seam" measured in one orientation
+            // does not establish it in the other.
+            // ----------------------------------------------------------------
+            eprintln!("\n-- HORIZONTAL boundary: top half photo MARKED, bottom half unmarked");
+            eprintln!("   flat field; boundary at y = 240.");
+            for (name, flat) in [
+                ("mid-grey #808080", Srgb::from_u8(0x80, 0x80, 0x80)),
+                ("steel blue #3366AA", Srgb::from_u8(0x33, 0x66, 0xAA)),
+            ] {
+                let mut px = photo.clone();
+                let mut mask = vec![true; w * h];
+                for i in 240 * w..w * h {
+                    px[i] = flat;
+                    mask[i] = false;
+                }
+                let d = shipping();
+                let split = d.dither_with_regions(&px, w, h, Some(&mask));
+                let control = d.dither_with_regions(&px, w, h, None);
+
+                let row_black = |img: &DitheredImage, y: usize| {
+                    let r: Vec<usize> = (y * w..(y + 1) * w).collect();
+                    hist(img, &r)[0] as f64 / r.len() as f64 * 100.0
+                };
+                let band = |img: &DitheredImage, yr: std::ops::Range<usize>| {
+                    let r: Vec<usize> = (yr.start * w..yr.end * w).collect();
+                    fmt_hist(&hist(img, &r))
+                };
+
+                eprintln!("   unmarked field = {name}");
+                eprintln!(
+                    "     marked side, 4 px band  y236..240: {}",
+                    band(&split, 236..240)
+                );
+                eprintln!(
+                    "       same band, no-boundary control : {}",
+                    band(&control, 236..240)
+                );
+                eprintln!(
+                    "     unmarked side, 4 px band y240..244: {}",
+                    band(&split, 240..244)
+                );
+                eprintln!(
+                    "       same flat field, far  y440..444 : {}",
+                    band(&split, 440..444)
+                );
+                eprintln!("     per-row black share  y  split / no-boundary control:");
+                for y in 232..252 {
+                    eprintln!(
+                        "       y={y:3}  {:5.1}% / {:5.1}%",
+                        row_black(&split, y),
+                        row_black(&control, y)
+                    );
+                }
+
+                // Frame-edge calibration in the matching orientation: the same
+                // flat colour full-frame unmarked, read down its TOP edge.
+                let flat_frame = vec![flat; w * h];
+                let all_structure = vec![false; w * h];
+                let flat_only =
+                    shipping().dither_with_regions(&flat_frame, w, h, Some(&all_structure));
+                let edge: Vec<String> = (0..8)
+                    .map(|y| format!("{:.1}", row_black(&flat_only, y)))
+                    .collect();
+                eprintln!(
+                    "     top-frame-edge calibration, same field full-frame unmarked: \
+                     y0..8 black {}%  (steady state y=440: {:.1}%)",
+                    edge.join("/"),
+                    row_black(&flat_only, 440)
+                );
+
+                let tag = if name.starts_with("mid") {
+                    "grey"
+                } else {
+                    "blue"
+                };
+                eprintln!(
+                    "     wrote {}",
+                    write_png(
+                        &format!("boundary_h_{tag}.png"),
+                        &split.to_rgb_actual(),
+                        w,
+                        h
+                    )
+                );
+            }
         }
 
         // ------------------------------------------------------------------
@@ -3903,9 +4144,15 @@ mod domain_tests {
 
         /// Per-frame cost of the region map on a worst-case 800x480 frame.
         ///
-        /// Run in release:
-        ///   cargo test --release -p eink-dither --lib region_map_cost_diag \
-        ///     -- --ignored --nocapture
+        /// **Run in release AND ALONE.** These are wall-clock timings on a
+        /// shared machine; run with the other four 800x480 diagnostics in
+        /// parallel they are meaningless and the sign of the result flips
+        /// (measured: the `None` baseline came out SLOWER than the feature).
+        ///
+        /// ```text
+        /// cargo test --release -p eink-dither --lib region_map_cost_diag \
+        ///   -- --ignored --nocapture --test-threads=1
+        /// ```
         ///
         /// `None` is "without a RegionMap"; `Some(..)` is "with" — `RegionMap`
         /// itself is `pub(crate)` and is deliberately NOT widened for this.
@@ -3918,6 +4165,7 @@ mod domain_tests {
             use std::time::Instant;
 
             eprintln!("\n=== Step 5: per-frame cost ===");
+            eprintln!("   (wall clock — valid only when run ALONE: add --test-threads=1)");
             let Some(src) = asset(
                 "screens/builtin/calibration/color/photo.png",
                 FRAME_W,

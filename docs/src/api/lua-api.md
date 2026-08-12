@@ -64,16 +64,35 @@ The colours the panel **really** shows, as measured — index-parallel to
 `device.colors`. `nil` when the panel has no measured colours configured.
 
 This is deliberately **not** filled in from `device.colors` when absent, so a
-script can tell an uncalibrated panel from one that measures exactly to spec:
+script can tell an uncalibrated panel from one that measures exactly to spec.
+
+> **⚠️ Use measured colours to *decide*, never to *paint*.**
+>
+> A measured value is the right input for a judgement — "is this ink dark
+> enough that I need white text on it?" — because it is what the eye will
+> see. It is the **wrong** thing to write into a `fill` or `stroke`.
+>
+> Ordinary (non-`continuous`) content is matched against the **official**
+> palette, so an official colour like `#00FF00` matches at distance zero and
+> comes out as that one ink, flat. A measured value like `#0D876B` is not an
+> official entry, cannot match exactly, and **dithers** — the flat block you
+> wanted breaks up into speckle. Paint `device.colors[i]`; the panel maps the
+> index to its real ink for you.
 
 ```lua
 local shown = device.colors_actual or device.colors
 
--- Pick a foreground that genuinely contrasts on this panel, not one that
--- only contrasts in the spec.
-local bg = shown[1]
-local fg = shown[2]
+-- DECIDE with the measured colour: pick a foreground that genuinely
+-- contrasts on this panel, not one that only contrasts in the spec.
+local fg = luminance(shown[i]) < 128 and "#FFFFFF" or "#000000"
+
+-- PAINT with the official colour, so the block pins to a single ink.
+local bg = device.colors[i]
 ```
+
+`screens/builtin/calibration/color` is the worked example: its solid patches
+are filled from `device.colors` and pick their label colour from
+`device.colors_actual`.
 
 `device.colors_actual` is resolved *before* this script runs, so it reflects
 whichever of these applies first: the dev colour-tuning override (or, when
@@ -88,13 +107,19 @@ render-opts > panel.colors_actual > measured header > none`. A mismatched
 length anywhere in that chain never fails the render — the offending layer is
 skipped with a warning and the next one down is tried.
 
-Measured colours only steer which palette **index** each pixel is dithered
-to; the PNG that gets sent to a real device is still drawn in the *nominal*
-palette (`colors`) — the device itself maps index to physical ink, so
-sending it nominal colours is correct even though the dithering targeted the
-measured ones. This split only matters if you're inspecting the raw PNG
-bytes; `render_screen`'s `use_actual` (see the MCP guide) exists precisely
-so an authoring agent can instead see what the panel will really look like.
+**Which palette a pixel is matched against depends on how it is marked.**
+Content inside a `data-byonk-tone="continuous"` region is matched against the
+**measured** colours; everything else is matched against the **official**
+ones. So measured colours steer the palette **index** only for the parts of
+the document you marked as continuous-tone — see
+[Marking continuous-tone content](../tutorial/svg-templates.md#marking-continuous-tone-content).
+
+Either way, the PNG that gets sent to a real device is drawn in the *nominal*
+palette (`colors`) — the device itself maps index to physical ink, so sending
+it nominal colours is correct whichever palette the matching targeted. This
+split only matters if you're inspecting the raw PNG bytes; `render_screen`'s
+`use_actual` (see the MCP guide) exists precisely so an authoring agent can
+instead see what the panel will really look like.
 
 #### device.dither
 

@@ -148,10 +148,15 @@ devices:
 It renders the same content — a photograph, a hue sweep, and a colour patch
 grid, top to bottom — twice, side by side. The two columns are identical
 markup with one difference: only the right-hand column is marked
-`data-byonk-tone="continuous"`, so only it is gamut-mapped. The left column is
-the untouched control. Whatever visibly differs between the two columns on
-your device is what the gamut mapper is doing to your content. The hue
-sweep is a fixed gradient of 12 equal hue steps, not driven by either param.
+`data-byonk-tone="continuous"`. That mark drives three things at once — the
+right column is matched against the panel's *measured* colours and gamut
+mapped, while the left column is matched against the *official* palette and
+exact-match pinned (see
+[Marking continuous-tone content](../tutorial/svg-templates.md#marking-continuous-tone-content)).
+The left column is the untouched control. Whatever visibly differs between the
+two columns on your device is what that whole difference in treatment is doing
+to your content. The hue sweep is a fixed gradient of 12 equal hue steps, not
+driven by either param.
 
 There are no gamut-mapping knobs on this screen — it deliberately shows you
 what a real screen gets, not a tuning surface.

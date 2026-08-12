@@ -301,6 +301,50 @@ local colors = layout.colors  -- e.g., {"#000000", "#555555", "#AAAAAA", "#FFFFF
 {% endfor %}
 ```
 
+### Marking continuous-tone content
+
+Byonk renders a screen as **two kinds of content**, and you choose which is
+which by marking the continuous-tone parts:
+
+```svg
+<!-- A photograph, or a gradient that sweeps through hues -->
+<image data-byonk-tone="continuous" href="photo.jpg" .../>
+```
+
+Everything **not** marked is treated as *structure* — text, rules, logos, flat
+fills, UI chrome. The difference is not cosmetic:
+
+| | Unmarked (structure) — the default | Marked `continuous` |
+|---|---|---|
+| Matched against | **Official** palette (`device.colors`) | **Measured** palette (`device.colors_actual`) |
+| Gamut mapping | off | on |
+| Exact-match pinning | **on** — an official colour comes out as that one ink, flat | off |
+
+**For structure this is what you want.** `#FF0000` is simply red: it matches
+at distance zero, pins, and renders as one flat ink with no speckle. Black
+text next to a saturated block stays black instead of picking up diffused
+colour error.
+
+**For a photograph it is not.** Nominal matching aims a photo at primaries
+the panel cannot physically produce, so an unmarked photograph looks
+markedly worse than a marked one. **This is the one mistake that costs you
+real quality — mark your photographs and your hue gradients.**
+
+Two rules that are easy to get wrong:
+
+- **Mark the element that *is* continuous-tone, never a group around it.** A
+  `<g>` wrapper will swallow neighbouring labels and captions, turning text
+  into continuous-tone content and switching off its pinning.
+- **Don't mark achromatic (grey) gradients.** Grey is always in gamut, so
+  mapping it is a no-op — while marking it switches exact-match pinning *off*
+  across the whole gradient, for no gain. Before marking anything, ask
+  whether the content can even be out of gamut.
+
+Marking rasterizes in document order, so an unmarked element drawn *after* a
+marked one paints over it and reverts those pixels to structure. Text over a
+photograph therefore needs no special handling, as long as it comes later in
+the document.
+
 ### Testing Display Colors
 
 The included `graytest` screen adapts to the device palette and shows all available colors as swatches with gradient and dithering tests.

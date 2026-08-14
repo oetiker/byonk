@@ -26,9 +26,12 @@ want opposite hinting treatment.
 2. Bump `resvg` 0.46 -> 0.48.1, `tiny-skia` 0.11 -> 0.12, `fontdb` 0.23 -> 0.24;
    point `resvg`/`usvg` at `byonk-base`; drop the `fontdb` pin.
 3. Reimplement `bitmap_strikes` in byonk using skrifa.
-4. A Lua `font_hinting` directive mirroring `FontHintingOptions`.
+4. A Lua `fonts` directive covering per-font hinting and bitmap strike choice.
 5. A render-scale warning.
 6. A three-state render capture so #30's manual assessment can attribute changes.
+
+`byonk-base` is built and green as of `b67da7c0` — see the companion spec's
+status section. Nothing here is blocked.
 
 ## Step 0: dependency audit
 
@@ -102,14 +105,18 @@ asserts sortedness (`svg_to_png.rs:463`) and the Lua table is 1-indexed
 byonk's Lua contract is that a screen script returns a table of render
 directives, and `run_script` parses optional keys off it into `ScriptResult`
 (`lua_runtime.rs:110-141`): `colors`, `dither`, `preserve_exact`, `error_clamp`,
-`noise_scale`, `chroma_clamp`, `strength`. Font hinting is one more such key. No
-new mechanism.
+`noise_scale`, `chroma_clamp`, `strength`. Font configuration is one more such
+key. No new mechanism.
 
-The value is a full structural mirror of `FontHintingOptions`, every field
-optional and defaulting to the Rust default:
+`byonk-base` exposes two per-font decisions, and they are entangled: declining a
+font's bitmap strikes is what sends its glyphs to the outline, and an outline is
+the only thing hinting can act on. A family's entry therefore has to be able to
+say both things at once, which rules out a directive shaped only like
+`FontHintingOptions`.
 
 ```lua
 font_hinting = {
+  -- The document-wide default, a structural mirror of FontHintingOptions.
   engine = "auto_fallback",        -- interpreter | auto | auto_fallback
   target = "mono",                 -- or a table:
   -- target = {
@@ -117,23 +124,42 @@ font_hinting = {
   --   symmetric_rendering = true,
   --   preserve_linear_metrics = false,
   -- },
-  fonts = {                        -- per-family, drives the resolver
-    X11Helv = false,               -- false = explicitly unhinted
-    Inter = { target = { mode = "light" } },
+
+  -- Per family. Drives select_hinting and select_bitmap together.
+  fonts = {
+    -- Keep the pixels: use the strikes, and hinting is moot for them anyway.
+    X11Helv = { strikes = true },
+
+    -- Same font, opposite intent: ignore the strikes and hint the outline.
+    -- `hinting` accepts the same shape as the top level, or false for none.
+    ["X11Helv Outline"] = { strikes = false, hinting = { target = "mono" } },
+
+    Inter = { hinting = { target = { mode = "light" } } },
+    Noto = { hinting = false },
   },
 }
 ```
 
-An absent key means hinting off, matching `Options::font_hinting: None`.
+Every field is optional. An absent `font_hinting` means hinting off, matching
+`Options::font_hinting: None`; an absent `strikes` means the resvg default,
+which is to use them. A family entry may still be given as a bare hinting value
+(`Inter = false`) for the common case, with the table form used when strikes
+matter.
 
-The `fonts` sub-table maps family name to config and is installed as the hinting
-selector, resolving families through the same `fontdb` query byonk already
-performs.
+The `fonts` sub-table resolves families through the same `fontdb` query byonk
+already performs, and is installed as both selectors.
 
 This composes with the existing `fonts` global, which exposes each face's
-`bitmap_strikes`: a script can decide hinting *from introspection* — a face with
-bitmap strikes wants hinting off, a variable font wants it on — rather than
-hardcoding family names.
+`bitmap_strikes`: a script can decide *from introspection* — a face with strikes
+at the size being drawn wants them used and needs no hinting, a face without
+wants hinting on — rather than hardcoding family names.
+
+One thing the directive cannot express, because resvg does not offer it:
+scaling a strike to a size it was not drawn for. #1115's rule stands — a strike
+is used only at its own size, and every other size falls back to the outline
+whatever `strikes` says. A screen wanting crisp pixels at an arbitrary size must
+pick a size the font actually carries, which is exactly what the `fonts` global
+is there to tell it.
 
 ## Hinting is effective at byonk's render scale
 
@@ -206,9 +232,10 @@ matters, and its hardcoded `/tmp` output path is a second reason to revisit it.
   (`svg_to_png.rs:427-467`) must pass **unchanged**. They are the contract for the
   fontdb substitution — non-empty and ascending strike lists for X11Helv.
 - Lua directive parsing: each field, omitted fields falling back to defaults,
-  `false` for a family, and malformed input rejected with a useful error.
-- A render test through the Lua path proving per-font hinting reaches the
-  renderer.
+  `false` for a family, the bare-value shorthand, `strikes` with and without a
+  sibling `hinting`, and malformed input rejected with a useful error.
+- A render test through the Lua path proving both per-font hinting and the
+  strike choice reach the renderer.
 - The scale-not-1.0 warning fires for a hardcoded-dimension screen on a
   differently sized panel.
 - The full existing suite passes.
@@ -238,7 +265,8 @@ changelogs.
 2. On `feat/screen-store-authoring-core`: bump dependencies, point at
    `byonk-base`, reimplement `bitmap_strikes` with skrifa, drop the fontdb pin.
    Get it compiling and green before adding anything.
-3. Add the `font_hinting` Lua directive and the render-scale warning.
+3. Add the `font_hinting` Lua directive (hinting + strikes) and the
+   render-scale warning.
 4. Capture state 3; pixel-diff against state 2; hand the differing screens to the
    manual assessment.
 5. Fix or delete `test_bitmap_font_render`.

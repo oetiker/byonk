@@ -9,6 +9,22 @@ Companion spec: `2026-08-14-byonk-resvg-integration-design.md`, which consumes
 this branch. **This spec comes first.** byonk integrates once, when `byonk-base`
 is ready.
 
+## Status — 2026-08-14
+
+**Built and green.** `byonk-base` exists at `b67da7c0`, 18 commits ahead of
+`upstream/main`, passing 1808 tests (1746 reference renders) with no new clippy
+warnings.
+
+| Step | State |
+|---|---|
+| Merge #1115 and #1116 into `byonk-base` | done (`b877fa04`, `97a95ca0`) — three import-level conflicts, resolved |
+| `feat/font-hinting-resolver` | done (`a675a998`), merged at `01f89ef3` |
+| Hinting × bitmap-strike combination tests | done (`ce9ca399`) |
+| `FontResolver::select_bitmap` | done (`b67da7c0`) |
+| Hand off to the integration spec | ready |
+
+Remaining: nothing blocking. The branch is consumable.
+
 ## Problem
 
 byonk pins `resvg`, `usvg`, and `fontdb` to the fork's `skrifa` branch
@@ -42,10 +58,11 @@ way.
 | Bitmap glyph rendering (mono/grayscale/BGRA) | **PR #1115, open** — carried. |
 | Font hinting | **PR #1116, open** — carried. |
 | Per-font hinting | **New** — `feat/font-hinting-resolver`. |
+| Per-font bitmap strike choice | **New** — `FontResolver::select_bitmap`, on `byonk-base`. |
 | `FaceInfo::bitmap_strikes` | Moves out of resvg entirely; see the integration spec. |
 | Glyph outline LRU cache | Dropped permanently. |
 | PNG DPI | PR #1118, closed upstream. Dropped permanently. |
-| Hinting via custom SVG attributes | Rejected upstream. Superseded by the resolver. `feat/hinting-css-properties` is deleted. |
+| Hinting via custom SVG attributes | Rejected upstream. Superseded by the resolver. `feat/hinting-css-properties` is **kept** for now rather than deleted, though nothing depends on it. |
 
 Recorded, not addressed: upstream always pushes the `wght` variation coordinate
 while `wdth`, `ital`, and `slnt` are pushed only when non-default
@@ -166,6 +183,28 @@ different slots, so the resolver is a smaller change than it first appears.
 Genuine touch points: `parser/text.rs:146` (where `state.opt.font_hinting` is
 read today) and `converter.rs:232` (where the hinting fragment is assembled).
 
+## Choosing whether a font's strikes are used
+
+Hinting has nothing to offer a bitmap glyph: a strike arrives as an image, so
+there is no outline to grid-fit. That leaves *which of the two to draw* as the
+only lever, and #1115 left it fixed — a strike was used whenever the size
+matched, and every other size fell back to the outline.
+
+`FontResolver::select_bitmap` makes it a choice, per font, beside the hinting
+selector:
+
+```rust
+pub type BitmapSelectionFn<'a> = Box<dyn Fn(ID, f32, &Database) -> bool + Send + Sync + 'a>;
+```
+
+The resolved face, the size in user units, and the database; `false` sends the
+glyph to the outline. Declining a font's strikes is therefore also what makes it
+hintable, which is why the two selectors belong together.
+
+The default allows strikes for every font, so an unset resolver behaves exactly
+as before. #1115's exact-size rule is unchanged: this gates strike use, it does
+not add scaling of a strike to a size it was not drawn for.
+
 ## Testing
 
 - The resolver branch renders byte-identically to #1116 when no resolver is set.
@@ -175,6 +214,25 @@ read today) and `converter.rs:232` (where the hinting fragment is assembled).
 - Existing #1115 and #1116 tests keep passing; neither branch is modified.
 - `byonk-base` itself builds and passes the full suite after each merge. The tip
   is what byonk consumes, so a green tip is the deliverable, not a nicety.
+
+Two lessons from doing it, worth keeping for the next round:
+
+**A reference-backed test can pass vacuously.** Both combination tests compare
+against references that must differ for the comparison to mean anything, so the
+difference was measured: 476 pixels between the unhinted and hinted renders of
+`mixed-fonts.svg`. Without that check, a fixture insensitive to hinting would
+have produced two green tests proving nothing.
+
+**Generating a reference from your own new code proves nothing on its own.**
+`monochrome-no-strikes.png` could only come from the implementation it tests, so
+the wiring was reverted with the test in place: it then failed by 690 pixels
+while the control — declining a family the file never uses — kept passing. That
+is the evidence the test catches the feature's absence without the selector
+over-applying.
+
+The combination tests live on `byonk-base` rather than on either feature branch,
+because the combination only exists where both are merged. They are therefore in
+neither PR, and are a follow-up contribution if upstream takes both.
 
 ## Risks
 
@@ -190,10 +248,32 @@ renders matching.
 
 ## Sequence
 
-1. Create `byonk-base` from `upstream/main`; merge `feat/bitmap-mask-glyphs` and
-   `feat/font-hinting`. Build and test the tip.
-2. Build `feat/font-hinting-resolver` on `feat/font-hinting`. Verify the
-   no-resolver-set equivalence against #1116.
-3. Re-merge the tip; build and test.
-4. Delete `feat/hinting-css-properties`.
-5. Hand off to the integration spec.
+1. ~~Create `byonk-base` from `upstream/main`; merge `feat/bitmap-mask-glyphs`
+   and `feat/font-hinting`. Build and test the tip.~~ done
+2. ~~Build `feat/font-hinting-resolver` on `feat/font-hinting`. Verify the
+   no-resolver-set equivalence against #1116.~~ done
+3. ~~Re-merge the tip; build and test.~~ done
+4. ~~Cover the hinting × bitmap-strike combination.~~ done
+5. ~~Add `FontResolver::select_bitmap`.~~ done
+6. Hand off to the integration spec.
+
+`feat/hinting-css-properties` is kept rather than deleted. It carries the
+rejected custom-attribute design and nothing depends on it, but it costs nothing
+to leave in place.
+
+## Maintaining this branch
+
+The merge is not conflict-free, so budget for it after an upstream bump. Merging
+#1116 into #1115 produced three conflicts, all import-level, all from the two
+branches reworking the same text code:
+
+- `converter.rs` — #1115 relocated `BitmapImage` into a new `text::bitmap`
+  module, so #1116's `crate::flatten::` import path is stale.
+- `flatten.rs` — `BitmapData`/`BitmapFormat` moved to `bitmap.rs`, leaving
+  flatten needing only `HintingInstance`.
+- `CHANGELOG.md` — both add an Unreleased entry; keep both.
+
+Worth noting for the next person: `git merge-tree` and GitHub both reported the
+two branches as cleanly mergeable, because each was tested **against
+`upstream/main` independently**. That says nothing about whether they merge with
+*each other*. Check the pairwise merge, not just each branch's PR status.

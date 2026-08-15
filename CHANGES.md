@@ -131,7 +131,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Text on black-and-white panels is crisp instead of speckled.** Small type used
+- **Bitmap fonts render correctly.** The 26 bundled X11 bitmap faces, and Terminus,
+  lost chunks out of their glyphs at every size and were unevenly spaced. Byonk was
+  positioning them using the metrics of the font's outline rather than the metrics
+  the pixel design carries for that exact size — a pixel font is drawn afresh per
+  size, so the two only agree at one of them. Every glyph after the first therefore
+  landed between pixels, where a picture of a pixel grid cannot be reproduced, and
+  the renderer smeared its edges. Glyphs now sit on whole pixels by construction and
+  keep their designed spacing, and a strike is also snapped to the pixel grid when a
+  screen itself places text at a fractional position. Terminus at 14 px and 18 px is
+  now 1 px per glyph wider, which is its real design: byonk was crowding it.
   to come out with a fuzzy halo of stray dots around every letter. Screens on such
   panels now get sharp, solid glyphs with no extra work; a screen that asks for
   smoother text itself (`text-rendering="geometricPrecision"`) still gets it, and

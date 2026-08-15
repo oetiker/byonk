@@ -3742,7 +3742,7 @@ dependencies = [
 [[package]]
 name = "resvg"
 version = "0.48.1"
-source = "git+https://github.com/oetiker/resvg.git?branch=byonk-base#303e38e02350b5d88502f3b6ffb9918fcfd8fc35"
+source = "git+https://github.com/oetiker/resvg.git?branch=byonk-base#61956742bb27ab6280f062030140a25e78af5a07"
 dependencies = [
  "bytemuck",
  "gif",
@@ -5001,7 +5001,7 @@ dependencies = [
 [[package]]
 name = "usvg"
 version = "0.48.1"
-source = "git+https://github.com/oetiker/resvg.git?branch=byonk-base#303e38e02350b5d88502f3b6ffb9918fcfd8fc35"
+source = "git+https://github.com/oetiker/resvg.git?branch=byonk-base#61956742bb27ab6280f062030140a25e78af5a07"
 dependencies = [
  "base64 0.23.1",
  "data-url",

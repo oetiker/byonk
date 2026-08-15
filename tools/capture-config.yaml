@@ -168,9 +168,22 @@ screens:
 # Devices for the resvg byonk-base render-capture harness (tools/capture-renders.sh).
 # Every screen ref is `handle/path`; deterministic calibration/example screens use
 # an explicit `panel:` so the render uses real palette colors, not a fallback grey.
+#
+# DEFAULT deliberately points at `byonk-builtin/calibration/grey`, NOT
+# `byonk-builtin/default` (fix round 2 — see capture-renders.sh's header
+# comment). Any device below whose own `screen:` fails to resolve silently
+# falls through to whatever DEFAULT points at (verified in
+# src/services/content_pipeline.rs::run_script_for_device); making that
+# target a screen the harness already captures byte-for-byte turns "did a
+# screen silently fall back" into a plain byte comparison the distinctness
+# check can do, for one or many mis-resolved screens, without depending on
+# the wall clock. `byonk-builtin/default` itself is still captured directly
+# under its own device (AA:BB:CC:00:00:12, "builtin-default") — that
+# capture is unaffected by this change and remains in the nondet bucket
+# since it shows the clock.
 devices:
   DEFAULT:
-    screen: byonk-builtin/default
+    screen: byonk-builtin/calibration/grey
   "AA:BB:CC:00:00:01":
     panel: trmnl_og
     screen: byonk-builtin/calibration/gamut
@@ -211,8 +224,8 @@ devices:
     panel: trmnl_og
     screen: examples/swiss-departure-board
   # Canary: a deliberately nonexistent screen ref. capture-renders.sh renders
-  # this first and records whether it exits 0 (silent fallback to the
-  # DEFAULT device's screen — the current, verified behavior even for a
+  # this first and records whether it exits 0 (silent fallback to whatever
+  # DEFAULT points at above — the current, verified behavior even for a
   # *registered* device, per `run_script_for_device` in
   # src/services/content_pipeline.rs) or errors (fallback path is gone).
   # Either way the manifest states which one happened, so a human reading it

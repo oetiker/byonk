@@ -12,33 +12,47 @@
 # a registered screen repo in `config.yaml` on this branch.
 #
 # Two checks guard against the manifest looking like coverage it doesn't
-# have (Task 1 review, round 1): a CLI whose "screen not found" path falls
-# back to the DEFAULT splash instead of erroring would make every render
-# below exit 0 while actually capturing the wrong content — which is
-# exactly what happened when this harness was first run against the
-# pre-#30 `main` worktree (10 of 13 screens silently got the DEFAULT
-# splash). Byte-diffing against a `builtin-default` capture from the same
-# run does NOT catch this reliably, because `builtin-default` itself shows
-# a clock and differs run-to-run. Instead:
+# have (Task 1 review, round 1 + round 2): a CLI whose "screen not found"
+# path falls back to the DEFAULT device's screen instead of erroring would
+# make every render below exit 0 while actually capturing the wrong
+# content — which is exactly what happened when this harness was first run
+# against the pre-#30 `main` worktree (10 of 13 screens silently got the
+# fallback splash).
 #
 #   1. CANARY (mechanism check): render a deliberately nonexistent screen
 #      ref first. Verified against `src/services/content_pipeline.rs`
 #      (`run_script_for_device`): a *registered* device whose `screen:` ref
-#      fails to resolve falls through to the DEFAULT device's screen (which
+#      fails to resolve falls through to whatever DEFAULT points at (which
 #      always resolves, so nothing ever reaches the CLI's error path) — the
 #      canary is therefore EXPECTED to exit 0 on every run against the
 #      current tree, not just on a regression. Its purpose is to make that
-#      fact loud and current in every manifest, rather than assumed, since
-#      it is exactly what made 10/13 of the state-1 (pre-#30) renders look
-#      like coverage without being it. A canary that ever starts exiting
-#      non-zero would mean the fallback path was removed or DEFAULT itself
-#      stopped resolving — also worth knowing.
+#      fact loud and current in every manifest, rather than assumed. A
+#      canary that ever starts exiting non-zero would mean the fallback
+#      path was removed or DEFAULT itself stopped resolving.
 #   2. DISTINCTNESS (symptom check): every deterministic screen's PNG must
-#      differ from every other deterministic screen's PNG. Two identical
-#      bytes among clock-free renders means at least one of them rendered
-#      the DEFAULT fallback (or some other shared content) instead of its
-#      own screen — this is the check that actually catches a mis-resolved
-#      screen in a given run, since the canary alone cannot.
+#      differ from every other deterministic screen's PNG. `tools/capture-
+#      config.yaml`'s reserved `DEFAULT` device deliberately points at
+#      `byonk-builtin/calibration/grey` — one of the deterministic screens
+#      this harness already captures byte-for-byte — specifically so a
+#      fallback isn't just "different from its own six siblings" (which a
+#      single silently-broken ref would sail through unnoticed) but
+#      collides byte-for-byte with `calibration-grey.png` (round 1's design
+#      compared det screens only to each other, which misses exactly the
+#      single-screen-falls-back case; round 2 fixes that by making the
+#      fallback target a screen already in the comparison set). This is
+#      sound with no clock dependency, unlike diffing against
+#      `builtin-default` (which shows the current time and differs
+#      run-to-run even between two correct renders) — `calibration/grey` has
+#      no clock in it. Known residual gap: the fallback's dithering uses the
+#      *calling* device's own panel (see `main.rs`'s `device_config` ->
+#      `panel` chain), not DEFAULT's, so `calibration-color` (the one
+#      deterministic screen on `trmnl_og_4clr` instead of `trmnl_og`) would
+#      fall back to grey content dithered through the 4-color palette —
+#      different bytes from `calibration-grey.png` (dithered through
+#      `trmnl_og`), so a broken `calibration-color` ref alone would NOT be
+#      caught by this check. It would still be visually obvious (a grey
+#      test-pattern dithered into red/yellow bands) to the human eye a later
+#      task hands differing screens to.
 #
 # Both verdicts are written into MANIFEST.txt, because the manifest is the
 # artifact a human reads later to decide what was actually covered.
@@ -79,7 +93,7 @@ if [ "$canary_exit" -eq 0 ]; then
   {
     echo "CANARY: fallback-to-DEFAULT is active (unresolved screen ref exited 0, as expected"
     echo "  on the current codebase — see the header comment). Every exit=0 below is NOT"
-    echo "  proof the requested screen rendered; it may be the DEFAULT splash instead."
+    echo "  proof the requested screen rendered; it may be DEFAULT's fallback screen instead."
     echo "  The DISTINCTNESS check below is what actually guards this run — read it first."
   } >> "$OUT/MANIFEST.txt"
 else
@@ -104,16 +118,22 @@ for entry in $SCREENS; do
 done
 
 # --- 3. Distinctness: no two deterministic renders may be identical -------
+# DEFAULT points at calibration-grey (see capture-config.yaml), so a
+# fallback lands byte-identical to calibration-grey.png regardless of
+# whether one screen fell back or several — this is what actually catches
+# gap 1 from round 2's review (a single mis-resolved screen has no other
+# sibling to collide with; it collides with the fallback target itself,
+# which is already in this comparison set).
 dup_found=0
 det_files=("$OUT"/*.png)
 for ((i = 0; i < ${#det_files[@]}; i++)); do
   for ((j = i + 1; j < ${#det_files[@]}; j++)); do
     if cmp -s "${det_files[$i]}" "${det_files[$j]}"; then
-      echo "DISTINCTNESS FAIL: $(basename "${det_files[$i]}") == $(basename "${det_files[$j]}")" >> "$OUT/MANIFEST.txt"
+      echo "DISTINCTNESS FAIL: $(basename "${det_files[$i]}") == $(basename "${det_files[$j]}") — one of these likely fell back to DEFAULT (calibration/grey) instead of rendering its own screen" >> "$OUT/MANIFEST.txt"
       dup_found=1
     fi
   done
 done
-[ "$dup_found" -eq 0 ] && echo "DISTINCTNESS ok: all deterministic renders differ from each other" >> "$OUT/MANIFEST.txt"
+[ "$dup_found" -eq 0 ] && echo "DISTINCTNESS ok: no deterministic screen collided with another, including the DEFAULT fallback target (calibration-grey.png) — see the header comment for the one panel-dependent case this can't catch (calibration-color)" >> "$OUT/MANIFEST.txt"
 
 cat "$OUT/MANIFEST.txt"

@@ -210,3 +210,14 @@ devices:
   "AA:BB:CC:00:00:15":
     panel: trmnl_og
     screen: examples/swiss-departure-board
+  # Canary: a deliberately nonexistent screen ref. capture-renders.sh renders
+  # this first and records whether it exits 0 (silent fallback to the
+  # DEFAULT device's screen — the current, verified behavior even for a
+  # *registered* device, per `run_script_for_device` in
+  # src/services/content_pipeline.rs) or errors (fallback path is gone).
+  # Either way the manifest states which one happened, so a human reading it
+  # later knows whether `exit=0` elsewhere means "this screen rendered" or
+  # merely "something rendered."
+  "AA:BB:CC:00:00:99":
+    panel: trmnl_og
+    screen: byonk-builtin/__capture_canary_nonexistent__

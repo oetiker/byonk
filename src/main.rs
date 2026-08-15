@@ -489,6 +489,8 @@ fn run_render_command(
             } else {
                 None
             },
+            // Task 7 wires the screen's resolved font config here.
+            None,
         )
         .map_err(|e| anyhow::anyhow!("Render error: {e}"))?;
 

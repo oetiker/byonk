@@ -480,6 +480,7 @@ impl ContentPipeline {
         use_actual: bool,
         dither: Option<&str>,
         tuning: Option<&crate::rendering::svg_to_png::DitherTuning>,
+        fonts: Option<&crate::rendering::font_config::FontConfig>,
     ) -> Result<Vec<u8>, ContentError> {
         let png_bytes = self.renderer.svg_renderer.render_to_palette_png(
             svg.as_bytes(),
@@ -489,6 +490,7 @@ impl ContentPipeline {
             use_actual,
             dither,
             tuning,
+            fonts,
         )?;
         Ok(png_bytes)
     }
@@ -501,11 +503,12 @@ impl ContentPipeline {
         &self,
         svg: &str,
         spec: DisplaySpec,
+        fonts: Option<&crate::rendering::font_config::FontConfig>,
     ) -> Result<Vec<u8>, ContentError> {
-        let png_bytes = self
-            .renderer
-            .svg_renderer
-            .render_to_raw_png(svg.as_bytes(), spec)?;
+        let png_bytes =
+            self.renderer
+                .svg_renderer
+                .render_to_raw_png(svg.as_bytes(), spec, fonts)?;
         Ok(png_bytes)
     }
 

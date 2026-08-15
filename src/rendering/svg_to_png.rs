@@ -1,5 +1,6 @@
 use crate::error::RenderError;
 use crate::models::DisplaySpec;
+use crate::rendering::font_config::{FontConfig, HintingSpec};
 use eink_dither::{
     DitherAlgorithm, EinkDitherer, GamutMapper, GamutOptions, Palette as EinkPalette,
     Srgb as EinkSrgb,
@@ -147,8 +148,9 @@ impl SvgRenderer {
         use_actual: bool,
         dither: Option<&str>,
         tuning: Option<&DitherTuning>,
+        fonts: Option<&FontConfig>,
     ) -> Result<Vec<u8>, RenderError> {
-        let pixmap = self.rasterize_svg(svg_data, spec)?;
+        let pixmap = self.rasterize_svg(svg_data, spec, fonts)?;
 
         // Build eink-dither palette with dedup (eink-dither rejects duplicates)
         let (eink_palette, output_palette) = build_eink_palette(palette, actual, use_actual)?;
@@ -179,7 +181,11 @@ impl SvgRenderer {
         // rasterization entirely: every pixel is structure.
         let tone_mask: Option<Vec<bool>> = if crate::rendering::tone_mask::has_tone_markup(svg_data)
         {
-            let mask = self.rasterize_tone_mask(svg_data, spec)?;
+            // The same `fonts` as the frame above, deliberately: the mask
+            // selects which of the frame's pixels are continuous-tone, so a
+            // mask whose text resolved to a different face — or the same face
+            // hinted differently — would be offset from what it masks.
+            let mask = self.rasterize_tone_mask(svg_data, spec, fonts)?;
             if mask.len() != pixels.len() {
                 // Cannot happen: both rasterize to `spec`. Loud rather than
                 // silently skipped.
@@ -304,8 +310,9 @@ impl SvgRenderer {
         &self,
         svg_data: &[u8],
         spec: DisplaySpec,
+        fonts: Option<&FontConfig>,
     ) -> Result<Vec<u8>, RenderError> {
-        let pixmap = self.rasterize_svg(svg_data, spec)?;
+        let pixmap = self.rasterize_svg(svg_data, spec, fonts)?;
         let rgb: Vec<u8> = rgba_to_eink_srgb(pixmap.data())
             .into_iter()
             .flat_map(|c| c.to_bytes())
@@ -315,10 +322,132 @@ impl SvgRenderer {
         Ok(optimize_png(png_bytes))
     }
 
+    /// A [`usvg::FontResolver`] implementing `fonts`' variants and their
+    /// hinting and bitmap-strike policy.
+    ///
+    /// Variants exist because usvg's `select_hinting` and `select_bitmap`
+    /// hooks are keyed on face ID, so two runs of text that resolve to the
+    /// same face cannot be configured apart. fontdb does not deduplicate
+    /// identical font data — loading the same bytes twice yields two distinct
+    /// IDs both reporting the same family — so a variant is a second load of
+    /// an existing font, reachable from the SVG through a plain
+    /// `font-family`: standard markup, no custom attributes.
+    ///
+    /// The load has to happen here, lazily, rather than eagerly in
+    /// [`SvgRenderer::with_fonts`]: variants are declared per script while the
+    /// database is built once at startup, so there is nothing to load
+    /// eagerly *from*. `select_font` receives `&mut Arc<Database>` precisely
+    /// so a resolver may load fonts on demand, and `Source::Binary` is
+    /// `Arc`-backed, so the `Arc::make_mut` below duplicates face *metadata*,
+    /// not font bytes.
+    fn font_resolver(fonts: Option<&FontConfig>) -> usvg::FontResolver<'static> {
+        let mut resolver = usvg::FontResolver::default();
+        let Some(cfg) = fonts else { return resolver };
+        if cfg.variants.is_empty() {
+            return resolver;
+        }
+
+        // Face ID -> the variant alias we loaded it for. Populated lazily by
+        // `select_font` and read by the other two hooks, which receive only an
+        // ID. The hooks are `Fn + Send + Sync`, hence the mutex.
+        let aliases: Arc<std::sync::Mutex<std::collections::HashMap<usvg::fontdb::ID, String>>> =
+            Default::default();
+        // (alias, base face) -> the face we loaded for it, so repeated text
+        // runs asking for the same variant share one face instead of adding
+        // another copy of the font to the database each time.
+        let loaded_for: Arc<
+            std::sync::Mutex<
+                std::collections::HashMap<(String, usvg::fontdb::ID), usvg::fontdb::ID>,
+            >,
+        > = Default::default();
+
+        let variants = cfg.variants.clone();
+        let seen = aliases.clone();
+        let base_selector = usvg::FontResolver::default_font_selector();
+        resolver.select_font = Box::new(move |font, db| {
+            for family in font.families() {
+                let usvg::FontFamily::Named(name) = family else {
+                    continue;
+                };
+                let Some(variant) = variants.get(name.as_str()) else {
+                    continue;
+                };
+
+                // Resolve the variant's base face with the *requesting*
+                // element's style, weight and stretch, so a variant of a
+                // family with several faces still picks the right one.
+                let query = usvg::fontdb::Query {
+                    families: &[usvg::fontdb::Family::Name(&variant.font)],
+                    weight: usvg::fontdb::Weight(font.weight()),
+                    stretch: to_fontdb_stretch(font.stretch()),
+                    style: to_fontdb_style(font.style()),
+                };
+                let Some(base) = db.query(&query) else {
+                    continue;
+                };
+
+                let key = (name.clone(), base);
+                if let Some(id) = loaded_for.lock().unwrap().get(&key) {
+                    return Some(*id);
+                }
+
+                let Some((source, index)) = db.face_source(base) else {
+                    continue;
+                };
+                // A second load of the same bytes yields a second face ID —
+                // fontdb does not deduplicate identical font data — and that
+                // is what gives the variant its own hinting and strike config.
+                let loaded = usvg::fontdb::Database::load_font_source(Arc::make_mut(db), source);
+                let Some(id) = loaded.get(index as usize).copied() else {
+                    continue;
+                };
+                seen.lock().unwrap().insert(id, name.clone());
+                loaded_for.lock().unwrap().insert(key, id);
+                return Some(id);
+            }
+            base_selector(font, db)
+        });
+
+        let variants = cfg.variants.clone();
+        let seen = aliases.clone();
+        resolver.select_hinting = Box::new(move |id, _size, global, _db| {
+            let alias = seen.lock().unwrap().get(&id).cloned();
+            match alias.and_then(|a| variants.get(&a).and_then(|v| v.hinting.clone())) {
+                // The variant overrides: `Some(spec)` hints it its own way,
+                // `None` is hinting explicitly off for this variant.
+                Some(over) => over.map(|s| s.to_usvg()),
+                // Either not a variant face, or a variant that does not
+                // override hinting: inherit the document default, which
+                // `global` already carries.
+                None => global,
+            }
+        });
+
+        let variants = cfg.variants.clone();
+        let seen = aliases;
+        resolver.select_bitmap = Box::new(move |id, _size, _db| {
+            let alias = seen.lock().unwrap().get(&id).cloned();
+            alias
+                .and_then(|a| variants.get(&a).and_then(|v| v.strikes))
+                .unwrap_or(true) // resvg's default: strikes are used
+        });
+
+        resolver
+    }
+
     /// Parse and rasterize SVG to an RGBA pixmap
-    fn rasterize_svg(&self, svg_data: &[u8], spec: DisplaySpec) -> Result<Pixmap, RenderError> {
+    fn rasterize_svg(
+        &self,
+        svg_data: &[u8],
+        spec: DisplaySpec,
+        fonts: Option<&FontConfig>,
+    ) -> Result<Pixmap, RenderError> {
         let options = usvg::Options {
             fontdb: self.fontdb.clone(),
+            font_hinting: fonts
+                .and_then(|f| f.default.as_ref())
+                .map(HintingSpec::to_usvg),
+            font_resolver: Self::font_resolver(fonts),
             ..Default::default()
         };
         let tree = usvg::Tree::from_data(svg_data, &options)
@@ -366,12 +495,17 @@ impl SvgRenderer {
         &self,
         svg_data: &[u8],
         spec: DisplaySpec,
+        fonts: Option<&FontConfig>,
     ) -> Result<Vec<bool>, RenderError> {
         let mask_svg = crate::rendering::tone_mask::build_mask_svg(svg_data)
             .map_err(|e| RenderError::SvgParse(format!("tone mask: {e}")))?;
 
         let options = usvg::Options {
             fontdb: self.fontdb.clone(),
+            font_hinting: fonts
+                .and_then(|f| f.default.as_ref())
+                .map(HintingSpec::to_usvg),
+            font_resolver: Self::font_resolver(fonts),
             ..Default::default()
         };
         let tree = usvg::Tree::from_data(&mask_svg, &options)
@@ -407,6 +541,31 @@ impl Default for SvgRenderer {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// usvg's font stretch as fontdb spells it, so a variant's base face is
+/// queried with the same stretch the requesting element asked for.
+fn to_fontdb_stretch(stretch: usvg::FontStretch) -> usvg::fontdb::Stretch {
+    match stretch {
+        usvg::FontStretch::UltraCondensed => usvg::fontdb::Stretch::UltraCondensed,
+        usvg::FontStretch::ExtraCondensed => usvg::fontdb::Stretch::ExtraCondensed,
+        usvg::FontStretch::Condensed => usvg::fontdb::Stretch::Condensed,
+        usvg::FontStretch::SemiCondensed => usvg::fontdb::Stretch::SemiCondensed,
+        usvg::FontStretch::Normal => usvg::fontdb::Stretch::Normal,
+        usvg::FontStretch::SemiExpanded => usvg::fontdb::Stretch::SemiExpanded,
+        usvg::FontStretch::Expanded => usvg::fontdb::Stretch::Expanded,
+        usvg::FontStretch::ExtraExpanded => usvg::fontdb::Stretch::ExtraExpanded,
+        usvg::FontStretch::UltraExpanded => usvg::fontdb::Stretch::UltraExpanded,
+    }
+}
+
+/// usvg's font style as fontdb spells it. See [`to_fontdb_stretch`].
+fn to_fontdb_style(style: usvg::FontStyle) -> usvg::fontdb::Style {
+    match style {
+        usvg::FontStyle::Normal => usvg::fontdb::Style::Normal,
+        usvg::FontStyle::Italic => usvg::fontdb::Style::Italic,
+        usvg::FontStyle::Oblique => usvg::fontdb::Style::Oblique,
+    }
+}
 
 /// Convert RGBA pixel data to eink-dither Srgb, alpha-compositing against white.
 fn rgba_to_eink_srgb(rgba_data: &[u8]) -> Vec<EinkSrgb> {
@@ -616,6 +775,9 @@ fn pack_nbits(indices: &[u8], width: u32, bits: u8) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rendering::font_config::{
+        FontConfig, FontVariant, HintingEngine, HintingSpec, HintingTarget,
+    };
 
     #[test]
     fn build_eink_palette_drops_mismatched_actual_but_still_builds() {
@@ -778,7 +940,16 @@ mod tests {
         let spec = DisplaySpec::from_dimensions(800, 200).unwrap();
         let palette = vec![(0, 0, 0), (255, 255, 255)];
         let png = renderer
-            .render_to_palette_png(svg.as_bytes(), spec, &palette, None, false, None, None)
+            .render_to_palette_png(
+                svg.as_bytes(),
+                spec,
+                &palette,
+                None,
+                false,
+                None,
+                None,
+                None,
+            )
             .unwrap();
         std::fs::write("/tmp/byonk-bitmap-font-test2.png", &png).unwrap();
         println!(
@@ -798,7 +969,7 @@ mod tests {
           </svg>"##;
         let spec = DisplaySpec::from_dimensions(100, 100).unwrap();
         let mask = renderer
-            .rasterize_tone_mask(svg.as_bytes(), spec)
+            .rasterize_tone_mask(svg.as_bytes(), spec, None)
             .expect("mask must rasterize");
 
         assert_eq!(mask.len(), 100 * 100);
@@ -818,7 +989,9 @@ mod tests {
             <rect x="40" y="40" width="20" height="20" fill="#000000"/>
           </svg>"##;
         let spec = DisplaySpec::from_dimensions(100, 100).unwrap();
-        let mask = renderer.rasterize_tone_mask(svg.as_bytes(), spec).unwrap();
+        let mask = renderer
+            .rasterize_tone_mask(svg.as_bytes(), spec, None)
+            .unwrap();
         assert!(mask[10 * 100 + 10], "photo area must be marked");
         assert!(
             !mask[50 * 100 + 50],
@@ -848,7 +1021,9 @@ mod tests {
         );
 
         let spec = DisplaySpec::from_dimensions(400, 400).unwrap();
-        let mask = renderer.rasterize_tone_mask(svg.as_bytes(), spec).unwrap();
+        let mask = renderer
+            .rasterize_tone_mask(svg.as_bytes(), spec, None)
+            .unwrap();
         let row = 200usize;
         let last = (0..400).rev().find(|&x| mask[row * 400 + x]);
         assert_eq!(
@@ -868,7 +1043,9 @@ mod tests {
         let renderer = SvgRenderer::new();
         let spec = DisplaySpec::from_dimensions(200, 200).unwrap();
         let span = |svg: &str| {
-            let mask = renderer.rasterize_tone_mask(svg.as_bytes(), spec).unwrap();
+            let mask = renderer
+                .rasterize_tone_mask(svg.as_bytes(), spec, None)
+                .unwrap();
             let row = 100usize;
             let first = (0..200).find(|&x| mask[row * 200 + x]).unwrap();
             let last = (0..200).rev().find(|&x| mask[row * 200 + x]).unwrap();
@@ -936,7 +1113,16 @@ mod tests {
         ];
 
         let plain = renderer
-            .render_to_palette_png(svg.as_bytes(), spec, &palette, None, false, None, None)
+            .render_to_palette_png(
+                svg.as_bytes(),
+                spec,
+                &palette,
+                None,
+                false,
+                None,
+                None,
+                None,
+            )
             .unwrap();
 
         let tuning = DitherTuning {
@@ -952,6 +1138,7 @@ mod tests {
                 false,
                 None,
                 Some(&tuning),
+                None,
             )
             .unwrap();
 
@@ -980,10 +1167,28 @@ mod tests {
         ];
 
         let a = renderer
-            .render_to_palette_png(marked.as_bytes(), spec, &palette, None, false, None, None)
+            .render_to_palette_png(
+                marked.as_bytes(),
+                spec,
+                &palette,
+                None,
+                false,
+                None,
+                None,
+                None,
+            )
             .unwrap();
         let b = renderer
-            .render_to_palette_png(unmarked.as_bytes(), spec, &palette, None, false, None, None)
+            .render_to_palette_png(
+                unmarked.as_bytes(),
+                spec,
+                &palette,
+                None,
+                false,
+                None,
+                None,
+                None,
+            )
             .unwrap();
 
         assert_ne!(a, b, "marking a vivid region must change the output");
@@ -1038,6 +1243,7 @@ mod tests {
                 &six_ink_official(),
                 None,
                 false,
+                None,
                 None,
                 None,
             )
@@ -1158,6 +1364,7 @@ mod tests {
                     false,
                     None,
                     Some(&tuning),
+                    None,
                 )
                 .expect("render failed");
             let img = image::load_from_memory(&png)
@@ -1283,9 +1490,11 @@ mod tests {
             .expect("tone screen templates");
 
         let renderer = SvgRenderer::new();
-        let pixmap = renderer.rasterize_svg(svg.as_bytes(), spec).unwrap();
+        let pixmap = renderer.rasterize_svg(svg.as_bytes(), spec, None).unwrap();
         let pixels = rgba_to_eink_srgb(pixmap.data());
-        let mask = renderer.rasterize_tone_mask(svg.as_bytes(), spec).unwrap();
+        let mask = renderer
+            .rasterize_tone_mask(svg.as_bytes(), spec, None)
+            .unwrap();
         assert_eq!(mask.len(), pixels.len());
 
         let (eink_palette, _) = build_eink_palette(&official, Some(&actual), false).unwrap();
@@ -1328,5 +1537,222 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&cache_root);
+    }
+
+    /// A renderer carrying byonk's bundled fonts, the way production builds
+    /// one. `SvgRenderer::default()` loads system fonts only, so it has no
+    /// `Outfit` and every hinting fixture below would silently fall back.
+    fn bundled_renderer() -> SvgRenderer {
+        SvgRenderer::with_fonts(crate::assets::AssetLoader::new(None, None, None).get_fonts())
+    }
+
+    #[test]
+    fn hinting_changes_the_rendered_pixels() {
+        const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480">
+          <rect width="800" height="480" fill="#fff"/>
+          <text x="20" y="40" font-family="Outfit" font-size="11"
+                style="font-variation-settings: 'wght' 400">Hamburgefonstiv 0123456789</text>
+        </svg>"##;
+
+        let r = bundled_renderer();
+        let bw = &[(0u8, 0u8, 0u8), (255, 255, 255)];
+
+        let unhinted = r
+            .render_to_palette_png(
+                SVG.as_bytes(),
+                DisplaySpec::OG,
+                bw,
+                None,
+                false,
+                None,
+                None,
+                None,
+            )
+            .expect("unhinted render");
+
+        let cfg = FontConfig::adaptive_default(2);
+        let hinted = r
+            .render_to_palette_png(
+                SVG.as_bytes(),
+                DisplaySpec::OG,
+                bw,
+                None,
+                false,
+                None,
+                None,
+                Some(&cfg),
+            )
+            .expect("hinted render");
+
+        assert_ne!(
+            unhinted, hinted,
+            "mono hinting at 11px must change the rasterisation; identical output \
+             means the resolver is not reaching the renderer"
+        );
+    }
+
+    #[test]
+    fn a_variant_hints_differently_from_its_base_font_in_one_document() {
+        const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480">
+          <rect width="800" height="480" fill="#fff"/>
+          <text x="20" y="40" font-family="Outfit" font-size="11"
+                style="font-variation-settings: 'wght' 400">Hamburgefonstiv 0123456789</text>
+          <text x="20" y="80" font-family="Outfit Mono" font-size="11"
+                style="font-variation-settings: 'wght' 400">Hamburgefonstiv 0123456789</text>
+        </svg>"##;
+
+        let r = bundled_renderer();
+        let bw = &[(0u8, 0u8, 0u8), (255, 255, 255)];
+        let render = |cfg: &FontConfig| {
+            r.render_to_palette_png(
+                SVG.as_bytes(),
+                DisplaySpec::OG,
+                bw,
+                None,
+                false,
+                None,
+                None,
+                Some(cfg),
+            )
+            .expect("render")
+        };
+
+        // Baseline: no variants at all. "Outfit Mono" is not a family, so the
+        // second line falls back to the same face as the first.
+        let mut plain = FontConfig::adaptive_default(4);
+        plain.variants.clear();
+
+        let mut with_variant = plain.clone();
+        with_variant.variants.insert(
+            "Outfit Mono".to_string(),
+            FontVariant {
+                font: "Outfit".to_string(),
+                strikes: None,
+                hinting: Some(Some(HintingSpec {
+                    engine: HintingEngine::Auto,
+                    target: HintingTarget::Mono,
+                })),
+            },
+        );
+
+        assert_ne!(
+            render(&plain),
+            render(&with_variant),
+            "declaring an Outfit Mono variant must change the second line's \
+             rasterisation; identical output means select_font never resolved it"
+        );
+
+        // Control: a variant nothing in the document references must change
+        // nothing. Without this, a resolver applying its hinting to every face
+        // would pass the assertion above.
+        let mut unused = plain.clone();
+        unused.variants.insert(
+            "Outfit Unused".to_string(),
+            FontVariant {
+                font: "Outfit".to_string(),
+                strikes: None,
+                hinting: Some(Some(HintingSpec {
+                    engine: HintingEngine::Auto,
+                    target: HintingTarget::Mono,
+                })),
+            },
+        );
+        assert_eq!(
+            render(&plain),
+            render(&unused),
+            "a variant no element uses must not affect the render"
+        );
+
+        // Second control: the *hinting* has to be what makes the difference,
+        // not the mere existence of a second face. A variant that inherits
+        // hinting resolves the second line to a duplicate of the same face
+        // configured identically, so it must rasterize byte for byte the same.
+        let mut inheriting = plain.clone();
+        inheriting.variants.insert(
+            "Outfit Mono".to_string(),
+            FontVariant {
+                font: "Outfit".to_string(),
+                strikes: None,
+                hinting: None,
+            },
+        );
+        assert_eq!(
+            render(&plain),
+            render(&inheriting),
+            "a variant that overrides nothing must render identically; a \
+             difference here means the assertion above measured the extra \
+             face rather than its hinting"
+        );
+    }
+    /// The assumption the whole variant design rests on: a face loaded inside
+    /// `select_font` via `Arc::make_mut` gets a NEW id and survives into the
+    /// rest of the parse, so `select_hinting` is later called with that id.
+    ///
+    /// Kept as a direct test of usvg/fontdb behaviour rather than folded into
+    /// the pixel-diff tests above: if a resvg bump ever breaks the mechanism,
+    /// this says so in one line instead of leaving two renders mysteriously
+    /// identical.
+    #[test]
+    fn make_mut_load_survives_into_select_hinting() {
+        use std::sync::Mutex;
+        const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480">
+          <text x="20" y="40" font-family="Outfit" font-size="11">Hamburgefonstiv</text>
+        </svg>"##;
+
+        let renderer = bundled_renderer();
+        let selected: Arc<Mutex<Vec<usvg::fontdb::ID>>> = Default::default();
+        let hinted: Arc<Mutex<Vec<usvg::fontdb::ID>>> = Default::default();
+        let base_ids: std::collections::HashSet<usvg::fontdb::ID> =
+            renderer.fontdb.faces().map(|f| f.id).collect();
+
+        let mut resolver = usvg::FontResolver::default();
+        let sel = selected.clone();
+        resolver.select_font = Box::new(move |font, db| {
+            let query = usvg::fontdb::Query {
+                families: &[usvg::fontdb::Family::Name("Outfit")],
+                weight: usvg::fontdb::Weight(font.weight()),
+                stretch: usvg::fontdb::Stretch::Normal,
+                style: usvg::fontdb::Style::Normal,
+            };
+            let base = db.query(&query).expect("Outfit must resolve");
+            let (source, index) = db.face_source(base).unwrap();
+            let loaded = usvg::fontdb::Database::load_font_source(Arc::make_mut(db), source);
+            let id = loaded.get(index as usize).copied().unwrap();
+            sel.lock().unwrap().push(id);
+            Some(id)
+        });
+        let hin = hinted.clone();
+        resolver.select_hinting = Box::new(move |id, _s, global, db| {
+            hin.lock().unwrap().push(id);
+            // The database select_hinting is handed must still contain the
+            // face we loaded, or the "same parse" claim is false.
+            assert!(db.face(id).is_some(), "loaded face vanished from the db");
+            global
+        });
+
+        let options = usvg::Options {
+            fontdb: renderer.fontdb.clone(),
+            font_hinting: Some(FontConfig::adaptive_default(2).default.unwrap().to_usvg()),
+            font_resolver: resolver,
+            ..Default::default()
+        };
+        let tree = usvg::Tree::from_data(SVG.as_bytes(), &options).expect("parse");
+        let mut pixmap = Pixmap::new(800, 480).unwrap();
+        resvg::render(&tree, Transform::default(), &mut pixmap.as_mut());
+
+        let selected = selected.lock().unwrap().clone();
+        let hinted = hinted.lock().unwrap().clone();
+        println!("selected={selected:?} hinted={hinted:?}");
+        assert_eq!(selected.len(), 1, "select_font must have run once");
+        let id = selected[0];
+        assert!(
+            !base_ids.contains(&id),
+            "the loaded face must be a NEW id, not the base font's"
+        );
+        assert!(
+            hinted.contains(&id),
+            "select_hinting never saw the id select_font returned: the \
+             Arc::make_mut mutation did not survive the parse"
+        );
     }
 }

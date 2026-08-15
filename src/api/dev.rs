@@ -765,6 +765,8 @@ pub async fn handle_render(
         use_actual,
         final_dither.as_deref(),
         if has_tuning { Some(&tuning) } else { None },
+        // Task 7 wires the screen's resolved font config here.
+        None,
     ) {
         Ok(png_bytes) => (
             StatusCode::OK,

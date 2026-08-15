@@ -1171,6 +1171,8 @@ pub async fn handle_image<R: DeviceRegistry>(
         false, // production always uses official colors
         dither,
         if has_tuning { Some(&tuning) } else { None },
+        // Task 7 wires the screen's resolved font config here.
+        None,
     )?;
 
     tracing::info!(size_bytes = png_bytes.len(), "Image rendered and served");

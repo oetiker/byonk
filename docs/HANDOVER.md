@@ -1,10 +1,11 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-15 (session 18). **Initiative: adopt the resvg `byonk-base` branch.**
+_Last updated: 2026-08-16 (session 19). **Initiative: adopt the resvg `byonk-base` branch.**
 Plan Tasks 1, 2, 3, 5, 6 are complete and reviewed. Tasks 4, 7, 8, 9, 10 remain.
 Task 11 (the font-trio decision) ran and **the owner has decided: bundle Source.**
-Along the way this session opened a second front — a real rendering defect in bitmap
-fonts — which is **mid-diagnosis with an agent still running.**_
+The second front — the bitmap-font rendering defect (F15) — is **diagnosed, fixed, pushed
+to PR #1115 and merged into `byonk-base`.** byonk itself is unchanged until its
+`Cargo.lock` is bumped; see "What F15 needs next"._
 
 ## Where the work lives
 
@@ -12,9 +13,13 @@ fonts — which is **mid-diagnosis with an agent still running.**_
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
 | PR | **#30**, OPEN against `main` — https://github.com/oetiker/byonk/pull/30 |
-| HEAD | `f755241` — tree clean |
-| Verified | `make check` green at `f755241` (474 tests, 0 failed) |
+| HEAD | `46a50a3` — tree clean (the commits after `f755241` are docs only) |
+| Verified | `make check` green at `f755241` (474 tests, 0 failed); nothing in code has changed since |
 | **Not pushed** | HEAD is ahead of origin. Push before relying on CI. |
+
+**resvg work happens in a different repo.** `oetiker/resvg` carries three branches that
+matter: `feat/bitmap-mask-glyphs` (upstream PR #1115), `feat/font-hinting` (upstream PR
+#1116), and `byonk-base`, which merges them and is what byonk's `[patch.crates-io]` pins.
 
 **The plan:** `docs/superpowers/plans/2026-08-15-resvg-byonk-base-integration.md`.
 Still authoritative for Tasks 4, 7, 8, 9, 10 — but see "the plan has been wrong a lot".
@@ -24,22 +29,28 @@ Still authoritative for Tasks 4, 7, 8, 9, 10 — but see "the plan has been wron
 Every ruling, finding and commit range is there in far more detail than this file.
 **Trust it plus `git log` over memory.** Also in that directory: `f11-report.md`,
 `f15-report.md`, `font-licensing-research.md`, and the briefs `f9-brief.md` /
-`f10-brief.md` (written, not yet dispatched).
+`f10-brief.md` (written, not yet dispatched). **`f15-report.md` predates the upstream
+landing** — its measurements hold, but its "nothing is pushed" framing and its commit
+hashes are superseded by the F15 section below.
+
+**Two obsolete `.patch` files live there — ignore both.**
+`f15-resvg-bitmap-strike-fix.patch` never held the fix at all (it holds `b67da7c` +
+`303e38e`, which were already on `origin/byonk-base`), and
+`f15-resvg-bitmap-advance-fix.patch` held the pre-upstream version. **`git log` on
+`oetiker/resvg` is now the only source of truth for the resvg work.**
 
 ---
 
-# ⚠️ Something is running right now
+# ⚠️ Read this before touching fonts
 
-An agent (`superpowers:systematic-debugging`) is redoing the bitmap-font fix — see
-**F15** below. It works in a **scratchpad clone of the resvg fork**, not in byonk, and
-was told to leave the byonk tree clean. Check `git status` before assuming.
-
-**No push to `oetiker/resvg` is authorized.** The owner did not answer that question;
-they challenged the diagnosis instead — and were right.
+**The bitmap fix is on `byonk-base` (`61956742`) but byonk has not picked it up.** The
+`Cargo.lock` still pins the old commit, so byonk renders exactly as before. The first
+thing that happens when the lock is bumped is that **Terminus @14 and @18 get 1 px/glyph
+wider** — that is deliberate and correct, not a regression.
 
 ---
 
-# What this session finished
+# Completed in this initiative (session 18)
 
 ## Plan Task 3 — resvg bump + skrifa strikes (`94ff77f`, `b6d0315`)
 
@@ -104,7 +115,7 @@ restores AA but also disables hinting.**
 
 ---
 
-# The second front: bitmap fonts render wrong (F15)
+# The second front: bitmap fonts render wrong (F15) — FIXED
 
 **byonk ships 26 X11 bitmap TTFs that do not render correctly**, documents them in
 `fonts/FONTS.md` and `docs/`, and demos them at `screens/examples/demo/font/bitmap/`.
@@ -113,9 +124,7 @@ Glyphs lose chunks at every size. This **predates this initiative**.
 ## Root cause — the owner's, not the agent's
 
 The agent found that strikes are painted at fractional device coordinates and the
-rectangle is anti-aliased, and fixed it by **snapping placement to whole pixels**
-(fork commit `0e3a6cb`; patch preserved at
-`.superpowers/sdd/…/f15-resvg-snap-bitmap-glyphs.patch`).
+rectangle is anti-aliased, and fixed it by **snapping placement to whole pixels**.
 
 **The owner challenged it** — *"fonts adjust their properties based on pt size, they are
 not simply scaled"* — and was right. Verified:
@@ -123,15 +132,22 @@ not simply scaled"* — and was right. Verified:
 - `skrifa-0.44.0/src/bitmap.rs:247` exposes `pub advance: Option<f32>`, *"the horizontal
   advance width of the bitmap glyph **in pixels**"*, populated from the strike metrics
   (`:307`). Strikes carry **per-ppem** metrics; they are not the outline scaled.
-- **The fork throws it away.** `grep -n advance crates/usvg/src/text/bitmap.rs` returns
-  nothing — only `inner_bearing_x/y` and `ppem_x/y`. The advance reaching layout comes
-  from the shaper over the outline `hmtx`, and is fractional at nearly every ppem.
+- **The code threw it away**, laying every bitmap glyph out on the outline's `hmtx`
+  advance, which is fractional at nearly every ppem.
 
-**True root cause: bitmap glyphs are laid out on outline metrics instead of their own
+**True root cause: bitmap glyphs were laid out on outline metrics instead of their own
 strike metrics.** This also dissolves the "separate issue" of uneven letter spacing —
 same fault. Correct advances are integers, so glyphs land on whole pixels *by
-construction* rather than being snapped afterwards. **Snapping is a band-aid and is not
-being landed as the fix.**
+construction* rather than being snapped afterwards. **Snapping was demoted from "the fix"
+to a complement** — see below for why it was still kept.
+
+## The defect was ours, not released resvg's
+
+Checked before assuming: the fork's `CHANGELOG.md` Unreleased section says *"Previously
+only PNG bitmap glyphs were rendered."* Upstream resvg draws **colour emoji** bitmaps
+only, where glyphs generally have no outline and get scaled anyway. The monochrome mask
+strike path is **our own unreleased feature** (PR #1115). So there was no upstream bug to
+report, and the fix belonged **inside PR #1115** rather than as a follow-up.
 
 **Falsified, so nobody chases it again:** the vertical-metric overflow (every X11
 conversion has ascender > upem). Real malformation, **not** the cause — X11Helv @34 and
@@ -143,47 +159,101 @@ the grid. Its outline advance is a uniform ½ em, which lands on a whole pixel a
 strike ppem, so it never goes off-grid on its own. That same uniform advance is why it is
 *wrong* at 14 and 18 px, where the real cell is 8 and 10 wide rather than 7 and 9.
 
-## The fix — done, in the fork, NOT pushed
+## Terminus is correct — settled with measurement, do not reopen
 
-Fork clone commits `0e3a6cb` (snapping) + `e72efe6` (strike advances), +47/−7 lines, no
-API change. **The clone is ephemeral; the durable artifact is
-`.superpowers/sdd/…/f15-resvg-bitmap-strike-fix.patch`.** byonk tree untouched.
+The theory "Terminus has bugs in its advances" was raised again this session and
+**measured to destruction**. All 1359 glyphs of every strike in our own
+`fonts/TerminusTTF.ttf` (v4.49.3):
 
-- **Verified, not assumed:** `advance` is `Some` and a whole number of pixels for *every*
-  strike byonk ships (X11Helv `H`@12 → strike 9 vs `hmtx` 8.82).
+| ppem | 12 | **14** | 16 | **18** | 20 | 22 | 24 | 28 | 32 |
+|---|---|---|---|---|---|---|---|---|---|
+| strike advance (`EBLC` `horiAdvance`) | 6 | **8** | 8 | **10** | 10 | 11 | 12 | 14 | 16 |
+| outline advance (`hmtx`, 500/1000 em) | 6 | **7** | 8 | **9** | 10 | 11 | 12 | 14 | 16 |
+| canonical `ter-uXXn` cell width | 6 | **8** | 8 | **10** | 10 | 11 | 12 | 14 | 16 |
+
+**The strike matches canonical Terminus at every one of the nine sizes.** The outline is
+what disagrees, at exactly two. And it cannot be fixed: `hmtx` holds **one** advance per
+glyph that is merely scaled by size, so it encodes one ratio — but Terminus needs 0.500
+for seven sizes, 0.571 for 8×14 and 0.556 for 10×18. **No single `hmtx` value is right at
+all nine.**
+
+That limitation is irrelevant, because **the strike carries its own advance and Terminus
+fills it in correctly**. The font is complete; the consumer was reading the wrong table.
+*Terminus is NOT buggy. No upstream report, no patch to our copy.* This reframes the fix
+usefully: it is not a workaround for one imperfect font but the **only correct handling**,
+since a strike advance is unrepresentable in `hmtx` whenever cell aspect varies by size.
+
+## The fix — PUSHED to PR #1115
+
+Two commits on `oetiker:feat/bitmap-mask-glyphs`, root cause first:
+
+| | |
+|---|---|
+| `3cd6d6a5` | `fix: space a bitmap glyph by its own strike's advance` |
+| `17f41cac` | `fix: blit a bitmap strike onto whole pixels` |
+
 - Substitution happens in `form_glyph_clusters`, the single font-units→user-units point,
   so `text-anchor`, `textLength`, `letter-spacing`, `dx`/`dy`, `textPath`, decorations and
-  bbox all keep working. The real coupling introduced: **layout now consults
-  `select_bitmap`** (once per shaping run). `matching_mask` is shared by layout and
-  flattening so the two cannot drift.
+  bbox all keep working. `matching_mask` is shared by layout and flattening so the two
+  cannot drift.
+- **Only a mask strike that will actually be drawn contributes an advance.** Colour
+  bitmaps and outline-less glyphs are untouched, so the emoji path this code was built
+  for is unaffected — which is why **no reference image changed**.
 - **Snapping was demoted but kept, on evidence.** With correct advances ordinary text is
   already grey-free at every size, but `x="20.5"` → 150 grey px, `letter-spacing="0.5"` →
   67, `text-anchor="middle"` with odd width → 150. Conversely snapping *alone* stutters
   the pitch (`10 11 10 10 10 11 10`); with advances it is constant.
-- **Terminus @14 and @18: the strike is right, the outline advance is the approximation.**
-  Terminus's canonical cells are 6×12, **8×14**, 8×16, **10×18**, 10×20, 11×22, 12×24,
-  14×28, 16×32 — width is *not* height/2 at 14 and 18. Verified in our own file: at
-  ppem 14 all 1356 real glyphs share one record, cell 8×14, advance 8, imageSize 14 bytes
-  (= 8·14/8 exactly, so no padding). TerminusTTF gives every glyph a uniform half-em
-  outline advance, which cannot express those two sizes, so it says 7 and 9.
-  **byonk was crowding Terminus by 1 px/glyph at 14 and 18.** Hence Terminus @14 is the
-  one render that changes (3154 px) — **deliberate and correct**.
-  *Terminus is NOT buggy; we ship the latest (4.49.3, Apr 2023, the current release); no
-  upstream report and no patch to our copy are needed. Two wrong theories were discarded
-  on the way here — see Lessons.*
-  Controller eyeballed `x11fix2/Terminus_{before,after}_4x.png`: identical at 8/10/11/12,
-  wider and uncrowded at 14. X11Misc10x: 0 px changed.
-- Pitch is now even at every size for every face (measured ruler in `x11fix2/index.md`).
-- 2 new usvg unit tests pin the substitution; 1747 render tests pass, **no reference
-  image changed**. An upstream end-to-end test is blocked: the only monochrome test font
-  has strikes at 16/24 where Terminus agrees with itself, and regenerating it is not
-  byte-reproducible here — recommendation in the report.
+- **The test font now carries a 14 px strike.** `make-bitmap-mono.py` builds
+  `PPEMS = (14, 16, 24)`. 14 is the only size where strike (8) and outline (7) disagree;
+  16 and 24 agree, which is exactly why nothing caught this before. Verified our
+  `fonts/TerminusTTF.ttf` reproduces the previously committed test font **byte-for-byte in
+  every table except `head.modified`**, so the added strike is the only real change.
+- **Both fixes are sabotage-proven, and cross-cleanly:** disabling the advance wiring
+  fails `a_strike_is_spaced_by_its_own_advance` (`left: 7.0, right: 8.0`) while the
+  snapping test still passes; disabling snapping fails
+  `a_strike_is_blitted_onto_whole_pixels` while the advance test still passes. Each test
+  catches only its own fix, which is also the proof that the two commits are independent.
+- Verified at `17f41cac`: `cargo fmt --check` clean, clippy only pre-existing warnings
+  (the change *removes* a parameter), **1734 tests, 0 failures, no reference image
+  changed**.
+- **Adapted for upstream, three ways**, because the fix was written on `byonk-base` which
+  also carries the hinting PR: the `select_bitmap` gating was dropped (that hook is not in
+  #1115), a `[GlyphHinting::ppem]` doc link was reworded, and two `select_bitmap` tests
+  were removed from the new test file.
+- Byonk-side renders from the earlier verification round (pitch rulers, before/after
+  sheets) are in the ephemeral `…/scratchpad/x11fix2/index.md`.
 - Rows at 8/10/11 px in the Terminus sheets look poor in *both* before and after: Terminus
   has **no strike below 12**, so those are the outline path. Pre-existing, out of scope.
 
-**To land:** owner authorization to push `oetiker/resvg`, then bump `Cargo.lock`, add a
-byonk-side regression test (it cannot exist before the pin moves), and a `CHANGES.md`
-entry. Then **re-run the bitmap-vs-outline comparison** (owner already asked for this).
+## `byonk-base` is merged and pushed — `61956742`
+
+`feat/bitmap-mask-glyphs` merged into `byonk-base`, pushed. **1749 tests, 0 failures**,
+fmt clean, tree clean.
+
+**The merge needed one semantic fix, and it is the interesting part.** `byonk-base` commit
+`b67da7c` had added `FontResolver::select_bitmap`; the upstream version of the advance fix
+resolves `strike_source` **unconditionally**, because upstream has no such hook. Git merged
+that cleanly and silently produced a bug: a host declining a font's strikes got its
+**outline drawn but its strike advances used** — at 14 px, an 8 px pitch around a 7 px
+glyph. `strike_source` is gated on `select_bitmap` again.
+
+**The pre-existing reference-image test could never have caught this** — verified by
+sabotage: with the gate removed, `strikes_can_be_declined_for_a_font` still passes, because
+the document it renders uses 16 and 24, the sizes where Terminus's two advances agree. The
+new `declining_strikes_also_declines_their_advance` is what pins it (`left: 8.0,
+right: 7.0` when the gate is removed). **This is the trap to remember for any future merge
+of upstream font work into `byonk-base`: byonk-base has host hooks upstream does not, and
+a clean textual merge is not evidence the semantics survived.**
+
+## What F15 needs next
+
+1. **Bump byonk's `Cargo.lock`** onto `byonk-base` `61956742`. Until then byonk renders
+   exactly as before — nothing in byonk has changed yet.
+2. Add a byonk-side regression test — it cannot exist before the pin moves.
+3. A `CHANGES.md` entry.
+4. **Re-run the bitmap-vs-outline comparison** (owner already asked; the earlier answer
+   was measured against the bug). Expect **Terminus @14 and @18 to change and nothing
+   else** — byonk was crowding them by 1 px/glyph.
 
 ---
 
@@ -221,7 +291,7 @@ Two things to remember:
 | **F10** | Bundle the Source trio, repoint generics, licences, docs. | `f10-brief.md` |
 | F13 | Extend `screens/examples/demo/font/{ttf,bitmap,hinting}/` to cover Source. | — |
 | F14 | Licence + notice files per the research above; fix `FONTS.md` (it lists `X11LuType` under *Proportional* — it is monospaced, 1 distinct advance). | — |
-| F15 | The bitmap fix — **in flight**. | — |
+| F15 | The bitmap fix — **done**: PR #1115 + merged to `byonk-base`. Needs the `Cargo.lock` bump. | — |
 
 **F9's motivation:** eight of the nine trio candidates have **no TrueType hinting
 program** — a 7-byte `prep` stub (`b8 01 ff 85 b0 04 8d` = `SCANCTRL`/`SCANTYPE`, i.e.
@@ -287,11 +357,23 @@ Both live under this session's scratchpad and are **ephemeral**.
   API, wrong font-repo paths, an incomplete call-site list. Verify every symbol.
 - **Demonstrate the check fails when the thing is broken.** Sabotage caught real holes
   three times. A test that passes with the fix reverted is worthless.
-- **Check the domain fact before calling something a bug.** Two theories were wrong here:
-  the X11 vertical-metric overflow (real malformation, not the cause) and "TerminusTTF's
-  odd-width strikes are mispackaged" (Terminus 14 and 18 really are 8 and 10 wide —
-  cell width is not height/2 at those sizes). Both were caught by the owner, not by the
-  agents. Measure the font, then check what the font is *supposed* to be.
+- **Check the domain fact before calling something a bug.** Three theories were wrong
+  here: the X11 vertical-metric overflow (real malformation, not the cause), "TerminusTTF's
+  odd-width strikes are mispackaged", and "Terminus has bugs in its advances" (raised
+  twice; the strikes match canonical Terminus at all nine sizes — see the table above).
+  Measure the font, then check what the font is *supposed* to be.
+- **Ask whose bug it is before deciding where to fix it.** I asserted the advance defect
+  was upstream resvg's; the fork `CHANGELOG` said otherwise in one line — upstream renders
+  only PNG bitmap glyphs, and the mask path is our own unreleased feature. That single
+  check moved the fix from "follow-up patch" into PR #1115, where it belongs.
+- **A saved artifact is not evidence that it holds what its name says.**
+  `f15-resvg-bitmap-strike-fix.patch` was recorded as *the* durable copy of the fix and
+  actually contained two already-pushed commits. The real work survived only because the
+  ephemeral clone happened not to have been cleaned up. Diff a preserved patch against
+  what it claims to preserve.
+- **Order a commit series by cause, not by the order you discovered things.** The fix was
+  written snapping-first, then advances; shipped advances-first. Reordering it stopped
+  commit 1 from asserting a cause that commit 2 overturns.
 - **An isolating experiment can be sound and still stop one level short.** It only varies
   what the experimenter already believes matters. The owner's domain knowledge broke open
   both the aliasing bug and the bitmap-advance bug. **Show the owner renders early.**
@@ -326,6 +408,11 @@ Both live under this session's scratchpad and are **ephemeral**.
   `tools/capture-config.yaml`.
 - Fonts for the trio work are at `…/scratchpad/gfonts/ofl/` — Roboto is under `ofl/`,
   **not** `apache/` as the plan says.
+- **Working on resvg:** clone `oetiker/resvg` into the scratchpad. Its test suite is fast
+  (~11 s, 1734 tests) and safe to run in the foreground — this is *not* byonk's `make
+  check`. `crates/resvg/tests/fonts/make-bitmap-mono.py` regenerates the bitmap test font;
+  it needs `fontTools` and `TerminusTTF-Regular.ttf` beside it, which is a copy of byonk's
+  `fonts/TerminusTTF.ttf`. Output is reproducible apart from `head.modified`.
 
 ---
 

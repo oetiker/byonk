@@ -125,6 +125,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Built-in screens are now a minimal, read-only set** (default + calibration);
   your own screens are no longer mixed into the `byonk-builtin` handle. Existing
   installs are migrated automatically on first start.
+- Updated the SVG renderer to resvg 0.48.1, which brings a faster and more correct
+  text engine. Text positioning and glyph advances are more accurate, so some screens
+  may shift by a pixel or two.
 
 ### Fixed
 

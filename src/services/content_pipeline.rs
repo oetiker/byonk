@@ -151,7 +151,7 @@ impl ContentPipeline {
                     stretch: format!("{:?}", face.stretch),
                     monospaced: face.monospaced,
                     post_script_name: face.post_script_name.clone(),
-                    bitmap_strikes: face.bitmap_strikes.clone(),
+                    bitmap_strikes: renderer.svg_renderer.bitmap_strikes(face.id).to_vec(),
                 };
                 font_families
                     .entry(family_name.clone())

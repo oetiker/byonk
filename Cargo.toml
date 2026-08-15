@@ -22,10 +22,14 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "trace", "set-header"] }
 
 # Rendering
-resvg = "0.46"
-tiny-skia = "0.11"
+resvg = "0.48.1"
+tiny-skia = "0.12"
 png = "0.17"
-fontdb = "0.23"
+fontdb = "0.24"
+# Bitmap strike introspection. Replaces the `bitmap_strikes` field byonk's
+# fontdb fork carried; see src/rendering/font_strikes.rs. Pinned to the version
+# usvg uses so the tree holds one copy.
+skrifa = "0.44"
 
 # Scripting & Templating
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
@@ -129,8 +133,8 @@ tempfile = "3"
 base64 = "0.22"
 
 [patch.crates-io]
-# Use our patched resvg with variable font support
-# https://github.com/oetiker/resvg
-resvg = { git = "https://github.com/oetiker/resvg.git", branch = "skrifa" }
-usvg = { git = "https://github.com/oetiker/resvg.git", branch = "skrifa" }
-fontdb = { git = "https://github.com/oetiker/resvg.git", branch = "skrifa" }
+# resvg with bitmap glyph rendering, font hinting, and the per-font hinting and
+# bitmap-strike resolver hooks. Everything else is upstream 0.48.1.
+# https://github.com/oetiker/resvg/tree/byonk-base
+resvg = { git = "https://github.com/oetiker/resvg.git", branch = "byonk-base" }
+usvg  = { git = "https://github.com/oetiker/resvg.git", branch = "byonk-base" }

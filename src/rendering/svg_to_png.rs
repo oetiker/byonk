@@ -36,6 +36,12 @@ use tiny_skia::Pixmap;
 pub struct SvgRenderer {
     /// Font database for text rendering
     fontdb: Arc<fontdb::Database>,
+    /// Bitmap strike sizes per face, ascending.
+    ///
+    /// Computed once at load time rather than per query: `with_face_data`
+    /// re-parses the font, and the Lua `fonts` global reads this for every face
+    /// on every script run.
+    strikes: std::collections::HashMap<fontdb::ID, Vec<u16>>,
 }
 
 impl SvgRenderer {
@@ -82,14 +88,31 @@ impl SvgRenderer {
             .collect();
         tracing::debug!(families = ?families, "Available font families");
 
+        let ids: Vec<fontdb::ID> = fontdb.faces().map(|f| f.id).collect();
+        let strikes = ids
+            .into_iter()
+            .map(|id| {
+                let sizes = fontdb
+                    .with_face_data(id, crate::rendering::font_strikes::bitmap_strikes_for)
+                    .unwrap_or_default();
+                (id, sizes)
+            })
+            .collect();
+
         Self {
             fontdb: Arc::new(fontdb),
+            strikes,
         }
     }
 
     /// Access the font database faces
     pub fn font_faces(&self) -> impl Iterator<Item = &fontdb::FaceInfo> {
         self.fontdb.faces()
+    }
+
+    /// Bitmap strike sizes for a face, ascending. Empty for outline fonts.
+    pub fn bitmap_strikes(&self, id: fontdb::ID) -> &[u16] {
+        self.strikes.get(&id).map(Vec::as_slice).unwrap_or(&[])
     }
 
     /// Create a new SVG renderer with no custom fonts (system fonts only)
@@ -716,15 +739,14 @@ mod tests {
             .find(|f| f.families.first().map(|(n, _)| n.as_str()) == Some("X11Helv"))
             .expect("X11Helv face not found");
 
-        assert!(
-            !x11_face.bitmap_strikes.is_empty(),
-            "X11Helv should have bitmap strikes"
-        );
+        let strikes = renderer.bitmap_strikes(x11_face.id);
+
+        assert!(!strikes.is_empty(), "X11Helv should have bitmap strikes");
         // Strikes should be sorted
-        for w in x11_face.bitmap_strikes.windows(2) {
+        for w in strikes.windows(2) {
             assert!(w[0] <= w[1], "bitmap_strikes should be sorted");
         }
-        println!("X11Helv bitmap strikes: {:?}", x11_face.bitmap_strikes);
+        println!("X11Helv bitmap strikes: {:?}", strikes);
     }
 
     #[test]

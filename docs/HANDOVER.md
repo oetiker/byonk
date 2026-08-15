@@ -43,10 +43,11 @@ hashes are superseded by the F15 section below.
 
 # ⚠️ Read this before touching fonts
 
-**The bitmap fix is on `byonk-base` (`61956742`) but byonk has not picked it up.** The
-`Cargo.lock` still pins the old commit, so byonk renders exactly as before. The first
-thing that happens when the lock is bumped is that **Terminus @14 and @18 get 1 px/glyph
-wider** — that is deliberate and correct, not a regression.
+**The bitmap fix is live in byonk** as of `e514271` — `Cargo.lock` pins `byonk-base`
+`61956742`. `make check` green (474 passed, 0 failed — the same count as before the bump).
+**Terminus @14 and @18 now render 1 px/glyph wider.** That is deliberate and correct: its
+cells are 8x14 and 10x18, which a single `hmtx` advance cannot express, so byonk had been
+crowding it. Do not "fix" it back.
 
 ---
 
@@ -247,13 +248,16 @@ a clean textual merge is not evidence the semantics survived.**
 
 ## What F15 needs next
 
-1. **Bump byonk's `Cargo.lock`** onto `byonk-base` `61956742`. Until then byonk renders
-   exactly as before — nothing in byonk has changed yet.
-2. Add a byonk-side regression test — it cannot exist before the pin moves.
-3. A `CHANGES.md` entry.
-4. **Re-run the bitmap-vs-outline comparison** (owner already asked; the earlier answer
-   was measured against the bug). Expect **Terminus @14 and @18 to change and nothing
-   else** — byonk was crowding them by 1 px/glyph.
+Done: the pin bump and the `CHANGES.md` entry, both in `e514271`.
+
+1. **A byonk-side regression test.** It could not exist before the pin moved, and there is
+   still none — byonk has no test that fails if the pin regresses. The resvg-side tests
+   (`a_strike_is_spaced_by_its_own_advance`, `declining_strikes_also_declines_their_advance`)
+   do not run in byonk's suite.
+2. **Re-run the bitmap-vs-outline comparison** (owner asked; the earlier answer was
+   measured against the bug). Expect **Terminus @14 and @18 to change and nothing else**.
+   This is also the owner-facing check that the fix looks right at true size — the
+   Lessons below say show renders early.
 
 ---
 

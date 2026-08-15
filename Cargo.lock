@@ -396,6 +396,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "usvg",
  "utoipa",
  "utoipa-swagger-ui",
  "wiremock",

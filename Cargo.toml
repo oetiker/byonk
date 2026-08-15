@@ -23,6 +23,9 @@ tower-http = { version = "0.6", features = ["fs", "trace", "set-header"] }
 
 # Rendering
 resvg = "0.48.1"
+# Direct dependency (not just transitively via resvg) so byonk can name
+# usvg's font hinting types in src/rendering/font_config.rs.
+usvg = "0.48.1"
 tiny-skia = "0.12"
 png = "0.17"
 fontdb = "0.24"

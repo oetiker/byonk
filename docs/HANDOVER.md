@@ -159,9 +159,17 @@ API change. **The clone is ephemeral; the durable artifact is
   already grey-free at every size, but `x="20.5"` → 150 grey px, `letter-spacing="0.5"` →
   67, `text-anchor="middle"` with odd width → 150. Conversely snapping *alone* stutters
   the pitch (`10 11 10 10 10 11 10`); with advances it is constant.
-- **New finding: Terminus disagrees with itself at 14 and 18 px** — 8 px strike cell
-  against a 7 px outline advance. The "flawless control" was crowding glyphs all along.
-  Hence Terminus @14 is the one render that changes (3154 px) — **deliberate and correct**.
+- **Terminus @14 and @18: the strike is right, the outline advance is the approximation.**
+  Terminus's canonical cells are 6×12, **8×14**, 8×16, **10×18**, 10×20, 11×22, 12×24,
+  14×28, 16×32 — width is *not* height/2 at 14 and 18. Verified in our own file: at
+  ppem 14 all 1356 real glyphs share one record, cell 8×14, advance 8, imageSize 14 bytes
+  (= 8·14/8 exactly, so no padding). TerminusTTF gives every glyph a uniform half-em
+  outline advance, which cannot express those two sizes, so it says 7 and 9.
+  **byonk was crowding Terminus by 1 px/glyph at 14 and 18.** Hence Terminus @14 is the
+  one render that changes (3154 px) — **deliberate and correct**.
+  *Terminus is NOT buggy; we ship the latest (4.49.3, Apr 2023, the current release); no
+  upstream report and no patch to our copy are needed. Two wrong theories were discarded
+  on the way here — see Lessons.*
   Controller eyeballed `x11fix2/Terminus_{before,after}_4x.png`: identical at 8/10/11/12,
   wider and uncrowded at 14. X11Misc10x: 0 px changed.
 - Pitch is now even at every size for every face (measured ruler in `x11fix2/index.md`).
@@ -278,6 +286,11 @@ Both live under this session's scratchpad and are **ephemeral**.
   API, wrong font-repo paths, an incomplete call-site list. Verify every symbol.
 - **Demonstrate the check fails when the thing is broken.** Sabotage caught real holes
   three times. A test that passes with the fix reverted is worthless.
+- **Check the domain fact before calling something a bug.** Two theories were wrong here:
+  the X11 vertical-metric overflow (real malformation, not the cause) and "TerminusTTF's
+  odd-width strikes are mispackaged" (Terminus 14 and 18 really are 8 and 10 wide —
+  cell width is not height/2 at those sizes). Both were caught by the owner, not by the
+  agents. Measure the font, then check what the font is *supposed* to be.
 - **An isolating experiment can be sound and still stop one level short.** It only varies
   what the experimenter already believes matters. The owner's domain knowledge broke open
   both the aliasing bug and the bitmap-advance bug. **Show the owner renders early.**

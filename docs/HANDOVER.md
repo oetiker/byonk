@@ -138,9 +138,10 @@ conversion has ascender > upem). Real malformation, **not** the cause — X11Hel
 X11Misc10x @20 are pixel-perfect with the same malformed ascender, and no code in the
 bitmap path reads the ascender.
 
-**Why Terminus looked flawless:** it is not immune. It breaks identically when pushed off
-the grid — its advance is exactly ½ em and its strikes are at even ppem, so it never
-lands off it.
+**Why Terminus looked flawless:** it is not immune — it breaks identically when pushed off
+the grid. Its outline advance is a uniform ½ em, which lands on a whole pixel at every
+strike ppem, so it never goes off-grid on its own. That same uniform advance is why it is
+*wrong* at 14 and 18 px, where the real cell is 8 and 10 wide rather than 7 and 9.
 
 ## The fix — done, in the fork, NOT pushed
 

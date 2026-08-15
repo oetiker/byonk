@@ -128,6 +128,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Text using the generic `sans-serif`, `serif`, `monospace`, `cursive` or `fantasy`
+  font families now renders on the device. These resolved only to fonts byonk does
+  not ship, so on the released container image — which contains no system fonts —
+  such text was silently dropped and the screen rendered blank. They now resolve to
+  bundled fonts (Outfit, and Terminus for monospace).
 - **Saturated colours are no longer rendered flat.** The dithering error cap
   (`error_clamp`) used to limit the resulting pixel value rather than the error
   itself, so how much error could accumulate depended on how close a colour

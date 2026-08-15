@@ -51,6 +51,26 @@ impl SvgRenderer {
         // Load system fonts as fallback
         fontdb.load_system_fonts();
 
+        // Point the generic families at fonts we actually ship.
+        //
+        // fontdb defaults these to Arial / Times New Roman / Courier New, none
+        // of which byonk bundles. That is invisible on a developer machine —
+        // `load_system_fonts` above finds them — but the release image is
+        // `FROM scratch`, so on the device nothing matches, usvg skips the text
+        // and the screen renders blank. byonk's own `v1/base.svg`,
+        // `v1/header.svg`, `v1/footer.svg` and the built-in error screens all
+        // ask for `sans-serif`.
+        //
+        // These must be set AFTER `load_system_fonts()`: on Linux that call
+        // parses fontconfig and overwrites the generics with whatever the host
+        // aliases them to. Deterministic rendering across dev, CI and the
+        // release image is the point.
+        fontdb.set_sans_serif_family("Outfit");
+        fontdb.set_serif_family("Outfit");
+        fontdb.set_cursive_family("Outfit");
+        fontdb.set_fantasy_family("Outfit");
+        fontdb.set_monospace_family("Terminus (TTF)");
+
         tracing::info!(
             font_count = fontdb.len(),
             "Loaded fonts for SVG text rendering"
@@ -606,6 +626,62 @@ mod tests {
         assert_eq!(palette.actual(0), EinkSrgb::from_u8(0, 0, 0));
         assert_eq!(palette.actual(1), EinkSrgb::from_u8(255, 255, 255));
         assert_eq!(palette.actual(2), EinkSrgb::from_u8(168, 58, 48));
+    }
+
+    #[test]
+    fn generic_families_resolve_to_bundled_fonts() {
+        use fontdb::{Family, Query};
+
+        // Build the renderer the way production does: fonts byonk actually
+        // ships, loaded via `with_fonts` (which also falls back to
+        // `load_system_fonts`, matching the real code path).
+        let loader = crate::assets::AssetLoader::new(None, None, None);
+        let fonts = loader.get_fonts();
+        let renderer = SvgRenderer::with_fonts(fonts.clone());
+        let db = &renderer.fontdb;
+
+        // The bundled families, computed independently of `db` above: load
+        // *only* byonk's shipped font bytes into a scratch database, with no
+        // `load_system_fonts()` fallback. If we instead derived "bundled"
+        // from `db.faces()`, the check would be tautological — `db` already
+        // contains every system font too (via `with_fonts`'s fallback), so
+        // any face `query()` can possibly return is trivially a member of
+        // its own face list, and the assertion could never fail regardless
+        // of which family the generics actually resolve to.
+        let mut bundled_only = fontdb::Database::new();
+        for (_, data) in &fonts {
+            bundled_only.load_font_data(data.clone().into_owned());
+        }
+        let bundled: std::collections::HashSet<String> = bundled_only
+            .faces()
+            .filter_map(|f| f.families.first().map(|(n, _)| n.clone()))
+            .collect();
+
+        for generic in [
+            Family::SansSerif,
+            Family::Serif,
+            Family::Monospace,
+            Family::Cursive,
+            Family::Fantasy,
+        ] {
+            let id = db
+                .query(&Query {
+                    families: &[generic],
+                    ..Default::default()
+                })
+                .unwrap_or_else(|| panic!("{generic:?} did not resolve at all"));
+
+            let family = db
+                .face(id)
+                .and_then(|f| f.families.first().map(|(n, _)| n.clone()))
+                .expect("resolved face must have a family name");
+
+            assert!(
+                bundled.contains(&family),
+                "{generic:?} resolved to {family:?}, which is not a bundled font; \
+                 it would not resolve in the FROM scratch release image"
+            );
+        }
     }
 
     #[test]

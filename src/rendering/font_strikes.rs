@@ -56,7 +56,10 @@ mod tests {
             "X11Helv is a bitmap font and must report strikes"
         );
         for w in strikes.windows(2) {
-            assert!(w[0] < w[1], "strikes must be ascending and deduplicated: {strikes:?}");
+            assert!(
+                w[0] < w[1],
+                "strikes must be ascending and deduplicated: {strikes:?}"
+            );
         }
     }
 

@@ -1580,7 +1580,18 @@ mod tests {
             )
             .expect("unhinted render");
 
-        let cfg = FontConfig::adaptive_default(2);
+        // Deliberately NOT `adaptive_default(2)`: that also aliases the glyph
+        // rasterisation, so the two arms would differ even if hinting stopped
+        // reaching the renderer entirely and this test would keep passing while
+        // measuring nothing it is named for. Pinning `aliased: false` leaves
+        // hinting as the only difference.
+        let cfg = FontConfig {
+            default: Some(HintingSpec {
+                engine: HintingEngine::Auto,
+                target: HintingTarget::Mono { aliased: false },
+            }),
+            variants: Default::default(),
+        };
         let hinted = r
             .render_to_palette_png(
                 SVG.as_bytes(),
@@ -1829,9 +1840,21 @@ mod tests {
         let r = bundled_renderer();
         let spec = DisplaySpec::OG;
 
+        // The baseline is mono-hinted but anti-aliased — the exact state this
+        // task changes, not an unhinted render. That isolates the aliasing
+        // axis: the two arms lay down identical hinted outlines and differ
+        // only in how they are rasterised, so the ink comparison below can be
+        // tight instead of having to absorb the hinting shift as well.
+        let base_cfg = FontConfig {
+            default: Some(HintingSpec {
+                engine: HintingEngine::Auto,
+                target: HintingTarget::Mono { aliased: false },
+            }),
+            variants: Default::default(),
+        };
         let aa = r
-            .rasterize_svg(ALIASING_SVG.as_bytes(), spec, None)
-            .expect("unconfigured render");
+            .rasterize_svg(ALIASING_SVG.as_bytes(), spec, Some(&base_cfg))
+            .expect("anti-aliased baseline render");
         let cfg = FontConfig::adaptive_default(2);
         let al = r
             .rasterize_svg(ALIASING_SVG.as_bytes(), spec, Some(&cfg))
@@ -1840,11 +1863,11 @@ mod tests {
         let text_aa = band_stats(&aa, 0..80, spec.width);
         let text_al = band_stats(&al, 0..80, spec.width);
 
-        // Sanity: the fixture must actually produce anti-aliased text without
-        // the config, or "no greys with it" would prove nothing.
+        // Sanity: the baseline must actually produce anti-aliased text, or
+        // "no greys in the other arm" would prove nothing.
         assert!(
             text_aa.grey > 100,
-            "the fixture produced only {} grey text pixels un-configured, so this \
+            "the mono-hinted baseline produced only {} grey text pixels, so this \
              test cannot see aliasing at all",
             text_aa.grey
         );
@@ -1866,12 +1889,21 @@ mod tests {
             text_al.black > 0,
             "the aliased text band has no black pixels at all: the text is gone"
         );
+        // The band comes from the measurement, not from taste. With the
+        // baseline pinned to the same mono-hinted outlines (above), the two
+        // arms measured ink_aa = 345.02 px and ink_al = 336.00 px, a ratio of
+        // 0.9738 — 2.62% below parity, which is the rounding of partial edge
+        // coverage onto whole pixels and nothing more. The bound is parity ±3x
+        // that measured deviation (±7.9%), leaving room for font and renderer
+        // jitter while staying far from the failures it guards against: a
+        // dropped stem or a flooded band moves this by tens of percent, not by
+        // eight.
         let ratio = text_al.ink / text_aa.ink;
         assert!(
-            (0.6..1.6).contains(&ratio),
-            "aliased text carries {:.2}x the ink of the anti-aliased render \
-             ({:.0} vs {:.0} px): that is stems dropping out or the band \
-             flooding, not 1-bit rasterisation of the same glyphs",
+            (0.92..1.08).contains(&ratio),
+            "aliased text carries {:.4}x the ink of the anti-aliased baseline \
+             ({:.2} vs {:.2} px, measured at 0.9738): that is stems dropping out \
+             or the band flooding, not 1-bit rasterisation of the same glyphs",
             ratio,
             text_al.ink,
             text_aa.ink
@@ -1905,6 +1937,94 @@ mod tests {
             text.grey > 100,
             "a greyscale panel must keep anti-aliased text; only {} grey pixels",
             text.grey
+        );
+    }
+
+    /// The in-document escape hatch from the black-and-white aliased default.
+    ///
+    /// Aliasing is a per-element, inheritable property (`text-rendering` on the
+    /// text node) while hinting is per-face, so an element that wants smooth or
+    /// no hinting on a BW panel would otherwise inherit `optimizeSpeed` and land
+    /// in the known-bad "aliased without mono hinting" state, where thin stems
+    /// drop out — tiny-skia has no dropout control.
+    ///
+    /// `text-rendering: optimizeLegibility` is the way out, and it is NOT the
+    /// same as `geometricPrecision`: both restore anti-aliasing, but
+    /// `flatten.rs`'s `hintable` excludes only `GeometricPrecision`, so
+    /// `optimizeLegibility` keeps the glyphs hinted. This test exists because
+    /// that distinction is about to be recommended to screen authors, so it must
+    /// be proven rather than read off the source.
+    #[test]
+    fn optimize_legibility_restores_anti_aliasing_and_keeps_hinting() {
+        const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480">
+          <rect width="800" height="480" fill="#ffffff"/>
+          <text x="20" y="40" font-family="Outfit" font-size="11"
+                text-rendering="optimizeLegibility"
+                style="font-variation-settings: 'wght' 400">Hamburgefonstiv 0123456789</text>
+        </svg>"##;
+
+        let r = bundled_renderer();
+        let spec = DisplaySpec::OG;
+
+        // A black-and-white panel: the config asks for mono hinting AND aliased
+        // glyphs document-wide.
+        let bw = FontConfig::adaptive_default(2);
+        let escaped = r
+            .rasterize_svg(SVG.as_bytes(), spec, Some(&bw))
+            .expect("escape-hatch render");
+
+        // Half one: the anti-aliasing really is back.
+        let stats = band_stats(&escaped, 0..80, spec.width);
+        assert!(
+            stats.grey > 100,
+            "text-rendering: optimizeLegibility did not restore anti-aliasing on a \
+             BW panel: only {} grey pixels. The escape hatch does not work and must \
+             not be recommended",
+            stats.grey
+        );
+
+        // Half two: PROVEN, not asserted. Hinting has no direct observable, so
+        // compare against the same document rendered with hinting switched off
+        // and nothing else changed. Both arms rasterise anti-aliased (the
+        // element states `optimizeLegibility` itself, and an unhinted config
+        // implies usvg's own `OptimizeLegibility` default anyway), so the only
+        // thing that can move a pixel is the hinting.
+        let unhinted = FontConfig {
+            default: None,
+            variants: Default::default(),
+        };
+        let plain = r
+            .rasterize_svg(SVG.as_bytes(), spec, Some(&unhinted))
+            .expect("unhinted render");
+
+        assert_ne!(
+            escaped.data(),
+            plain.data(),
+            "an element using optimizeLegibility on a BW panel rasterised \
+             identically hinted and unhinted: optimizeLegibility is dropping the \
+             hinting too, so it is NOT a safe escape hatch — it behaves like \
+             geometricPrecision"
+        );
+
+        // The control that gives the assertion above its meaning: under
+        // `geometricPrecision` the same comparison must come out EQUAL, because
+        // usvg refuses to hint that mode at all. Without this, a renderer that
+        // ignored `text-rendering` entirely — leaving both arms mono-hinted and
+        // aliased, differing by hinting — would satisfy the assert_ne above and
+        // the test would "prove" the escape hatch while measuring nothing about
+        // optimizeLegibility specifically.
+        let gp_svg = SVG.replace("optimizeLegibility", "geometricPrecision");
+        let gp_hinted = r
+            .rasterize_svg(gp_svg.as_bytes(), spec, Some(&bw))
+            .expect("gp hinted render");
+        let gp_plain = r
+            .rasterize_svg(gp_svg.as_bytes(), spec, Some(&unhinted))
+            .expect("gp unhinted render");
+        assert_eq!(
+            gp_hinted.data(),
+            gp_plain.data(),
+            "geometricPrecision was still hinted, so the hinted/unhinted \
+             comparison above does not isolate hinting"
         );
     }
 

@@ -142,15 +142,39 @@ bitmap path reads the ascender.
 the grid — its advance is exactly ½ em and its strikes are at even ppem, so it never
 lands off it.
 
-## What the running agent was told
+## The fix — done, in the fork, NOT pushed
 
-Verify the skrifa reading itself (if `advance` is `None` for X11 strikes, everything
-changes); re-do the fix from the strike advance; decide honestly whether snapping becomes
-dead code and **delete it if so**; face that advances are consumed in
-`crates/usvg/src/text/layout.rs` **before** rasterisation while strike selection depends
-on ppem — and report if that is too invasive rather than quietly falling back to
-snapping; re-render into `…/scratchpad/x11fix2/` keeping `x11fix/` intact, with letter
-spacing now in scope.
+Fork clone commits `0e3a6cb` (snapping) + `e72efe6` (strike advances), +47/−7 lines, no
+API change. **The clone is ephemeral; the durable artifact is
+`.superpowers/sdd/…/f15-resvg-bitmap-strike-fix.patch`.** byonk tree untouched.
+
+- **Verified, not assumed:** `advance` is `Some` and a whole number of pixels for *every*
+  strike byonk ships (X11Helv `H`@12 → strike 9 vs `hmtx` 8.82).
+- Substitution happens in `form_glyph_clusters`, the single font-units→user-units point,
+  so `text-anchor`, `textLength`, `letter-spacing`, `dx`/`dy`, `textPath`, decorations and
+  bbox all keep working. The real coupling introduced: **layout now consults
+  `select_bitmap`** (once per shaping run). `matching_mask` is shared by layout and
+  flattening so the two cannot drift.
+- **Snapping was demoted but kept, on evidence.** With correct advances ordinary text is
+  already grey-free at every size, but `x="20.5"` → 150 grey px, `letter-spacing="0.5"` →
+  67, `text-anchor="middle"` with odd width → 150. Conversely snapping *alone* stutters
+  the pitch (`10 11 10 10 10 11 10`); with advances it is constant.
+- **New finding: Terminus disagrees with itself at 14 and 18 px** — 8 px strike cell
+  against a 7 px outline advance. The "flawless control" was crowding glyphs all along.
+  Hence Terminus @14 is the one render that changes (3154 px) — **deliberate and correct**.
+  Controller eyeballed `x11fix2/Terminus_{before,after}_4x.png`: identical at 8/10/11/12,
+  wider and uncrowded at 14. X11Misc10x: 0 px changed.
+- Pitch is now even at every size for every face (measured ruler in `x11fix2/index.md`).
+- 2 new usvg unit tests pin the substitution; 1747 render tests pass, **no reference
+  image changed**. An upstream end-to-end test is blocked: the only monochrome test font
+  has strikes at 16/24 where Terminus agrees with itself, and regenerating it is not
+  byte-reproducible here — recommendation in the report.
+- Rows at 8/10/11 px in the Terminus sheets look poor in *both* before and after: Terminus
+  has **no strike below 12**, so those are the outline path. Pre-existing, out of scope.
+
+**To land:** owner authorization to push `oetiker/resvg`, then bump `Cargo.lock`, add a
+byonk-side regression test (it cannot exist before the pin moves), and a `CHANGES.md`
+entry. Then **re-run the bitmap-vs-outline comparison** (owner already asked for this).
 
 ---
 

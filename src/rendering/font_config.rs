@@ -43,7 +43,26 @@ pub enum HintingMode {
 pub enum HintingTarget {
     /// A strong hinting style intended for aliased, monochrome
     /// rasterization.
-    Mono,
+    Mono {
+        /// Also rasterize the glyphs 1-bit, instead of letting resvg
+        /// anti-alias the mono-hinted outlines.
+        ///
+        /// This lives inside `Mono` rather than beside it because aliasing is
+        /// only safe *together with* mono hinting. tiny-skia has no dropout
+        /// control — its `anti_alias = false` is a plain >50% coverage
+        /// threshold, where the TrueType spec would force thin stems on — so
+        /// aliasing an unhinted or smooth-hinted outline drops stems that fall
+        /// between sample points. Mono hinting substitutes for dropout control
+        /// by snapping stems onto whole pixels, leaving nothing to drop. Making
+        /// this a field of the `Mono` variant means "aliased" is simply not
+        /// expressible without it.
+        ///
+        /// Glyph aliasing is a property of the *document* (usvg derives it from
+        /// `text-rendering`), so only the flag on [`FontConfig::default`] is
+        /// honoured; on a per-variant override it is inert. See
+        /// [`FontConfig::text_rendering_default`].
+        aliased: bool,
+    },
     /// A hinting style suitable for anti-aliased rasterization.
     Smooth {
         /// The basic mode for smooth hinting.
@@ -89,7 +108,11 @@ impl HintingSpec {
                 HintingEngine::AutoFallback => usvg::FontHintingEngine::AutoFallback,
             },
             target: match self.target {
-                HintingTarget::Mono => usvg::FontHintingTarget::Mono,
+                // `aliased` is deliberately not mapped: usvg's hinting target
+                // has no rasterization knob. It reaches usvg through
+                // `Options::text_rendering` — see
+                // [`FontConfig::text_rendering_default`].
+                HintingTarget::Mono { .. } => usvg::FontHintingTarget::Mono,
                 HintingTarget::Smooth {
                     mode,
                     symmetric_rendering,
@@ -145,7 +168,11 @@ impl FontConfig {
     /// `{% include %}` line and its output is preserved by construction.
     pub fn adaptive_default(grey_count: usize) -> Self {
         let target = if grey_count <= 2 {
-            HintingTarget::Mono
+            // Hinting alone only aligns stems to the pixel grid — resvg then
+            // anti-aliases them anyway, and byonk's error-diffusion ditherer
+            // turns the resulting grey edges into speckle. A 1-bit panel wants
+            // the glyph rasterized 1-bit.
+            HintingTarget::Mono { aliased: true }
         } else {
             HintingTarget::Smooth {
                 mode: HintingMode::Normal,
@@ -161,6 +188,26 @@ impl FontConfig {
             variants: BTreeMap::new(),
         }
     }
+
+    /// The document-wide `text-rendering` this config implies.
+    ///
+    /// usvg derives glyph anti-aliasing from `text-rendering` and nothing else:
+    /// `text/flatten.rs` maps `TextRendering::OptimizeSpeed` to
+    /// `ShapeRendering::CrispEdges` on the flattened glyph paths, and resvg's
+    /// `path.rs` sets `paint.anti_alias = rendering_mode.use_shape_antialiasing()`.
+    ///
+    /// This is a *default*, fed to `Options::text_rendering`: usvg's parser does
+    /// `find_attribute(AId::TextRendering).unwrap_or(state.opt.text_rendering)`,
+    /// so a document that states its own `text-rendering` still wins. And it
+    /// is scoped to text — shapes keep their own `shape-rendering`.
+    pub fn text_rendering_default(&self) -> usvg::TextRendering {
+        match self.default.as_ref().map(|h| h.target) {
+            Some(HintingTarget::Mono { aliased: true }) => usvg::TextRendering::OptimizeSpeed,
+            // usvg's own default; leaving it explicit keeps every other path
+            // byte-identical to a render that never mentions text-rendering.
+            _ => usvg::TextRendering::default(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -171,8 +218,56 @@ mod tests {
     fn bw_panels_get_mono_hinting_matching_the_old_partial() {
         let cfg = FontConfig::adaptive_default(2);
         let h = cfg.default.expect("a BW panel must be hinted");
-        assert!(matches!(h.target, HintingTarget::Mono));
+        assert!(matches!(h.target, HintingTarget::Mono { .. }));
         assert!(matches!(h.engine, HintingEngine::Auto));
+    }
+
+    #[test]
+    fn bw_panels_also_ask_for_aliased_glyphs() {
+        // Mono hinting alone only aligns stems; resvg still anti-aliases them
+        // and the ditherer speckles the grey edges.
+        let cfg = FontConfig::adaptive_default(2);
+        let h = cfg.default.clone().expect("a BW panel must be hinted");
+        assert!(
+            matches!(h.target, HintingTarget::Mono { aliased: true }),
+            "got {:?}",
+            h.target
+        );
+        assert_eq!(
+            cfg.text_rendering_default(),
+            usvg::TextRendering::OptimizeSpeed
+        );
+    }
+
+    #[test]
+    fn greyscale_and_unhinted_configs_keep_usvgs_own_text_rendering() {
+        // The grey_count > 2 path and the no-config path must feed usvg
+        // exactly what it would have used on its own, so their renders stay
+        // byte-identical to before glyph aliasing existed.
+        assert_eq!(
+            FontConfig::adaptive_default(4).text_rendering_default(),
+            usvg::TextRendering::default()
+        );
+        let off = FontConfig {
+            default: None,
+            variants: BTreeMap::new(),
+        };
+        assert_eq!(off.text_rendering_default(), usvg::TextRendering::default());
+    }
+
+    #[test]
+    fn mono_without_aliasing_does_not_switch_the_rasterizer() {
+        // The pairing is one-way: mono hinting is required for aliasing, but
+        // mono hinting alone must not imply it — that is the pre-existing
+        // behaviour a `font_hinting` directive can still ask for.
+        let cfg = FontConfig {
+            default: Some(HintingSpec {
+                engine: HintingEngine::Auto,
+                target: HintingTarget::Mono { aliased: false },
+            }),
+            variants: BTreeMap::new(),
+        };
+        assert_eq!(cfg.text_rendering_default(), usvg::TextRendering::default());
     }
 
     #[test]
@@ -228,7 +323,7 @@ mod tests {
     fn hinting_spec_maps_mono_and_auto_fallback() {
         let spec = HintingSpec {
             engine: HintingEngine::AutoFallback,
-            target: HintingTarget::Mono,
+            target: HintingTarget::Mono { aliased: true },
         };
         let out = spec.to_usvg();
         assert!(matches!(out.engine, usvg::FontHintingEngine::AutoFallback));

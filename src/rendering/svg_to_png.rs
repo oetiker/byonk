@@ -435,6 +435,30 @@ impl SvgRenderer {
         resolver
     }
 
+    /// The parse options for one render.
+    ///
+    /// Shared by the frame and the tone mask on purpose: the mask selects which
+    /// of the frame's pixels are continuous-tone, so text that resolved to a
+    /// different face — or the same face hinted or rasterized differently —
+    /// would leave the mask offset from what it masks. One function means the
+    /// two cannot drift apart.
+    fn parse_options(&self, fonts: Option<&FontConfig>) -> usvg::Options<'static> {
+        usvg::Options {
+            fontdb: self.fontdb.clone(),
+            font_hinting: fonts
+                .and_then(|f| f.default.as_ref())
+                .map(HintingSpec::to_usvg),
+            // The *default* text-rendering, which is what carries glyph
+            // aliasing into resvg. usvg only consults it where the document
+            // says nothing, so an SVG setting its own `text-rendering` wins.
+            text_rendering: fonts
+                .map(FontConfig::text_rendering_default)
+                .unwrap_or_default(),
+            font_resolver: Self::font_resolver(fonts),
+            ..Default::default()
+        }
+    }
+
     /// Parse and rasterize SVG to an RGBA pixmap
     fn rasterize_svg(
         &self,
@@ -442,14 +466,7 @@ impl SvgRenderer {
         spec: DisplaySpec,
         fonts: Option<&FontConfig>,
     ) -> Result<Pixmap, RenderError> {
-        let options = usvg::Options {
-            fontdb: self.fontdb.clone(),
-            font_hinting: fonts
-                .and_then(|f| f.default.as_ref())
-                .map(HintingSpec::to_usvg),
-            font_resolver: Self::font_resolver(fonts),
-            ..Default::default()
-        };
+        let options = self.parse_options(fonts);
         let tree = usvg::Tree::from_data(svg_data, &options)
             .map_err(|e| RenderError::SvgParse(e.to_string()))?;
 
@@ -500,14 +517,7 @@ impl SvgRenderer {
         let mask_svg = crate::rendering::tone_mask::build_mask_svg(svg_data)
             .map_err(|e| RenderError::SvgParse(format!("tone mask: {e}")))?;
 
-        let options = usvg::Options {
-            fontdb: self.fontdb.clone(),
-            font_hinting: fonts
-                .and_then(|f| f.default.as_ref())
-                .map(HintingSpec::to_usvg),
-            font_resolver: Self::font_resolver(fonts),
-            ..Default::default()
-        };
+        let options = self.parse_options(fonts);
         let tree = usvg::Tree::from_data(&mask_svg, &options)
             .map_err(|e| RenderError::SvgParse(format!("tone mask: {e}")))?;
 
@@ -1630,7 +1640,7 @@ mod tests {
                 strikes: None,
                 hinting: Some(Some(HintingSpec {
                     engine: HintingEngine::Auto,
-                    target: HintingTarget::Mono,
+                    target: HintingTarget::Mono { aliased: false },
                 })),
             },
         );
@@ -1653,7 +1663,7 @@ mod tests {
                 strikes: None,
                 hinting: Some(Some(HintingSpec {
                     engine: HintingEngine::Auto,
-                    target: HintingTarget::Mono,
+                    target: HintingTarget::Mono { aliased: false },
                 })),
             },
         );
@@ -1754,5 +1764,218 @@ mod tests {
             "select_hinting never saw the id select_font returned: the \
              Arc::make_mut mutation did not survive the parse"
         );
+    }
+
+    // ---- Glyph rasterisation (aliased vs anti-aliased) --------------------
+
+    /// A fixture carrying BOTH text and a curved shape, so a test can tell
+    /// "glyphs were aliased" apart from "the whole document was aliased".
+    ///
+    /// The text lives in rows 0..80, the circle in rows 200..360; the two bands
+    /// never overlap, so each can be measured on its own.
+    const ALIASING_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480">
+          <rect width="800" height="480" fill="#ffffff"/>
+          <text x="20" y="40" font-family="Outfit" font-size="11"
+                style="font-variation-settings: 'wght' 400">Hamburgefonstiv 0123456789</text>
+          <circle cx="400" cy="280" r="60" fill="#000000"/>
+        </svg>"##;
+
+    /// Grey statistics for one horizontal band of a raw (pre-dither) render.
+    ///
+    /// `grey` counts pixels that are neither pure black nor pure white — the
+    /// anti-aliasing byonk's ditherer turns into speckle. `ink` is total
+    /// coverage in whole-pixel units, so it can be compared between an aliased
+    /// and an anti-aliased render of the same glyphs.
+    struct BandStats {
+        grey: usize,
+        black: usize,
+        ink: f64,
+    }
+
+    fn band_stats(pixmap: &Pixmap, rows: std::ops::Range<u32>, width: u32) -> BandStats {
+        let data = pixmap.data();
+        let mut s = BandStats {
+            grey: 0,
+            black: 0,
+            ink: 0.0,
+        };
+        for y in rows {
+            for x in 0..width {
+                let i = ((y * width + x) * 4) as usize;
+                // Opaque render over an opaque white fill, black paint only:
+                // any channel is the coverage complement. Use green.
+                let v = data[i + 1];
+                if v == 0 {
+                    s.black += 1;
+                } else if v != 255 {
+                    s.grey += 1;
+                }
+                s.ink += (255 - v) as f64 / 255.0;
+            }
+        }
+        s
+    }
+
+    /// The bug this task fixes: a black-and-white panel asks for mono hinting,
+    /// but resvg still anti-aliases the hinted outlines and the Atkinson
+    /// ditherer turns those grey edges into speckle. On a 1-bit panel the
+    /// glyphs must be rasterised 1-bit.
+    ///
+    /// Measured on the RAW pixmap, before dithering — that is the only place
+    /// the anti-aliasing is visible; after dithering everything is 1-bit by
+    /// definition and the test could not fail.
+    #[test]
+    fn bw_default_rasterises_glyphs_without_anti_aliasing() {
+        let r = bundled_renderer();
+        let spec = DisplaySpec::OG;
+
+        let aa = r
+            .rasterize_svg(ALIASING_SVG.as_bytes(), spec, None)
+            .expect("unconfigured render");
+        let cfg = FontConfig::adaptive_default(2);
+        let al = r
+            .rasterize_svg(ALIASING_SVG.as_bytes(), spec, Some(&cfg))
+            .expect("bw render");
+
+        let text_aa = band_stats(&aa, 0..80, spec.width);
+        let text_al = band_stats(&al, 0..80, spec.width);
+
+        // Sanity: the fixture must actually produce anti-aliased text without
+        // the config, or "no greys with it" would prove nothing.
+        assert!(
+            text_aa.grey > 100,
+            "the fixture produced only {} grey text pixels un-configured, so this \
+             test cannot see aliasing at all",
+            text_aa.grey
+        );
+
+        assert_eq!(
+            text_al.grey, 0,
+            "a black-and-white panel still anti-aliases its glyphs: {} grey pixels \
+             in the text band. resvg is never told to rasterise 1-bit, so the \
+             ditherer turns these into speckle",
+            text_al.grey
+        );
+
+        // Hole closed #1: "text vanished" and "the band went solid black" both
+        // produce zero greys and would pass the assertion above. Require the
+        // aliased glyphs to carry roughly the same ink as the anti-aliased
+        // ones — mono hinting redistributes coverage onto whole pixels, it does
+        // not delete or invent strokes.
+        assert!(
+            text_al.black > 0,
+            "the aliased text band has no black pixels at all: the text is gone"
+        );
+        let ratio = text_al.ink / text_aa.ink;
+        assert!(
+            (0.6..1.6).contains(&ratio),
+            "aliased text carries {:.2}x the ink of the anti-aliased render \
+             ({:.0} vs {:.0} px): that is stems dropping out or the band \
+             flooding, not 1-bit rasterisation of the same glyphs",
+            ratio,
+            text_al.ink,
+            text_aa.ink
+        );
+
+        // Hole closed #2: setting `shape_rendering` (or otherwise aliasing the
+        // WHOLE document) would also zero the text greys. The circle must keep
+        // its anti-aliased edge — this is a text-rendering default, not a
+        // document-wide one.
+        let shape_al = band_stats(&al, 200..360, spec.width);
+        assert!(
+            shape_al.grey > 100,
+            "the circle lost its anti-aliasing ({} grey pixels): the aliasing was \
+             applied to the whole document, not to glyphs",
+            shape_al.grey
+        );
+    }
+
+    /// A greyscale panel must be untouched by the change above: `grey_count > 2`
+    /// keeps smooth hinting AND anti-aliased glyphs.
+    #[test]
+    fn greyscale_default_keeps_anti_aliased_glyphs() {
+        let r = bundled_renderer();
+        let spec = DisplaySpec::OG;
+        let cfg = FontConfig::adaptive_default(4);
+        let px = r
+            .rasterize_svg(ALIASING_SVG.as_bytes(), spec, Some(&cfg))
+            .expect("greyscale render");
+        let text = band_stats(&px, 0..80, spec.width);
+        assert!(
+            text.grey > 100,
+            "a greyscale panel must keep anti-aliased text; only {} grey pixels",
+            text.grey
+        );
+    }
+
+    /// The tone mask must be rasterized exactly like the frame it selects
+    /// from. If the frame aliased its glyphs and the mask anti-aliased them
+    /// (or vice versa), the mask would be offset from the text it masks.
+    ///
+    /// Only the aliasing differs between the two arms — same config otherwise —
+    /// so a difference in the mask can only come from the aliasing reaching the
+    /// mask's rasterizer.
+    #[test]
+    fn glyph_aliasing_reaches_the_tone_mask_too() {
+        const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480">
+          <rect width="800" height="480" fill="#ffffff"/>
+          <g data-byonk-tone="continuous">
+            <text x="20" y="40" font-family="Outfit" font-size="11"
+                  style="font-variation-settings: 'wght' 400">Hamburgefonstiv 0123456789</text>
+          </g>
+        </svg>"##;
+
+        let r = bundled_renderer();
+        let spec = DisplaySpec::OG;
+        let mask = |aliased: bool| {
+            let cfg = FontConfig {
+                default: Some(HintingSpec {
+                    engine: HintingEngine::Auto,
+                    target: HintingTarget::Mono { aliased },
+                }),
+                variants: Default::default(),
+            };
+            r.rasterize_tone_mask(SVG.as_bytes(), spec, Some(&cfg))
+                .expect("mask")
+        };
+
+        assert_ne!(
+            mask(true),
+            mask(false),
+            "the tone mask ignored glyph aliasing: it would be computed from a \
+             differently rasterized document than the frame it masks"
+        );
+    }
+
+    /// The default must be a default. A document that states its own
+    /// `text-rendering` keeps winning, whether as a presentation attribute or
+    /// through the `style` attribute.
+    #[test]
+    fn an_explicit_text_rendering_beats_the_bw_default() {
+        let r = bundled_renderer();
+        let spec = DisplaySpec::OG;
+        let cfg = FontConfig::adaptive_default(2);
+
+        for decl in [
+            r#"text-rendering="geometricPrecision""#,
+            r#"style="text-rendering: geometricPrecision""#,
+        ] {
+            let svg = format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480">
+                  <rect width="800" height="480" fill="#ffffff"/>
+                  <text x="20" y="40" font-family="Outfit" font-size="11" {decl}>Hamburgefonstiv 0123456789</text>
+                </svg>"##
+            );
+            let px = r
+                .rasterize_svg(svg.as_bytes(), spec, Some(&cfg))
+                .expect("render");
+            let text = band_stats(&px, 0..80, spec.width);
+            assert!(
+                text.grey > 100,
+                "{decl} was overridden: only {} grey pixels, so byonk is forcing \
+                 aliasing rather than defaulting it",
+                text.grey
+            );
+        }
     }
 }

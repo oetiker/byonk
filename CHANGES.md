@@ -131,6 +131,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Text on black-and-white panels is crisp instead of speckled.** Small type used
+  to come out with a fuzzy halo of stray dots around every letter. Screens on such
+  panels now get sharp, solid glyphs with no extra work; a screen that asks for
+  smoother text itself (`text-rendering="geometricPrecision"`) still gets it, and
+  panels with grey levels are unchanged.
 - Text using the generic `sans-serif`, `serif`, `monospace`, `cursive` or `fantasy`
   font families now renders on the device. These resolved only to fonts byonk does
   not ship, so on the released container image — which contains no system fonts —

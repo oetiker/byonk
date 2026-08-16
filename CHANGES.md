@@ -157,6 +157,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   previous conversion moved them to the typographic quotes at U+2018 and U+2019,
   leaving `'` and `` ` `` blank. It no longer has U+0152, U+0153, U+0178, U+2018,
   U+2019 or U+2212, none of which are in the ISO 8859-1 range the face is drawn for.
+- **`sans-serif`, `serif` and `monospace` now get real text faces.** They used to
+  resolve to the house sans — and `monospace` to Terminus, a pixel face that only
+  looks right at the nine sizes it was drawn for. Byonk now bundles Source Sans 3,
+  Source Serif 4 and Source Code Pro and points the three generics at them, so a
+  screen asking for a serif gets a serif and one asking for a monospace gets a
+  monospace at any size. `cursive` and `fantasy` still resolve to Outfit, and every
+  screen that names Outfit is unchanged. **If you write one of these families by
+  name, quote it**: `font-family="'Source Sans 3'"`. A name ending in a digit is not
+  valid unquoted CSS and falls back without warning.
 - **Automatic-fallback hinting now actually falls back.** Text set with the
   automatic-fallback engine came out unhinted on most fonts, including the bundled
   Outfit. The engine is meant to use a font's own hinting where it has some and the

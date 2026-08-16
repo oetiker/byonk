@@ -261,6 +261,44 @@ Byonk supports variable fonts via CSS `font-variation-settings`:
 
 > **Note:** Place custom font files (e.g., `Outfit-Variable.ttf`) in the `fonts/` directory.
 
+### Bundled Fonts
+
+Byonk ships these outline families, so they render the same on your machine and
+on the device. (The device image contains no system fonts at all — anything not
+bundled simply does not draw.)
+
+| Family | Use |
+|---|---|
+| `Outfit` | The house sans. Variable weight 100–900. |
+| `'Source Sans 3'` | What `sans-serif` resolves to. Variable weight 200–900. |
+| `'Source Serif 4'` | What `serif` resolves to. Variable weight and optical size. |
+| `'Source Code Pro'` | What `monospace` resolves to. Variable weight 200–900. |
+| `'Terminus (TTF)'` | A pixel face, plus 26 `X11*` bitmap families — see `fonts/FONTS.md`. |
+
+`cursive` and `fantasy` resolve to `Outfit`; byonk bundles nothing decorative.
+
+**Quote any family name that ends in a digit or contains parentheses.** CSS reads
+an unquoted `font-family` as a list of identifiers, and `3`, `4` and `(TTF)` are
+not identifiers — the whole declaration is discarded and your text silently comes
+out in some other face. There is no warning.
+
+```svg
+<!-- Wrong: renders in a fallback face -->
+<text font-family="Source Sans 3">…</text>
+<text font-family="Terminus (TTF)">…</text>
+
+<!-- Right -->
+<text font-family="'Source Sans 3'">…</text>
+<text font-family="'Terminus (TTF)'">…</text>
+```
+
+`Outfit` and `Source Code Pro` contain neither, so they are safe either way.
+
+You do not need to ask for a weight: text with no `font-weight` renders at 400,
+not at whatever the variable font's own default happens to be. Source Sans 3 and
+Source Code Pro default internally to 200 (ExtraLight), and that default does not
+reach your screen.
+
 ## Colors and Palettes
 
 E-ink displays support a limited color palette. The default 4-grey OG palette is `#000000, #555555, #AAAAAA, #FFFFFF`, but color displays may have palettes like `#000000, #FFFFFF, #FF0000, #FFFF00`. The display palette is available in Lua via `layout.colors`.

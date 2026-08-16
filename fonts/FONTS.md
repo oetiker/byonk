@@ -1,4 +1,31 @@
-# X11 Bitmap Fonts for Byonk
+# Fonts bundled with Byonk
+
+The release image is `FROM scratch` and has no system fonts, so a screen can
+only use what is here.
+
+## Outline families
+
+| File | Family | Role | Licence |
+|---|---|---|---|
+| `Outfit-Variable.ttf` | `Outfit` | The house sans, and `cursive`/`fantasy` | OFL 1.1 |
+| `SourceSans3-Variable.ttf` | `'Source Sans 3'` | `sans-serif` | `licenses/SourceSans3-OFL.txt` |
+| `SourceSerif4-Variable.ttf` | `'Source Serif 4'` | `serif` | `licenses/SourceSerif4-OFL.txt` |
+| `SourceCodePro-Variable.ttf` | `'Source Code Pro'` | `monospace` | `licenses/SourceCodePro-OFL.txt` |
+| `TerminusTTF*.ttf` | `'Terminus (TTF)'` | A pixel face with outlines | OFL 1.1 |
+
+The Source files are the upright variable faces only; the italics are not
+bundled, and nothing in byonk asks for them. They keep Google Fonts' contents
+but not its `Name[axes].ttf` filenames — brackets in a filename are a needless
+hazard in the embedding globs, and `-Variable` matches Outfit's convention.
+
+**Quote a family name that ends in a digit**: `font-family="Source Sans 3"` is
+invalid CSS and falls back silently. Write `font-family="'Source Sans 3'"`. The
+same applies to `'Terminus (TTF)'`.
+
+Licence notices for the rest of the tree are still outstanding — see the licence
+table in the handover.
+
+# X11 bitmap families
 
 Bitmap-only OpenType files built from the original X.Org BDF sources. Each file
 carries every pixel size of one family and style as an embedded bitmap strike,

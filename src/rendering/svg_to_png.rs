@@ -72,11 +72,19 @@ impl SvgRenderer {
         // parses fontconfig and overwrites the generics with whatever the host
         // aliases them to. Deterministic rendering across dev, CI and the
         // release image is the point.
-        fontdb.set_sans_serif_family("Outfit");
-        fontdb.set_serif_family("Outfit");
+        // The Source trio are the generics proper: three families designed
+        // together, each drawn for its own role, so a screen that asks for
+        // `serif` gets a serif rather than the house sans wearing the label.
+        // `monospace` in particular used to resolve to Terminus, a bitmap face
+        // that only renders as designed at the nine sizes it carries strikes
+        // for; Source Code Pro is an outline face and holds at any size.
+        fontdb.set_sans_serif_family("Source Sans 3");
+        fontdb.set_serif_family("Source Serif 4");
+        fontdb.set_monospace_family("Source Code Pro");
+        // No Source member is decorative, and an unmapped generic drops out of
+        // the `FROM scratch` image entirely, so these stay on the house sans.
         fontdb.set_cursive_family("Outfit");
         fontdb.set_fantasy_family("Outfit");
-        fontdb.set_monospace_family("Terminus (TTF)");
 
         tracing::info!(
             font_count = fontdb.len(),
@@ -925,12 +933,18 @@ mod tests {
             .filter_map(|f| f.families.first().map(|(n, _)| n.clone()))
             .collect();
 
-        for generic in [
-            Family::SansSerif,
-            Family::Serif,
-            Family::Monospace,
-            Family::Cursive,
-            Family::Fantasy,
+        // Named, not merely "something bundled": with only the membership
+        // check below, the mapping could point every generic at one house font
+        // and still pass. `cursive` and `fantasy` have no Source member and
+        // stay on Outfit deliberately — a decorative generic has no better
+        // answer here, and leaving them unmapped would drop them out of the
+        // release image entirely.
+        for (generic, expected) in [
+            (Family::SansSerif, "Source Sans 3"),
+            (Family::Serif, "Source Serif 4"),
+            (Family::Monospace, "Source Code Pro"),
+            (Family::Cursive, "Outfit"),
+            (Family::Fantasy, "Outfit"),
         ] {
             let id = db
                 .query(&Query {
@@ -948,6 +962,12 @@ mod tests {
                 bundled.contains(&family),
                 "{generic:?} resolved to {family:?}, which is not a bundled font; \
                  it would not resolve in the FROM scratch release image"
+            );
+
+            assert_eq!(
+                family, expected,
+                "{generic:?} resolved to {family:?}, not the {expected:?} byonk \
+                 maps it to"
             );
         }
     }
@@ -1691,7 +1711,7 @@ mod tests {
           <rect width="800" height="480" fill="#fff"/>
           <text x="20" y="40" font-family="Outfit" font-size="11"
                 style="font-variation-settings: 'wght' 400">Hamburgefonstiv 0123456789</text>
-          <text x="20" y="80" font-family="Outfit Mono" font-size="11"
+          <text x="20" y="80" font-family="Outfit Mono, Outfit" font-size="11"
                 style="font-variation-settings: 'wght' 400">Hamburgefonstiv 0123456789</text>
         </svg>"##;
 
@@ -1713,6 +1733,14 @@ mod tests {
 
         // Baseline: no variants at all. "Outfit Mono" is not a family, so the
         // second line falls back to the same face as the first.
+        //
+        // The document names that fallback itself — `Outfit Mono, Outfit` —
+        // rather than leaving an unresolvable family to land wherever the
+        // generic families happen to point. It used to land on Outfit only
+        // because `sans-serif` did; repointing the generics at the Source trio
+        // silently moved it to Source Sans 3 and broke the second control
+        // below, which needs `plain` and `inheriting` to resolve to the same
+        // face. Naming it keeps this test about hinting.
         let mut plain = FontConfig::adaptive_default(4);
         plain.variants.clear();
 

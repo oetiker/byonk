@@ -1,11 +1,13 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-16 (session 19). **Initiative: adopt the resvg `byonk-base` branch.**
+_Last updated: 2026-08-16 (session 20). **Initiative: adopt the resvg `byonk-base` branch.**
 Plan Tasks 1, 2, 3, 5, 6 are complete and reviewed. Tasks 4, 7, 8, 9, 10 remain.
 Task 11 (the font-trio decision) ran and **the owner has decided: bundle Source.**
-The second front — the bitmap-font rendering defect (F15) — is **diagnosed, fixed, pushed
-to PR #1115 and merged into `byonk-base`.** byonk itself is unchanged until its
-`Cargo.lock` is bumped; see "What F15 needs next"._
+The bitmap-font rendering defect (F15) is **fixed, merged into `byonk-base`, and live in
+byonk** (`e514271`). The owner-requested bitmap-vs-outline re-run is **done** — and it
+uncovered two new defects, **F16 (the X11 importer threw the real pixel advances away)** and
+**F17 (an unquoted parenthesised font family never renders)**. **Next round: fix the
+importer — owner's instruction.**_
 
 ## Where the work lives
 
@@ -13,8 +15,8 @@ to PR #1115 and merged into `byonk-base`.** byonk itself is unchanged until its
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
 | PR | **#30**, OPEN against `main` — https://github.com/oetiker/byonk/pull/30 |
-| HEAD | `46a50a3` — tree clean (the commits after `f755241` are docs only) |
-| Verified | `make check` green at `f755241` (474 tests, 0 failed); nothing in code has changed since |
+| HEAD | `215f9e2` plus this handover commit — tree clean; everything after `f755241` is docs only |
+| Verified | `make check` green at `f755241` (474 tests, 0 failed) and re-run green at `e514271` after the pin bump; no code has changed since |
 | **Not pushed** | HEAD is ahead of origin. Push before relying on CI. |
 
 **resvg work happens in a different repo.** `oetiker/resvg` carries three branches that
@@ -48,6 +50,19 @@ hashes are superseded by the F15 section below.
 **Terminus @14 and @18 now render 1 px/glyph wider.** That is deliberate and correct: its
 cells are 8x14 and 10x18, which a single `hmtx` advance cannot express, so byonk had been
 crowding it. Do not "fix" it back.
+
+Three more things that will otherwise cost a session each:
+
+1. **A font family whose name contains parentheses MUST be quoted in `font-family`.**
+   `font-family="Terminus (TTF)"` is invalid CSS and silently falls back to a serif.
+   `font-family="'Terminus (TTF)'"` works. See **F17**.
+2. **A bitmap face only renders as a bitmap at a size it has a strike for**, and nothing
+   warns you. Terminus: 12 14 16 18 20 22 24 28 32. X11Helv: 8 10 11 12 14 17 18 20 24 25
+   34. Any other size silently becomes an anti-aliased outline. Two rows of the first
+   bitmap-vs-outline comparison were wasted on this.
+3. **Our 26 X11 TTFs do not carry the original X11 pixel advances**, so bad spacing in an
+   X11 face is probably the *font*, not the renderer. See **F16** — measure before
+   theorising.
 
 ---
 
@@ -111,8 +126,10 @@ restores AA but also disables hinting.**
    substitution, no bitmap/outline hybrid. Generic names → Source, full stop. Designers
    choose bitmap faces explicitly, helped by the font demo screens.
 3. **Fonts need licence files**, and the X11 licensing was researched (below).
-4. **Re-run the bitmap-vs-outline comparison** once the bitmap fix lands — the earlier
-   answer was measured against the bug.
+4. ~~Re-run the bitmap-vs-outline comparison once the bitmap fix lands~~ — **done in
+   session 20**, see "The bitmap-vs-outline re-run" below.
+5. **Fix the X11 importer (F16) next round.** Owner's instruction, given after seeing the
+   evidence.
 
 ---
 
@@ -121,6 +138,11 @@ restores AA but also disables hinting.**
 **byonk ships 26 X11 bitmap TTFs that do not render correctly**, documents them in
 `fonts/FONTS.md` and `docs/`, and demos them at `screens/examples/demo/font/bitmap/`.
 Glyphs lose chunks at every size. This **predates this initiative**.
+
+> **F15 was only half the story.** It fixed how byonk *reads* strike metrics. **F16 below
+> shows the metrics in our X11 files are themselves wrong**, so those 26 fonts still do not
+> render correctly — for a second, independent reason, in the conversion rather than the
+> renderer. Read both before concluding anything about an X11 face.
 
 ## Root cause — the owner's, not the agent's
 
@@ -248,16 +270,152 @@ a clean textual merge is not evidence the semantics survived.**
 
 ## What F15 needs next
 
-Done: the pin bump and the `CHANGES.md` entry, both in `e514271`.
+Done: the pin bump and the `CHANGES.md` entry, both in `e514271`. Also done: the
+bitmap-vs-outline re-run (session 20, below).
 
-1. **A byonk-side regression test.** It could not exist before the pin moved, and there is
-   still none — byonk has no test that fails if the pin regresses. The resvg-side tests
-   (`a_strike_is_spaced_by_its_own_advance`, `declining_strikes_also_declines_their_advance`)
-   do not run in byonk's suite.
-2. **Re-run the bitmap-vs-outline comparison** (owner asked; the earlier answer was
-   measured against the bug). Expect **Terminus @14 and @18 to change and nothing else**.
-   This is also the owner-facing check that the fix looks right at true size — the
-   Lessons below say show renders early.
+1. **A byonk-side regression test — STILL MISSING.** byonk has no test that fails if the
+   pin regresses. The resvg-side tests (`a_strike_is_spaced_by_its_own_advance`,
+   `declining_strikes_also_declines_their_advance`) do not run in byonk's suite.
+
+## The bitmap-vs-outline re-run — DONE (session 20)
+
+**Artifact for the owner:** https://claude.ai/code/artifact/8fe47446-49b6-4256-9db6-429aa3b8bfb6
+Built by `…/scratchpad/build_page.py` from `…/scratchpad/assets/`; **both are ephemeral**,
+as are the comparison screens (`…/scratchpad/cmp-screens/`), the config
+(`…/scratchpad/cmp-config.yaml`) and the "before" worktree
+(`…/scratchpad/byonk-before`, detached at `744fec8`, pin `303e38e`). **Delete that
+worktree with `git worktree remove` when done** — it is registered in this repo.
+
+Method, worth reusing: two `byonk` binaries from the **same source tree** differing only in
+`Cargo.lock`, driven over the same scratch screen repo. Renders diffed by pixel count, then
+by ink width per row.
+
+**The prediction "Terminus @14 and @18 change and nothing else" was half right.**
+
+- **Terminus**: changes at exactly 14 and 18, nowhere else. Ink width of a 15-character
+  string 104→118 and 133→147, i.e. +1 px per glyph. As predicted.
+- **X11Helv**: changes at nearly every size (11, 12, 14, 20, 24 of those tested), in **both
+  directions** — its strike advances and its scaled outline advance disagree everywhere
+  except 34 px, the size it was converted at. "Nothing else" was wrong; a proportional face
+  had no reason to behave like Terminus.
+- **Outfit**: unchanged at every size. Kept deliberately as the control — a pure outline
+  face must not move, and it did not.
+
+**Owner-facing verdict:** bitmap wins below ~14 px (on the 4-grey panel Outfit's stems
+resolve to mid greys against a `#B8B8B0` white and read soft; the bitmap faces stay black),
+outline wins from ~18 px up. Prefer **X11Helv** over Terminus for dense small text unless
+fixed pitch is actually wanted — Terminus is monospaced and costs noticeably more width.
+
+---
+
+# F16 — the X11 importer threw the real pixel advances away — NOT FIXED
+
+**Owner's call: fix the importer next round.** The owner raised it (*"maybe our x11 ttf
+conversion has issues … I can't believe it was designed that way in its original form"*)
+and was right.
+
+## The finding, in one line
+
+**Our 26 converted X11 TTFs contain no original `DWIDTH` at all.** Every strike advance is
+the *outline* advance rounded to a whole pixel at that ppem.
+
+## Evidence — three independent measurements that agree
+
+1. **The derived-advance signature.** For every real glyph in all 26 files, strike advance
+   `== round(outline_advance × ppem ÷ em)`. Share: 99.5–100.0% per file; the only misses are
+   `.notdef`, `.null` and `nonmarkingreturn`. **Control: `TerminusTTF.ttf` scores 77.7%** —
+   a genuine bitmap font whose strikes carry independent metrics *must* disagree, and does.
+2. **Ground truth from the fonts themselves.** FontForge preserved each strike's source
+   XLFD in a `BDF ` table, and an X11 name states the cell width outright: the `C-70` in
+   `-Misc-Fixed-Medium-R-Normal--13-120-75-75-C-70-ISO10646-1` means 7.0 px. A fixed-pitch
+   font must render at exactly that pitch. **16 of our 28 fixed-pitch strikes do not.**
+3. **Measured through byonk.** A ruler of 10 and 20 identical glyphs; pitch =
+   `(ink₂₀ − ink₁₀) ÷ 10`, which cancels the glyph's own bitmap width and assumes nothing.
+   Matches (2) exactly.
+
+| Family | Strike | Source cell | byonk renders |
+|---|---|---|---|
+| X11Misc6x | 12, 13 px | 6 | 7, **8** |
+| X11Misc7x | 13 px | 7 | **6** (glyphs weld into a solid bar) |
+| X11Misc7x | 14 px | 7 | 7 ✓ |
+| X11Misc8x | 13, 16 px | 8 | **7**, **9** |
+| X11Misc9x | 15, 18 px | 9 | **8**, **10** |
+| X11Misc9x-Bold | 15, 18 px | 9 | **12**, **14** |
+| X11Misc5x | 7 px | 5 | **4** |
+| X11Term | 18 px | 11 | **10** |
+
+**Fixed-pitch strikes that are correct today** (safe to use meanwhile): X11Misc5x 6 and 8;
+X11Misc6x 9 and 10, and 13 in Bold/Oblique; X11Misc7x 14; X11Misc10x 20; X11Misc12x 24;
+X11Term 14.
+
+The proportional families (X11Helv, X11LuSans, X11LuType) carry the same derived-advance
+signature, but their ground truth is not knowable without the source BDFs.
+
+## Mechanism — `fonts/x11-importer.py`
+
+Two things combine:
+
+- The font is opened from the **smallest** BDF and the em is then rescaled
+  (`font.em = largest_px * 100`), so the single outline advance is right for at most one
+  size. Measured outline advance of `M` against the correct `cell × 100`:
+  6x = 800 (should be 600), 7x = 700 ✓, 8x = 900 (should be 800), 9x = 1000 (should be
+  900), 10x = 1000 ✓, 12x = 1200 ✓. For three families it is right at **no** size.
+- Then, around line 239:
+  ```python
+  scale = font.em // largest_px
+  for glyph in font.glyphs():
+      glyph.width = round(glyph.width / scale) * scale
+  ```
+  This quantises the outline to whole pixels **of the largest strike only**, and FontForge
+  propagates the new width down into the bitmap strikes, overwriting what the BDFs brought
+  in. Nothing afterwards restores `DWIDTH`.
+
+## The fix to write next round
+
+1. Restore each strike's advance from its own BDF **after** all outline work, rather than
+   letting FontForge derive it. (FontForge's `BitmapGlyph` has a settable per-strike width.)
+2. Derive the outline advance from the **largest** strike's cell, not the smallest BDF.
+3. **Add an assertion pass and fail the build on it** — for a `C-NN` source, every strike
+   advance must equal `NN/10`; for proportional sources, every strike advance must equal
+   that size's `DWIDTH`. That check catches all 16 and would have caught this originally.
+4. Regenerate the 26 TTFs, then re-run the pitch ruler. Requires a machine with the X11
+   bitmap fonts installed (see the script's docstring) — that is the practical blocker.
+
+## What F16 does *not* change
+
+The resvg fix (F15) stays correct and its improvement is real: integers instead of
+fractions put glyphs on the pixel grid and stopped them being anti-aliased into grey mush.
+It simply cannot restore metrics the files do not contain — it faithfully renders wrong
+advances that the old fractional path was accidentally blurring over. In a few places
+(the fixed-pitch faces above) that makes spacing *tighter* and visibly wrong where before
+it was merely fuzzy. **Do not read that as an F15 regression.**
+
+## Falsified — do not chase it again
+
+**Ink overhang is not evidence of a conversion defect.** 47–57% of glyphs in the X11
+*oblique* faces draw wider than their own advance, which looks damning until you check the
+control: `TerminusTTF-Italic` overhangs on 40.5% of its glyphs and `-Bold-Italic` on 56.5%.
+Slanted bitmap faces overhang normally. The fixed-pitch cell-width mismatch is the proof;
+overhang is not.
+
+---
+
+# F17 — a parenthesised font family never renders — NOT FIXED
+
+`font-family="Terminus (TTF)"` is invalid CSS — an unquoted family name cannot contain
+parentheses — so it is discarded and the text falls back to a serif. **This means
+`screens/examples/demo/font/ttf/screen.svg` has never rendered Terminus at all**, and the
+before/after of that screen differs by only 742 px, all of them in the header bar (the one
+line on it actually set in a bitmap face). Confirmed pre-existing against
+`/tmp/byonk-renders/state2-final/demo-font-ttf.png`.
+
+`font-family="'Terminus (TTF)'"` renders correctly. The sibling bitmap demo is unaffected
+only because no X11 family name has parentheses in it.
+
+**Decide when fixing (Task 8 territory):** quote it in the screen, rename the family, or
+have byonk quote family names on the author's behalf. A rename touches `fonts/FONTS.md`,
+the docs and any user screen; quoting is local but leaves the trap armed for the next
+author.
 
 ---
 
@@ -295,7 +453,13 @@ Two things to remember:
 | **F10** | Bundle the Source trio, repoint generics, licences, docs. | `f10-brief.md` |
 | F13 | Extend `screens/examples/demo/font/{ttf,bitmap,hinting}/` to cover Source. | — |
 | F14 | Licence + notice files per the research above; fix `FONTS.md` (it lists `X11LuType` under *Proportional* — it is monospaced, 1 distinct advance). | — |
-| F15 | The bitmap fix — **done**: PR #1115 + merged to `byonk-base`. Needs the `Cargo.lock` bump. | — |
+| F15 | The bitmap fix — **done**: PR #1115, merged to `byonk-base`, pinned in `e514271`. Still owes a byonk-side regression test. | — |
+| **F16** | **Fix `fonts/x11-importer.py` and regenerate the 26 TTFs — NEXT ROUND, owner's call.** Full diagnosis and fix recipe above. | — |
+| F17 | Quote (or rename) the parenthesised `Terminus (TTF)` family so the shipped demo renders it. Fold into Task 8. | — |
+
+**F14 gains a correction from F16:** `FONTS.md` documents each X11 family's pixel sizes,
+and those tables describe strikes whose advances are wrong. Do not treat `FONTS.md` as
+ground truth for metrics — the source XLFD in each TTF's `BDF ` table is.
 
 **F9's motivation:** eight of the nine trio candidates have **no TrueType hinting
 program** — a 7-byte `prep` stub (`b8 01 ff 85 b0 04 8d` = `SCANCTRL`/`SCANTYPE`, i.e.
@@ -347,10 +511,16 @@ context only (10 of 13 silently fell back).
 4. `for_error_diffusion()` is applied to **every** dither (`api/builder.rs`), so HyAB and
    its `kchroma = 10` tuning are not on the crate's dithering path at all.
 
-**Owner-facing artifact** (all specimens, both bugs, the data):
-https://claude.ai/code/artifact/f7ef39be-1a9d-4c97-bd95-d9b3422a515e — redeploy by
-republishing `…/scratchpad/type-trials.html` (built by `scratchpad/build_page.py`).
-Both live under this session's scratchpad and are **ephemeral**.
+**Owner-facing artifacts** — both live in an *ephemeral* scratchpad, so the URLs outlive
+their sources:
+
+| What | URL |
+|---|---|
+| Bitmap vs outline: the F15 before/after, the F16 diagnosis, the F17 bug (session 20) | https://claude.ai/code/artifact/8fe47446-49b6-4256-9db6-429aa3b8bfb6 |
+| Type trials: all specimens, both earlier bugs, the data (session 19) | https://claude.ai/code/artifact/f7ef39be-1a9d-4c97-bd95-d9b3422a515e |
+
+To update either, republish its own `build_page.py` output **passing the existing URL** —
+publishing without it creates a second artifact instead of updating the one the owner has.
 
 ---
 
@@ -389,6 +559,24 @@ Both live under this session's scratchpad and are **ephemeral**.
 - **Verify a claim before relaying it.** Twice this session I passed on a subagent
   conclusion that was wrong (a "regressed" demo screen that was inert; "strikes arrive
   resampled" when it was edge coverage).
+- **Always carry a control through a font measurement.** Every F16 conclusion turned on
+  one: Outfit proved the before/after diff was really the strike change; `TerminusTTF`
+  proved the derived-advance signature was ours and not universal; `TerminusTTF-Italic`
+  *killed* the overhang theory outright. A measurement with no control cannot tell "this
+  font is broken" from "this is how fonts are".
+- **Ask what the artifact is supposed to contain before asking whether it is rendered
+  right.** Two rounds went into why Terminus @10 and X11Helv @16 looked "not pixel exact";
+  neither face has a strike at that size. Check the strike list first.
+- **A screen that renders is not a screen that rendered what you asked for.** The Terminus
+  demo has been shipping a serif fallback for its entire life and nothing failed. The
+  DEFAULT-fallback collision check caught the same class of error again this session.
+- **A flattering test string hides font defects.** `Render jpq 0123` is full of narrow
+  glyphs with side bearings to spare and looked fine; the demo's own `10px/X11Helv` — all
+  `x X H v /`, glyphs that fill their whole cell — did not. Pick sample text that stresses
+  the widest glyphs.
+- **Set CSS `height: auto` on any image you scale by width alone.** The `width`/`height`
+  attributes are presentational hints; overriding only `width` stretches the picture. Shipped
+  an artifact with every zoom figure horizontally stretched, and the owner caught it.
 
 ---
 
@@ -412,6 +600,17 @@ Both live under this session's scratchpad and are **ephemeral**.
   `tools/capture-config.yaml`.
 - Fonts for the trio work are at `…/scratchpad/gfonts/ofl/` — Roboto is under `ofl/`,
   **not** `apache/` as the plan says.
+- **Rendering a scratch screen** (how the F16 evidence was produced, and how to verify the
+  regenerated fonts): put screens in a directory with a `byonk-screens.yaml` manifest
+  (`name: examples` + description/author/licence — **without it the repo is skipped and
+  every render silently falls back**), then
+  `CONFIG_FILE=<cfg> EXAMPLES_DIR=<dir> ./target/debug/byonk render --mac <mac> --output x.png`.
+  Point the config's `DEFAULT` device at `byonk-builtin/calibration/grey` and `cmp` your
+  render against a deliberately-unresolvable MAC's render — identical bytes mean you
+  captured the fallback, not your screen. `--use-actual false` gives spec colours (use for
+  pixel diffs); the default gives the panel's measured colours (use for judging type).
+- **Measuring pitch without assuming a glyph width:** render the same glyph N and 2N times,
+  `pitch = (ink₂ₙ − inkₙ) / N`. Both bitmap width and side bearings cancel.
 - **Working on resvg:** clone `oetiker/resvg` into the scratchpad. Its test suite is fast
   (~11 s, 1734 tests) and safe to run in the foreground — this is *not* byonk's `make
   check`. `crates/resvg/tests/fonts/make-bitmap-mono.py` regenerates the bitmap test font;

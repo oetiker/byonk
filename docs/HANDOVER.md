@@ -1,9 +1,10 @@
 # Handover — Byonk
 
 _Last updated: 2026-08-16 (session 22). **Initiative: adopt the resvg `byonk-base`
-branch.** Plan Tasks 1, 2, 3, 5, 6 done; 4, 7, 8, 9, 10 remain. **F16, F9 and F10 are all
-DONE and landed** (`1ce8210`, `87da75f`, `d018ddb`). Next up: **plan Tasks 4, 7, 8, 9, 10**,
-plus **F18** — a pre-existing stack-overflow crash found this session. See Queued work._
+branch.** Plan Tasks 1, 2, 3, 5, 6 done; 4, 7, 8, 9, 10 remain. **F16, F9, F10 and F18 are all
+DONE and landed** (`1ce8210`, `87da75f`, `d018ddb`, `e85fe7b`). Next up: **plan Tasks 4, 7, 8, 9, 10**,
+plus **F18** (`e85fe7b`) — a pre-existing crash that aborted the whole process, found and
+fixed this session. See Queued work._
 
 ## Where the work lives
 
@@ -11,9 +12,9 @@ plus **F18** — a pre-existing stack-overflow crash found this session. See Que
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
 | PR | **#30**, OPEN against `main` — https://github.com/oetiker/byonk/pull/30 |
-| HEAD | `d018ddb` plus this handover commit — tree clean |
-| Verified | `cargo test --workspace` green at `d018ddb`: **1091 passed, 0 failed, exit 0**; clippy clean |
-| Pushed | `cfc0f75` is on `origin` and green on #30. **`87da75f` and `d018ddb` are NOT pushed.** |
+| HEAD | `e85fe7b` plus this handover commit — tree clean |
+| Verified | `cargo test --workspace` green at `e85fe7b`: **1096 passed, 0 failed, exit 0**; clippy clean |
+| Pushed | `cfc0f75` is on `origin` and green on #30. **Everything after it is NOT pushed** (`87da75f`, `d018ddb`, `7538b49`, `ab02f9d`, `e85fe7b`). |
 
 **resvg work happens in a different repo.** `oetiker/resvg` carries `feat/bitmap-mask-glyphs`
 (upstream PR #1115), `feat/font-hinting` (upstream PR #1116), and `byonk-base`, which merges
@@ -237,32 +238,45 @@ licence file at all.
 | ~~F16~~ | **DONE** — landed in `1ce8210`. See the F16 section above. |
 | ~~F9~~ | **DONE** — `87da75f`. `AutoFallback` now resolves to `Auto` for a face with no `fpgm`/`cvt`. |
 | ~~F10~~ | **DONE** — `d018ddb`. Source trio bundled, generics repointed, OFL notices shipped, docs updated. |
-| **F18** | **NEW, pre-existing crash.** `{% include "byonk-base-v1/header.svg" %}` or `footer.svg` in a screen **aborts byonk with a stack overflow**. See below. |
+| ~~F18~~ | **DONE** — `e85fe7b`. The shipped components' HTML-comment usage examples were live self-includes; templates fixed and cycle/depth/macro guards added. |
 | F13 | Extend `screens/examples/demo/font/{ttf,bitmap,hinting}/` to cover Source. |
 | F14 | Licence + notice files per the table above. **`FONTS.md`'s "X11LuType is proportional" is wrong — it is monospaced**; the F16 draft already fixes this. |
 | F15 | Owes a byonk-side regression test (above). |
 | F17 | `font-family="Terminus (TTF)"` is invalid CSS — parentheses must be quoted, or the text silently falls back to a serif. **`screens/examples/demo/font/ttf/screen.svg` has therefore never rendered Terminus.** Quote it, rename the family, or have byonk quote on the author's behalf. Fold into Task 8. |
 
-**F18 — a shipped template crashes the renderer.** Found while checking F10's blast
-radius, **not caused by it** — proved by reproducing with the F10 mapping stashed.
+**F18 — DONE (`e85fe7b`). The root cause was the documentation itself.**
 
-```
-thread 'main' has overflowed its stack
-fatal runtime error: stack overflow, aborting
-```
+`header.svg`, `footer.svg` and `status_bar.svg` wrapped their doc block in an **HTML**
+comment. Tera does not treat `<!-- -->` as a comment, so the `Usage: {% include
+"byonk-base-v1/header.svg" %}` line inside it was a **live directive** and each file
+included itself without end. `hinting.svg` and `base.svg` never crashed because they
+already used Tera's `{# #}`. The three broken files now match them.
 
-- Reproduces with `{% include "byonk-base-v1/header.svg" %}` **alone**, and with
-  `footer.svg` alone. Both are the documented usage written in their own header comments.
-- `{% include "byonk-base-v1/hinting.svg" %}` includes **fine**, and the shipped demo
-  screens use it — so this is not "includes are broken", it is these files.
-- Not the fonts: a bare `<text font-family="sans-serif">` with no include renders fine.
-- The suspect the evidence points at is `{{ title | default(value="BYONK") }}` /
-  `{{ width | default(value=800) - 20 }}` — the two crashing files use Tera filters and
-  `hinting.svg` does not. **Not confirmed.** Next step is to bisect the template body.
-- A stack overflow **aborts the process**, so on a device this is not a broken screen,
-  it is a dead server. Rate it accordingly.
-- Repro rig: `.superpowers/sdd/…/f16-probe/` — add a screen whose `screen.svg` is a
-  bare `<svg>` with the include, point a device at it, `byonk render`.
+**The session's filter hypothesis was wrong** — it was flagged as an unverified
+correlation in the subagent brief, which is why it did not anchor the diagnosis. The real
+tell was that the crashing files and the safe ones differed in *comment syntax*, not in
+filters.
+
+Templates alone were not enough: the trap stayed armed for any screen author. So
+`TemplateService::build_tera` now walks the include/extends/import graph reachable from
+the screen and rejects a cycle (naming the chain) or a chain deeper than 64, and rejects a
+macro that can call itself. Both walks use an explicit stack. Being in `build_tera` means
+`validate_template` catches a looping screen at **authoring** time.
+
+**Both halves sabotage-checked**: reverting only the templates gives a clean `Circular
+template reference: weather/screen.svg -> byonk-base-v1/header.svg ->
+byonk-base-v1/header.svg`; disabling only the guard restores `stack overflow, aborting`
+(SIGABRT) on a user-authored self-include.
+
+**Two things found on the way, NOT fixed:**
+1. `status_bar.svg` uses bare `{% if wifi_status == ... %}` with no `default`, so it
+   errors unless the context has a top-level `wifi_status`. A real screen's Lua data lands
+   under `data.*`, so **it is unclear that this component is usable from a screen at all.**
+   Worth checking before advertising it.
+2. `/private/tmp` really does not survive a reboot — the probe rig vanished mid-session
+   and a `cmp` against a **missing** canary silently reported success. **`test -s` both
+   files before believing a canary comparison.** The durable copy in
+   `.superpowers/sdd/…/f16-probe/` is what saved the rig; keep putting probes there.
 
 **F9's motivation:** eight of nine trio candidates have no TrueType hinting program — a
 7-byte `prep` stub and no `fpgm`/`cvt`. skrifa's `AutoFallback` tests whether `fpgm` *or*
@@ -414,7 +428,7 @@ same `build_page.py` output **passing the existing URL**, or a second artifact i
 # Build / verify
 
 - `make check` = fmt + clippy + full suite, **~10 min — background it**; it runs
-  `cargo fmt`, not `--check`, so it rewrites files. Green state = **1091 passed**.
+  `cargo fmt`, not `--check`, so it rewrites files. Green state = **1096 passed**.
 - **Changing `Cargo.lock`'s resvg pin forces a full rebuild of usvg/resvg and everything
   downstream — ~10+ min. Always background it**; a 600 s foreground timeout will kill it.
 - **Subagents must not run `make check`** — the 600 s watchdog kills them. Give them

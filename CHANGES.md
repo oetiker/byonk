@@ -167,6 +167,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   render at all unless the screen supplied a WiFi state, although its notes call that
   optional. It now draws whichever indicators it was given and omits the rest. All three
   also show how to pass values in, which was never written down.
+- **The bundled header and status bar no longer draw on top of each other.** A screen using
+  both got the header's timestamp and the status icons stacked in the same top-right corner,
+  and the icons were dark grey on the header's black bar, so they were barely visible. The
+  status icons now own that corner and default to light ink; the header no longer draws a
+  timestamp, which removes a duplicate, since `footer.svg` already prints one. To put the
+  icons somewhere else, set `status_y` and the new `status_color`. **If you include
+  `header.svg` and relied on it showing `updated_at`, include `footer.svg` as well.**
 - **A screen can no longer take the server down with a looping template.** A template that
   includes itself, two that include each other, or a macro that calls itself used to abort
   the whole process. Byonk now refuses such a screen with an ordinary error that names the

@@ -873,7 +873,15 @@ Include reusable components in your templates. Reference byonk's standard compon
 **Key points:**
 - Use `{% include "byonk-base-v1/filename.svg" %}` for standard-library components, or a
   repo-relative path for your package's own shared SVG
-- Included templates have access to all variables in the current context
+- Included templates have access to all variables in the current context — but note that
+  your script's data arrives **namespaced** under `data.*`, while the standard components
+  read bare names like `title`. Bridge the two with `{% set %}` before the include, or the
+  component silently falls back to its default:
+
+  ```svg
+  {% set title = data.headline %}
+  {% include "byonk-base-v1/header.svg" %}
+  ```
 - Components work well for headers, footers, status bars, and other repeated elements
 
 ### Standard-Library Components
@@ -883,10 +891,24 @@ Byonk's `byonk-base-v1` package ships several ready-to-use components:
 | Component | Description |
 |-----------|-------------|
 | `byonk-base-v1/base.svg` | Base layout with title/content/footer blocks (for `{% extends %}`) |
-| `byonk-base-v1/header.svg` | Header bar with title and optional timestamp |
-| `byonk-base-v1/footer.svg` | Footer with timestamp and optional text |
+| `byonk-base-v1/header.svg` | Black title bar across the top 60px |
+| `byonk-base-v1/footer.svg` | Footer with timestamp (`updated_at`) and optional text |
 | `byonk-base-v1/hinting.svg` | Adaptive font hinting (mono for BW, smooth for greyscale) |
-| `byonk-base-v1/status_bar.svg` | WiFi and battery indicators |
+| `byonk-base-v1/status_bar.svg` | WiFi and battery indicators, drawn into the header's top-right corner |
+
+These components are designed to stack without overlapping: `header.svg` owns the top 60px,
+`status_bar.svg` the corner inside it, and `footer.svg` the bottom 30px.
+
+- **The timestamp belongs to the footer.** `header.svg` does not draw one, because that is
+  where `status_bar.svg`'s icons go. Set `updated_at` and include `footer.svg`.
+- **The status icons default to light ink** (`rgb(200,200,200)`), since they sit on the black
+  header bar. To place them anywhere else, set both position and colour:
+
+  ```svg
+  {% set status_y = 70 %}
+  {% set status_color = "rgb(80,80,80)" %}
+  {% include "byonk-base-v1/status_bar.svg" %}
+  ```
 
 ### Combining Extends and Includes
 

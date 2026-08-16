@@ -841,6 +841,80 @@ mod tests {
     }
 
     #[test]
+    fn the_footer_owns_the_timestamp_and_the_header_leaves_the_corner_free() {
+        // `status_bar.svg` sits in the header's top-right corner, so the header
+        // cannot also right-align a timestamp there — the two drew on top of
+        // each other. The footer already prints `updated_at`, so the header
+        // gives it up rather than the timestamp being dropped or duplicated.
+        let render = |part: &str| {
+            let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[]));
+            let template = format!(r#"<svg>{{% include "byonk-base-v1/{part}" %}}</svg>"#);
+            let data = serde_json::json!({ "title": "Hi", "updated_at": "12:34" });
+            svc()
+                .render(&template, &src, "weather", &data)
+                .unwrap_or_else(|e| panic!("{part} failed to render: {e}"))
+        };
+
+        let header = render("header.svg");
+        assert!(
+            !header.contains("12:34"),
+            "header still draws a timestamp into the status bar's corner: {header}"
+        );
+        // Control: the header must still do its own job. Without this,
+        // emptying header.svg would pass.
+        assert!(
+            header.contains("Hi"),
+            "header stopped drawing its title: {header}"
+        );
+
+        // Control: the timestamp is relocated, not lost.
+        let footer = render("footer.svg");
+        assert!(
+            footer.contains("12:34"),
+            "footer must be the one component that prints updated_at: {footer}"
+        );
+    }
+
+    #[test]
+    fn status_bar_ink_is_light_by_default_and_overridable() {
+        // The icons live on the black header band, so their default stroke is
+        // light. A screen placing them on white needs the other end of the
+        // range, hence `status_color` rather than a hard-coded value.
+        let render = |data: serde_json::Value| {
+            let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[]));
+            let template = r#"<svg>{% include "byonk-base-v1/status_bar.svg" %}</svg>"#;
+            svc().render(template, &src, "weather", &data).unwrap()
+        };
+
+        let defaulted = render(serde_json::json!({
+            "wifi_status": "connected", "battery_level": 80,
+        }));
+        assert!(
+            defaulted.contains("rgb(200,200,200)"),
+            "status icons must default to light ink for the black header band: {defaulted}"
+        );
+        assert!(
+            !defaulted.contains("rgb(80,80,80)"),
+            "status icons still carry the old dark ink, invisible on black: {defaulted}"
+        );
+
+        // Every mark must honour the override, not just the first one — this
+        // is what fails if only the wifi glyph gets the variable.
+        let overridden = render(serde_json::json!({
+            "wifi_status": "connected", "battery_level": 80,
+            "status_color": "rgb(17,17,17)",
+        }));
+        assert!(
+            overridden.contains("rgb(17,17,17)"),
+            "status_color was ignored: {overridden}"
+        );
+        assert!(
+            !overridden.contains("rgb(200,200,200)"),
+            "some status marks kept the default ink after an override: {overridden}"
+        );
+    }
+
+    #[test]
     fn test_render_rejects_self_including_template() {
         // A user-authored template that includes itself must produce a render
         // error, never a stack overflow that aborts the process.

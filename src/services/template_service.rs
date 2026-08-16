@@ -778,6 +778,69 @@ mod tests {
     }
 
     #[test]
+    fn test_shipped_base_components_render_with_nothing_set() {
+        // Every variable these three document is optional, so a screen that
+        // sets none of them must still render. `status_bar.svg` compared
+        // `wifi_status` against a string with no default, and in Tera that is
+        // a hard error when the variable is absent — so the component was
+        // unusable in exactly the case its own docs call out as fine.
+        for part in ["header.svg", "footer.svg", "status_bar.svg"] {
+            let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[]));
+            let template = format!(r#"<svg>{{% include "byonk-base-v1/{part}" %}}</svg>"#);
+            let data = serde_json::json!({});
+            svc()
+                .render(&template, &src, "weather", &data)
+                .unwrap_or_else(|e| panic!("{part} must render with nothing set: {e}"));
+        }
+    }
+
+    #[test]
+    fn test_status_bar_still_draws_wifi_when_it_is_set() {
+        // The control for the test above: making `wifi_status` optional must
+        // not mean ignoring it. Without this, deleting the whole wifi block
+        // would pass.
+        let render_with = |wifi: serde_json::Value| {
+            let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[]));
+            let template = r#"<svg>{% include "byonk-base-v1/status_bar.svg" %}</svg>"#;
+            let data = serde_json::json!({ "wifi_status": wifi });
+            svc().render(template, &src, "weather", &data).unwrap()
+        };
+
+        // The connected glyph has three arcs; the disconnected one is struck
+        // through with a `<line>`. Each state must draw its own.
+        let connected = render_with(serde_json::json!("connected"));
+        assert!(
+            connected.contains("M2,9 L4,6 L6,9"),
+            "connected wifi did not draw its arcs: {connected}"
+        );
+        assert!(
+            !connected.contains("<line"),
+            "connected wifi drew the disconnected strike: {connected}"
+        );
+
+        let disconnected = render_with(serde_json::json!("disconnected"));
+        assert!(
+            disconnected.contains("<line"),
+            "disconnected wifi did not draw its strike: {disconnected}"
+        );
+
+        // Unset draws no indicator at all, which is the case that used to error.
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[]));
+        let unset = svc()
+            .render(
+                r#"<svg>{% include "byonk-base-v1/status_bar.svg" %}</svg>"#,
+                &src,
+                "weather",
+                &serde_json::json!({}),
+            )
+            .unwrap();
+        assert!(
+            !unset.contains("M2,9 L4,6 L6,9") && !unset.contains("<line"),
+            "an unset wifi_status drew an indicator anyway: {unset}"
+        );
+    }
+
+    #[test]
     fn test_render_rejects_self_including_template() {
         // A user-authored template that includes itself must produce a render
         // error, never a stack overflow that aborts the process.

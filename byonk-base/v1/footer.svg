@@ -1,7 +1,12 @@
 {#
   Reusable footer component with timestamp and optional message.
 
-  Usage: {% include "byonk-base-v1/footer.svg" %}
+  Usage:
+    {% set footer_text = data.note %}
+    {% include "byonk-base-v1/footer.svg" %}
+
+  A screen's Lua data arrives under `data.*`, so name each variable with
+  `{% set %}` before including. Anything left unset falls back to a default.
 
   Expected variables:
     - updated_at: Timestamp string (optional)

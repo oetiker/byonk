@@ -163,7 +163,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Each of those three files carried its usage example inside an HTML comment, which the
   template engine does not treat as a comment, so the example told the file to include
   itself without end. The examples are now written as template comments and the components
-  work as documented.
+  work as documented. The status bar had a second fault on top of that: it refused to
+  render at all unless the screen supplied a WiFi state, although its notes call that
+  optional. It now draws whichever indicators it was given and omits the rest. All three
+  also show how to pass values in, which was never written down.
 - **A screen can no longer take the server down with a looping template.** A template that
   includes itself, two that include each other, or a macro that calls itself used to abort
   the whole process. Byonk now refuses such a screen with an ordinary error that names the

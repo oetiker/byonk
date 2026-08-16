@@ -1,7 +1,13 @@
 {#
   Reusable status bar component with icon indicators.
 
-  Usage: {% include "byonk-base-v1/status_bar.svg" %}
+  Usage:
+    {% set wifi_status = data.wifi %}
+    {% set battery_level = data.batt %}
+    {% include "byonk-base-v1/status_bar.svg" %}
+
+  A screen's Lua data arrives under `data.*`, so name each variable with
+  `{% set %}` before including. Anything left unset falls back to a default.
 
   Expected variables:
     - wifi_status: "connected" | "disconnected" | "unknown" (optional)
@@ -9,12 +15,17 @@
     - status_y: Y position (default: 0)
 #}
 <g transform="translate({{ width | default(value=800) - 80 }}, {{ status_y | default(value=15) }})">
-  <!-- WiFi indicator -->
+  <!-- WiFi indicator. `is defined` first, like the battery below: comparing an
+       unset variable against a string is a hard error in Tera, so without this
+       guard the component could not be used without setting wifi_status —
+       which its own notes above call optional. -->
+  {% if wifi_status is defined %}
   {% if wifi_status == "connected" %}
   <path d="M0,12 L4,4 L8,12 M2,9 L4,6 L6,9 M3.5,7 L4,6.5 L4.5,7" fill="none" stroke="rgb(80,80,80)" stroke-width="1.5"/>
   {% elif wifi_status == "disconnected" %}
   <path d="M0,12 L4,4 L8,12" fill="none" stroke="rgb(180,180,180)" stroke-width="1.5"/>
   <line x1="1" y1="5" x2="7" y2="11" stroke="rgb(180,180,180)" stroke-width="1.5"/>
+  {% endif %}
   {% endif %}
 
   <!-- Battery indicator -->

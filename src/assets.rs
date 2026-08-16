@@ -60,8 +60,19 @@ struct EmbeddedScreens;
 struct EmbeddedExamples;
 
 /// Embedded font assets
+///
+/// Restricted to the same extensions `get_fonts` accepts from an external
+/// `FONTS_DIR`, so embedded and filesystem fonts agree on what counts as a
+/// font. Without the filter the whole directory ships inside the binary and is
+/// handed to fontdb — `FONTS.md`, the importer's Python sources, a stray
+/// `.DS_Store` — and `init` then tries to write those back out, including into
+/// subdirectories it never created.
 #[derive(RustEmbed)]
 #[folder = "fonts/"]
+#[include = "*.ttf"]
+#[include = "*.otf"]
+#[include = "*.woff"]
+#[include = "*.woff2"]
 struct EmbeddedFonts;
 
 /// Authoring reference pages, embedded so the MCP server can serve them as
@@ -973,6 +984,29 @@ mod tests {
     fn test_list_embedded_fonts() {
         let fonts = AssetLoader::list_embedded(AssetCategory::Fonts);
         assert!(!fonts.is_empty());
+    }
+
+    /// `fonts/` holds more than fonts — `FONTS.md`, and the importer's Python
+    /// package and tests in subdirectories. Embedding those would ship them
+    /// inside the binary, feed them to fontdb as if they were faces, and make
+    /// `init` write into subdirectories it never created.
+    #[test]
+    fn only_font_files_are_embedded() {
+        let fonts = AssetLoader::list_embedded(AssetCategory::Fonts);
+
+        for name in &fonts {
+            assert!(
+                name.ends_with(".ttf")
+                    || name.ends_with(".otf")
+                    || name.ends_with(".woff")
+                    || name.ends_with(".woff2"),
+                "{name} is not a font, but is embedded as one"
+            );
+            assert!(
+                !name.contains('/'),
+                "{name} is in a subdirectory, which `init` cannot write into"
+            );
+        }
     }
 
     #[test]

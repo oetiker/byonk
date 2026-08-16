@@ -3,7 +3,7 @@
 
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 
-.PHONY: all build release debug run clean docs docs-dev check fmt lint test ha-setup ha-check help
+.PHONY: all build release debug run clean docs docs-dev check fmt lint test ha-setup ha-check fonts fonts-setup fonts-check help
 
 # Default target
 all: release
@@ -112,6 +112,25 @@ check: fmt lint test
 	@echo "All checks passed!"
 
 # =============================================================================
+# X11 Bitmap Fonts
+# =============================================================================
+#
+# The importer needs only Python and fontTools -- no FontForge, no potrace and
+# no X11 installation -- so the shipped fonts can be rebuilt and checked
+# anywhere. Its venv is kept apart from the Home Assistant one so the two
+# dependency sets cannot collide.
+
+fonts-setup: ## create .venv-fonts (run once before 'make fonts')
+	uv venv --python 3.13 .venv-fonts
+	uv pip install --python .venv-fonts -r fonts/requirements.txt
+
+fonts-check: ## run the importer's own tests
+	.venv-fonts/bin/python -m pytest fonts/tests -q
+
+fonts: fonts-check ## rebuild the 26 X11 TTFs from their pinned BDF sources
+	.venv-fonts/bin/python fonts/x11-importer.py
+
+# =============================================================================
 # Home Assistant Integration
 # =============================================================================
 
@@ -151,6 +170,11 @@ help:
 	@echo "  make docs         Build documentation"
 	@echo "  make docs-dev     Start docs dev server"
 	@echo "  make docs-samples Generate sample images (auto-starts server)"
+	@echo ""
+	@echo "X11 bitmap fonts:"
+	@echo "  make fonts-setup  Create .venv-fonts (run once)"
+	@echo "  make fonts-check  Run the font importer's tests"
+	@echo "  make fonts        Rebuild the 26 X11 TTFs from pinned BDF sources"
 	@echo ""
 	@echo "Home Assistant VM:"
 	@echo "  make ha-vm        Boot the Home Assistant OS test VM (headless)"

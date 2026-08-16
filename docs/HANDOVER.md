@@ -1,8 +1,9 @@
 # Handover — Byonk
 
 _Last updated: 2026-08-16 (session 22). **Initiative: adopt the resvg `byonk-base`
-branch.** Plan Tasks 1, 2, 3, 5, 6 done; 4, 7, 8, 9, 10 remain. **F16 is DONE and landed**
-(`1ce8210`). Next up: **F9, F10, and plan Tasks 4, 7, 8, 9, 10** — see Queued work._
+branch.** Plan Tasks 1, 2, 3, 5, 6 done; 4, 7, 8, 9, 10 remain. **F16, F9 and F10 are all
+DONE and landed** (`1ce8210`, `87da75f`, `d018ddb`). Next up: **plan Tasks 4, 7, 8, 9, 10**,
+plus **F18** — a pre-existing stack-overflow crash found this session. See Queued work._
 
 ## Where the work lives
 
@@ -10,9 +11,9 @@ branch.** Plan Tasks 1, 2, 3, 5, 6 done; 4, 7, 8, 9, 10 remain. **F16 is DONE an
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
 | PR | **#30**, OPEN against `main` — https://github.com/oetiker/byonk/pull/30 |
-| HEAD | `1ce8210` plus this handover commit — tree clean |
-| Verified | `cargo test --workspace` green at `1ce8210`: **1086 passed, 0 failed, exit 0** |
-| Pushed | level with `origin` as of `3e47517`; CI on #30 has seen the new pin |
+| HEAD | `d018ddb` plus this handover commit — tree clean |
+| Verified | `cargo test --workspace` green at `d018ddb`: **1091 passed, 0 failed, exit 0**; clippy clean |
+| Pushed | `cfc0f75` is on `origin` and green on #30. **`87da75f` and `d018ddb` are NOT pushed.** |
 
 **resvg work happens in a different repo.** `oetiker/resvg` carries `feat/bitmap-mask-glyphs`
 (upstream PR #1115), `feat/font-hinting` (upstream PR #1116), and `byonk-base`, which merges
@@ -51,7 +52,7 @@ only `an_outline_free_strike_is_spaced_by_its_own_advance`; byonk `cargo test --
 **1086 passed / 0 failed**; the pitch ruler through byonk is **11/11** (3/11 before).
 Specimens for the owner: https://claude.ai/code/artifact/ef06c1db-b5ba-467c-8cc3-3a7069e00488
 
-Byonk's branch is pushed and PR #30 carries all of it.
+F16 itself is pushed and PR #30 carries it; the later F9/F10 commits are not.
 
 ## The resvg change — landed
 
@@ -234,12 +235,34 @@ licence file at all.
 | ID | What |
 |---|---|
 | ~~F16~~ | **DONE** — landed in `1ce8210`. See the F16 section above. |
-| **F9** | Resolve `AutoFallback` ourselves: a face with no `fpgm`/`cvt` has no usable interpreter hinting, so substitute `Auto`. Brief: `f9-brief.md` |
-| **F10** | Bundle the Source trio, repoint generics, licences, docs. Brief: `f10-brief.md` |
+| ~~F9~~ | **DONE** — `87da75f`. `AutoFallback` now resolves to `Auto` for a face with no `fpgm`/`cvt`. |
+| ~~F10~~ | **DONE** — `d018ddb`. Source trio bundled, generics repointed, OFL notices shipped, docs updated. |
+| **F18** | **NEW, pre-existing crash.** `{% include "byonk-base-v1/header.svg" %}` or `footer.svg` in a screen **aborts byonk with a stack overflow**. See below. |
 | F13 | Extend `screens/examples/demo/font/{ttf,bitmap,hinting}/` to cover Source. |
 | F14 | Licence + notice files per the table above. **`FONTS.md`'s "X11LuType is proportional" is wrong — it is monospaced**; the F16 draft already fixes this. |
 | F15 | Owes a byonk-side regression test (above). |
 | F17 | `font-family="Terminus (TTF)"` is invalid CSS — parentheses must be quoted, or the text silently falls back to a serif. **`screens/examples/demo/font/ttf/screen.svg` has therefore never rendered Terminus.** Quote it, rename the family, or have byonk quote on the author's behalf. Fold into Task 8. |
+
+**F18 — a shipped template crashes the renderer.** Found while checking F10's blast
+radius, **not caused by it** — proved by reproducing with the F10 mapping stashed.
+
+```
+thread 'main' has overflowed its stack
+fatal runtime error: stack overflow, aborting
+```
+
+- Reproduces with `{% include "byonk-base-v1/header.svg" %}` **alone**, and with
+  `footer.svg` alone. Both are the documented usage written in their own header comments.
+- `{% include "byonk-base-v1/hinting.svg" %}` includes **fine**, and the shipped demo
+  screens use it — so this is not "includes are broken", it is these files.
+- Not the fonts: a bare `<text font-family="sans-serif">` with no include renders fine.
+- The suspect the evidence points at is `{{ title | default(value="BYONK") }}` /
+  `{{ width | default(value=800) - 20 }}` — the two crashing files use Tera filters and
+  `hinting.svg` does not. **Not confirmed.** Next step is to bisect the template body.
+- A stack overflow **aborts the process**, so on a device this is not a broken screen,
+  it is a dead server. Rate it accordingly.
+- Repro rig: `.superpowers/sdd/…/f16-probe/` — add a screen whose `screen.svg` is a
+  bare `<svg>` with the include, point a device at it, `byonk render`.
 
 **F9's motivation:** eight of nine trio candidates have no TrueType hinting program — a
 7-byte `prep` stub and no `fpgm`/`cvt`. skrifa's `AutoFallback` tests whether `fpgm` *or*
@@ -247,11 +270,35 @@ licence file at all.
 sets `Auto` explicitly — keep that. **Upstream will not change this**
 (googlefonts/fontations#1151, closed "No issue here"). Do not PR it.
 
-**F10's two hazards, to settle by rendering not argument:** Source Sans 3 and Source Code
-Pro default to `wght` 200, not 400; the plan says resvg always pushes `wght` from CSS
-`font-weight`, but the specimen work found Source Code Pro "far too light" without an
-explicit pin — both cannot be true. And Source Serif 4's `opsz` defaults to 20, while
-resvg pushes non-`wght` axes only when non-default.
+**F10's two hazards were settled by rendering, and BOTH WERE FALSE. Do not reopen them.**
+
+| Claim | Measured through byonk on `trmnl_og` |
+|---|---|
+| fvar `wght` default leaks, so Source comes out ExtraLight | **No.** Saying nothing about weight rendered **0.08%** from explicit `wght 400` and **163%** from explicit `wght 100`. resvg pushes 400 from CSS. |
+| Source Serif 4 is pinned at `opsz` 20 whatever the size | **No.** At 10 px, saying nothing rendered **0.20%** from explicit `opsz 10` and **19.46%** from explicit `opsz 20`, the fvar default. `opsz` tracks font size. |
+
+Two things made these cheap and trustworthy. **Outfit's own fvar default is `wght` 100**,
+so the weight question was answerable with a font already in the tree, before adding
+anything. And each run carried a control that would move if the axis were dead — `wght
+100` and `opsz 60`/`opsz 8` — so "these two agree" could not be confused with "nothing is
+being applied". Rig preserved in `.superpowers/sdd/…/f16-probe/screens/{wght,opsz}`.
+
+**The earlier specimen finding that Source Code Pro was "far too light" without an
+explicit `wght` pin is falsified for byonk's pipeline.** Whatever it measured, it was not
+this.
+
+**The digit-final trap is real and now proven, not just reasoned:** rendered through
+byonk, unquoted `font-family="Source Sans 3"` comes out in a **serif**; `'Source Sans 3'`
+comes out right. `Source Code Pro` has no digit and is safe unquoted. Documented in
+`docs/src/tutorial/svg-templates.md` and `fonts/FONTS.md`.
+
+**A test premise F10 broke, worth remembering:**
+`a_variant_hints_differently_from_its_base_font_in_one_document` relied on the
+unresolvable family `Outfit Mono` falling back to Outfit — true only while `sans-serif`
+pointed there. Repointing the generics silently moved that fallback to Source Sans 3 and
+broke a *control*, not the main assertion. The document now names its own fallback
+(`Outfit Mono, Outfit`). **Any test that leans on where an unresolved family lands is
+leaning on the generic mapping.**
 
 # Remaining plan tasks
 
@@ -347,7 +394,7 @@ same `build_page.py` output **passing the existing URL**, or a second artifact i
 # Build / verify
 
 - `make check` = fmt + clippy + full suite, **~10 min — background it**; it runs
-  `cargo fmt`, not `--check`, so it rewrites files. Green state = **1086 passed**.
+  `cargo fmt`, not `--check`, so it rewrites files. Green state = **1091 passed**.
 - **Changing `Cargo.lock`'s resvg pin forces a full rebuild of usvg/resvg and everything
   downstream — ~10+ min. Always background it**; a 600 s foreground timeout will kill it.
 - **Subagents must not run `make check`** — the 600 s watchdog kills them. Give them

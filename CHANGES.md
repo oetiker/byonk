@@ -157,6 +157,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   previous conversion moved them to the typographic quotes at U+2018 and U+2019,
   leaving `'` and `` ` `` blank. It no longer has U+0152, U+0153, U+0178, U+2018,
   U+2019 or U+2212, none of which are in the ISO 8859-1 range the face is drawn for.
+- **Using a bundled header, footer or status bar no longer kills the server.** A screen
+  that included one of the ready-made `byonk-base-v1` components — exactly as their own
+  usage notes describe — crashed byonk outright, taking every other screen down with it.
+  Each of those three files carried its usage example inside an HTML comment, which the
+  template engine does not treat as a comment, so the example told the file to include
+  itself without end. The examples are now written as template comments and the components
+  work as documented.
+- **A screen can no longer take the server down with a looping template.** A template that
+  includes itself, two that include each other, or a macro that calls itself used to abort
+  the whole process. Byonk now refuses such a screen with an ordinary error that names the
+  loop, so the screen fails and everything else keeps running. Very deeply nested includes
+  are refused the same way.
 - **`sans-serif`, `serif` and `monospace` now get real text faces.** They used to
   resolve to the house sans — and `monospace` to Terminus, a pixel face that only
   looks right at the nine sizes it was drawn for. Byonk now bundles Source Sans 3,

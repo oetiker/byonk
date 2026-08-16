@@ -1,4 +1,5 @@
 use regex::Regex;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 use tera::{Context, Tera};
 
@@ -36,6 +37,139 @@ pub enum TemplateError {
 
     #[error("Image resolution error: {0}")]
     ImageResolution(String),
+
+    #[error("Circular template reference: {0}")]
+    CircularReference(String),
+
+    #[error("Template reference chain deeper than {MAX_TEMPLATE_DEPTH}: {0}")]
+    TemplateTooDeep(String),
+
+    #[error("Recursive template macro (not supported): {0}")]
+    RecursiveMacro(String),
+}
+
+/// Maximum number of templates that may be chained together by
+/// `{% include %}` / `{% extends %}` / `{% import %}` before a render is
+/// refused. Tera resolves these by recursing on the Rust call stack with no
+/// limit of its own, so an unchecked chain overflows the stack and aborts the
+/// whole process instead of failing the render.
+const MAX_TEMPLATE_DEPTH: usize = 64;
+
+/// Collect the template names referenced from an AST by `{% include %}`,
+/// `{% extends %}` and `{% import %}`, descending into every construct that
+/// can hold a body (blocks, loops, conditionals, filter sections, macro
+/// definitions). The walk uses an explicit stack so deeply nested templates
+/// cannot overflow the stack here either.
+fn referenced_templates(nodes: &[tera::ast::Node]) -> Vec<String> {
+    use tera::ast::Node;
+
+    let mut refs = Vec::new();
+    let mut stack: Vec<&Node> = nodes.iter().collect();
+
+    while let Some(node) = stack.pop() {
+        match node {
+            Node::Include(_, names, _) => refs.extend(names.iter().cloned()),
+            Node::Extends(_, name) => refs.push(name.clone()),
+            Node::ImportMacro(_, name, _) => refs.push(name.clone()),
+            Node::Block(_, block, _) => stack.extend(block.body.iter()),
+            Node::Forloop(_, forloop, _) => {
+                stack.extend(forloop.body.iter());
+                if let Some(empty) = &forloop.empty_body {
+                    stack.extend(empty.iter());
+                }
+            }
+            Node::If(cond, _) => {
+                for (_, _, body) in &cond.conditions {
+                    stack.extend(body.iter());
+                }
+                if let Some((_, body)) = &cond.otherwise {
+                    stack.extend(body.iter());
+                }
+            }
+            Node::FilterSection(_, filter, _) => stack.extend(filter.body.iter()),
+            Node::MacroDefinition(_, def, _) => stack.extend(def.body.iter()),
+            _ => {}
+        }
+    }
+
+    refs
+}
+
+/// Collect the names of the macros called from a macro body.
+///
+/// Namespaces are deliberately ignored: this is used to build an
+/// over-approximation of the macro call graph, where two macros that share a
+/// name count as one node. That can only ever report recursion that isn't
+/// there, never miss recursion that is.
+fn called_macro_names(nodes: &[tera::ast::Node]) -> Vec<String> {
+    use tera::ast::{Expr, ExprVal, Node};
+
+    let mut names = Vec::new();
+    let mut exprs: Vec<&Expr> = Vec::new();
+    let mut stack: Vec<&Node> = nodes.iter().collect();
+
+    while let Some(node) = stack.pop() {
+        match node {
+            Node::VariableBlock(_, expr) => exprs.push(expr),
+            Node::Set(_, set) => exprs.push(&set.value),
+            Node::Block(_, block, _) => stack.extend(block.body.iter()),
+            Node::Forloop(_, forloop, _) => {
+                exprs.push(&forloop.container);
+                stack.extend(forloop.body.iter());
+                if let Some(empty) = &forloop.empty_body {
+                    stack.extend(empty.iter());
+                }
+            }
+            Node::If(cond, _) => {
+                for (_, expr, body) in &cond.conditions {
+                    exprs.push(expr);
+                    stack.extend(body.iter());
+                }
+                if let Some((_, body)) = &cond.otherwise {
+                    stack.extend(body.iter());
+                }
+            }
+            Node::FilterSection(_, filter, _) => {
+                exprs.extend(filter.filter.args.values());
+                stack.extend(filter.body.iter());
+            }
+            Node::MacroDefinition(_, def, _) => {
+                exprs.extend(def.args.values().flatten());
+                stack.extend(def.body.iter());
+            }
+            _ => {}
+        }
+    }
+
+    while let Some(expr) = exprs.pop() {
+        for filter in &expr.filters {
+            exprs.extend(filter.args.values());
+        }
+        match &expr.val {
+            ExprVal::MacroCall(call) => {
+                names.push(call.name.clone());
+                exprs.extend(call.args.values());
+            }
+            ExprVal::FunctionCall(call) => exprs.extend(call.args.values()),
+            ExprVal::Math(math) => {
+                exprs.push(&math.lhs);
+                exprs.push(&math.rhs);
+            }
+            ExprVal::Logic(logic) => {
+                exprs.push(&logic.lhs);
+                exprs.push(&logic.rhs);
+            }
+            ExprVal::In(in_expr) => {
+                exprs.push(&in_expr.lhs);
+                exprs.push(&in_expr.rhs);
+            }
+            ExprVal::Array(items) => exprs.extend(items.iter()),
+            ExprVal::Test(test) => exprs.extend(test.args.iter()),
+            _ => {}
+        }
+    }
+
+    names
 }
 
 /// Service for rendering SVG templates with Tera
@@ -139,7 +273,159 @@ impl TemplateService {
         let main_name = join_rel(screen_path, "screen.svg");
         tera.add_raw_template(&main_name, template_src)?;
 
+        // Refuse the two constructs that make Tera recurse without a bound
+        // (see the two checks below) before anything tries to render.
+        let reachable = Self::check_template_graph(&tera, &main_name)?;
+        Self::check_macro_graph(&tera, &reachable)?;
+
         Ok((tera, main_name))
+    }
+
+    /// Refuse a template whose `{% include %}` / `{% extends %}` / `{% import %}`
+    /// graph contains a cycle or an excessively long chain.
+    ///
+    /// Tera expands includes by recursing on the Rust call stack while
+    /// rendering, and has no recursion limit: a template that (directly or
+    /// indirectly) includes itself overflows the stack, which aborts the whole
+    /// process rather than failing one render. Catching it up front turns that
+    /// crash into an ordinary render error, and because the check runs in
+    /// `build_tera` it also covers `validate_template` — a screen with a
+    /// circular include is rejected at authoring time.
+    ///
+    /// Only the graph reachable from the main template is walked, so an
+    /// unrelated template elsewhere in the screen repo cannot break a screen
+    /// that never references it. The set of reachable templates is returned so
+    /// the macro check can be scoped the same way.
+    fn check_template_graph(
+        tera: &Tera,
+        main_name: &str,
+    ) -> Result<HashSet<String>, TemplateError> {
+        // Iterative depth-first search. `path` is the chain of templates
+        // currently being explored, so a cycle can be reported with the exact
+        // chain that produced it; `done` holds fully explored templates so a
+        // diamond-shaped (but acyclic) graph is not re-walked.
+        enum Step {
+            Enter(String),
+            Leave,
+        }
+
+        let mut done: HashSet<String> = HashSet::new();
+        let mut on_path: HashSet<String> = HashSet::new();
+        let mut path: Vec<String> = Vec::new();
+        let mut work: Vec<Step> = vec![Step::Enter(main_name.to_string())];
+
+        while let Some(step) = work.pop() {
+            match step {
+                Step::Leave => {
+                    if let Some(name) = path.pop() {
+                        on_path.remove(&name);
+                        done.insert(name);
+                    }
+                }
+                Step::Enter(name) => {
+                    if done.contains(&name) {
+                        continue;
+                    }
+                    if on_path.contains(&name) {
+                        path.push(name);
+                        return Err(TemplateError::CircularReference(path.join(" -> ")));
+                    }
+                    if path.len() >= MAX_TEMPLATE_DEPTH {
+                        path.push(name);
+                        return Err(TemplateError::TemplateTooDeep(path.join(" -> ")));
+                    }
+                    // A reference to a template that was never registered is
+                    // not our problem: Tera reports the missing target itself,
+                    // with a message that points at the offending tag.
+                    let Some(template) = tera.templates.get(&name) else {
+                        continue;
+                    };
+                    let refs = referenced_templates(&template.ast);
+                    on_path.insert(name.clone());
+                    path.push(name);
+                    work.push(Step::Leave);
+                    work.extend(refs.into_iter().map(Step::Enter));
+                }
+            }
+        }
+
+        Ok(done)
+    }
+
+    /// Refuse a screen whose macros can call themselves, directly or through
+    /// other macros.
+    ///
+    /// Tera evaluates a macro call by recursing on the Rust call stack with no
+    /// limit, exactly like `{% include %}`, so a recursive macro overflows the
+    /// stack and aborts the process. Unlike an include chain there is no way to
+    /// bound it at render time, so recursive macros are rejected outright — a
+    /// screen that needs repetition should use `{% for %}`, or flatten the data
+    /// in its Lua script.
+    ///
+    /// The call graph is keyed by macro name only (see `called_macro_names`),
+    /// which over-approximates: it can never miss real recursion.
+    fn check_macro_graph(tera: &Tera, reachable: &HashSet<String>) -> Result<(), TemplateError> {
+        let mut calls: HashMap<&str, HashSet<String>> = HashMap::new();
+        for name in reachable {
+            let Some(template) = tera.templates.get(name) else {
+                continue;
+            };
+            for (macro_name, def) in &template.macros {
+                calls
+                    .entry(macro_name.as_str())
+                    .or_default()
+                    .extend(called_macro_names(&def.body));
+            }
+        }
+        if calls.is_empty() {
+            return Ok(());
+        }
+
+        enum Step<'a> {
+            Enter(&'a str),
+            Leave,
+        }
+
+        let mut done: HashSet<&str> = HashSet::new();
+        for root in calls.keys().copied() {
+            if done.contains(root) {
+                continue;
+            }
+            let mut on_path: HashSet<&str> = HashSet::new();
+            let mut path: Vec<&str> = Vec::new();
+            let mut work: Vec<Step> = vec![Step::Enter(root)];
+
+            while let Some(step) = work.pop() {
+                match step {
+                    Step::Leave => {
+                        if let Some(name) = path.pop() {
+                            on_path.remove(name);
+                            done.insert(name);
+                        }
+                    }
+                    Step::Enter(name) => {
+                        if done.contains(name) {
+                            continue;
+                        }
+                        if on_path.contains(name) {
+                            path.push(name);
+                            return Err(TemplateError::RecursiveMacro(path.join(" -> ")));
+                        }
+                        // A call to a macro that is not defined in any reachable
+                        // template is Tera's error to report, not ours.
+                        let Some(callees) = calls.get(name) else {
+                            continue;
+                        };
+                        on_path.insert(name);
+                        path.push(name);
+                        work.push(Step::Leave);
+                        work.extend(callees.iter().map(|c| Step::Enter(c.as_str())));
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Render a screen template with the given data, scoped to one screen repo.
@@ -467,6 +753,82 @@ mod tests {
         let data = serde_json::json!({ "data": { "msg": "hello" } });
         let out = svc().render(template, &src, "weather", &data).unwrap();
         assert!(out.contains("<text>hello</text>"), "{out}");
+    }
+
+    #[test]
+    fn test_render_shipped_base_components() {
+        // The shipped byonk-base components are documented as `{% include %}`
+        // targets; including them must render, not recurse forever.
+        for part in ["header.svg", "footer.svg", "status_bar.svg"] {
+            let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[]));
+            let template = format!(r#"<svg>{{% include "byonk-base-v1/{part}" %}}</svg>"#);
+            let data = serde_json::json!({
+                "title": "Hi", "updated_at": "12:00", "footer_text": "f",
+                "width": 800, "height": 480, "battery_level": 50,
+                "wifi_status": "connected",
+            });
+            let out = svc()
+                .render(&template, &src, "weather", &data)
+                .unwrap_or_else(|e| panic!("{part} failed to render: {e}"));
+            assert!(
+                !out.contains("{% include"),
+                "{part}: include not expanded: {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_render_rejects_self_including_template() {
+        // A user-authored template that includes itself must produce a render
+        // error, never a stack overflow that aborts the process.
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[]));
+        let template = r#"<svg>{% include "weather/screen.svg" %}</svg>"#;
+        let data = serde_json::json!({});
+        let err = svc()
+            .render(template, &src, "weather", &data)
+            .expect_err("self-including template must be an error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("weather/screen.svg"),
+            "error should name the cycle: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_render_rejects_mutually_including_templates() {
+        // Two screen repo parts that include each other, reached from the screen.
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[
+            ("weather/a.svg", r#"{% include "weather/b.svg" %}"#),
+            ("weather/b.svg", r#"{% include "weather/a.svg" %}"#),
+        ]));
+        let template = r#"<svg>{% include "weather/a.svg" %}</svg>"#;
+        let data = serde_json::json!({});
+        assert!(svc().render(template, &src, "weather", &data).is_err());
+    }
+
+    #[test]
+    fn test_render_rejects_recursive_macro() {
+        // A macro that calls itself is the other unbounded-recursion route in
+        // Tera; it must be a render error, never a stack overflow.
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[(
+            "weather/macros.svg",
+            "{% macro boom(n) %}{{ self::boom(n=n) }}{% endmacro boom %}",
+        )]));
+        let template = r#"{% import "weather/macros.svg" as m %}<svg>{{ m::boom(n=1) }}</svg>"#;
+        let data = serde_json::json!({});
+        assert!(svc().render(template, &src, "weather", &data).is_err());
+    }
+
+    #[test]
+    fn test_render_allows_non_recursive_macro() {
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[(
+            "weather/macros.svg",
+            "{% macro label(t) %}<text>{{ t }}</text>{% endmacro label %}",
+        )]));
+        let template = r#"{% import "weather/macros.svg" as m %}<svg>{{ m::label(t="hi") }}</svg>"#;
+        let data = serde_json::json!({});
+        let out = svc().render(template, &src, "weather", &data).unwrap();
+        assert!(out.contains("<text>hi</text>"), "{out}");
     }
 
     #[test]

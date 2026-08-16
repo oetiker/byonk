@@ -1,4 +1,4 @@
-<!--
+{#
   Reusable status bar component with icon indicators.
 
   Usage: {% include "byonk-base-v1/status_bar.svg" %}
@@ -7,7 +7,7 @@
     - wifi_status: "connected" | "disconnected" | "unknown" (optional)
     - battery_level: 0-100 (optional)
     - status_y: Y position (default: 0)
--->
+#}
 <g transform="translate({{ width | default(value=800) - 80 }}, {{ status_y | default(value=15) }})">
   <!-- WiFi indicator -->
   {% if wifi_status == "connected" %}

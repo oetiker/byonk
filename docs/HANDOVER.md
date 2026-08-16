@@ -1,11 +1,8 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-16 (session 21). **Initiative: adopt the resvg `byonk-base`
-branch.** Plan Tasks 1, 2, 3, 5, 6 done; 4, 7, 8, 9, 10 remain. **F16 (the X11 importer
-threw the real pixel advances away) is BUILT AND PROVEN but NOT LANDED** — it needs one
-resvg change pushed first, and that push is the owner's call. Everything else about F16 is
-finished and verified. **Start by reading "F16 — where it stopped" below and asking the
-owner the one open question.**_
+_Last updated: 2026-08-16 (session 22). **Initiative: adopt the resvg `byonk-base`
+branch.** Plan Tasks 1, 2, 3, 5, 6 done; 4, 7, 8, 9, 10 remain. **F16 is DONE and landed**
+(`1ce8210`). Next up: **F9, F10, and plan Tasks 4, 7, 8, 9, 10** — see Queued work._
 
 ## Where the work lives
 
@@ -13,13 +10,13 @@ owner the one open question.**_
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
 | PR | **#30**, OPEN against `main` — https://github.com/oetiker/byonk/pull/30 |
-| HEAD | `f2a075f` plus this handover commit — tree clean |
-| Verified | `cargo test --workspace` green at `f2a075f`: **1086 passed, 0 failed, exit 0** |
-| **Not pushed** | HEAD is ~17 ahead of origin. Push before relying on CI. |
+| HEAD | `1ce8210` plus this handover commit — tree clean |
+| Verified | `cargo test --workspace` green at `1ce8210`: **1086 passed, 0 failed, exit 0** |
+| **Not pushed** | HEAD is ~18 ahead of origin. Push before relying on CI. |
 
 **resvg work happens in a different repo.** `oetiker/resvg` carries `feat/bitmap-mask-glyphs`
 (upstream PR #1115), `feat/font-hinting` (upstream PR #1116), and `byonk-base`, which merges
-them and is what byonk's `[patch.crates-io]` pins. Current pin: `61956742`.
+them and is what byonk's `[patch.crates-io]` pins. Current pin: `2e766508`.
 
 **The plan:** `docs/superpowers/plans/2026-08-15-resvg-byonk-base-integration.md` — still
 authoritative for Tasks 4, 7, 8, 9, 10, but the plan has been wrong in five of five tasks
@@ -32,19 +29,32 @@ its name claims.** `git log` on `oetiker/resvg` is the source of truth for resvg
 
 ---
 
-# ⚠️ F16 — where it stopped. READ THIS FIRST.
+# F16 — DONE
 
 ## The state in one paragraph
 
-The importer is **rewritten, committed (`f2a075f`) and green**. The 26 regenerated fonts
-are **correct and proven** but **deliberately not committed**, because they need a
-one-line resvg change to be spaced right, and that change is **committed only in an
-ephemeral clone**. The blocking question put to the owner and *not yet answered*:
+The importer was rewritten in `f2a075f`; the 26 regenerated fonts, the pin bump,
+`FONTS.md` and the `CHANGES.md` entry landed in **`1ce8210`**. The owner chose to put the
+resvg fix on **upstream PR #1115 as well as the fork**, so it was cherry-picked onto
+`feat/bitmap-mask-glyphs` (`d2ef8ee8`, pushed — this **updates upstream PR #1115**) and
+merged into `byonk-base` (**`2e766508`**, pushed). Byonk's `Cargo.lock` pins `2e766508`.
 
-> **Push the resvg commit to `oetiker/resvg` `byonk-base`? And if so, also onto upstream
-> PR #1115, or fork-only for now?**
+**The cherry-pick was not clean, and the conflict mattered:** the byonk-side test used
+`FontResolver::select_bitmap`, which does not exist upstream. The upstream copy therefore
+carries the new test *without* the `allow_strikes` plumbing and *without*
+`declining_strikes_also_declines_their_advance`; `byonk-base` keeps both. The merge back
+into `byonk-base` was checked by `git diff 235f499 <merge>` coming out **empty** — that is
+the guard against the merge trap recorded under F15.
 
-## The resvg change — committed, verified, NOT pushed
+Verified after landing: resvg **1750 passed / 0 failed** on `byonk-base`, sabotage fails
+only `an_outline_free_strike_is_spaced_by_its_own_advance`; byonk `cargo test --workspace`
+**1086 passed / 0 failed**; the pitch ruler through byonk is **11/11** (3/11 before).
+Specimens for the owner: https://claude.ai/code/artifact/ef06c1db-b5ba-467c-8cc3-3a7069e00488
+
+**Still not pushed:** byonk's own branch is ~18 ahead of `origin`. PR #30 has not seen any
+of this.
+
+## The resvg change — landed
 
 `crates/usvg/src/text/bitmap.rs`, `mask_advance` had:
 
@@ -63,11 +73,11 @@ Deleting the line is the whole fix.
 
 | | |
 |---|---|
-| Commit | `235f499` in the **ephemeral** clone `…/scratchpad/resvg` (branch `byonk-base`) |
+| Upstream | `d2ef8ee8` on `oetiker/resvg` `feat/bitmap-mask-glyphs` — **this is PR #1115** |
+| Fork | `2e766508` on `byonk-base` (merge of the above); byonk pins this |
 | **Durable copy** | `.superpowers/sdd/2026-08-15-resvg-byonk-base-integration/f16-resvg-outline-free-advance.patch` |
-| Verified | applied to a clean `HEAD~1` tree: applies cleanly, guard gone, binary test font present |
-| Tests | **1750 passed, 0 failed, no reference image changed**; `cargo fmt` clean |
-| Sabotage | reinstating the guard fails **only** `an_outline_free_strike_is_spaced_by_its_own_advance` |
+| Tests | `byonk-base` **1750 passed, 0 failed**; PR branch **1804 passed, 0 failed**; no reference image changed |
+| Sabotage | reinstating the guard fails **only** `an_outline_free_strike_is_spaced_by_its_own_advance` — checked on both branches |
 
 It adds a test font `BitmapMonoNoOutline.subset.ttf` (BitmapMono with its outline tables
 deleted) emitted by the extended `make-bitmap-mono.py`, and consolidates the
@@ -77,21 +87,9 @@ deleted) emitted by the extended `make-bitmap-mono.py`, and consolidates the
 **Why the five existing tests could not catch it: every one of them uses a font with
 outlines.** Same shape of trap as the `select_bitmap` merge bug recorded under F15.
 
-## The exact resume sequence
-
-1. Get the owner's answer to the question above.
-2. Push `235f499` (or apply the patch to a fresh clone and push).
-3. `cargo update -p usvg -p resvg` — bumps `Cargo.lock` to the new `byonk-base` rev.
-4. `make fonts-setup` (once), then `make fonts` — regenerates all 26 deterministically.
-5. Install `fonts/FONTS.md` from `…/scratchpad/FONTS.md.draft` and the `CHANGES.md`
-   entry from `…/scratchpad/CHANGES-f16.draft.md`. **Both are ephemeral — if the
-   scratchpad is gone, rewrite them; the facts they need are all in this file.**
-6. One commit: 26 binaries + `Cargo.lock` + `FONTS.md` + `CHANGES.md`.
-7. Re-run the pitch ruler (recipe under Build/verify) and `cargo test --workspace`.
-
-**Do not commit the fonts without the pin bump.** With the old pin the advances are
-correct in the file and *ignored* at render time, giving fractional pitch — worse than
-today. That is exactly why they were held back.
+**The fonts and the pin must move together.** With the old pin the advances are correct in
+the file and *ignored* at render time, giving fractional pitch — worse than before. If the
+pin is ever rolled back, roll the fonts back with it.
 
 ## What was built (all committed in `f2a075f`)
 
@@ -236,7 +234,7 @@ licence file at all.
 
 | ID | What |
 |---|---|
-| **F16** | **Blocked on the push question above. Everything else is done.** |
+| ~~F16~~ | **DONE** — landed in `1ce8210`. See the F16 section above. |
 | **F9** | Resolve `AutoFallback` ourselves: a face with no `fpgm`/`cvt` has no usable interpreter hinting, so substitute `Auto`. Brief: `f9-brief.md` |
 | **F10** | Bundle the Source trio, repoint generics, licences, docs. Brief: `f10-brief.md` |
 | F13 | Extend `screens/examples/demo/font/{ttf,bitmap,hinting}/` to cover Source. |
@@ -278,28 +276,29 @@ hatch is **`text-rendering: optimizeLegibility`** — restores AA *and keeps hin
 
 # Open questions for the owner
 
-1. **THE BLOCKER:** push the resvg commit to `byonk-base`? Also onto PR #1115?
-2. **`grey_count <= 2` may be the wrong rule.** On the 4-grey panel at 10–12 px
+1. **`grey_count <= 2` may be the wrong rule.** On the 4-grey panel at 10–12 px
    mono+aliased beats smooth, but at 14 px smooth wins — the real fix may be a **size
    term**, not a wider grey threshold. *Always name panels by config key:* the **4-colour**
    `trmnl_og_4clr` already counts as `grey_count = 2`; it is **4-grey** `trmnl_og` that is
    in question, and they behave oppositely.
-3. **Two inert knobs:** `HintingMode::Light` is byte-identical to `Normal`, and with
+2. **Two inert knobs:** `HintingMode::Light` is byte-identical to `Normal`, and with
    `engine: Interpreter` the `target` has no effect.
-4. A typo'd screen ref in `config.yaml` silently renders the DEFAULT screen
+3. A typo'd screen ref in `config.yaml` silently renders the DEFAULT screen
    (`content_pipeline.rs:204-223`). Still unfixed.
-5. `for_error_diffusion()` is applied to **every** dither (`api/builder.rs`), so HyAB and
+4. `for_error_diffusion()` is applied to **every** dither (`api/builder.rs`), so HyAB and
    its `kchroma = 10` tuning are not on the crate's dithering path at all.
-6. **`CHANGES.md` Unreleased has a dangling fragment** around line 142: `…byonk was
-   crowding it.` is followed by `to come out with a fuzzy halo of stray dots around every
-   letter.` — a bullet lost its opening in an earlier merge. Left alone rather than
-   guessed at. Re-read the whole Unreleased section before merging #30 anyway.
+5. ~~`CHANGES.md` dangling fragment.~~ **Fixed in `1ce8210`.** The lost line was
+   `- **Text on black-and-white panels is crisp instead of speckled.** Small type used`,
+   recovered verbatim from `2fbb35a` (`git log -S` on the surviving text found it), not
+   rewritten. **Still re-read the whole Unreleased section before merging #30** — one F1
+   entry promises crisp BW text that is only true once Task 7 wires the real `FontConfig`.
 
 **Owner-facing artifacts** (URLs outlive their ephemeral sources; to update, republish the
 same `build_page.py` output **passing the existing URL**, or a second artifact is created):
 
 | What | URL |
 |---|---|
+| **X11 Bitmap Specimens** — all 26 rebuilt faces, F16 before/after, the pitch table (session 22) | https://claude.ai/code/artifact/ef06c1db-b5ba-467c-8cc3-3a7069e00488 |
 | Bitmap vs outline; F15 before/after; F16 diagnosis; F17 (session 20) | https://claude.ai/code/artifact/8fe47446-49b6-4256-9db6-429aa3b8bfb6 |
 | Type trials: specimens, two bugs, the data (session 19) | https://claude.ai/code/artifact/f7ef39be-1a9d-4c97-bd95-d9b3422a515e |
 
@@ -381,6 +380,10 @@ same `build_page.py` output **passing the existing URL**, or a second artifact i
   panel's measured colours (use for judging type).
 - **Measuring pitch without assuming a glyph width:** render the same glyph N and 2N
   times, `pitch = (ink₂ₙ − inkₙ) / N`. Both bitmap width and side bearings cancel.
+  **The whole rig is preserved** in `.superpowers/sdd/…/f16-probe/`: the ruler screen, a
+  `cfg.yaml` with one device per family and a canary, `measure_pitch.py` (prints all 11
+  rows with a verdict), and `build_page.py` (rebuilds the specimen artifact). Fix the
+  absolute paths in `cfg.yaml` and `build_page.py` first — they name a dead scratchpad.
 - **Swapping fonts without rebuilding:** `FONTS_DIR=<dir>` overrides embedded fonts **by
   filename**. Extract the committed ones with
   `git show HEAD:fonts/X11Foo.ttf > <dir>/X11Foo.ttf` to get a "before".

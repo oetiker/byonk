@@ -123,6 +123,13 @@ pub enum ContentError {
 
     #[error("Screen not found: {0}")]
     ScreenNotFound(String),
+
+    /// A device's configured `screen:` names a screen no repo provides.
+    ///
+    /// Distinct from `ScreenNotFound` so the message can name both halves: the
+    /// ref alone leaves it ambiguous which device carries the typo.
+    #[error("Device {device} is configured for screen '{screen}', which no screen repo provides")]
+    DeviceScreenUnresolved { device: String, screen: String },
 }
 
 /// Content pipeline that orchestrates script → template → render
@@ -203,26 +210,31 @@ impl ContentPipeline {
 
         if let Some(device_config) = device_config {
             // Found device config — resolve the device's screen ref via screen repos.
-            if let Some(resolved) = self
+            let resolved = self
                 .screen_repo_manager
                 .loader()
                 .resolve(&device_config.screen)
-            {
-                if let Some(ctx) = device_ctx.as_mut() {
-                    ctx.refresh_override = device_config.refresh;
-                }
-                return self.run_resolved(
-                    &resolved,
-                    &device_config.params,
-                    device_ctx.as_ref(),
-                    None,
-                    None,
-                );
+                .ok_or_else(|| ContentError::DeviceScreenUnresolved {
+                    device: device_mac.to_string(),
+                    screen: device_config.screen.clone(),
+                })?;
+            if let Some(ctx) = device_ctx.as_mut() {
+                ctx.refresh_override = device_config.refresh;
             }
-            // Device config exists but screen not found — fall through to default
+            return self.run_resolved(
+                &resolved,
+                &device_config.params,
+                device_ctx.as_ref(),
+                None,
+                None,
+            );
         }
 
-        // Fall back to the reserved DEFAULT device's screen with empty params.
+        // No config for this device at all — fall back to the reserved DEFAULT
+        // device's screen with empty params. This is the intended path for an
+        // unknown device; a *configured* device with an unresolvable screen ref
+        // errors above instead, because substituting DEFAULT there renders a
+        // screen that is not the one asked for and reports success.
         let default_ref = config
             .default_device_screen()
             .unwrap_or("byonk-builtin/default");
@@ -786,6 +798,50 @@ mod pipeline_tests {
             result.screen_name.contains("calibration/grey"),
             "expected fallback to resolve through devices[\"DEFAULT\"] (byonk-builtin/calibration/grey), got {}",
             result.screen_name
+        );
+    }
+
+    #[test]
+    fn run_script_for_device_errors_when_its_screen_ref_does_not_resolve() {
+        use crate::models::config::{DeviceConfig, RESERVED_DEFAULT_KEY};
+        let mut config = crate::models::AppConfig::default();
+        // A DEFAULT that resolves, so the only thing that can make this test
+        // pass is refusing to use it. Without that refusal a typo'd `screen:`
+        // renders the DEFAULT screen and reports success — the render looks
+        // fine and is the wrong screen.
+        config.devices.insert(
+            RESERVED_DEFAULT_KEY.to_string(),
+            DeviceConfig {
+                screen: "byonk-builtin/calibration/grey".to_string(),
+                ..Default::default()
+            },
+        );
+        config.devices.insert(
+            "00:11:22:33:44:55".to_string(),
+            DeviceConfig {
+                screen: "byonk-builtin/celibration/grey".to_string(),
+                ..Default::default()
+            },
+        );
+        let loader = Arc::new(AssetLoader::new(None, None, None));
+        let pipeline = build_pipeline_with_config(config, HashMap::new(), loader);
+
+        let msg = match pipeline.run_script_for_device("00:11:22:33:44:55", None) {
+            Ok(result) => panic!(
+                "a device naming an unresolvable screen must be an error, but it rendered {}",
+                result.screen_name
+            ),
+            Err(e) => e.to_string(),
+        };
+        // The message has to name the ref that did not resolve; "screen not
+        // found" alone leaves the owner guessing which of the two it means.
+        assert!(
+            msg.contains("byonk-builtin/celibration/grey"),
+            "error must name the unresolved screen ref, got: {msg}"
+        );
+        assert!(
+            msg.contains("00:11:22:33:44:55"),
+            "error must name the device, got: {msg}"
         );
     }
 

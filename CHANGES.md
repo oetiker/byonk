@@ -174,6 +174,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timestamp, which removes a duplicate, since `footer.svg` already prints one. To put the
   icons somewhere else, set `status_y` and the new `status_color`. **If you include
   `header.svg` and relied on it showing `updated_at`, include `footer.svg` as well.**
+- **A device configured for a screen that does not exist is now an error.** A typo in a
+  device's `screen:` silently rendered the DEFAULT screen instead and reported success, so
+  the device showed a plausible-looking picture that was not the screen you asked for. Byonk
+  now says which device names which missing screen — on the command line as a failure, and
+  on the device as an on-screen message. Devices that have no configuration of their own
+  still fall back to the DEFAULT screen, which is what that fallback is for.
 - **A screen can no longer take the server down with a looping template.** A template that
   includes itself, two that include each other, or a macro that calls itself used to abort
   the whole process. Byonk now refuses such a screen with an ordinary error that names the

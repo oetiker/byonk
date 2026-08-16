@@ -379,7 +379,10 @@ fn run_render_command(
         // Normal render path
         let script_result = content_pipeline
             .run_script_for_device(mac, Some(device_context.clone()))
-            .map_err(|e| anyhow::anyhow!("Script error: {e}"))?;
+            // `ContentError` already labels its own kind ("Script error: …",
+            // "Template error: …"), so adding a prefix here both doubled it up
+            // and mislabelled every variant that is not a script failure.
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         // device_config/panel/dc_colors/dc_dither/panel_colors/measured were
         // already resolved once above (before the device context) and are

@@ -1711,7 +1711,7 @@ mod tests {
           <rect width="800" height="480" fill="#fff"/>
           <text x="20" y="40" font-family="Outfit" font-size="11"
                 style="font-variation-settings: 'wght' 400">Hamburgefonstiv 0123456789</text>
-          <text x="20" y="80" font-family="Outfit Mono, Outfit" font-size="11"
+          <text x="20" y="80" font-family="Crisp Body, Outfit" font-size="11"
                 style="font-variation-settings: 'wght' 400">Hamburgefonstiv 0123456789</text>
         </svg>"##;
 
@@ -1731,22 +1731,29 @@ mod tests {
             .expect("render")
         };
 
-        // Baseline: no variants at all. "Outfit Mono" is not a family, so the
-        // second line falls back to the same face as the first.
+        // A variant alias is a name the author makes up and byonk intercepts,
+        // so it must not be a real family — otherwise ordinary font lookup
+        // could satisfy the second line and this test could not tell the two
+        // apart. `Crisp Body` says what the variant is *for*. It deliberately
+        // does not read like a font: an alias built as `<RealFamily>
+        // <TechnicalTerm>` — the earlier `Outfit Mono`, which meant Outfit
+        // with mono *hinting*, not a monospaced Outfit — is read by everyone
+        // as a font that does not exist.
         //
-        // The document names that fallback itself — `Outfit Mono, Outfit` —
-        // rather than leaving an unresolvable family to land wherever the
-        // generic families happen to point. It used to land on Outfit only
-        // because `sans-serif` did; repointing the generics at the Source trio
-        // silently moved it to Source Sans 3 and broke the second control
-        // below, which needs `plain` and `inheriting` to resolve to the same
-        // face. Naming it keeps this test about hinting.
+        // Baseline: no variants at all, so the second line falls back to the
+        // same face as the first. The document names that fallback itself —
+        // `Crisp Body, Outfit` — rather than leaving an unresolvable family to
+        // land wherever the generic families happen to point. It used to land
+        // on Outfit only because `sans-serif` did; repointing the generics at
+        // the Source trio silently moved it to Source Sans 3 and broke the
+        // second control below, which needs `plain` and `inheriting` to
+        // resolve to the same face. Naming it keeps this test about hinting.
         let mut plain = FontConfig::adaptive_default(4);
         plain.variants.clear();
 
         let mut with_variant = plain.clone();
         with_variant.variants.insert(
-            "Outfit Mono".to_string(),
+            "Crisp Body".to_string(),
             FontVariant {
                 font: "Outfit".to_string(),
                 strikes: None,
@@ -1760,7 +1767,7 @@ mod tests {
         assert_ne!(
             render(&plain),
             render(&with_variant),
-            "declaring an Outfit Mono variant must change the second line's \
+            "declaring a Crisp Body variant must change the second line's \
              rasterisation; identical output means select_font never resolved it"
         );
 
@@ -1769,7 +1776,7 @@ mod tests {
         // would pass the assertion above.
         let mut unused = plain.clone();
         unused.variants.insert(
-            "Outfit Unused".to_string(),
+            "Never Referenced".to_string(),
             FontVariant {
                 font: "Outfit".to_string(),
                 strikes: None,
@@ -1791,7 +1798,7 @@ mod tests {
         // configured identically, so it must rasterize byte for byte the same.
         let mut inheriting = plain.clone();
         inheriting.variants.insert(
-            "Outfit Mono".to_string(),
+            "Crisp Body".to_string(),
             FontVariant {
                 font: "Outfit".to_string(),
                 strikes: None,

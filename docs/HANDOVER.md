@@ -300,11 +300,31 @@ broke a *control*, not the main assertion. The document now names its own fallba
 (`Outfit Mono, Outfit`). **Any test that leans on where an unresolved family lands is
 leaning on the generic mapping.**
 
+**Variant aliases: name them for their purpose, never `<RealFamily> <TechnicalTerm>`.**
+A variant alias is a name the author invents and byonk's `select_font` intercepts, so it
+*must not* be a real family — that is the mechanism, not a wart. But the plan's examples,
+`"Outfit Mono"` and `"X11Helv Outline"`, both read as fonts that do not exist. `"Outfit
+Mono"` meant *Outfit with mono hinting*; every reader takes it for a monospaced Outfit.
+The owner queried it on sight. Renamed in the test to **`"Crisp Body"`** (and `"Outfit
+Unused"` → `"Never Referenced"`). **Task 7 must not ship the plan's names in the Lua
+examples or the docs** — use purpose names like
+`["Crisp Body"] = { font = "Outfit", hinting = { target = "mono" } }`.
+
+Second, subtler rule from the same episode: **an alias that resolves to nothing makes a
+test depend on where unresolved families land**, which is the generic mapping. Always name
+the fallback in the document (`font-family="Crisp Body, Outfit"`).
+
+**`Hamburgefonstiv` is a type-design proof word** — chosen for shape coverage (stems,
+bowls, arches, diagonals, ascenders/descenders), not for stressing a rasteriser. It came
+from the plan. It is *representative*, and the lesson below wants *extreme*. Prefer
+`x X H v /` when a test is about hinting or aliasing.
+
 # Remaining plan tasks
 
 4. Render-scale warning.
 7. **`font_hinting` Lua directive** — must carry the F1 design constraint (below) *and*
-   validate declared variant base families at parse time.
+   validate declared variant base families at parse time. **Also: do not ship the plan's
+   example alias names.** See the variant-alias rule below.
 8. Migrate screens + docs (fold in F17).
 9. State-3 capture + pixel diff + **show the owner**. Baseline
    `/tmp/byonk-renders/state2-final` — regenerate rather than trust, `/tmp` does not

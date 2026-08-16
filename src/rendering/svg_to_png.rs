@@ -94,7 +94,7 @@ impl SvgRenderer {
             .into_iter()
             .map(|id| {
                 let sizes = fontdb
-                    .with_face_data(id, crate::rendering::font_strikes::bitmap_strikes_for)
+                    .with_face_data(id, crate::rendering::font_introspection::bitmap_strikes_for)
                     .unwrap_or_default();
                 (id, sizes)
             })
@@ -342,16 +342,57 @@ impl SvgRenderer {
     /// not font bytes.
     fn font_resolver(fonts: Option<&FontConfig>) -> usvg::FontResolver<'static> {
         let mut resolver = usvg::FontResolver::default();
-        let Some(cfg) = fonts else { return resolver };
-        if cfg.variants.is_empty() {
-            return resolver;
-        }
 
         // Face ID -> the variant alias we loaded it for. Populated lazily by
         // `select_font` and read by the other two hooks, which receive only an
         // ID. The hooks are `Fn + Send + Sync`, hence the mutex.
         let aliases: Arc<std::sync::Mutex<std::collections::HashMap<usvg::fontdb::ID, String>>> =
             Default::default();
+        // Empty when no variants are declared, which is the ordinary case. The
+        // hinting hook below is installed either way, because resolving
+        // `AutoFallback` is not a variant feature — see `resolve_auto_fallback`.
+        let variants = fonts.map(|c| c.variants.clone()).unwrap_or_default();
+
+        if !variants.is_empty() {
+            Self::install_variant_hooks(&mut resolver, &variants, &aliases);
+        }
+
+        let hinting_variants = variants;
+        let seen = aliases;
+        // Face ID -> whether its interpreter has a real program to run.
+        // `select_hinting` is called once per glyph and answering re-parses the
+        // font, so the answer is computed once per face.
+        let interpreter_usable: Arc<
+            std::sync::Mutex<std::collections::HashMap<usvg::fontdb::ID, bool>>,
+        > = Default::default();
+        resolver.select_hinting = Box::new(move |id, _size, global, db| {
+            let alias = seen.lock().unwrap().get(&id).cloned();
+            let requested = match alias
+                .and_then(|a| hinting_variants.get(&a).and_then(|v| v.hinting.clone()))
+            {
+                // The variant overrides: `Some(spec)` hints it its own way,
+                // `None` is hinting explicitly off for this variant.
+                Some(over) => over.map(|s| s.to_usvg()),
+                // Either not a variant face, or a variant that does not
+                // override hinting: inherit the document default, which
+                // `global` already carries.
+                None => global,
+            };
+            resolve_auto_fallback(&interpreter_usable, id, db, requested)
+        });
+
+        resolver
+    }
+
+    /// The `select_font` and `select_bitmap` halves of the resolver, which only
+    /// exist to serve declared variants. Split out so [`Self::font_resolver`]
+    /// can install the hinting hook unconditionally without nesting the whole
+    /// body in an `if`.
+    fn install_variant_hooks(
+        resolver: &mut usvg::FontResolver<'static>,
+        declared: &std::collections::BTreeMap<String, crate::rendering::font_config::FontVariant>,
+        aliases: &Arc<std::sync::Mutex<std::collections::HashMap<usvg::fontdb::ID, String>>>,
+    ) {
         // (alias, base face) -> the face we loaded for it, so repeated text
         // runs asking for the same variant share one face instead of adding
         // another copy of the font to the database each time.
@@ -361,7 +402,7 @@ impl SvgRenderer {
             >,
         > = Default::default();
 
-        let variants = cfg.variants.clone();
+        let variants = declared.clone();
         let seen = aliases.clone();
         let base_selector = usvg::FontResolver::default_font_selector();
         resolver.select_font = Box::new(move |font, db| {
@@ -408,31 +449,14 @@ impl SvgRenderer {
             base_selector(font, db)
         });
 
-        let variants = cfg.variants.clone();
+        let variants = declared.clone();
         let seen = aliases.clone();
-        resolver.select_hinting = Box::new(move |id, _size, global, _db| {
-            let alias = seen.lock().unwrap().get(&id).cloned();
-            match alias.and_then(|a| variants.get(&a).and_then(|v| v.hinting.clone())) {
-                // The variant overrides: `Some(spec)` hints it its own way,
-                // `None` is hinting explicitly off for this variant.
-                Some(over) => over.map(|s| s.to_usvg()),
-                // Either not a variant face, or a variant that does not
-                // override hinting: inherit the document default, which
-                // `global` already carries.
-                None => global,
-            }
-        });
-
-        let variants = cfg.variants.clone();
-        let seen = aliases;
         resolver.select_bitmap = Box::new(move |id, _size, _db| {
             let alias = seen.lock().unwrap().get(&id).cloned();
             alias
                 .and_then(|a| variants.get(&a).and_then(|v| v.strikes))
                 .unwrap_or(true) // resvg's default: strikes are used
         });
-
-        resolver
     }
 
     /// The parse options for one render.
@@ -551,6 +575,55 @@ impl Default for SvgRenderer {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Resolve usvg's `AutoFallback` hinting engine for one face.
+///
+/// `AutoFallback` is documented as picking the interpreter for fonts that carry
+/// hints and the automatic hinter for those that don't. skrifa decides it by
+/// asking only whether `fpgm` or `prep` is non-empty, so a face whose entire
+/// program is the seven-byte dropout-control stub modern build tools emit gets
+/// the interpreter — which then has nothing to run, and the text comes out
+/// unhinted while the caller believes it asked for a fallback. Byonk answers
+/// the question the documentation poses and substitutes `Auto` where the
+/// interpreter would idle.
+///
+/// This can only move a face towards the automatic hinter, never away from it,
+/// so it cannot override an author who asked for `Interpreter` outright.
+///
+/// The answer is memoised per face because usvg calls `select_hinting` once per
+/// glyph while reading it re-parses the font. Upstream will not change the
+/// selection rule — skrifa matches FreeType deliberately and Skia depends on
+/// that parity — so this is byonk's to resolve.
+fn resolve_auto_fallback(
+    interpreter_usable: &std::sync::Mutex<std::collections::HashMap<usvg::fontdb::ID, bool>>,
+    id: usvg::fontdb::ID,
+    db: &usvg::fontdb::Database,
+    requested: Option<usvg::FontHintingOptions>,
+) -> Option<usvg::FontHintingOptions> {
+    let mut opts = requested?;
+    if !matches!(opts.engine, usvg::FontHintingEngine::AutoFallback) {
+        return Some(opts);
+    }
+
+    let usable = *interpreter_usable
+        .lock()
+        .unwrap()
+        .entry(id)
+        .or_insert_with(|| {
+            db.with_face_data(
+                id,
+                crate::rendering::font_introspection::has_interpreter_hinting,
+            )
+            // A face whose bytes cannot be read is one byonk cannot claim
+            // carries hints, so it falls back rather than idling.
+            .unwrap_or(false)
+        });
+
+    if !usable {
+        opts.engine = usvg::FontHintingEngine::Auto;
+    }
+    Some(opts)
+}
 
 /// usvg's font stretch as fontdb spells it, so a variant's base face is
 /// queried with the same stretch the requesting element asked for.
@@ -1919,6 +1992,74 @@ mod tests {
             "the circle lost its anti-aliasing ({} grey pixels): the aliasing was \
              applied to the whole document, not to glyphs",
             shape_al.grey
+        );
+    }
+
+    /// `AutoFallback` on a face carrying no real hinting program must actually
+    /// fall back to the automatic hinter.
+    ///
+    /// Outfit's whole contribution is the seven-byte dropout-control stub in
+    /// `prep`. skrifa asks only whether `fpgm` or `prep` is non-empty, so it
+    /// picks the interpreter, which then has nothing to run — `AutoFallback`
+    /// silently means "unhinted" for such a face. byonk resolves this itself.
+    ///
+    /// Note the `variants: Default::default()`: this is the ordinary path an
+    /// unremarkable screen takes, so the substitution has to hold there and not
+    /// only where a variant resolver is installed.
+    #[test]
+    fn auto_fallback_reaches_the_autohinter_on_a_stub_only_face() {
+        let r = bundled_renderer();
+        let spec = DisplaySpec::OG;
+
+        let render = |engine| {
+            let cfg = FontConfig {
+                default: Some(HintingSpec {
+                    engine,
+                    // Mono, unaliased: the strongest hinting signal, with
+                    // rasterisation held constant so only hinting can move.
+                    target: HintingTarget::Mono { aliased: false },
+                }),
+                variants: Default::default(),
+            };
+            r.rasterize_svg(ALIASING_SVG.as_bytes(), spec, Some(&cfg))
+                .expect("render")
+                .data()
+                .to_vec()
+        };
+
+        let auto = render(HintingEngine::Auto);
+        let interpreter = render(HintingEngine::Interpreter);
+        let fallback = render(HintingEngine::AutoFallback);
+
+        // Compared as a count of differing pixels rather than with `assert_eq!`
+        // on the buffers: these are 800x480 RGBA, and a failed `assert_eq!`
+        // would print megabytes of them.
+        let differing = |a: &[u8], b: &[u8]| {
+            a.chunks_exact(4)
+                .zip(b.chunks_exact(4))
+                .filter(|(x, y)| x != y)
+                .count()
+        };
+
+        // The control, and it must come first: if the two engines happened to
+        // agree on this face, both assertions below would hold no matter what
+        // `AutoFallback` did, and the test would measure nothing.
+        assert!(
+            differing(&auto, &interpreter) > 0,
+            "the automatic hinter and the interpreter render this face \
+             identically, so this test cannot tell which one AutoFallback chose"
+        );
+
+        assert_eq!(
+            differing(&fallback, &auto),
+            0,
+            "AutoFallback did not reach the automatic hinter on a face whose \
+             only hinting program is the dropout-control stub"
+        );
+        assert!(
+            differing(&fallback, &interpreter) > 0,
+            "AutoFallback still selected the interpreter, which has nothing to \
+             run on this face and leaves the outline unhinted"
         );
     }
 

@@ -157,6 +157,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   previous conversion moved them to the typographic quotes at U+2018 and U+2019,
   leaving `'` and `` ` `` blank. It no longer has U+0152, U+0153, U+0178, U+2018,
   U+2019 or U+2212, none of which are in the ISO 8859-1 range the face is drawn for.
+- **Automatic-fallback hinting now actually falls back.** Text set with the
+  automatic-fallback engine came out unhinted on most fonts, including the bundled
+  Outfit. The engine is meant to use a font's own hinting where it has some and the
+  automatic hinter where it does not, but it treated the small preamble almost every
+  modern font carries as real hinting, chose the font's own — which had nothing to
+  apply — and left the outlines untouched. Such fonts now get the automatic hinter,
+  as intended.
 - **Text on black-and-white panels is crisp instead of speckled.** Small type used
   to come out with a fuzzy halo of stray dots around every letter. Screens on such
   panels now get sharp, solid glyphs with no extra work; a screen that asks for

@@ -1,10 +1,11 @@
 # Handover — Byonk
 
 _Last updated: 2026-08-16 (session 22). **Initiative: adopt the resvg `byonk-base`
-branch.** Plan Tasks 1, 2, 3, 5, 6 done; 4, 7, 8, 9, 10 remain. **F16, F9, F10 and F18 are all
-DONE and landed** (`1ce8210`, `87da75f`, `d018ddb`, `e85fe7b`). Next up: **plan Tasks 4, 7, 8, 9, 10**,
-plus **F18** (`e85fe7b`) — a pre-existing crash that aborted the whole process, found and
-fixed this session. See Queued work._
+branch.** Plan Tasks 1, 2, 3, 5, 6 done; **4, 7, 8, 9, 10 remain and are the next work.**
+Landed this session: **F16** (`1ce8210`), **F9** (`87da75f`), **F10** (`d018ddb`), **F18**
+(`e85fe7b`) and **F19** (`05b2156`). F18 and F19 were not planned — a crash that aborted
+the whole process, and the component set it lives in being unusable. Both were found by
+checking F10's blast radius rather than by looking for them._
 
 ## Where the work lives
 
@@ -12,9 +13,9 @@ fixed this session. See Queued work._
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
 | PR | **#30**, OPEN against `main` — https://github.com/oetiker/byonk/pull/30 |
-| HEAD | `e85fe7b` plus this handover commit — tree clean |
-| Verified | `cargo test --workspace` green at `e85fe7b`: **1096 passed, 0 failed, exit 0**; clippy clean |
-| Pushed | `cfc0f75` is on `origin` and green on #30. **Everything after it is NOT pushed** (`87da75f`, `d018ddb`, `7538b49`, `ab02f9d`, `e85fe7b`). |
+| HEAD | `05b2156` plus this handover commit — tree clean |
+| Verified | `cargo test --workspace` green at `05b2156`: **1098 passed, 0 failed, exit 0**; clippy clean |
+| **Not pushed** | `cfc0f75` is the last commit on `origin` (green on #30). **Seven commits after it are local only**: `87da75f`, `d018ddb`, `7538b49`, `ab02f9d`, `e85fe7b`, `9cac700`, `05b2156`. Pushing is the owner's call — ask before relying on CI. |
 
 **resvg work happens in a different repo.** `oetiker/resvg` carries `feat/bitmap-mask-glyphs`
 (upstream PR #1115), `feat/font-hinting` (upstream PR #1116), and `byonk-base`, which merges
@@ -239,6 +240,7 @@ licence file at all.
 | ~~F9~~ | **DONE** — `87da75f`. `AutoFallback` now resolves to `Auto` for a face with no `fpgm`/`cvt`. |
 | ~~F10~~ | **DONE** — `d018ddb`. Source trio bundled, generics repointed, OFL notices shipped, docs updated. |
 | ~~F18~~ | **DONE** — `e85fe7b`. The shipped components' HTML-comment usage examples were live self-includes; templates fixed and cycle/depth/macro guards added. |
+| ~~F19~~ | **DONE** — `05b2156`. `status_bar.svg` errored unless `wifi_status` was set; all three components now document how to receive values at all. |
 | F13 | Extend `screens/examples/demo/font/{ttf,bitmap,hinting}/` to cover Source. |
 | F14 | Licence + notice files per the table above. **`FONTS.md`'s "X11LuType is proportional" is wrong — it is monospaced**; the F16 draft already fixes this. |
 | F15 | Owes a byonk-side regression test (above). |
@@ -268,15 +270,41 @@ template reference: weather/screen.svg -> byonk-base-v1/header.svg ->
 byonk-base-v1/header.svg`; disabling only the guard restores `stack overflow, aborting`
 (SIGABRT) on a user-authored self-include.
 
-**Two things found on the way, NOT fixed:**
-1. `status_bar.svg` uses bare `{% if wifi_status == ... %}` with no `default`, so it
-   errors unless the context has a top-level `wifi_status`. A real screen's Lua data lands
-   under `data.*`, so **it is unclear that this component is usable from a screen at all.**
-   Worth checking before advertising it.
-2. `/private/tmp` really does not survive a reboot — the probe rig vanished mid-session
-   and a `cmp` against a **missing** canary silently reported success. **`test -s` both
-   files before believing a canary comparison.** The durable copy in
-   `.superpowers/sdd/…/f16-probe/` is what saved the rig; keep putting probes there.
+**F19 — DONE (`05b2156`). The component set was unusable, in two layers.**
+
+Found while verifying F18: with the crash gone, `status_bar.svg` still refused to render.
+
+1. **The reported fault.** It compared `wifi_status` against a string with **no default**,
+   which in Tera is a hard error when the variable is absent — for a variable its own notes
+   call *optional*. The battery block two lines below already guarded with `is defined`;
+   the WiFi block now does too.
+2. **The one underneath.** None of the three said how to receive anything, and *this nearly
+   went in the handover as "these components may be unusable"*. The template context is
+   **strictly namespaced** — `data`, `device`, `params`, `layout`, built in
+   `content_pipeline.rs` — while the components read bare `title` / `wifi_status` /
+   `footer_text`. So every documented variable was unreachable and each silently fell back
+   to its default.
+
+**The bridge is `{% set %}` in the including template, and it does reach an include —
+verified by rendering, not assumed.** That idiom is now in all three usage notes:
+
+```
+{% set wifi_status = data.wifi %}
+{% include "byonk-base-v1/status_bar.svg" %}
+```
+
+Nice consequence: those usage examples now contain live-looking `{% set %}`/`{% include %}`
+tags — exactly what caused F18 when they sat in an HTML comment.
+`test_shipped_base_components_render_with_nothing_set` covers it: if `{# #}` ever stopped
+protecting them, F18's cycle guard would reject these files and the test would fail.
+
+`test_status_bar_still_draws_wifi_when_it_is_set` is the control that blocks "fix it by
+deleting the feature" — it asserts connected draws its arcs, disconnected draws its
+strike, and unset draws neither. Gutting the block instead of guarding it fails it.
+
+**Left alone deliberately:** with `header.svg` and `status_bar.svg` in one screen, the
+battery icon and the header's right-aligned timestamp sit almost on top of each other.
+Repositioning shipped components is a design decision, not a bug fix — **ask the owner.**
 
 **F9's motivation:** eight of nine trio candidates have no TrueType hinting program — a
 7-byte `prep` stub and no `fpgm`/`cvt`. skrifa's `AutoFallback` tests whether `fpgm` *or*
@@ -363,8 +391,12 @@ hatch is **`text-rendering: optimizeLegibility`** — restores AA *and keeps hin
    in question, and they behave oppositely.
 2. **Two inert knobs:** `HintingMode::Light` is byte-identical to `Normal`, and with
    `engine: Interpreter` the `target` has no effect.
-3. A typo'd screen ref in `config.yaml` silently renders the DEFAULT screen
-   (`content_pipeline.rs:204-223`). Still unfixed.
+3. **A typo'd screen ref in `config.yaml` silently renders the DEFAULT screen**
+   (`content_pipeline.rs:204-223`). Still unfixed, and it cost real time again in session
+   22: after a reboot deleted a probe rig, byonk rendered the default splash and reported
+   success. Every probe in this repo carries a canary purely to work around this. **A
+   config naming a screen that does not resolve should be an error, not a silent
+   substitution** — that is the fix worth making.
 4. `for_error_diffusion()` is applied to **every** dither (`api/builder.rs`), so HyAB and
    its `kchroma = 10` tuning are not on the crate's dithering path at all.
 5. ~~`CHANGES.md` dangling fragment.~~ **Fixed in `1ce8210`.** The lost line was
@@ -416,6 +448,17 @@ same `build_page.py` output **passing the existing URL**, or a second artifact i
 - **A saved artifact is not evidence that it holds what its name says.** Diff a preserved
   patch against what it claims to preserve — `f16-resvg-outline-free-advance.patch` was
   applied to a clean tree and checked before being trusted.
+- **A negative result from a missing file is not a passing test.** `cmp -s a b` against a
+  non-existent `b` exits non-zero, exactly like "the files differ". Any check whose pass
+  condition is a command *failing* must first prove both inputs exist.
+- **A template that reads bare names cannot see a namespaced context.** byonk hands Tera
+  `data`/`device`/`params`/`layout`; `byonk-base/v1/*` read bare `title`, `wifi_status`.
+  Every documented variable was therefore unreachable and silently defaulted — a whole
+  component family looked fine and did nothing. **When a component documents inputs, render
+  it once with those inputs set and once without, and require the two to differ.**
+- **Work left by an agent that died is not verified work.** Session 22's subagent was
+  killed by a machine crash mid-task. Its diff looked complete and *was* good, but nothing
+  had been run. Re-run everything, including the sabotage checks, before trusting it.
 - **Never run `make check` while the tree is being edited.** Also `make check > log; echo
   "EXIT=$?"` reports the *echo's* status — use `|| echo FAILED >> log`.
 - **Judge type at true size.** 124.7 dpi, so 10 px = 5.8 pt.
@@ -428,7 +471,7 @@ same `build_page.py` output **passing the existing URL**, or a second artifact i
 # Build / verify
 
 - `make check` = fmt + clippy + full suite, **~10 min — background it**; it runs
-  `cargo fmt`, not `--check`, so it rewrites files. Green state = **1096 passed**.
+  `cargo fmt`, not `--check`, so it rewrites files. Green state = **1098 passed**.
 - **Changing `Cargo.lock`'s resvg pin forces a full rebuild of usvg/resvg and everything
   downstream — ~10+ min. Always background it**; a 600 s foreground timeout will kill it.
 - **Subagents must not run `make check`** — the 600 s watchdog kills them. Give them
@@ -456,6 +499,10 @@ same `build_page.py` output **passing the existing URL**, or a second artifact i
 - **Always include a canary device** whose `screen:` cannot resolve, point `DEFAULT` at
   `byonk-builtin/calibration/grey`, and `cmp` the two renders. Identical bytes mean you
   captured the fallback, not your screen. This caught a real mistake in session 21.
+  **`test -s` BOTH files before believing the `cmp`.** In session 22 a reboot deleted the
+  probe rig; `cmp` against a canary that no longer existed returned non-zero, which reads
+  as "different, therefore fine". The render had actually fallen back to the default
+  screen. The tell was the file size — 47 KB for a two-line screen.
 - `--use-actual false` gives spec colours (use for pixel diffs); the default gives the
   panel's measured colours (use for judging type).
 - **Measuring pitch without assuming a glyph width:** render the same glyph N and 2N
@@ -489,6 +536,9 @@ ephemeral. Remove with `git worktree remove` (or `git worktree prune`) when conv
 …/bc0fc7e3-…/scratchpad/byonk-before   (detached 744fec8)
 ```
 
+Both now report **`prunable`** (`git worktree list`) — the reboot took their directories
+with it. `git worktree prune` is safe and removes both.
+
 ---
 
 # Carried forward
@@ -500,3 +550,7 @@ Still open on PR #30: re-read `CHANGES.md`'s Unreleased section as a whole befor
 (one F1 entry promises crisp BW text that is only true once Task 7 wires the real
 `FontConfig`; all production call sites still pass `None`), and two overstated test names
 in `dither/mod.rs`.
+
+Session 22 added four user-facing `CHANGES.md` entries under Unreleased — the rebuilt X11
+fonts, the Source trio and generics, automatic-fallback hinting, and the two template
+fixes. They have not been read as a set against the rest of the section.

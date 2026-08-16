@@ -141,6 +141,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keep their designed spacing, and a strike is also snapped to the pixel grid when a
   screen itself places text at a fractional position. Terminus at 14 px and 18 px is
   now 1 px per glyph wider, which is its real design: byonk was crowding it.
+- **The X11 bitmap fonts are spaced as their designers drew them.** The 26 bundled
+  X11 faces were converted from their originals in a way that threw the original
+  pixel advances away and recomputed them from an autotraced outline, so 16 of 28
+  fixed-pitch strikes rendered at the wrong pitch. `X11Misc7x` at 13 px was a pixel
+  too narrow and its glyphs welded into a bar; `X11Misc9x` Bold at 18 px was five
+  pixels too wide and read as if letter-spaced. Every face has been rebuilt from the
+  original X.Org sources and now renders at exactly the pitch those sources declare.
+  The rebuilt fonts are also bitmap-only, which halves their size — the bundle drops
+  from 8.7 MB to 4.9 MB. One consequence worth knowing: a bitmap face asked for at a
+  size it has no strike for now scales its nearest strike instead of falling back to
+  a blurry traced outline. It stays the same typeface at the right width, but it is
+  blocky. `fonts/FONTS.md` lists the sizes each family actually has.
+- `X11Term` gained the plain ASCII apostrophe and backtick, which it never had: the
+  previous conversion moved them to the typographic quotes at U+2018 and U+2019,
+  leaving `'` and `` ` `` blank. It no longer has U+0152, U+0153, U+0178, U+2018,
+  U+2019 or U+2212, none of which are in the ISO 8859-1 range the face is drawn for.
+- **Text on black-and-white panels is crisp instead of speckled.** Small type used
   to come out with a fuzzy halo of stray dots around every letter. Screens on such
   panels now get sharp, solid glyphs with no extra work; a screen that asks for
   smoother text itself (`text-rendering="geometricPrecision"`) still gets it, and

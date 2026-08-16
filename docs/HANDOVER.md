@@ -302,9 +302,25 @@ protecting them, F18's cycle guard would reject these files and the test would f
 deleting the feature" — it asserts connected draws its arcs, disconnected draws its
 strike, and unset draws neither. Gutting the block instead of guarding it fails it.
 
-**Left alone deliberately:** with `header.svg` and `status_bar.svg` in one screen, the
-battery icon and the header's right-aligned timestamp sit almost on top of each other.
-Repositioning shipped components is a design decision, not a bug fix — **ask the owner.**
+**F20 — DONE (`8246b92`). The overlap the owner was asked about, plus two faults under it.**
+
+With `header.svg` and `status_bar.svg` in one screen the battery icon and the header's
+right-aligned timestamp overlapped. The owner chose: **the icons own the corner, the
+timestamp moves to the footer.** Rendering it revealed two more faults the description had
+missed — the icons are dark grey on the header's *black* bar, so they were near-invisible
+anyway; and `updated_at` was drawn by `header.svg` **and** `footer.svg`, printing the time
+twice. `header.svg` now has no timestamp, the icons default to light ink, and
+`status_color` lets a screen placing them on white darken them again.
+
+**Breaking:** a screen including `header.svg` alone and relying on `updated_at` must now
+include `footer.svg` too.
+
+Sabotage-checked both halves: re-adding the header timestamp, and hard-coding the ink on
+the battery marks only, each fail their own test. Before/after renders of
+header+status_bar+footer confirmed it — **the zoomed corner is what showed the overlap was
+ink-on-ink, not merely close.** Still open, cosmetic: the WiFi glyph is an 8×12 three-arc
+path whose inner arcs collapse at that size, so it reads as a caret. Pre-existing; only
+noticeable now that the icon is visible at all.
 
 **F9's motivation:** eight of nine trio candidates have no TrueType hinting program — a
 7-byte `prep` stub and no `fpgm`/`cvt`. skrifa's `AutoFallback` tests whether `fpgm` *or*
@@ -391,12 +407,17 @@ hatch is **`text-rendering: optimizeLegibility`** — restores AA *and keeps hin
    in question, and they behave oppositely.
 2. **Two inert knobs:** `HintingMode::Light` is byte-identical to `Normal`, and with
    `engine: Interpreter` the `target` has no effect.
-3. **A typo'd screen ref in `config.yaml` silently renders the DEFAULT screen**
-   (`content_pipeline.rs:204-223`). Still unfixed, and it cost real time again in session
-   22: after a reboot deleted a probe rig, byonk rendered the default splash and reported
-   success. Every probe in this repo carries a canary purely to work around this. **A
-   config naming a screen that does not resolve should be an error, not a silent
-   substitution** — that is the fix worth making.
+3. ~~**A typo'd screen ref in `config.yaml` silently renders the DEFAULT screen.**~~
+   **FIXED in `3a35030` (F21).** A device that *is* configured and whose `screen:` does not
+   resolve now returns `ContentError::DeviceScreenUnresolved`, naming both the device and
+   the ref. A device with **no** config still falls back to DEFAULT — that is what the
+   fallback is for, and `run_script_for_device_falls_back_to_default_device_screen` still
+   passes. The device-polling path already rendered a visible error SVG for any
+   `ContentError`, so a panel shows a message instead of the wrong screen; the CLI exits
+   non-zero and writes no file. Also dropped `main.rs`'s `"Script error:"` wrapper, which
+   double-prefixed real script errors and mislabelled every other variant.
+   **Consequence: the canary-device workaround is no longer needed for *configured*
+   devices** — a probe rig can point a device at a bogus ref and assert the error instead.
 4. `for_error_diffusion()` is applied to **every** dither (`api/builder.rs`), so HyAB and
    its `kchroma = 10` tuning are not on the crate's dithering path at all.
 5. ~~`CHANGES.md` dangling fragment.~~ **Fixed in `1ce8210`.** The lost line was

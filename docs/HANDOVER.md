@@ -12,7 +12,7 @@ branch.** Plan Tasks 1, 2, 3, 5, 6 done; 4, 7, 8, 9, 10 remain. **F16 is DONE an
 | PR | **#30**, OPEN against `main` — https://github.com/oetiker/byonk/pull/30 |
 | HEAD | `1ce8210` plus this handover commit — tree clean |
 | Verified | `cargo test --workspace` green at `1ce8210`: **1086 passed, 0 failed, exit 0** |
-| **Not pushed** | HEAD is ~18 ahead of origin. Push before relying on CI. |
+| Pushed | level with `origin` as of `3e47517`; CI on #30 has seen the new pin |
 
 **resvg work happens in a different repo.** `oetiker/resvg` carries `feat/bitmap-mask-glyphs`
 (upstream PR #1115), `feat/font-hinting` (upstream PR #1116), and `byonk-base`, which merges
@@ -51,8 +51,7 @@ only `an_outline_free_strike_is_spaced_by_its_own_advance`; byonk `cargo test --
 **1086 passed / 0 failed**; the pitch ruler through byonk is **11/11** (3/11 before).
 Specimens for the owner: https://claude.ai/code/artifact/ef06c1db-b5ba-467c-8cc3-3a7069e00488
 
-**Still not pushed:** byonk's own branch is ~18 ahead of `origin`. PR #30 has not seen any
-of this.
+Byonk's branch is pushed and PR #30 carries all of it.
 
 ## The resvg change — landed
 

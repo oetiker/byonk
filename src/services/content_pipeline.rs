@@ -56,6 +56,9 @@ pub struct ScriptResult {
     pub script_strength: Option<f32>,
     /// Gamut mapping knobs from the script return, if it set any.
     pub script_gamut: Option<crate::models::GamutTuningValues>,
+    /// The screen's `font_hinting` directive, if it declared one. `None` means
+    /// the panel's adaptive default applies — see `resolve_font_config`.
+    pub font_hinting: Option<crate::rendering::font_config::FontHintingDirective>,
     /// Messages captured from the script's `log_info`/`log_warn`/`log_error`
     /// calls, in call order. See `lua_runtime::ScriptResult::logs`.
     pub logs: Vec<String>,
@@ -130,6 +133,30 @@ pub enum ContentError {
     /// ref alone leaves it ambiguous which device carries the typo.
     #[error("Device {device} is configured for screen '{screen}', which no screen repo provides")]
     DeviceScreenUnresolved { device: String, screen: String },
+}
+
+/// How many of a palette's entries are neutral greys (including black and
+/// white), which is what decides whether text wants aliased mono hinting.
+///
+/// Mirrors the `layout.grey_count` a screen sees, which is computed the same
+/// way from the hex colour strings.
+fn grey_count_of(palette: &[(u8, u8, u8)]) -> usize {
+    palette.iter().filter(|(r, g, b)| r == g && g == b).count()
+}
+
+/// Resolves a screen's `font_hinting` directive against the panel.
+///
+/// A screen with no directive still gets the adaptive default — that is the
+/// whole point, and it is why this lives beside the render call rather than at
+/// each caller.
+fn resolve_font_config(
+    directive: Option<&crate::rendering::font_config::FontHintingDirective>,
+    grey_count: usize,
+) -> crate::rendering::font_config::FontConfig {
+    use crate::rendering::font_config::FontConfig;
+    directive
+        .map(|d| d.resolve(grey_count))
+        .unwrap_or_else(|| FontConfig::adaptive_default(grey_count))
 }
 
 /// Content pipeline that orchestrates script → template → render
@@ -328,6 +355,7 @@ impl ContentPipeline {
             script_chroma_clamp: lua_result.chroma_clamp,
             script_strength: lua_result.strength,
             script_gamut: lua_result.gamut,
+            font_hinting: lua_result.font_hinting,
             logs: lua_result.logs,
         })
     }
@@ -492,8 +520,13 @@ impl ContentPipeline {
         use_actual: bool,
         dither: Option<&str>,
         tuning: Option<&crate::rendering::svg_to_png::DitherTuning>,
-        fonts: Option<&crate::rendering::font_config::FontConfig>,
+        fonts: Option<&crate::rendering::font_config::FontHintingDirective>,
     ) -> Result<Vec<u8>, ContentError> {
+        // Resolved here, not by the caller. The adaptive default is what makes
+        // text crisp on a black-and-white panel with no Lua involved, so making
+        // any call site responsible for supplying it is how it goes missing on
+        // one of them — silently, since a screen with no hinting still renders.
+        let font_config = resolve_font_config(fonts, grey_count_of(palette));
         let png_bytes = self.renderer.svg_renderer.render_to_palette_png(
             svg.as_bytes(),
             spec,
@@ -502,7 +535,7 @@ impl ContentPipeline {
             use_actual,
             dither,
             tuning,
-            fonts,
+            Some(&font_config),
         )?;
         Ok(png_bytes)
     }
@@ -515,12 +548,18 @@ impl ContentPipeline {
         &self,
         svg: &str,
         spec: DisplaySpec,
-        fonts: Option<&crate::rendering::font_config::FontConfig>,
+        fonts: Option<&crate::rendering::font_config::FontHintingDirective>,
     ) -> Result<Vec<u8>, ContentError> {
-        let png_bytes =
-            self.renderer
-                .svg_renderer
-                .render_to_raw_png(svg.as_bytes(), spec, fonts)?;
+        // The raw preview is full-colour RGBA, so it is never the 1-bit case
+        // that wants aliased mono. `RAW_GREY_COUNT` says that explicitly rather
+        // than leaving a bare number here.
+        const RAW_GREY_COUNT: usize = usize::MAX;
+        let font_config = resolve_font_config(fonts, RAW_GREY_COUNT);
+        let png_bytes = self.renderer.svg_renderer.render_to_raw_png(
+            svg.as_bytes(),
+            spec,
+            Some(&font_config),
+        )?;
         Ok(png_bytes)
     }
 
@@ -842,6 +881,52 @@ mod pipeline_tests {
         assert!(
             msg.contains("00:11:22:33:44:55"),
             "error must name the device, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_screen_with_no_directive_still_gets_the_panel_s_hinting() {
+        // The load-bearing test for the whole feature. Hinting is applied by
+        // the server, not by the screen, so nothing a screen does can reveal a
+        // call site that forgot to supply the adaptive default — the screen
+        // still renders, just unhinted. This renders the same SVG on a
+        // black-and-white palette twice: once as a screen that said nothing,
+        // once as a screen that explicitly turned hinting off. If the default
+        // is ever dropped at the call site the two become identical.
+        use crate::rendering::font_config::FontHintingDirective;
+
+        let loader = Arc::new(AssetLoader::new(None, None, None));
+        let pipeline =
+            build_pipeline_with_config(crate::models::AppConfig::default(), HashMap::new(), loader);
+
+        // Small text is where hinting shows; `x X H v /` stresses stems and
+        // diagonals rather than flattering the rasteriser.
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 60" width="200" height="60">
+              <rect width="100%" height="100%" fill="white"/>
+              <text x="6" y="24" font-family="sans-serif" font-size="11">x X H v /</text>
+              <text x="6" y="44" font-family="sans-serif" font-size="9">Hamburg 0123</text>
+            </svg>"#;
+        let spec = DisplaySpec::from_dimensions(200, 60).unwrap_or(DisplaySpec::OG);
+        // Two neutral entries -> grey_count 2 -> the adaptive default is
+        // aliased mono, the case that differs most from no hinting at all.
+        let bw = [(0u8, 0u8, 0u8), (255u8, 255u8, 255u8)];
+
+        let render = |fonts: Option<&FontHintingDirective>| {
+            pipeline
+                .render_png_from_svg(svg, spec, &bw, None, false, None, None, fonts)
+                .expect("render should succeed")
+        };
+
+        let defaulted = render(None);
+        let hinting_off = render(Some(&FontHintingDirective {
+            default: Some(None),
+            variants: Default::default(),
+        }));
+
+        assert!(
+            defaulted != hinting_off,
+            "a screen that said nothing rendered identically to one that turned hinting off — \
+             the panel's adaptive default is not reaching the renderer"
         );
     }
 

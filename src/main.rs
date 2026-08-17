@@ -310,6 +310,7 @@ fn run_render_command(
         measured_colors,
         measured_source,
         cli_gamut,
+        script_font_hinting,
     ) = if is_unregistered {
         let code = device_context.registration_code.as_deref().unwrap();
 
@@ -374,6 +375,9 @@ fn run_render_command(
             measured.colors,
             measured.source,
             byonk::models::GamutTuningValues::default(),
+            // The registration screen is byonk's own; it carries no screen
+            // directive, so the panel's adaptive default applies.
+            None,
         )
     } else {
         // Normal render path
@@ -448,6 +452,7 @@ fn run_render_command(
             render_params.measured_colors,
             render_params.measured_source,
             render_params.gamut,
+            script_result.font_hinting,
         )
     };
 
@@ -492,8 +497,7 @@ fn run_render_command(
             } else {
                 None
             },
-            // Task 7 wires the screen's resolved font config here.
-            None,
+            script_font_hinting.as_ref(),
         )
         .map_err(|e| anyhow::anyhow!("Render error: {e}"))?;
 

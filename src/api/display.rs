@@ -990,6 +990,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                                 .with_colors(Some(params.palette))
                                 .with_colors_actual(params.measured_colors)
                                 .with_dither(params.dither)
+                                .with_font_hinting(result.font_hinting.clone())
                                 .with_tuning(&tuning);
                                 let hash = cached.content_hash.clone();
                                 cache.store(cached);
@@ -1171,8 +1172,7 @@ pub async fn handle_image<R: DeviceRegistry>(
         false, // production always uses official colors
         dither,
         if has_tuning { Some(&tuning) } else { None },
-        // Task 7 wires the screen's resolved font config here.
-        None,
+        cached.font_hinting.as_ref(),
     )?;
 
     tracing::info!(size_bytes = png_bytes.len(), "Image rendered and served");

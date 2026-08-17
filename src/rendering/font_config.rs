@@ -210,6 +210,75 @@ impl FontConfig {
     }
 }
 
+/// What a screen's `font_hinting` directive asked for, before the panel is
+/// known.
+///
+/// This is deliberately *not* a [`FontConfig`]: a script can name variants
+/// without saying anything about the document default, and that case has to
+/// stay distinguishable from asking for no hinting at all. Collapsing the two
+/// — which is what "a present directive replaces the default wholesale" would
+/// do — means `font_hinting = { variants = ... }` silently discards the
+/// adaptive mono hinting a black-and-white panel depends on, for an author who
+/// only meant to add a variant.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub struct FontHintingDirective {
+    /// The document default the script asked for.
+    ///
+    /// `None` — the script said nothing, so [`FontConfig::adaptive_default`]
+    /// stands. `Some(None)` — hinting explicitly off. `Some(Some(spec))` — this
+    /// spec instead of the adaptive one.
+    pub default: Option<Option<HintingSpec>>,
+    /// Per-variant overrides. These are always additive; the adaptive default
+    /// is never a source of variants.
+    pub variants: BTreeMap<String, FontVariant>,
+}
+
+impl FontHintingDirective {
+    /// Resolves the directive against the panel to the config a render uses.
+    pub fn resolve(&self, grey_count: usize) -> FontConfig {
+        FontConfig {
+            default: match &self.default {
+                Some(explicit) => explicit.clone(),
+                None => FontConfig::adaptive_default(grey_count).default,
+            },
+            variants: self.variants.clone(),
+        }
+    }
+
+    /// Whether this directive lands a variant in the known-bad
+    /// aliased-without-mono state, and which variants those are.
+    ///
+    /// Glyph aliasing is a property of the *document* — usvg derives it from
+    /// `text-rendering`, and [`FontConfig::text_rendering_default`] is the only
+    /// thing that sets it — while hinting is per face. So a variant that opts
+    /// out of mono while the document is aliased is still rasterized aliased,
+    /// and aliasing an outline that was not mono-hinted drops stems: tiny-skia
+    /// has no dropout control. The author's escape hatch is
+    /// `text-rendering="optimizeLegibility"` on those elements, which restores
+    /// anti-aliasing and keeps hinting. (`geometricPrecision` restores
+    /// anti-aliasing but disables hinting — not the same thing.)
+    pub fn variants_escaping_aliasing(&self, grey_count: usize) -> Vec<String> {
+        let resolved = self.resolve(grey_count);
+        if !matches!(
+            resolved.default.as_ref().map(|h| h.target),
+            Some(HintingTarget::Mono { aliased: true })
+        ) {
+            return Vec::new();
+        }
+        self.variants
+            .iter()
+            .filter(|(_, v)| match &v.hinting {
+                // Inherits the document default, so it stays mono: fine.
+                None => false,
+                // Explicitly off, or explicitly not mono: aliased without mono.
+                Some(None) => true,
+                Some(Some(spec)) => !matches!(spec.target, HintingTarget::Mono { .. }),
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

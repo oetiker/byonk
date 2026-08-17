@@ -1319,6 +1319,51 @@ return {
 }
 ```
 
+### font_hinting
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `font_hinting` | table, `false`, or nil | Overrides how byonk hints this screen's text |
+
+**Omit it.** Byonk already hints text for you, choosing per render from the
+panel: mono hinting with 1-bit glyphs on a black-and-white panel, smooth
+anti-aliased hinting once there are greys. This key is only for overriding that.
+
+```lua
+return {
+  data = { ... },
+  refresh_rate = 300,
+  font_hinting = {
+    engine = "auto",                             -- interpreter | auto | auto_fallback
+    target = "mono",                             -- or a table, see below
+    variants = {
+      ["Crisp Body"] = { font = "Outfit", hinting = { target = "mono" } },
+    },
+  },
+}
+```
+
+- `font_hinting = false` turns hinting off entirely.
+- `target` is `"mono"`, `"smooth"`, `"light"`, `"lcd"`, `"vertical_lcd"`, or a
+  table: `{ mode = "mono", aliased = false }`, or
+  `{ mode = "light", symmetric = true, preserve_linear_metrics = false }`.
+- A directive that only declares `variants` **keeps** byonk's adaptive default;
+  state a `target` to replace it.
+- A **variant** is a name you invent for a font hinted a particular way, so one
+  screen can render the same family two ways. Its `font` must be an installed
+  family and its name must *not* be — both are checked when the script runs, and
+  a mistake is an error rather than a silently different font.
+
+Errors here are hard errors, unlike the dither knobs above, which ignore a
+malformed value. A mistyped hinting target would otherwise render as something
+you never asked for with nothing said about it.
+
+**See [Font Hinting](font-hinting.md)** for the full reference, including the
+one trap: on a black-and-white panel a variant that opts out of mono hinting is
+still drawn 1-bit and its stems can drop out. The fix is
+`text-rendering="optimizeLegibility"` on those elements — byonk warns when a
+screen sets this up.
+
 ### error_clamp, noise_scale, chroma_clamp, strength
 
 | Field | Type | Description |

@@ -1202,8 +1202,7 @@ impl ScreenStore {
             use_actual,
             render_params.dither.as_deref(),
             has_tuning.then_some(&dither_tuning),
-            // Task 7 wires the screen's resolved font config here.
-            None,
+            script_result.font_hinting.as_ref(),
         ) {
             Ok(bytes) => bytes,
             Err(e) => {
@@ -1224,7 +1223,7 @@ impl ScreenStore {
 
         let raw_png = if opts.include_raw {
             self.pipeline
-                .render_raw_png_from_svg(&svg, display_spec, None)
+                .render_raw_png_from_svg(&svg, display_spec, script_result.font_hinting.as_ref())
                 .ok()
         } else {
             None

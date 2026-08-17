@@ -39,6 +39,15 @@ pub struct ScriptResult {
     /// Optional gamut mapping knobs from the script return. Only takes effect
     /// where the SVG marks a region `data-byonk-tone="continuous"`.
     pub gamut: Option<crate::models::GamutTuningValues>,
+    /// Font hinting from the script's `font_hinting` directive.
+    ///
+    /// `None` means the script had no directive at all, so the server's
+    /// adaptive default applies untouched. See
+    /// [`crate::rendering::font_config::FontHintingDirective`] for how a
+    /// present directive is resolved against the panel — in particular why a
+    /// directive that only names variants keeps the adaptive default rather
+    /// than replacing it.
+    pub font_hinting: Option<crate::rendering::font_config::FontHintingDirective>,
     /// Messages captured from `log_info`/`log_warn`/`log_error` calls during
     /// this run, in call order (each prefixed with its level, e.g.
     /// `"[warn] ..."`). In addition to — not a replacement for — the
@@ -232,6 +241,304 @@ pub enum ScriptError {
 
     #[error("Script not found: {0}")]
     NotFound(String),
+
+    /// The script's `font_hinting` directive could not be understood.
+    ///
+    /// Deliberately an error rather than a silent default: the neighbouring
+    /// `error_clamp`/`noise_scale` parsers use `.ok()`, which swallows a
+    /// malformed value, and a mistyped hinting target would then render as
+    /// something the author never asked for with nothing said about it.
+    #[error("font_hinting: {0}")]
+    FontHinting(String),
+}
+
+/// Parses the optional `font_hinting` directive off a script's return table.
+///
+/// Every failure is an error naming the offending value. That is a deliberate
+/// break from the neighbouring `error_clamp` / `noise_scale` parsers, which use
+/// `.ok()` and silently drop a malformed value: a mistyped hinting target would
+/// otherwise render as something the author never asked for, with nothing said.
+///
+/// `known_families` is what the renderer's fontdb actually holds. Variant base
+/// families are checked against it here because the font resolver cannot report
+/// a miss — `select_font` falls through to the default selector when
+/// `db.query` finds nothing, so an unresolvable base family silently lands
+/// wherever unresolved families land, which is the generic mapping.
+fn parse_font_hinting(
+    result: &Table,
+    known_families: &HashMap<String, Vec<FontFaceInfo>>,
+) -> Result<Option<crate::rendering::font_config::FontHintingDirective>, String> {
+    use crate::rendering::font_config::FontHintingDirective;
+
+    let raw: Value = result
+        .get("font_hinting")
+        .map_err(|e| format!("could not be read: {e}"))?;
+
+    let table = match raw {
+        Value::Nil => return Ok(None),
+        Value::Boolean(false) => {
+            return Ok(Some(FontHintingDirective {
+                default: Some(None),
+                variants: Default::default(),
+            }))
+        }
+        Value::Boolean(true) => {
+            return Err(
+                "`true` says nothing about how to hint. Omit font_hinting to get the \
+                        server's adaptive default, use `false` to turn hinting off, or give a \
+                        table."
+                    .to_string(),
+            )
+        }
+        Value::Table(t) => t,
+        other => {
+            return Err(format!(
+                "expected a table or false, got {}",
+                other.type_name()
+            ))
+        }
+    };
+
+    let engine = match table.get::<Value>("engine").map_err(|e| e.to_string())? {
+        Value::Nil => crate::rendering::font_config::HintingEngine::Auto,
+        Value::String(s) => parse_engine(&s.to_string_lossy())?,
+        other => {
+            return Err(format!(
+                "engine must be a string, got {}",
+                other.type_name()
+            ))
+        }
+    };
+
+    // A directive that says nothing about the target leaves the adaptive
+    // default in place; only an explicit target replaces it.
+    let default = match table.get::<Value>("target").map_err(|e| e.to_string())? {
+        Value::Nil => None,
+        Value::Boolean(false) => Some(None),
+        v => Some(Some(crate::rendering::font_config::HintingSpec {
+            engine,
+            target: parse_target(v)?,
+        })),
+    };
+
+    let variants = parse_variants(&table, known_families)?;
+
+    Ok(Some(FontHintingDirective { default, variants }))
+}
+
+fn parse_engine(s: &str) -> Result<crate::rendering::font_config::HintingEngine, String> {
+    use crate::rendering::font_config::HintingEngine;
+    match s {
+        "interpreter" => Ok(HintingEngine::Interpreter),
+        "auto" => Ok(HintingEngine::Auto),
+        "auto_fallback" => Ok(HintingEngine::AutoFallback),
+        other => Err(format!(
+            "unknown engine {other:?} — expected \"interpreter\", \"auto\" or \"auto_fallback\""
+        )),
+    }
+}
+
+/// Parses a `target`, which is either a shorthand string or a table whose
+/// `mode` picks the style. `mode` is the discriminator so that mono's extra
+/// knob (`aliased`) and smooth's two (`symmetric`, `preserve_linear_metrics`)
+/// each have a home.
+fn parse_target(v: Value) -> Result<crate::rendering::font_config::HintingTarget, String> {
+    use crate::rendering::font_config::{HintingMode, HintingTarget};
+
+    // Smooth's defaults match what the adaptive default gives a grey panel, so
+    // `target = "smooth"` produces the same thing byonk would have chosen.
+    const SMOOTH_SYMMETRIC: bool = false;
+    const SMOOTH_PRESERVE: bool = true;
+
+    let (mode, table) = match v {
+        Value::String(s) => (s.to_string_lossy().to_string(), None),
+        Value::Table(t) => {
+            let mode = match t.get::<Value>("mode").map_err(|e| e.to_string())? {
+                Value::Nil => "smooth".to_string(),
+                Value::String(s) => s.to_string_lossy().to_string(),
+                other => {
+                    return Err(format!(
+                        "target mode must be a string, got {}",
+                        other.type_name()
+                    ))
+                }
+            };
+            (mode, Some(t))
+        }
+        other => {
+            return Err(format!(
+                "target must be a string or a table, got {}",
+                other.type_name()
+            ))
+        }
+    };
+
+    let get_bool = |key: &str, fallback: bool| -> Result<bool, String> {
+        match &table {
+            None => Ok(fallback),
+            Some(t) => match t.get::<Value>(key).map_err(|e| e.to_string())? {
+                Value::Nil => Ok(fallback),
+                Value::Boolean(b) => Ok(b),
+                other => Err(format!(
+                    "target {key} must be a boolean, got {}",
+                    other.type_name()
+                )),
+            },
+        }
+    };
+
+    let smooth = |mode: HintingMode| -> Result<HintingTarget, String> {
+        Ok(HintingTarget::Smooth {
+            mode,
+            symmetric_rendering: get_bool("symmetric", SMOOTH_SYMMETRIC)?,
+            preserve_linear_metrics: get_bool("preserve_linear_metrics", SMOOTH_PRESERVE)?,
+        })
+    };
+
+    match mode.as_str() {
+        // Aliasing defaults on because mono hinting is what makes aliasing
+        // safe, and asking for mono on its own is almost always asking for
+        // crisp 1-bit text. `aliased = false` is there for a grey panel that
+        // still wants stems on the grid.
+        "mono" => Ok(HintingTarget::Mono {
+            aliased: get_bool("aliased", true)?,
+        }),
+        "smooth" | "normal" => smooth(HintingMode::Normal),
+        "light" => smooth(HintingMode::Light),
+        "lcd" => smooth(HintingMode::Lcd),
+        "vertical_lcd" => smooth(HintingMode::VerticalLcd),
+        other => Err(format!(
+            "unknown target {other:?} — expected \"mono\", \"smooth\", \"light\", \"lcd\" or \
+             \"vertical_lcd\""
+        )),
+    }
+}
+
+fn parse_variants(
+    table: &Table,
+    known_families: &HashMap<String, Vec<FontFaceInfo>>,
+) -> Result<std::collections::BTreeMap<String, crate::rendering::font_config::FontVariant>, String>
+{
+    use crate::rendering::font_config::{FontVariant, HintingSpec};
+
+    let variants_table = match table.get::<Value>("variants").map_err(|e| e.to_string())? {
+        Value::Nil => return Ok(Default::default()),
+        Value::Table(t) => t,
+        other => {
+            return Err(format!(
+                "variants must be a table, got {}",
+                other.type_name()
+            ))
+        }
+    };
+
+    let mut out = std::collections::BTreeMap::new();
+    for pair in variants_table.pairs::<String, Value>() {
+        let (alias, value) = pair.map_err(|e| e.to_string())?;
+
+        // The alias is a name `select_font` intercepts before the default
+        // selector runs. If it is also a real family, the interception shadows
+        // that family and every element asking for it silently gets something
+        // else.
+        if known_families.contains_key(&alias) {
+            return Err(format!(
+                "variant name {alias:?} is already an installed font family. A variant name is \
+                 an alias you invent for byonk to intercept, so it must not be a real family — \
+                 name it for its purpose instead, e.g. \"Crisp Body\"."
+            ));
+        }
+
+        let vt = match value {
+            Value::Table(t) => t,
+            other => {
+                return Err(format!(
+                    "variant {alias:?} must be a table, got {}",
+                    other.type_name()
+                ))
+            }
+        };
+
+        let font = match vt.get::<Value>("font").map_err(|e| e.to_string())? {
+            Value::String(s) => s.to_string_lossy().to_string(),
+            Value::Nil => {
+                return Err(format!(
+                    "variant {alias:?} has no `font` — a variant needs the family it is a \
+                     variant of"
+                ))
+            }
+            other => {
+                return Err(format!(
+                    "variant {alias:?} font must be a string, got {}",
+                    other.type_name()
+                ))
+            }
+        };
+        if !known_families.contains_key(&font) {
+            return Err(format!(
+                "variant {alias:?} names font {font:?}, which is not installed. \
+                 `fonts.families()` lists what this server has."
+            ));
+        }
+
+        let strikes = match vt.get::<Value>("strikes").map_err(|e| e.to_string())? {
+            Value::Nil => None,
+            Value::Boolean(b) => Some(b),
+            other => {
+                return Err(format!(
+                    "variant {alias:?} strikes must be a boolean, got {}",
+                    other.type_name()
+                ))
+            }
+        };
+
+        // Outer None = inherit the document default; Some(None) = off for this
+        // variant only.
+        let hinting = match vt.get::<Value>("hinting").map_err(|e| e.to_string())? {
+            Value::Nil => None,
+            Value::Boolean(false) => Some(None),
+            Value::Boolean(true) => {
+                return Err(format!(
+                    "variant {alias:?} hinting `true` says nothing — omit it to inherit, use \
+                     `false` to turn hinting off, or give a table"
+                ))
+            }
+            Value::Table(ht) => {
+                let engine = match ht.get::<Value>("engine").map_err(|e| e.to_string())? {
+                    Value::Nil => crate::rendering::font_config::HintingEngine::Auto,
+                    Value::String(s) => parse_engine(&s.to_string_lossy())?,
+                    other => {
+                        return Err(format!(
+                            "variant {alias:?} engine must be a string, got {}",
+                            other.type_name()
+                        ))
+                    }
+                };
+                let target = match ht.get::<Value>("target").map_err(|e| e.to_string())? {
+                    Value::Nil => {
+                        return Err(format!("variant {alias:?} hinting table has no `target`"))
+                    }
+                    v => parse_target(v)?,
+                };
+                Some(Some(HintingSpec { engine, target }))
+            }
+            other => {
+                return Err(format!(
+                    "variant {alias:?} hinting must be a table or false, got {}",
+                    other.type_name()
+                ))
+            }
+        };
+
+        out.insert(
+            alias,
+            FontVariant {
+                font,
+                strikes,
+                hinting,
+            },
+        );
+    }
+    Ok(out)
 }
 
 /// Information about a single font face, for exposing to Lua
@@ -414,6 +721,33 @@ impl LuaRuntime {
                 max_compression: t.get::<f32>("max_compression").ok(),
             });
 
+        let font_hinting =
+            parse_font_hinting(&result, &self.font_families).map_err(ScriptError::FontHinting)?;
+
+        // Warn where a variant escapes the document's aliasing. Pushed into the
+        // script's own log sink so it reaches the author the same way their
+        // `log_warn` calls do.
+        if let Some(directive) = font_hinting.as_ref() {
+            // The panel is not known here, and the state is only reachable when
+            // the document is aliased mono — which the adaptive default gives a
+            // black-and-white panel. Checking against grey_count 2 asks
+            // "would this be wrong on the panel where it can be wrong?".
+            let escaping = directive.variants_escaping_aliasing(2);
+            if !escaping.is_empty() {
+                if let Ok(mut sink) = log_sink.lock() {
+                    sink.push(format!(
+                        "[warn] font_hinting: on a black-and-white panel this screen's text is \
+                         drawn 1-bit, and variant(s) {} turn off mono hinting. Glyph aliasing is \
+                         per-document while hinting is per-face, so on such a panel their stems \
+                         can drop out. Set text-rendering=\"optimizeLegibility\" on the elements \
+                         using them to restore anti-aliasing while keeping hinting \
+                         (geometricPrecision would disable hinting instead).",
+                        escaping.join(", ")
+                    ));
+                }
+            }
+        }
+
         let logs = log_sink.lock().map(|g| g.clone()).unwrap_or_default();
 
         Ok(ScriptResult {
@@ -428,6 +762,7 @@ impl LuaRuntime {
             chroma_clamp,
             strength,
             gamut,
+            font_hinting,
             logs,
         })
     }

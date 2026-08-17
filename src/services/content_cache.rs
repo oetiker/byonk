@@ -36,6 +36,10 @@ pub struct CachedContent {
     pub strength: Option<f32>,
     /// Optional gamut mapping knobs for dithering
     pub gamut: crate::models::GamutTuningValues,
+    /// The screen's `font_hinting` directive, cached alongside the other
+    /// script-derived render knobs. `None` means the panel's adaptive default
+    /// applies, so a screen that says nothing still gets hinted text.
+    pub font_hinting: Option<crate::rendering::font_config::FontHintingDirective>,
 }
 
 impl CachedContent {
@@ -47,6 +51,7 @@ impl CachedContent {
             content_hash,
             screen_name,
             generated_at: chrono::Utc::now(),
+            font_hinting: None,
             width,
             height,
             colors: None,
@@ -75,6 +80,15 @@ impl CachedContent {
     /// Set the dither mode
     pub fn with_dither(mut self, dither: Option<String>) -> Self {
         self.dither = dither;
+        self
+    }
+
+    /// Attach the screen's font-hinting directive.
+    pub fn with_font_hinting(
+        mut self,
+        font_hinting: Option<crate::rendering::font_config::FontHintingDirective>,
+    ) -> Self {
+        self.font_hinting = font_hinting;
         self
     }
 

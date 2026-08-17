@@ -203,9 +203,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as intended.
 - **Text on black-and-white panels is crisp instead of speckled.** Small type used
   to come out with a fuzzy halo of stray dots around every letter. Screens on such
-  panels now get sharp, solid glyphs with no extra work; a screen that asks for
-  smoother text itself (`text-rendering="geometricPrecision"`) still gets it, and
-  panels with grey levels are unchanged.
+  panels now get sharp, solid glyphs with no extra work; a screen that wants
+  smoother text for a particular element can ask with
+  `text-rendering="optimizeLegibility"`, and panels with grey levels are unchanged.
+- **Byonk now hints text for you, and screens no longer need to ask.** Which
+  treatment a screen gets is chosen per render from the panel it is being drawn
+  for: mono hinting with 1-bit glyphs on a black-and-white panel, smooth
+  anti-aliased hinting once there are greys. Including
+  `byonk-base-v1/hinting.svg` is no longer how this happens, and a screen that
+  includes it is unaffected either way.
+- **New `font_hinting` directive for `script.lua`**, for the screens that want
+  something other than what byonk chose. It can pick the engine and target,
+  turn hinting off outright, and declare *variants* — your own names for a font
+  hinted a particular way, so one screen can render the same family two
+  different ways. Byonk checks a variant's base family and name when the script
+  runs and fails with a clear message, rather than silently rendering a
+  different font. See the new "Font Hinting" page in the documentation.
 - Text using the generic `sans-serif`, `serif`, `monospace`, `cursive` or `fantasy`
   font families now renders on the device. These resolved only to fonts byonk does
   not ship, so on the released container image — which contains no system fonts —

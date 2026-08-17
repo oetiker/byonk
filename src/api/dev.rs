@@ -553,6 +553,7 @@ pub async fn handle_render(
                 Option<f32>,
                 Option<f32>,
                 Option<crate::models::GamutTuningValues>,
+                Option<crate::rendering::font_config::FontHintingDirective>,
             ),
             String,
         >((
@@ -565,6 +566,7 @@ pub async fn handle_render(
             script_result.script_chroma_clamp,
             script_result.script_strength,
             script_result.script_gamut,
+            script_result.font_hinting,
         ))
     })
     .await;
@@ -579,6 +581,7 @@ pub async fn handle_render(
         script_chroma_clamp,
         script_strength,
         script_gamut,
+        script_font_hinting,
     ) = match result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
@@ -765,8 +768,7 @@ pub async fn handle_render(
         use_actual,
         final_dither.as_deref(),
         if has_tuning { Some(&tuning) } else { None },
-        // Task 7 wires the screen's resolved font config here.
-        None,
+        script_font_hinting.as_ref(),
     ) {
         Ok(png_bytes) => (
             StatusCode::OK,

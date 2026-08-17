@@ -3518,3 +3518,382 @@ mod lua_image_process_tests {
         );
     }
 }
+
+// ============================================================================
+// The `font_hinting` directive
+// ============================================================================
+
+mod font_hinting_tests {
+    use super::*;
+    use byonk::rendering::font_config::{
+        FontHintingDirective, HintingEngine, HintingMode, HintingTarget,
+    };
+    use byonk::services::FontFaceInfo;
+
+    /// Runs `script` as a screen and returns its parsed `font_hinting`.
+    ///
+    /// Two families are registered so variant validation has something real to
+    /// check against: a variant naming an unknown family must fail, and an
+    /// alias colliding with a known family must fail too.
+    fn parse(script: &str) -> Result<Option<FontHintingDirective>, String> {
+        let (_temp_dir, asset_loader) = setup_test_env(&[("fh.lua", script)]);
+        let mut fams = HashMap::new();
+        for name in ["Outfit", "X11Helv"] {
+            fams.insert(
+                name.to_string(),
+                vec![FontFaceInfo {
+                    style: "Normal".to_string(),
+                    weight: 400,
+                    stretch: "Normal".to_string(),
+                    monospaced: false,
+                    post_script_name: format!("{name}-Regular"),
+                    bitmap_strikes: vec![],
+                }],
+            );
+        }
+        let runtime = LuaRuntime::with_fonts(asset_loader, fams);
+        runtime
+            .run_script_from_asset(std::path::Path::new("fh.lua"), &HashMap::new(), None, None)
+            .map(|r| r.font_hinting)
+            .map_err(|e| e.to_string())
+    }
+
+    fn wrap(body: &str) -> String {
+        format!("return {{ data = {{}}, refresh_rate = 60, {body} }}")
+    }
+
+    #[test]
+    fn a_script_saying_nothing_about_hinting_gets_no_config() {
+        // Absent must stay distinguishable from `false`: absent means the
+        // server's adaptive default applies, `false` means hinting is off.
+        let got = parse("return { data = {}, refresh_rate = 60 }").unwrap();
+        assert!(got.is_none(), "expected None, got {got:?}");
+    }
+
+    #[test]
+    fn target_mono_is_aliased_by_default_with_the_auto_engine() {
+        let cfg = parse(&wrap(r#"font_hinting = { target = "mono" }"#))
+            .unwrap()
+            .expect("font_hinting should be present");
+        let spec = cfg
+            .default
+            .expect("an explicit target was given")
+            .expect("and it is not `off`");
+        assert_eq!(spec.engine, HintingEngine::Auto);
+        assert_eq!(spec.target, HintingTarget::Mono { aliased: true });
+        assert!(cfg.variants.is_empty());
+    }
+
+    #[test]
+    fn mono_can_be_asked_for_without_aliasing() {
+        // Mono hinting with anti-aliasing left on is a real combination: it is
+        // what a grey panel wants if the author still wants stems on the grid.
+        let cfg = parse(&wrap(
+            r#"font_hinting = { target = { mode = "mono", aliased = false } }"#,
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            cfg.default.unwrap().unwrap().target,
+            HintingTarget::Mono { aliased: false }
+        );
+    }
+
+    #[test]
+    fn a_smooth_target_carries_all_three_of_its_fields() {
+        let cfg = parse(&wrap(
+            r#"font_hinting = { target = { mode = "light", symmetric = true,
+                                          preserve_linear_metrics = false } }"#,
+        ))
+        .unwrap()
+        .unwrap();
+        match cfg.default.unwrap().unwrap().target {
+            HintingTarget::Smooth {
+                mode,
+                symmetric_rendering,
+                preserve_linear_metrics,
+            } => {
+                assert_eq!(mode, HintingMode::Light, "mode");
+                assert!(symmetric_rendering, "symmetric");
+                assert!(!preserve_linear_metrics, "preserve_linear_metrics");
+            }
+            other => panic!("expected Smooth, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn font_hinting_false_is_hinting_off_not_absent() {
+        let cfg = parse(&wrap("font_hinting = false"))
+            .unwrap()
+            .expect("false must still produce a config — it is an override");
+        assert_eq!(
+            cfg.default,
+            Some(None),
+            "`false` must be an explicit off, not an unstated default"
+        );
+        assert!(cfg.variants.is_empty());
+    }
+
+    #[test]
+    fn a_variant_carries_both_its_strikes_flag_and_its_hinting() {
+        let cfg = parse(&wrap(
+            r#"font_hinting = { variants = {
+                 ["Plain Labels"] = { font = "X11Helv", strikes = false,
+                                      hinting = { target = "mono" } } } }"#,
+        ))
+        .unwrap()
+        .unwrap();
+        let v = cfg.variants.get("Plain Labels").expect("the variant");
+        assert_eq!(v.font, "X11Helv");
+        assert_eq!(v.strikes, Some(false));
+        assert_eq!(
+            v.hinting.clone().flatten().unwrap().target,
+            HintingTarget::Mono { aliased: true }
+        );
+    }
+
+    #[test]
+    fn a_variant_with_no_hinting_key_inherits_rather_than_disabling() {
+        // The outer None means "inherit"; it must not collapse to "off".
+        let cfg = parse(&wrap(
+            r#"font_hinting = { variants = {
+                 ["Crisp Body"] = { font = "Outfit" } } }"#,
+        ))
+        .unwrap()
+        .unwrap();
+        let v = cfg.variants.get("Crisp Body").unwrap();
+        assert!(v.hinting.is_none(), "expected inherit, got {:?}", v.hinting);
+        assert!(v.strikes.is_none());
+    }
+
+    #[test]
+    fn a_variant_can_turn_hinting_off_for_itself() {
+        let cfg = parse(&wrap(
+            r#"font_hinting = { variants = {
+                 ["Crisp Body"] = { font = "Outfit", hinting = false } } }"#,
+        ))
+        .unwrap()
+        .unwrap();
+        let v = cfg.variants.get("Crisp Body").unwrap();
+        assert_eq!(v.hinting, Some(None), "expected explicit off");
+    }
+
+    #[test]
+    fn a_bad_target_is_rejected_by_name_not_silently_defaulted() {
+        let err = parse(&wrap(r#"font_hinting = { target = "nonsense" }"#))
+            .expect_err("a bad target must be an error");
+        assert!(
+            err.contains("nonsense"),
+            "error must name the bad value, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_bad_engine_is_rejected_by_name() {
+        let err = parse(&wrap(
+            r#"font_hinting = { engine = "turbo", target = "mono" }"#,
+        ))
+        .expect_err("a bad engine must be an error");
+        assert!(
+            err.contains("turbo"),
+            "error must name the bad value, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_variant_naming_a_font_that_is_not_installed_is_rejected() {
+        // Caught at parse time, not silently at render time: a typo'd base
+        // family would otherwise leave the alias resolving to nothing, and
+        // where an unresolved family lands is the generic mapping.
+        let err = parse(&wrap(
+            r#"font_hinting = { variants = {
+                 ["Crisp Body"] = { font = "Outfti" } } }"#,
+        ))
+        .expect_err("an unknown base family must be an error");
+        assert!(
+            err.contains("Outfti"),
+            "error must name the unknown family, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_variant_alias_that_collides_with_a_real_family_is_rejected() {
+        // The alias is a name byonk intercepts during font selection. If it is
+        // also a real family, the interception shadows that family and the
+        // author gets a silently different font.
+        let err = parse(&wrap(
+            r#"font_hinting = { variants = {
+                 ["X11Helv"] = { font = "Outfit" } } }"#,
+        ))
+        .expect_err("an alias colliding with a real family must be an error");
+        assert!(
+            err.contains("X11Helv"),
+            "error must name the colliding alias, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_variant_with_no_font_at_all_is_rejected() {
+        let err = parse(&wrap(
+            r#"font_hinting = { variants = { ["Crisp Body"] = { strikes = false } } }"#,
+        ))
+        .expect_err("a variant with no base font must be an error");
+        assert!(
+            err.contains("Crisp Body"),
+            "error must name the variant, got: {err}"
+        );
+    }
+    #[test]
+    fn a_variant_escaping_aliased_mono_is_warned_about() {
+        // The F1 constraint. Glyph aliasing is a property of the *document*
+        // (usvg derives it from `text-rendering`), while hinting is per face.
+        // So a variant that opts out of mono while the document default is
+        // aliased mono still gets aliased — and aliasing without mono hinting
+        // drops stems, because tiny-skia has no dropout control. The author
+        // has to say `text-rendering="optimizeLegibility"` on those elements.
+        // Silence here would ship that as a mystery.
+        let (_temp_dir, asset_loader) = setup_test_env(&[(
+            "warn.lua",
+            r#"return { data = {}, refresh_rate = 60,
+                 font_hinting = { target = "mono", variants = {
+                   ["Soft Body"] = { font = "Outfit", hinting = { target = "smooth" } } } } }"#,
+        )]);
+        let mut fams = HashMap::new();
+        fams.insert(
+            "Outfit".to_string(),
+            vec![FontFaceInfo {
+                style: "Normal".to_string(),
+                weight: 400,
+                stretch: "Normal".to_string(),
+                monospaced: false,
+                post_script_name: "Outfit-Regular".to_string(),
+                bitmap_strikes: vec![],
+            }],
+        );
+        let runtime = LuaRuntime::with_fonts(asset_loader, fams);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("warn.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script should run — this is a warning, not an error");
+
+        let joined = result.logs.join("\n");
+        assert!(
+            joined.contains("Soft Body"),
+            "the warning must name the variant, got logs: {joined:?}"
+        );
+        assert!(
+            joined.contains("optimizeLegibility"),
+            "the warning must name the escape hatch, got logs: {joined:?}"
+        );
+    }
+
+    #[test]
+    fn no_warning_when_the_default_is_not_aliased() {
+        // The control: the warning must key on the aliasing, not merely on a
+        // variant existing. Without this, warning unconditionally would pass.
+        let (_temp_dir, asset_loader) = setup_test_env(&[(
+            "nowarn.lua",
+            r#"return { data = {}, refresh_rate = 60,
+                 font_hinting = { target = { mode = "mono", aliased = false }, variants = {
+                   ["Soft Body"] = { font = "Outfit", hinting = { target = "smooth" } } } } }"#,
+        )]);
+        let mut fams = HashMap::new();
+        fams.insert(
+            "Outfit".to_string(),
+            vec![FontFaceInfo {
+                style: "Normal".to_string(),
+                weight: 400,
+                stretch: "Normal".to_string(),
+                monospaced: false,
+                post_script_name: "Outfit-Regular".to_string(),
+                bitmap_strikes: vec![],
+            }],
+        );
+        let runtime = LuaRuntime::with_fonts(asset_loader, fams);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("nowarn.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script should run");
+        let joined = result.logs.join("\n");
+        assert!(
+            !joined.contains("optimizeLegibility"),
+            "warned when nothing was aliased, got logs: {joined:?}"
+        );
+    }
+    #[test]
+    fn naming_only_variants_keeps_the_panel_s_adaptive_default() {
+        // The case the plan's "a present directive replaces the default
+        // wholesale" rule gets wrong. An author adding one variant has said
+        // nothing about the document default, so a black-and-white panel must
+        // keep its mono hinting. Replacing wholesale would silently drop it and
+        // the screen would go speckly for no stated reason.
+        let cfg = parse(&wrap(
+            r#"font_hinting = { variants = {
+                 ["Crisp Body"] = { font = "Outfit" } } }"#,
+        ))
+        .unwrap()
+        .unwrap();
+        assert!(
+            cfg.default.is_none(),
+            "no target was stated, so nothing should override the adaptive default"
+        );
+
+        // And resolving it against a BW panel still yields aliased mono.
+        assert_eq!(
+            cfg.resolve(2).default.unwrap().target,
+            HintingTarget::Mono { aliased: true },
+            "a BW panel must keep its mono hinting"
+        );
+        // Control: the same directive on a grey panel resolves to smooth, so
+        // the assertion above is about the panel and not a constant.
+        assert!(
+            matches!(
+                cfg.resolve(4).default.unwrap().target,
+                HintingTarget::Smooth { .. }
+            ),
+            "a grey panel should still resolve to smooth"
+        );
+        // The variant survives resolution either way.
+        assert!(cfg.resolve(2).variants.contains_key("Crisp Body"));
+    }
+
+    #[test]
+    fn an_explicit_target_does_override_the_adaptive_default() {
+        // The other half: when the script does state a target, the panel does
+        // not get a vote.
+        let cfg = parse(&wrap(r#"font_hinting = { target = "light" }"#))
+            .unwrap()
+            .unwrap();
+        for grey_count in [2, 4] {
+            assert!(
+                matches!(
+                    cfg.resolve(grey_count).default.unwrap().target,
+                    HintingTarget::Smooth {
+                        mode: HintingMode::Light,
+                        ..
+                    }
+                ),
+                "explicit light should survive grey_count {grey_count}"
+            );
+        }
+    }
+
+    #[test]
+    fn hinting_off_survives_resolution_on_every_panel() {
+        let cfg = parse(&wrap("font_hinting = false")).unwrap().unwrap();
+        for grey_count in [2, 4] {
+            assert!(
+                cfg.resolve(grey_count).default.is_none(),
+                "`false` must stay off on grey_count {grey_count}"
+            );
+        }
+    }
+}

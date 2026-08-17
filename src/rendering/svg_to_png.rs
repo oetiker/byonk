@@ -1182,51 +1182,136 @@ mod tests {
         println!("X11Helv bitmap strikes: {:?}", strikes);
     }
 
+    /// Bitmap strikes reach the rasterizer, and `select_bitmap` is what decides.
+    ///
+    /// This replaces `test_bitmap_font_render`, which rendered X11Helv, wrote
+    /// the PNG to a hardcoded `/tmp` path and asserted **nothing**. It was
+    /// coverage-shaped during exactly the change that made strikes byonk's own
+    /// concern: `FontResolver::select_bitmap` is a hook `byonk-base` adds and
+    /// upstream resvg does not have, so a bad merge or a rolled-back pin can
+    /// take strike rendering away with no byonk test noticing. The `/tmp` write
+    /// was a second defect — the release image is `FROM scratch` and has no
+    /// `/tmp`.
+    ///
+    /// **Why not the obvious assertion.** The tempting form is "render at a
+    /// size the face has a strike for, render at a size it does not, assert
+    /// they differ". That is vacuous: two different `font-size` values produce
+    /// different pixels whether or not any strike is ever consulted. The only
+    /// input that isolates the feature is the one `select_bitmap` reads —
+    /// `FontVariant::strikes` — so both renders here use the same text, the
+    /// same face and the same size, and differ in nothing else.
     #[test]
-    fn test_bitmap_font_render() {
-        let loader = crate::assets::AssetLoader::new(None, None, None);
-        let fonts = loader.get_fonts();
-        let renderer = SvgRenderer::with_fonts(fonts);
+    fn a_bitmap_face_rasterizes_from_its_strike_only_when_strikes_are_enabled() {
+        // 14 is one of X11Helv's strike sizes (see fonts/FONTS.md). At a size
+        // the family has no strike for, the nearest strike is scaled instead,
+        // which muddies what the flag is being asked.
+        const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="200">
+          <rect width="800" height="200" fill="#fff"/>
+          <text x="20" y="40" font-family="Legible Label, X11Helv"
+                font-size="14" fill="#000">illiIL1 xXHv Hamburgefonstiv</text>
+        </svg>"##;
 
-        // Check what fontdb knows about X11Helv
-        for face in renderer.fontdb.faces() {
-            if let Some((name, _)) = face.families.first() {
-                if name == "X11Helv" {
-                    println!(
-                        "Face: {} | style={:?} weight={:?} | source={:?}",
-                        name, face.style, face.weight, face.source
-                    );
-                }
-            }
-        }
-
-        // Render with bitmap fonts — font-size selects the bitmap strike
-        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200" width="800" height="200">
-          <rect width="800" height="200" fill="white"/>
-          <text x="20" y="30" font-family="X11Helv" font-size="8" fill="black">X11Helv 8px: Hello World</text>
-          <text x="20" y="60" font-family="NONEXISTENT_FONT" font-size="14" fill="black">NONEXISTENT: Hello World</text>
-          <text x="20" y="90" font-family="X11Helv" font-size="14" fill="black">X11Helv 14px: Hello World</text>
-        </svg>"#;
-
-        let spec = DisplaySpec::from_dimensions(800, 200).unwrap();
-        let palette = vec![(0, 0, 0), (255, 255, 255)];
-        let png = renderer
-            .render_to_palette_png(
-                svg.as_bytes(),
-                spec,
-                &palette,
+        let r = bundled_renderer();
+        let bw = &[(0u8, 0u8, 0u8), (255, 255, 255)];
+        let render = |cfg: &FontConfig| {
+            r.render_to_palette_png(
+                SVG.as_bytes(),
+                DisplaySpec::from_dimensions(800, 200).unwrap(),
+                bw,
                 None,
                 false,
                 None,
                 None,
-                None,
+                Some(cfg),
                 &mut None,
             )
-            .unwrap();
-        std::fs::write("/tmp/byonk-bitmap-font-test2.png", &png).unwrap();
-        println!(
-            "Wrote /tmp/byonk-bitmap-font-test2.png ({} bytes)",
-            png.len()
+            .expect("render")
+        };
+
+        // `Legible Label` is an alias byonk intercepts, not a real family, so
+        // the document names `X11Helv` after it as the fallback the baseline
+        // resolves to. Naming the fallback keeps this test about strikes
+        // rather than about wherever an unresolvable family happens to land.
+        let mut plain = FontConfig::adaptive_default(2);
+        plain.variants.clear();
+
+        let variant = |strikes: bool| {
+            let mut cfg = plain.clone();
+            cfg.variants.insert(
+                "Legible Label".to_string(),
+                FontVariant {
+                    font: "X11Helv".to_string(),
+                    strikes: Some(strikes),
+                    hinting: None,
+                },
+            );
+            cfg
+        };
+
+        let with_strikes = render(&variant(true));
+        let without_strikes = render(&variant(false));
+
+        assert_ne!(
+            with_strikes, without_strikes,
+            "turning strikes off for a bitmap face must change its rasterisation; \
+             identical output means select_bitmap never reached the renderer — \
+             the byonk-base hook is gone, or the pin was rolled back"
+        );
+
+        // Control 1: enabling strikes explicitly is what resvg already does,
+        // so it must reproduce the no-variant baseline byte for byte. Without
+        // this, `assert_ne!` above would also pass if merely *declaring* a
+        // variant perturbed the render — the alias path loads a second copy of
+        // the face, and a second copy must not be a difference by itself.
+        assert_eq!(
+            with_strikes,
+            render(&plain),
+            "strikes = true is resvg's own default, so it must be \
+             indistinguishable from declaring no variant at all"
+        );
+
+        // Control 2: the flag must be about *strikes*, not about variants in
+        // general. Outfit is an outline font with no strikes to suppress
+        // (pinned by `an_outline_font_reports_no_strikes` in
+        // font_introspection), so toggling the same flag on it must change
+        // nothing.
+        const OUTLINE_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="200">
+          <rect width="800" height="200" fill="#fff"/>
+          <text x="20" y="40" font-family="Legible Label, Outfit"
+                font-size="14" fill="#000">illiIL1 xXHv Hamburgefonstiv</text>
+        </svg>"##;
+        let render_outline = |cfg: &FontConfig| {
+            r.render_to_palette_png(
+                OUTLINE_SVG.as_bytes(),
+                DisplaySpec::from_dimensions(800, 200).unwrap(),
+                bw,
+                None,
+                false,
+                None,
+                None,
+                Some(cfg),
+                &mut None,
+            )
+            .expect("render")
+        };
+        let outline_variant = |strikes: bool| {
+            let mut cfg = plain.clone();
+            cfg.variants.insert(
+                "Legible Label".to_string(),
+                FontVariant {
+                    font: "Outfit".to_string(),
+                    strikes: Some(strikes),
+                    hinting: None,
+                },
+            );
+            cfg
+        };
+        assert_eq!(
+            render_outline(&outline_variant(true)),
+            render_outline(&outline_variant(false)),
+            "an outline font has no strikes, so the strikes flag must not \
+             change its rasterisation — if this differs, the flag is doing \
+             something other than selecting strikes"
         );
     }
 

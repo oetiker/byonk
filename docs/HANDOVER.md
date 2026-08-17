@@ -377,12 +377,58 @@ bowls, arches, diagonals, ascenders/descenders), not for stressing a rasteriser.
 from the plan. It is *representative*, and the lesson below wants *extreme*. Prefer
 `x X H v /` when a test is about hinting or aliasing.
 
+# Task 7 — DONE (`a02cc6e`)
+
+**Hinting is now actually applied.** Task 6 threaded `Option<&FontConfig>` through the
+render and *every production call site passed `None`*, so nothing was hinted anywhere —
+which is why the `CHANGES.md` entry promising crisp BW text was not yet true. It is now.
+
+**The key structural decision:** hinting is resolved **inside**
+`ContentPipeline::render_png_from_svg` from the palette, not by the caller. Making each
+call site supply the adaptive default is how it goes missing on one of them — silently,
+because an unhinted screen still renders.
+`a_screen_with_no_directive_still_gets_the_panel_s_hinting` pins it: a screen that said
+nothing must differ from one that said `font_hinting = false`. Sabotage-verified.
+
+**Three more plan errors, on top of the five already recorded (now eight of eight):**
+
+1. **The plan's Lua surface cannot express `aliased`** — the one knob that makes BW text
+   crisp. `mode` is now the discriminator, so mono's `aliased` and smooth's `symmetric` /
+   `preserve_linear_metrics` each have a home.
+2. Its field name is `symmetric`; the real one is `symmetric_rendering`.
+3. **Its core semantic rule is harmful.** "A present directive replaces the default
+   wholesale" means `font_hinting = { variants = ... }` silently discards the adaptive mono
+   hinting a BW panel needs, for an author who only meant to add a variant. **`FontHintingDirective`
+   separates "stated no default" (`None`) from "explicitly off" (`Some(None)`)** and
+   `resolve(grey_count)` applies it. `naming_only_variants_keeps_the_panel_s_adaptive_default`
+   is the test.
+
+**It also wired two sites the plan never listed** — `api/dev.rs` and `screen_store.rs` (the
+MCP authoring render) — and had to carry the directive through **`CachedContent`**, because
+the device path renders from that cache, not from the script result. Without it a screen's
+hinting would have worked on the CLI and over MCP and quietly not on the device.
+
+**Handover requirements, both met.** Variant base families *and* variant names are validated
+when the script runs (`select_font` falls through to the default selector on a miss, so an
+unresolvable base family lands on the generic mapping instead of erroring). The F1 constraint
+is carried as a **warning naming the offending variants**, pointing at
+`text-rendering="optimizeLegibility"` and away from `geometricPrecision`.
+
+**Proven by render, not just tests:** unhinted-then-aliased vs mono-hinted-then-aliased on a
+2-colour palette. The unhinted row is visibly broken — `illiIL1` mush, stems dropping — which
+is the F1 failure mode made visible. Rig: `…/scratchpad/probe/{hint-auto,hint-off}` +
+`cfg2.yaml`.
+
+**Still owed by Task 8:** `byonk-base/v1/hinting.svg` still emits `-resvg-hinting-*` CSS,
+which resvg 0.48.1 ignores. It is inert, not harmful — but it must become the
+`shape-rendering: crispEdges` shim, and the 12 screens must drop the include.
+
 # Remaining plan tasks
 
-4. Render-scale warning.
-7. **`font_hinting` Lua directive** — must carry the F1 design constraint (below) *and*
-   validate declared variant base families at parse time. **Also: do not ship the plan's
-   example alias names.** See the variant-alias rule below.
+4. Render-scale warning. **Worth doing — this trap bit again in session 23:** a probe SVG
+   with a `400x120` viewBox rendered into an 800x480 device came out scaled 2×, so type
+   meant to be judged at 9–11 px was judged at 18–22. Silent.
+7. ~~**`font_hinting` Lua directive**~~ — **DONE (`a02cc6e`).** See below.
 8. Migrate screens + docs (fold in F17).
 9. State-3 capture + pixel diff + **show the owner**. Baseline
    `/tmp/byonk-renders/state2-final` — regenerate rather than trust, `/tmp` does not

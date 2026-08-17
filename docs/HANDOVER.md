@@ -1,9 +1,9 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-17 (session 24). **Initiative: adopt the resvg `byonk-base` branch.**
-Plan Tasks 1, 2, 3, 5, 6, 7, **8** done; **4, 9, 10 remain.** Landed this session:
-**Task 8** (`da1415e`) and an unplanned but larger fix, **`c850ea7`** — `byonk render` could
-never render a screen that fetches anything, and the hinting demo had been showing nothing._
+_Last updated: 2026-08-17 (session 25). **Initiative: adopt the resvg `byonk-base` branch.**
+Plan Tasks 1, 2, 3, 5, 6, 7, 8, **4** done; **9 and 10 remain.** Landed this session:
+**Task 4** (`3823079`) — the render-scale warning, implemented against the plan's rule, plus
+a docs bug it uncovered._
 
 ## Where the work lives
 
@@ -11,9 +11,9 @@ never render a screen that fetches anything, and the hinting demo had been showi
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
 | PR | **#30**, OPEN against `main` — https://github.com/oetiker/byonk/pull/30 |
-| HEAD | `c850ea7` — **tree clean** |
-| Verified | `make check` at `c850ea7`: **1124 passed, 0 failed**; clippy clean under `-D warnings` |
-| Pushed | `5863c7c` is on `origin`. **Five commits are local only:** `a02cc6e`, `9db650a`, `6e6e214`, `da1415e`, `c850ea7`. Pushing is the owner's call. |
+| HEAD | `3823079` — **tree clean** |
+| Verified | `make check` on the tree that became `3823079`: **1131 passed, 0 failed**; clippy clean under `-D warnings` |
+| Pushed | `5863c7c` is on `origin`. **Seven commits are local only:** `a02cc6e`, `9db650a`, `6e6e214`, `da1415e`, `c850ea7`, `4cefe83`, `3823079`. Pushing is the owner's call. |
 | Push gotcha | The ssh-agent holds **no identities**, so `git push origin …` fails on publickey. `gh` is authenticated over HTTPS with `repo` scope — `git push https://github.com/oetiker/byonk.git <branch>` works and leaves the remote config alone. |
 
 **resvg work happens in a different repo.** `oetiker/resvg` carries `feat/bitmap-mask-glyphs`
@@ -22,13 +22,17 @@ them and is what byonk's `[patch.crates-io]` pins. **Current pin: `2e766508`** (
 `Cargo.lock`; `Cargo.toml` tracks the branch).
 
 **The plan:** `docs/superpowers/plans/2026-08-15-resvg-byonk-base-integration.md`. Still the
-authority on *what* Tasks 4, 9, 10 are for — but **it has now been wrong in nine of nine
-tasks touched.** Treat its code as a sketch. Verify every symbol.
+authority on *what* Tasks 9 and 10 are for — but **it has now been wrong in ten of ten tasks
+touched.** Treat its code as a sketch. Verify every symbol.
 
 **The ledger:** `.superpowers/sdd/2026-08-15-resvg-byonk-base-integration/progress.md`
 (git-ignored). Also there: `f11-report.md`, `f15-report.md`, `font-licensing-research.md`,
 `f9-brief.md`, `f10-brief.md`, `f16-probe/`. **Ignore the two `f15-*.patch` files — neither
 holds what its name claims.** `git log` on `oetiker/resvg` is the truth for resvg work.
+
+**Session 24's detail** (Task 8, the CLI fetch fix, `http_response()`, the three stacked
+hinting-demo bugs) is in `git show 4cefe83:docs/HANDOVER.md`. Everything from it that is still
+binding has been carried into this document.
 
 ---
 
@@ -37,13 +41,15 @@ holds what its name claims.** `git log` on `oetiker/resvg` is the truth for resv
 **Two TLS tests are flaky under full-workspace load** —
 `lua_https_tests::{test_https_with_custom_ca_cert, test_https_with_client_certificate}`.
 They fail with `error sending request for url (https://127.0.0.1:…)`, which is the shape a
-30 s timeout takes. Observed **once in three full `make check` runs**; they pass 8/8 in
-isolation and 3/3 running the whole `lua_api_test` binary.
+30 s timeout takes. Observed **once in three full `make check` runs** in session 24; **session
+25's `make check` was clean** (1131/1131), so it is now once in four.
 
-**The null hypothesis was never tested** — nobody has run the suite with `c850ea7`'s HTTP
-change reverted, so "my change caused it" is unproven. What the change plausibly contributes
-is **one extra OS thread per HTTP request**, on tests already sitting near the default 30 s
-timeout on a saturated machine.
+**The null hypothesis has still never been tested** — nobody has run the suite with
+`c850ea7`'s HTTP change reverted, so "my change caused it" is unproven. What the change
+plausibly contributes is **one extra OS thread per HTTP request**, on tests already sitting
+near the default 30 s timeout on a saturated machine. Session 25 saw this machine hit **load
+average 78** from unrelated desktop apps, which makes a load-dependent timeout entirely
+plausible without any byonk defect at all.
 
 **If it needs fixing, do not loosen the test.** The better shape is to stop building a client
 per request: **cache the `reqwest::blocking::Client`**. The original panic was on *dropping*
@@ -58,91 +64,91 @@ the server path.
 
 | # | What | Notes |
 |---|---|---|
-| 4 | Render-scale warning | A probe SVG with a `400x120` viewBox rendered into an 800×480 device comes out silently scaled 2×, so type meant to be judged at 9–11 px is judged at 18–22. Bit session 23. |
-| 9 | State-3 capture + pixel diff + **show the owner** | Baseline `/tmp/byonk-renders/state2-final` — **regenerate rather than trust; `/tmp` does not survive reboot.** Note `tools/capture-renders.sh` drives `cargo run --release`; a debug-binary variant is much faster (see *Rendering a scratch screen*). |
+| 9 | State-3 capture + pixel diff + **show the owner** | Baseline `/tmp/byonk-renders/state2-final` — **regenerate rather than trust; `/tmp` does not survive reboot.** `tools/capture-renders.sh` drives `cargo run --release`; a debug-binary variant is much faster and session 25 proved it works (see *Rendering a scratch screen*). |
 | 10 | Fix or delete `test_bitmap_font_render` | |
 
 ---
 
-# Task 8 — DONE (`da1415e`)
+# Task 4 — DONE (`3823079`)
 
-`byonk-base/v1/hinting.svg` is reduced to a shim and removed from all 12 bundled screens.
-**Output-preserving, measured:** all 8 bundled screens that render without a network fetch are
-byte-identical before and after.
+Byonk now warns when a screen's SVG is not the size of the panel it is drawn on.
 
-**`shape-rendering` never applied to text at all.** usvg reads it only when converting a
-*shape* element (`converter.rs:969`); `<text>` takes its rasterization from `text-rendering`
-(`parser/text.rs:112`). Emptying the partial entirely changed no pixel — verified against a
-control, since an earlier probe adding `fill:` to the same file *did* change output. The shim
-still emits `crispEdges` so an out-of-tree screen including it from a non-text rule is
-unaffected.
+## The plan's rule was wrong, and this is plan error #10
 
-**F17 folded in and confirmed real:** `font-family="Terminus (TTF)"` unquoted is invalid CSS,
-so the Terminus demo had never rendered Terminus — it fell back to a serif. Fixed
-**template-side**, which is the general fix. Signature that confirms the diagnosis: the
-Terminus demo changed, the bitmap demo (plain-identifier families) stayed byte-identical.
+The plan's `scale_is_degraded` **exempts exact integer zooms**, and its own test asserts
+`!scale_is_degraded(936, 702, DisplaySpec::X)`. But the case that motivated Task 4 — a
+`400x120` probe rendered into 800×480, which bit session 23 — **is an exact 2× zoom**. The
+plan's rule would have stayed silent on the bug it was written to catch.
 
-`docs/src/tutorial/svg-templates.md` carried ~80 lines documenting the removed
-`-resvg-hinting-*` properties. **That page is embedded and served to LLM authors over MCP**,
-so it was teaching the wrong thing to the reader least able to check. Replaced.
+**Owner chose: warn on any size mismatch, no exemption.** The predicate is
+`SvgRenderer::scale_warning(svg_w, svg_h, spec) -> Option<String>`, next to `fit_transform`
+and fed the same numbers, so the two cannot disagree.
+
+## Why integer zoom is not a free pass — read from the pinned resvg, not reasoned
+
+Source: `~/.cargo/git/checkouts/resvg-b4a0ccb9ea26de88/2e76650/`
+
+- `crates/usvg/src/text/flatten.rs:283` — `let ppem = glyph.font_size();`, and the
+  `GlyphHinting::ppem` doc comment says it outright: *"Derived from the font size, so hinted
+  glyphs only land on whole pixels at an unscaled render."* The hinting ppem is the
+  **user-unit** font size; the render transform is not involved. Integer zoom preserves the
+  grid fit geometrically, but the glyph is fitted for one size and shown at another.
+- `crates/usvg/src/text/flatten.rs:68` — `snap_bitmap_glyph` returns early unless the scale
+  is 1.0 within `1e-4`. **Bitmap faces lose strike snapping at any zoom**, integer included,
+  and the strike raster is then resampled.
+- And the plain one: every dimension the author chose is displayed at the wrong size, which
+  is what makes type impossible to judge.
+
+## The channel — owner's decision, and it needed the CLI too
+
+`tracing::warn!` was rejected: it reaches the server log, not the screen's author.
+
+`rasterize_svg` fills a **`&mut Option<String>` out-parameter**, mirroring
+`api::display::resolve_render_params`' existing `measured_warning`. Each caller decides:
+
+| caller | where it goes |
+|---|---|
+| `ScreenStore::render` | `RenderResult::log` as `[warn] …` — the MCP/authoring path |
+| `main.rs` (`byonk render`) | **stderr** |
+| `api/display.rs`, `api/dev.rs`, `render_to_raw_png`, `content_pipeline`'s internal call | `&mut None` |
+
+**The CLI leg was not optional.** `byonk render` never prints the script log at all, and
+`/dev/render` passes `None` for its log sink (`content_pipeline.rs`, `run_script_direct` doc
+comment) — so the sink alone would have left the warning invisible in the exact tool that
+invites this mistake. `render_to_raw_png` stays silent so the authoring path, which renders
+twice when `include_raw` is set, does not log one mistake twice.
+
+## How it was verified
+
+- **7 tests, all RED first.** 5 on the predicate, 1 through `render_to_palette_png` (proves
+  usvg's *resolved* document size is what feeds it), 1 through `ScreenStore::render` (proves
+  the log channel).
+- **Sabotage 1:** implemented the plan's integer-zoom exemption → **3 tests fail**, including
+  the one named for the missed case. The fractional test still passed, which is exactly the
+  narrow slice the plan's rule does catch.
+- **Sabotage 2:** removed the `screen_store` log push → `no scale warning in []`.
+- **All 13 bundled screens render clean** (debug binary + `tools/capture-config.yaml`).
+- **Positive control, because "0 warnings" is otherwise indistinguishable from a dead
+  mechanism:** a scratch repo with a correct screen (silent) and a `400x240` screen (warns)
+  driven through the real `byonk render`. Recipe below under *Rendering a scratch screen*.
+
+## The docs were teaching the bug — second time this initiative
+
+`docs/src/tutorial/svg-templates.md` said *"Set `viewBox` to `0 0 800 480` for TRMNL OG"* and
+hardcoded the numbers in its opening example. **That page is one of the three `EmbeddedDocs`
+served to LLM authors over MCP**, so it was instructing the reader least able to check to
+write exactly the screen byonk now warns about. Rewritten to build the size from
+`layout.width`/`layout.height` (both `layout.center_x` and `layout.center_y` exist in the
+template namespace — see `content_pipeline::build_layout_context`), with the three costs and
+the warning text documented. Later snippets on the page still write `800x480` literally and
+the page now **says so**, rather than contradicting itself.
+
+> Session 24 replaced ~80 lines of this same file. Treat it as a known trap: it is the most
+> load-bearing authoring doc byonk ships, and it goes stale silently.
 
 ---
 
-# `c850ea7` — the fetch fix, and the demo that showed nothing
-
-## `byonk render` could never fetch
-
-It drove the whole render synchronously from inside `#[tokio::main]`, so Lua's
-`reqwest::blocking` client was built and dropped on a tokio worker thread and tokio panicked
-in runtime shutdown. The script fell into its failure path and the render died with a
-confusing `data.width` error. **No screen that fetches anything had ever rendered from the
-CLI.**
-
-Every other caller — `api/display.rs`, `api/dev.rs`, `mcp/` — steps onto a blocking thread by
-hand first, which is how the CLI came to be the one that forgot. **Fixed at the choke point:**
-`send_http_request_off_runtime` runs the request on a thread with no tokio context.
-`build_http_spec` collects the options once so `http_request` and `http_response` cannot
-drift. Both `webscrape` and `swiss-departure-board` now render live data from the CLI.
-
-**Lua's HTTP path had no test coverage whatsoever.** The three "HTTP tests" in
-`tests/lua_api_test.rs` start a mock server and then assert only that a URL string contains a
-path — they never run Lua, and the comment admits it. Three real tests were written failing
-first; the first reproduces the production panic exactly.
-
-## New Lua API: `http_response()`
-
-Owner's call, and the reason for it: a script could not tell a 404 or a 500 from data, because
-`http_get` returns only the body. Returns `ok` / `status` / `body` / `headers` / `error` /
-`from_cache` and **does not raise** — what a failure means is the screen's business.
-Responses are now cached **only when they succeed**, so an error page is no longer served as
-data for a whole `cache_ttl` window.
-
-> **Owner decision:** byonk intervenes only when Lua *crashes*. The two fetching examples call
-> `error()` when they cannot carry on, which puts the message on the device's error screen
-> (`display.rs:1032`) and exits the CLI non-zero. Verified end to end. They previously returned
-> a half-filled table holding an `error` field their templates never referenced, so **any**
-> fetch failure ended in `Variable 'data.width' not found`.
-
-## The hinting demo had three stacked bugs
-
-The owner did not believe the demo, twice, and was right both times. Every cell looked alike.
-
-1. **The stylesheet's `text { font-family: Outfit; }` overrode every cell's own
-   `font-family` attribute.** In SVG a presentation attribute is the **lowest**-priority
-   source, so a CSS rule beats it. The variants were never selected. This is why `smooth` and
-   `off` were byte-identical. Nothing warns you — the text renders fine in the base font.
-2. **Fractional baselines.** Only the top-left cell sat on the pixel grid; the rest were ⅓ and
-   ⅔ of a pixel off in both axes. Hinting fits the outline to the grid and the layout then slid
-   the glyph off it — **3–5% of the ink lost to dropped stems**, more than the difference
-   between two engines. The demo was violating byonk's own documented whole-pixel advice.
-3. **The mono column was never drawn 1-bit** (below).
-
-All three fixed: **no two of the nine cells are identical.** `auto/smooth` vs `auto/off` went
-from 0 differing pixels to 832; `auto/mono` vs `interpreter/mono` from 11 to 558.
-
----
-
-# Settled this session — do not reopen
+# Settled — do not reopen
 
 ## A variant CAN be aliased. The flag is document-level; the effect is not.
 
@@ -178,8 +184,8 @@ all confirmed by render: **`interpreter` is effectively unhinted** (19 differing
 hinting-off), **`auto` ≡ `auto_fallback`** (byonk's `resolve_auto_fallback` doing its job), and
 `interpreter` is *visibly worse* when aliased — uneven stems, 421 ink px vs 376.
 
-> I first called the engine axis "dead". **That was wrong** — it was suppressed by demo bug 1.
-> It is the axis that *shows* these facts, and `auto ≡ auto_fallback` is a live check that
+> The engine axis is **not** dead — that earlier call was wrong, and was an artefact of a demo
+> bug. It is the axis that *shows* these facts, and `auto ≡ auto_fallback` is a live check that
 > byonk's auto-fallback fix still works. Install a hinted font via `FONTS_DIR` and the rows
 > separate further.
 
@@ -203,7 +209,11 @@ obvious. `hinting = false` on a variant is byte-identical to document-level
 3. **Fonts need licence files** (table below).
 4. **Bitmap fonts should have no outlines if possible** — delivered by F16.
 5. **F20: status icons own the header corner; the timestamp lives in the footer.**
-6. **byonk intervenes only when Lua crashes** (this session, above).
+6. **byonk intervenes only when Lua crashes.** The two fetching examples call `error()` when
+   they cannot carry on, which puts the message on the device's error screen
+   (`display.rs:1032`) and exits the CLI non-zero.
+7. **Authoring warnings reach the author, not the operator** (Task 4, above). A new warning of
+   this kind belongs in the script log sink and on the CLI's stderr — never only in `tracing`.
 
 ## The Lua surface, as shipped
 
@@ -236,7 +246,7 @@ the offending variants, checked against `grey_count = 2`.
 **Name them for their purpose, never `<RealFamily> <TechnicalTerm>`.** `"Outfit Mono"` reads as
 a monospaced Outfit; use `["Crisp Body"] = { font = "Outfit", … }`. Byonk enforces the "not a
 real family" half at parse time. **Always name the fallback in the document:**
-`font-family="'Crisp Body', Outfit"` — and see the CSS trap below.
+`font-family="'Crisp Body', Outfit"` — and see the CSS trap in *Lessons*.
 
 ## F15 / F16 — the bitmap work, done and live
 
@@ -259,8 +269,7 @@ real family" half at parse time. **Always name the fallback in the document:**
 - **F9 / `AutoFallback`:** upstream will not change it (googlefonts/fontations#1151, closed).
   byonk sets `Auto` explicitly and `resolve_auto_fallback` corrects the interpreter choice —
   keep both. Do not PR it.
-- **`font-weight` does not disable hinting.** Suspected during the demo investigation;
-  measured at weight 400 and 500, both hinted.
+- **`font-weight` does not disable hinting.** Measured at weight 400 and 500, both hinted.
 
 ## Font licensing — researched, awaiting F14
 
@@ -291,7 +300,8 @@ for everything in the tree; what is missing is **notices** — `fonts/` has no l
 | F14 | Licence + notice files per the table above. **`FONTS.md`'s "X11LuType is proportional" is wrong — it is monospaced.** |
 | F15 | **Owes a byonk-side regression test.** The resvg-side tests do not run in byonk's suite, so nothing in byonk fails if the pin regresses. |
 | F22 | Cosmetic: the WiFi glyph reads as a caret at 8×12. Redraw or drop it. |
-| F23 | **New.** The two fetching examples fail in a sandbox with `Cannot drop a runtime…` *from the fetch error path* — the `c850ea7` fix covers the request itself, but check whether any other blocking call in `lua_runtime.rs` shares the hazard. |
+| F23 | The two fetching examples fail in a sandbox with `Cannot drop a runtime…` *from the fetch error path* — `c850ea7` covers the request itself, but check whether any other blocking call in `lua_runtime.rs` shares the hazard. |
+| F24 | **New.** `/dev/render` shows the author nothing but an image — it passes `None` for the script log sink, so neither their `log_*` output nor byonk's authoring warnings reach the browser preview. Worth deciding whether that is intended. |
 
 ---
 
@@ -303,12 +313,10 @@ for everything in the tree; what is missing is **notices** — `fonts/` has no l
    counts as `grey_count = 2`; it is **4-grey** `trmnl_og` that is in question, and they behave
    oppositely. `FontConfig::adaptive_default` is the single place the rule lives.
 2. **One genuinely inert knob remains:** `HintingMode::Light` is byte-identical to `Normal`.
-   (The other former entry — "`interpreter` makes `target` inert" — is now better stated as
-   *the interpreter has nothing to run on any bundled font*.)
 3. `for_error_diffusion()` is applied to **every** dither (`api/builder.rs`), so HyAB and its
    `kchroma = 10` tuning are not on the crate's dithering path at all.
 4. **Before merging #30: re-read `CHANGES.md`'s Unreleased section as a whole.** It has grown
-   across four sessions and has never been read as a set. Also: two overstated test names in
+   across five sessions and has never been read as a set. Also: two overstated test names in
    `dither/mod.rs`.
 
 **Owner-facing artifacts** (URLs outlive their ephemeral sources; to update, republish
@@ -321,45 +329,57 @@ for everything in the tree; what is missing is **notices** — `fonts/` has no l
 | Bitmap vs outline; F15 before/after; F16 diagnosis; F17 (session 20) | https://claude.ai/code/artifact/8fe47446-49b6-4256-9db6-429aa3b8bfb6 |
 | Type trials: specimens, two bugs, the data (session 19) | https://claude.ai/code/artifact/f7ef39be-1a9d-4c97-bd95-d9b3422a515e |
 
+Session 25 produced no artifact — Task 4 has no visual result worth showing.
+
 ---
 
 # Lessons — these keep paying off
 
+- **A rule can be right about the mechanism and still wrong about the decision.** The plan's
+  integer-zoom exemption was *correct* that integer zoom keeps a hinted outline on whole
+  pixels — and still wrong, because that was never the main cost. **Check that a rule's stated
+  justification actually covers the case that motivated the rule.** It did not: the exemption
+  silenced the exact bug the task existed for.
+- **"No warnings" is not coverage until the mechanism has been shown to fire.** Thirteen clean
+  screens prove nothing on their own — a warning that is never wired up produces the same
+  output. Build a positive control that must trip it.
 - **Demonstrate the check fails when the thing is broken.** A test written *after* the
   implementation has never been shown to fail, so sabotage is the only thing standing in for
-  the RED step. Session 24 sabotaged `select_hinting` to prove the aliasing test had teeth.
-- **A default nothing asks for is a default that goes missing.** Resolve such defaults at the
-  single choke point. The CLI fetch bug is the same shape: five callers each had to remember
-  `spawn_blocking`, and one forgot.
-- **The plan's code is not evidence. Nine of nine tasks touched were wrong.** Verify every
+  the RED step. Session 25 sabotaged twice: the predicate (to the plan's rule) and the log
+  wiring.
+- **The plan's code is not evidence. Ten of ten tasks touched were wrong.** Verify every
   symbol.
-- **Always carry a control through a measurement.** Session 24's first variant measurement said
-  "all ten differ" — that was **error diffusion leaking between rows of one image**. Rendering
-  one variant per image, with a duplicated screen as a byte-identical control, gave the true
-  answer: four distinct appearances. The finished demo still shows this: cells that *must* be
-  identical differ by 244–284 px purely from position. **Only the aliased mono column, which
-  has no greys, is exactly comparable.**
-- **Two things that look the same are not necessarily the same thing.** Chasing "why do these
-  cells look alike" found three independent causes stacked on each other. Stopping at the first
-  plausible one would have shipped the other two.
+- **A default nothing asks for is a default that goes missing.** Resolve such defaults at the
+  single choke point. Five callers each having to remember `spawn_blocking` is how the CLI
+  forgot; the same shape produced the scale warning's out-param design.
+- **Always carry a control through a measurement.** Cells that *must* be identical differ by
+  244–284 px purely from position, because error diffusion depends on position. **Only
+  grey-free (aliased) content is exactly comparable.**
+- **Two things that look the same are not necessarily the same thing.** "Why do these cells
+  look alike" turned out to be three independent causes stacked on each other.
 - **A CSS rule beats a presentation attribute in SVG.** `text { font-family: … }` silently
   overrides every `font-family="…"` attribute on matching elements, and the text still renders
-  — in the wrong face. **Third font-family failure this initiative**, after F17's unquoted
+  — in the wrong face. Third font-family failure this initiative, after F17's unquoted
   parentheses and the `Source Sans 3` digit-suffix trap.
 - **Put text on whole-pixel positions, not just whole-pixel sizes.** Hinting fits to the pixel
   grid; a fractional baseline slides the fitted glyph straight back off it.
-- **Verify a background job is actually running before reporting on it.** Session 24 twice read
-  a log that had not caught up and drew the wrong conclusion — once "still running" when it had
-  finished, once "killed mid-suite" when it had not. `ps -eo pid,etime,command` plus the log's
-  mtime settles it; a `pgrep` pattern that misses `cargo-clippy` does not.
+- **Fix the docs when they are the bug.** `docs/src/tutorial/svg-templates.md` has now been
+  the bug **twice** in this initiative. It is embedded and served to LLM authors over MCP, so
+  a stale line there teaches the reader least able to check.
+- **A sleeping laptop looks exactly like a hung build.** `ps -eo pid,etime,command` reports
+  *wall* time, which keeps counting through sleep, so a large `etime` is not evidence of a
+  hang. Check `uptime` too — this machine hit **load average 78** from unrelated desktop apps
+  and a normally-2-minute compile took over 20.
+- **`cargo check --lib --tests` is the fast way to see a signature-change RED.** A full
+  `cargo test` build costs minutes on this machine; the type error arrives in seconds.
+- **Verify a background job is actually running before reporting on it.** The log's mtime plus
+  `ps` settles it; a `pgrep` pattern that misses `cargo-clippy` does not.
 - **A screen that renders is not a screen that rendered what you asked for.** Carry a canary
   string *in the render itself*.
 - **`test -s` both files before believing a `cmp`.** `cmp -s a b` against a non-existent `b`
   exits non-zero, exactly like "the files differ".
-- **Judge type at true size, and check the render scale.** Exactly what plan Task 4 is for.
 - **A flattering test string hides font defects.** `illiIL1 xXHv`, not `Render jpq 0123`.
 - **When the data is right and the render is still wrong, suspect the consumer's guards.**
-- **Fix the docs when they are the bug.** Shipping a component means shipping how to use it.
 - **Work left by an agent that died is not verified work.**
 - **Never run `make check` while the tree is being edited.** Also `make check > log; echo
   "EXIT=$?"` reports the *echo's* status — use `|| echo FAILED >> log`. Same trap with any
@@ -371,7 +391,7 @@ for everything in the tree; what is missing is **notices** — `fonts/` has no l
 # Build / verify
 
 - `make check` = fmt + clippy + full suite, **~15 min — background it**; it runs `cargo fmt`,
-  not `--check`, so it rewrites files. **Green state = 1124 passed, 0 failed.**
+  not `--check`, so it rewrites files. **Green state = 1131 passed, 0 failed.**
 - **Changing `Cargo.lock`'s resvg pin forces a full rebuild of usvg/resvg — 10+ min.**
 - **Editing an embedded asset forces a rebuild.** `EmbeddedDocs` embeds exactly three files
   (`api/lua-api.md`, `tutorial/svg-templates.md`, `guide/authoring.md`); `EmbeddedBase` embeds
@@ -382,27 +402,43 @@ for everything in the tree; what is missing is **notices** — `fonts/` has no l
   iteration fast — but "no change" is then indistinguishable from a stale binary, so **prove
   disk-backing with a visible sabotage first**.
 - **Subagents must not run `make check`** — the 600 s watchdog kills them.
-- `CARGO_BUILD_JOBS=2` — shared machine. `cargo test` takes only **one** filter.
+- `CARGO_BUILD_JOBS=2` — shared machine. `cargo test` takes only **one** filter, and a filter
+  matches the *whole path*, so `--lib 'rendering::svg_to_png::tests::a'` is how you run a
+  group of tests whose names share no substring.
 - Pre-existing `#[ignore]` failures, unrelated: `preprocess::preprocessor::tests::{…}`.
 - **Never `git add -A`.** `examples/` is an untracked near-copy of `screens/examples/`.
-- **IDE diagnostics lie in this tree.** Only an actual cargo run counts.
+- **IDE diagnostics lie in this tree**, and they also lag behind edits made by scripted
+  rewrites. Only an actual cargo run counts.
 - **Do not split `src/rendering/svg_to_png.rs`** — it would collide with PR #30's diff.
 - `make docs` = `mdbook build`; mdbook is installed. `docs/book/` is gitignored.
 - **`docs/src/images/` is gitignored** — `hintdemo.png` is refreshed locally, never committed.
 
 ## Rendering a scratch screen
 
-- Put screens in a directory with a `byonk-screens.yaml` manifest — **without it the repo is
-  skipped and every render silently falls back.** Each screen also needs a `meta.yaml` with
-  `title`/`description`/`byonk`/`refresh`; a bare `name:` is **not** enough and the screen is
-  reported as "not provided". **`EXAMPLES_DIR` registers under the fixed handle `examples`,
-  NOT the manifest's `name:`.** Use the config instead:
-  ```yaml
-  screen_repos:
-    probe: { path: /abs/path/to/dir }
-  ```
-  then `CONFIG_FILE=<cfg> ./target/debug/byonk render --mac <mac> --output x.png`.
-- **Match the SVG's viewBox to the device**, or the render is silently scaled (see Task 4).
+Validated end to end in session 25 — this recipe works:
+
+1. Make a directory with a `byonk-screens.yaml` manifest (`name`, `description`, `author`,
+   `license`). **Without the manifest the repo is skipped and every render silently falls
+   back.**
+2. Each screen needs `meta.yaml` (`title`, `description`, `byonk`, `refresh`), `script.lua`
+   and `screen.svg`. A bare `name:` in `meta.yaml` is **not** enough — the screen is reported
+   as "not provided".
+3. Register it in a config copy. **`EXAMPLES_DIR` registers under the fixed handle `examples`,
+   NOT the manifest's `name:`**, so use the config instead:
+   ```yaml
+   screen_repos:
+     probe: { path: /abs/path/to/dir }
+   devices:
+     "AA:BB:CC:00:00:71": { panel: trmnl_og, screen: probe/myscreen }
+   ```
+   Seed the copy from `tools/capture-config.yaml`, which already has the panels and a
+   `DEFAULT` device.
+4. `CONFIG_FILE=<cfg> ./target/debug/byonk render --mac AA:BB:CC:00:00:71 --output x.png`
+
+Notes:
+
+- **Build the SVG from `layout.width`/`layout.height`.** Byonk now warns on stderr if you do
+  not — that is Task 4, and the warning names both sizes and the scale factor.
 - **Put text at integer x/y in any probe that judges hinting.** A fractional baseline costs
   3–5% of the ink and will swamp what you are measuring.
 - **Renders are dithered, and error diffusion depends on position** — two identical treatments
@@ -414,8 +450,10 @@ for everything in the tree; what is missing is **notices** — `fonts/` has no l
 - **Swapping fonts without rebuilding:** `FONTS_DIR=<dir>` overrides embedded fonts **by
   filename**.
 - PIL is available; `Image.NEAREST` at 3–6× is what makes pixel-level differences legible.
-- **A fast capture rig** (debug binary, same device map as `tools/capture-renders.sh`) is worth
-  rebuilding for Task 9 — the shipped script uses `cargo run --release`.
+- **The debug binary is the fast capture rig** Task 9 wants. Session 25 rendered all 13
+  bundled screens through it in seconds using `tools/capture-config.yaml`'s device map;
+  `tools/capture-renders.sh` uses `cargo run --release` and also swallows stderr, so it would
+  hide the new warning.
 
 ## Fonts
 
@@ -429,17 +467,8 @@ for everything in the tree; what is missing is **notices** — `fonts/` has no l
   `Cargo.lock` first and restore them after.**
 - The patched resvg source is readable at
   `~/.cargo/git/checkouts/resvg-b4a0ccb9ea26de88/<rev>/` — faster than cloning when you only
-  need to check what usvg does.
-
-## Housekeeping
-
-Two **stale scratch worktrees** are registered and both report **`prunable`**.
-`git worktree prune` is safe and removes both:
-
-```
-…/6b605fbb-…/scratchpad/byonk-state1   (main)
-…/bc0fc7e3-…/scratchpad/byonk-before   (detached 744fec8)
-```
+  need to check what usvg does. Session 25 settled the whole integer-zoom question from
+  `crates/usvg/src/text/flatten.rs` without building anything.
 
 ---
 
@@ -447,4 +476,8 @@ Two **stale scratch worktrees** are registered and both report **`prunable`**.
 
 The pinning initiative is done and reviewed; detail in `git show 3b32762:docs/HANDOVER.md` —
 read before touching `eink-dither`, gamut mapping or colour models. Session 23's detail (F20,
-F21, Task 7 archaeology) is in `git show 6e6e214:docs/HANDOVER.md`.
+F21, Task 7 archaeology) is in `git show 6e6e214:docs/HANDOVER.md`; session 24's (Task 8, the
+CLI fetch fix, `http_response()`, the hinting demo) is in `git show 4cefe83:docs/HANDOVER.md`.
+
+The two stale scratch worktrees noted in the last handover were **pruned** in session 25;
+`git worktree list` is clean.

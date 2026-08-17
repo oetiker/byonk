@@ -1,11 +1,9 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-16 (session 22). **Initiative: adopt the resvg `byonk-base`
-branch.** Plan Tasks 1, 2, 3, 5, 6 done; **4, 7, 8, 9, 10 remain and are the next work.**
-Landed this session: **F16** (`1ce8210`), **F9** (`87da75f`), **F10** (`d018ddb`), **F18**
-(`e85fe7b`) and **F19** (`05b2156`). F18 and F19 were not planned — a crash that aborted
-the whole process, and the component set it lives in being unusable. Both were found by
-checking F10's blast radius rather than by looking for them._
+_Last updated: 2026-08-17 (session 23). **Initiative: adopt the resvg `byonk-base` branch.**
+Plan Tasks 1, 2, 3, 5, 6, 7 done; **4, 8, 9, 10 remain.** Landed this session: **F20**
+(`8246b92`), **F21** (`3a35030`) and **Task 7** (`a02cc6e`). Task 7 is the one that matters:
+until it landed, byonk applied **no hinting at all** in production._
 
 ## Where the work lives
 
@@ -13,160 +11,170 @@ checking F10's blast radius rather than by looking for them._
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
 | PR | **#30**, OPEN against `main` — https://github.com/oetiker/byonk/pull/30 |
-| HEAD | `05b2156` plus this handover commit — tree clean |
-| Verified | `cargo test --workspace` green at `05b2156`: **1098 passed, 0 failed, exit 0**; clippy clean |
-| **Not pushed** | `cfc0f75` is the last commit on `origin` (green on #30). **Seven commits after it are local only**: `87da75f`, `d018ddb`, `7538b49`, `ab02f9d`, `e85fe7b`, `9cac700`, `05b2156`. Pushing is the owner's call — ask before relying on CI. |
+| HEAD | `9db650a` — **tree clean** |
+| Verified | `make check` at `9db650a`: **1120 passed, 0 failed**; clippy clean under `-D warnings` |
+| Pushed | `5863c7c` is on `origin` and **all 10 CI checks passed there**. **Two commits are local only:** `a02cc6e`, `9db650a`. Pushing is the owner's call. |
+| Push gotcha | The ssh-agent holds **no identities**, so `git push origin …` fails on publickey. `gh` is authenticated over HTTPS with `repo` scope — `git push https://github.com/oetiker/byonk.git <branch>` works and leaves the remote config alone. |
 
 **resvg work happens in a different repo.** `oetiker/resvg` carries `feat/bitmap-mask-glyphs`
 (upstream PR #1115), `feat/font-hinting` (upstream PR #1116), and `byonk-base`, which merges
-them and is what byonk's `[patch.crates-io]` pins. Current pin: `2e766508`.
+them and is what byonk's `[patch.crates-io]` pins. **Current pin: `2e766508`** (in
+`Cargo.lock`; `Cargo.toml` tracks the branch).
 
-**The plan:** `docs/superpowers/plans/2026-08-15-resvg-byonk-base-integration.md` — still
-authoritative for Tasks 4, 7, 8, 9, 10, but the plan has been wrong in five of five tasks
-touched. Verify every symbol.
+**The plan:** `docs/superpowers/plans/2026-08-15-resvg-byonk-base-integration.md`. Still the
+authority on *what* Tasks 4, 8, 9, 10 are for — but **it has now been wrong in eight of eight
+tasks touched**, including a semantic rule that was actively harmful (Task 7 below). Treat
+its code as a sketch. Verify every symbol.
 
 **The ledger:** `.superpowers/sdd/2026-08-15-resvg-byonk-base-integration/progress.md`
 (git-ignored). Also there: `f11-report.md`, `f15-report.md`, `font-licensing-research.md`,
-`f9-brief.md`, `f10-brief.md`. **Ignore the two `f15-*.patch` files — neither holds what
-its name claims.** `git log` on `oetiker/resvg` is the source of truth for resvg work.
+`f9-brief.md`, `f10-brief.md`, `f16-probe/`. **Ignore the two `f15-*.patch` files — neither
+holds what its name claims.** `git log` on `oetiker/resvg` is the truth for resvg work.
 
 ---
 
-# F16 — DONE
+# Next work: Task 8
 
-## The state in one paragraph
+**Migrate the 12 screens + docs, folding in F17.** Three parts:
 
-The importer was rewritten in `f2a075f`; the 26 regenerated fonts, the pin bump,
-`FONTS.md` and the `CHANGES.md` entry landed in **`1ce8210`**. The owner chose to put the
-resvg fix on **upstream PR #1115 as well as the fork**, so it was cherry-picked onto
-`feat/bitmap-mask-glyphs` (`d2ef8ee8`, pushed — this **updates upstream PR #1115**) and
-merged into `byonk-base` (**`2e766508`**, pushed). Byonk's `Cargo.lock` pins `2e766508`.
+1. **`byonk-base/v1/hinting.svg` still emits `-resvg-hinting-*` CSS**, which resvg 0.48.1
+   ignores. It is **inert, not harmful** — hinting now comes from `usvg::Options`, not CSS.
+   It must become a shim carrying only `shape-rendering: crispEdges`.
+2. **12 files reference the include** (`grep -rl "hinting.svg" screens/`). Delete the
+   `{% include %}` only where the surrounding CSS rule still has other declarations; where
+   it was the rule's whole body, delete the rule.
+3. **F17, folded in:** `font-family="Terminus (TTF)"` is invalid CSS — unquoted parentheses
+   mean the text silently falls back to a serif, so the **Terminus TTF demo has never
+   rendered Terminus**. **Verified location (the old handover named the wrong file):** the
+   family string is `screens/examples/demo/font/ttf/script.lua:9`
+   (`local family = "Terminus (TTF)"`), and `screen.svg:18` interpolates it **unquoted** as
+   `font-family="{{ line.family }}"`. So either the Lua must emit a quoted name, the
+   template must quote what it interpolates, or the family gets renamed. **Note the
+   template-side fix is the general one** — any screen interpolating a family name hits
+   this, not just this demo.
 
-**The cherry-pick was not clean, and the conflict mattered:** the byonk-side test used
-`FontResolver::select_bitmap`, which does not exist upstream. The upstream copy therefore
-carries the new test *without* the `allow_strikes` plumbing and *without*
-`declining_strikes_also_declines_their_advance`; `byonk-base` keeps both. The merge back
-into `byonk-base` was checked by `git diff 235f499 <merge>` coming out **empty** — that is
-the guard against the merge trap recorded under F15.
+**Migrating is output-preserving by construction** — `FontConfig::adaptive_default` was built
+to reproduce exactly what `hinting.svg` used to emit, so deleting the include should not
+change a single pixel. That is testable, and Task 9's pixel diff is where it gets proven.
 
-Verified after landing: resvg **1750 passed / 0 failed** on `byonk-base`, sabotage fails
-only `an_outline_free_strike_is_spaced_by_its_own_advance`; byonk `cargo test --workspace`
-**1086 passed / 0 failed**; the pitch ruler through byonk is **11/11** (3/11 before).
-Specimens for the owner: https://claude.ai/code/artifact/ef06c1db-b5ba-467c-8cc3-3a7069e00488
+Docs for the directive are already written (`docs/src/api/font-hinting.md`, linked from
+SUMMARY.md, plus a `### font_hinting` section in `api/lua-api.md`). Task 8 owes the
+**upgrade notice** for the now-inert include.
 
-F16 itself is pushed and PR #30 carries it; the later F9/F10 commits are not.
+## Remaining plan tasks
 
-## The resvg change — landed
+| # | What | Notes |
+|---|---|---|
+| 8 | Migrate screens + docs | Above. Fold in F17. |
+| 4 | Render-scale warning | **Worth doing — it bit again in session 23.** A probe SVG with a `400x120` viewBox rendered into an 800×480 device came out silently scaled 2×, so type meant to be judged at 9–11 px was judged at 18–22. |
+| 9 | State-3 capture + pixel diff + **show the owner** | Baseline `/tmp/byonk-renders/state2-final` — **regenerate rather than trust; `/tmp` does not survive reboot.** |
+| 10 | Fix or delete `test_bitmap_font_render` | |
 
-`crates/usvg/src/text/bitmap.rs`, `mask_advance` had:
+---
 
-```rust
-// A glyph with no outline at all keeps whatever strike it has, at any
-// size, so its image is scaled and its advance is not this one.
-font.outline_glyphs().get(glyph_id.into())?;
+# Task 7 — DONE (`a02cc6e`)
+
+**Hinting is now actually applied.** Task 6 threaded `Option<&FontConfig>` through the render
+and **every production call site passed `None`**, so nothing in byonk was hinted anywhere.
+That is why the `CHANGES.md` entry promising crisp BW text was not yet true. It is now.
+
+**The structural decision worth keeping:** hinting resolves **inside**
+`ContentPipeline::render_png_from_svg`, from the palette, *not* by the caller. Making five
+call sites each responsible for supplying the adaptive default is how it goes missing on one
+of them — silently, because an unhinted screen still renders perfectly well.
+`a_screen_with_no_directive_still_gets_the_panel_s_hinting` pins it: a screen that said
+nothing must render differently from one that said `font_hinting = false`. Sabotage-verified
+by making a call site drop the config.
+
+## The Lua surface, as shipped
+
+```lua
+font_hinting = false            -- hinting off entirely
+font_hinting = {
+  engine = "auto",              -- interpreter | auto | auto_fallback
+  target = "mono",              -- shorthand for { mode = "mono" }
+  -- target = { mode = "mono", aliased = false },
+  -- target = { mode = "light", symmetric = true, preserve_linear_metrics = false },
+  variants = {
+    ["Crisp Body"] = { font = "Outfit", hinting = { target = "mono" } },
+  },
+}
 ```
 
-It is wrong. `matching_mask`, called on the next line, **already** narrows to the strike
-whose ppem equals the requested size, and `glyph()` draws that strike unscaled whether or
-not an outline exists. So the guard only ever suppressed the advance of a strike that
-*was* being drawn — in the one case that can least afford it, because an outline-free font
-has nothing but `hmtx` to fall back on and `hmtx` can be right at one size at most.
-Deleting the line is the whole fix.
+`mode` is the discriminator: mono's extra knob is `aliased`, smooth's are `symmetric` and
+`preserve_linear_metrics`. Smooth's defaults match what a grey panel would have got anyway.
 
-| | |
-|---|---|
-| Upstream | `d2ef8ee8` on `oetiker/resvg` `feat/bitmap-mask-glyphs` — **this is PR #1115** |
-| Fork | `2e766508` on `byonk-base` (merge of the above); byonk pins this |
-| **Durable copy** | `.superpowers/sdd/2026-08-15-resvg-byonk-base-integration/f16-resvg-outline-free-advance.patch` |
-| Tests | `byonk-base` **1750 passed, 0 failed**; PR branch **1804 passed, 0 failed**; no reference image changed |
-| Sabotage | reinstating the guard fails **only** `an_outline_free_strike_is_spaced_by_its_own_advance` — checked on both branches |
+## Three more plan errors (this is what took eight of eight)
 
-It adds a test font `BitmapMonoNoOutline.subset.ttf` (BitmapMono with its outline tables
-deleted) emitted by the extended `make-bitmap-mono.py`, and consolidates the
-`last_inked_column*` helpers — which also removes a **pre-existing** dead-code warning on
-`byonk-base` (confirmed pre-existing by stashing).
+1. **The plan's surface cannot express `aliased`** — the one knob that makes BW text crisp.
+2. Its field is `symmetric`; the real one is `symmetric_rendering`.
+3. **Its core rule is harmful.** "A present directive replaces the default wholesale" means
+   `font_hinting = { variants = ... }` silently discards the adaptive mono hinting a BW panel
+   depends on, for an author who only meant to add a variant. **`FontHintingDirective`
+   separates "stated no default" (`None`) from "explicitly off" (`Some(None)`)**;
+   `resolve(grey_count)` applies it. Test:
+   `naming_only_variants_keeps_the_panel_s_adaptive_default`.
 
-**Why the five existing tests could not catch it: every one of them uses a font with
-outlines.** Same shape of trap as the `select_bitmap` merge bug recorded under F15.
+**It also wired two sites the plan never listed** — `api/dev.rs` and `screen_store.rs` (the
+MCP authoring render) — and had to carry the directive through **`CachedContent`**, because
+the device path renders from that cache, not from the script result. Without that, a screen's
+hinting would have worked on the CLI and over MCP and quietly **not on the device**.
 
-**The fonts and the pin must move together.** With the old pin the advances are correct in
-the file and *ignored* at render time, giving fractional pitch — worse than before. If the
-pin is ever rolled back, roll the fonts back with it.
+## Validation and the F1 warning
 
-## What was built (all committed in `f2a075f`)
+Both handover requirements met, and both fail loudly rather than rendering something else:
 
-`fonts/x11importer/` — pure Python + fontTools, no FontForge, no potrace, no X11 install:
+- **Variant base families are checked when the script runs.** `select_font` falls through to
+  the default selector when `db.query` misses, so an unresolvable base family lands on the
+  generic mapping instead of erroring.
+- **Variant *names* are checked too.** The name is a hook byonk intercepts before the default
+  selector; if it is also a real family, that family is shadowed.
+- **The F1 constraint ships as a warning naming the offending variants**, pointing at
+  `text-rendering="optimizeLegibility"` and away from `geometricPrecision`. It is checked
+  against `grey_count = 2` — "would this be wrong on the panel where it *can* be wrong?" —
+  because the same screen may be rendered on any panel.
 
-| File | Job |
-|---|---|
-| `bdf.py` | read BDF, keep `DWIDTH` and the XLFD cell width untouched |
-| `sfnt.py` | write a bitmap-only sfnt (`EBDT` fmt 1 + `EBLC` fmt 1, **no `glyf`**) |
-| `verify.py` | compare the built font back against its sources; `cell_checked` reports coverage |
-| `families.py` | which BDFs make up each of the 26 faces |
-| `sources.py` | 10 X.Org tarballs pinned by version + SHA-256 |
-| `cli.py` | fetch → build → verify → write; **refuses to write if anything disagrees** |
+**Proven by render, not only by tests:** unhinted-then-aliased vs mono-hinted-then-aliased on
+a 2-colour palette. The unhinted row is visibly broken — `illiIL1` mush, stems dropping — and
+is the F1 failure mode made visible. Rig: `…/scratchpad/probe/{hint-auto,hint-off}` +
+`cfg2.yaml` (**ephemeral**).
 
-`fonts/tests/` — 18 tests, `make fonts-check`. `make fonts` rebuilds. Venv `.venv-fonts`
-is separate from the HA `.venv` so the dependency sets cannot collide.
+**F1 design constraint, still binding on anything that touches hinting:** aliasing is
+per-element and inheritable; hinting is per-face. An element choosing smooth/no hinting on a
+BW panel inherits `optimizeSpeed` and lands in the known-bad aliased-without-mono state
+(tiny-skia has no dropout control; stems drop out). Escape hatch:
+**`text-rendering: optimizeLegibility`** — restores AA *and keeps hinting*. **Trap:
+`geometricPrecision` restores AA but disables hinting.**
 
-Also in `f2a075f`: **`EmbeddedFonts` is now restricted to font extensions**
-(`src/assets.rs`). It embedded all of `fonts/`, so the new Python subdirectories broke
-`test_init_fonts` (it tried to write into directories it never created), and `FONTS.md`
-plus a stray `.DS_Store` were being shipped in the binary and handed to fontdb. Pinned by
-`only_font_files_are_embedded`.
+---
 
-## Results — measured, not asserted
+# Session 23's other two fixes
 
-- 26 fonts, **same strike inventory, zero glyphs lost** (except X11Term, below).
-- **8.7 MB → 4.9 MB.** Byte-identical across two runs (deterministic; `head.created`/
-  `modified` are hard-coded).
-- **40% of all advances changed** (58 765 of 144 412).
-- Pitch ruler through byonk, the 11 rows of the old F16 table: **8 wrong before, 0 after.**
-- **Unplanned cross-check that held:** the faces the old handover listed as *already
-  correct* (X11Misc10x @20, X11Misc12x @24, X11Misc6x Bold @13) came out with 0% of their
-  advances changed.
+**F20 — the shipped components (`8246b92`).** `header.svg` and `status_bar.svg` both claimed
+the header's top-right corner, and the timestamp's ink cut through the battery outline.
+**Owner chose: the icons own the corner, the timestamp moves to the footer.** Rendering it
+surfaced two faults the report had missed — the icons were dark grey on a *black* bar, so
+near-invisible regardless; and `updated_at` was drawn by `header.svg` **and** `footer.svg`,
+printing the time twice. Icons now default to light ink with a `status_color` override.
 
-Owner-facing renders (**ephemeral**): `…/scratchpad/demo-before.png` vs `demo-after.png` —
-the shipped `demo/font/bitmap` screen with `font_prefix: X11Misc`. `bold 18px/X11Misc9x`
-was rendering as `b o l d   1 8 p x` (9 px cell spaced at 14); after, every row is tight.
+> **Breaking:** a screen including `header.svg` alone and relying on `updated_at` must now
+> include `footer.svg` too.
 
-## Three findings that were NOT in the diagnosis
+Still open, cosmetic: the WiFi glyph is an 8×12 three-arc path whose inner arcs collapse at
+that size, so it reads as a caret. Pre-existing; only noticeable now that it is visible.
 
-1. **X11Term spans two foundries.** `term14.bdf` in `font-bitstream-75dpi` is
-   `-DEC-Terminal-…-14-…-C-80-`; the **same filename** in `font-bitstream-100dpi` is
-   `-Bitstream-Terminal-…-18-…-C-110-`. That is where its two strikes come from. **F14 must
-   put two notices in one file.** (The old handover credited `font-dec-misc`; that package
-   holds only `deccurs`/`decsess`.)
-2. **X11Term never had a plain apostrophe.** Upstream puts `quoteright` at ENCODING 39 and
-   `quoteleft` at 96. The old conversion relocated them to U+2019/U+2018, so `'` and
-   `` ` `` were blank in a *terminal* font. The rebuild restores them and drops U+0152,
-   U+0153, U+0178, U+2018, U+2019, U+2212 — none of which are in the ISO 8859-1 range the
-   face is drawn for. Net: 194 → 195 codepoints, 188 shared.
-3. **`lub*` (LucidaBright, a serif) was mapped into `X11LuSans`** beside `luRS*` (Lucida
-   Sans). Only a size-dedup accident kept serif glyphs out of the sans font. Verified
-   LucidaBright has **no size Lucida Sans lacks**, so dropping it changes nothing in the
-   output. Prefixes are now matched as `prefix\d*$`, so `helvB` cannot swallow `helvBO08`
-   and the old sort-longest-first hack is gone.
+**F21 — the silent screen-ref fallback (`3a35030`).** A device that **is** configured and
+whose `screen:` does not resolve now returns `ContentError::DeviceScreenUnresolved`, naming
+both the device and the ref. A device with **no** config still falls back to DEFAULT — that
+is what the fallback is for, and its test still passes. The device-polling path already
+rendered a visible error SVG for any `ContentError`, so a panel shows a message instead of
+the wrong screen; the CLI exits non-zero and writes no file. Also dropped `main.rs`'s
+`"Script error:"` wrapper, which double-prefixed real script errors and mislabelled every
+other variant.
 
-## Design decisions worth not relitigating
-
-- **Sources are X.Org tarballs, not Debian `.pcf.gz`.** They ship the original `.bdf`, so
-  nothing sits between us and the ground truth. 10 packages, SHA-256 pinned in
-  `sources.py`. Needed: adobe-75/100dpi, bh-75/100dpi, bh-lucidatypewriter-75/100dpi,
-  bitstream-75/100dpi, misc-misc, sony-misc.
-- **Where two sources give the same pixel size** (a 14 pt face at 75 dpi and a 10 pt at
-  100 dpi are both 14 px), the **75 dpi one wins** — same as the old importer, so the
-  strike inventory is unchanged and only the metrics move.
-- **`upem = largest_ppem × 100`**, and `hmtx` comes from the largest strike. Same
-  convention the old FontForge output used.
-- **Not every fixed-pitch source declares a whole-pixel cell** — `lutRS19` says `M-159`,
-  an average, while all 873 glyphs advance 16. The XLFD check skips those rather than
-  invent a rounding, and the run **prints how many strikes got both checks** so a skipped
-  one cannot read as a pass.
-- **Behaviour change the owner accepted implicitly by asking for outline-free:** at a size
-  with no strike, the renderer now **scales the nearest strike** (blocky, same typeface,
-  right width) instead of falling back to a soft autotraced outline. Proven by probe; on a
-  4-grey panel it reads *better*, because the traced fallback resolved to mid greys.
+> **Consequence: the canary-device workaround is no longer needed for *configured* devices.**
+> A probe rig can point a device at a bogus ref and assert the error instead. Unconfigured
+> devices still fall back, so the canary still has a job there.
 
 ---
 
@@ -179,38 +187,44 @@ was rendering as `b o l d   1 8 p x` (9 px cell spaced at 14); after, every row 
    sans, referenced by name where it already is.
 2. **No fallback magic.** No grafting X11 strikes into Source, no size-conditional family
    substitution, no bitmap/outline hybrid. Designers choose bitmap faces explicitly.
-3. **Fonts need licence files** (research below).
-4. **Bitmap fonts should have no outlines if possible** — asked for in session 21, and
-   that is what F16 delivers.
+3. **Fonts need licence files** (table below).
+4. **Bitmap fonts should have no outlines if possible** — delivered by F16.
+5. **F20: status icons own the header corner; the timestamp lives in the footer.**
 
-## F15 — the bitmap strike fix, DONE and live
+## F15 / F16 — the bitmap work, done and live
 
-Bitmap glyphs were laid out on the outline's `hmtx` advance instead of their own strike
-metrics. Fixed in `oetiker/resvg` (`3cd6d6a5` + `17f41cac`), merged into `byonk-base`
-`61956742`, pinned in byonk `e514271`. **Terminus @14 and @18 render 1 px/glyph wider —
-that is correct, do not "fix" it back.**
-
-**Terminus is NOT buggy.** Measured to destruction across all 1359 glyphs of all nine
-strikes: the strike advances match canonical `ter-uXXn` at every size (6 8 8 10 10 11 12
-14 16); only the outline disagrees, at 14 and 18, and no single `hmtx` value can be right
-at all nine. Raised twice, settled twice. **No upstream report, no patch to our copy.**
-
-**Merge trap to remember:** `byonk-base` has host hooks upstream does not
-(`FontResolver::select_bitmap`). A clean textual merge of upstream font work is **not**
-evidence the semantics survived — one such merge silently produced "outline drawn but
-strike advances used".
-
-**F15 still owes a byonk-side regression test.** The resvg-side tests do not run in
-byonk's suite, so nothing in byonk fails if the pin regresses.
+- **The fonts and the resvg pin must move together.** With the old pin the advances are
+  correct in the file and *ignored* at render time, giving fractional pitch — worse than
+  before. If the pin is rolled back, roll the fonts back with it.
+- **Terminus is NOT buggy.** Measured across all 1359 glyphs of all nine strikes: strike
+  advances match canonical `ter-uXXn` at every size; only the outline disagrees, at 14 and
+  18, and no single `hmtx` value can be right at all nine. **Terminus @14 and @18 render
+  1 px/glyph wider — that is correct, do not "fix" it back.** Raised twice, settled twice.
+- **Merge trap:** `byonk-base` has host hooks upstream does not
+  (`FontResolver::select_bitmap`). A clean *textual* merge of upstream font work is **not**
+  evidence the semantics survived — one such merge silently produced "outline drawn but
+  strike advances used". Guard by diffing the merge result against the pre-merge tree.
+- **A bitmap face only renders as a bitmap at a size it has a strike for**, and nothing warns
+  you. At other sizes the nearest strike is scaled (blocky, right width). `fonts/FONTS.md`
+  lists the sizes per family.
+- Full archaeology, if ever needed: `git show 9db650a~1:docs/HANDOVER.md`.
 
 ## Falsified — do not chase again
 
-- **X11 vertical-metric overflow** (ascender > upem in every conversion): real
-  malformation, **not** a cause of anything. No code in the bitmap path reads the ascender.
+- **X11 vertical-metric overflow** (ascender > upem): real malformation, **not** a cause of
+  anything. No code in the bitmap path reads the ascender.
 - **Ink overhang in the oblique faces**: `TerminusTTF-Italic` overhangs on 40.5% of its
   glyphs too. Slanted bitmap faces overhang normally.
+- **F10's two hazards, both FALSE**, settled by rendering: the fvar `wght` default does *not*
+  leak (resvg pushes 400 from CSS), and Source Serif 4 is *not* pinned at `opsz` 20 (`opsz`
+  tracks font size). The earlier specimen finding that Source Code Pro was "far too light"
+  without an explicit `wght` pin is **falsified for byonk's pipeline**.
+- **F9 / `AutoFallback`:** skrifa tests whether `fpgm` *or* `prep` is non-empty, so it picks
+  the interpreter for fonts with only a 7-byte `prep` stub. byonk sets `Auto` explicitly —
+  keep that. **Upstream will not change it** (googlefonts/fontations#1151, closed "No issue
+  here"). Do not PR it.
 
-## Font licensing — researched
+## Font licensing — researched, awaiting F14
 
 `.superpowers/sdd/…/font-licensing-research.md`. Redistribution and modification are
 permitted for everything in the tree; what is missing is **notices** — `fonts/` has no
@@ -218,17 +232,30 @@ licence file at all.
 
 | Family | Licence | Obligation |
 |---|---|---|
-| Outfit, Terminus (TTF) | OFL 1.1 | ship OFL text |
+| Outfit, Terminus (TTF), Source trio | OFL 1.1 | ship OFL text |
 | X11Helv | Adobe + DEC, MIT/X11-style | notice in copies **and documentation** |
 | X11LuSans, X11LuType | **Lucida** (Bigelow & Holmes) | verbatim notice in user docs **and code comments** |
-| X11Term | **DEC 1991 *and* Bitstream** — see finding 1 | both notices |
+| X11Term | **DEC 1991 *and* Bitstream** — it spans two foundries | both notices, in one file |
 | X11Misc5x–10x | public domain | none |
 | **X11Misc12x**, **X11Misc8x @16** | **Sony Corp. 1987/88** | its own notice |
 
-- **`X11Misc*` is a cell-width grouping, not a licence grouping.** Notices must be per
-  source file. The importer now writes every distinct source `COPYRIGHT` into name ID 0.
+- **`X11Misc*` is a cell-width grouping, not a licence grouping.** Notices must be per source
+  file. The importer writes every distinct source `COPYRIGHT` into name ID 0.
 - **Do not rename `X11LuSans`/`X11LuType` toward "Lucida"** — the trademark licence covers
   unmodified fonts only, and byonk modified them.
+
+## Naming rule for variant aliases
+
+**Name them for their purpose, never `<RealFamily> <TechnicalTerm>`.** An alias is a name the
+author invents and `select_font` intercepts, so it *must not* be a real family — that is the
+mechanism, not a wart. But `"Outfit Mono"` (the plan's example, meaning *Outfit with mono
+hinting*) reads as a monospaced Outfit to every later reader; **the owner queried it on
+sight.** Use `["Crisp Body"] = { font = "Outfit", hinting = { target = "mono" } }`. Byonk now
+*enforces* the "not a real family" half at parse time.
+
+Second rule from the same episode: **an alias that resolves to nothing makes a test depend on
+where unresolved families land**, which is the generic mapping. Always name the fallback in
+the document: `font-family="'Crisp Body', Outfit"`.
 
 ---
 
@@ -236,244 +263,33 @@ licence file at all.
 
 | ID | What |
 |---|---|
-| ~~F16~~ | **DONE** — landed in `1ce8210`. See the F16 section above. |
-| ~~F9~~ | **DONE** — `87da75f`. `AutoFallback` now resolves to `Auto` for a face with no `fpgm`/`cvt`. |
-| ~~F10~~ | **DONE** — `d018ddb`. Source trio bundled, generics repointed, OFL notices shipped, docs updated. |
-| ~~F18~~ | **DONE** — `e85fe7b`. The shipped components' HTML-comment usage examples were live self-includes; templates fixed and cycle/depth/macro guards added. |
-| ~~F19~~ | **DONE** — `05b2156`. `status_bar.svg` errored unless `wifi_status` was set; all three components now document how to receive values at all. |
 | F13 | Extend `screens/examples/demo/font/{ttf,bitmap,hinting}/` to cover Source. |
-| F14 | Licence + notice files per the table above. **`FONTS.md`'s "X11LuType is proportional" is wrong — it is monospaced**; the F16 draft already fixes this. |
-| F15 | Owes a byonk-side regression test (above). |
-| F17 | `font-family="Terminus (TTF)"` is invalid CSS — parentheses must be quoted, or the text silently falls back to a serif. **`screens/examples/demo/font/ttf/screen.svg` has therefore never rendered Terminus.** Quote it, rename the family, or have byonk quote on the author's behalf. Fold into Task 8. |
-
-**F18 — DONE (`e85fe7b`). The root cause was the documentation itself.**
-
-`header.svg`, `footer.svg` and `status_bar.svg` wrapped their doc block in an **HTML**
-comment. Tera does not treat `<!-- -->` as a comment, so the `Usage: {% include
-"byonk-base-v1/header.svg" %}` line inside it was a **live directive** and each file
-included itself without end. `hinting.svg` and `base.svg` never crashed because they
-already used Tera's `{# #}`. The three broken files now match them.
-
-**The session's filter hypothesis was wrong** — it was flagged as an unverified
-correlation in the subagent brief, which is why it did not anchor the diagnosis. The real
-tell was that the crashing files and the safe ones differed in *comment syntax*, not in
-filters.
-
-Templates alone were not enough: the trap stayed armed for any screen author. So
-`TemplateService::build_tera` now walks the include/extends/import graph reachable from
-the screen and rejects a cycle (naming the chain) or a chain deeper than 64, and rejects a
-macro that can call itself. Both walks use an explicit stack. Being in `build_tera` means
-`validate_template` catches a looping screen at **authoring** time.
-
-**Both halves sabotage-checked**: reverting only the templates gives a clean `Circular
-template reference: weather/screen.svg -> byonk-base-v1/header.svg ->
-byonk-base-v1/header.svg`; disabling only the guard restores `stack overflow, aborting`
-(SIGABRT) on a user-authored self-include.
-
-**F19 — DONE (`05b2156`). The component set was unusable, in two layers.**
-
-Found while verifying F18: with the crash gone, `status_bar.svg` still refused to render.
-
-1. **The reported fault.** It compared `wifi_status` against a string with **no default**,
-   which in Tera is a hard error when the variable is absent — for a variable its own notes
-   call *optional*. The battery block two lines below already guarded with `is defined`;
-   the WiFi block now does too.
-2. **The one underneath.** None of the three said how to receive anything, and *this nearly
-   went in the handover as "these components may be unusable"*. The template context is
-   **strictly namespaced** — `data`, `device`, `params`, `layout`, built in
-   `content_pipeline.rs` — while the components read bare `title` / `wifi_status` /
-   `footer_text`. So every documented variable was unreachable and each silently fell back
-   to its default.
-
-**The bridge is `{% set %}` in the including template, and it does reach an include —
-verified by rendering, not assumed.** That idiom is now in all three usage notes:
-
-```
-{% set wifi_status = data.wifi %}
-{% include "byonk-base-v1/status_bar.svg" %}
-```
-
-Nice consequence: those usage examples now contain live-looking `{% set %}`/`{% include %}`
-tags — exactly what caused F18 when they sat in an HTML comment.
-`test_shipped_base_components_render_with_nothing_set` covers it: if `{# #}` ever stopped
-protecting them, F18's cycle guard would reject these files and the test would fail.
-
-`test_status_bar_still_draws_wifi_when_it_is_set` is the control that blocks "fix it by
-deleting the feature" — it asserts connected draws its arcs, disconnected draws its
-strike, and unset draws neither. Gutting the block instead of guarding it fails it.
-
-**F20 — DONE (`8246b92`). The overlap the owner was asked about, plus two faults under it.**
-
-With `header.svg` and `status_bar.svg` in one screen the battery icon and the header's
-right-aligned timestamp overlapped. The owner chose: **the icons own the corner, the
-timestamp moves to the footer.** Rendering it revealed two more faults the description had
-missed — the icons are dark grey on the header's *black* bar, so they were near-invisible
-anyway; and `updated_at` was drawn by `header.svg` **and** `footer.svg`, printing the time
-twice. `header.svg` now has no timestamp, the icons default to light ink, and
-`status_color` lets a screen placing them on white darken them again.
-
-**Breaking:** a screen including `header.svg` alone and relying on `updated_at` must now
-include `footer.svg` too.
-
-Sabotage-checked both halves: re-adding the header timestamp, and hard-coding the ink on
-the battery marks only, each fail their own test. Before/after renders of
-header+status_bar+footer confirmed it — **the zoomed corner is what showed the overlap was
-ink-on-ink, not merely close.** Still open, cosmetic: the WiFi glyph is an 8×12 three-arc
-path whose inner arcs collapse at that size, so it reads as a caret. Pre-existing; only
-noticeable now that the icon is visible at all.
-
-**F9's motivation:** eight of nine trio candidates have no TrueType hinting program — a
-7-byte `prep` stub and no `fpgm`/`cvt`. skrifa's `AutoFallback` tests whether `fpgm` *or*
-`prep` is non-empty, so it picks the interpreter for all nine and never falls back. byonk
-sets `Auto` explicitly — keep that. **Upstream will not change this**
-(googlefonts/fontations#1151, closed "No issue here"). Do not PR it.
-
-**F10's two hazards were settled by rendering, and BOTH WERE FALSE. Do not reopen them.**
-
-| Claim | Measured through byonk on `trmnl_og` |
-|---|---|
-| fvar `wght` default leaks, so Source comes out ExtraLight | **No.** Saying nothing about weight rendered **0.08%** from explicit `wght 400` and **163%** from explicit `wght 100`. resvg pushes 400 from CSS. |
-| Source Serif 4 is pinned at `opsz` 20 whatever the size | **No.** At 10 px, saying nothing rendered **0.20%** from explicit `opsz 10` and **19.46%** from explicit `opsz 20`, the fvar default. `opsz` tracks font size. |
-
-Two things made these cheap and trustworthy. **Outfit's own fvar default is `wght` 100**,
-so the weight question was answerable with a font already in the tree, before adding
-anything. And each run carried a control that would move if the axis were dead — `wght
-100` and `opsz 60`/`opsz 8` — so "these two agree" could not be confused with "nothing is
-being applied". Rig preserved in `.superpowers/sdd/…/f16-probe/screens/{wght,opsz}`.
-
-**The earlier specimen finding that Source Code Pro was "far too light" without an
-explicit `wght` pin is falsified for byonk's pipeline.** Whatever it measured, it was not
-this.
-
-**The digit-final trap is real and now proven, not just reasoned:** rendered through
-byonk, unquoted `font-family="Source Sans 3"` comes out in a **serif**; `'Source Sans 3'`
-comes out right. `Source Code Pro` has no digit and is safe unquoted. Documented in
-`docs/src/tutorial/svg-templates.md` and `fonts/FONTS.md`.
-
-**A test premise F10 broke, worth remembering:**
-`a_variant_hints_differently_from_its_base_font_in_one_document` relied on the
-unresolvable family `Outfit Mono` falling back to Outfit — true only while `sans-serif`
-pointed there. Repointing the generics silently moved that fallback to Source Sans 3 and
-broke a *control*, not the main assertion. The document now names its own fallback
-(`Outfit Mono, Outfit`). **Any test that leans on where an unresolved family lands is
-leaning on the generic mapping.**
-
-**Variant aliases: name them for their purpose, never `<RealFamily> <TechnicalTerm>`.**
-A variant alias is a name the author invents and byonk's `select_font` intercepts, so it
-*must not* be a real family — that is the mechanism, not a wart. But the plan's examples,
-`"Outfit Mono"` and `"X11Helv Outline"`, both read as fonts that do not exist. `"Outfit
-Mono"` meant *Outfit with mono hinting*; every reader takes it for a monospaced Outfit.
-The owner queried it on sight. Renamed in the test to **`"Crisp Body"`** (and `"Outfit
-Unused"` → `"Never Referenced"`). **Task 7 must not ship the plan's names in the Lua
-examples or the docs** — use purpose names like
-`["Crisp Body"] = { font = "Outfit", hinting = { target = "mono" } }`.
-
-Second, subtler rule from the same episode: **an alias that resolves to nothing makes a
-test depend on where unresolved families land**, which is the generic mapping. Always name
-the fallback in the document (`font-family="Crisp Body, Outfit"`).
-
-**`Hamburgefonstiv` is a type-design proof word** — chosen for shape coverage (stems,
-bowls, arches, diagonals, ascenders/descenders), not for stressing a rasteriser. It came
-from the plan. It is *representative*, and the lesson below wants *extreme*. Prefer
-`x X H v /` when a test is about hinting or aliasing.
-
-# Task 7 — DONE (`a02cc6e`)
-
-**Hinting is now actually applied.** Task 6 threaded `Option<&FontConfig>` through the
-render and *every production call site passed `None`*, so nothing was hinted anywhere —
-which is why the `CHANGES.md` entry promising crisp BW text was not yet true. It is now.
-
-**The key structural decision:** hinting is resolved **inside**
-`ContentPipeline::render_png_from_svg` from the palette, not by the caller. Making each
-call site supply the adaptive default is how it goes missing on one of them — silently,
-because an unhinted screen still renders.
-`a_screen_with_no_directive_still_gets_the_panel_s_hinting` pins it: a screen that said
-nothing must differ from one that said `font_hinting = false`. Sabotage-verified.
-
-**Three more plan errors, on top of the five already recorded (now eight of eight):**
-
-1. **The plan's Lua surface cannot express `aliased`** — the one knob that makes BW text
-   crisp. `mode` is now the discriminator, so mono's `aliased` and smooth's `symmetric` /
-   `preserve_linear_metrics` each have a home.
-2. Its field name is `symmetric`; the real one is `symmetric_rendering`.
-3. **Its core semantic rule is harmful.** "A present directive replaces the default
-   wholesale" means `font_hinting = { variants = ... }` silently discards the adaptive mono
-   hinting a BW panel needs, for an author who only meant to add a variant. **`FontHintingDirective`
-   separates "stated no default" (`None`) from "explicitly off" (`Some(None)`)** and
-   `resolve(grey_count)` applies it. `naming_only_variants_keeps_the_panel_s_adaptive_default`
-   is the test.
-
-**It also wired two sites the plan never listed** — `api/dev.rs` and `screen_store.rs` (the
-MCP authoring render) — and had to carry the directive through **`CachedContent`**, because
-the device path renders from that cache, not from the script result. Without it a screen's
-hinting would have worked on the CLI and over MCP and quietly not on the device.
-
-**Handover requirements, both met.** Variant base families *and* variant names are validated
-when the script runs (`select_font` falls through to the default selector on a miss, so an
-unresolvable base family lands on the generic mapping instead of erroring). The F1 constraint
-is carried as a **warning naming the offending variants**, pointing at
-`text-rendering="optimizeLegibility"` and away from `geometricPrecision`.
-
-**Proven by render, not just tests:** unhinted-then-aliased vs mono-hinted-then-aliased on a
-2-colour palette. The unhinted row is visibly broken — `illiIL1` mush, stems dropping — which
-is the F1 failure mode made visible. Rig: `…/scratchpad/probe/{hint-auto,hint-off}` +
-`cfg2.yaml`.
-
-**Still owed by Task 8:** `byonk-base/v1/hinting.svg` still emits `-resvg-hinting-*` CSS,
-which resvg 0.48.1 ignores. It is inert, not harmful — but it must become the
-`shape-rendering: crispEdges` shim, and the 12 screens must drop the include.
-
-# Remaining plan tasks
-
-4. Render-scale warning. **Worth doing — this trap bit again in session 23:** a probe SVG
-   with a `400x120` viewBox rendered into an 800x480 device came out scaled 2×, so type
-   meant to be judged at 9–11 px was judged at 18–22. Silent.
-7. ~~**`font_hinting` Lua directive**~~ — **DONE (`a02cc6e`).** See below.
-8. Migrate screens + docs (fold in F17).
-9. State-3 capture + pixel diff + **show the owner**. Baseline
-   `/tmp/byonk-renders/state2-final` — regenerate rather than trust, `/tmp` does not
-   survive reboot.
-10. Fix or delete `test_bitmap_font_render`.
-
-**F1 design constraint Task 7 must honour:** aliasing is per-element and inheritable;
-hinting is per-face. Once per-element hinting exists, any element choosing smooth/no
-hinting on a BW panel inherits `optimizeSpeed` and lands in the known-bad
-aliased-without-mono state (tiny-skia has no dropout control; stems drop out). The escape
-hatch is **`text-rendering: optimizeLegibility`** — restores AA *and keeps hinting*.
-**Trap: `geometricPrecision` restores AA but disables hinting.**
+| F14 | Licence + notice files per the table above. **`FONTS.md`'s "X11LuType is proportional" is wrong — it is monospaced.** |
+| F15 | **Owes a byonk-side regression test.** The resvg-side tests do not run in byonk's suite, so nothing in byonk fails if the pin regresses. |
+| F17 | Fold into Task 8 (above). |
+| F22 | Cosmetic: the WiFi glyph reads as a caret at 8×12. Redraw or drop it. |
 
 ---
 
 # Open questions for the owner
 
-1. **`grey_count <= 2` may be the wrong rule.** On the 4-grey panel at 10–12 px
-   mono+aliased beats smooth, but at 14 px smooth wins — the real fix may be a **size
-   term**, not a wider grey threshold. *Always name panels by config key:* the **4-colour**
-   `trmnl_og_4clr` already counts as `grey_count = 2`; it is **4-grey** `trmnl_og` that is
-   in question, and they behave oppositely.
+1. **`grey_count <= 2` may be the wrong rule.** On the 4-grey panel at 10–12 px mono+aliased
+   beats smooth, but at 14 px smooth wins — the real fix may be a **size term**, not a wider
+   grey threshold. *Always name panels by config key:* the **4-colour** `trmnl_og_4clr`
+   already counts as `grey_count = 2`; it is **4-grey** `trmnl_og` that is in question, and
+   they behave oppositely. **Now cheap to explore** — `FontConfig::adaptive_default` is the
+   single place the rule lives.
 2. **Two inert knobs:** `HintingMode::Light` is byte-identical to `Normal`, and with
-   `engine: Interpreter` the `target` has no effect.
-3. ~~**A typo'd screen ref in `config.yaml` silently renders the DEFAULT screen.**~~
-   **FIXED in `3a35030` (F21).** A device that *is* configured and whose `screen:` does not
-   resolve now returns `ContentError::DeviceScreenUnresolved`, naming both the device and
-   the ref. A device with **no** config still falls back to DEFAULT — that is what the
-   fallback is for, and `run_script_for_device_falls_back_to_default_device_screen` still
-   passes. The device-polling path already rendered a visible error SVG for any
-   `ContentError`, so a panel shows a message instead of the wrong screen; the CLI exits
-   non-zero and writes no file. Also dropped `main.rs`'s `"Script error:"` wrapper, which
-   double-prefixed real script errors and mislabelled every other variant.
-   **Consequence: the canary-device workaround is no longer needed for *configured*
-   devices** — a probe rig can point a device at a bogus ref and assert the error instead.
-4. `for_error_diffusion()` is applied to **every** dither (`api/builder.rs`), so HyAB and
-   its `kchroma = 10` tuning are not on the crate's dithering path at all.
-5. ~~`CHANGES.md` dangling fragment.~~ **Fixed in `1ce8210`.** The lost line was
-   `- **Text on black-and-white panels is crisp instead of speckled.** Small type used`,
-   recovered verbatim from `2fbb35a` (`git log -S` on the surviving text found it), not
-   rewritten. **Still re-read the whole Unreleased section before merging #30** — one F1
-   entry promises crisp BW text that is only true once Task 7 wires the real `FontConfig`.
+   `engine: Interpreter` the `target` has no effect. Both are documented as inert.
+3. `for_error_diffusion()` is applied to **every** dither (`api/builder.rs`), so HyAB and its
+   `kchroma = 10` tuning are not on the crate's dithering path at all.
+4. **Before merging #30: re-read `CHANGES.md`'s Unreleased section as a whole.** It has grown
+   across three sessions and has never been read as a set. The entry promising crisp BW text
+   **is now true** (Task 7) and its `geometricPrecision` advice has been corrected to
+   `optimizeLegibility`. Also: two overstated test names in `dither/mod.rs`.
 
-**Owner-facing artifacts** (URLs outlive their ephemeral sources; to update, republish the
-same `build_page.py` output **passing the existing URL**, or a second artifact is created):
+**Owner-facing artifacts** (URLs outlive their ephemeral sources; to update, republish
+**passing the existing URL**, or a second artifact is created):
 
 | What | URL |
 |---|---|
@@ -481,143 +297,124 @@ same `build_page.py` output **passing the existing URL**, or a second artifact i
 | Bitmap vs outline; F15 before/after; F16 diagnosis; F17 (session 20) | https://claude.ai/code/artifact/8fe47446-49b6-4256-9db6-429aa3b8bfb6 |
 | Type trials: specimens, two bugs, the data (session 19) | https://claude.ai/code/artifact/f7ef39be-1a9d-4c97-bd95-d9b3422a515e |
 
+**Session 23's renders were never published** and their scratchpad is ephemeral: the F20
+corner zoom and the Task 7 hinted/unhinted comparison. Regenerate from the rigs if wanted.
+
 ---
 
 # Lessons — these keep paying off
 
-- **A fixture where ink width equals the advance cannot catch an advance bug.** The first
-  F16 test fixtures made bitmap width == `DWIDTH`, so sabotaging the advance wiring to
-  `advance = width` passed all 12 tests. Giving every fixture glyph a side bearing turned
-  the same sabotage into 3 failures. This is the *same* blind spot that let F16 ship: 16
-  and 24 px are the sizes where Terminus's two records agree.
-- **Demonstrate the check fails when the thing is broken.** Sabotage caught real holes four
-  times across these sessions. A test that passes with the fix reverted is worthless.
+- **Demonstrate the check fails when the thing is broken.** Sabotage has caught real holes in
+  every session that used it. In session 23, seven sabotages on Task 7 alone were each caught
+  by their own test. A test that passes with the fix reverted is worthless — and a test
+  written *after* the implementation has never been shown to fail at all, so sabotage is the
+  only thing standing in for the RED step.
+- **A default nothing asks for is a default that goes missing.** Hinting is applied by the
+  server, so no screen can reveal a call site that forgot it — the screen just renders
+  unhinted. Resolve such defaults at the single choke point, and pin them with a test that
+  compares "said nothing" against "explicitly off".
+- **The plan's code is not evidence. Eight of eight tasks touched were wrong**, once with a
+  rule that would have silently degraded output. Verify every symbol.
+- **A screen that renders is not a screen that rendered what you asked for.** Carry a canary
+  string *in the render itself* — session 23's probes printed `CANARY AUTO` / `CANARY OFF` in
+  the image, which is stronger than comparing file bytes.
+- **`test -s` both files before believing a `cmp`.** `cmp -s a b` against a non-existent `b`
+  exits non-zero, exactly like "the files differ".
+- **Judge type at true size, and check the render scale.** Session 23 judged 9–11 px type
+  that was silently rendered at 2× because the probe's viewBox did not match the device.
+  This is exactly what plan Task 4 is for.
+- **A flattering test string hides font defects.** `x X H v /` and `illiIL1`, not
+  `Render jpq 0123`. (`Hamburgefonstiv` is a *type-design* proof word — representative, not
+  extreme.)
 - **When the data is right and the render is still wrong, suspect the consumer's guards.**
-  F16's advances were correct in the file and the pitch was still fractional; the cause was
-  an over-broad early-return in our own renderer. Read the code path, do not re-measure the
-  data.
-- **Two code paths that must agree need the same predicate.** `glyph()` drew an exact
-  strike for an outline-free glyph while `mask_advance()` refused to space it. The
-  asymmetry *was* the bug, and the doc comment on `matching_mask` had even warned about
-  the mirror-image case.
-- **Always carry a control through a font measurement.** Outfit proved a diff was the
-  strike change; `TerminusTTF` proved the derived-advance signature was ours;
-  `TerminusTTF-Italic` killed the overhang theory. A measurement with no control cannot
-  tell "this font is broken" from "this is how fonts are".
-- **Check the domain fact before calling something a bug**, and **ask whose bug it is
-  before deciding where to fix it.**
-- **A screen that renders is not a screen that rendered what you asked for.** The canary
-  device caught a silent fallback within minutes this session (see Build/verify).
-- **The plan's code is not evidence.** Wrong in five of five tasks touched. Verify symbols.
-- **An isolating experiment can be sound and still stop one level short** — it only varies
-  what the experimenter already believes matters. **Show the owner renders early;** owner
-  domain knowledge broke open the aliasing bug, the bitmap-advance bug and F16.
-- **A saved artifact is not evidence that it holds what its name says.** Diff a preserved
-  patch against what it claims to preserve — `f16-resvg-outline-free-advance.patch` was
-  applied to a clean tree and checked before being trusted.
-- **A negative result from a missing file is not a passing test.** `cmp -s a b` against a
-  non-existent `b` exits non-zero, exactly like "the files differ". Any check whose pass
-  condition is a command *failing* must first prove both inputs exist.
+- **Two code paths that must agree need the same predicate.**
+- **Always carry a control through a measurement.** A measurement with no control cannot tell
+  "this is broken" from "this is how it is". Same for warnings: the test that the warning
+  *doesn't* fire is what stops it firing unconditionally.
 - **A template that reads bare names cannot see a namespaced context.** byonk hands Tera
-  `data`/`device`/`params`/`layout`; `byonk-base/v1/*` read bare `title`, `wifi_status`.
-  Every documented variable was therefore unreachable and silently defaulted — a whole
-  component family looked fine and did nothing. **When a component documents inputs, render
-  it once with those inputs set and once without, and require the two to differ.**
-- **Work left by an agent that died is not verified work.** Session 22's subagent was
-  killed by a machine crash mid-task. Its diff looked complete and *was* good, but nothing
-  had been run. Re-run everything, including the sabotage checks, before trusting it.
+  `data`/`device`/`params`/`layout`. **When a component documents inputs, render it once with
+  those inputs set and once without, and require the two to differ.**
+- **Fix the docs when they are the bug.** F18's crash *was* a usage example; F20's overlap was
+  half a documentation problem. Shipping a component means shipping how to use it.
+- **Work left by an agent that died is not verified work.** Re-run everything, sabotage checks
+  included, before trusting it.
 - **Never run `make check` while the tree is being edited.** Also `make check > log; echo
-  "EXIT=$?"` reports the *echo's* status — use `|| echo FAILED >> log`.
-- **Judge type at true size.** 124.7 dpi, so 10 px = 5.8 pt.
-- **A flattering test string hides font defects.** Pick sample text that stresses the
-  widest glyphs (`x X H v /`, not `Render jpq 0123`).
+  "EXIT=$?"` reports the *echo's* status — use `|| echo FAILED >> log`. Same trap with any
+  pipe: `cmd | tail; echo $?` reports `tail`.
+- **A saved artifact is not evidence that it holds what its name says.** Diff it against what
+  it claims to preserve.
 - **Set CSS `height: auto` on any image you scale by width alone.**
 
 ---
 
 # Build / verify
 
-- `make check` = fmt + clippy + full suite, **~10 min — background it**; it runs
-  `cargo fmt`, not `--check`, so it rewrites files. Green state = **1098 passed**.
+- `make check` = fmt + clippy + full suite, **~10 min — background it**; it runs `cargo fmt`,
+  not `--check`, so it rewrites files. **Green state = 1120 passed, 0 failed.**
 - **Changing `Cargo.lock`'s resvg pin forces a full rebuild of usvg/resvg and everything
-  downstream — ~10+ min. Always background it**; a 600 s foreground timeout will kill it.
+  downstream — 10+ min. Always background it**; a foreground timeout will kill it.
+- **Editing an embedded asset forces a rebuild.** `EmbeddedDocs` embeds exactly three files
+  (`api/lua-api.md`, `tutorial/svg-templates.md`, `guide/authoring.md`); `EmbeddedBase`
+  embeds `byonk-base/`. Editing any of those mid-`make check` corrupts the run. Other
+  `docs/src/` pages are free.
 - **Subagents must not run `make check`** — the 600 s watchdog kills them. Give them
-  `CARGO_BUILD_JOBS=2 cargo check --workspace --all-targets` + targeted `cargo test`.
+  `CARGO_BUILD_JOBS=2 cargo check --workspace --all-targets` + a targeted `cargo test`.
 - `CARGO_BUILD_JOBS=2` — shared machine. `cargo test` takes only **one** filter.
 - Pre-existing `#[ignore]` failures, unrelated: `preprocess::preprocessor::tests::{…}`.
 - **Never `git add -A`.** `examples/` is an untracked near-copy of `screens/examples/`.
 - **IDE diagnostics lie in this tree.** Only an actual cargo run counts.
 - **Do not split `src/rendering/svg_to_png.rs`** — it would collide with PR #30's diff.
+- `make docs` = `mdbook build`; mdbook is installed. `docs/book/` is gitignored.
 
-## Fonts
+## Rendering a scratch screen
 
-- `make fonts-setup` (once) → `.venv-fonts`; `make fonts-check` (18 tests, instant);
-  `make fonts` (rebuild all 26, deterministic). Downloads cache in `fonts/.x11-cache/`
-  (git-ignored).
-- **Rendering a scratch screen.** Put screens in a directory with a `byonk-screens.yaml`
-  manifest — **without it the repo is skipped and every render silently falls back.**
-  **`EXAMPLES_DIR` registers under the fixed handle `examples`, NOT the manifest's
-  `name:`.** To use your own handle, put it in the config instead:
+- Put screens in a directory with a `byonk-screens.yaml` manifest — **without it the repo is
+  skipped and every render silently falls back.** **`EXAMPLES_DIR` registers under the fixed
+  handle `examples`, NOT the manifest's `name:`.** Use the config instead:
   ```yaml
   screen_repos:
     probe: { path: /abs/path/to/dir }
   ```
   then `CONFIG_FILE=<cfg> ./target/debug/byonk render --mac <mac> --output x.png`.
-- **Always include a canary device** whose `screen:` cannot resolve, point `DEFAULT` at
-  `byonk-builtin/calibration/grey`, and `cmp` the two renders. Identical bytes mean you
-  captured the fallback, not your screen. This caught a real mistake in session 21.
-  **`test -s` BOTH files before believing the `cmp`.** In session 22 a reboot deleted the
-  probe rig; `cmp` against a canary that no longer existed returned non-zero, which reads
-  as "different, therefore fine". The render had actually fallen back to the default
-  screen. The tell was the file size — 47 KB for a two-line screen.
+- **Match the SVG's viewBox to the device**, or the render is silently scaled (see Task 4).
+- **Put a canary string in the image**, e.g. `CANARY AUTO`. Since F21 a *configured* device
+  with an unresolvable ref errors instead of falling back, so the old canary-device trick is
+  only needed for unconfigured devices.
+- `--colors "#000000,#FFFFFF"` forces a 2-colour panel — the BW/mono-hinting case.
 - `--use-actual false` gives spec colours (use for pixel diffs); the default gives the
   panel's measured colours (use for judging type).
-- **Measuring pitch without assuming a glyph width:** render the same glyph N and 2N
-  times, `pitch = (ink₂ₙ − inkₙ) / N`. Both bitmap width and side bearings cancel.
-  **The whole rig is preserved** in `.superpowers/sdd/…/f16-probe/`: the ruler screen, a
-  `cfg.yaml` with one device per family and a canary, `measure_pitch.py` (prints all 11
-  rows with a verdict), and `build_page.py` (rebuilds the specimen artifact). Fix the
-  absolute paths in `cfg.yaml` and `build_page.py` first — they name a dead scratchpad.
+- **Measuring pitch without assuming a glyph width:** render the same glyph N and 2N times,
+  `pitch = (ink₂ₙ − inkₙ) / N`. Both bitmap width and side bearings cancel. Rig preserved in
+  `.superpowers/sdd/…/f16-probe/` (ruler screen, `cfg.yaml`, `measure_pitch.py`,
+  `build_page.py`) — **fix the absolute paths first, they name a dead scratchpad.**
 - **Swapping fonts without rebuilding:** `FONTS_DIR=<dir>` overrides embedded fonts **by
-  filename**. Extract the committed ones with
-  `git show HEAD:fonts/X11Foo.ttf > <dir>/X11Foo.ttf` to get a "before".
-- **A bitmap face only renders as a bitmap at a size it has a strike for**, and nothing
-  warns you. Terminus: 12 14 16 18 20 22 24 28 32. Check the strike list before concluding
-  a render is wrong. `fonts/FONTS.md` lists them per family.
-- **Working on resvg:** clone `oetiker/resvg` into the scratchpad. Its suite is fast
-  (~11 s, 1750 tests) and safe in the foreground — this is *not* byonk's `make check`. To
-  test byonk against a local resvg, point `[patch.crates-io]` in `Cargo.toml` at
-  `<clone>/crates/{resvg,usvg}` — **back up `Cargo.toml` and `Cargo.lock` first and
-  restore them after**, or you commit a path that only exists on one machine.
-  `make-bitmap-mono.py` needs `fontTools` and a copy of `fonts/TerminusTTF.ttf` named
-  `TerminusTTF-Regular.ttf` beside it; output is reproducible apart from `head.modified`,
-  so restore the committed `BitmapMono.subset.ttf` after regenerating.
+  filename**. Get a "before" with `git show HEAD:fonts/X11Foo.ttf > <dir>/X11Foo.ttf`.
+- PIL is available for cropping/zooming renders; `Image.NEAREST` at 3–6× is what makes
+  pixel-level differences legible.
+
+## Fonts
+
+- `make fonts-setup` (once) → `.venv-fonts`; `make fonts-check` (18 tests, instant);
+  `make fonts` (rebuild all 26, deterministic). Downloads cache in `fonts/.x11-cache/`.
+- **Working on resvg:** clone `oetiker/resvg` into the scratchpad. Its suite is fast (~11 s,
+  1750 tests) and safe in the foreground — this is *not* byonk's `make check`. To test byonk
+  against a local resvg, point `[patch.crates-io]` at `<clone>/crates/{resvg,usvg}` — **back
+  up `Cargo.toml` and `Cargo.lock` first and restore them after**, or you commit a path that
+  exists on one machine only.
 
 ## Housekeeping
 
-Two **stale scratch worktrees** are registered in this repo and their directories are
-ephemeral. Remove with `git worktree remove` (or `git worktree prune`) when convenient:
+Two **stale scratch worktrees** are registered and both report **`prunable`** — the reboot
+took their directories. `git worktree prune` is safe and removes both:
 
 ```
 …/6b605fbb-…/scratchpad/byonk-state1   (main)
 …/bc0fc7e3-…/scratchpad/byonk-before   (detached 744fec8)
 ```
 
-Both now report **`prunable`** (`git worktree list`) — the reboot took their directories
-with it. `git worktree prune` is safe and removes both.
-
 ---
 
 # Carried forward
 
-The pinning initiative is done and reviewed; detail in `git show 3b32762:docs/HANDOVER.md`
-— read before touching `eink-dither`, gamut mapping or colour models.
-
-Still open on PR #30: re-read `CHANGES.md`'s Unreleased section as a whole before merge
-(one F1 entry promises crisp BW text that is only true once Task 7 wires the real
-`FontConfig`; all production call sites still pass `None`), and two overstated test names
-in `dither/mod.rs`.
-
-Session 22 added four user-facing `CHANGES.md` entries under Unreleased — the rebuilt X11
-fonts, the Source trio and generics, automatic-fallback hinting, and the two template
-fixes. They have not been read as a set against the rest of the section.
+The pinning initiative is done and reviewed; detail in `git show 3b32762:docs/HANDOVER.md` —
+read before touching `eink-dither`, gamut mapping or colour models.

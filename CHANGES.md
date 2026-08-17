@@ -68,6 +68,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renders a photograph, hue sweep and colour patch grid twice side by side, with the
   right half marked as continuous-tone. Shows on a real panel what gamut mapping
   changes.
+- **New `font_hinting` directive for `script.lua`**, for the screens that want
+  something other than what byonk chose. It can pick the engine and target,
+  turn hinting off outright, and declare *variants* — your own names for a font
+  hinted a particular way, so one screen can render the same family two
+  different ways. Byonk checks a variant's base family and name when the script
+  runs and fails with a clear message, rather than silently rendering a
+  different font. See the new "Font Hinting" page in the documentation.
 
 ### Changed
 
@@ -148,6 +155,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated the SVG renderer to resvg 0.48.1, which brings a faster and more correct
   text engine. Text positioning and glyph advances are more accurate, so some screens
   may shift by a pixel or two.
+- **Byonk now hints text for you, and screens no longer need to ask.** Which
+  treatment a screen gets is chosen per render from the panel it is being drawn
+  for: mono hinting with 1-bit glyphs on a black-and-white panel, smooth
+  anti-aliased hinting once there are greys. Including
+  `byonk-base-v1/hinting.svg` is no longer how this happens, and a screen that
+  includes it is unaffected either way — the include is now inert and can be
+  deleted. **The `-resvg-hinting-*` CSS properties no longer exist**, so a
+  screen that set them directly must move that configuration into the new
+  `font_hinting` directive; until it does, it silently gets byonk's own choice
+  instead of what it asked for. The bundled screens no longer include the
+  partial, and render identically without it.
 
 ### Fixed
 
@@ -233,15 +251,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the whole process. Byonk now refuses such a screen with an ordinary error that names the
   loop, so the screen fails and everything else keeps running. Very deeply nested includes
   are refused the same way.
-- **`sans-serif`, `serif` and `monospace` now get real text faces.** They used to
-  resolve to the house sans — and `monospace` to Terminus, a pixel face that only
-  looks right at the nine sizes it was drawn for. Byonk now bundles Source Sans 3,
-  Source Serif 4 and Source Code Pro and points the three generics at them, so a
-  screen asking for a serif gets a serif and one asking for a monospace gets a
-  monospace at any size. `cursive` and `fantasy` still resolve to Outfit, and every
-  screen that names Outfit is unchanged. **If you write one of these families by
-  name, quote it**: `font-family="'Source Sans 3'"`. A name ending in a digit is not
-  valid unquoted CSS and falls back without warning.
+- **The generic font families work, and now get real text faces.** Text set in
+  `sans-serif`, `serif`, `monospace`, `cursive` or `fantasy` used to resolve only
+  to fonts byonk does not ship, so on the released container image — which
+  contains no system fonts — such text was silently dropped and the screen came
+  out blank. Byonk now bundles Source Sans 3, Source Serif 4 and Source Code Pro
+  and points the three main generics at them, so a screen asking for a serif gets
+  a serif and one asking for a monospace gets a monospace at any size. `cursive`
+  and `fantasy` resolve to Outfit, and every screen that names Outfit is
+  unchanged. **If you write one of these families by name, quote it**:
+  `font-family="'Source Sans 3'"`. A name ending in a digit is not valid unquoted
+  CSS and falls back without warning.
 - **Automatic-fallback hinting now actually falls back.** Text set with the
   automatic-fallback engine came out unhinted on most fonts, including the bundled
   Outfit. The engine is meant to use a font's own hinting where it has some and the
@@ -254,29 +274,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   panels now get sharp, solid glyphs with no extra work; a screen that wants
   smoother text for a particular element can ask with
   `text-rendering="optimizeLegibility"`, and panels with grey levels are unchanged.
-- **Byonk now hints text for you, and screens no longer need to ask.** Which
-  treatment a screen gets is chosen per render from the panel it is being drawn
-  for: mono hinting with 1-bit glyphs on a black-and-white panel, smooth
-  anti-aliased hinting once there are greys. Including
-  `byonk-base-v1/hinting.svg` is no longer how this happens, and a screen that
-  includes it is unaffected either way — the include is now inert and can be
-  deleted. **The `-resvg-hinting-*` CSS properties no longer exist**, so a
-  screen that set them directly must move that configuration into the new
-  `font_hinting` directive; until it does, it silently gets byonk's own choice
-  instead of what it asked for. The bundled screens no longer include the
-  partial, and render identically without it.
-- **New `font_hinting` directive for `script.lua`**, for the screens that want
-  something other than what byonk chose. It can pick the engine and target,
-  turn hinting off outright, and declare *variants* — your own names for a font
-  hinted a particular way, so one screen can render the same family two
-  different ways. Byonk checks a variant's base family and name when the script
-  runs and fails with a clear message, rather than silently rendering a
-  different font. See the new "Font Hinting" page in the documentation.
-- Text using the generic `sans-serif`, `serif`, `monospace`, `cursive` or `fantasy`
-  font families now renders on the device. These resolved only to fonts byonk does
-  not ship, so on the released container image — which contains no system fonts —
-  such text was silently dropped and the screen rendered blank. They now resolve to
-  bundled fonts (Outfit, and Terminus for monospace).
 - **Saturated colours are no longer rendered flat.** The dithering error cap
   (`error_clamp`) used to limit the resulting pixel value rather than the error
   itself, so how much error could accumulate depended on how close a colour

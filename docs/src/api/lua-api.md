@@ -322,7 +322,13 @@ local colors = layout.colors                 -- Display palette colors
 
 ## HTTP Functions
 
-Byonk provides three HTTP functions: `http_request` (full control), `http_get` (GET shorthand), and `http_post` (POST shorthand).
+Byonk provides four HTTP functions: `http_request` (full control), `http_get` (GET
+shorthand), `http_post` (POST shorthand), and `http_response`, which returns the whole
+reply so a script can check whether the request actually succeeded.
+
+**Which to use.** `http_get` and friends return only the body, so a 404 or a 500 arrives
+looking exactly like data. If the screen should react to a failure — or say what went
+wrong — use `http_response`.
 
 ### http_request(url, options?)
 
@@ -504,6 +510,49 @@ if not ok then
   log_error("Request failed: " .. tostring(response))
 end
 ```
+
+### http_response(url, options?)
+
+Makes a request and returns the whole reply instead of just the body. Takes exactly the
+same options as `http_request`.
+
+**Unlike the other three, it does not raise when the request fails.** A refused
+connection, a timeout and a 500 are all outcomes the script can inspect and decide about,
+because what a failure means is the screen's business, not byonk's.
+
+```lua
+local reply = http_response("https://api.example.com/data", { timeout = 15 })
+
+if not reply.ok then
+  -- reply.error is set when nothing arrived at all; otherwise it was a bad status.
+  error("Could not reach the API: " .. (reply.error or ("HTTP " .. tostring(reply.status))))
+end
+
+local data = json_decode(reply.body)
+```
+
+**Returns:** `table`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ok` | boolean | `true` only for a 2xx status |
+| `status` | number | The HTTP status, or `nil` if no reply arrived |
+| `body` | string | The response body, or `nil` if no reply arrived |
+| `headers` | table | Response headers, with lowercased names |
+| `error` | string | Why nothing arrived, or `nil` if a reply did |
+| `from_cache` | boolean | Whether this came from the `cache_ttl` cache |
+
+**Notes:**
+
+- `ok` is about the status only. A 404 that returns a helpful JSON error body still has
+  `ok = false`, and its body is there for you to read.
+- Only successful responses are cached, so an error page is never served as data for the
+  rest of a `cache_ttl` window.
+- **If a screen has no sensible way to carry on, raise.** Calling `error()` makes byonk
+  draw its own error screen on the device, naming the screen and your message, and makes
+  `byonk render` exit non-zero. That is far more useful than a screen that renders with
+  pieces missing.
+
 
 ## JSON Functions
 

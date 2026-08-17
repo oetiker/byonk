@@ -457,6 +457,16 @@ the engine barely does. The image states which coincidences are expected.
   invalid CSS as soon as the name contains anything but plain identifiers — a
   family like `Terminus (TTF)` silently falls back to a serif. Write
   `font-family="'{{ line.family }}'"`.
+- **Don't set `font-family` in both a CSS rule and an attribute.** A
+  presentation attribute is the lowest-priority source in SVG, so
+  `text { font-family: … }` in a `<style>` block silently overrides every
+  `font-family="…"` attribute on matching elements. The text still renders, in
+  the wrong face. Set it on a class or on the element, not both.
+- **Put text on whole-pixel positions, not just whole-pixel sizes.** Hinting
+  fits the outline to the pixel grid; a baseline at `y="80.667"` then slides
+  the fitted glyph back off it. Measured on byonk's own demo, fractional
+  baselines cost 3–5% of the ink to dropped stems — more than the difference
+  between two hinting engines.
 - **Test on your actual display.** What reads well depends on the font, the
   size and the panel.
 

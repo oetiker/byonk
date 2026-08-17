@@ -5,27 +5,35 @@
 -- `font_hinting` directive does — this is the worked example for the
 -- Font Hinting page in the docs.
 --
--- The third column turns hinting off. It is a CONTROL: because no engine
--- runs when hinting is off, those three cells must look identical to each
--- other, and any cell that differs from them is a cell where hinting
--- actually did something.
+-- The third column turns hinting off: the control every other cell is read
+-- against.
 --
--- Several cells are EXPECTED to coincide. That is a property of the fonts
--- and the engines, not a fault in the grid, and it is the most useful thing
--- the grid teaches: for a font that carries no usable hinting program, the
--- target is what matters and the engine barely does. Measured on Outfit,
--- one line per variant, each rendered in its own image so that error
--- diffusion could not leak between them:
+-- What the grid actually shows, measured rather than assumed. Read the mono
+-- column first — it is drawn 1-bit, so it carries no anti-aliased greys for
+-- the ditherer to perturb, and is the only column where cells can be
+-- compared exactly:
 --
---   * `auto` and `auto_fallback` agree in every column — with no hints to
---     fall back to, the fallback engine lands on the automatic hinter.
---   * under `interpreter` the target has no effect, so that whole row is
---     one appearance, and it differs from "off" only marginally.
---   * `mode = "light"` is byte-identical to "normal"; it has no column here
---     for that reason.
+--   * `auto` and `auto_fallback` are the same picture. None of the fonts
+--     byonk ships carries a hinting program — every one has an empty `fpgm`
+--     and zero instruction bytes across every glyph — so there is nothing to
+--     fall back TO and the fallback engine lands on the automatic hinter.
+--     If this pair ever stops matching, byonk's `resolve_auto_fallback` has
+--     regressed and `auto_fallback` is silently rendering unhinted.
+--   * `interpreter` is visibly worse: stem spacing goes uneven and the glyphs
+--     gain ink. It is executing a font program that does not exist, so the
+--     outline reaches the rasterizer unfitted. That is the row to point at
+--     when someone asks why byonk defaults to `auto`.
+--   * In the smooth and off columns the two differ far less, because both are
+--     anti-aliased and the difference lands in grey edge pixels rather than
+--     in which pixels are covered at all.
 --
--- So the grid holds three distinct appearances plus the control, and a cell
--- that stops matching its expected group is a real regression.
+-- `mode = "light"` has no column: it is byte-identical to "normal".
+--
+-- Careful when measuring this screen: it is dithered, and error diffusion
+-- varies with position, so two cells with identical settings at different
+-- places on the page do NOT come out byte-identical. That is the measurement
+-- confound, not a rendering difference. Compare within the mono column, or
+-- render one variant per image.
 
 local base = "Outfit"
 
@@ -46,10 +54,22 @@ local engines = {
 
 -- `mode = "light"` is deliberately absent: it renders byte-identically to
 -- "normal", so a column for it would be three more duplicate cells.
+-- `text_rendering` is the other half of each treatment, and the grid is wrong
+-- without it. The Lua `aliased` flag is document-level, so a variant cannot
+-- carry it — but aliasing is an ordinary inheritable SVG property, so the
+-- element using the variant can ask for it directly. Measured: a mono variant
+-- plus `optimizeSpeed` renders byte-identically to the document-level
+-- `target = { mode = "mono", aliased = true }`.
+--
+-- Stating it on every cell also makes the grid mean the same thing on a
+-- black-and-white panel as on a grey one, instead of inheriting whichever
+-- default the panel happened to give it.
 local targets = {
-  { name = "mono",   target = "mono",   hinted = true },
-  { name = "smooth", target = "smooth", hinted = true },
-  { name = "off",    target = nil,      hinted = false },
+  -- Mono hinting is what makes aliasing safe: the rasterizer has no dropout
+  -- control, so an un-hinted outline drawn 1-bit loses stems.
+  { name = "mono",   target = "mono",   hinted = true,  text_rendering = "optimizeSpeed" },
+  { name = "smooth", target = "smooth", hinted = true,  text_rendering = "optimizeLegibility" },
+  { name = "off",    target = nil,      hinted = false, text_rendering = "optimizeLegibility" },
 }
 
 local margin = 4
@@ -59,8 +79,14 @@ local col_header_h = 18
 local pad = 6
 local col_count = #targets
 local row_count = #engines
-local cell_w = (width - margin * 2 - row_header_w) / col_count
-local cell_h = (height - top - margin - col_header_h) / row_count
+-- Whole pixels, deliberately. Hinting fits the outline to the pixel grid, so
+-- a cell origin at x.667 slides the fitted glyph straight back off it and
+-- undoes the fit — measured at 3-5% of the ink lost to dropped stems, which
+-- is more than the difference between two engines. With fractional cells only
+-- the top-left cell of this grid sat on the grid at all, and the rest were
+-- being compared against it unfairly.
+local cell_w = math.floor((width - margin * 2 - row_header_w) / col_count)
+local cell_h = math.floor((height - top - margin - col_header_h) / row_count)
 
 -- Build the variant table alongside the cells, so a cell and the variant it
 -- names can never drift apart.
@@ -102,11 +128,7 @@ for ri, eng in ipairs(engines) do
 
     table.insert(cells, {
       family = alias,
-      -- Anything that is not mono-hinted needs anti-aliasing restored on a
-      -- black-and-white panel, where byonk draws the document 1-bit and an
-      -- un-hinted outline would drop stems. optimizeLegibility restores it
-      -- and keeps hinting; geometricPrecision would disable hinting.
-      needs_aa = not (tgt.hinted and tgt.target == "mono"),
+      text_rendering = tgt.text_rendering,
       lines = lines,
     })
   end
@@ -116,7 +138,7 @@ local col_headers = {}
 for ci, tgt in ipairs(targets) do
   table.insert(col_headers, {
     label = tgt.name,
-    x = margin + row_header_w + (ci - 1) * cell_w + cell_w / 2,
+    x = margin + row_header_w + (ci - 1) * cell_w + math.floor(cell_w / 2),
   })
 end
 
@@ -125,8 +147,8 @@ for ri, eng in ipairs(engines) do
   local row_y = top + col_header_h + (ri - 1) * cell_h
   table.insert(row_headers, {
     label = eng.name,
-    x = margin + row_header_w / 2 + 1,
-    y = row_y + cell_h / 2,
+    x = margin + math.floor(row_header_w / 2) + 1,
+    y = row_y + math.floor(cell_h / 2),
     line_y = row_y,
     show_line = ri > 1,
   })

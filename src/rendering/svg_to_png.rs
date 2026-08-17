@@ -867,7 +867,7 @@ fn pack_nbits(indices: &[u8], width: u32, bits: u8) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::rendering::font_config::{
-        FontConfig, FontVariant, HintingEngine, HintingSpec, HintingTarget,
+        FontConfig, FontVariant, HintingEngine, HintingMode, HintingSpec, HintingTarget,
     };
 
     #[test]
@@ -1813,6 +1813,125 @@ mod tests {
              face rather than its hinting"
         );
     }
+    /// A variant can be drawn 1-bit, even though the Lua `aliased` flag is
+    /// document-level and a variant cannot carry it.
+    ///
+    /// Aliasing reaches usvg through `Options::text_rendering`, which is an
+    /// ordinary inheritable SVG property — so the *element* using the variant
+    /// can ask for it with `text-rendering="optimizeSpeed"`. Pinned because
+    /// without it a "mono" variant only gets grid-fitting, still anti-aliased,
+    /// which looks so nearly identical to smooth that a broken variant and a
+    /// working one are indistinguishable by eye. That is exactly how the
+    /// bundled hinting demo shipped its mono column looking like its smooth
+    /// one.
+    ///
+    /// Rendered on a 4-grey panel, where the document default is *not*
+    /// aliased, so the element attribute is the only thing that can produce a
+    /// 1-bit glyph.
+    #[test]
+    fn a_mono_variant_plus_optimize_speed_equals_the_document_level_aliased_mono() {
+        const ALIASED_VARIANT: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480">
+          <rect width="800" height="480" fill="#fff"/>
+          <text x="20" y="40" font-family="Crisp Body, Outfit" font-size="11"
+                text-rendering="optimizeSpeed"
+                style="font-variation-settings: 'wght' 400">illiIL1 xXHv Hamburgefonstiv</text>
+        </svg>"##;
+        const PLAIN: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480">
+          <rect width="800" height="480" fill="#fff"/>
+          <text x="20" y="40" font-family="Outfit" font-size="11"
+                style="font-variation-settings: 'wght' 400">illiIL1 xXHv Hamburgefonstiv</text>
+        </svg>"##;
+
+        let r = bundled_renderer();
+        let grey4 = &[
+            (0u8, 0u8, 0u8),
+            (85, 85, 85),
+            (170, 170, 170),
+            (255, 255, 255),
+        ];
+        let render = |svg: &str, cfg: &FontConfig| {
+            r.render_to_palette_png(
+                svg.as_bytes(),
+                DisplaySpec::OG,
+                grey4,
+                None,
+                false,
+                None,
+                None,
+                Some(cfg),
+            )
+            .expect("render")
+        };
+
+        let mono_variant = |aliased_default: bool| {
+            let mut cfg = FontConfig::adaptive_default(4);
+            cfg.variants.clear();
+            if aliased_default {
+                cfg.default = Some(HintingSpec {
+                    engine: HintingEngine::Auto,
+                    target: HintingTarget::Mono { aliased: true },
+                });
+            }
+            cfg
+        };
+
+        // The reference: the document itself asks for mono *with* aliasing,
+        // which is the treatment Task 7 proved crisp on a black-and-white
+        // panel. Nothing here is a variant.
+        let reference = render(PLAIN, &mono_variant(true));
+
+        // The claim: a variant asking for mono, with the element opting into
+        // aliasing, reaches the same place.
+        let mut via_variant = FontConfig::adaptive_default(4);
+        via_variant.variants.clear();
+        via_variant.variants.insert(
+            "Crisp Body".to_string(),
+            FontVariant {
+                font: "Outfit".to_string(),
+                strikes: None,
+                hinting: Some(Some(HintingSpec {
+                    engine: HintingEngine::Auto,
+                    target: HintingTarget::Mono { aliased: false },
+                })),
+            },
+        );
+        assert_eq!(
+            reference,
+            render(ALIASED_VARIANT, &via_variant),
+            "a mono variant drawn with text-rendering=optimizeSpeed must match \
+             the document-level aliased mono; a difference means part of a \
+             screen can no longer be made crisp on its own"
+        );
+
+        // Control: the aliasing attribute alone is not what produced the
+        // match. The same element, with a variant hinted smooth instead of
+        // mono, is the known-bad aliased-without-mono state and must differ.
+        let mut smooth_variant = FontConfig::adaptive_default(4);
+        smooth_variant.variants.clear();
+        smooth_variant.variants.insert(
+            "Crisp Body".to_string(),
+            FontVariant {
+                font: "Outfit".to_string(),
+                strikes: None,
+                hinting: Some(Some(HintingSpec {
+                    engine: HintingEngine::Auto,
+                    target: HintingTarget::Smooth {
+                        mode: HintingMode::Normal,
+                        symmetric_rendering: false,
+                        preserve_linear_metrics: true,
+                    },
+                })),
+            },
+        );
+        assert_ne!(
+            reference,
+            render(ALIASED_VARIANT, &smooth_variant),
+            "aliasing without mono hinting must not match mono; if it does, \
+             the variant's target is being ignored and the test above proved \
+             nothing"
+        );
+    }
+
     /// The assumption the whole variant design rests on: a face loaded inside
     /// `select_font` via `Arc::make_mut` gets a NEW id and survives into the
     /// rest of the parse, so `select_hinting` is later called with that id.

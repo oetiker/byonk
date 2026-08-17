@@ -37,37 +37,22 @@ local encoded_station = url_encode(station)
 
 local url = "https://transport.opendata.ch/v1/stationboard?station=" .. encoded_station .. "&limit=" .. limit
 
-local ok, response = pcall(function()
-  return http_get(url)
-end)
+-- http_response reports a failure instead of raising, so this can tell a
+-- refused connection from a 500 and say which happened. Anything it cannot
+-- recover from is raised: byonk draws its own error screen naming the screen
+-- and the message, which is far more useful than a half-populated board.
+local reply = http_response(url, { timeout = 15 })
 
-if not ok then
-  log_error("Failed to fetch departures: " .. tostring(response))
-  return {
-    data = {
-      station = station,
-      error = "Failed to fetch departures",
-      departures = {},
-      updated_at = time_format(time_now(), "%H:%M")
-    },
-    refresh_rate = 60
-  }
+if not reply.ok then
+  error("Could not reach transport.opendata.ch for " .. station .. ": "
+    .. (reply.error or ("HTTP " .. tostring(reply.status))))
 end
 
 -- Parse JSON response
-local json = json_decode(response)
+local json = json_decode(reply.body)
 
 if not json or not json.stationboard then
-  log_error("Invalid response from API")
-  return {
-    data = {
-      station = station,
-      error = "Invalid API response",
-      departures = {},
-      updated_at = time_format(time_now(), "%H:%M")
-    },
-    refresh_rate = 60
-  }
+  error("transport.opendata.ch returned no stationboard for " .. station)
 end
 
 -- Get actual station name from response

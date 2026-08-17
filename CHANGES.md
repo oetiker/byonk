@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- **New `http_response()` for Lua scripts**, which returns the whole reply —
+  `ok`, `status`, `body`, `headers` — instead of just the body, and does not
+  raise when the request fails. Until now a script could not tell a 404 or a
+  500 from real data: `http_get` hands back whatever came, so an error page
+  arrived looking exactly like the thing you asked for. What a failure means is
+  the screen's business, so byonk now reports it and lets the script decide.
+  Responses are also only cached when they succeed, so an error page is no
+  longer served as data for the rest of a `cache_ttl` window.
 - **Writable local screen repositories** via `screen_repos: { <name>: { path: … } }`,
   so your own screens live in their own handle (`local`) instead of being mixed into
   the `byonk-builtin` handle.
@@ -131,6 +139,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`byonk render` could never render a screen that fetches anything.** Any
+  screen calling `http_get` — the bundled `webscrape` and
+  `swiss-departure-board` examples among them — failed on the command line with
+  a tokio panic about dropping a runtime, then a confusing complaint about a
+  missing `data.width`. The CLI drove the whole render from inside its async
+  runtime, where the blocking HTTP client may not be used, while every other
+  caller happened to step off it first. The request now always runs on a thread
+  of its own, so a script can fetch no matter how byonk was started.
+- **Two example screens hid the reason they failed.** `webscrape` and
+  `swiss-departure-board` returned a half-filled data table when a fetch
+  failed, holding an error message their templates never displayed — so any
+  fetch failure ended in `Variable 'data.width' not found` rather than in
+  anything a reader could act on. Both now report what went wrong and stop,
+  which puts the message on the device's error screen and on the command line.
+- **The font hinting demo showed nine cells that were meant to differ and
+  didn't.** Its stylesheet set `font-family` on a bare `text` rule, and in SVG
+  a CSS rule outranks a presentation attribute — so it overrode the
+  `font-family` on every cell and the hinting variants were never selected.
+  Its grid was also laid out on fractional pixel positions, which slides a
+  hinted glyph back off the pixel grid it was just fitted to and costs 3-5% of
+  the ink to dropped stems. Both are fixed, and the demo now draws its
+  mono-hinted column 1-bit, so the treatments are plainly different.
 - **The Terminus TTF font demo never actually showed Terminus.** The example
   wrote its family name into the template unquoted, and `Terminus (TTF)` is not
   a valid unquoted CSS family, so every line of the demo silently fell back to a

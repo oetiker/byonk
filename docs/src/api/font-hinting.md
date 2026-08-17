@@ -79,8 +79,21 @@ target = { mode = "light", symmetric = true, preserve_linear_metrics = false }
 is what byonk itself uses for a grey panel — so `target = "smooth"` gives you
 exactly what a grey panel would have got anyway.
 
-**`aliased` only has meaning on the document default**, not on a variant. See
-the warning below.
+**`aliased` only has meaning on the document default**, not on a variant —
+but that is a limit of the *flag*, not of the variant. Aliasing is an ordinary
+inheritable SVG property, so an element using a variant can ask for it itself:
+
+```svg
+<text font-family="'Crisp Body', Outfit" text-rendering="optimizeSpeed">10px</text>
+```
+
+A mono variant plus `optimizeSpeed` renders **byte-identically** to the
+document-level `target = { mode = "mono", aliased = true }`. That pairing is how
+you get genuinely crisp 1-bit type for *part* of a screen — on a grey panel as
+well as a black-and-white one — which is the whole reason variants exist.
+
+**Only ever pair `optimizeSpeed` with mono hinting.** See the warning below for
+what happens otherwise.
 
 ### `variants` — hinting one font two ways in one screen
 
@@ -124,6 +137,15 @@ Body"` says what it is for.
 Always name a real fallback in the SVG (`font-family="'Crisp Body', Outfit"`),
 so the text still resolves sensibly if the variant is ever removed.
 
+> **Do not also set `font-family` in a CSS rule that matches the same element.**
+> In SVG a presentation attribute is the *lowest* priority, so
+> `text { font-family: Outfit; }` in a `<style>` block overrides every
+> `font-family="'Crisp Body', …"` attribute on the elements it matches — and
+> the variant is then never selected. Nothing warns you: the text renders
+> perfectly well in the base font. Byonk's own hinting demo shipped this way,
+> with nine cells that were supposed to differ and did not. Put the family on
+> a class, or on the elements, but not in both places.
+
 ### Naming variants does not replace the default
 
 A directive that only declares `variants` leaves byonk's adaptive default in
@@ -153,6 +175,13 @@ in the SVG, on the elements using that variant:
 
 > **Do not use `geometricPrecision` for this.** It also restores anti-aliasing,
 > but it disables hinting at the same time — which is not what you asked for.
+
+The same property runs the other way, and that is the useful direction: an
+element that is mono-hinted can ask for `text-rendering="optimizeSpeed"` to be
+drawn 1-bit even where the document is not. `optimizeSpeed` without mono
+hinting is precisely the state this section warns about, so the two belong
+together — see `examples/demo/font/hinting`, which states a `text-rendering`
+on every cell for exactly this reason.
 
 ## Notes
 

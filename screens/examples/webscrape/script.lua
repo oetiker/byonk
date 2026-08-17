@@ -34,24 +34,17 @@ local today_start = now - (hour * 3600 + min * 60 + sec)
 local url = "https://floerli-olten.ch/index.cgi?rm=calendar&start=" .. math.floor(today_start)
 log_info("Fetching URL: " .. url)
 
-local ok, html = pcall(function()
-  return http_get(url)
-end)
+-- http_response reports a failure instead of raising, so this can say which
+-- failure happened. Raising hands the screen to byonk's own error rendering,
+-- which names the screen and the message.
+local reply = http_response(url, { timeout = 15 })
 
-if not ok then
-  log_error("Failed to fetch calendar: " .. tostring(html))
-  return {
-    data = {
-      room = room_name,
-      error = "Failed to fetch calendar",
-      current = nil,
-      upcoming = {},
-      updated_at = time_format(now, "%H:%M"),
-      date_str = time_format(now, "%d.%m.%Y")
-    },
-    refresh_rate = 60
-  }
+if not reply.ok then
+  error("Could not fetch the " .. room_name .. " calendar: "
+    .. (reply.error or ("HTTP " .. tostring(reply.status))))
 end
+
+local html = reply.body
 
 local doc = html_parse(html)
 

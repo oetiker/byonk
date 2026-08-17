@@ -96,6 +96,134 @@ async fn test_lua_qr_svg_function() {
 // Direct Lua API tests using mock HTTP server
 // ============================================================================
 
+/// Regression: `byonk render` drives the whole render synchronously from
+/// inside `#[tokio::main]`, so Lua's blocking HTTP client was built and
+/// dropped on a tokio worker thread and tokio panicked in runtime shutdown.
+/// No screen that fetches anything had ever rendered from the CLI.
+///
+/// The other callers (`api/display.rs`, `api/dev.rs`, `mcp/`) each wrap the
+/// Lua work in `spawn_blocking` by hand, which is how the CLI came to be the
+/// one that forgot. This test pins the fix at the choke point instead: a
+/// script must be able to fetch no matter which context byonk calls it from.
+///
+/// `multi_thread` is required because this test blocks its own thread on the
+/// request while wiremock has to answer it on another.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_script_can_fetch_over_http_from_inside_a_tokio_runtime() {
+    let server = MockHttpServer::start().await;
+    server
+        .mock_get_json(
+            "/api/data",
+            serde_json::json!({ "message": "from the mock", "count": 42 }),
+        )
+        .await;
+
+    let script = format!(
+        r#"
+        local body = http_get("{}")
+        local decoded = json_decode(body)
+        return {{
+            data = {{ message = decoded.message, count = decoded.count }},
+            refresh_rate = 60
+        }}
+        "#,
+        server.url_for("/api/data")
+    );
+
+    let (_temp_dir, asset_loader) = setup_test_env(&[("fetch.lua", script.as_str())]);
+    let runtime = LuaRuntime::new(asset_loader);
+
+    let result = runtime
+        .run_script_from_asset(
+            std::path::Path::new("fetch.lua"),
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .expect("a script that fetches must run from inside a tokio runtime");
+
+    assert_eq!(result.data["message"], "from the mock");
+    assert_eq!(result.data["count"], 42);
+}
+
+/// A script could not tell a 500 from a 200: `http_get` returns only the body,
+/// so an error page arrived looking exactly like data. `http_response` returns
+/// the whole response, and does not raise for a failing status — deciding what
+/// a 500 means is the script's business.
+#[tokio::test(flavor = "multi_thread")]
+async fn http_response_reports_a_failing_status_instead_of_raising() {
+    let server = MockHttpServer::start().await;
+    server
+        .mock_get_status("/boom", 500, "upstream exploded")
+        .await;
+    server
+        .mock_get_json("/fine", serde_json::json!({ "ok": true }))
+        .await;
+
+    let script = format!(
+        r#"
+        local bad = http_response("{}")
+        local good = http_response("{}")
+        return {{
+            data = {{
+                bad_ok = bad.ok, bad_status = bad.status, bad_body = bad.body,
+                good_ok = good.ok, good_status = good.status,
+            }},
+            refresh_rate = 60
+        }}
+        "#,
+        server.url_for("/boom"),
+        server.url_for("/fine")
+    );
+
+    let (_temp_dir, asset_loader) = setup_test_env(&[("status.lua", script.as_str())]);
+    let runtime = LuaRuntime::new(asset_loader);
+
+    let result = runtime
+        .run_script_from_asset(
+            std::path::Path::new("status.lua"),
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .expect("a failing status must not raise");
+
+    assert_eq!(result.data["bad_ok"], false, "500 must not report ok");
+    assert_eq!(result.data["bad_status"], 500);
+    assert_eq!(result.data["bad_body"], "upstream exploded");
+    assert_eq!(result.data["good_ok"], true);
+    assert_eq!(result.data["good_status"], 200);
+}
+
+/// A transport failure is an outcome the script can inspect, not a crash.
+/// Port 1 on loopback refuses immediately, so this needs no network.
+#[tokio::test(flavor = "multi_thread")]
+async fn http_response_reports_a_transport_failure_instead_of_raising() {
+    let script = r#"
+        local r = http_response("http://127.0.0.1:1/nope", { timeout = 5 })
+        return {
+            data = { ok = r.ok, status = r.status, has_error = r.error ~= nil },
+            refresh_rate = 60
+        }
+    "#;
+
+    let (_temp_dir, asset_loader) = setup_test_env(&[("refused.lua", script)]);
+    let runtime = LuaRuntime::new(asset_loader);
+
+    let result = runtime
+        .run_script_from_asset(
+            std::path::Path::new("refused.lua"),
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .expect("a refused connection must not raise");
+
+    assert_eq!(result.data["ok"], false);
+    assert!(result.data["status"].is_null(), "no status without a reply");
+    assert_eq!(result.data["has_error"], true);
+}
+
 #[tokio::test]
 async fn test_lua_http_get_json() {
     let server = MockHttpServer::start().await;

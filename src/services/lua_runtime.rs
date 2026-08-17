@@ -84,6 +84,300 @@ fn push_log(sink: &Arc<Mutex<Vec<String>>>, line: String) {
 /// Translate a Lua options table into the three typed structs the pipeline
 /// needs. Unknown `preset` and `fit` values are errors, never silent no-ops:
 /// a typo that silently does nothing is worse than one that fails loudly.
+/// Everything one Lua HTTP call needs, as plain owned data.
+///
+/// It is collected in the Lua callback and then handed to a thread of our
+/// own, because `reqwest::blocking` builds a private tokio runtime and tokio
+/// panics if such a runtime is dropped while a tokio context is active.
+///
+/// Byonk's server paths happen to call Lua from inside `spawn_blocking`,
+/// where blocking is permitted, so they never hit it. `byonk render` drives
+/// the same code straight from `#[tokio::main]`, where it is not — so no
+/// screen that fetched anything had ever rendered from the command line.
+/// Doing the request off-runtime fixes it once, here, rather than leaving
+/// every caller to remember a rule that fails silently when forgotten.
+struct HttpRequestSpec {
+    url: String,
+    method: String,
+    timeout_secs: u64,
+    follow_redirects: bool,
+    max_redirects: usize,
+    danger_accept_invalid_certs: bool,
+    ca_cert_path: Option<String>,
+    client_cert_path: Option<String>,
+    client_key_path: Option<String>,
+    params: Option<Vec<(String, String)>>,
+    headers: Option<Vec<(String, String)>>,
+    basic_auth: Option<(String, String)>,
+    body: Option<String>,
+    /// The body came from the `json` option, so it carries a JSON content type.
+    body_is_json: bool,
+}
+
+/// A reply that arrived. The status is kept because a script otherwise cannot
+/// tell an error page from data — `http_get` returns only the body.
+struct HttpOutcome {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+/// Build the client, send the request, read the body. Runs on the worker
+/// thread, never on a tokio thread.
+fn send_http_request(spec: HttpRequestSpec) -> Result<HttpOutcome, String> {
+    let mut client_builder = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(spec.timeout_secs));
+
+    client_builder = if spec.follow_redirects {
+        client_builder.redirect(reqwest::redirect::Policy::limited(spec.max_redirects))
+    } else {
+        client_builder.redirect(reqwest::redirect::Policy::none())
+    };
+
+    if spec.danger_accept_invalid_certs {
+        tracing::warn!(url = %spec.url, "Accepting invalid TLS certificates - this is insecure!");
+        client_builder = client_builder.danger_accept_invalid_certs(true);
+    }
+
+    if let Some(ref ca_path) = spec.ca_cert_path {
+        let ca_data = std::fs::read(ca_path)
+            .map_err(|e| format!("Failed to read CA certificate file '{ca_path}': {e}"))?;
+        let ca_cert = reqwest::Certificate::from_pem(&ca_data)
+            .map_err(|e| format!("Failed to parse CA certificate: {e}"))?;
+        client_builder = client_builder.add_root_certificate(ca_cert);
+        tracing::debug!(ca_cert = %ca_path, "Added custom CA certificate");
+    }
+
+    match (&spec.client_cert_path, &spec.client_key_path) {
+        (Some(cert_path), Some(key_path)) => {
+            let cert_data = std::fs::read(cert_path).map_err(|e| {
+                format!("Failed to read client certificate file '{cert_path}': {e}")
+            })?;
+            let key_data = std::fs::read(key_path)
+                .map_err(|e| format!("Failed to read client key file '{key_path}': {e}"))?;
+            let mut pem_buffer = cert_data;
+            pem_buffer.push(b'\n');
+            pem_buffer.extend_from_slice(&key_data);
+            let identity = reqwest::Identity::from_pem(&pem_buffer)
+                .map_err(|e| format!("Failed to create client identity from cert/key: {e}"))?;
+            client_builder = client_builder.identity(identity);
+            tracing::debug!(client_cert = %cert_path, client_key = %key_path, "Added client certificate for mTLS");
+        }
+        (None, None) => {}
+        _ => {
+            return Err(
+                "Both client_cert and client_key must be provided together for mTLS".to_string(),
+            )
+        }
+    }
+
+    let client = client_builder
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+    let mut request = match spec.method.to_uppercase().as_str() {
+        "GET" => client.get(&spec.url),
+        "POST" => client.post(&spec.url),
+        "PUT" => client.put(&spec.url),
+        "DELETE" => client.delete(&spec.url),
+        "PATCH" => client.patch(&spec.url),
+        "HEAD" => client.head(&spec.url),
+        other => return Err(format!("Unsupported HTTP method: {other}")),
+    };
+
+    if let Some(ref params) = spec.params {
+        request = request.query(params);
+    }
+    if let Some(ref headers) = spec.headers {
+        for (name, value) in headers {
+            request = request.header(name, value);
+        }
+    }
+    if let Some((ref username, ref password)) = spec.basic_auth {
+        request = request.basic_auth(username, Some(password));
+    }
+    if let Some(ref body) = spec.body {
+        if spec.body_is_json {
+            request = request.header("Content-Type", "application/json");
+        }
+        request = request.body(body.clone());
+    }
+
+    let response = request
+        .send()
+        .map_err(|e| format!("HTTP request failed: {e}"))?;
+    let status = response.status().as_u16();
+    let headers = response
+        .headers()
+        .iter()
+        .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    let body = response
+        .bytes()
+        .map_err(|e| format!("Failed to read response: {e}"))?
+        .to_vec();
+
+    Ok(HttpOutcome {
+        status,
+        headers,
+        body,
+    })
+}
+
+/// Read a Lua options table into an `HttpRequestSpec`, and work out the cache
+/// key while the pieces are still to hand. Shared by `http_request` and
+/// `http_response` so the two cannot drift on what an option means.
+fn build_http_spec(
+    lua: &Lua,
+    url: String,
+    options: Option<Table>,
+) -> LuaResult<(HttpRequestSpec, Option<u64>, Option<String>)> {
+    const KNOWN_OPTIONS: &[&str] = &[
+        "method",
+        "params",
+        "headers",
+        "body",
+        "json",
+        "basic_auth",
+        "timeout",
+        "follow_redirects",
+        "max_redirects",
+        "danger_accept_invalid_certs",
+        "ca_cert",
+        "client_cert",
+        "client_key",
+        "cache_ttl",
+    ];
+
+    let method = options
+        .as_ref()
+        .and_then(|opts| opts.get::<String>("method").ok())
+        .unwrap_or_else(|| "GET".to_string());
+
+    tracing::debug!(url = %url, method = %method, "Lua http_request");
+
+    let mut spec = HttpRequestSpec {
+        url,
+        method,
+        timeout_secs: 30,
+        follow_redirects: true,
+        max_redirects: 10,
+        danger_accept_invalid_certs: false,
+        ca_cert_path: None,
+        client_cert_path: None,
+        client_key_path: None,
+        params: None,
+        headers: None,
+        basic_auth: None,
+        body: None,
+        body_is_json: false,
+    };
+    let mut cache_ttl: Option<u64> = None;
+
+    if let Some(ref opts) = options {
+        for key in opts
+            .clone()
+            .pairs::<String, Value>()
+            .flatten()
+            .map(|(k, _)| k)
+        {
+            if !KNOWN_OPTIONS.contains(&key.as_str()) {
+                tracing::warn!(
+                    option = %key,
+                    "http_request: unknown option (valid options: {})",
+                    KNOWN_OPTIONS.join(", ")
+                );
+            }
+        }
+
+        if let Ok(t) = opts.get::<u64>("timeout") {
+            spec.timeout_secs = t;
+        }
+        if let Ok(f) = opts.get::<bool>("follow_redirects") {
+            spec.follow_redirects = f;
+        }
+        if let Ok(m) = opts.get::<usize>("max_redirects") {
+            spec.max_redirects = m;
+        }
+        if let Ok(d) = opts.get::<bool>("danger_accept_invalid_certs") {
+            spec.danger_accept_invalid_certs = d;
+        }
+        if let Ok(ca) = opts.get::<String>("ca_cert") {
+            spec.ca_cert_path = Some(ca);
+        }
+        if let Ok(cert) = opts.get::<String>("client_cert") {
+            spec.client_cert_path = Some(cert);
+        }
+        if let Ok(key) = opts.get::<String>("client_key") {
+            spec.client_key_path = Some(key);
+        }
+        if let Ok(ttl) = opts.get::<u64>("cache_ttl") {
+            cache_ttl = Some(ttl);
+        }
+
+        if let Ok(params_table) = opts.get::<Table>("params") {
+            let params: Vec<(String, String)> = params_table
+                .pairs::<String, Value>()
+                .flatten()
+                .map(|(k, v)| {
+                    let v_str = match v {
+                        Value::String(s) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
+                        Value::Integer(i) => i.to_string(),
+                        Value::Number(n) => n.to_string(),
+                        Value::Boolean(b) => b.to_string(),
+                        _ => String::new(),
+                    };
+                    (k, v_str)
+                })
+                .collect();
+            spec.params = Some(params);
+        }
+
+        if let Ok(headers_table) = opts.get::<Table>("headers") {
+            spec.headers = Some(headers_table.pairs::<String, String>().flatten().collect());
+        }
+
+        if let Ok(auth_table) = opts.get::<Table>("basic_auth") {
+            let username: String = auth_table.get("username").unwrap_or_default();
+            let password: String = auth_table.get("password").unwrap_or_default();
+            if !username.is_empty() {
+                spec.basic_auth = Some((username, password));
+            }
+        }
+
+        // `json` takes precedence over `body`.
+        if let Ok(json_table) = opts.get::<Table>("json") {
+            let json_value = lua_value_to_json(lua, Value::Table(json_table))?;
+            let json_str = serde_json::to_string(&json_value)
+                .map_err(|e| mlua::Error::external(format!("JSON encode error: {e}")))?;
+            spec.body = Some(json_str);
+            spec.body_is_json = true;
+        } else if let Ok(body) = opts.get::<String>("body") {
+            spec.body = Some(body);
+        }
+    }
+
+    let cache_key = cache_ttl.map(|_| {
+        super::http_cache::compute_cache_key(
+            &spec.url,
+            &spec.method,
+            spec.params.as_deref(),
+            spec.headers.as_deref(),
+            spec.body.as_deref(),
+        )
+    });
+
+    Ok((spec, cache_ttl, cache_key))
+}
+
+/// Run `send_http_request` on a thread with no tokio context, whatever
+/// context byonk itself was called from. See `HttpRequestSpec`.
+fn send_http_request_off_runtime(spec: HttpRequestSpec) -> Result<HttpOutcome, String> {
+    std::thread::spawn(move || send_http_request(spec))
+        .join()
+        .map_err(|_| "the HTTP worker thread panicked".to_string())?
+}
+
 fn parse_image_opts(
     opts: Option<&Table>,
     palette_hex: Option<&[String]>,
@@ -1164,257 +1458,89 @@ impl LuaRuntime {
         //   cache_ttl: number of seconds to cache the response (default: no caching)
         let http_request =
             lua.create_function(|lua, (url, options): (String, Option<Table>)| {
-                use super::http_cache;
+                let (spec, cache_ttl, cache_key) = build_http_spec(lua, url, options)?;
 
-                let method = options
-                    .as_ref()
-                    .and_then(|opts| opts.get::<String>("method").ok())
-                    .unwrap_or_else(|| "GET".to_string());
-
-                tracing::debug!(url = %url, method = %method, "Lua http_request");
-
-                let mut client_builder = reqwest::blocking::Client::builder();
-                let mut timeout_secs = 30u64;
-                let mut follow_redirects = true;
-                let mut max_redirects = 10usize;
-                let mut danger_accept_invalid_certs = false;
-                let mut cache_ttl: Option<u64> = None;
-
-                // Certificate paths (will be parsed from options)
-                let mut ca_cert_path: Option<String> = None;
-                let mut client_cert_path: Option<String> = None;
-                let mut client_key_path: Option<String> = None;
-
-                // For cache key computation
-                let mut params_for_cache: Option<Vec<(String, String)>> = None;
-                let mut headers_for_cache: Option<Vec<(String, String)>> = None;
-                let mut body_for_cache: Option<String> = None;
-
-                // Parse options if provided
-                if let Some(ref opts) = options {
-                    if let Ok(t) = opts.get::<u64>("timeout") {
-                        timeout_secs = t;
-                    }
-                    if let Ok(f) = opts.get::<bool>("follow_redirects") {
-                        follow_redirects = f;
-                    }
-                    if let Ok(m) = opts.get::<usize>("max_redirects") {
-                        max_redirects = m;
-                    }
-                    if let Ok(d) = opts.get::<bool>("danger_accept_invalid_certs") {
-                        danger_accept_invalid_certs = d;
-                    }
-                    if let Ok(ca) = opts.get::<String>("ca_cert") {
-                        ca_cert_path = Some(ca);
-                    }
-                    if let Ok(cert) = opts.get::<String>("client_cert") {
-                        client_cert_path = Some(cert);
-                    }
-                    if let Ok(key) = opts.get::<String>("client_key") {
-                        client_key_path = Some(key);
-                    }
-                    if let Ok(ttl) = opts.get::<u64>("cache_ttl") {
-                        cache_ttl = Some(ttl);
-                    }
-                }
-
-                client_builder =
-                    client_builder.timeout(std::time::Duration::from_secs(timeout_secs));
-
-                // Configure redirect policy
-                if follow_redirects {
-                    client_builder =
-                        client_builder.redirect(reqwest::redirect::Policy::limited(max_redirects));
-                } else {
-                    client_builder = client_builder.redirect(reqwest::redirect::Policy::none());
-                }
-
-                // Configure TLS certificate validation
-                if danger_accept_invalid_certs {
-                    tracing::warn!(url = %url, "Accepting invalid TLS certificates - this is insecure!");
-                    client_builder = client_builder.danger_accept_invalid_certs(true);
-                }
-
-                // Add custom CA certificate if provided
-                if let Some(ca_path) = ca_cert_path {
-                    let ca_data = std::fs::read(&ca_path).map_err(|e| {
-                        mlua::Error::external(format!("Failed to read CA certificate file '{}': {}", ca_path, e))
-                    })?;
-                    let ca_cert = reqwest::Certificate::from_pem(&ca_data).map_err(|e| {
-                        mlua::Error::external(format!("Failed to parse CA certificate: {}", e))
-                    })?;
-                    client_builder = client_builder.add_root_certificate(ca_cert);
-                    tracing::debug!(ca_cert = %ca_path, "Added custom CA certificate");
-                }
-
-                // Add client certificate for mTLS if both cert and key are provided
-                if let (Some(cert_path), Some(key_path)) = (client_cert_path.clone(), client_key_path.clone()) {
-                    // Read and combine certificate and key into a single PEM buffer
-                    let cert_data = std::fs::read(&cert_path).map_err(|e| {
-                        mlua::Error::external(format!("Failed to read client certificate file '{}': {}", cert_path, e))
-                    })?;
-                    let key_data = std::fs::read(&key_path).map_err(|e| {
-                        mlua::Error::external(format!("Failed to read client key file '{}': {}", key_path, e))
-                    })?;
-
-                    // Create combined PEM buffer (cert + key)
-                    let mut pem_buffer = cert_data.clone();
-                    pem_buffer.push(b'\n');
-                    pem_buffer.extend_from_slice(&key_data);
-
-                    let identity = reqwest::Identity::from_pem(&pem_buffer).map_err(|e| {
-                        mlua::Error::external(format!("Failed to create client identity from cert/key: {}", e))
-                    })?;
-                    client_builder = client_builder.identity(identity);
-                    tracing::debug!(client_cert = %cert_path, client_key = %key_path, "Added client certificate for mTLS");
-                } else if client_cert_path.is_some() || client_key_path.is_some() {
-                    return Err(mlua::Error::external(
-                        "Both client_cert and client_key must be provided together for mTLS"
-                    ));
-                }
-
-                let client = client_builder.build().map_err(|e| {
-                    mlua::Error::external(format!("Failed to build HTTP client: {e}"))
-                })?;
-
-                let mut request = match method.to_uppercase().as_str() {
-                    "GET" => client.get(&url),
-                    "POST" => client.post(&url),
-                    "PUT" => client.put(&url),
-                    "DELETE" => client.delete(&url),
-                    "PATCH" => client.patch(&url),
-                    "HEAD" => client.head(&url),
-                    _ => {
-                        return Err(mlua::Error::external(format!(
-                            "Unsupported HTTP method: {method}"
-                        )))
-                    }
-                };
-
-                if let Some(ref opts) = options {
-                    // Warn about unknown options
-                    const KNOWN_OPTIONS: &[&str] = &[
-                        "method",
-                        "params",
-                        "headers",
-                        "body",
-                        "json",
-                        "basic_auth",
-                        "timeout",
-                        "follow_redirects",
-                        "max_redirects",
-                        "danger_accept_invalid_certs",
-                        "ca_cert",
-                        "client_cert",
-                        "client_key",
-                        "cache_ttl",
-                    ];
-                    for key in opts.clone().pairs::<String, Value>().flatten() {
-                        if !KNOWN_OPTIONS.contains(&key.0.as_str()) {
-                            tracing::warn!(
-                                option = %key.0,
-                                "http_request: unknown option (valid options: {})",
-                                KNOWN_OPTIONS.join(", ")
-                            );
-                        }
-                    }
-
-                    // Add query parameters
-                    if let Ok(params_table) = opts.get::<Table>("params") {
-                        let params: Vec<(String, String)> = params_table
-                            .pairs::<String, Value>()
-                            .flatten()
-                            .map(|(k, v)| {
-                                let v_str = match v {
-                                    Value::String(s) => {
-                                        s.to_str().map(|s| s.to_string()).unwrap_or_default()
-                                    }
-                                    Value::Integer(i) => i.to_string(),
-                                    Value::Number(n) => n.to_string(),
-                                    Value::Boolean(b) => b.to_string(),
-                                    _ => String::new(),
-                                };
-                                (k, v_str)
-                            })
-                            .collect();
-                        params_for_cache = Some(params.clone());
-                        request = request.query(&params);
-                    }
-
-                    // Add custom headers
-                    if let Ok(headers_table) = opts.get::<Table>("headers") {
-                        let mut headers_vec = Vec::new();
-                        for (name, value) in headers_table.pairs::<String, String>().flatten() {
-                            headers_vec.push((name.clone(), value.clone()));
-                            request = request.header(&name, &value);
-                        }
-                        headers_for_cache = Some(headers_vec);
-                    }
-
-                    // Add basic auth
-                    if let Ok(auth_table) = opts.get::<Table>("basic_auth") {
-                        let username: String = auth_table.get("username").unwrap_or_default();
-                        let password: String = auth_table.get("password").unwrap_or_default();
-                        if !username.is_empty() {
-                            request = request.basic_auth(username, Some(password));
-                        }
-                    }
-
-                    // Add body - json takes precedence over body
-                    if let Ok(json_table) = opts.get::<Table>("json") {
-                        let json_value = lua_value_to_json(lua, Value::Table(json_table))?;
-                        let json_str = serde_json::to_string(&json_value).map_err(|e| {
-                            mlua::Error::external(format!("JSON encode error: {e}"))
-                        })?;
-                        body_for_cache = Some(json_str.clone());
-                        request = request
-                            .header("Content-Type", "application/json")
-                            .body(json_str);
-                    } else if let Ok(body) = opts.get::<String>("body") {
-                        body_for_cache = Some(body.clone());
-                        request = request.body(body);
-                    }
-                }
-
-                // Compute cache key and check cache if caching is enabled
-                let cache_key = cache_ttl.map(|_| {
-                    http_cache::compute_cache_key(
-                        &url,
-                        &method,
-                        params_for_cache.as_deref(),
-                        headers_for_cache.as_deref(),
-                        body_for_cache.as_deref(),
-                    )
-                });
-
-                // Check cache first if caching is enabled
                 if let Some(ref key) = cache_key {
-                    if let Some(cached_response) = http_cache::get_cached(key) {
-                        return lua.create_string(&cached_response);
+                    if let Some(cached) = super::http_cache::get_cached(key) {
+                        return lua.create_string(&cached);
                     }
                 }
 
-                // Make the actual request
-                let response_bytes = match request.send() {
-                    Ok(response) => match response.bytes() {
-                        Ok(bytes) => bytes.to_vec(),
-                        Err(e) => {
-                            return Err(mlua::Error::external(format!(
-                                "Failed to read response: {e}"
-                            )))
-                        }
-                    },
-                    Err(e) => return Err(mlua::Error::external(format!("HTTP request failed: {e}"))),
-                };
+                let outcome = send_http_request_off_runtime(spec).map_err(mlua::Error::external)?;
 
-                // Store in cache if caching is enabled
+                // Only a success is worth remembering. Caching an error page
+                // would serve it as data for the whole TTL, and this function
+                // gives the script no way to notice.
                 if let (Some(key), Some(ttl)) = (cache_key, cache_ttl) {
-                    http_cache::store_cached(key, response_bytes.clone(), ttl);
+                    if (200..300).contains(&outcome.status) {
+                        super::http_cache::store_cached(key, outcome.body.clone(), ttl);
+                    }
                 }
 
-                lua.create_string(&response_bytes)
+                lua.create_string(&outcome.body)
             })?;
         globals.set("http_request", http_request.clone())?;
+
+        // http_response(url, options?) -> table
+        //
+        // Same options as `http_request`, but returns the whole reply instead
+        // of just the body, and does NOT raise when the request fails:
+        //   ok      boolean   true for a 2xx status
+        //   status  number    the HTTP status, or nil if no reply arrived
+        //   body    string    the body, or nil if no reply arrived
+        //   headers table      response headers, lowercased names
+        //   error   string    why nothing arrived, or nil
+        //
+        // `http_get` hands back only the body, so a script cannot tell an
+        // error page from data. Deciding what a 500 means belongs to the
+        // script, so this reports and lets it choose.
+        let http_response =
+            lua.create_function(|lua, (url, options): (String, Option<Table>)| {
+                let (spec, cache_ttl, cache_key) = build_http_spec(lua, url, options)?;
+                let result = lua.create_table()?;
+
+                // Only successes are cached, so a hit is always a success.
+                if let Some(ref key) = cache_key {
+                    if let Some(cached) = super::http_cache::get_cached(key) {
+                        result.set("ok", true)?;
+                        result.set("status", 200)?;
+                        result.set("body", lua.create_string(&cached)?)?;
+                        result.set("headers", lua.create_table()?)?;
+                        result.set("from_cache", true)?;
+                        return Ok(result);
+                    }
+                }
+
+                match send_http_request_off_runtime(spec) {
+                    Ok(outcome) => {
+                        let ok = (200..300).contains(&outcome.status);
+                        if let (Some(key), Some(ttl)) = (cache_key, cache_ttl) {
+                            if ok {
+                                super::http_cache::store_cached(key, outcome.body.clone(), ttl);
+                            }
+                        }
+                        let headers = lua.create_table()?;
+                        for (name, value) in &outcome.headers {
+                            headers.set(name.as_str(), value.as_str())?;
+                        }
+                        result.set("ok", ok)?;
+                        result.set("status", outcome.status)?;
+                        result.set("body", lua.create_string(&outcome.body)?)?;
+                        result.set("headers", headers)?;
+                        result.set("from_cache", false)?;
+                    }
+                    Err(e) => {
+                        // Nothing arrived: no status, no body, and a reason.
+                        result.set("ok", false)?;
+                        result.set("error", e)?;
+                        result.set("headers", lua.create_table()?)?;
+                        result.set("from_cache", false)?;
+                    }
+                }
+
+                Ok(result)
+            })?;
+        globals.set("http_response", http_response)?;
 
         // http_get(url, options?) - convenience wrapper for GET requests
         let http_get = http_request.clone();

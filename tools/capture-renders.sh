@@ -20,17 +20,26 @@
 # fallback splash).
 #
 #   1. CANARY (mechanism check): render a deliberately nonexistent screen
-#      ref first. Verified against `src/services/content_pipeline.rs`
-#      (`run_script_for_device`): a *registered* device whose `screen:` ref
-#      fails to resolve falls through to whatever DEFAULT points at (which
-#      always resolves, so nothing ever reaches the CLI's error path) — the
-#      canary is therefore EXPECTED to exit 0 on every run against the
-#      current tree, not just on a regression. Its purpose is to make that
-#      fact loud and current in every manifest, rather than assumed. A
-#      canary that ever starts exiting non-zero would mean the fallback
-#      path was removed or DEFAULT itself stopped resolving.
+#      ref first, and record which way it went. Its purpose is to keep the
+#      answer current in every manifest rather than assumed — and the answer
+#      HAS CHANGED once already, which is the point of measuring it.
+#
+#      When this harness was written, `run_script_for_device` in
+#      `src/services/content_pipeline.rs` let a *registered* device whose
+#      `screen:` ref failed to resolve fall through to whatever DEFAULT
+#      pointed at, so the canary exited 0 and `exit=0` below proved only
+#      that *something* rendered. Commit 3a35030 ("refuse a device whose
+#      configured screen does not resolve") removed that fallback, so on the
+#      current tree the canary exits NON-ZERO and `exit=0` below does mean
+#      "this screen rendered". Do not tighten either branch into an
+#      assertion: the manifest states which behaviour was live for that run,
+#      and a future reader needs that either way.
 #   2. DISTINCTNESS (symptom check): every deterministic screen's PNG must
-#      differ from every other deterministic screen's PNG. `tools/capture-
+#      differ from every other deterministic screen's PNG. Now that the
+#      canary shows the fallback is gone, this is belt-and-braces rather
+#      than the primary guard — keep it, because it costs nothing and is
+#      the only check that would catch two screens rendering the same
+#      content for some reason other than a fallback. `tools/capture-
 #      config.yaml`'s reserved `DEFAULT` device deliberately points at
 #      `byonk-builtin/calibration/grey` — one of the deterministic screens
 #      this harness already captures byte-for-byte — specifically so a
@@ -56,12 +65,29 @@
 #
 # Both verdicts are written into MANIFEST.txt, because the manifest is the
 # artifact a human reads later to decide what was actually covered.
+#
+# STDERR IS CAPTURED, NOT DISCARDED. `byonk render` writes authoring warnings
+# (currently the render-scale warning) to stderr and nowhere else, so an
+# earlier version of this script that sent stderr to /dev/null would have
+# reported a clean capture for a screen byonk was actively complaining about.
+# Per-screen stderr lands in `<name>.stderr` next to the PNG, and any non-empty
+# one is called out in MANIFEST.txt.
+#
+# BYONK_BIN selects the binary. Default is `cargo run --release` for a
+# from-scratch checkout; export BYONK_BIN=./target/debug/byonk to reuse an
+# existing debug build, which is seconds instead of minutes. rust-embed reads
+# screens from disk in a debug build, so a debug capture reflects the working
+# tree, not the last build.
 set -uo pipefail
 
 OUT="${1:?usage: capture-renders.sh <output-dir>}"
 CFG="${CONFIG_FILE:-tools/capture-config.yaml}"
 EXAMPLES="${EXAMPLES_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/screens/examples}"
 mkdir -p "$OUT/nondeterministic"
+
+# Word-split deliberately: the default is a multi-word command.
+# shellcheck disable=SC2206
+BYONK=(${BYONK_BIN:-cargo run --release --quiet --})
 
 CANARY_MAC="AA:BB:CC:00:00:99"
 
@@ -85,7 +111,7 @@ AA:BB:CC:00:00:15:swiss-departure-board:nondet
 : > "$OUT/MANIFEST.txt"
 
 # --- 1. Canary: prove an unresolved screen ref still hard-errors ----------
-CONFIG_FILE="$CFG" EXAMPLES_DIR="$EXAMPLES" cargo run --release --quiet -- \
+CONFIG_FILE="$CFG" EXAMPLES_DIR="$EXAMPLES" "${BYONK[@]}" \
     render --mac "$CANARY_MAC" --output "$OUT/.canary.png" >/dev/null 2>&1
 canary_exit=$?
 rm -f "$OUT/.canary.png"
@@ -112,10 +138,26 @@ for entry in $SCREENS; do
   name="${rest%:*}"
   bucket="${rest##*:}"
   [ "$bucket" = det ] && dir="$OUT" || dir="$OUT/nondeterministic"
-  CONFIG_FILE="$CFG" EXAMPLES_DIR="$EXAMPLES" cargo run --release --quiet -- \
-      render --mac "$mac" --output "$dir/$name.png" >/dev/null 2>&1
+  CONFIG_FILE="$CFG" EXAMPLES_DIR="$EXAMPLES" "${BYONK[@]}" \
+      render --mac "$mac" --output "$dir/$name.png" \
+      >/dev/null 2>"$dir/$name.stderr"
   echo "$name $bucket exit=$?" >> "$OUT/MANIFEST.txt"
 done
+
+# --- 2b. Surface anything byonk wrote to stderr ----------------------------
+# `byonk render` puts authoring warnings on stderr and nowhere else, so a
+# capture that discards them reports "13 screens rendered" for a tree byonk is
+# warning about. Any non-empty stderr is quoted into the manifest verbatim.
+warn_found=0
+for f in "$OUT"/*.stderr "$OUT"/nondeterministic/*.stderr; do
+  [ -s "$f" ] || continue
+  warn_found=1
+  {
+    echo "STDERR from $(basename "${f%.stderr}"):"
+    sed 's/^/  | /' "$f"
+  } >> "$OUT/MANIFEST.txt"
+done
+[ "$warn_found" -eq 0 ] && echo "STDERR: every screen rendered silently — byonk emitted no warnings" >> "$OUT/MANIFEST.txt"
 
 # --- 3. Distinctness: no two deterministic renders may be identical -------
 # DEFAULT points at calibration-grey (see capture-config.yaml), so a

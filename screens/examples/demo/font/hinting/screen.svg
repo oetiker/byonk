@@ -5,18 +5,7 @@
     .header { font-size: 11px; font-weight: 700; fill: #ffffff; }
     .col-header { font-size: 14px; font-weight: 700; text-anchor: middle; }
     .row-header { font-size: 13px; font-weight: 700; text-anchor: middle; }
-    {% for cell in data.cells %}
-    .c{{ cell.idx }} {
-      {% if cell.hinted %}-resvg-hinting-target: {{ cell.target }};
-      -resvg-hinting-mode: {{ cell.mode }};
-      -resvg-hinting-engine: {{ cell.engine }};{% if cell.is_mono %}
-      -resvg-hinting-symmetric: false;
-      -resvg-hinting-preserve-linear-metrics: true;
-      shape-rendering: crispEdges;{% endif %}
-      {% else %}text-rendering: geometricPrecision;
-      {% endif %}
-    }
-    {% endfor %}
+    .note { font-size: 9px; font-weight: 400; fill: #555555; }
     </style>
   </defs>
 
@@ -24,7 +13,10 @@
 
   <!-- Header -->
   <rect width="{{ data.width }}" height="16" fill="#000000"/>
-  <text class="header" x="4" y="12">Hinting Demo — engine × target</text>
+  <text class="header" x="4" y="12">Hinting Demo — font_hinting variants over Outfit: engine × target</text>
+  <!-- The expected coincidences, stated in the image so nobody reads a
+       duplicate cell as a broken one. See script.lua for the measurement. -->
+  <text class="note" x="{{ data.width - 4 }}" y="12" text-anchor="end" fill="#AAAAAA">"off" = control · auto = auto_fallback · interpreter ignores target</text>
 
   <!-- Column headers -->
   {% for ch in data.col_headers %}
@@ -47,10 +39,15 @@
   <!-- Outer grid border -->
   <rect x="{{ data.grid_x1 }}" y="{{ data.grid_y1 }}" width="{{ data.grid_x2 - data.grid_x1 }}" height="{{ data.grid_y2 - data.grid_y1 }}" fill="none" stroke="#000000" stroke-width="0.5"/>
 
-  <!-- Cell contents -->
+  <!-- Cell contents.
+       The family name is quoted, because an unquoted family containing
+       anything but plain identifiers is invalid CSS and falls back silently.
+       `text-rendering="optimizeLegibility"` is set on every cell that is not
+       mono-hinted: on a black-and-white panel byonk draws the document 1-bit,
+       and aliasing an outline that was not mono-hinted drops stems. -->
   {% for cell in data.cells %}
   {% for line in cell.lines %}
-  <text class="c{{ cell.idx }}" x="{{ line.x }}" y="{{ line.y }}" font-size="{{ line.size }}">{{ line.text }}</text>
+  <text x="{{ line.x }}" y="{{ line.y }}" font-size="{{ line.size }}" font-family="'{{ cell.family }}', '{{ data.base }}'"{% if cell.needs_aa %} text-rendering="optimizeLegibility"{% endif %}>{{ line.text }}</text>
   {% endfor %}
   {% endfor %}
 </svg>

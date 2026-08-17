@@ -14,7 +14,7 @@ byonk ships three of these out of the box, and they play different roles:
 
 | Layer | Handle | Writable? | What it's for |
 |-------|--------|-----------|----------------|
-| Base include library | `byonk-base-v1` | No (embedded) | Shared SVG layouts and components (`base.svg`, `hinting.svg`, `header.svg`, …) that screens `{% extends %}` or `{% include %}` — see [SVG Templates](../tutorial/svg-templates.md). It's also a sandboxed Lua module namespace: `require("byonk-base-v1/std")` and similar from `script.lua`. Not a screen repo itself; you never reference it as `handle/path` for a *screen*, only inside `{% include "byonk-base-v1/…" %}` or `require("byonk-base-v1/…")`. |
+| Base include library | `byonk-base-v1` | No (embedded) | Shared SVG layouts and components (`base.svg`, `header.svg`, `footer.svg`, …) that screens `{% extends %}` or `{% include %}` — see [SVG Templates](../tutorial/svg-templates.md). It's also a sandboxed Lua module namespace: `require("byonk-base-v1/std")` and similar from `script.lua`. Not a screen repo itself; you never reference it as `handle/path` for a *screen*, only inside `{% include "byonk-base-v1/…" %}` or `require("byonk-base-v1/…")`. |
 | Built-in screens | `byonk-builtin` | No | A minimal, fixed set: `default` (the fallback screen for un-onboarded/unassigned devices) and `calibration/*` (panel calibration patterns). Always present, never changes shape. |
 | Examples | `examples` | Yes | Worked, runnable samples (`hello`, `mandelbrot`, `webscrape`, `gphoto`, `swiss-departure-board`, a font demo) — seeded to disk once so you can read, run, and edit them directly. |
 

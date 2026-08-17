@@ -1,11 +1,15 @@
-{# Adaptive font hinting for e-ink displays.
-   Applies mono hinting on BW displays, smooth on greyscale.
+{# Retained for compatibility — this partial no longer configures hinting.
 
-   Usage: {% include "byonk-base-v1/hinting.svg" %} inside a CSS text rule.
-   Requires: layout.grey_count (available automatically in template context). #}
-{% if layout.grey_count <= 2 %}-resvg-hinting-target: mono;
--resvg-hinting-symmetric: false;
--resvg-hinting-preserve-linear-metrics: true;
-{% endif %}shape-rendering: crispEdges;
--resvg-hinting-mode: normal;
--resvg-hinting-engine: auto;
+   Hinting is applied by the server now, adaptively per panel, and needs
+   nothing in the document. Override it from Lua with the `font_hinting`
+   directive (see the Font Hinting page in the docs).
+
+   Including this is inert: `shape-rendering` is read by usvg only when it
+   converts a *shape* element, while `<text>` takes its rasterization from
+   `text-rendering`. It is emitted unchanged purely so that an out-of-tree
+   screen including this from a non-text rule keeps the behaviour it had.
+
+   New screens should not include this at all.
+
+   Usage: {% include "byonk-base-v1/hinting.svg" %} inside a CSS rule. #}
+shape-rendering: crispEdges;

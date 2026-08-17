@@ -131,6 +131,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Terminus TTF font demo never actually showed Terminus.** The example
+  wrote its family name into the template unquoted, and `Terminus (TTF)` is not
+  a valid unquoted CSS family, so every line of the demo silently fell back to a
+  serif — the one thing the demo exists to show. Both font demos now quote the
+  family they interpolate. This is the same trap as quoting `Source Sans 3`: if
+  a template writes a family name it got from a script, quote it.
 - **Bitmap fonts render correctly.** The 26 bundled X11 bitmap faces, and Terminus,
   lost chunks out of their glyphs at every size and were unevenly spaced. Byonk was
   positioning them using the metrics of the font's outline rather than the metrics
@@ -211,7 +217,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for: mono hinting with 1-bit glyphs on a black-and-white panel, smooth
   anti-aliased hinting once there are greys. Including
   `byonk-base-v1/hinting.svg` is no longer how this happens, and a screen that
-  includes it is unaffected either way.
+  includes it is unaffected either way — the include is now inert and can be
+  deleted. **The `-resvg-hinting-*` CSS properties no longer exist**, so a
+  screen that set them directly must move that configuration into the new
+  `font_hinting` directive; until it does, it silently gets byonk's own choice
+  instead of what it asked for. The bundled screens no longer include the
+  partial, and render identically without it.
 - **New `font_hinting` directive for `script.lua`**, for the screens that want
   something other than what byonk chose. It can pick the engine and target,
   turn hinting off outright, and declare *variants* — your own names for a font

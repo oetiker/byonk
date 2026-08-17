@@ -110,7 +110,6 @@ Create `screens/hello/screen.svg`:
     text {
       font-family: Outfit, sans-serif;
       fill: black;
-      {% include "byonk-base-v1/hinting.svg" %}
     }
     .greeting { font-size: 48px; font-weight: 700; }
     .time { font-size: 72px; font-weight: 700; }
@@ -145,8 +144,9 @@ Create `screens/hello/screen.svg`:
 
 **Template features used:**
 - `{{ data.variable }}` - Inserts values from the Lua script's `data` table
-- `{% include "byonk-base-v1/hinting.svg" %}` - Pulls in byonk's shared e-ink font hinting
-  from the `byonk-base-v1` standard library (see [SVG Templates](svg-templates.md))
+- Nothing for font hinting — byonk hints text automatically, choosing the
+  treatment from the panel's palette. Override it from Lua only if you need to
+  (see [Font Hinting](../api/font-hinting.md))
 - CSS styling for fonts and colors
 - `text-anchor="middle"` for centered text
 

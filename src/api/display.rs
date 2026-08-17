@@ -1173,6 +1173,10 @@ pub async fn handle_image<R: DeviceRegistry>(
         dither,
         if has_tuning { Some(&tuning) } else { None },
         cached.font_hinting.as_ref(),
+        // The device path has no author to talk to: whoever wrote this screen
+        // is not the one holding the panel. The warning belongs to the
+        // authoring paths (`ScreenStore::render`, `byonk render`).
+        &mut None,
     )?;
 
     tracing::info!(size_bytes = png_bytes.len(), "Image rendered and served");

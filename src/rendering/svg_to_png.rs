@@ -157,8 +157,9 @@ impl SvgRenderer {
         dither: Option<&str>,
         tuning: Option<&DitherTuning>,
         fonts: Option<&FontConfig>,
+        scale_warning: &mut Option<String>,
     ) -> Result<Vec<u8>, RenderError> {
-        let pixmap = self.rasterize_svg(svg_data, spec, fonts)?;
+        let pixmap = self.rasterize_svg(svg_data, spec, fonts, scale_warning)?;
 
         // Build eink-dither palette with dedup (eink-dither rejects duplicates)
         let (eink_palette, output_palette) = build_eink_palette(palette, actual, use_actual)?;
@@ -320,7 +321,9 @@ impl SvgRenderer {
         spec: DisplaySpec,
         fonts: Option<&FontConfig>,
     ) -> Result<Vec<u8>, RenderError> {
-        let pixmap = self.rasterize_svg(svg_data, spec, fonts)?;
+        // The palette render reports the same document, and the authoring path
+        // runs both — so reporting here too would log one mistake twice.
+        let pixmap = self.rasterize_svg(svg_data, spec, fonts, &mut None)?;
         let rgb: Vec<u8> = rgba_to_eink_srgb(pixmap.data())
             .into_iter()
             .flat_map(|c| c.to_bytes())
@@ -492,17 +495,24 @@ impl SvgRenderer {
     }
 
     /// Parse and rasterize SVG to an RGBA pixmap
+    /// `scale_warning` is an out-parameter, set when the document is not the
+    /// size of the panel — see [`Self::scale_warning`]. The renderer has no
+    /// channel of its own to reach the screen's author, so the caller decides
+    /// where it goes; the ones with nowhere to put it pass `&mut None`. This
+    /// mirrors `api::display::resolve_render_params`' `measured_warning`.
     fn rasterize_svg(
         &self,
         svg_data: &[u8],
         spec: DisplaySpec,
         fonts: Option<&FontConfig>,
+        scale_warning: &mut Option<String>,
     ) -> Result<Pixmap, RenderError> {
         let options = self.parse_options(fonts);
         let tree = usvg::Tree::from_data(svg_data, &options)
             .map_err(|e| RenderError::SvgParse(e.to_string()))?;
 
         let svg_size = tree.size();
+        *scale_warning = Self::scale_warning(svg_size.width(), svg_size.height(), spec);
         let transform = Self::fit_transform(svg_size.width(), svg_size.height(), spec);
 
         let mut pixmap =
@@ -526,6 +536,45 @@ impl SvgRenderer {
         let offset_x = (spec.width as f32 - svg_w * scale) / 2.0;
         let offset_y = (spec.height as f32 - svg_h * scale) / 2.0;
         Transform::from_scale(scale, scale).post_translate(offset_x, offset_y)
+    }
+
+    /// The message for an SVG that is not the size of the panel it is being
+    /// drawn on, or `None` when it is.
+    ///
+    /// A screen built from `layout.width`/`layout.height` is the panel by
+    /// construction, so this only fires on hardcoded dimensions — an
+    /// authoring mistake with no other symptom, because [`Self::fit_transform`]
+    /// silently rescales to fit and the result still looks like a screen.
+    ///
+    /// **Any** mismatch counts, including an exact integer zoom. Integer zoom
+    /// keeps a hinted outline on whole pixels, but that is the smallest of the
+    /// three costs: usvg derives the hinting ppem from the *user-unit* font
+    /// size (`usvg::text::flatten`), so the glyph is grid-fitted for the size
+    /// the author wrote and then displayed at another; `snap_bitmap_glyph`
+    /// gives up unless the scale is 1.0, so bitmap faces lose their strike
+    /// snapping and get resampled; and every dimension the author chose is
+    /// shown at the wrong size, which is what makes type impossible to judge.
+    ///
+    /// Takes plain floats for the same reason `fit_transform` does, and is
+    /// compared against the same numbers, so the two cannot disagree.
+    fn scale_warning(svg_w: f32, svg_h: f32, spec: DisplaySpec) -> Option<String> {
+        // usvg resolves the document size as floats, so an exact match can
+        // land a hair beside the integer. A real mismatch is a whole pixel.
+        const SIZE_EPS: f32 = 0.01;
+        if (svg_w - spec.width as f32).abs() < SIZE_EPS
+            && (svg_h - spec.height as f32).abs() < SIZE_EPS
+        {
+            return None;
+        }
+        let scale = (spec.width as f32 / svg_w).min(spec.height as f32 / svg_h);
+        Some(format!(
+            "this screen's SVG is {svg_w}x{svg_h} but the device is {}x{}, so the render is \
+             scaled by {scale} to fit and every dimension the screen chose is displayed at \
+             that factor. Text is resampled: hinted outlines are fitted to the SVG's own \
+             pixel grid, and bitmap fonts are only drawn from their strikes at scale 1. Use \
+             layout.width and layout.height rather than hardcoded dimensions.",
+            spec.width, spec.height
+        ))
     }
 
     /// Rasterize the tone mask for `svg_data`.
@@ -870,6 +919,125 @@ mod tests {
         FontConfig, FontVariant, HintingEngine, HintingMode, HintingSpec, HintingTarget,
     };
 
+    /// The intended case: the screen used `layout.width`/`layout.height`, so
+    /// its SVG is the panel. Nothing to say.
+    #[test]
+    fn an_svg_authored_at_the_panel_size_draws_no_scale_warning() {
+        assert_eq!(
+            SvgRenderer::scale_warning(800.0, 480.0, DisplaySpec::OG),
+            None
+        );
+        assert_eq!(
+            SvgRenderer::scale_warning(1872.0, 1404.0, DisplaySpec::X),
+            None
+        );
+    }
+
+    /// The case this warning exists for, and the one an "only fractional
+    /// scales matter" rule would miss: a probe SVG authored at 400x120 and
+    /// rendered into an 800x480 panel comes out at an *exact* 2x zoom, so
+    /// type sized for 10 px is judged at 20. usvg fits hinted outlines to the
+    /// SVG's own pixel grid (`text/flatten.rs`: the hinting ppem is the
+    /// user-unit font size) and refuses to snap bitmap strikes at any scale
+    /// but 1.0, so an integer zoom is not a free pass.
+    #[test]
+    fn a_half_size_svg_warns_even_though_its_zoom_is_exactly_two() {
+        let warning = SvgRenderer::scale_warning(400.0, 120.0, DisplaySpec::OG)
+            .expect("an exact 2x zoom is still a rescaled render");
+        // Both sizes have to be in the message: an author who cannot see the
+        // two numbers side by side cannot act on it.
+        assert!(
+            warning.contains("400x120"),
+            "the SVG's own size must be named: {warning}"
+        );
+        assert!(
+            warning.contains("800x480"),
+            "the device's size must be named: {warning}"
+        );
+    }
+
+    /// A screen hardcoded for the original panel, shown on a TRMNL X.
+    #[test]
+    fn a_fractional_scale_warns() {
+        let warning = SvgRenderer::scale_warning(800.0, 480.0, DisplaySpec::X)
+            .expect("800x480 does not fit 1872x1404 at any integer zoom");
+        assert!(warning.contains("800x480"), "{warning}");
+        assert!(warning.contains("1872x1404"), "{warning}");
+    }
+
+    /// A mismatch on one axis alone is still a mismatch — the fit scale is the
+    /// smaller of the two ratios, so the render is letterboxed rather than
+    /// filled, and nothing else in byonk says so.
+    #[test]
+    fn a_mismatch_on_one_axis_alone_still_warns() {
+        assert!(SvgRenderer::scale_warning(800.0, 240.0, DisplaySpec::OG).is_some());
+        assert!(SvgRenderer::scale_warning(400.0, 480.0, DisplaySpec::OG).is_some());
+    }
+
+    /// usvg resolves the document size as floats, so an exact match can arrive
+    /// a hair beside the integer. That is not an authoring mistake.
+    #[test]
+    fn a_float_rounding_difference_is_not_a_mismatch() {
+        assert_eq!(
+            SvgRenderer::scale_warning(800.000_01, 479.999_99, DisplaySpec::OG),
+            None
+        );
+    }
+
+    /// The predicate has to be fed usvg's *resolved* document size, not a
+    /// number we parsed ourselves — this drives it through a real render so a
+    /// wiring mistake cannot hide behind the unit tests above.
+    #[test]
+    fn a_render_reports_its_scale_warning_to_the_caller() {
+        let renderer = SvgRenderer::new();
+        let palette = vec![(0, 0, 0), (255, 255, 255)];
+        let spec = DisplaySpec::from_dimensions(800, 480).unwrap();
+        let svg = |w: u32, h: u32| {
+            format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}">
+                     <rect width="{w}" height="{h}" fill="white"/>
+                     <rect x="10" y="10" width="20" height="20" fill="black"/>
+                   </svg>"#
+            )
+        };
+
+        let mut authored_at_the_panel = None;
+        renderer
+            .render_to_palette_png(
+                svg(800, 480).as_bytes(),
+                spec,
+                &palette,
+                None,
+                false,
+                None,
+                None,
+                None,
+                &mut authored_at_the_panel,
+            )
+            .expect("must render");
+        assert_eq!(authored_at_the_panel, None);
+
+        let mut hardcoded_half_size = None;
+        renderer
+            .render_to_palette_png(
+                svg(400, 240).as_bytes(),
+                spec,
+                &palette,
+                None,
+                false,
+                None,
+                None,
+                None,
+                &mut hardcoded_half_size,
+            )
+            .expect("must still render — this is a warning, not a failure");
+        let warning = hardcoded_half_size.expect("a half-size SVG must be reported");
+        assert!(
+            warning.contains("400x240"),
+            "the size must come from the parsed document: {warning}"
+        );
+    }
+
     #[test]
     fn build_eink_palette_drops_mismatched_actual_but_still_builds() {
         // Three official colours, two measured: the measured list is dropped
@@ -1052,6 +1220,7 @@ mod tests {
                 None,
                 None,
                 None,
+                &mut None,
             )
             .unwrap();
         std::fs::write("/tmp/byonk-bitmap-font-test2.png", &png).unwrap();
@@ -1225,6 +1394,7 @@ mod tests {
                 None,
                 None,
                 None,
+                &mut None,
             )
             .unwrap();
 
@@ -1242,6 +1412,7 @@ mod tests {
                 None,
                 Some(&tuning),
                 None,
+                &mut None,
             )
             .unwrap();
 
@@ -1279,6 +1450,7 @@ mod tests {
                 None,
                 None,
                 None,
+                &mut None,
             )
             .unwrap();
         let b = renderer
@@ -1291,6 +1463,7 @@ mod tests {
                 None,
                 None,
                 None,
+                &mut None,
             )
             .unwrap();
 
@@ -1349,6 +1522,7 @@ mod tests {
                 None,
                 None,
                 None,
+                &mut None,
             )
             .expect("render failed");
         let img = image::load_from_memory(&png)
@@ -1468,6 +1642,7 @@ mod tests {
                     None,
                     Some(&tuning),
                     None,
+                    &mut None,
                 )
                 .expect("render failed");
             let img = image::load_from_memory(&png)
@@ -1593,7 +1768,9 @@ mod tests {
             .expect("tone screen templates");
 
         let renderer = SvgRenderer::new();
-        let pixmap = renderer.rasterize_svg(svg.as_bytes(), spec, None).unwrap();
+        let pixmap = renderer
+            .rasterize_svg(svg.as_bytes(), spec, None, &mut None)
+            .unwrap();
         let pixels = rgba_to_eink_srgb(pixmap.data());
         let mask = renderer
             .rasterize_tone_mask(svg.as_bytes(), spec, None)
@@ -1670,6 +1847,7 @@ mod tests {
                 None,
                 None,
                 None,
+                &mut None,
             )
             .expect("unhinted render");
 
@@ -1695,6 +1873,7 @@ mod tests {
                 None,
                 None,
                 Some(&cfg),
+                &mut None,
             )
             .expect("hinted render");
 
@@ -1727,6 +1906,7 @@ mod tests {
                 None,
                 None,
                 Some(cfg),
+                &mut None,
             )
             .expect("render")
         };
@@ -1859,6 +2039,7 @@ mod tests {
                 None,
                 None,
                 Some(cfg),
+                &mut None,
             )
             .expect("render")
         };
@@ -2080,11 +2261,11 @@ mod tests {
             variants: Default::default(),
         };
         let aa = r
-            .rasterize_svg(ALIASING_SVG.as_bytes(), spec, Some(&base_cfg))
+            .rasterize_svg(ALIASING_SVG.as_bytes(), spec, Some(&base_cfg), &mut None)
             .expect("anti-aliased baseline render");
         let cfg = FontConfig::adaptive_default(2);
         let al = r
-            .rasterize_svg(ALIASING_SVG.as_bytes(), spec, Some(&cfg))
+            .rasterize_svg(ALIASING_SVG.as_bytes(), spec, Some(&cfg), &mut None)
             .expect("bw render");
 
         let text_aa = band_stats(&aa, 0..80, spec.width);
@@ -2175,7 +2356,7 @@ mod tests {
                 }),
                 variants: Default::default(),
             };
-            r.rasterize_svg(ALIASING_SVG.as_bytes(), spec, Some(&cfg))
+            r.rasterize_svg(ALIASING_SVG.as_bytes(), spec, Some(&cfg), &mut None)
                 .expect("render")
                 .data()
                 .to_vec()
@@ -2225,7 +2406,7 @@ mod tests {
         let spec = DisplaySpec::OG;
         let cfg = FontConfig::adaptive_default(4);
         let px = r
-            .rasterize_svg(ALIASING_SVG.as_bytes(), spec, Some(&cfg))
+            .rasterize_svg(ALIASING_SVG.as_bytes(), spec, Some(&cfg), &mut None)
             .expect("greyscale render");
         let text = band_stats(&px, 0..80, spec.width);
         assert!(
@@ -2265,7 +2446,7 @@ mod tests {
         // glyphs document-wide.
         let bw = FontConfig::adaptive_default(2);
         let escaped = r
-            .rasterize_svg(SVG.as_bytes(), spec, Some(&bw))
+            .rasterize_svg(SVG.as_bytes(), spec, Some(&bw), &mut None)
             .expect("escape-hatch render");
 
         // Half one: the anti-aliasing really is back.
@@ -2289,7 +2470,7 @@ mod tests {
             variants: Default::default(),
         };
         let plain = r
-            .rasterize_svg(SVG.as_bytes(), spec, Some(&unhinted))
+            .rasterize_svg(SVG.as_bytes(), spec, Some(&unhinted), &mut None)
             .expect("unhinted render");
 
         assert_ne!(
@@ -2310,10 +2491,10 @@ mod tests {
         // optimizeLegibility specifically.
         let gp_svg = SVG.replace("optimizeLegibility", "geometricPrecision");
         let gp_hinted = r
-            .rasterize_svg(gp_svg.as_bytes(), spec, Some(&bw))
+            .rasterize_svg(gp_svg.as_bytes(), spec, Some(&bw), &mut None)
             .expect("gp hinted render");
         let gp_plain = r
-            .rasterize_svg(gp_svg.as_bytes(), spec, Some(&unhinted))
+            .rasterize_svg(gp_svg.as_bytes(), spec, Some(&unhinted), &mut None)
             .expect("gp unhinted render");
         assert_eq!(
             gp_hinted.data(),
@@ -2382,7 +2563,7 @@ mod tests {
                 </svg>"##
             );
             let px = r
-                .rasterize_svg(svg.as_bytes(), spec, Some(&cfg))
+                .rasterize_svg(svg.as_bytes(), spec, Some(&cfg), &mut None)
                 .expect("render");
             let text = band_stats(&px, 0..80, spec.width);
             assert!(

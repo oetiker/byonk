@@ -769,6 +769,10 @@ pub async fn handle_render(
         final_dither.as_deref(),
         if has_tuning { Some(&tuning) } else { None },
         script_font_hinting.as_ref(),
+        // `/dev/render` answers with an image and nothing else — it does not
+        // carry the script log either (see `run_script_direct`), so there is
+        // nowhere to put this.
+        &mut None,
     ) {
         Ok(png_bytes) => (
             StatusCode::OK,

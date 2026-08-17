@@ -1194,6 +1194,7 @@ impl ScreenStore {
         let (dither_tuning, has_tuning) =
             crate::api::display::resolve_dither_tuning(&render_params);
 
+        let mut scale_warning: Option<String> = None;
         let png = match self.pipeline.render_png_from_svg(
             &svg,
             display_spec,
@@ -1203,6 +1204,7 @@ impl ScreenStore {
             render_params.dither.as_deref(),
             has_tuning.then_some(&dither_tuning),
             script_result.font_hinting.as_ref(),
+            &mut scale_warning,
         ) {
             Ok(bytes) => bytes,
             Err(e) => {
@@ -1220,6 +1222,12 @@ impl ScreenStore {
                 };
             }
         };
+
+        // Same channel as `measured_warning` above: the author reads this,
+        // the server operator does not.
+        if let Some(w) = scale_warning {
+            log.push(format!("[warn] {w}"));
+        }
 
         let raw_png = if opts.include_raw {
             self.pipeline
@@ -2138,6 +2146,70 @@ mod tests {
         assert!(!res.png.is_empty());
         assert_eq!(res.data["message"], "X");
         assert!(res.log.iter().any(|l| l.contains("hi")));
+    }
+
+    /// A screen whose SVG is not the panel's size is silently rescaled to fit,
+    /// so nothing else in a render says it happened. The author is the only
+    /// person who can fix it, and `RenderResult::log` is what reaches them —
+    /// the same place their own `log_*` output lands.
+    #[test]
+    fn render_warns_in_the_log_when_the_svg_is_not_the_panel_size() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "scale", StarterKind::Minimal)
+            .unwrap();
+        store
+            .write_file("local/scale", "script.lua", b"return { data = {} }", None)
+            .unwrap();
+
+        let render_with_svg = |svg: &str| {
+            store
+                .write_file("local/scale", "screen.svg", svg.as_bytes(), None)
+                .unwrap();
+            // `RenderOpts::default()` is the "og" model: 800x480.
+            store.render("local/scale", RenderOpts::default())
+        };
+        let svg = |w: u32, h: u32| {
+            format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}">
+                     <rect width="{w}" height="{h}" fill="white"/>
+                   </svg>"#
+            )
+        };
+
+        let authored_at_the_panel = render_with_svg(&svg(800, 480));
+        assert!(
+            authored_at_the_panel.error.is_none(),
+            "{:?}",
+            authored_at_the_panel.error
+        );
+        assert!(
+            !authored_at_the_panel
+                .log
+                .iter()
+                .any(|l| l.contains("scaled by")),
+            "a screen that is the panel must not be warned about: {:?}",
+            authored_at_the_panel.log
+        );
+
+        // Half the panel on both axes — an *exact* 2x zoom, and still wrong.
+        let hardcoded_half_size = render_with_svg(&svg(400, 240));
+        assert!(
+            hardcoded_half_size.error.is_none(),
+            "a rescaled screen must still render: {:?}",
+            hardcoded_half_size.error
+        );
+        let warning = hardcoded_half_size
+            .log
+            .iter()
+            .find(|l| l.contains("scaled by"))
+            .unwrap_or_else(|| panic!("no scale warning in {:?}", hardcoded_half_size.log));
+        assert!(
+            warning.starts_with("[warn]"),
+            "must be tagged like every other authoring warning: {warning}"
+        );
+        assert!(warning.contains("400x240"), "{warning}");
+        assert!(warning.contains("800x480"), "{warning}");
     }
 
     #[test]

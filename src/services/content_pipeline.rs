@@ -521,6 +521,7 @@ impl ContentPipeline {
         dither: Option<&str>,
         tuning: Option<&crate::rendering::svg_to_png::DitherTuning>,
         fonts: Option<&crate::rendering::font_config::FontHintingDirective>,
+        scale_warning: &mut Option<String>,
     ) -> Result<Vec<u8>, ContentError> {
         // Resolved here, not by the caller. The adaptive default is what makes
         // text crisp on a black-and-white panel with no Lua involved, so making
@@ -536,6 +537,7 @@ impl ContentPipeline {
             dither,
             tuning,
             Some(&font_config),
+            scale_warning,
         )?;
         Ok(png_bytes)
     }
@@ -913,7 +915,7 @@ mod pipeline_tests {
 
         let render = |fonts: Option<&FontHintingDirective>| {
             pipeline
-                .render_png_from_svg(svg, spec, &bw, None, false, None, None, fonts)
+                .render_png_from_svg(svg, spec, &bw, None, false, None, None, fonts, &mut None)
                 .expect("render should succeed")
         };
 

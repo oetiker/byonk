@@ -7,17 +7,19 @@ SVG templates define the visual layout of your screens. They use [Tera](https://
 A Byonk SVG template is a standard SVG file with Tera expressions:
 
 ```svg
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
-  <rect width="800" height="480" fill="white"/>
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 {{ layout.width }} {{ layout.height }}"
+     width="{{ layout.width }}" height="{{ layout.height }}">
+  <rect width="{{ layout.width }}" height="{{ layout.height }}" fill="white"/>
 
-  <text x="400" y="240" text-anchor="middle" font-size="24">
+  <text x="{{ layout.center_x }}" y="{{ layout.center_y }}" text-anchor="middle" font-size="24">
     {{ message }}
   </text>
 </svg>
 ```
 
 **Key points:**
-- Set `viewBox` to `0 0 800 480` for TRMNL OG (or `0 0 1872 1404` for TRMNL X)
+- Size the `viewBox` from `layout.width` and `layout.height`, never from fixed numbers
 - Always include `width` and `height` attributes
 - Use `{{ variable }}` to insert values from Lua
 
@@ -28,7 +30,36 @@ A Byonk SVG template is a standard SVG file with Tera expressions:
 | TRMNL OG | 800 | 480 | 5:3 |
 | TRMNL X | 1872 | 1404 | 4:3 |
 
-Byonk automatically scales your SVG to fit the display, but matching the aspect ratio gives the best results.
+**Build the size from `layout.width` and `layout.height`.** These are the panel's
+own pixels, so a template that uses them is always drawn at scale 1, on every
+device.
+
+If your SVG is some other size, Byonk scales it to fit rather than failing — and
+that costs you more than sharpness:
+
+- **Every dimension you chose is displayed at the wrong size.** Type set at 10 px
+  in a 400x240 SVG is 20 px on an 800x480 panel. You cannot judge a layout that
+  is not being shown at the size you designed it.
+- **Hinting stops helping.** Hinted glyph outlines are fitted to the pixel grid
+  of the SVG's own coordinate system, not the panel's.
+- **Bitmap fonts stop being bitmaps.** A strike is drawn for one exact pixel
+  size, so it is only reproduced faithfully at scale 1; at any other scale it is
+  resampled.
+
+Byonk reports this when it happens. `byonk render` prints it to stderr, and the
+authoring API returns it in the render log:
+
+```
+[warn] this screen's SVG is 400x240 but the device is 800x480, so the render is
+scaled by 2 to fit ... Use layout.width and layout.height rather than hardcoded
+dimensions.
+```
+
+A mismatched aspect ratio is scaled by the smaller of the two ratios and centred,
+so the render is also padded with blank bands.
+
+The remaining examples on this page write `0 0 800 480` literally, to keep them
+short. In a real screen, use `layout.width` and `layout.height`.
 
 ## Variables
 

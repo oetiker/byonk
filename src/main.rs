@@ -484,6 +484,7 @@ fn run_render_command(
         "CLI render measured-colour resolution"
     );
 
+    let mut scale_warning: Option<String> = None;
     let png_bytes = content_pipeline
         .render_png_from_svg(
             &svg_content,
@@ -498,8 +499,17 @@ fn run_render_command(
                 None
             },
             script_font_hinting.as_ref(),
+            &mut scale_warning,
         )
         .map_err(|e| anyhow::anyhow!("Render error: {e}"))?;
+
+    // The CLI does not print the script log, so this is the only way the
+    // warning reaches whoever ran the render — and a probe SVG rendered at the
+    // wrong scale is exactly the mistake this command invites. stderr, so it
+    // stays out of anything piping the success line.
+    if let Some(w) = scale_warning {
+        eprintln!("warning: {w}");
+    }
 
     // Write to file
     std::fs::write(output, &png_bytes)?;

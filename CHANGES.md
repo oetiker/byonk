@@ -71,6 +71,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Byonk now tells you when a screen's SVG is not the size of the device.**
+  Such a screen still renders — byonk scales it to fit — but the scaling is
+  silent, and it costs more than sharpness: every dimension you chose is shown
+  at the wrong size (text set at 10 px in a 400x240 SVG is 20 px on an 800x480
+  panel), hinting stops helping because hinted outlines are fitted to the SVG's
+  own pixel grid, and bitmap fonts are resampled instead of being drawn from
+  their strikes. `byonk render` prints the warning to stderr and the authoring
+  API returns it in the render log. Build your `viewBox`, `width` and `height`
+  from `layout.width` and `layout.height` and it never fires. An exact 2x zoom
+  is warned about too — an integer scale keeps glyphs on whole pixels, but it
+  still shows your layout at twice the size you designed it.
+
 - **Continuous-tone content is now marked, and it changes how a screen renders.**
   Byonk now treats a screen as two kinds of content. Anything you mark with
   `data-byonk-tone="continuous"` — photographs, hue gradients — is matched

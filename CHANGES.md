@@ -240,6 +240,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timestamp, which removes a duplicate, since `footer.svg` already prints one. To put the
   icons somewhere else, set `status_y` and the new `status_color`. **If you include
   `header.svg` and relied on it showing `updated_at`, include `footer.svg` as well.**
+- **The grey calibration screen is readable on panels with many grey levels.** It laid
+  every swatch out in a single row, so on a 16-grey panel each `#RRGGBB` label got a
+  sixteenth of the width — about a third of what the text needs. The labels ran together
+  into an unreadable smear, the registration circles overlapped, and the leftmost one hung
+  off the edge of the screen. Swatches now wrap into a grid once there are more than eight
+  of them (4x4 at sixteen levels, 3x3 at nine), and the labels and registration marks are
+  sized and placed from the swatch rather than from the panel. The swatch block also grows
+  to fill the space a tall panel used to leave empty. Palettes of eight or fewer keep the
+  single row they already fit. Each swatch is now labelled once rather than printing its
+  hex value twice.
 - **`byonk render` now draws at the device's own panel size.** It used to take the
   output size only from `--device`, which offers just two values — `og` (800x480) and
   `x` (1872x1404). So a device configured for any other panel rendered at 800x480

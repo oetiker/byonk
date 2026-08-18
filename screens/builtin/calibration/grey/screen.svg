@@ -15,22 +15,25 @@
   <!-- Background -->
   <rect width="{{ data.width }}" height="{{ data.height }}" fill="rgb(170,170,170)"/>
 
-  <!-- Top section: Gray level bars -->
+  <!-- Top section: grey level swatches. One row while the labels fit, a
+       grid once they do not — see the grid comment in script.lua. -->
   {% for bar in data.bars %}
-  <rect x="{{ bar.x }}" y="0" width="{{ bar.width }}" height="{{ data.bar_height }}" fill="{{ bar.color }}"/>
+  <rect x="{{ bar.x }}" y="{{ bar.y }}" width="{{ bar.width }}" height="{{ bar.height }}" fill="{{ bar.color }}"/>
   {% endfor %}
 
-  <!-- Labels on bars -->
+  <!-- Labels on swatches -->
   {% for bar in data.bars %}
-  <text x="{{ bar.center_x }}" y="{{ data.label_y }}" text-anchor="middle" fill="{{ bar.text_color }}" font-family="Outfit" font-size="{{ data.font_label }}" font-weight="600">{{ bar.label }}</text>
-  <text x="{{ bar.center_x }}" y="{{ data.value_y }}" text-anchor="middle" fill="{{ bar.text_color }}" font-family="Outfit" font-size="{{ data.font_value }}">{{ bar.value }}</text>
+  <text x="{{ bar.center_x }}" y="{{ bar.label_y }}" text-anchor="middle" fill="{{ bar.text_color }}" font-family="Outfit" font-size="{{ data.font_label }}" font-weight="600">{{ bar.label }}</text>
+  {% if bar.show_value %}
+  <text x="{{ bar.center_x }}" y="{{ bar.value_y }}" text-anchor="middle" fill="{{ bar.text_color }}" font-family="Outfit" font-size="{{ data.font_value }}">{{ bar.value }}</text>
+  {% endif %}
   {% endfor %}
 
-  <!-- Center circle pattern on bars -->
+  <!-- Registration mark on each swatch -->
   {% for bar in data.bars %}
-  <circle cx="{{ bar.center_x }}" cy="{{ data.circle_y }}" r="{{ data.circle_r }}" fill="none" stroke="{{ bar.text_color }}" stroke-width="3"/>
-  <line x1="{{ bar.center_x - data.circle_r }}" y1="{{ data.circle_y }}" x2="{{ bar.center_x + data.circle_r }}" y2="{{ data.circle_y }}" stroke="{{ bar.text_color }}" stroke-width="1"/>
-  <line x1="{{ bar.center_x }}" y1="{{ data.circle_y - data.circle_r }}" x2="{{ bar.center_x }}" y2="{{ data.circle_y + data.circle_r }}" stroke="{{ bar.text_color }}" stroke-width="1"/>
+  <circle cx="{{ bar.center_x }}" cy="{{ bar.circle_y }}" r="{{ data.circle_r }}" fill="none" stroke="{{ bar.text_color }}" stroke-width="3"/>
+  <line x1="{{ bar.center_x - data.circle_r }}" y1="{{ bar.circle_y }}" x2="{{ bar.center_x + data.circle_r }}" y2="{{ bar.circle_y }}" stroke="{{ bar.text_color }}" stroke-width="1"/>
+  <line x1="{{ bar.center_x }}" y1="{{ bar.circle_y - data.circle_r }}" x2="{{ bar.center_x }}" y2="{{ bar.circle_y + data.circle_r }}" stroke="{{ bar.text_color }}" stroke-width="1"/>
   {% endfor %}
 
   <!-- Horizontal gradient for dithering demo -->

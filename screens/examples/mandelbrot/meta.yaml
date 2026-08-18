@@ -1,4 +1,4 @@
 title: Mandelbrot
 description: Renders a random, beautiful region of the Mandelbrot set.
-byonk: "0.17"
+byonk: "0.18"
 refresh: 600

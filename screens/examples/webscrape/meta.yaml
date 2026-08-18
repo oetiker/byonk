@@ -1,6 +1,6 @@
 title: Web Scrape (Flörli Bookings)
 description: Scrapes floerli-olten.ch and shows current and upcoming room bookings.
-byonk: "0.17"
+byonk: "0.18"
 params:
   room:
     type: string

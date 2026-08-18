@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.18.0 - 2026-08-18
+
+### New
+
 - **New `http_response()` for Lua scripts**, which returns the whole reply —
   `ok`, `status`, `body`, `headers` — instead of just the body, and does not
   raise when the request fails. Until now a script could not tell a 404 or a
@@ -75,7 +83,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   different ways. Byonk checks a variant's base family and name when the script
   runs and fails with a clear message, rather than silently rendering a
   different font. See the new "Font Hinting" page in the documentation.
-
 ### Changed
 
 - **Byonk now tells you when a screen's SVG is not the size of the device.**

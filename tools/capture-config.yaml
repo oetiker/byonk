@@ -223,6 +223,38 @@ devices:
   "AA:BB:CC:00:00:15":
     panel: trmnl_og
     screen: examples/swiss-departure-board
+  # --- Panel coverage -----------------------------------------------------
+  # Everything above runs on trmnl_og (4-grey), with one screen on
+  # trmnl_og_4clr — which left byonk's two hardest palettes, 16-grey and
+  # 6-colour, completely unexercised by this harness. The four calibration
+  # screens all build their SVG from layout.width/layout.height, so they
+  # render natively at any panel size and any aspect; that is what makes
+  # this coverage cheap. Each pairing below is chosen for what the panel
+  # makes visible, not for completeness:
+  #   grey  -> the palette ramp itself
+  #   tone  -> a photograph plus patches, mapped vs. pinned side by side
+  #   gamut -> the hue circle across lightness, which is the whole question
+  #            on a 6-colour panel
+  "AA:BB:CC:00:00:21":
+    panel: trmnl_x
+    screen: byonk-builtin/calibration/grey
+  "AA:BB:CC:00:00:22":
+    panel: trmnl_x
+    screen: byonk-builtin/calibration/tone
+  "AA:BB:CC:00:00:23":
+    panel: reterminal_e1002
+    screen: byonk-builtin/calibration/color
+  "AA:BB:CC:00:00:24":
+    panel: reterminal_e1002
+    screen: byonk-builtin/calibration/gamut
+  "AA:BB:CC:00:00:25":
+    panel: reterminal_e1002
+    screen: byonk-builtin/calibration/tone
+  # The only portrait panel byonk ships a profile for, and the only one over
+  # 1 Mpx — worth capturing for the aspect alone, not just the palette.
+  "AA:BB:CC:00:00:26":
+    panel: reterminal_e1004
+    screen: byonk-builtin/calibration/gamut
   # Canary: a deliberately nonexistent screen ref. capture-renders.sh renders
   # this first and records whether it exits 0 (silent fallback to whatever
   # DEFAULT points at above — the current, verified behavior even for a

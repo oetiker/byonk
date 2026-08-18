@@ -100,6 +100,12 @@ AA:BB:CC:00:00:04:calibration-color:det
 AA:BB:CC:00:00:06:demo-font-bitmap:det
 AA:BB:CC:00:00:07:demo-font-ttf:det
 AA:BB:CC:00:00:08:demo-font-hinting:det
+AA:BB:CC:00:00:21:calibration-grey-16grey:det
+AA:BB:CC:00:00:22:calibration-tone-16grey:det
+AA:BB:CC:00:00:23:calibration-color-6clr:det
+AA:BB:CC:00:00:24:calibration-gamut-6clr:det
+AA:BB:CC:00:00:25:calibration-tone-6clr:det
+AA:BB:CC:00:00:26:calibration-gamut-6clr-13in:det
 AA:BB:CC:00:00:05:mandelbrot:nondet
 AA:BB:CC:00:00:11:hello:nondet
 AA:BB:CC:00:00:12:builtin-default:nondet

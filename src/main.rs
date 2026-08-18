@@ -35,7 +35,9 @@ enum Commands {
         #[arg(short, long)]
         output: PathBuf,
 
-        /// Device type: "og" (800x480) or "x" (1872x1404)
+        /// Fallback render size when the device has no configured panel:
+        /// "og" (800x480) or "x" (1872x1404). A device whose `panel:` is set
+        /// renders at that panel's own dimensions and ignores this.
         #[arg(short, long, default_value = "og")]
         device: String,
 
@@ -171,6 +173,32 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
+/// The size `byonk render` draws at.
+///
+/// **The device's own panel wins.** `--device` offers exactly two sizes,
+/// `og` (800x480) and `x` (1872x1404), so on its own it cannot express the
+/// 1200x1600 reTerminal E1004, either 296x128 Xiao, or any panel an operator
+/// defines themselves — a device configured for one of those used to render at
+/// 800x480 while correctly using that panel's *palette*, producing a
+/// plausible-looking PNG of the wrong size. The render-scale warning cannot
+/// catch it either: a screen built from `layout.width`/`layout.height` builds
+/// itself to whatever it is told, so the SVG and the render agree and only the
+/// panel disagrees.
+///
+/// `--device` stays as the fallback for a MAC with no device config, and
+/// for a panel that declares no dimensions.
+fn resolve_cli_display_spec(
+    panel_size: Option<(u32, u32)>,
+    device_type: &str,
+) -> anyhow::Result<byonk::models::DisplaySpec> {
+    use byonk::models::DisplaySpec;
+    match panel_size {
+        Some((w, h)) => Ok(DisplaySpec::from_dimensions(w, h)?),
+        None if device_type == "x" => Ok(DisplaySpec::X),
+        None => Ok(DisplaySpec::OG),
+    }
+}
+
 /// Render a screen directly to a PNG file (no server needed)
 #[allow(clippy::too_many_arguments)]
 fn run_render_command(
@@ -185,7 +213,6 @@ fn run_render_command(
     use_actual_flag: Option<bool>,
 ) -> anyhow::Result<()> {
     use byonk::assets::AssetLoader;
-    use byonk::models::DisplaySpec;
     use byonk::services::DeviceContext;
 
     // Minimal logging for CLI
@@ -225,11 +252,29 @@ fn run_render_command(
             .expect("Failed to initialize content pipeline"),
     );
 
-    // Parse device type
-    let display_spec = match device_type {
-        "x" => DisplaySpec::X,
-        _ => DisplaySpec::OG,
-    };
+    // Device config -> panel -> colors/dither/measured/size, resolved once
+    // here (before the device context and reused after the script runs) so
+    // this chain can't drift between what the script sees as
+    // `device.colors_actual` and what the final render actually dithers
+    // against — see Task 1 review, which found `main.rs` recomputing this
+    // chain twice, ~80 lines apart. `registration_code` is borrowed here and
+    // moved into DeviceContext below.
+    let device_config = config.get_device_config(mac).or_else(|| {
+        registration_code
+            .as_deref()
+            .and_then(|code| config.get_device_config_for_code(code))
+    });
+    let dc_colors = device_config.and_then(|dc| dc.colors.clone());
+    let dc_dither = device_config.and_then(|dc| dc.dither.clone());
+    let dc_panel = device_config.and_then(|dc| dc.panel.clone());
+    let panel = dc_panel.as_deref().and_then(|name| config.get_panel(name));
+    let panel_colors = panel.map(|p| p.colors.clone());
+
+    // The panel is part of that same chain: it knows its own dimensions, and
+    // taking the size from anywhere else is how a device configured for a
+    // 1200x1600 panel rendered at 800x480 in that panel's colours.
+    let display_spec =
+        resolve_cli_display_spec(panel.and_then(|p| Some((p.width?, p.height?))), device_type)?;
 
     // Build initial palette from --colors flag or device type default
     let cli_palette: Vec<(u8, u8, u8)> = if let Some(ref colors_str) = colors {
@@ -244,24 +289,6 @@ fn run_render_command(
     } else {
         vec![(0, 0, 0), (85, 85, 85), (170, 170, 170), (255, 255, 255)]
     };
-
-    // Device config -> panel -> colors/dither/measured, resolved once here
-    // (before the device context and reused after the script runs) so this
-    // chain can't drift between what the script sees as `device.colors_actual`
-    // and what the final render actually dithers against — see Task 1
-    // review, which found `main.rs` recomputing this chain twice, ~80 lines
-    // apart. `registration_code` is borrowed here and moved into
-    // DeviceContext below.
-    let device_config = config.get_device_config(mac).or_else(|| {
-        registration_code
-            .as_deref()
-            .and_then(|code| config.get_device_config_for_code(code))
-    });
-    let dc_colors = device_config.and_then(|dc| dc.colors.clone());
-    let dc_dither = device_config.and_then(|dc| dc.dither.clone());
-    let dc_panel = device_config.and_then(|dc| dc.panel.clone());
-    let panel = dc_panel.as_deref().and_then(|name| config.get_panel(name));
-    let panel_colors = panel.map(|p| p.colors.clone());
     let measured: Option<Vec<(u8, u8, u8)>> = panel
         .and_then(|p| p.colors_actual.as_deref())
         .map(byonk::api::display::parse_colors_header);
@@ -1101,5 +1128,52 @@ mod tests {
 
         // Seeded: the shipped examples landed in the pinned examples dir.
         assert!(tmp.path().join("examples/byonk-screens.yaml").exists());
+    }
+
+    /// The case the two-valued `--device` flag cannot express at all.
+    ///
+    /// `byonk render` used to size every render from that flag alone, so a
+    /// device configured for the 1200x1600 reTerminal E1004 got an 800x480
+    /// PNG — in the E1004's own 6-colour palette, because the palette half of
+    /// the panel chain was already wired up. The result looked plausible and
+    /// was the wrong size for the device it named.
+    #[test]
+    fn a_panel_the_device_type_flag_cannot_express_still_renders_at_its_own_size() {
+        let spec = resolve_cli_display_spec(Some((1200, 1600)), "og").unwrap();
+        assert_eq!(
+            (spec.width, spec.height),
+            (1200, 1600),
+            "a configured panel's dimensions must reach the render"
+        );
+    }
+
+    /// The control that makes the test above about the *panel* rather than
+    /// about `from_dimensions` accepting anything: the flag names a size, the
+    /// panel names a different one, and the panel has to win. Without this, an
+    /// implementation that preferred the flag would still pass the E1004 case
+    /// whenever the flag happened to agree.
+    #[test]
+    fn the_configured_panel_outranks_the_device_type_flag() {
+        let spec = resolve_cli_display_spec(Some((800, 480)), "x").unwrap();
+        assert_eq!(
+            (spec.width, spec.height),
+            (800, 480),
+            "`--device x` must not override the device's own panel"
+        );
+    }
+
+    /// The fallback still works, for a MAC with no device config and for a
+    /// panel that declares no dimensions. Both arrive here as `None`.
+    #[test]
+    fn without_a_panel_the_device_type_flag_still_chooses_the_size() {
+        let x = resolve_cli_display_spec(None, "x").unwrap();
+        assert_eq!((x.width, x.height), (1872, 1404));
+
+        let og = resolve_cli_display_spec(None, "og").unwrap();
+        assert_eq!((og.width, og.height), (800, 480));
+
+        // Anything unrecognised is OG, which is what the old `match` did.
+        let other = resolve_cli_display_spec(None, "nonsense").unwrap();
+        assert_eq!((other.width, other.height), (800, 480));
     }
 }

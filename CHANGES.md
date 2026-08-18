@@ -240,6 +240,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timestamp, which removes a duplicate, since `footer.svg` already prints one. To put the
   icons somewhere else, set `status_y` and the new `status_color`. **If you include
   `header.svg` and relied on it showing `updated_at`, include `footer.svg` as well.**
+- **`byonk render` now draws at the device's own panel size.** It used to take the
+  output size only from `--device`, which offers just two values — `og` (800x480) and
+  `x` (1872x1404). So a device configured for any other panel rendered at 800x480
+  while correctly using that panel's *colours*: the reTerminal E1004 (1200x1600), the
+  three 296x128 Xiao panels, and any panel you define yourself all came out the wrong
+  size, in a picture that otherwise looked right. `--device` is now only the fallback
+  for a device that has no `panel:` set. **If you scripted around the old behaviour by
+  passing `--device x` to get a large render, drop it** — the panel decides now.
 - **A device configured for a screen that does not exist is now an error.** A typo in a
   device's `screen:` silently rendered the DEFAULT screen instead and reported success, so
   the device showed a plausible-looking picture that was not the screen you asked for. Byonk

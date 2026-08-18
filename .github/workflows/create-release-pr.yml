@@ -218,6 +218,23 @@ jobs:
           chmod +x tools/release/bump-integration-version.sh
           tools/release/bump-integration-version.sh "${VERSION}"
 
+      # A screen's `byonk: "0.17"` is read as `^0.17`, i.e. `<0.18.0`, so a minor
+      # release puts byonk's own screens outside their own declared range and
+      # `GET /api/admin/screens` starts warning on every one of them -- including
+      # the fallback screen, which trains users to ignore the field. That drift
+      # shipped once already, in 0.16.0, and the guard test in
+      # tests/screen_schemas_test.rs fails the release PR when it happens again.
+      #
+      # The tutorial's meta.yaml examples move too, so the docs cannot end up
+      # quoting a version the screens no longer declare.
+      - name: Update the declared engine requirement
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          chmod +x tools/release/bump-screen-engine.sh
+          tools/release/bump-screen-engine.sh "${VERSION}"
+
       # The add-on's `version:` is the tag Supervisor pulls from
       # ghcr.io/oetiker/byonk, so between this PR merging and the publisher pushing
       # the image (~15-20 min) the add-on store advertises a version that is not
@@ -248,6 +265,9 @@ jobs:
           git add Cargo.toml Cargo.lock CHANGES.md \
                   custom_components/byonk/manifest.json \
                   homeassistant/byonk/config.yaml homeassistant/byonk/CHANGELOG.md
+          # -u, not the bare paths: stage modifications to tracked files without
+          # sweeping in anything untracked sitting under these trees.
+          git add -u screens docs/src
 
           if git diff --cached --quiet; then
             echo "::error title=Nothing to commit::No version-bearing file changed"
@@ -284,6 +304,7 @@ jobs:
               "- rolls the \`CHANGES.md\` \`Unreleased\` section into \`## ${VERSION}\`" \
               "- moves \`Cargo.toml\` and \`Cargo.lock\` to \`${VERSION}\`" \
               "- syncs \`custom_components/byonk/manifest.json\`" \
+              "- points every shipped screen and doc example at the \`${VERSION%.*}\` engine series" \
               "- syncs \`homeassistant/byonk/config.yaml\` and its changelog" \
               "" \
               "Review the changelog, then merge. Merging triggers **Release publisher**, which tags \`${TAG}\`, builds the binaries and the container, publishes the GitHub release and deploys the docs." \

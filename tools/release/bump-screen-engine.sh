@@ -18,19 +18,25 @@
 # nothing, which is correct: 0.17.2 is inside ^0.17.
 #
 # The rewrite is anchored at column 0. In a meta.yaml that skips the nested
-# keys under `params:`; in a Markdown file it confines the change to lines
-# inside a fenced YAML block, which is where these examples live.
+# keys under `params:`. In Markdown it is a plain column-0 match and NOT a
+# fenced-block parse: every example lives at column 0 inside a ```yaml fence,
+# but a line of prose beginning `byonk: "x.y"` would be rewritten too. Two doc
+# files have not been worth a Markdown parser.
 set -euo pipefail
 
 version="${1:?usage: bump-screen-engine.sh <version> [root]}"
 root="${2:-.}"
 
 # major.minor -- the series, not the point release.
-series="${version%.*}"
-if [ "$series" = "$version" ] || [ -z "$series" ]; then
-  echo "bump-screen-engine.sh: cannot derive a major.minor series from '$version'" >&2
+#
+# Parsed, not chopped. `${version%.*}` turns a version that is missing its patch
+# component into something plausible and wrong: "0.18" becomes series "0", which
+# no emptiness check catches, and 15 files would silently be stamped `byonk: "0"`.
+if [[ ! "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+  echo "bump-screen-engine.sh: expected a x.y.z version, got '$version'" >&2
   exit 1
 fi
+series="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
 
 changed=0
 bump() { # file

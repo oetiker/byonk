@@ -255,6 +255,23 @@ jobs:
           fi
 
           git commit -m "Release ${TAG}"
+
+          # Cancelling a release means closing its PR, which leaves the branch
+          # behind. The next attempt computes the same version, so it builds the
+          # same branch name from a different base -- and the push is rejected as a
+          # non-fast-forward, with nothing in the Actions UI able to recover it.
+          # Clear the stale branch, but never one that still has an open PR: that
+          # is a live proposal, not litter.
+          OPEN_PR=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty')
+          if [ -n "$OPEN_PR" ]; then
+            echo "::error title=Release already proposed::${BRANCH} already has an open PR: ${OPEN_PR} -- merge or close it before cutting ${TAG} again."
+            exit 1
+          fi
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "::notice title=Clearing stale branch::${BRANCH} is left over from a cancelled release; deleting it"
+            git push origin --delete "$BRANCH"
+          fi
+
           git push origin "$BRANCH"
 
           PR_URL=$(gh pr create \

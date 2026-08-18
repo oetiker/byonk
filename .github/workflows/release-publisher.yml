@@ -83,13 +83,27 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
           # The release, not the tag, is what says "this version shipped".
-          if gh release view "${TAG}" >/dev/null 2>&1; then
+          #
+          # "No such release" and "could not ask" are different answers, and only
+          # the first one means publish. Treating every failure as "not released"
+          # would let a transient API error start a second publish of a version
+          # that already shipped -- re-pushing its images and rewriting its
+          # release assets.
+          set +e
+          ERR=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" 2>&1 >/dev/null)
+          RC=$?
+          set -e
+
+          if [ "$RC" -eq 0 ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=Already released::${TAG} already has a GitHub release - nothing to do"
             echo "Nothing to publish: \`${TAG}\` is already released." >> "$GITHUB_STEP_SUMMARY"
-          else
+          elif printf '%s' "$ERR" | grep -q 'HTTP 404'; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
             echo "::notice title=Publishing::${TAG}"
+          else
+            echo "::error title=Cannot determine release state::Asking whether ${TAG} is released failed with something other than a 404: ${ERR}"
+            exit 1
           fi
 
   tag:

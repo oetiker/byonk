@@ -2,8 +2,9 @@
 
 _Last updated: 2026-08-18 (session 26). **The resvg `byonk-base` initiative is COMPLETE:
 all 10 plan tasks done.** Session 26 landed the last two — Task 9 (the render sweep) and
-Task 10 (`test_bitmap_font_render`) — plus a changelog reconciliation. **The branch is
-pushed and `make check` is green. The next job is to merge PR #30.**_
+Task 10 (`test_bitmap_font_render`) — reconciled the changelog, and then, at the owner's
+request, extended the sweep to the 16-grey and 6-colour panels, **which found and fixed two
+bugs**. **The branch is pushed and `make check` is green. The next job is to merge PR #30.**_
 
 ## Where the work lives
 
@@ -11,9 +12,9 @@ pushed and `make check` is green. The next job is to merge PR #30.**_
 |---|---|
 | Branch | `feat/screen-store-authoring-core` |
 | PR | **#30**, OPEN against `main` — https://github.com/oetiker/byonk/pull/30 |
-| HEAD | `e7fe213` — **tree clean, fully pushed** (`origin` is at `e7fe213`) |
-| Verified | `make check` on `e7fe213`'s content: **1131 passed, 0 failed**; clippy clean under `-D warnings` |
-| CI | **All 10 checks green on `e7fe213`** (Build, Test, Check & Lint, HA Validation, Release Scripts, CodeQL, 4× Analyze) |
+| HEAD | `bac40ee` — **tree clean, fully pushed** (`origin` is at `bac40ee`) |
+| Verified | `make check` on `bac40ee`'s content: **1138 passed, 0 failed**; clippy clean under `-D warnings` |
+| CI | Green on `e7fe213` (all 10 checks). **Four commits landed after that** — re-check with `gh pr checks 30` before merging. |
 | Push gotcha | The ssh-agent holds **no identities**, so `git push origin …` fails on publickey. `gh` is authenticated over HTTPS — `git push https://github.com/oetiker/byonk.git <branch>` works and leaves the remote config alone. |
 
 **resvg work happens in a different repo.** `oetiker/resvg` carries `feat/bitmap-mask-glyphs`
@@ -35,10 +36,12 @@ holds what its name claims.** `git log` on `oetiker/resvg` is the truth for resv
 
 # What to do next
 
-1. **Merge PR #30.** It is ready: `make check` green locally and **all 10 CI checks green on
-   `e7fe213`**. Nothing is outstanding against it. See
-   `superpowers:finishing-a-development-branch` if you want the integration checklist.
-2. Then pick from *Queued work* below. Nothing there blocks the merge.
+1. **Merge PR #30.** `make check` is green locally on `bac40ee`; confirm CI is too (it was
+   last verified on `e7fe213`, four commits back). Nothing else is outstanding against it.
+   See `superpowers:finishing-a-development-branch` for the integration checklist.
+2. **Decide the 16-grey tone question** below — the one thing this session found and did
+   *not* resolve.
+3. Then pick from *Queued work* below. Nothing there blocks the merge.
 
 ## Before merging — one thing already done, one still open
 
@@ -57,9 +60,10 @@ holds what its name claims.** `git log` on `oetiker/resvg` is the truth for resv
 
 **All 13 bundled screens render correctly.** Nothing overflows, collides or vanishes. Every
 one was opened and judged individually. The 7 deterministic screens are **byte-identical
-across two consecutive captures**, so the harness's det/nondet bucketing still holds.
+across two consecutive captures**, so the harness's det/nondet bucketing still holds. (The
+sweep grew to 19 captures across 5 panels later in the session — see below.)
 
-**Owner artifact (all 13 renders embedded, plus the findings):**
+**Owner artifact (every render embedded, plus the findings):**
 https://claude.ai/code/artifact/7e3a6c8d-763d-4985-8f12-69c7d7fdcc99
 
 Three things changed about what a capture proves:
@@ -69,8 +73,8 @@ Three things changed about what a capture proves:
   the CLI. It would have reported a clean sweep for a tree byonk was complaining about. Fixed:
   per-screen `<name>.stderr` beside the PNG, any non-empty one quoted into `MANIFEST.txt`.
 - **`BYONK_BIN` now selects the binary.** `BYONK_BIN=./target/debug/byonk
-  ./tools/capture-renders.sh <dir>` captures all 13 in **seconds**. The default is still
-  `cargo run --release` so a fresh checkout works.
+  ./tools/capture-renders.sh <dir>` captures the whole set in **seconds**. The default is
+  still `cargo run --release` so a fresh checkout works.
 - **The canary flipped, and it is an improvement.** An unresolved screen ref used to fall back
   to DEFAULT and exit 0; `3a35030` made it hard-error. So **`exit=0` now genuinely means "this
   screen rendered"**. The script's header claimed the opposite and was corrected. Keep both
@@ -113,21 +117,71 @@ against a backup.
 
 **This closes F15.** Byonk's own suite now fails if the resvg pin regresses.
 
+## The owner asked for the other panels — and that found two bugs (`b7a896f`, `70fbdef`, `bac40ee`)
+
+The sweep above covered `trmnl_og` twelve times and `trmnl_og_4clr` once. **The 16-grey and
+both 6-colour panels had never been rendered by anything.** Six pairings are now permanent in
+`tools/capture-config.yaml`, so a sweep is 19 captures across 5 panels. The four calibration
+screens build from `layout.width`/`layout.height`, which is what makes this cheap.
+
+**Bug 1 — `byonk render` ignored the device's panel size (`b7a896f`).** The first attempt
+returned *every* screen at 800×480, including those on 1872×1404 and 1200×1600 panels. The CLI
+sized renders only from `--device`, which has two values. The palette half of the chain was
+already wired, so an E1004 device rendered **in that panel's six colours at the wrong size**.
+Also hit all three 296×128 Xiao panels and any operator-defined panel. **The scale warning
+cannot catch this** — a screen built from `layout.*` builds itself to whatever it is told, so
+the SVG and the render agree and only the panel disagrees. Now in one pure function,
+`resolve_cli_display_spec`, with three tests, sabotage-verified.
+
+**Bug 2 — `calibration/grey` fell apart at 16 entries (`bac40ee`).** One row gave each
+`#RRGGBB` label a sixteenth of the width; labels smeared together, circles overlapped, the
+leftmost hung off the screen. Swatches now wrap past 8 entries (4×4 at 16, 3×3 at 9); labels
+and marks are sized from the *cell*, not the panel (30% of a cell is under one cap height,
+which clipped row 0); the block grows to fill the band a tall panel left empty; each swatch is
+labelled once instead of printing its hex twice. Rendered at 2, 4, 6, 9, 12, 16.
+`tests/calibration_grey_layout_test.rs` guards it by **reading back the geometry the script
+computed** — a smeared render is structurally valid, so pixels cannot tell you if text is
+legible. Sabotage-verified.
+
+> **`calibration/color` already handled 6 entries cleanly.** If another screen needs the same
+> treatment, that is the one to copy.
+
 ---
 
-# Open item the owner should decide
+# Open items the owner should decide
 
-**Two TLS tests are flaky under full-workspace load** —
+## NEW — marking costs shadow detail at 16 grey levels
+
+On `calibration/tone` the marked (measured, mapped) half is supposed to show what gamut
+mapping buys. On the 4-grey panel the two halves are close. **On `trmnl_x` the marked half is
+markedly darker and loses shadow separation** the unmarked half keeps — visible in the hair and
+the left of the face. Capture: `calibration-tone-16grey`, and in the artifact below.
+
+There is a reading where this is honest: `trmnl_x`'s measured palette runs `#383838`–`#B8B8B0`,
+a narrow real range, so mapping into it *should* darken. **But the unmarked half dithers
+against that same measured palette**, so the gap comes from the mapping, not the inks — and on
+a panel with 16 levels, losing shadow separation is the opposite of what the extra levels are
+for. **Not diagnosed.** Decide which half is the better preview before touching the mapper.
+It only became visible because the harness had never rendered this panel.
+
+## Two TLS tests are flaky
+
 `lua_https_tests::{test_https_with_custom_ca_cert, test_https_with_client_certificate}`.
 They fail with `error sending request for url (https://127.0.0.1:…)`, the shape a 30 s timeout
 takes. Observed **once in three** full `make check` runs in session 24; sessions 25 and 26 were
-both clean, so it is now **once in five**.
+clean across three more runs, so it is now **once in six**.
 
 **The null hypothesis has still never been tested** — nobody has run the suite with `c850ea7`'s
-HTTP change reverted, so "my change caused it" is unproven. What the change plausibly
-contributes is **one extra OS thread per HTTP request**, on tests already near a 30 s timeout.
-Session 25 saw this machine hit **load average 78** from unrelated desktop apps, which makes a
-load-dependent timeout plausible with no byonk defect at all.
+HTTP change reverted, so "my change caused it" is unproven.
+
+**The best explanation is now the laptop suspending, not CPU contention.** The owner pointed
+out (session 26) that the alarming load averages on this machine — 78 in session 25, 40 in
+session 26 — are an **artefact of the device sleeping**, not real contention. That reframes it
+usefully: a 30 s timeout is *wall clock*, so a suspend in the middle of a test blows it
+instantly no matter how idle the CPU is. That fits a failure that is rare, unreproducible, and
+confined to the two tests with the longest network waits. **Before spending anything on a fix,
+check whether the failing runs coincide with a sleep** (`pmset -g log | grep -i sleep`, or
+`log show --predicate 'eventMessage contains "Wake"'`).
 
 **If it needs fixing, do not loosen the test.** Cache the `reqwest::blocking::Client` instead
 of building one per request. The original panic was on *dropping* the client's runtime inside a
@@ -338,7 +392,7 @@ for everything in the tree; what is missing is **notices** — `fonts/` has no l
 
 | What | URL |
 |---|---|
-| **State 3 render sweep — all 13 screens, the three findings, Task 10** (session 26) | https://claude.ai/code/artifact/7e3a6c8d-763d-4985-8f12-69c7d7fdcc99 |
+| **Render sweep — 19 captures across 5 panels, the two bugs it found, Task 10** (session 26) | https://claude.ai/code/artifact/7e3a6c8d-763d-4985-8f12-69c7d7fdcc99 |
 | Task 8 + the three demo bugs + the fetch fix (session 24) | https://claude.ai/code/artifact/dede3454-3192-47d6-8e45-97a71440a08f |
 | X11 Bitmap Specimens — all 26 rebuilt faces, F16 before/after, the pitch table (session 22) | https://claude.ai/code/artifact/ef06c1db-b5ba-467c-8cc3-3a7069e00488 |
 | Bitmap vs outline; F15 before/after; F16 diagnosis; F17 (session 20) | https://claude.ai/code/artifact/8fe47446-49b6-4256-9db6-429aa3b8bfb6 |
@@ -352,6 +406,13 @@ for everything in the tree; what is missing is **notices** — `fonts/` has no l
   screens prove nothing on their own — a warning that is never wired up produces the same
   output. Build a positive control that must trip it. Session 26 did, and only then was the
   sweep worth reporting.
+- **Coverage that is wide in one dimension can be nil in another.** The harness rendered 13
+  screens and looked thorough — on one of five panels. Both bugs session 26 found lived in the
+  dimension nobody was varying. Ask what the sweep holds *constant*, not just what it covers.
+- **A parameter that is only ever passed one value is untested, not correct.** `--device` had
+  two settings and everything used the default, so nothing noticed it was the *only* input to
+  a decision the panel should have owned. The palette half of the same chain was already right,
+  which made the wrong half look right too.
 - **A tool that hides a channel makes every future run lie.** The capture harness discarded
   stderr, which is the only place the CLI puts authoring warnings. Whenever a new output
   channel is added, **check what the existing harnesses do with it** — they were written before
@@ -389,6 +450,13 @@ for everything in the tree; what is missing is **notices** — `fonts/` has no l
 - **Read a changelog section as a set, not as a stream of appends.** Five sessions of appending
   produced two entries that contradicted each other and two filed under the wrong heading. The
   reader sees it all at once even though it was never written that way.
+- **Assert on the geometry, not the pixels, when the question is "is this legible".** A screen
+  whose labels overlap into a smear renders perfectly validly; no pixel comparison catches it.
+  `RenderResult::data` hands back exactly what the script computed and the SVG places things
+  with, which makes screen layout testable — see `tests/calibration_grey_layout_test.rs`.
+- **A raw string ends at the first `"#`, and hex colours are full of them.** `r#"…"#` around
+  YAML containing `colors: "#000000,…"` fails to parse in a way that reads as nonsense
+  (`expected `;`, found `000000``). Use `r##"…"##`. Third time on this branch.
 - **A sleeping laptop looks exactly like a hung build.** `ps -eo pid,etime,command` reports
   *wall* time, which keeps counting through sleep. Check `uptime` too — this machine hit **load
   average 78** and a normally-2-minute compile took over 20. An IDE `cargo check --workspace`
@@ -416,7 +484,7 @@ for everything in the tree; what is missing is **notices** — `fonts/` has no l
 # Build / verify
 
 - `make check` = fmt + clippy + full suite, **~15 min — background it**; it runs `cargo fmt`,
-  not `--check`, so it rewrites files. **Green state = 1131 passed, 0 failed.**
+  not `--check`, so it rewrites files. **Green state = 1138 passed, 0 failed.**
 - **Changing `Cargo.lock`'s resvg pin forces a full rebuild of usvg/resvg — 10+ min.**
 - **Editing an embedded asset forces a rebuild.** `EmbeddedDocs` embeds exactly three files
   (`api/lua-api.md`, `tutorial/svg-templates.md`, `guide/authoring.md`); `EmbeddedBase` embeds
@@ -437,16 +505,21 @@ for everything in the tree; what is missing is **notices** — `fonts/` has no l
 - `make docs` = `mdbook build`; mdbook is installed. `docs/book/` is gitignored.
 - **`docs/src/images/` is gitignored** — `hintdemo.png` is refreshed locally, never committed.
 
-## Capturing all 13 bundled screens
+## Capturing every bundled screen, on every panel
 
 ```bash
 BYONK_BIN=./target/debug/byonk ./tools/capture-renders.sh /path/to/out
 ```
 
-Seconds, not minutes. Writes `MANIFEST.txt` with the canary verdict, per-screen exit codes,
-any stderr byonk produced, and the distinctness verdict. **Do not put the output in `/tmp`** —
-that is how the previous baselines were lost. Deterministic screens land at the top level,
+Seconds, not minutes. **19 captures across 5 panels** — 4-grey, 4-colour, 16-grey and both
+6-colour. Writes `MANIFEST.txt` with the canary verdict, per-screen exit codes, any stderr
+byonk produced, and the distinctness verdict. **Do not put the output in `/tmp`** — that is how
+the previous baselines were lost. Deterministic screens land at the top level,
 non-deterministic ones in `nondeterministic/`.
+
+**A capture is only as wide as `tools/capture-config.yaml`'s device map.** Twelve of the
+original thirteen devices were on one panel, and two bugs hid in that gap for the whole
+initiative. When adding a panel profile, add a device for it here too.
 
 ## Rendering a scratch screen
 

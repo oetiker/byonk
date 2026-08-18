@@ -1,4 +1,5 @@
 use regex::Regex;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 use tera::{Context, Tera};
 
@@ -36,6 +37,139 @@ pub enum TemplateError {
 
     #[error("Image resolution error: {0}")]
     ImageResolution(String),
+
+    #[error("Circular template reference: {0}")]
+    CircularReference(String),
+
+    #[error("Template reference chain deeper than {MAX_TEMPLATE_DEPTH}: {0}")]
+    TemplateTooDeep(String),
+
+    #[error("Recursive template macro (not supported): {0}")]
+    RecursiveMacro(String),
+}
+
+/// Maximum number of templates that may be chained together by
+/// `{% include %}` / `{% extends %}` / `{% import %}` before a render is
+/// refused. Tera resolves these by recursing on the Rust call stack with no
+/// limit of its own, so an unchecked chain overflows the stack and aborts the
+/// whole process instead of failing the render.
+const MAX_TEMPLATE_DEPTH: usize = 64;
+
+/// Collect the template names referenced from an AST by `{% include %}`,
+/// `{% extends %}` and `{% import %}`, descending into every construct that
+/// can hold a body (blocks, loops, conditionals, filter sections, macro
+/// definitions). The walk uses an explicit stack so deeply nested templates
+/// cannot overflow the stack here either.
+fn referenced_templates(nodes: &[tera::ast::Node]) -> Vec<String> {
+    use tera::ast::Node;
+
+    let mut refs = Vec::new();
+    let mut stack: Vec<&Node> = nodes.iter().collect();
+
+    while let Some(node) = stack.pop() {
+        match node {
+            Node::Include(_, names, _) => refs.extend(names.iter().cloned()),
+            Node::Extends(_, name) => refs.push(name.clone()),
+            Node::ImportMacro(_, name, _) => refs.push(name.clone()),
+            Node::Block(_, block, _) => stack.extend(block.body.iter()),
+            Node::Forloop(_, forloop, _) => {
+                stack.extend(forloop.body.iter());
+                if let Some(empty) = &forloop.empty_body {
+                    stack.extend(empty.iter());
+                }
+            }
+            Node::If(cond, _) => {
+                for (_, _, body) in &cond.conditions {
+                    stack.extend(body.iter());
+                }
+                if let Some((_, body)) = &cond.otherwise {
+                    stack.extend(body.iter());
+                }
+            }
+            Node::FilterSection(_, filter, _) => stack.extend(filter.body.iter()),
+            Node::MacroDefinition(_, def, _) => stack.extend(def.body.iter()),
+            _ => {}
+        }
+    }
+
+    refs
+}
+
+/// Collect the names of the macros called from a macro body.
+///
+/// Namespaces are deliberately ignored: this is used to build an
+/// over-approximation of the macro call graph, where two macros that share a
+/// name count as one node. That can only ever report recursion that isn't
+/// there, never miss recursion that is.
+fn called_macro_names(nodes: &[tera::ast::Node]) -> Vec<String> {
+    use tera::ast::{Expr, ExprVal, Node};
+
+    let mut names = Vec::new();
+    let mut exprs: Vec<&Expr> = Vec::new();
+    let mut stack: Vec<&Node> = nodes.iter().collect();
+
+    while let Some(node) = stack.pop() {
+        match node {
+            Node::VariableBlock(_, expr) => exprs.push(expr),
+            Node::Set(_, set) => exprs.push(&set.value),
+            Node::Block(_, block, _) => stack.extend(block.body.iter()),
+            Node::Forloop(_, forloop, _) => {
+                exprs.push(&forloop.container);
+                stack.extend(forloop.body.iter());
+                if let Some(empty) = &forloop.empty_body {
+                    stack.extend(empty.iter());
+                }
+            }
+            Node::If(cond, _) => {
+                for (_, expr, body) in &cond.conditions {
+                    exprs.push(expr);
+                    stack.extend(body.iter());
+                }
+                if let Some((_, body)) = &cond.otherwise {
+                    stack.extend(body.iter());
+                }
+            }
+            Node::FilterSection(_, filter, _) => {
+                exprs.extend(filter.filter.args.values());
+                stack.extend(filter.body.iter());
+            }
+            Node::MacroDefinition(_, def, _) => {
+                exprs.extend(def.args.values().flatten());
+                stack.extend(def.body.iter());
+            }
+            _ => {}
+        }
+    }
+
+    while let Some(expr) = exprs.pop() {
+        for filter in &expr.filters {
+            exprs.extend(filter.args.values());
+        }
+        match &expr.val {
+            ExprVal::MacroCall(call) => {
+                names.push(call.name.clone());
+                exprs.extend(call.args.values());
+            }
+            ExprVal::FunctionCall(call) => exprs.extend(call.args.values()),
+            ExprVal::Math(math) => {
+                exprs.push(&math.lhs);
+                exprs.push(&math.rhs);
+            }
+            ExprVal::Logic(logic) => {
+                exprs.push(&logic.lhs);
+                exprs.push(&logic.rhs);
+            }
+            ExprVal::In(in_expr) => {
+                exprs.push(&in_expr.lhs);
+                exprs.push(&in_expr.rhs);
+            }
+            ExprVal::Array(items) => exprs.extend(items.iter()),
+            ExprVal::Test(test) => exprs.extend(test.args.iter()),
+            _ => {}
+        }
+    }
+
+    names
 }
 
 /// Service for rendering SVG templates with Tera
@@ -96,24 +230,20 @@ impl TemplateService {
         );
     }
 
-    /// Render a screen template with the given data, scoped to one screen repo.
-    ///
-    /// Templates are always loaded fresh (to support live editing). Every base
-    /// asset is registered under `byonk-base-<v>/…` and every screen repo `.svg` under
-    /// its screen-repo-relative name, so `{% include %}`/`{% extends %}` can only reach
-    /// the screen's own screen repo plus the embedded `byonk-base` library.
-    ///
-    /// * `template_src` — the resolved `screen.svg` contents.
-    /// * `source` — the screen's screen repo source (for sibling includes/parts).
-    /// * `screen_path` — the screen's screen-repo-relative directory (for image refs
-    ///   and the main template name).
-    pub fn render(
+    /// Build a `Tera` instance for one screen: register every embedded base
+    /// asset, every screen repo `.svg`, and `template_src` itself as the main
+    /// template (named `screen_path/screen.svg`). This is the registration
+    /// phase shared by `render` (which goes on to render it against real
+    /// data) and `validate_template` (which stops here, needing no `data`
+    /// context) — so `{% include %}`/`{% extends %}` can only reach the
+    /// screen's own screen repo plus the embedded `byonk-base` library in
+    /// both paths, and a registration failure means the same thing in both.
+    fn build_tera(
         &self,
         template_src: &str,
         source: &Arc<dyn ScreenRepoSource>,
         screen_path: &str,
-        data: &serde_json::Value,
-    ) -> Result<String, TemplateError> {
+    ) -> Result<(Tera, String), TemplateError> {
         let mut tera = Tera::default();
 
         // Register every embedded base asset under `byonk-base-<version-path>`,
@@ -139,9 +269,184 @@ impl TemplateService {
         Self::register_filters(&mut tera);
 
         // Register the main screen template (authoritative source, may differ from
-        // the on-disk copy during live editing) and render it.
+        // the on-disk copy during live editing).
         let main_name = join_rel(screen_path, "screen.svg");
         tera.add_raw_template(&main_name, template_src)?;
+
+        // Refuse the two constructs that make Tera recurse without a bound
+        // (see the two checks below) before anything tries to render.
+        let reachable = Self::check_template_graph(&tera, &main_name)?;
+        Self::check_macro_graph(&tera, &reachable)?;
+
+        Ok((tera, main_name))
+    }
+
+    /// Refuse a template whose `{% include %}` / `{% extends %}` / `{% import %}`
+    /// graph contains a cycle or an excessively long chain.
+    ///
+    /// Tera expands includes by recursing on the Rust call stack while
+    /// rendering, and has no recursion limit: a template that (directly or
+    /// indirectly) includes itself overflows the stack, which aborts the whole
+    /// process rather than failing one render. Catching it up front turns that
+    /// crash into an ordinary render error, and because the check runs in
+    /// `build_tera` it also covers `validate_template` — a screen with a
+    /// circular include is rejected at authoring time.
+    ///
+    /// Only the graph reachable from the main template is walked, so an
+    /// unrelated template elsewhere in the screen repo cannot break a screen
+    /// that never references it. The set of reachable templates is returned so
+    /// the macro check can be scoped the same way.
+    fn check_template_graph(
+        tera: &Tera,
+        main_name: &str,
+    ) -> Result<HashSet<String>, TemplateError> {
+        // Iterative depth-first search. `path` is the chain of templates
+        // currently being explored, so a cycle can be reported with the exact
+        // chain that produced it; `done` holds fully explored templates so a
+        // diamond-shaped (but acyclic) graph is not re-walked.
+        enum Step {
+            Enter(String),
+            Leave,
+        }
+
+        let mut done: HashSet<String> = HashSet::new();
+        let mut on_path: HashSet<String> = HashSet::new();
+        let mut path: Vec<String> = Vec::new();
+        let mut work: Vec<Step> = vec![Step::Enter(main_name.to_string())];
+
+        while let Some(step) = work.pop() {
+            match step {
+                Step::Leave => {
+                    if let Some(name) = path.pop() {
+                        on_path.remove(&name);
+                        done.insert(name);
+                    }
+                }
+                Step::Enter(name) => {
+                    if done.contains(&name) {
+                        continue;
+                    }
+                    if on_path.contains(&name) {
+                        path.push(name);
+                        return Err(TemplateError::CircularReference(path.join(" -> ")));
+                    }
+                    if path.len() >= MAX_TEMPLATE_DEPTH {
+                        path.push(name);
+                        return Err(TemplateError::TemplateTooDeep(path.join(" -> ")));
+                    }
+                    // A reference to a template that was never registered is
+                    // not our problem: Tera reports the missing target itself,
+                    // with a message that points at the offending tag.
+                    let Some(template) = tera.templates.get(&name) else {
+                        continue;
+                    };
+                    let refs = referenced_templates(&template.ast);
+                    on_path.insert(name.clone());
+                    path.push(name);
+                    work.push(Step::Leave);
+                    work.extend(refs.into_iter().map(Step::Enter));
+                }
+            }
+        }
+
+        Ok(done)
+    }
+
+    /// Refuse a screen whose macros can call themselves, directly or through
+    /// other macros.
+    ///
+    /// Tera evaluates a macro call by recursing on the Rust call stack with no
+    /// limit, exactly like `{% include %}`, so a recursive macro overflows the
+    /// stack and aborts the process. Unlike an include chain there is no way to
+    /// bound it at render time, so recursive macros are rejected outright — a
+    /// screen that needs repetition should use `{% for %}`, or flatten the data
+    /// in its Lua script.
+    ///
+    /// The call graph is keyed by macro name only (see `called_macro_names`),
+    /// which over-approximates: it can never miss real recursion.
+    fn check_macro_graph(tera: &Tera, reachable: &HashSet<String>) -> Result<(), TemplateError> {
+        let mut calls: HashMap<&str, HashSet<String>> = HashMap::new();
+        for name in reachable {
+            let Some(template) = tera.templates.get(name) else {
+                continue;
+            };
+            for (macro_name, def) in &template.macros {
+                calls
+                    .entry(macro_name.as_str())
+                    .or_default()
+                    .extend(called_macro_names(&def.body));
+            }
+        }
+        if calls.is_empty() {
+            return Ok(());
+        }
+
+        enum Step<'a> {
+            Enter(&'a str),
+            Leave,
+        }
+
+        let mut done: HashSet<&str> = HashSet::new();
+        for root in calls.keys().copied() {
+            if done.contains(root) {
+                continue;
+            }
+            let mut on_path: HashSet<&str> = HashSet::new();
+            let mut path: Vec<&str> = Vec::new();
+            let mut work: Vec<Step> = vec![Step::Enter(root)];
+
+            while let Some(step) = work.pop() {
+                match step {
+                    Step::Leave => {
+                        if let Some(name) = path.pop() {
+                            on_path.remove(name);
+                            done.insert(name);
+                        }
+                    }
+                    Step::Enter(name) => {
+                        if done.contains(name) {
+                            continue;
+                        }
+                        if on_path.contains(name) {
+                            path.push(name);
+                            return Err(TemplateError::RecursiveMacro(path.join(" -> ")));
+                        }
+                        // A call to a macro that is not defined in any reachable
+                        // template is Tera's error to report, not ours.
+                        let Some(callees) = calls.get(name) else {
+                            continue;
+                        };
+                        on_path.insert(name);
+                        path.push(name);
+                        work.push(Step::Leave);
+                        work.extend(callees.iter().map(|c| Step::Enter(c.as_str())));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Render a screen template with the given data, scoped to one screen repo.
+    ///
+    /// Templates are always loaded fresh (to support live editing). Every base
+    /// asset is registered under `byonk-base-<v>/…` and every screen repo `.svg` under
+    /// its screen-repo-relative name, so `{% include %}`/`{% extends %}` can only reach
+    /// the screen's own screen repo plus the embedded `byonk-base` library.
+    ///
+    /// * `template_src` — the resolved `screen.svg` contents.
+    /// * `source` — the screen's screen repo source (for sibling includes/parts).
+    /// * `screen_path` — the screen's screen-repo-relative directory (for image refs
+    ///   and the main template name).
+    pub fn render(
+        &self,
+        template_src: &str,
+        source: &Arc<dyn ScreenRepoSource>,
+        screen_path: &str,
+        data: &serde_json::Value,
+    ) -> Result<String, TemplateError> {
+        let (tera, main_name) = self.build_tera(template_src, source, screen_path)?;
 
         let context = Context::from_serialize(data)?;
         let svg = tera.render(&main_name, &context)?;
@@ -151,6 +456,26 @@ impl TemplateService {
         let svg = self.resolve_image_refs(&svg, source, screen_path)?;
 
         Ok(svg)
+    }
+
+    /// Validate that `template_src` compiles and its `{% extends %}` chain
+    /// resolves, without rendering it — the exact registration phase `render`
+    /// runs, minus the final `tera.render(...)` call that needs a `data`
+    /// context this caller doesn't have. Catches Tera syntax errors and
+    /// missing-parent/circular `extends` errors in `template_src` itself.
+    ///
+    /// Does NOT catch a missing `{% include %}` target: Tera only resolves
+    /// includes while actually rendering (see `build_tera`'s doc comment),
+    /// so a screen with a dangling include can pass `validate_template` and
+    /// still fail `render`.
+    pub fn validate_template(
+        &self,
+        template_src: &str,
+        source: &Arc<dyn ScreenRepoSource>,
+        screen_path: &str,
+    ) -> Result<(), TemplateError> {
+        self.build_tera(template_src, source, screen_path)?;
+        Ok(())
     }
 
     /// Resolve relative image href attributes to data URIs
@@ -386,6 +711,9 @@ mod tests {
         fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
             unreachable!("manifest() not used by render()")
         }
+        fn screen_files(&self, _screen_path: &str) -> Vec<String> {
+            vec![]
+        }
     }
 
     fn svc() -> TemplateService {
@@ -425,6 +753,219 @@ mod tests {
         let data = serde_json::json!({ "data": { "msg": "hello" } });
         let out = svc().render(template, &src, "weather", &data).unwrap();
         assert!(out.contains("<text>hello</text>"), "{out}");
+    }
+
+    #[test]
+    fn test_render_shipped_base_components() {
+        // The shipped byonk-base components are documented as `{% include %}`
+        // targets; including them must render, not recurse forever.
+        for part in ["header.svg", "footer.svg", "status_bar.svg"] {
+            let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[]));
+            let template = format!(r#"<svg>{{% include "byonk-base-v1/{part}" %}}</svg>"#);
+            let data = serde_json::json!({
+                "title": "Hi", "updated_at": "12:00", "footer_text": "f",
+                "width": 800, "height": 480, "battery_level": 50,
+                "wifi_status": "connected",
+            });
+            let out = svc()
+                .render(&template, &src, "weather", &data)
+                .unwrap_or_else(|e| panic!("{part} failed to render: {e}"));
+            assert!(
+                !out.contains("{% include"),
+                "{part}: include not expanded: {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_shipped_base_components_render_with_nothing_set() {
+        // Every variable these three document is optional, so a screen that
+        // sets none of them must still render. `status_bar.svg` compared
+        // `wifi_status` against a string with no default, and in Tera that is
+        // a hard error when the variable is absent — so the component was
+        // unusable in exactly the case its own docs call out as fine.
+        for part in ["header.svg", "footer.svg", "status_bar.svg"] {
+            let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[]));
+            let template = format!(r#"<svg>{{% include "byonk-base-v1/{part}" %}}</svg>"#);
+            let data = serde_json::json!({});
+            svc()
+                .render(&template, &src, "weather", &data)
+                .unwrap_or_else(|e| panic!("{part} must render with nothing set: {e}"));
+        }
+    }
+
+    #[test]
+    fn test_status_bar_still_draws_wifi_when_it_is_set() {
+        // The control for the test above: making `wifi_status` optional must
+        // not mean ignoring it. Without this, deleting the whole wifi block
+        // would pass.
+        let render_with = |wifi: serde_json::Value| {
+            let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[]));
+            let template = r#"<svg>{% include "byonk-base-v1/status_bar.svg" %}</svg>"#;
+            let data = serde_json::json!({ "wifi_status": wifi });
+            svc().render(template, &src, "weather", &data).unwrap()
+        };
+
+        // The connected glyph has three arcs; the disconnected one is struck
+        // through with a `<line>`. Each state must draw its own.
+        let connected = render_with(serde_json::json!("connected"));
+        assert!(
+            connected.contains("M2,9 L4,6 L6,9"),
+            "connected wifi did not draw its arcs: {connected}"
+        );
+        assert!(
+            !connected.contains("<line"),
+            "connected wifi drew the disconnected strike: {connected}"
+        );
+
+        let disconnected = render_with(serde_json::json!("disconnected"));
+        assert!(
+            disconnected.contains("<line"),
+            "disconnected wifi did not draw its strike: {disconnected}"
+        );
+
+        // Unset draws no indicator at all, which is the case that used to error.
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[]));
+        let unset = svc()
+            .render(
+                r#"<svg>{% include "byonk-base-v1/status_bar.svg" %}</svg>"#,
+                &src,
+                "weather",
+                &serde_json::json!({}),
+            )
+            .unwrap();
+        assert!(
+            !unset.contains("M2,9 L4,6 L6,9") && !unset.contains("<line"),
+            "an unset wifi_status drew an indicator anyway: {unset}"
+        );
+    }
+
+    #[test]
+    fn the_footer_owns_the_timestamp_and_the_header_leaves_the_corner_free() {
+        // `status_bar.svg` sits in the header's top-right corner, so the header
+        // cannot also right-align a timestamp there — the two drew on top of
+        // each other. The footer already prints `updated_at`, so the header
+        // gives it up rather than the timestamp being dropped or duplicated.
+        let render = |part: &str| {
+            let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[]));
+            let template = format!(r#"<svg>{{% include "byonk-base-v1/{part}" %}}</svg>"#);
+            let data = serde_json::json!({ "title": "Hi", "updated_at": "12:34" });
+            svc()
+                .render(&template, &src, "weather", &data)
+                .unwrap_or_else(|e| panic!("{part} failed to render: {e}"))
+        };
+
+        let header = render("header.svg");
+        assert!(
+            !header.contains("12:34"),
+            "header still draws a timestamp into the status bar's corner: {header}"
+        );
+        // Control: the header must still do its own job. Without this,
+        // emptying header.svg would pass.
+        assert!(
+            header.contains("Hi"),
+            "header stopped drawing its title: {header}"
+        );
+
+        // Control: the timestamp is relocated, not lost.
+        let footer = render("footer.svg");
+        assert!(
+            footer.contains("12:34"),
+            "footer must be the one component that prints updated_at: {footer}"
+        );
+    }
+
+    #[test]
+    fn status_bar_ink_is_light_by_default_and_overridable() {
+        // The icons live on the black header band, so their default stroke is
+        // light. A screen placing them on white needs the other end of the
+        // range, hence `status_color` rather than a hard-coded value.
+        let render = |data: serde_json::Value| {
+            let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[]));
+            let template = r#"<svg>{% include "byonk-base-v1/status_bar.svg" %}</svg>"#;
+            svc().render(template, &src, "weather", &data).unwrap()
+        };
+
+        let defaulted = render(serde_json::json!({
+            "wifi_status": "connected", "battery_level": 80,
+        }));
+        assert!(
+            defaulted.contains("rgb(200,200,200)"),
+            "status icons must default to light ink for the black header band: {defaulted}"
+        );
+        assert!(
+            !defaulted.contains("rgb(80,80,80)"),
+            "status icons still carry the old dark ink, invisible on black: {defaulted}"
+        );
+
+        // Every mark must honour the override, not just the first one — this
+        // is what fails if only the wifi glyph gets the variable.
+        let overridden = render(serde_json::json!({
+            "wifi_status": "connected", "battery_level": 80,
+            "status_color": "rgb(17,17,17)",
+        }));
+        assert!(
+            overridden.contains("rgb(17,17,17)"),
+            "status_color was ignored: {overridden}"
+        );
+        assert!(
+            !overridden.contains("rgb(200,200,200)"),
+            "some status marks kept the default ink after an override: {overridden}"
+        );
+    }
+
+    #[test]
+    fn test_render_rejects_self_including_template() {
+        // A user-authored template that includes itself must produce a render
+        // error, never a stack overflow that aborts the process.
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[]));
+        let template = r#"<svg>{% include "weather/screen.svg" %}</svg>"#;
+        let data = serde_json::json!({});
+        let err = svc()
+            .render(template, &src, "weather", &data)
+            .expect_err("self-including template must be an error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("weather/screen.svg"),
+            "error should name the cycle: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_render_rejects_mutually_including_templates() {
+        // Two screen repo parts that include each other, reached from the screen.
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[
+            ("weather/a.svg", r#"{% include "weather/b.svg" %}"#),
+            ("weather/b.svg", r#"{% include "weather/a.svg" %}"#),
+        ]));
+        let template = r#"<svg>{% include "weather/a.svg" %}</svg>"#;
+        let data = serde_json::json!({});
+        assert!(svc().render(template, &src, "weather", &data).is_err());
+    }
+
+    #[test]
+    fn test_render_rejects_recursive_macro() {
+        // A macro that calls itself is the other unbounded-recursion route in
+        // Tera; it must be a render error, never a stack overflow.
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[(
+            "weather/macros.svg",
+            "{% macro boom(n) %}{{ self::boom(n=n) }}{% endmacro boom %}",
+        )]));
+        let template = r#"{% import "weather/macros.svg" as m %}<svg>{{ m::boom(n=1) }}</svg>"#;
+        let data = serde_json::json!({});
+        assert!(svc().render(template, &src, "weather", &data).is_err());
+    }
+
+    #[test]
+    fn test_render_allows_non_recursive_macro() {
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(TestSource::new(&[(
+            "weather/macros.svg",
+            "{% macro label(t) %}<text>{{ t }}</text>{% endmacro label %}",
+        )]));
+        let template = r#"{% import "weather/macros.svg" as m %}<svg>{{ m::label(t="hi") }}</svg>"#;
+        let data = serde_json::json!({});
+        let out = svc().render(template, &src, "weather", &data).unwrap();
+        assert!(out.contains("<text>hi</text>"), "{out}");
     }
 
     #[test]

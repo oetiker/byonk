@@ -12,6 +12,7 @@ use serde::Deserialize;
 
 use crate::models::config::ScreenRepoRef;
 use crate::models::AppConfig;
+use crate::services::screen_repo_manager::RESERVED_HANDLES;
 
 /// One screen repo entry as it appears in the add-on options `screen_repos:` list.
 /// The handle is a field here (HAOS list rows are flat objects); byonk stores
@@ -145,15 +146,38 @@ pub fn apply_to_config(result: &ReadResult, config: &mut AppConfig) {
         // In add-on mode the screen repo registry is taken authoritatively from
         // options.json: it always replaces config.screen_repos, so an empty list
         // clears any pre-existing registry.
+        //
+        // `handle` is free text in the add-on Options form, so a row claiming a
+        // reserved handle is dropped with a warning rather than honored. The
+        // add-on has no `path:` field (see the `path: None` below), so such a
+        // row would register nothing at all while still suppressing the
+        // auto-registration of `local`/`examples` in
+        // `ScreenRepoManager::build_disk_sources` — silently making the user's
+        // own `SCREENS_DIR` screens unreachable, with no way to tell from the
+        // Options screen why.
         config.screen_repos = opts
             .screen_repos
             .iter()
             .filter(|p| !p.handle.trim().is_empty())
+            .filter(|p| {
+                let handle = p.handle.trim();
+                if RESERVED_HANDLES.contains(&handle) {
+                    tracing::warn!(
+                        handle,
+                        "Ignoring add-on screen_repos entry: `{handle}` is a reserved handle \
+                         (byonk registers it itself); rename the entry to use it"
+                    );
+                    false
+                } else {
+                    true
+                }
+            })
             .map(|p| {
                 (
                     p.handle.trim().to_string(),
                     ScreenRepoRef {
                         repo: p.repo.clone(),
+                        path: None,
                         pin: p.pin.clone(),
                         token: p.token.clone(),
                     },
@@ -407,6 +431,56 @@ mod tests {
         assert_eq!(pkg.token.as_deref(), Some("gh_x"));
     }
 
+    /// An add-on user can type anything into a `screen_repos` row's `handle`.
+    /// Typing a reserved one must not disable byonk's own registration of it:
+    /// with `path: None` forced by `apply_to_config`, such an entry registers
+    /// nothing while suppressing the `SCREENS_DIR` auto-registration, which
+    /// makes every screen the user authored unreachable.
+    ///
+    /// Non-vacuous: without the reserved-handle filter all three rows land in
+    /// `config.screen_repos` and every assertion below fails.
+    #[test]
+    fn apply_drops_reserved_handles_from_the_addon_screen_repo_list() {
+        let reserved_rows: Vec<AddonScreenRepo> =
+            ["local", "examples", "byonk-builtin", "  local "]
+                .iter()
+                .map(|h| AddonScreenRepo {
+                    handle: h.to_string(),
+                    repo: Some("https://example.com/x.git".to_string()),
+                    pin: None,
+                    token: None,
+                })
+                .chain(std::iter::once(AddonScreenRepo {
+                    handle: "mine".to_string(),
+                    repo: Some("https://example.com/mine.git".to_string()),
+                    pin: None,
+                    token: None,
+                }))
+                .collect();
+
+        let r = ReadResult::Parsed(AddonOptions {
+            admin_token: Some("t".to_string()),
+            log_level: None,
+            auth_mode: None,
+            screen_repo_refresh_interval: None,
+            screen_repos: reserved_rows,
+        });
+        let mut config = embedded_config();
+        apply_to_config(&r, &mut config);
+
+        for reserved in ["local", "examples", "byonk-builtin"] {
+            assert!(
+                !config.screen_repos.contains_key(reserved),
+                "reserved handle `{reserved}` must never be registered from add-on options"
+            );
+        }
+        assert!(
+            config.screen_repos.contains_key("mine"),
+            "a non-reserved handle in the same list must still register"
+        );
+        assert_eq!(config.screen_repos.len(), 1);
+    }
+
     #[test]
     fn apply_preserves_absent_settings_but_clears_packages() {
         // A parsed options file that omits the new keys must not clobber config
@@ -426,6 +500,7 @@ mod tests {
             "stale".to_string(),
             ScreenRepoRef {
                 repo: Some("https://example.com/stale.git".to_string()),
+                path: None,
                 pin: None,
                 token: None,
             },

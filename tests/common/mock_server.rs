@@ -53,6 +53,16 @@ impl MockHttpServer {
             .await;
     }
 
+    /// Mock a GET endpoint answering with a specific status code, so a test
+    /// can tell an error reply from a successful one.
+    pub async fn mock_get_status(&self, endpoint: &str, status: u16, body: &str) {
+        Mock::given(method("GET"))
+            .and(path(endpoint))
+            .respond_with(ResponseTemplate::new(status).set_body_string(body))
+            .mount(&self.server)
+            .await;
+    }
+
     /// Mock a GET endpoint with query parameters
     pub async fn mock_get_with_params(
         &self,

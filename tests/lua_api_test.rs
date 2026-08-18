@@ -96,6 +96,134 @@ async fn test_lua_qr_svg_function() {
 // Direct Lua API tests using mock HTTP server
 // ============================================================================
 
+/// Regression: `byonk render` drives the whole render synchronously from
+/// inside `#[tokio::main]`, so Lua's blocking HTTP client was built and
+/// dropped on a tokio worker thread and tokio panicked in runtime shutdown.
+/// No screen that fetches anything had ever rendered from the CLI.
+///
+/// The other callers (`api/display.rs`, `api/dev.rs`, `mcp/`) each wrap the
+/// Lua work in `spawn_blocking` by hand, which is how the CLI came to be the
+/// one that forgot. This test pins the fix at the choke point instead: a
+/// script must be able to fetch no matter which context byonk calls it from.
+///
+/// `multi_thread` is required because this test blocks its own thread on the
+/// request while wiremock has to answer it on another.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_script_can_fetch_over_http_from_inside_a_tokio_runtime() {
+    let server = MockHttpServer::start().await;
+    server
+        .mock_get_json(
+            "/api/data",
+            serde_json::json!({ "message": "from the mock", "count": 42 }),
+        )
+        .await;
+
+    let script = format!(
+        r#"
+        local body = http_get("{}")
+        local decoded = json_decode(body)
+        return {{
+            data = {{ message = decoded.message, count = decoded.count }},
+            refresh_rate = 60
+        }}
+        "#,
+        server.url_for("/api/data")
+    );
+
+    let (_temp_dir, asset_loader) = setup_test_env(&[("fetch.lua", script.as_str())]);
+    let runtime = LuaRuntime::new(asset_loader);
+
+    let result = runtime
+        .run_script_from_asset(
+            std::path::Path::new("fetch.lua"),
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .expect("a script that fetches must run from inside a tokio runtime");
+
+    assert_eq!(result.data["message"], "from the mock");
+    assert_eq!(result.data["count"], 42);
+}
+
+/// A script could not tell a 500 from a 200: `http_get` returns only the body,
+/// so an error page arrived looking exactly like data. `http_response` returns
+/// the whole response, and does not raise for a failing status — deciding what
+/// a 500 means is the script's business.
+#[tokio::test(flavor = "multi_thread")]
+async fn http_response_reports_a_failing_status_instead_of_raising() {
+    let server = MockHttpServer::start().await;
+    server
+        .mock_get_status("/boom", 500, "upstream exploded")
+        .await;
+    server
+        .mock_get_json("/fine", serde_json::json!({ "ok": true }))
+        .await;
+
+    let script = format!(
+        r#"
+        local bad = http_response("{}")
+        local good = http_response("{}")
+        return {{
+            data = {{
+                bad_ok = bad.ok, bad_status = bad.status, bad_body = bad.body,
+                good_ok = good.ok, good_status = good.status,
+            }},
+            refresh_rate = 60
+        }}
+        "#,
+        server.url_for("/boom"),
+        server.url_for("/fine")
+    );
+
+    let (_temp_dir, asset_loader) = setup_test_env(&[("status.lua", script.as_str())]);
+    let runtime = LuaRuntime::new(asset_loader);
+
+    let result = runtime
+        .run_script_from_asset(
+            std::path::Path::new("status.lua"),
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .expect("a failing status must not raise");
+
+    assert_eq!(result.data["bad_ok"], false, "500 must not report ok");
+    assert_eq!(result.data["bad_status"], 500);
+    assert_eq!(result.data["bad_body"], "upstream exploded");
+    assert_eq!(result.data["good_ok"], true);
+    assert_eq!(result.data["good_status"], 200);
+}
+
+/// A transport failure is an outcome the script can inspect, not a crash.
+/// Port 1 on loopback refuses immediately, so this needs no network.
+#[tokio::test(flavor = "multi_thread")]
+async fn http_response_reports_a_transport_failure_instead_of_raising() {
+    let script = r#"
+        local r = http_response("http://127.0.0.1:1/nope", { timeout = 5 })
+        return {
+            data = { ok = r.ok, status = r.status, has_error = r.error ~= nil },
+            refresh_rate = 60
+        }
+    "#;
+
+    let (_temp_dir, asset_loader) = setup_test_env(&[("refused.lua", script)]);
+    let runtime = LuaRuntime::new(asset_loader);
+
+    let result = runtime
+        .run_script_from_asset(
+            std::path::Path::new("refused.lua"),
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .expect("a refused connection must not raise");
+
+    assert_eq!(result.data["ok"], false);
+    assert!(result.data["status"].is_null(), "no status without a reply");
+    assert_eq!(result.data["has_error"], true);
+}
+
 #[tokio::test]
 async fn test_lua_http_get_json() {
     let server = MockHttpServer::start().await;
@@ -442,6 +570,208 @@ mod lua_unit_tests {
 
         assert!(result.data["has_svg"].as_bool().unwrap());
         assert!(result.data["has_rects"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn test_device_colors_actual_exposed_when_measured() {
+        let script = r#"
+            return {
+                data = {
+                    actual_1 = device.colors_actual[1],
+                    actual_3 = device.colors_actual[3],
+                    count = #device.colors_actual,
+                    official_count = #device.colors,
+                },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_ca.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let ctx = DeviceContext {
+            mac: "TE:ST:00:00:00:00".to_string(),
+            width: Some(800),
+            height: Some(480),
+            colors: Some(vec![
+                "#000000".to_string(),
+                "#FFFFFF".to_string(),
+                "#FF0000".to_string(),
+            ]),
+            colors_actual: Some(vec![
+                "#0A0A0A".to_string(),
+                "#E8E6E0".to_string(),
+                "#A83A30".to_string(),
+            ]),
+            ..Default::default()
+        };
+
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_ca.lua"),
+                &HashMap::new(),
+                Some(&ctx),
+                None,
+            )
+            .expect("Script should run");
+
+        assert_eq!(result.data["actual_1"].as_str().unwrap(), "#0A0A0A");
+        assert_eq!(result.data["actual_3"].as_str().unwrap(), "#A83A30");
+        assert_eq!(result.data["count"].as_i64().unwrap(), 3);
+        // Index-parallel with device.colors.
+        assert_eq!(result.data["official_count"].as_i64().unwrap(), 3);
+    }
+
+    #[test]
+    fn test_device_colors_actual_is_nil_when_uncalibrated() {
+        // Deliberately NOT mirrored from device.colors: a script must be able to
+        // tell "this panel is uncalibrated" from "this panel measures to spec".
+        let script = r#"
+            return {
+                data = { is_nil = device.colors_actual == nil },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_ca_nil.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let ctx = DeviceContext {
+            mac: "TE:ST:00:00:00:00".to_string(),
+            width: Some(800),
+            height: Some(480),
+            colors: Some(vec!["#000000".to_string(), "#FFFFFF".to_string()]),
+            colors_actual: None,
+            ..Default::default()
+        };
+
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_ca_nil.lua"),
+                &HashMap::new(),
+                Some(&ctx),
+                None,
+            )
+            .expect("Script should run");
+
+        assert!(result.data["is_nil"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn test_script_can_return_colors_actual() {
+        let script = r##"
+            return {
+                data = {},
+                colors        = { "#000000", "#FFFFFF", "#FF0000" },
+                colors_actual = { "#0A0A0A", "#E8E6E0", "#A83A30" },
+                refresh_rate  = 60
+            }
+        "##;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_ret_ca.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_ret_ca.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("Script should run");
+
+        assert_eq!(
+            result.colors_actual.as_deref(),
+            Some(
+                [
+                    "#0A0A0A".to_string(),
+                    "#E8E6E0".to_string(),
+                    "#A83A30".to_string()
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(result.colors.as_ref().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_script_without_colors_actual_yields_none() {
+        let script = r#"
+            return { data = {}, refresh_rate = 60 }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_no_ca.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_no_ca.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("Script should run");
+
+        assert!(result.colors_actual.is_none());
+    }
+
+    #[test]
+    fn test_script_empty_colors_actual_yields_none() {
+        // Matches the existing `colors` behaviour: an empty table is None, not
+        // Some(vec![]), so it falls through the chain instead of blanking it.
+        let script = r#"
+            return { data = {}, colors_actual = {}, refresh_rate = 60 }
+        "#;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_empty_ca.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_empty_ca.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("Script should run");
+
+        assert!(result.colors_actual.is_none());
+    }
+
+    #[test]
+    fn test_script_colors_actual_length_mismatch_appears_in_log_and_falls_back() {
+        // The script returns a 4-entry palette but only 2 measured colours.
+        // The runtime itself does not judge lengths — it just carries the
+        // value through unchanged; Task 4's `resolve_render_params` is what
+        // turns the mismatch into a fallback + warning (see
+        // `services::screen_store::tests::
+        // render_script_colors_actual_length_mismatch_falls_back_to_panel_and_logs_warning`
+        // for that behavioural half, asserted through `ScreenStore::render`
+        // where the warning-to-script-log wiring is directly observable).
+        let script = r##"
+            return {
+                data = {},
+                colors        = { "#000000", "#555555", "#AAAAAA", "#FFFFFF" },
+                colors_actual = { "#0A0A0A", "#E8E6E0" },
+                refresh_rate  = 60
+            }
+        "##;
+
+        let (_temp_dir, asset_loader) = setup_test_env(&[("test_mismatch.lua", script)]);
+        let runtime = LuaRuntime::new(asset_loader);
+
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_mismatch.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("Script must still run");
+
+        // The runtime itself does not judge lengths — it just carries the value.
+        assert_eq!(result.colors_actual.as_ref().unwrap().len(), 2);
+        assert_eq!(result.colors.as_ref().unwrap().len(), 4);
     }
 
     #[test]
@@ -2421,5 +2751,1277 @@ mod lua_https_tests {
             "Expected error about reading CA cert, got: {}",
             error
         );
+    }
+}
+
+// ============================================================================
+// image_process() Lua global (Task 9)
+// ============================================================================
+
+mod lua_image_process_tests {
+    use super::*;
+
+    /// A small generated PNG. Built, never committed — a binary fixture in the
+    /// repo is a fixture nobody can inspect or regenerate.
+    fn tiny_png(w: u32, h: u32) -> Vec<u8> {
+        let mut img = image::RgbImage::new(w, h);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            // Muted, low-saturation content: the case image_process exists for.
+            let v = (120 + ((x + y) % 3) * 12) as u8;
+            *px = image::Rgb([v + 8, v, v.saturating_sub(6)]);
+        }
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        out.into_inner()
+    }
+
+    /// setup_test_env + a generated `tiny.png` alongside the script.
+    fn setup_image_env(script_name: &str, script: &str) -> (TempDir, Arc<AssetLoader>) {
+        let (temp_dir, loader) = setup_test_env(&[(script_name, script)]);
+        std::fs::write(temp_dir.path().join("tiny.png"), tiny_png(40, 20)).expect("write test png");
+        (temp_dir, loader)
+    }
+
+    #[test]
+    fn test_image_process_returns_a_data_uri_and_dimensions() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local src, w, h = image_process(png, { width = 20, height = 10, fit = "cover" })
+            return {
+                data = {
+                    is_png = string.sub(src, 1, 22) == "data:image/png;base64,",
+                    w = w,
+                    h = h,
+                },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["is_png"].as_bool().unwrap(),
+            "must be a png data URI"
+        );
+        assert_eq!(result.data["w"].as_i64().unwrap(), 20);
+        assert_eq!(result.data["h"].as_i64().unwrap(), 10);
+    }
+
+    #[test]
+    fn test_image_process_rejects_an_out_of_range_slider() {
+        // exposure = 30 is a typo for 3.0. It must fail loudly rather than
+        // saturating to a white rectangle.
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local ok, err = pcall(function()
+                return image_process(png, { exposure = 30 })
+            end)
+            return { data = { ok = ok, err = tostring(err) }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_range.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_range.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run — the pcall catches the error");
+
+        assert!(!result.data["ok"].as_bool().unwrap(), "must have raised");
+        let err = result.data["err"].as_str().unwrap();
+        assert!(
+            err.contains("exposure"),
+            "the error must name the field: {err}"
+        );
+    }
+
+    #[test]
+    fn test_image_process_preset_runs_without_a_palette() {
+        // palette_aware on a device with no palette at all: a logged no-op, not
+        // an error. A screen using the eink preset must render everywhere.
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local src = image_process(png, { preset = "eink", palette_aware = true })
+            return { data = { ok = src ~= nil }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_preset.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let ctx = DeviceContext {
+            mac: "TE:ST:00:00:00:00".to_string(),
+            width: Some(800),
+            height: Some(480),
+            colors: None,
+            colors_actual: None,
+            ..Default::default()
+        };
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_preset.lua"),
+                &HashMap::new(),
+                Some(&ctx),
+                None,
+            )
+            .expect("script must run");
+
+        assert!(result.data["ok"].as_bool().unwrap());
+        assert!(
+            result.logs.iter().any(|l| l.contains("palette_aware")),
+            "the no-op must be logged, not silent: {:?}",
+            result.logs
+        );
+    }
+
+    #[test]
+    fn test_image_process_rejects_an_unknown_preset() {
+        // A typo'd preset that silently does nothing ships looking like it worked.
+        // Brought up to the standard of its `..._rejects_an_unknown_fit` sibling:
+        // pin which field the error names, not just that pcall failed.
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local ok, err = pcall(function() return image_process(png, { preset = "vivid" }) end)
+            return { data = { ok = ok, err = tostring(err) }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_preset_bad.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_preset_bad.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            !result.data["ok"].as_bool().unwrap(),
+            "unknown preset must raise"
+        );
+        let err = result.data["err"].as_str().unwrap();
+        assert!(
+            err.contains("preset"),
+            "the error must name the field: {err}"
+        );
+    }
+
+    #[test]
+    fn test_image_process_palette_aware_with_a_palette_actually_uses_it() {
+        // The brief pins the *no-palette* no-op path
+        // (`test_image_process_preset_runs_without_a_palette`) but nothing
+        // else in this file proves `palette_aware` actually threads a real
+        // palette through to `output_endpoints`. Without this, a binding
+        // that always passes `None` for `output_endpoints` (i.e. silently
+        // drops `palette_aware` even when a palette IS present) would pass
+        // every other test in this module.
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local with_palette = image_process(png, { palette_aware = true })
+            local without_palette = image_process(png, {})
+            return {
+                data = {
+                    differs = with_palette ~= without_palette,
+                },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_palette.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let ctx = DeviceContext {
+            mac: "TE:ST:00:00:00:01".to_string(),
+            width: Some(800),
+            height: Some(480),
+            // A tight, off-0..1 measured range so palette_aware's endpoint
+            // compression is guaranteed to move at least some pixels.
+            colors_actual: Some(vec!["#202020".to_string(), "#d8d8d8".to_string()]),
+            ..Default::default()
+        };
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_palette.lua"),
+                &HashMap::new(),
+                Some(&ctx),
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "palette_aware with a real palette must change the output vs. without it"
+        );
+    }
+
+    #[test]
+    fn test_image_process_prefers_colors_actual_over_colors() {
+        // The sourcing order from the brief, exactly: colors_actual, then
+        // colors, then nothing. A device with BOTH set must use
+        // colors_actual, not colors — assert on the actual numeric effect,
+        // not just "no warning was logged" (which colors alone would also
+        // satisfy).
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local out = image_process(png, { palette_aware = true })
+            return { data = { out = out }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_actual.lua", script);
+        let runtime = LuaRuntime::new(loader.clone());
+
+        let ctx_actual = DeviceContext {
+            mac: "TE:ST:00:00:00:02".to_string(),
+            colors: Some(vec!["#000000".to_string(), "#ffffff".to_string()]),
+            colors_actual: Some(vec!["#202020".to_string(), "#d8d8d8".to_string()]),
+            ..Default::default()
+        };
+        let runtime2 = LuaRuntime::new(loader);
+        let ctx_colors_only = DeviceContext {
+            mac: "TE:ST:00:00:00:03".to_string(),
+            colors: Some(vec!["#000000".to_string(), "#ffffff".to_string()]),
+            colors_actual: None,
+            ..Default::default()
+        };
+
+        let result_actual = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_actual.lua"),
+                &HashMap::new(),
+                Some(&ctx_actual),
+                None,
+            )
+            .expect("script must run");
+        let result_colors = runtime2
+            .run_script_from_asset(
+                std::path::Path::new("test_img_actual.lua"),
+                &HashMap::new(),
+                Some(&ctx_colors_only),
+                None,
+            )
+            .expect("script must run");
+
+        assert_ne!(
+            result_actual.data["out"].as_str().unwrap(),
+            result_colors.data["out"].as_str().unwrap(),
+            "colors_actual (#202020..#d8d8d8) must win over colors (#000000..#ffffff), \
+             producing a different output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_geometry_error_names_the_reason() {
+        // A geometry-layer error (bad crop) must reach Lua as a real error,
+        // not just "something failed" — pin the ImageProcessError::BadCrop
+        // wording that process_image produces.
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local ok, err = pcall(function()
+                return image_process(png, { crop = { x = 0.9, y = 0.0, w = 0.5, h = 1.0 } })
+            end)
+            return { data = { ok = ok, err = tostring(err) }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_crop.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_crop.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run — the pcall catches the error");
+
+        assert!(
+            !result.data["ok"].as_bool().unwrap(),
+            "an out-of-bounds crop must raise"
+        );
+        let err = result.data["err"].as_str().unwrap();
+        assert!(
+            err.contains("does not lie within the image"),
+            "must be the BadCrop message, not a generic failure: {err}"
+        );
+    }
+
+    #[test]
+    fn test_image_process_rejects_an_unknown_fit() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local ok, err = pcall(function()
+                return image_process(png, { fit = "zoom" })
+            end)
+            return { data = { ok = ok, err = tostring(err) }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_fit.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_fit.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            !result.data["ok"].as_bool().unwrap(),
+            "an unknown fit must raise"
+        );
+        let err = result.data["err"].as_str().unwrap();
+        assert!(err.contains("fit"), "the error must name the field: {err}");
+    }
+
+    #[test]
+    fn test_image_process_jpeg_format_and_quality() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local src = image_process(png, { format = "jpeg", quality = 50 })
+            return {
+                data = { is_jpeg = string.sub(src, 1, 23) == "data:image/jpeg;base64," },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_jpeg.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_jpeg.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["is_jpeg"].as_bool().unwrap(),
+            "must be a jpeg data URI"
+        );
+    }
+
+    #[test]
+    fn test_image_process_with_no_opts_table_uses_defaults() {
+        // The `opts` parameter is `Option<Table>` — a script that omits it
+        // entirely must still work (the `let Some(t) = opts else { ... }`
+        // branch in `parse_image_opts`), not just a script that passes `{}`.
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local src, w, h = image_process(png)
+            return {
+                data = { ok = src ~= nil, w = w, h = h },
+                refresh_rate = 60
+            }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_noopts.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_noopts.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(result.data["ok"].as_bool().unwrap());
+        // No geometry given: dimensions pass through unchanged from the
+        // 40x20 source `tiny_png` generates.
+        assert_eq!(result.data["w"].as_i64().unwrap(), 40);
+        assert_eq!(result.data["h"].as_i64().unwrap(), 20);
+    }
+
+    // ------------------------------------------------------------------
+    // Fix round 1: the tone-parameter half of `parse_image_opts` had zero
+    // coverage — `curve`/`sharpen`/most other tone fields could be deleted
+    // from the parser wholesale and every test above stayed green. These
+    // close that gap.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_image_process_grayscale_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local gray = image_process(png, { grayscale = true })
+            return { data = { differs = baseline ~= gray }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_grayscale.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_grayscale.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "grayscale = true must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_curve_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local curved = image_process(png, { curve = {{0,0},{0.5,0.9},{1,1}} })
+            return { data = { differs = baseline ~= curved }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_curve.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_curve.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "a non-identity curve must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_sharpen_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local sharp = image_process(png, { sharpen = { amount = 100, radius = 2 } })
+            return { data = { differs = baseline ~= sharp }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_sharpen.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_sharpen.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "sharpen must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_rejects_a_malformed_curve_point() {
+        // Pin the message text, not merely that an error occurred — a curve
+        // point missing its `output` value must name that, specifically.
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local ok, err = pcall(function()
+                return image_process(png, { curve = {{0.1}} })
+            end)
+            return { data = { ok = ok, err = tostring(err) }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_curve_bad.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_curve_bad.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run — the pcall catches the error");
+
+        assert!(
+            !result.data["ok"].as_bool().unwrap(),
+            "a curve point missing its output value must raise"
+        );
+        let err = result.data["err"].as_str().unwrap();
+        assert!(
+            err.contains("curve point missing output"),
+            "must be the specific malformed-curve-point message: {err}"
+        );
+    }
+
+    /// A hand-built 2x1 PNG: pure black then pure white, so `blacks`/
+    /// `whites`'s effect on each end of the tone range can be read straight
+    /// off the decoded pixels.
+    fn black_white_png() -> Vec<u8> {
+        let mut img = image::RgbImage::new(2, 1);
+        img.put_pixel(0, 0, image::Rgb([0, 0, 0]));
+        img.put_pixel(1, 0, image::Rgb([255, 255, 255]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        out.into_inner()
+    }
+
+    /// Decode a `data:image/png;base64,...` URI back to an RGB pixel, so a
+    /// test can assert on actual tone-mapped content, not just "it changed".
+    fn decode_data_uri_pixel(uri: &str, x: u32, y: u32) -> image::Rgb<u8> {
+        use base64::Engine as _;
+        let b64 = uri
+            .strip_prefix("data:image/png;base64,")
+            .expect("expected a PNG data URI");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap();
+        let img = image::load_from_memory(&bytes).unwrap();
+        *img.to_rgb8().get_pixel(x, y)
+    }
+
+    #[test]
+    fn test_image_process_blacks_and_whites_are_not_interchangeable() {
+        // `blacks` and `whites` push OPPOSITE ends of the tone range
+        // (blacks lifts the shadow floor, whites pulls the highlight
+        // ceiling down). A parser bug that swaps which `Params` field each
+        // Lua key maps to would still change the output — so a plain
+        // "differs from baseline" assertion can't catch it — but it would
+        // move the WRONG end of the range. A black/white source pins that:
+        // `blacks = -100` alone must lift the black pixel and leave the
+        // white pixel alone; `whites = -100` alone must do the reverse.
+        let script_blacks = r#"
+            local png = read_asset("bw.png")
+            local out = image_process(png, { fit = "none", blacks = -100 })
+            return { data = { out = out }, refresh_rate = 60 }
+        "#;
+        let script_whites = r#"
+            local png = read_asset("bw.png")
+            local out = image_process(png, { fit = "none", whites = -100 })
+            return { data = { out = out }, refresh_rate = 60 }
+        "#;
+
+        let (temp, loader) = setup_test_env(&[
+            ("test_bw_blacks.lua", script_blacks),
+            ("test_bw_whites.lua", script_whites),
+        ]);
+        std::fs::write(temp.path().join("bw.png"), black_white_png()).expect("write bw.png");
+
+        let runtime = LuaRuntime::new(loader);
+        let blacks_result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_bw_blacks.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+        let whites_result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_bw_whites.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        let blacks_out = blacks_result.data["out"].as_str().unwrap();
+        let whites_out = whites_result.data["out"].as_str().unwrap();
+
+        let blacks_black_px = decode_data_uri_pixel(blacks_out, 0, 0);
+        let whites_black_px = decode_data_uri_pixel(whites_out, 0, 0);
+        let blacks_white_px = decode_data_uri_pixel(blacks_out, 1, 0);
+        let whites_white_px = decode_data_uri_pixel(whites_out, 1, 0);
+
+        assert!(
+            blacks_black_px[0] > 20,
+            "blacks = -100 must lift the black pixel toward the shadow floor: got {}",
+            blacks_black_px[0]
+        );
+        assert!(
+            whites_black_px[0] < 5,
+            "whites = -100 alone must NOT move the black pixel: got {}",
+            whites_black_px[0]
+        );
+        assert!(
+            whites_white_px[0] < 235,
+            "whites = -100 must pull the white pixel down from the highlight ceiling: got {}",
+            whites_white_px[0]
+        );
+        assert!(
+            blacks_white_px[0] > 250,
+            "blacks = -100 alone must NOT move the white pixel: got {}",
+            blacks_white_px[0]
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Fix round 2: `blacks`/`whites`/`curve`/`sharpen`/`grayscale` each got
+    // a dedicated test above, but ten more `Params` fields
+    // (temperature, tint, auto_levels, highlights, shadows, contrast,
+    // clarity, vibrance, saturation, invert) were still covered only
+    // incidentally, by the blanket "every field forced to None" mutation —
+    // which those five dedicated tests happen to kill for unrelated
+    // reasons. A single one of these ten dropped from `parse_image_opts`
+    // would slip through undetected. One "differs from baseline" test per
+    // field closes that, same shape as `..._grayscale_changes_the_output`.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_image_process_temperature_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local warmed = image_process(png, { temperature = 100 })
+            return { data = { differs = baseline ~= warmed }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_temperature.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_temperature.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "temperature = 100 must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_tint_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local tinted = image_process(png, { tint = 100 })
+            return { data = { differs = baseline ~= tinted }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_tint.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_tint.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "tint = 100 must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_auto_levels_changes_the_output() {
+        // `tiny.png`'s content is deliberately "muted, low-saturation" (see
+        // its generator above) — its measured min/max sits well inside
+        // 0..1, so stretching it to the default output_endpoints of (0, 1)
+        // under auto_levels has an observable effect.
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local leveled = image_process(png, { auto_levels = true })
+            return { data = { differs = baseline ~= leveled }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_auto_levels.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_auto_levels.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "auto_levels = true must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_highlights_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local lifted = image_process(png, { highlights = 100 })
+            return { data = { differs = baseline ~= lifted }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_highlights.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_highlights.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "highlights = 100 must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_shadows_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local lifted = image_process(png, { shadows = 100 })
+            return { data = { differs = baseline ~= lifted }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_shadows.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_shadows.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "shadows = 100 must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_contrast_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local punchy = image_process(png, { contrast = 100 })
+            return { data = { differs = baseline ~= punchy }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_contrast.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_contrast.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "contrast = 100 must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_clarity_changes_the_output() {
+        // Clarity is a local-contrast (presence) effect: it needs pixel
+        // variation to act on, which `tiny.png`'s `(x + y) % 3` banding
+        // provides across its 40x20 extent.
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local clarified = image_process(png, { clarity = 100 })
+            return { data = { differs = baseline ~= clarified }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_clarity.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_clarity.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "clarity = 100 must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_vibrance_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local vivid = image_process(png, { vibrance = 100 })
+            return { data = { differs = baseline ~= vivid }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_vibrance.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_vibrance.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "vibrance = 100 must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_saturation_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local desat = image_process(png, { saturation = -100 })
+            return { data = { differs = baseline ~= desat }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_saturation.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_saturation.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "saturation = -100 must change the output"
+        );
+    }
+
+    #[test]
+    fn test_image_process_invert_changes_the_output() {
+        let script = r#"
+            local png = read_asset("tiny.png")
+            local baseline = image_process(png, {})
+            local inverted = image_process(png, { invert = true })
+            return { data = { differs = baseline ~= inverted }, refresh_rate = 60 }
+        "#;
+
+        let (_temp, loader) = setup_image_env("test_img_invert.lua", script);
+        let runtime = LuaRuntime::new(loader);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("test_img_invert.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script must run");
+
+        assert!(
+            result.data["differs"].as_bool().unwrap(),
+            "invert = true must change the output"
+        );
+    }
+}
+
+// ============================================================================
+// The `font_hinting` directive
+// ============================================================================
+
+mod font_hinting_tests {
+    use super::*;
+    use byonk::rendering::font_config::{
+        FontHintingDirective, HintingEngine, HintingMode, HintingTarget,
+    };
+    use byonk::services::FontFaceInfo;
+
+    /// Runs `script` as a screen and returns its parsed `font_hinting`.
+    ///
+    /// Two families are registered so variant validation has something real to
+    /// check against: a variant naming an unknown family must fail, and an
+    /// alias colliding with a known family must fail too.
+    fn parse(script: &str) -> Result<Option<FontHintingDirective>, String> {
+        let (_temp_dir, asset_loader) = setup_test_env(&[("fh.lua", script)]);
+        let mut fams = HashMap::new();
+        for name in ["Outfit", "X11Helv"] {
+            fams.insert(
+                name.to_string(),
+                vec![FontFaceInfo {
+                    style: "Normal".to_string(),
+                    weight: 400,
+                    stretch: "Normal".to_string(),
+                    monospaced: false,
+                    post_script_name: format!("{name}-Regular"),
+                    bitmap_strikes: vec![],
+                }],
+            );
+        }
+        let runtime = LuaRuntime::with_fonts(asset_loader, fams);
+        runtime
+            .run_script_from_asset(std::path::Path::new("fh.lua"), &HashMap::new(), None, None)
+            .map(|r| r.font_hinting)
+            .map_err(|e| e.to_string())
+    }
+
+    fn wrap(body: &str) -> String {
+        format!("return {{ data = {{}}, refresh_rate = 60, {body} }}")
+    }
+
+    #[test]
+    fn a_script_saying_nothing_about_hinting_gets_no_config() {
+        // Absent must stay distinguishable from `false`: absent means the
+        // server's adaptive default applies, `false` means hinting is off.
+        let got = parse("return { data = {}, refresh_rate = 60 }").unwrap();
+        assert!(got.is_none(), "expected None, got {got:?}");
+    }
+
+    #[test]
+    fn target_mono_is_aliased_by_default_with_the_auto_engine() {
+        let cfg = parse(&wrap(r#"font_hinting = { target = "mono" }"#))
+            .unwrap()
+            .expect("font_hinting should be present");
+        let spec = cfg
+            .default
+            .expect("an explicit target was given")
+            .expect("and it is not `off`");
+        assert_eq!(spec.engine, HintingEngine::Auto);
+        assert_eq!(spec.target, HintingTarget::Mono { aliased: true });
+        assert!(cfg.variants.is_empty());
+    }
+
+    #[test]
+    fn mono_can_be_asked_for_without_aliasing() {
+        // Mono hinting with anti-aliasing left on is a real combination: it is
+        // what a grey panel wants if the author still wants stems on the grid.
+        let cfg = parse(&wrap(
+            r#"font_hinting = { target = { mode = "mono", aliased = false } }"#,
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            cfg.default.unwrap().unwrap().target,
+            HintingTarget::Mono { aliased: false }
+        );
+    }
+
+    #[test]
+    fn a_smooth_target_carries_all_three_of_its_fields() {
+        let cfg = parse(&wrap(
+            r#"font_hinting = { target = { mode = "light", symmetric = true,
+                                          preserve_linear_metrics = false } }"#,
+        ))
+        .unwrap()
+        .unwrap();
+        match cfg.default.unwrap().unwrap().target {
+            HintingTarget::Smooth {
+                mode,
+                symmetric_rendering,
+                preserve_linear_metrics,
+            } => {
+                assert_eq!(mode, HintingMode::Light, "mode");
+                assert!(symmetric_rendering, "symmetric");
+                assert!(!preserve_linear_metrics, "preserve_linear_metrics");
+            }
+            other => panic!("expected Smooth, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn font_hinting_false_is_hinting_off_not_absent() {
+        let cfg = parse(&wrap("font_hinting = false"))
+            .unwrap()
+            .expect("false must still produce a config — it is an override");
+        assert_eq!(
+            cfg.default,
+            Some(None),
+            "`false` must be an explicit off, not an unstated default"
+        );
+        assert!(cfg.variants.is_empty());
+    }
+
+    #[test]
+    fn a_variant_carries_both_its_strikes_flag_and_its_hinting() {
+        let cfg = parse(&wrap(
+            r#"font_hinting = { variants = {
+                 ["Plain Labels"] = { font = "X11Helv", strikes = false,
+                                      hinting = { target = "mono" } } } }"#,
+        ))
+        .unwrap()
+        .unwrap();
+        let v = cfg.variants.get("Plain Labels").expect("the variant");
+        assert_eq!(v.font, "X11Helv");
+        assert_eq!(v.strikes, Some(false));
+        assert_eq!(
+            v.hinting.clone().flatten().unwrap().target,
+            HintingTarget::Mono { aliased: true }
+        );
+    }
+
+    #[test]
+    fn a_variant_with_no_hinting_key_inherits_rather_than_disabling() {
+        // The outer None means "inherit"; it must not collapse to "off".
+        let cfg = parse(&wrap(
+            r#"font_hinting = { variants = {
+                 ["Crisp Body"] = { font = "Outfit" } } }"#,
+        ))
+        .unwrap()
+        .unwrap();
+        let v = cfg.variants.get("Crisp Body").unwrap();
+        assert!(v.hinting.is_none(), "expected inherit, got {:?}", v.hinting);
+        assert!(v.strikes.is_none());
+    }
+
+    #[test]
+    fn a_variant_can_turn_hinting_off_for_itself() {
+        let cfg = parse(&wrap(
+            r#"font_hinting = { variants = {
+                 ["Crisp Body"] = { font = "Outfit", hinting = false } } }"#,
+        ))
+        .unwrap()
+        .unwrap();
+        let v = cfg.variants.get("Crisp Body").unwrap();
+        assert_eq!(v.hinting, Some(None), "expected explicit off");
+    }
+
+    #[test]
+    fn a_bad_target_is_rejected_by_name_not_silently_defaulted() {
+        let err = parse(&wrap(r#"font_hinting = { target = "nonsense" }"#))
+            .expect_err("a bad target must be an error");
+        assert!(
+            err.contains("nonsense"),
+            "error must name the bad value, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_bad_engine_is_rejected_by_name() {
+        let err = parse(&wrap(
+            r#"font_hinting = { engine = "turbo", target = "mono" }"#,
+        ))
+        .expect_err("a bad engine must be an error");
+        assert!(
+            err.contains("turbo"),
+            "error must name the bad value, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_variant_naming_a_font_that_is_not_installed_is_rejected() {
+        // Caught at parse time, not silently at render time: a typo'd base
+        // family would otherwise leave the alias resolving to nothing, and
+        // where an unresolved family lands is the generic mapping.
+        let err = parse(&wrap(
+            r#"font_hinting = { variants = {
+                 ["Crisp Body"] = { font = "Outfti" } } }"#,
+        ))
+        .expect_err("an unknown base family must be an error");
+        assert!(
+            err.contains("Outfti"),
+            "error must name the unknown family, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_variant_alias_that_collides_with_a_real_family_is_rejected() {
+        // The alias is a name byonk intercepts during font selection. If it is
+        // also a real family, the interception shadows that family and the
+        // author gets a silently different font.
+        let err = parse(&wrap(
+            r#"font_hinting = { variants = {
+                 ["X11Helv"] = { font = "Outfit" } } }"#,
+        ))
+        .expect_err("an alias colliding with a real family must be an error");
+        assert!(
+            err.contains("X11Helv"),
+            "error must name the colliding alias, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_variant_with_no_font_at_all_is_rejected() {
+        let err = parse(&wrap(
+            r#"font_hinting = { variants = { ["Crisp Body"] = { strikes = false } } }"#,
+        ))
+        .expect_err("a variant with no base font must be an error");
+        assert!(
+            err.contains("Crisp Body"),
+            "error must name the variant, got: {err}"
+        );
+    }
+    #[test]
+    fn a_variant_escaping_aliased_mono_is_warned_about() {
+        // The F1 constraint. Glyph aliasing is a property of the *document*
+        // (usvg derives it from `text-rendering`), while hinting is per face.
+        // So a variant that opts out of mono while the document default is
+        // aliased mono still gets aliased — and aliasing without mono hinting
+        // drops stems, because tiny-skia has no dropout control. The author
+        // has to say `text-rendering="optimizeLegibility"` on those elements.
+        // Silence here would ship that as a mystery.
+        let (_temp_dir, asset_loader) = setup_test_env(&[(
+            "warn.lua",
+            r#"return { data = {}, refresh_rate = 60,
+                 font_hinting = { target = "mono", variants = {
+                   ["Soft Body"] = { font = "Outfit", hinting = { target = "smooth" } } } } }"#,
+        )]);
+        let mut fams = HashMap::new();
+        fams.insert(
+            "Outfit".to_string(),
+            vec![FontFaceInfo {
+                style: "Normal".to_string(),
+                weight: 400,
+                stretch: "Normal".to_string(),
+                monospaced: false,
+                post_script_name: "Outfit-Regular".to_string(),
+                bitmap_strikes: vec![],
+            }],
+        );
+        let runtime = LuaRuntime::with_fonts(asset_loader, fams);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("warn.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script should run — this is a warning, not an error");
+
+        let joined = result.logs.join("\n");
+        assert!(
+            joined.contains("Soft Body"),
+            "the warning must name the variant, got logs: {joined:?}"
+        );
+        assert!(
+            joined.contains("optimizeLegibility"),
+            "the warning must name the escape hatch, got logs: {joined:?}"
+        );
+    }
+
+    #[test]
+    fn no_warning_when_the_default_is_not_aliased() {
+        // The control: the warning must key on the aliasing, not merely on a
+        // variant existing. Without this, warning unconditionally would pass.
+        let (_temp_dir, asset_loader) = setup_test_env(&[(
+            "nowarn.lua",
+            r#"return { data = {}, refresh_rate = 60,
+                 font_hinting = { target = { mode = "mono", aliased = false }, variants = {
+                   ["Soft Body"] = { font = "Outfit", hinting = { target = "smooth" } } } } }"#,
+        )]);
+        let mut fams = HashMap::new();
+        fams.insert(
+            "Outfit".to_string(),
+            vec![FontFaceInfo {
+                style: "Normal".to_string(),
+                weight: 400,
+                stretch: "Normal".to_string(),
+                monospaced: false,
+                post_script_name: "Outfit-Regular".to_string(),
+                bitmap_strikes: vec![],
+            }],
+        );
+        let runtime = LuaRuntime::with_fonts(asset_loader, fams);
+        let result = runtime
+            .run_script_from_asset(
+                std::path::Path::new("nowarn.lua"),
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .expect("script should run");
+        let joined = result.logs.join("\n");
+        assert!(
+            !joined.contains("optimizeLegibility"),
+            "warned when nothing was aliased, got logs: {joined:?}"
+        );
+    }
+    #[test]
+    fn naming_only_variants_keeps_the_panel_s_adaptive_default() {
+        // The case the plan's "a present directive replaces the default
+        // wholesale" rule gets wrong. An author adding one variant has said
+        // nothing about the document default, so a black-and-white panel must
+        // keep its mono hinting. Replacing wholesale would silently drop it and
+        // the screen would go speckly for no stated reason.
+        let cfg = parse(&wrap(
+            r#"font_hinting = { variants = {
+                 ["Crisp Body"] = { font = "Outfit" } } }"#,
+        ))
+        .unwrap()
+        .unwrap();
+        assert!(
+            cfg.default.is_none(),
+            "no target was stated, so nothing should override the adaptive default"
+        );
+
+        // And resolving it against a BW panel still yields aliased mono.
+        assert_eq!(
+            cfg.resolve(2).default.unwrap().target,
+            HintingTarget::Mono { aliased: true },
+            "a BW panel must keep its mono hinting"
+        );
+        // Control: the same directive on a grey panel resolves to smooth, so
+        // the assertion above is about the panel and not a constant.
+        assert!(
+            matches!(
+                cfg.resolve(4).default.unwrap().target,
+                HintingTarget::Smooth { .. }
+            ),
+            "a grey panel should still resolve to smooth"
+        );
+        // The variant survives resolution either way.
+        assert!(cfg.resolve(2).variants.contains_key("Crisp Body"));
+    }
+
+    #[test]
+    fn an_explicit_target_does_override_the_adaptive_default() {
+        // The other half: when the script does state a target, the panel does
+        // not get a vote.
+        let cfg = parse(&wrap(r#"font_hinting = { target = "light" }"#))
+            .unwrap()
+            .unwrap();
+        for grey_count in [2, 4] {
+            assert!(
+                matches!(
+                    cfg.resolve(grey_count).default.unwrap().target,
+                    HintingTarget::Smooth {
+                        mode: HintingMode::Light,
+                        ..
+                    }
+                ),
+                "explicit light should survive grey_count {grey_count}"
+            );
+        }
+    }
+
+    #[test]
+    fn hinting_off_survives_resolution_on_every_panel() {
+        let cfg = parse(&wrap("font_hinting = false")).unwrap().unwrap();
+        for grey_count in [2, 4] {
+            assert!(
+                cfg.resolve(grey_count).default.is_none(),
+                "`false` must stay off on grey_count {grey_count}"
+            );
+        }
     }
 }

@@ -46,6 +46,15 @@ fn render(doc: Document) -> String {
     doc.source().to_string()
 }
 
+/// Build a `yamlpath::Route` by chaining `with_key` over `path`.
+fn route_for<'a>(path: &[&'a str]) -> yamlpath::Route<'a> {
+    let mut route = yamlpath::Route::default();
+    for key in path {
+        route = route.with_key(*key);
+    }
+    route
+}
+
 /// Set a scalar value at `path` (e.g. `["registration","enabled"]`),
 /// preserving all surrounding comments and formatting.
 ///
@@ -60,12 +69,7 @@ pub fn set_scalar(
     assert!(!path.is_empty(), "set_scalar: path must not be empty");
 
     let doc = document(yaml)?;
-
-    // Build the full route to the target key.
-    let mut route = yamlpath::Route::default();
-    for key in path {
-        route = route.with_key(*key);
-    }
+    let route = route_for(path);
 
     // Try Replace first (key already exists). On failure, fall back to Add
     // at the parent route (adds the key to an existing mapping).
@@ -79,10 +83,7 @@ pub fn set_scalar(
 
     // Key doesn't exist yet — add it to the parent mapping.
     let last_key = path.last().expect("non-empty path");
-    let mut parent_route = yamlpath::Route::default();
-    for key in &path[..path.len() - 1] {
-        parent_route = parent_route.with_key(*key);
-    }
+    let parent_route = route_for(&path[..path.len() - 1]);
     let add_patch = Patch {
         route: parent_route,
         operation: Op::Add {
@@ -92,6 +93,32 @@ pub fn set_scalar(
     };
     let new_doc = apply_yaml_patches(&doc, &[add_patch])
         .map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
+    Ok(render(new_doc))
+}
+
+/// Replace a scalar value at `path` that must already exist, preserving all
+/// surrounding comments and formatting. Unlike [`set_scalar`], this never
+/// falls back to adding a new key when `Replace` fails — it returns
+/// [`ConfigWriteError::Patch`] instead.
+///
+/// Intended for callers whose contract is "rewrite an existing value", never
+/// "create if missing" — e.g. `screen_migration`, where an `Add` fallback
+/// could wrongly materialize a `screen:` key on a device that was inheriting
+/// it via a YAML merge key (`<<:`), rather than leaving it alone.
+pub fn replace_scalar(
+    yaml: &str,
+    path: &[&str],
+    value: serde_yaml::Value,
+) -> Result<String, ConfigWriteError> {
+    assert!(!path.is_empty(), "replace_scalar: path must not be empty");
+
+    let doc = document(yaml)?;
+    let patch = Patch {
+        route: route_for(path),
+        operation: Op::Replace(to_patch_value(&value)?),
+    };
+    let new_doc =
+        apply_yaml_patches(&doc, &[patch]).map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
     Ok(render(new_doc))
 }
 
@@ -362,6 +389,43 @@ devices:
         assert!(out.contains("# top comment"));
         assert!(out.contains("# trailing comment"));
         assert!(out.contains("enabled: false"));
+    }
+
+    #[test]
+    fn test_replace_scalar_preserves_comments() {
+        let out = replace_scalar(SAMPLE, &["registration", "enabled"], false.into()).unwrap();
+        assert!(out.contains("# top comment"));
+        assert!(out.contains("# trailing comment"));
+        assert!(out.contains("enabled: false"));
+    }
+
+    #[test]
+    fn test_replace_scalar_nested_device_field() {
+        let out = replace_scalar(SAMPLE, &["devices", "AA:BB", "screen"], "clock".into()).unwrap();
+        let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            v["devices"]["AA:BB"]["screen"],
+            serde_yaml::Value::from("clock")
+        );
+        // The sibling `params` sub-map and comments must survive untouched.
+        assert_eq!(
+            v["devices"]["AA:BB"]["params"]["station"],
+            serde_yaml::Value::from("Olten")
+        );
+        assert!(out.contains("# top comment"));
+        assert!(out.contains("# trailing comment"));
+    }
+
+    #[test]
+    fn test_replace_scalar_missing_key_errors_never_adds() {
+        // Unlike `set_scalar`, a missing key must error, not be materialized —
+        // contrast with `set_scalar` on the identical input/path, which does add it.
+        let err = replace_scalar(SAMPLE, &["registration", "does_not_exist"], true.into())
+            .expect_err("replace_scalar must not add a missing key");
+        assert!(matches!(err, ConfigWriteError::Patch(_)));
+
+        let added = set_scalar(SAMPLE, &["registration", "does_not_exist"], true.into()).unwrap();
+        assert!(added.contains("does_not_exist"));
     }
 
     #[test]

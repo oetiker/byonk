@@ -108,10 +108,8 @@ By default, Byonk listens on `0.0.0.0:3000` and uses embedded assets.
 
 ### Extracting Embedded Assets
 
-To customize the embedded screens and config:
-
 ```bash
-# See what's embedded
+# See what's embedded (built-in screens, examples, fonts, config)
 ./byonk init --list
 
 # Extract everything for editing
@@ -122,6 +120,14 @@ To customize the embedded screens and config:
 ./byonk init --config
 ```
 
+`./byonk init --screens` initializes `SCREENS_DIR` as your writable `local`
+screen repo: it writes a `byonk-screens.yaml` manifest there (nothing else).
+It does **not** copy the built-in or example screens — those stay embedded
+and read-only (built-ins) or get seeded separately (examples), as described
+in [Screen Repos Section](configuration.md#screen-repos-section) and
+[Screen Authoring](authoring.md). Use `./byonk init --config` to get an
+editable `config.yaml` to start from.
+
 ## Directory Structure (When Customizing)
 
 When using external files (via env vars), Byonk expects:
@@ -129,16 +135,23 @@ When using external files (via env vars), Byonk expects:
 ```
 data/
 ├── config.yaml              # Device and screen configuration
-├── screens/                 # A screen package (tree of screen folders)
-│   ├── byonk-screens.yaml   # Package manifest (name, description, author, license)
-│   ├── default/             # One screen = one folder
+├── screens/                 # Your writable `local` screen repo
+│   ├── byonk-screens.yaml   # Repo manifest (name, description, author, license)
+│   ├── my-clock/            # One screen = one folder
 │   │   ├── meta.yaml        # Title, description, params schema
 │   │   ├── script.lua       # Data-fetch logic
 │   │   └── screen.svg       # Tera template
 │   └── ...
+├── examples/                # Shipped worked examples, seeded once (editable)
+│   ├── byonk-screens.yaml
+│   ├── hello/
+│   └── ...
 └── fonts/                   # Custom fonts (optional)
     └── Outfit-Variable.ttf
 ```
+
+See [Screen Authoring](authoring.md) for how the built-in, example, and
+your-own-screens layers relate to each other.
 
 ## Environment Variables
 
@@ -146,10 +159,38 @@ data/
 |----------|---------|-------------|
 | `BIND_ADDR` | `0.0.0.0:3000` | Server bind address |
 | `CONFIG_FILE` | *(embedded)* | Path to configuration file |
-| `SCREENS_DIR` | *(embedded)* | Directory containing Lua scripts and SVG templates |
+| `SCREENS_DIR` | *(embedded)* | Your own writable screen repo (auto-registers as the `local` handle) |
 | `FONTS_DIR` | *(embedded)* | Directory containing font files |
+| `EXAMPLES_DIR` | `<SCREENS_DIR>/../examples` | Where the shipped worked-example screens are seeded (auto-registers as the `examples` handle). Only takes effect once — an existing, non-empty directory is left alone. |
 
 When path variables are not set, Byonk uses embedded assets (no filesystem access).
+
+On first run, an empty/missing `SCREENS_DIR` gets seeded with only a
+`byonk-screens.yaml` manifest (no screen files — `byonk-builtin`'s `default` +
+`calibration/*` screens stay embedded-only and are never copied there). An
+empty/missing examples directory separately gets the full shipped `examples`
+set (worked examples like `hello`, `gphoto`, `swiss-departure-board`) plus its
+own manifest. Both seed once; your edits and deletions afterward are never
+touched again.
+
+**Docker note:** the default `EXAMPLES_DIR` is derived as a *sibling* of
+`SCREENS_DIR` (`<SCREENS_DIR>/../examples`), one level up from the directory
+you actually mount. If you only mount `SCREENS_DIR` itself (e.g. `-v
+./screens:/screens -e SCREENS_DIR=/screens`), the derived examples directory
+falls outside any mounted volume — ephemeral, and unwritable on a read-only
+container root. Either mount a parent directory and point `SCREENS_DIR` at a
+subdirectory of it (as in the example above, `-v ./data:/data -e
+SCREENS_DIR=/data/screens`, which keeps the derived `/data/examples` inside
+the same volume), or set `EXAMPLES_DIR` explicitly to a path you've mounted.
+
+**Config vs. seeding:** if `screen_repos.examples` is set explicitly in
+`config.yaml`, it wins for *registration* — the `examples` handle resolves to
+that configured path instead of the auto-registered `EXAMPLES_DIR`/derived
+default. Seeding (writing the shipped example files to disk) is unaffected by
+this and always follows `EXAMPLES_DIR`/the derived default, since seeding runs
+before `config.yaml` is parsed. In practice this only matters if you both
+override `screen_repos.examples.path` *and* still want the shipped examples
+copied to disk — in that case, set `EXAMPLES_DIR` to the same path.
 
 ## Running as a Service (systemd)
 
@@ -216,6 +257,7 @@ Render a screen directly to PNG (useful for testing):
 | `-b, --battery` | Battery voltage for testing (e.g., 4.12) |
 | `-r, --rssi` | WiFi signal strength for testing (e.g., -67) |
 | `-f, --firmware` | Firmware version string for testing |
+| `--use-actual` | Draw the output PNG in the device's measured colours instead of the spec colours it sends to the panel. Defaults to on whenever the device's panel has a calibration; this only changes how the PNG is drawn, never the dithering. Accepts a bare flag (`--use-actual` means `true`) or an explicit `--use-actual true`/`--use-actual false`. `true` with no calibration is a no-op, not an error. |
 
 **Example with all device info:**
 
@@ -232,7 +274,7 @@ Extract embedded assets for customization:
 
 ```bash
 ./byonk init --all        # Extract everything
-./byonk init --screens    # Extract screens only
+./byonk init --screens    # Initialize SCREENS_DIR as your writable `local` repo (manifest only)
 ./byonk init --list       # List embedded assets
 ```
 

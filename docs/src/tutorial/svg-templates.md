@@ -7,17 +7,19 @@ SVG templates define the visual layout of your screens. They use [Tera](https://
 A Byonk SVG template is a standard SVG file with Tera expressions:
 
 ```svg
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
-  <rect width="800" height="480" fill="white"/>
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 {{ layout.width }} {{ layout.height }}"
+     width="{{ layout.width }}" height="{{ layout.height }}">
+  <rect width="{{ layout.width }}" height="{{ layout.height }}" fill="white"/>
 
-  <text x="400" y="240" text-anchor="middle" font-size="24">
+  <text x="{{ layout.center_x }}" y="{{ layout.center_y }}" text-anchor="middle" font-size="24">
     {{ message }}
   </text>
 </svg>
 ```
 
 **Key points:**
-- Set `viewBox` to `0 0 800 480` for TRMNL OG (or `0 0 1872 1404` for TRMNL X)
+- Size the `viewBox` from `layout.width` and `layout.height`, never from fixed numbers
 - Always include `width` and `height` attributes
 - Use `{{ variable }}` to insert values from Lua
 
@@ -28,7 +30,36 @@ A Byonk SVG template is a standard SVG file with Tera expressions:
 | TRMNL OG | 800 | 480 | 5:3 |
 | TRMNL X | 1872 | 1404 | 4:3 |
 
-Byonk automatically scales your SVG to fit the display, but matching the aspect ratio gives the best results.
+**Build the size from `layout.width` and `layout.height`.** These are the panel's
+own pixels, so a template that uses them is always drawn at scale 1, on every
+device.
+
+If your SVG is some other size, Byonk scales it to fit rather than failing — and
+that costs you more than sharpness:
+
+- **Every dimension you chose is displayed at the wrong size.** Type set at 10 px
+  in a 400x240 SVG is 20 px on an 800x480 panel. You cannot judge a layout that
+  is not being shown at the size you designed it.
+- **Hinting stops helping.** Hinted glyph outlines are fitted to the pixel grid
+  of the SVG's own coordinate system, not the panel's.
+- **Bitmap fonts stop being bitmaps.** A strike is drawn for one exact pixel
+  size, so it is only reproduced faithfully at scale 1; at any other scale it is
+  resampled.
+
+Byonk reports this when it happens. `byonk render` prints it to stderr, and the
+authoring API returns it in the render log:
+
+```
+[warn] this screen's SVG is 400x240 but the device is 800x480, so the render is
+scaled by 2 to fit ... Use layout.width and layout.height rather than hardcoded
+dimensions.
+```
+
+A mismatched aspect ratio is scaled by the smaller of the two ratios and centred,
+so the render is also padded with blank bands.
+
+The remaining examples on this page write `0 0 800 480` literally, to keep them
+short. In a real screen, use `layout.width` and `layout.height`.
 
 ## Variables
 
@@ -92,7 +123,7 @@ Pre-computed layout values are available under `layout.*`. These mirror the `lay
 | `layout.color_count` | integer | Number of colors in palette (default 4) |
 | `layout.grey_count` | integer | Number of grey levels in palette (default 4) |
 
-This is useful for conditional logic in SVG templates without needing Lua to pass the values through — for example, the `byonk-base-v1/hinting.svg` include uses `layout.grey_count` to switch between mono and smooth font hinting.
+This is useful for conditional logic in SVG templates without needing Lua to pass the values through — a template can, for example, choose a denser layout on a small panel by branching on `layout.width`.
 
 ### Basic Interpolation
 
@@ -261,6 +292,44 @@ Byonk supports variable fonts via CSS `font-variation-settings`:
 
 > **Note:** Place custom font files (e.g., `Outfit-Variable.ttf`) in the `fonts/` directory.
 
+### Bundled Fonts
+
+Byonk ships these outline families, so they render the same on your machine and
+on the device. (The device image contains no system fonts at all — anything not
+bundled simply does not draw.)
+
+| Family | Use |
+|---|---|
+| `Outfit` | The house sans. Variable weight 100–900. |
+| `'Source Sans 3'` | What `sans-serif` resolves to. Variable weight 200–900. |
+| `'Source Serif 4'` | What `serif` resolves to. Variable weight and optical size. |
+| `'Source Code Pro'` | What `monospace` resolves to. Variable weight 200–900. |
+| `'Terminus (TTF)'` | A pixel face, plus 26 `X11*` bitmap families — see `fonts/FONTS.md`. |
+
+`cursive` and `fantasy` resolve to `Outfit`; byonk bundles nothing decorative.
+
+**Quote any family name that ends in a digit or contains parentheses.** CSS reads
+an unquoted `font-family` as a list of identifiers, and `3`, `4` and `(TTF)` are
+not identifiers — the whole declaration is discarded and your text silently comes
+out in some other face. There is no warning.
+
+```svg
+<!-- Wrong: renders in a fallback face -->
+<text font-family="Source Sans 3">…</text>
+<text font-family="Terminus (TTF)">…</text>
+
+<!-- Right -->
+<text font-family="'Source Sans 3'">…</text>
+<text font-family="'Terminus (TTF)'">…</text>
+```
+
+`Outfit` and `Source Code Pro` contain neither, so they are safe either way.
+
+You do not need to ask for a weight: text with no `font-weight` renders at 400,
+not at whatever the variable font's own default happens to be. Source Sans 3 and
+Source Code Pro default internally to 200 (ExtraLight), and that default does not
+reach your screen.
+
 ## Colors and Palettes
 
 E-ink displays support a limited color palette. The default 4-grey OG palette is `#000000, #555555, #AAAAAA, #FFFFFF`, but color displays may have palettes like `#000000, #FFFFFF, #FF0000, #FFFF00`. The display palette is available in Lua via `layout.colors`.
@@ -270,7 +339,7 @@ The palette follows a priority chain: **Lua script `colors` return** > **device 
 ```yaml
 devices:
   "ABCDE-FGHJK":
-    screen: byonk-builtin/useful/swiss-departure-board
+    screen: examples/swiss-departure-board
     colors: "#000000,#FFFFFF,#FF0000"
 ```
 
@@ -301,6 +370,50 @@ local colors = layout.colors  -- e.g., {"#000000", "#555555", "#AAAAAA", "#FFFFF
 {% endfor %}
 ```
 
+### Marking continuous-tone content
+
+Byonk renders a screen as **two kinds of content**, and you choose which is
+which by marking the continuous-tone parts:
+
+```svg
+<!-- A photograph, or a gradient that sweeps through hues -->
+<image data-byonk-tone="continuous" href="photo.jpg" .../>
+```
+
+Everything **not** marked is treated as *structure* — text, rules, logos, flat
+fills, UI chrome. The difference is not cosmetic:
+
+| | Unmarked (structure) — the default | Marked `continuous` |
+|---|---|---|
+| Matched against | **Official** palette (`device.colors`) | **Measured** palette (`device.colors_actual`) |
+| Gamut mapping | off | on |
+| Exact-match pinning | **on** — an official colour comes out as that one ink, flat | off |
+
+**For structure this is what you want.** `#FF0000` is simply red: it matches
+at distance zero, pins, and renders as one flat ink with no speckle. Black
+text next to a saturated block stays black instead of picking up diffused
+colour error.
+
+**For a photograph it is not.** Nominal matching aims a photo at primaries
+the panel cannot physically produce, so an unmarked photograph looks
+markedly worse than a marked one. **This is the one mistake that costs you
+real quality — mark your photographs and your hue gradients.**
+
+Two rules that are easy to get wrong:
+
+- **Mark the element that *is* continuous-tone, never a group around it.** A
+  `<g>` wrapper will swallow neighbouring labels and captions, turning text
+  into continuous-tone content and switching off its pinning.
+- **Don't mark achromatic (grey) gradients.** Grey is always in gamut, so
+  mapping it is a no-op — while marking it switches exact-match pinning *off*
+  across the whole gradient, for no gain. Before marking anything, ask
+  whether the content can even be out of gamut.
+
+Marking rasterizes in document order, so an unmarked element drawn *after* a
+marked one paints over it and reverts those pixels to structure. Text over a
+photograph therefore needs no special handling, as long as it comes later in
+the document.
+
 ### Testing Display Colors
 
 The included `graytest` screen adapts to the device palette and shows all available colors as swatches with gradient and dithering tests.
@@ -325,87 +438,69 @@ The default screen also adapts to the palette:
 
 ## Font Rendering for E-ink
 
-Byonk uses a [patched version of resvg](https://github.com/oetiker/resvg/tree/skrifa) for SVG rendering, which adds font hinting support with custom CSS properties for fine-tuning. Getting these right makes a big difference on e-ink displays, where there are few (or no) gray levels to smooth out font edges.
+**Byonk hints text for you.** There is nothing to put in the template — hinting
+is chosen per render from the palette the device reports, so the same screen
+does the right thing on a black-and-white panel and on a greyscale one.
 
-### Available Properties
+Only override it if you have a reason to. That is done from `script.lua` with
+the `font_hinting` directive, not from CSS: see
+[Font Hinting](../api/font-hinting.md) for the full surface, including
+`variants`, which let one family appear twice in a screen with different
+treatment.
 
-| Property | Values | Default | Description |
-|----------|--------|---------|-------------|
-| `-resvg-hinting-target` | `smooth`, `mono` | `smooth` | `mono` for 1-bit displays, `smooth` for displays with gray levels |
-| `-resvg-hinting-mode` | `normal`, `light`, `lcd`, `vertical-lcd` | `normal` | Hinting strength. `normal` = strongest grid-fitting, `light` = softer |
-| `-resvg-hinting-engine` | `auto-fallback`, `auto`, `native` | `auto-fallback` | `auto` uses FreeType's auto-hinter (more consistent), `native` uses the font's built-in hints |
-| `-resvg-hinting-symmetric` | `true`, `false` | `true` | Symmetric rasterization. `false` can improve consistency at small sizes |
-| `-resvg-hinting-preserve-linear-metrics` | `true`, `false` | `false` | `true` forces uniform glyph spacing |
-| `shape-rendering` | `auto`, `crispEdges`, `geometricPrecision` | `auto` | `crispEdges` disables anti-aliasing on shapes and lines |
-| `text-rendering` | `auto`, `optimizeSpeed`, `optimizeLegibility`, `geometricPrecision` | `auto` | Hint for text rendering quality |
+> **If you are updating an older screen:** the `-resvg-hinting-*` CSS
+> properties no longer exist, and `{% include "byonk-base-v1/hinting.svg" %}`
+> is now inert. Including it still works and renders identically, so it can
+> simply be deleted. Anything that set `-resvg-hinting-*` directly must move
+> into the `font_hinting` directive.
 
-### Recommended Presets
+### Properties that still matter
 
-**1-bit display (black & white only):**
+| Property | Values | Applies to | Description |
+|----------|--------|-----------|-------------|
+| `shape-rendering` | `auto`, `crispEdges`, `geometricPrecision` | shapes only | `crispEdges` disables anti-aliasing on lines and rectangles. It has **no effect inside a `text` rule** — text takes its rasterization from `text-rendering`. |
+| `text-rendering` | `auto`, `optimizeSpeed`, `optimizeLegibility`, `geometricPrecision` | text | `optimizeLegibility` restores anti-aliasing **and keeps hinting**. `geometricPrecision` restores anti-aliasing but **disables hinting**. |
 
-```css
-text {
-  -resvg-hinting-target: mono;
-  -resvg-hinting-mode: normal;
-  -resvg-hinting-engine: auto;
-  -resvg-hinting-symmetric: false;
-  -resvg-hinting-preserve-linear-metrics: true;
-  shape-rendering: crispEdges;
-}
-```
-
-**4 gray levels:**
-
-```css
-text {
-  -resvg-hinting-target: smooth;
-  -resvg-hinting-mode: normal;
-  -resvg-hinting-engine: auto;
-  shape-rendering: crispEdges;
-}
-```
-
-**16 gray levels:**
-
-```css
-text {
-  -resvg-hinting-target: smooth;
-  -resvg-hinting-mode: light;
-  -resvg-hinting-engine: auto;
-}
-```
-
-### Adaptive Hinting
-
-The `byonk-base-v1/hinting.svg` include automatically applies the right hinting settings based on the display's grey levels:
-
-```svg
-<style>
-  text {
-    {% include "byonk-base-v1/hinting.svg" %}
-  }
-</style>
-```
-
-On black-and-white displays (`grey_count <= 2`) it enables mono hinting with `crispEdges`; on displays with more grey levels it uses smooth hinting. All built-in screens use this include from the `byonk-base-v1` standard library.
+`text-rendering` is worth knowing about for one specific case: on a
+black-and-white panel byonk draws the whole document 1-bit, and any text that
+is not mono-hinted can lose stems. Setting `text-rendering="optimizeLegibility"`
+on those elements is the fix. Byonk warns you when a screen sets this up.
 
 ### Hinting Demo Screen
 
-The built-in `hintdemo` screen provides a visual comparison of all hinting engine and target combinations in a 3×3 grid:
+`examples/demo/font/hinting` renders a 3×3 grid of `font_hinting` variants over
+one family — engine (`auto`, `interpreter`, `auto_fallback`) against target
+(`mono`, `smooth`, and a hinting-off control) at six sizes. It is the worked
+example for variants, and a useful thing to put on your own panel.
 
-- **Columns:** mono, normal (smooth), light (smooth)
-- **Rows:** auto engine, native engine, no hinting
-
-Enable it in your `config.yaml` to see how different settings affect text rendering at various font sizes on your actual display.
+Several cells deliberately coincide, which is the most useful thing the grid
+teaches: for a font carrying no usable hinting program the target matters and
+the engine barely does. The image states which coincidences are expected.
 
 ![Hinting demo screen](../images/hintdemo.png)
 
 ### Tips
 
-- **Use the `auto` engine.** The FreeType auto-hinter applies a consistent algorithm to all glyphs. Native font hints vary in quality and can produce inconsistent letterforms (e.g., the same letter rendering differently at the same size).
-- **Choose font sizes that land on whole pixel boundaries.** Fractional pixel heights cause glyphs to snap to the grid differently, producing inconsistent shapes.
-- **`shape-rendering: crispEdges`** eliminates anti-aliased edges on lines and rectangles — important when there are few gray levels to work with.
-- **Test on your actual display.** Optimal settings depend on the font, font size, and display capabilities. The presets above are starting points.
+- **Choose font sizes that land on whole pixel boundaries.** Fractional pixel
+  heights cause glyphs to snap to the grid differently, producing inconsistent
+  shapes.
+- **Quote interpolated font families.** `font-family="{{ line.family }}"` is
+  invalid CSS as soon as the name contains anything but plain identifiers — a
+  family like `Terminus (TTF)` silently falls back to a serif. Write
+  `font-family="'{{ line.family }}'"`.
+- **Don't set `font-family` in both a CSS rule and an attribute.** A
+  presentation attribute is the lowest-priority source in SVG, so
+  `text { font-family: … }` in a `<style>` block silently overrides every
+  `font-family="…"` attribute on matching elements. The text still renders, in
+  the wrong face. Set it on a class or on the element, not both.
+- **Put text on whole-pixel positions, not just whole-pixel sizes.** Hinting
+  fits the outline to the pixel grid; a baseline at `y="80.667"` then slides
+  the fitted glyph back off it. Measured on byonk's own demo, fractional
+  baselines cost 3–5% of the ink to dropped stems — more than the difference
+  between two hinting engines.
+- **Test on your actual display.** What reads well depends on the font, the
+  size and the panel.
+
 
 ## Bitmap Fonts
 
@@ -449,12 +544,12 @@ For sizes without an exact bitmap strike, autotraced scalable outlines are used 
 
 ### Bitmap Font Demo Screen
 
-The built-in `byonk-builtin/demo/font/bitmap` screen showcases all sizes and styles for a given font family. Assign it to a device and configure it with the `font_prefix` parameter:
+The example `examples/demo/font/bitmap` screen showcases all sizes and styles for a given font family. Assign it to a device and configure it with the `font_prefix` parameter:
 
 ```yaml
 devices:
   "YOUR:MAC:AD:DR:ES:S0":
-    screen: byonk-builtin/demo/font/bitmap
+    screen: examples/demo/font/bitmap
     params:
       font_prefix: X11Helv   # or X11LuSans, X11LuType, X11Term, X11Misc
 ```
@@ -620,14 +715,13 @@ and `meta.yaml`:
 
 ```
 screens/
-└── example/
-    └── hello/            # screen ref: byonk-builtin/example/hello
-        ├── meta.yaml
-        ├── script.lua
-        ├── screen.svg
-        ├── logo.png
-        ├── icon.svg
-        └── background.jpg
+└── hello/                # screen ref: local/hello
+    ├── meta.yaml
+    ├── script.lua
+    ├── screen.svg
+    ├── logo.png
+    ├── icon.svg
+    └── background.jpg
 ```
 
 ### Method 1: Direct in SVG (Automatic Resolution)
@@ -659,7 +753,7 @@ Simply reference images by filename in your SVG template. Byonk automatically re
 
 For more control, use `read_asset()` and `base64_encode()` in your Lua script:
 
-**screens/example/hello/script.lua:**
+**screens/hello/script.lua:**
 ```lua
 local icon = read_asset("icon.png")
 
@@ -672,7 +766,7 @@ return {
 }
 ```
 
-**screens/example/hello/screen.svg:**
+**screens/hello/screen.svg:**
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480">
   <image x="10" y="10" width="64" height="64" href="{{ data.icon_src }}"/>
@@ -712,7 +806,7 @@ Byonk supports Tera's template inheritance and includes for reusable components.
 comes from two places:
 
 - **`byonk-base-v1/…`** — byonk's built-in standard library of shared layouts and components
-  (the base layout, `hinting.svg`, `header.svg`, `footer.svg`, `status_bar.svg`), versioned
+  (the base layout, `header.svg`, `footer.svg`, `status_bar.svg`), versioned
   by the `-vN` suffix so a future `byonk-base-v2` can change the contract without breaking
   existing screens.
 - **Repo-relative paths** — any `.svg` file inside your own screen package, referenced by its
@@ -792,7 +886,15 @@ Include reusable components in your templates. Reference byonk's standard compon
 **Key points:**
 - Use `{% include "byonk-base-v1/filename.svg" %}` for standard-library components, or a
   repo-relative path for your package's own shared SVG
-- Included templates have access to all variables in the current context
+- Included templates have access to all variables in the current context — but note that
+  your script's data arrives **namespaced** under `data.*`, while the standard components
+  read bare names like `title`. Bridge the two with `{% set %}` before the include, or the
+  component silently falls back to its default:
+
+  ```svg
+  {% set title = data.headline %}
+  {% include "byonk-base-v1/header.svg" %}
+  ```
 - Components work well for headers, footers, status bars, and other repeated elements
 
 ### Standard-Library Components
@@ -802,10 +904,24 @@ Byonk's `byonk-base-v1` package ships several ready-to-use components:
 | Component | Description |
 |-----------|-------------|
 | `byonk-base-v1/base.svg` | Base layout with title/content/footer blocks (for `{% extends %}`) |
-| `byonk-base-v1/header.svg` | Header bar with title and optional timestamp |
-| `byonk-base-v1/footer.svg` | Footer with timestamp and optional text |
-| `byonk-base-v1/hinting.svg` | Adaptive font hinting (mono for BW, smooth for greyscale) |
-| `byonk-base-v1/status_bar.svg` | WiFi and battery indicators |
+| `byonk-base-v1/header.svg` | Black title bar across the top 60px |
+| `byonk-base-v1/footer.svg` | Footer with timestamp (`updated_at`) and optional text |
+| `byonk-base-v1/hinting.svg` | **Deprecated and inert.** Hinting moved into the server; see [Font Hinting](../api/font-hinting.md). Kept so existing screens keep working. |
+| `byonk-base-v1/status_bar.svg` | WiFi and battery indicators, drawn into the header's top-right corner |
+
+These components are designed to stack without overlapping: `header.svg` owns the top 60px,
+`status_bar.svg` the corner inside it, and `footer.svg` the bottom 30px.
+
+- **The timestamp belongs to the footer.** `header.svg` does not draw one, because that is
+  where `status_bar.svg`'s icons go. Set `updated_at` and include `footer.svg`.
+- **The status icons default to light ink** (`rgb(200,200,200)`), since they sit on the black
+  header bar. To place them anywhere else, set both position and colour:
+
+  ```svg
+  {% set status_y = 70 %}
+  {% set status_color = "rgb(80,80,80)" %}
+  {% include "byonk-base-v1/status_bar.svg" %}
+  ```
 
 ### Combining Extends and Includes
 

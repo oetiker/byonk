@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::assets::AssetLoader;
 use crate::error::RenderError;
@@ -42,10 +42,10 @@ pub struct ScriptResult {
     pub params: HashMap<String, serde_yaml::Value>,
     /// Optional color palette override from Lua script (hex RGB strings)
     pub script_colors: Option<Vec<String>>,
+    /// Optional measured-colour override from Lua script (hex RGB strings)
+    pub script_colors_actual: Option<Vec<String>>,
     /// Optional dither mode from Lua script ("photo" or "graphics")
     pub script_dither: Option<String>,
-    /// Optional preserve_exact override from Lua script
-    pub script_preserve_exact: Option<bool>,
     /// Optional error clamp override from Lua script
     pub script_error_clamp: Option<f32>,
     /// Optional blue noise jitter scale override from Lua script
@@ -54,6 +54,14 @@ pub struct ScriptResult {
     pub script_chroma_clamp: Option<f32>,
     /// Optional dither strength override from Lua script
     pub script_strength: Option<f32>,
+    /// Gamut mapping knobs from the script return, if it set any.
+    pub script_gamut: Option<crate::models::GamutTuningValues>,
+    /// The screen's `font_hinting` directive, if it declared one. `None` means
+    /// the panel's adaptive default applies — see `resolve_font_config`.
+    pub font_hinting: Option<crate::rendering::font_config::FontHintingDirective>,
+    /// Messages captured from the script's `log_info`/`log_warn`/`log_error`
+    /// calls, in call order. See `lua_runtime::ScriptResult::logs`.
+    pub logs: Vec<String>,
 }
 
 /// Device context passed to templates and Lua scripts
@@ -79,6 +87,11 @@ pub struct DeviceContext {
     pub board: Option<String>,
     /// Available display colors as hex RGB strings (e.g. ["#000000", "#FFFFFF", "#FF0000"])
     pub colors: Option<Vec<String>>,
+    /// Measured colors the panel really shows, index-parallel to `colors`.
+    /// `None` when nothing in the measured chain resolved — deliberately not
+    /// mirrored from `colors`, so a script can distinguish an uncalibrated
+    /// panel from one that measures exactly to spec.
+    pub colors_actual: Option<Vec<String>>,
     /// Pre-script resolved dither algorithm name
     pub dither_algorithm: Option<String>,
     /// Pre-script resolved error clamp
@@ -89,6 +102,12 @@ pub struct DeviceContext {
     pub dither_chroma_clamp: Option<f32>,
     /// Pre-script resolved dither strength
     pub dither_strength: Option<f32>,
+    /// Pre-script resolved gamut knee
+    pub dither_gamut_knee: Option<f32>,
+    /// Pre-script resolved gamut amount
+    pub dither_gamut_amount: Option<f32>,
+    /// Pre-script resolved gamut max compression
+    pub dither_gamut_max_compression: Option<f32>,
     /// Per-device refresh override (seconds) from DeviceConfig; 0/None = no override.
     pub refresh_override: Option<u32>,
 }
@@ -107,6 +126,37 @@ pub enum ContentError {
 
     #[error("Screen not found: {0}")]
     ScreenNotFound(String),
+
+    /// A device's configured `screen:` names a screen no repo provides.
+    ///
+    /// Distinct from `ScreenNotFound` so the message can name both halves: the
+    /// ref alone leaves it ambiguous which device carries the typo.
+    #[error("Device {device} is configured for screen '{screen}', which no screen repo provides")]
+    DeviceScreenUnresolved { device: String, screen: String },
+}
+
+/// How many of a palette's entries are neutral greys (including black and
+/// white), which is what decides whether text wants aliased mono hinting.
+///
+/// Mirrors the `layout.grey_count` a screen sees, which is computed the same
+/// way from the hex colour strings.
+fn grey_count_of(palette: &[(u8, u8, u8)]) -> usize {
+    palette.iter().filter(|(r, g, b)| r == g && g == b).count()
+}
+
+/// Resolves a screen's `font_hinting` directive against the panel.
+///
+/// A screen with no directive still gets the adaptive default — that is the
+/// whole point, and it is why this lives beside the render call rather than at
+/// each caller.
+fn resolve_font_config(
+    directive: Option<&crate::rendering::font_config::FontHintingDirective>,
+    grey_count: usize,
+) -> crate::rendering::font_config::FontConfig {
+    use crate::rendering::font_config::FontConfig;
+    directive
+        .map(|d| d.resolve(grey_count))
+        .unwrap_or_else(|| FontConfig::adaptive_default(grey_count))
 }
 
 /// Content pipeline that orchestrates script → template → render
@@ -135,7 +185,7 @@ impl ContentPipeline {
                     stretch: format!("{:?}", face.stretch),
                     monospaced: face.monospaced,
                     post_script_name: face.post_script_name.clone(),
-                    bitmap_strikes: face.bitmap_strikes.clone(),
+                    bitmap_strikes: renderer.svg_renderer.bitmap_strikes(face.id).to_vec(),
                 };
                 font_families
                     .entry(family_name.clone())
@@ -156,6 +206,20 @@ impl ContentPipeline {
         })
     }
 
+    /// The pipeline's `TemplateService`, for callers that need its template
+    /// registration/validation (e.g. `ScreenStore::validate`) without going
+    /// through the full script→template→render pipeline.
+    pub fn template_service(&self) -> &TemplateService {
+        &self.template_service
+    }
+
+    /// The pipeline's shared config, for callers that need panel lookups
+    /// (e.g. `ScreenStore::render`'s panel-profile resolution) without
+    /// going through the full script→template→render pipeline.
+    pub fn config(&self) -> &crate::server::SharedConfig {
+        &self.config
+    }
+
     /// Run script for a device (without rendering)
     pub fn run_script_for_device(
         &self,
@@ -173,25 +237,31 @@ impl ContentPipeline {
 
         if let Some(device_config) = device_config {
             // Found device config — resolve the device's screen ref via screen repos.
-            if let Some(resolved) = self
+            let resolved = self
                 .screen_repo_manager
                 .loader()
                 .resolve(&device_config.screen)
-            {
-                if let Some(ctx) = device_ctx.as_mut() {
-                    ctx.refresh_override = device_config.refresh;
-                }
-                return self.run_resolved(
-                    &resolved,
-                    &device_config.params,
-                    device_ctx.as_ref(),
-                    None,
-                );
+                .ok_or_else(|| ContentError::DeviceScreenUnresolved {
+                    device: device_mac.to_string(),
+                    screen: device_config.screen.clone(),
+                })?;
+            if let Some(ctx) = device_ctx.as_mut() {
+                ctx.refresh_override = device_config.refresh;
             }
-            // Device config exists but screen not found — fall through to default
+            return self.run_resolved(
+                &resolved,
+                &device_config.params,
+                device_ctx.as_ref(),
+                None,
+                None,
+            );
         }
 
-        // Fall back to the reserved DEFAULT device's screen with empty params.
+        // No config for this device at all — fall back to the reserved DEFAULT
+        // device's screen with empty params. This is the intended path for an
+        // unknown device; a *configured* device with an unresolvable screen ref
+        // errors above instead, because substituting DEFAULT there renders a
+        // screen that is not the one asked for and reports success.
         let default_ref = config
             .default_device_screen()
             .unwrap_or("byonk-builtin/default");
@@ -202,7 +272,7 @@ impl ContentPipeline {
             .ok_or_else(|| ContentError::ScreenNotFound(device_mac.to_string()))?;
 
         let empty_params: HashMap<String, serde_yaml::Value> = HashMap::new();
-        self.run_resolved(&resolved, &empty_params, device_ctx.as_ref(), None)
+        self.run_resolved(&resolved, &empty_params, device_ctx.as_ref(), None, None)
     }
 
     /// Run a screen by its `handle/path` ref with custom params (without rendering).
@@ -221,16 +291,22 @@ impl ContentPipeline {
             .resolve(screen_ref)
             .ok_or_else(|| ContentError::ScreenNotFound(screen_ref.to_string()))?;
 
-        self.run_resolved(&resolved, &params, device_ctx.as_ref(), None)
+        self.run_resolved(&resolved, &params, device_ctx.as_ref(), None, None)
     }
 
     /// Run a resolved screen's `script.lua` (without rendering).
+    ///
+    /// `caller_log_sink`, if given, is forwarded to `LuaRuntime::run_script`
+    /// so the caller can still read captured `log_*` output after a script
+    /// error (see that function's doc comment). `None` for every caller
+    /// that doesn't need logs on failure — behavior for them is unchanged.
     fn run_resolved(
         &self,
         resolved: &ResolvedScreen,
         params: &HashMap<String, serde_yaml::Value>,
         device_ctx: Option<&DeviceContext>,
         timestamp_override: Option<i64>,
+        caller_log_sink: Option<&Arc<Mutex<Vec<String>>>>,
     ) -> Result<ScriptResult, ContentError> {
         let screen_name = format!("{}/{}", resolved.handle, resolved.path);
         let script_rel = join_rel(&resolved.screen_dir, "script.lua");
@@ -247,6 +323,7 @@ impl ContentPipeline {
             params,
             device_ctx,
             timestamp_override,
+            caller_log_sink,
         )?;
 
         // Use script's refresh rate, device override, or the screen meta default.
@@ -271,12 +348,15 @@ impl ContentPipeline {
             screen_dir: resolved.screen_dir.clone(),
             params: params.clone(),
             script_colors: lua_result.colors,
+            script_colors_actual: lua_result.colors_actual,
             script_dither: lua_result.dither,
-            script_preserve_exact: lua_result.preserve_exact,
             script_error_clamp: lua_result.error_clamp,
             script_noise_scale: lua_result.noise_scale,
             script_chroma_clamp: lua_result.chroma_clamp,
             script_strength: lua_result.strength,
+            script_gamut: lua_result.gamut,
+            font_hinting: lua_result.font_hinting,
+            logs: lua_result.logs,
         })
     }
 
@@ -439,9 +519,15 @@ impl ContentPipeline {
         actual: Option<&[(u8, u8, u8)]>,
         use_actual: bool,
         dither: Option<&str>,
-        preserve_exact: bool,
         tuning: Option<&crate::rendering::svg_to_png::DitherTuning>,
+        fonts: Option<&crate::rendering::font_config::FontHintingDirective>,
+        scale_warning: &mut Option<String>,
     ) -> Result<Vec<u8>, ContentError> {
+        // Resolved here, not by the caller. The adaptive default is what makes
+        // text crisp on a black-and-white panel with no Lua involved, so making
+        // any call site responsible for supplying it is how it goes missing on
+        // one of them — silently, since a screen with no hinting still renders.
+        let font_config = resolve_font_config(fonts, grey_count_of(palette));
         let png_bytes = self.renderer.svg_renderer.render_to_palette_png(
             svg.as_bytes(),
             spec,
@@ -449,8 +535,32 @@ impl ContentPipeline {
             actual,
             use_actual,
             dither,
-            preserve_exact,
             tuning,
+            Some(&font_config),
+            scale_warning,
+        )?;
+        Ok(png_bytes)
+    }
+
+    /// Render an SVG straight to a full-color PNG with no e-ink dithering —
+    /// the pre-dither preview `ScreenStore::render`'s `RenderOpts::include_raw`
+    /// asks for, so an author can compare the palette-restricted device
+    /// output against what the SVG actually contains.
+    pub fn render_raw_png_from_svg(
+        &self,
+        svg: &str,
+        spec: DisplaySpec,
+        fonts: Option<&crate::rendering::font_config::FontHintingDirective>,
+    ) -> Result<Vec<u8>, ContentError> {
+        // The raw preview is full-colour RGBA, so it is never the 1-bit case
+        // that wants aliased mono. `RAW_GREY_COUNT` says that explicitly rather
+        // than leaving a bare number here.
+        const RAW_GREY_COUNT: usize = usize::MAX;
+        let font_config = resolve_font_config(fonts, RAW_GREY_COUNT);
+        let png_bytes = self.renderer.svg_renderer.render_to_raw_png(
+            svg.as_bytes(),
+            spec,
+            Some(&font_config),
         )?;
         Ok(png_bytes)
     }
@@ -598,12 +708,19 @@ impl ContentPipeline {
 
     /// Run a screen directly by its `handle/path` ref (for dev mode — no device
     /// config consulted). Params come in as JSON and are converted to YAML.
+    ///
+    /// `caller_log_sink`, if given, is forwarded to `run_resolved` /
+    /// `LuaRuntime::run_script` so the caller can read captured `log_*`
+    /// output even when this returns `Err` (the `ContentError` this wraps
+    /// into a `String` doesn't carry logs). `/dev/render` passes `None`
+    /// (unchanged behavior); `ScreenStore::render` passes its own sink.
     pub fn run_script_direct(
         &self,
         screen_ref: &str,
         params: HashMap<String, serde_json::Value>,
         device_ctx: Option<DeviceContext>,
         timestamp_override: Option<i64>,
+        caller_log_sink: Option<&Arc<Mutex<Vec<String>>>>,
     ) -> Result<ScriptResult, String> {
         // Convert JSON params to YAML params for consistency
         let yaml_params: HashMap<String, serde_yaml::Value> = params
@@ -627,6 +744,7 @@ impl ContentPipeline {
             &yaml_params,
             device_ctx.as_ref(),
             timestamp_override,
+            caller_log_sink,
         )
         .map_err(|e| e.to_string())
     }
@@ -690,6 +808,8 @@ mod pipeline_tests {
             shared.clone(),
             ScreenRepoCache::new(cache_root),
             disk,
+            None,
+            None,
         );
         pm.rebuild_loader();
         ContentPipeline::new(shared, loader, renderer, pm).unwrap()
@@ -702,7 +822,7 @@ mod pipeline_tests {
         config.devices.insert(
             RESERVED_DEFAULT_KEY.to_string(),
             DeviceConfig {
-                screen: "byonk-builtin/example/hello".to_string(),
+                screen: "byonk-builtin/calibration/grey".to_string(),
                 ..Default::default()
             },
         );
@@ -716,9 +836,99 @@ mod pipeline_tests {
             .run_script_for_device("00:11:22:33:44:55", None)
             .expect("default device screen should run");
         assert!(
-            result.screen_name.contains("hello"),
-            "expected fallback to resolve through devices[\"DEFAULT\"] (byonk-builtin/example/hello), got {}",
+            result.screen_name.contains("calibration/grey"),
+            "expected fallback to resolve through devices[\"DEFAULT\"] (byonk-builtin/calibration/grey), got {}",
             result.screen_name
+        );
+    }
+
+    #[test]
+    fn run_script_for_device_errors_when_its_screen_ref_does_not_resolve() {
+        use crate::models::config::{DeviceConfig, RESERVED_DEFAULT_KEY};
+        let mut config = crate::models::AppConfig::default();
+        // A DEFAULT that resolves, so the only thing that can make this test
+        // pass is refusing to use it. Without that refusal a typo'd `screen:`
+        // renders the DEFAULT screen and reports success — the render looks
+        // fine and is the wrong screen.
+        config.devices.insert(
+            RESERVED_DEFAULT_KEY.to_string(),
+            DeviceConfig {
+                screen: "byonk-builtin/calibration/grey".to_string(),
+                ..Default::default()
+            },
+        );
+        config.devices.insert(
+            "00:11:22:33:44:55".to_string(),
+            DeviceConfig {
+                screen: "byonk-builtin/celibration/grey".to_string(),
+                ..Default::default()
+            },
+        );
+        let loader = Arc::new(AssetLoader::new(None, None, None));
+        let pipeline = build_pipeline_with_config(config, HashMap::new(), loader);
+
+        let msg = match pipeline.run_script_for_device("00:11:22:33:44:55", None) {
+            Ok(result) => panic!(
+                "a device naming an unresolvable screen must be an error, but it rendered {}",
+                result.screen_name
+            ),
+            Err(e) => e.to_string(),
+        };
+        // The message has to name the ref that did not resolve; "screen not
+        // found" alone leaves the owner guessing which of the two it means.
+        assert!(
+            msg.contains("byonk-builtin/celibration/grey"),
+            "error must name the unresolved screen ref, got: {msg}"
+        );
+        assert!(
+            msg.contains("00:11:22:33:44:55"),
+            "error must name the device, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_screen_with_no_directive_still_gets_the_panel_s_hinting() {
+        // The load-bearing test for the whole feature. Hinting is applied by
+        // the server, not by the screen, so nothing a screen does can reveal a
+        // call site that forgot to supply the adaptive default — the screen
+        // still renders, just unhinted. This renders the same SVG on a
+        // black-and-white palette twice: once as a screen that said nothing,
+        // once as a screen that explicitly turned hinting off. If the default
+        // is ever dropped at the call site the two become identical.
+        use crate::rendering::font_config::FontHintingDirective;
+
+        let loader = Arc::new(AssetLoader::new(None, None, None));
+        let pipeline =
+            build_pipeline_with_config(crate::models::AppConfig::default(), HashMap::new(), loader);
+
+        // Small text is where hinting shows; `x X H v /` stresses stems and
+        // diagonals rather than flattering the rasteriser.
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 60" width="200" height="60">
+              <rect width="100%" height="100%" fill="white"/>
+              <text x="6" y="24" font-family="sans-serif" font-size="11">x X H v /</text>
+              <text x="6" y="44" font-family="sans-serif" font-size="9">Hamburg 0123</text>
+            </svg>"#;
+        let spec = DisplaySpec::from_dimensions(200, 60).unwrap_or(DisplaySpec::OG);
+        // Two neutral entries -> grey_count 2 -> the adaptive default is
+        // aliased mono, the case that differs most from no hinting at all.
+        let bw = [(0u8, 0u8, 0u8), (255u8, 255u8, 255u8)];
+
+        let render = |fonts: Option<&FontHintingDirective>| {
+            pipeline
+                .render_png_from_svg(svg, spec, &bw, None, false, None, None, fonts, &mut None)
+                .expect("render should succeed")
+        };
+
+        let defaulted = render(None);
+        let hinting_off = render(Some(&FontHintingDirective {
+            default: Some(None),
+            variants: Default::default(),
+        }));
+
+        assert!(
+            defaulted != hinting_off,
+            "a screen that said nothing rendered identically to one that turned hinting off — \
+             the panel's adaptive default is not reaching the renderer"
         );
     }
 

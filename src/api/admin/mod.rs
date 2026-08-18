@@ -45,7 +45,7 @@ pub fn admin_router() -> Router<AppState> {
     Router::new()
         .route("/devices", get(read::list_devices).post(write::add_device))
         .route(
-            "/devices/:key",
+            "/devices/{key}",
             patch(write::patch_device).delete(write::delete_device),
         )
         .route("/pending", get(read::pending))
@@ -56,11 +56,11 @@ pub fn admin_router() -> Router<AppState> {
             get(read::screen_repos).post(write::add_screen_repo),
         )
         .route(
-            "/screen-repos/:handle",
+            "/screen-repos/{handle}",
             patch(write::patch_screen_repo).delete(write::delete_screen_repo),
         )
         .route(
-            "/screen-repos/:handle/update",
+            "/screen-repos/{handle}/update",
             post(write::update_screen_repo),
         )
         .route("/screen-repos/update", post(write::update_all_screen_repos))

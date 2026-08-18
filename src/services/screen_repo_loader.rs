@@ -10,12 +10,44 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::assets::AssetLoader;
+use crate::assets::{AssetCategory, AssetLoader};
 use crate::models::screen_meta::ScreenMeta;
 use crate::models::screen_repo_manifest::ScreenRepoManifest;
 
 /// The handle under which the built-in (embedded + `SCREENS_DIR`) screen repo is registered.
 pub const BUILTIN_HANDLE: &str = "byonk-builtin";
+
+/// What backs a screen repo. Structural, not nominal — callers must never
+/// infer this from a handle's name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreenRepoKind {
+    /// Compiled into the binary; unshadowable and uneditable.
+    Embedded,
+    /// A git-fetched cache; read-only because a refresh would clobber edits.
+    Git,
+    /// A writable directory on disk.
+    Local,
+}
+
+impl ScreenRepoKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Embedded => "embedded",
+            Self::Git => "git",
+            Self::Local => "local",
+        }
+    }
+}
+
+/// The result of a size-capped read. Distinguishes "not there" from "there
+/// but refused", so callers can report the difference instead of collapsing
+/// both into `None`.
+#[derive(Debug)]
+pub enum ReadOutcome {
+    Found(Vec<u8>),
+    Missing,
+    TooLarge,
+}
 
 /// Reads any file within a screen repo by screen-repo-root-relative (manifest-`root`-relative)
 /// path, using forward slashes. Implementations must be cheap to share across threads.
@@ -28,6 +60,23 @@ pub trait ScreenRepoSource: Send + Sync {
         self.read(rel).and_then(|b| String::from_utf8(b).ok())
     }
 
+    /// Read `rel`, refusing anything larger than `max_bytes`.
+    ///
+    /// The default implementation is read-then-check: safe ONLY for a source
+    /// whose `read` never touches disk (bytes already resident in the
+    /// binary, no filesystem overlay). Any source whose `read` can reach the
+    /// filesystem — directly, or indirectly via an overlay like
+    /// `EmbeddedBuiltinSource`'s `SCREENS_DIR` — MUST override this to `stat`
+    /// the resolved target before reading, so an oversized file is never
+    /// pulled into memory at all.
+    fn read_limited(&self, rel: &str, max_bytes: usize) -> ReadOutcome {
+        match self.read(rel) {
+            None => ReadOutcome::Missing,
+            Some(b) if b.len() > max_bytes => ReadOutcome::TooLarge,
+            Some(b) => ReadOutcome::Found(b),
+        }
+    }
+
     /// All screen directories in this screen repo (dirs containing a `meta.yaml`),
     /// relative to the manifest `root` (or the screen repo root if no `root`).
     fn screen_paths(&self) -> Vec<String>;
@@ -38,6 +87,34 @@ pub trait ScreenRepoSource: Send + Sync {
 
     /// The parsed screen repo manifest.
     fn manifest(&self) -> &ScreenRepoManifest;
+
+    /// Every file that lives under `screen_path` (recursively), as paths
+    /// relative to the manifest root (i.e. what `read` resolves against) —
+    /// not just the `meta.yaml`/`script.lua`/`screen.svg` triple, but any
+    /// other asset a screen carries (images, extra libs, etc). This is the
+    /// full file set `ScreenStore::copy_screen` must carry over when it
+    /// forks a screen into a writable repo.
+    ///
+    /// Deliberately has no default implementation: a future `ScreenRepoSource`
+    /// must decide this explicitly rather than silently returning nothing
+    /// (which `copy_screen` would then read as "empty screen").
+    fn screen_files(&self, screen_path: &str) -> Vec<String>;
+
+    /// The on-disk directory `read`/`screen_paths`/`svg_files` resolve
+    /// screen-repo-relative paths against (i.e. the manifest-`root`-relative
+    /// directory, not necessarily the screen repo's top-level directory), or
+    /// `None` if this source is read-only (embedded, or a git cache that a
+    /// refresh would clobber). Callers that write files here MUST resolve
+    /// against this same directory so writes stay visible to `read`.
+    fn writable_root(&self) -> Option<&std::path::Path> {
+        None
+    }
+
+    /// What backs this source. Defaults to `Embedded` so a future embedded
+    /// source needs no override; the two disk sources override it.
+    fn kind(&self) -> ScreenRepoKind {
+        ScreenRepoKind::Embedded
+    }
 }
 
 /// A fully resolved screen: its parsed metadata plus a handle back to its screen repo
@@ -90,6 +167,51 @@ pub fn is_safe_rel(rel: &str) -> bool {
     !rel.split(['/', '\\']).any(|c| c == "..")
 }
 
+/// Read `root/rel`, refusing anything that resolves outside `root`.
+///
+/// `is_safe_rel` is a *lexical* guard — it stops `../` and absolute paths in
+/// the request string, but cannot see a symlink planted on disk. A repo is
+/// arbitrary content (git-fetched, Samba-dropped, or hand-placed), so the
+/// resolved target is canonicalized and prefix-checked against the
+/// canonicalized root before any bytes are read. Symlinks that stay inside
+/// the repo still resolve normally.
+pub(crate) fn read_within(root: &Path, rel: &str) -> Option<Vec<u8>> {
+    match read_within_limited(root, rel, usize::MAX) {
+        ReadOutcome::Found(bytes) => Some(bytes),
+        ReadOutcome::Missing | ReadOutcome::TooLarge => None,
+    }
+}
+
+/// `read_within`, but `stat`s the resolved target first so an oversized file
+/// is refused without ever being read into memory.
+pub(crate) fn read_within_limited(root: &Path, rel: &str, max_bytes: usize) -> ReadOutcome {
+    if !is_safe_rel(rel) {
+        return ReadOutcome::Missing;
+    }
+    let Some(canon_root) = std::fs::canonicalize(root).ok() else {
+        return ReadOutcome::Missing;
+    };
+    let Some(canon_target) = std::fs::canonicalize(canon_root.join(rel)).ok() else {
+        return ReadOutcome::Missing;
+    };
+    if !canon_target.starts_with(&canon_root) {
+        tracing::warn!(
+            root = %canon_root.display(),
+            rel,
+            "refused screen-repo read escaping the repo root"
+        );
+        return ReadOutcome::Missing;
+    }
+    match std::fs::metadata(&canon_target) {
+        Ok(m) if m.len() > max_bytes as u64 => ReadOutcome::TooLarge,
+        Ok(_) => match std::fs::read(&canon_target) {
+            Ok(b) => ReadOutcome::Found(b),
+            Err(_) => ReadOutcome::Missing,
+        },
+        Err(_) => ReadOutcome::Missing,
+    }
+}
+
 /// Split `"handle/path"` on the FIRST `/`. The path portion may itself contain `/`.
 fn split_ref(screen_ref: &str) -> Option<(&str, &str)> {
     let (handle, path) = screen_ref.split_once('/')?;
@@ -100,34 +222,11 @@ fn split_ref(screen_ref: &str) -> Option<(&str, &str)> {
     }
 }
 
-/// A screen repo that lives in an on-disk directory. Files are read with `fs::read`;
-/// screens are discovered by walking the manifest root for `meta.yaml` files.
-pub struct DiskScreenRepoSource {
-    manifest: ScreenRepoManifest,
-    /// Directory the manifest-relative paths resolve against (`root.join(manifest.root)`).
-    manifest_root: PathBuf,
-}
-
-impl DiskScreenRepoSource {
-    /// Load a disk screen repo rooted at `root`. Returns `Err` (skip) if the
-    /// `byonk-screens.yaml` manifest is missing or invalid.
-    pub fn load(root: &Path) -> Result<DiskScreenRepoSource, String> {
-        let manifest_path = root.join("byonk-screens.yaml");
-        let src = std::fs::read_to_string(&manifest_path)
-            .map_err(|e| format!("cannot read {}: {e}", manifest_path.display()))?;
-        let manifest = ScreenRepoManifest::from_yaml(&src)?;
-        let manifest_root = match manifest.root.as_deref() {
-            Some(r) if !r.is_empty() && r != "." => root.join(r),
-            _ => root.to_path_buf(),
-        };
-        Ok(DiskScreenRepoSource {
-            manifest,
-            manifest_root,
-        })
-    }
-
-    /// Recursively collect directories (relative to `base`) that contain a `meta.yaml`.
-    fn walk_screens(base: &Path, current: &Path, out: &mut Vec<String>) {
+/// Recursively collect directories (relative to `base`) that contain a `meta.yaml`,
+/// starting from `base` itself. Shared by every on-disk `ScreenRepoSource`
+/// implementation (`GitScreenRepoSource`, `LocalScreenRepoSource`).
+fn walk_screen_paths(base: &Path) -> Vec<String> {
+    fn walk(base: &Path, current: &Path, out: &mut Vec<String>) {
         let Ok(entries) = std::fs::read_dir(current) else {
             return;
         };
@@ -141,20 +240,27 @@ impl DiskScreenRepoSource {
                         }
                     }
                 }
-                Self::walk_screens(base, &path, out);
+                walk(base, &path, out);
             }
         }
     }
+    let mut out = Vec::new();
+    walk(base, base, &mut out);
+    out.sort();
+    out
+}
 
-    /// Recursively collect files (relative to `base`) whose extension is `ext`.
-    fn walk_ext(base: &Path, current: &Path, ext: &str, out: &mut Vec<String>) {
+/// Recursively collect files (relative to `base`) whose extension is `ext`, starting
+/// from `base` itself. Shared by every on-disk `ScreenRepoSource` implementation.
+fn walk_ext_files(base: &Path, ext: &str) -> Vec<String> {
+    fn walk(base: &Path, current: &Path, ext: &str, out: &mut Vec<String>) {
         let Ok(entries) = std::fs::read_dir(current) else {
             return;
         };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                Self::walk_ext(base, &path, ext, out);
+                walk(base, &path, ext, out);
             } else if path.extension().and_then(|e| e.to_str()) == Some(ext) {
                 if let Ok(rel) = path.strip_prefix(base) {
                     if let Some(s) = rel.to_str() {
@@ -164,37 +270,177 @@ impl DiskScreenRepoSource {
             }
         }
     }
+    let mut out = Vec::new();
+    walk(base, base, ext, &mut out);
+    out.sort();
+    out
 }
 
-impl ScreenRepoSource for DiskScreenRepoSource {
-    fn read(&self, rel: &str) -> Option<Vec<u8>> {
-        if !is_safe_rel(rel) {
-            return None;
+/// Recursively collect every file (no extension filter) under
+/// `base.join(screen_path)`, returned relative to `base` (i.e. still
+/// prefixed with `screen_path`) — the on-disk implementation shared by
+/// `GitScreenRepoSource`/`LocalScreenRepoSource::screen_files`. Unlike
+/// `walk_ext_files`, this walks a single screen's subtree, not the whole
+/// screen repo.
+fn walk_files_under(base: &Path, screen_path: &str) -> Vec<String> {
+    fn walk(base: &Path, current: &Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(current) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(base, &path, out);
+            } else if let Ok(rel) = path.strip_prefix(base) {
+                if let Some(s) = rel.to_str() {
+                    out.push(s.replace('\\', "/"));
+                }
+            }
         }
-        std::fs::read(self.manifest_root.join(rel)).ok()
+    }
+    let mut out = Vec::new();
+    walk(base, &base.join(screen_path), &mut out);
+    out.sort();
+    out
+}
+
+/// Resolve the directory manifest-relative paths resolve against, given a screen
+/// repo root and its manifest's optional `root:` offset.
+fn resolve_manifest_root(root: &Path, manifest: &ScreenRepoManifest) -> PathBuf {
+    match manifest.root.as_deref() {
+        Some(r) if !r.is_empty() && r != "." => root.join(r),
+        _ => root.to_path_buf(),
+    }
+}
+
+/// A screen repo that lives in an on-disk directory (a git-fetched cache). Files are
+/// read with `fs::read`; screens are discovered by walking the manifest root for
+/// `meta.yaml` files. Read-only: a refresh may clobber the cache, so `writable_root`
+/// returns `None`.
+pub struct GitScreenRepoSource {
+    manifest: ScreenRepoManifest,
+    /// Directory the manifest-relative paths resolve against (`root.join(manifest.root)`).
+    manifest_root: PathBuf,
+}
+
+impl GitScreenRepoSource {
+    /// Load a git-cache screen repo rooted at `root`. Returns `Err` (skip) if the
+    /// `byonk-screens.yaml` manifest is missing or invalid.
+    pub fn load(root: &Path) -> Result<GitScreenRepoSource, String> {
+        let manifest_path = root.join("byonk-screens.yaml");
+        let src = std::fs::read_to_string(&manifest_path)
+            .map_err(|e| format!("cannot read {}: {e}", manifest_path.display()))?;
+        let manifest = ScreenRepoManifest::from_yaml(&src)?;
+        let manifest_root = resolve_manifest_root(root, &manifest);
+        Ok(GitScreenRepoSource {
+            manifest,
+            manifest_root,
+        })
+    }
+}
+
+impl ScreenRepoSource for GitScreenRepoSource {
+    fn read(&self, rel: &str) -> Option<Vec<u8>> {
+        read_within(&self.manifest_root, rel)
+    }
+
+    fn read_limited(&self, rel: &str, max_bytes: usize) -> ReadOutcome {
+        read_within_limited(&self.manifest_root, rel, max_bytes)
     }
 
     fn screen_paths(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        Self::walk_screens(&self.manifest_root, &self.manifest_root, &mut out);
-        out.sort();
-        out
+        walk_screen_paths(&self.manifest_root)
     }
 
     fn svg_files(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        Self::walk_ext(&self.manifest_root, &self.manifest_root, "svg", &mut out);
-        out.sort();
-        out
+        walk_ext_files(&self.manifest_root, "svg")
     }
 
     fn manifest(&self) -> &ScreenRepoManifest {
         &self.manifest
     }
+
+    fn screen_files(&self, screen_path: &str) -> Vec<String> {
+        walk_files_under(&self.manifest_root, screen_path)
+    }
+
+    fn kind(&self) -> ScreenRepoKind {
+        ScreenRepoKind::Git
+    }
 }
 
-/// The built-in screen repo, backed by the embedded `screens/` tree (optionally
-/// overlaid by `SCREENS_DIR`) via `AssetLoader`.
+/// A screen repo that lives in a writable on-disk directory (authored/managed locally,
+/// as opposed to a git-fetched cache). Reads the same on-disk layout as
+/// `GitScreenRepoSource`, but exposes its manifest-root as writable so callers may
+/// create or edit screens in place.
+pub struct LocalScreenRepoSource {
+    manifest: ScreenRepoManifest,
+    /// Directory the manifest-relative paths resolve against (`root.join(manifest.root)`).
+    /// This is also what `writable_root` returns: reads and writes MUST share
+    /// one base directory, or a write would land somewhere `read` can't see it.
+    manifest_root: PathBuf,
+}
+
+impl LocalScreenRepoSource {
+    /// Load a local (writable) screen repo rooted at `root`. Returns `Err` (skip) if
+    /// the `byonk-screens.yaml` manifest is missing or invalid.
+    pub fn load(root: &Path) -> Result<LocalScreenRepoSource, String> {
+        let manifest_path = root.join("byonk-screens.yaml");
+        let src = std::fs::read_to_string(&manifest_path)
+            .map_err(|e| format!("cannot read {}: {e}", manifest_path.display()))?;
+        let manifest = ScreenRepoManifest::from_yaml(&src)?;
+        let manifest_root = resolve_manifest_root(root, &manifest);
+        Ok(LocalScreenRepoSource {
+            manifest,
+            manifest_root,
+        })
+    }
+}
+
+impl ScreenRepoSource for LocalScreenRepoSource {
+    fn read(&self, rel: &str) -> Option<Vec<u8>> {
+        read_within(&self.manifest_root, rel)
+    }
+
+    fn read_limited(&self, rel: &str, max_bytes: usize) -> ReadOutcome {
+        read_within_limited(&self.manifest_root, rel, max_bytes)
+    }
+
+    fn screen_paths(&self) -> Vec<String> {
+        walk_screen_paths(&self.manifest_root)
+    }
+
+    fn svg_files(&self) -> Vec<String> {
+        walk_ext_files(&self.manifest_root, "svg")
+    }
+
+    fn manifest(&self) -> &ScreenRepoManifest {
+        &self.manifest
+    }
+
+    fn screen_files(&self, screen_path: &str) -> Vec<String> {
+        walk_files_under(&self.manifest_root, screen_path)
+    }
+
+    fn writable_root(&self) -> Option<&Path> {
+        Some(&self.manifest_root)
+    }
+
+    fn kind(&self) -> ScreenRepoKind {
+        ScreenRepoKind::Local
+    }
+}
+
+/// The built-in screen repo: the embedded `screens/builtin/` tree.
+///
+/// **Its screen set is exactly the embedded one.** `screen_paths` enumerates
+/// `AssetLoader::list_embedded` (never the merged `list_screens`), so a screen
+/// the user authors under `SCREENS_DIR` belongs to the `local` handle and to
+/// `local` only — it does not also surface as a `byonk-builtin` screen.
+///
+/// The `SCREENS_DIR` overlay survives inside that fixed set: individual file
+/// *reads* still prefer `SCREENS_DIR` (see `read`), which is what keeps an
+/// upgraded install's customized `SCREENS_DIR/default/screen.svg` rendering.
 pub struct EmbeddedBuiltinSource {
     loader: Arc<AssetLoader>,
     manifest: ScreenRepoManifest,
@@ -205,10 +451,25 @@ pub struct EmbeddedBuiltinSource {
 impl EmbeddedBuiltinSource {
     /// Load the built-in screen repo. Returns `Err` (skip) if `byonk-screens.yaml`
     /// is missing or invalid.
+    ///
+    /// Reads the manifest **embedded-only**, deliberately bypassing the
+    /// `SCREENS_DIR` filesystem overlay `AssetLoader::read_screen` would
+    /// otherwise apply: `SCREENS_DIR` is the *separate* `local` repo's root
+    /// and happens to have its own `byonk-screens.yaml` at the same
+    /// relative path. Without this, the `local` manifest would shadow
+    /// `byonk-builtin`'s identity (name/description/author/license/`root:`)
+    /// on the primary deployment path (`SCREENS_DIR` set), and an invalid or
+    /// re-rooting `local` manifest could silently unregister the
+    /// `byonk-builtin` handle entirely. `screen_paths` is embedded-only for a
+    /// related but distinct reason (see its own doc comment); individual file
+    /// reads (`read`, and `screen_files`) still go through the `SCREENS_DIR`
+    /// overlay.
     pub fn load(loader: Arc<AssetLoader>) -> Result<EmbeddedBuiltinSource, String> {
-        let src = loader
-            .read_screen_string(Path::new("byonk-screens.yaml"))
+        let bytes = loader
+            .read_screen_embedded_only(Path::new("byonk-screens.yaml"))
             .map_err(|e| format!("cannot read embedded byonk-screens.yaml: {e}"))?;
+        let src = String::from_utf8(bytes.into_owned())
+            .map_err(|e| format!("embedded byonk-screens.yaml is not valid UTF-8: {e}"))?;
         let manifest = ScreenRepoManifest::from_yaml(&src)?;
         let root_prefix = match manifest.root.as_deref() {
             Some(r) if !r.is_empty() && r != "." => r.trim_end_matches('/').to_string(),
@@ -223,6 +484,19 @@ impl EmbeddedBuiltinSource {
 }
 
 impl ScreenRepoSource for EmbeddedBuiltinSource {
+    /// Reads still go through the `SCREENS_DIR` overlay
+    /// (`AssetLoader::read_screen` prefers the filesystem). Deliberate, and
+    /// load-bearing: a pre-split install copied the builtin screens into
+    /// `SCREENS_DIR` and users edited those copies in place, so dropping the
+    /// overlay here would silently revert a customized `default`/`calibration`
+    /// screen to the embedded bytes on upgrade.
+    ///
+    /// Note the flip side, unchanged by the enumeration narrowing below and
+    /// documented for users in `docs/src/guide/authoring.md`: because the two
+    /// repos share one directory, a `local` screen that reuses a builtin's
+    /// exact folder name (`local/default`) does override that builtin's files
+    /// on read. The two cases are indistinguishable on disk — they are the
+    /// same bytes — so the overlay cannot serve one without the other.
     fn read(&self, rel: &str) -> Option<Vec<u8>> {
         if !is_safe_rel(rel) {
             return None;
@@ -234,15 +508,46 @@ impl ScreenRepoSource for EmbeddedBuiltinSource {
             .map(|b| b.into_owned())
     }
 
+    /// Overrides the trait default: `read` above goes through the
+    /// `SCREENS_DIR` overlay, a user-writable directory (Samba, HA
+    /// `/config/screens`) — so, unlike a source whose bytes are always
+    /// resident in the binary, this source DOES have unbounded disk I/O to
+    /// avoid. Delegates to `AssetLoader::read_screen_capped`, which `stat`s
+    /// the overlay file before reading it.
+    fn read_limited(&self, rel: &str, max_bytes: usize) -> ReadOutcome {
+        if !is_safe_rel(rel) {
+            return ReadOutcome::Missing;
+        }
+        let full = join_rel(&self.root_prefix, rel);
+        match self.loader.read_screen_capped(Path::new(&full), max_bytes) {
+            Err(_) => ReadOutcome::Missing,
+            Ok(None) => ReadOutcome::TooLarge,
+            // The embedded fallback branch of `read_screen_capped` has no
+            // cap of its own (its bytes are already resident in the
+            // binary) — check the length here so an oversized *embedded*
+            // asset (unlikely, but not impossible for a future large
+            // built-in) is still reported as `TooLarge` rather than served.
+            Ok(Some(bytes)) if bytes.len() > max_bytes => ReadOutcome::TooLarge,
+            Ok(Some(bytes)) => ReadOutcome::Found(bytes.into_owned()),
+        }
+    }
+
+    /// **Embedded-only** — `AssetLoader::list_embedded`, not the
+    /// `SCREENS_DIR`-merged `list_screens`.
+    ///
+    /// The overlay was correct while `SCREENS_DIR` *was* `byonk-builtin`'s
+    /// on-disk copy. It is now the separate `local` repo, so enumerating it
+    /// here would report every user screen under a second handle: duplicating
+    /// each of them in `GET /api/admin/screens` (which groups
+    /// `loader.list_all()` by handle) and letting a `byonk-builtin/<x>` ref
+    /// resolve to a screen `byonk-builtin` does not ship.
     fn screen_paths(&self) -> Vec<String> {
         let prefix = if self.root_prefix.is_empty() {
             String::new()
         } else {
             format!("{}/", self.root_prefix)
         };
-        let mut out: Vec<String> = self
-            .loader
-            .list_screens()
+        let mut out: Vec<String> = AssetLoader::list_embedded(AssetCategory::Screens)
             .into_iter()
             .filter_map(|entry| {
                 // Keep only entries under the root prefix that are `meta.yaml` files.
@@ -262,6 +567,18 @@ impl ScreenRepoSource for EmbeddedBuiltinSource {
         out
     }
 
+    /// Stays **merged** with the `SCREENS_DIR` overlay, unlike `screen_paths`.
+    ///
+    /// This is not a listing surface: its only consumer is
+    /// `TemplateService::build_tera`, which registers each name as a Tera
+    /// template whose *content* it reads back through `read` — i.e. through
+    /// the overlay that stays merged either way. Narrowing it to the embedded
+    /// set would therefore close no boundary (a `byonk-builtin` screen's Lua
+    /// `require`s and image refs still resolve through the same overlaid
+    /// `read`), while breaking an upgraded install whose customized
+    /// `SCREENS_DIR/default/screen.svg` `{% include %}`s an SVG part that only
+    /// exists on disk — a break the migration cannot repair, since it
+    /// deliberately never rewrites `byonk-builtin/default`-shaped refs.
     fn svg_files(&self) -> Vec<String> {
         let prefix = if self.root_prefix.is_empty() {
             String::new()
@@ -288,6 +605,73 @@ impl ScreenRepoSource for EmbeddedBuiltinSource {
     fn manifest(&self) -> &ScreenRepoManifest {
         &self.manifest
     }
+
+    /// Stays **merged** with the `SCREENS_DIR` overlay, like `read` and unlike
+    /// `screen_paths`. It is scoped to one screen's own subtree, and with
+    /// `screen_paths` narrowed that screen is always one of the embedded
+    /// three — so this can only ever pick up overlay files sitting *inside* a
+    /// builtin screen's directory. Those are exactly the files `read` serves,
+    /// and `copy_screen` (its only consumer) must carry all of them so forking
+    /// an upgraded install's customized `byonk-builtin/default` yields a
+    /// faithful copy rather than the embedded original minus the user's extra
+    /// assets.
+    fn screen_files(&self, screen_path: &str) -> Vec<String> {
+        let prefix = if self.root_prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", self.root_prefix)
+        };
+        let screen_prefix = format!("{screen_path}/");
+        let mut out: std::collections::BTreeSet<String> = self
+            .loader
+            .list_screens()
+            .into_iter()
+            .filter_map(|entry| {
+                let under = entry.strip_prefix(&prefix)?;
+                if under.starts_with(&screen_prefix) {
+                    Some(under.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // `list_screens()`'s overlay branch (`AssetLoader::collect_screen_files`)
+        // only picks up `.lua`/`.svg`/`.yaml` files — embedded assets are
+        // unfiltered (rust-embed includes image globs), so this only bites a
+        // screen living under `SCREENS_DIR` (the HA add-on's primary
+        // layout): its non-lua/svg/yaml assets (images, etc) are visible to
+        // `read()` but invisible to the list above. Walk the overlay dir
+        // directly too, so `copy_screen` sees every file the source can
+        // actually serve, not just the subset `list_screens()` happens to
+        // enumerate. A `BTreeSet` dedups (an overlay file that also matches
+        // `list_screens()`'s extension filter would otherwise appear twice)
+        // and keeps the result sorted.
+        if let Some(screens_dir) = self.loader.screens_dir() {
+            let overlay_base = if self.root_prefix.is_empty() {
+                screens_dir.to_path_buf()
+            } else {
+                screens_dir.join(&self.root_prefix)
+            };
+            out.extend(walk_files_under(&overlay_base, screen_path));
+        }
+
+        out.into_iter().collect()
+    }
+}
+
+/// The kind of on-disk screen repo source a `handle` should be backed by.
+///
+/// Distinguishes a read-only git-fetched cache checkout from a writable,
+/// authored/managed local directory (a `path:` config entry, or the
+/// auto-registered `SCREENS_DIR` under the `local` handle) so
+/// `ScreenRepoLoader::new` can construct the right `ScreenRepoSource` impl
+/// per handle.
+pub enum DiskSource {
+    /// A read-only git-fetched cache checkout (`GitScreenRepoSource`).
+    Git(PathBuf),
+    /// A writable, authored/managed local directory (`LocalScreenRepoSource`).
+    Local(PathBuf),
 }
 
 /// Resolves screen references against a registry of screen repos keyed by handle.
@@ -296,11 +680,13 @@ pub struct ScreenRepoLoader {
 }
 
 impl ScreenRepoLoader {
-    /// Build a loader. The `byonk-builtin` handle is always registered (backed by
-    /// the embedded tree + `SCREENS_DIR` overlay). Each `disk_packages` entry maps
-    /// a handle to a screen repo root directory. ScreenRepos whose manifest is
-    /// missing/invalid are skipped with a warning.
-    pub fn new(asset_loader: Arc<AssetLoader>, disk_packages: HashMap<String, PathBuf>) -> Self {
+    /// Build a loader. The `byonk-builtin` handle is always registered (backed
+    /// by the embedded tree; `SCREENS_DIR` overlays its file reads but never
+    /// adds screens to it). Each `disk_sources` entry maps
+    /// a handle to a typed on-disk screen repo root (git cache vs. writable
+    /// local). ScreenRepos whose manifest is missing/invalid are skipped with
+    /// a warning.
+    pub fn new(asset_loader: Arc<AssetLoader>, disk_sources: HashMap<String, DiskSource>) -> Self {
         let mut registry: HashMap<String, Arc<dyn ScreenRepoSource>> = HashMap::new();
 
         match EmbeddedBuiltinSource::load(asset_loader) {
@@ -312,18 +698,35 @@ impl ScreenRepoLoader {
             }
         }
 
-        for (handle, root) in disk_packages {
-            match DiskScreenRepoSource::load(&root) {
-                Ok(src) => {
-                    registry.insert(handle, Arc::new(src));
-                }
-                Err(e) => {
-                    tracing::warn!(handle = %handle, root = %root.display(), error = %e, "skipping disk screen repo: invalid manifest");
-                }
+        for (handle, source) in disk_sources {
+            match source {
+                DiskSource::Git(root) => match GitScreenRepoSource::load(&root) {
+                    Ok(src) => {
+                        registry.insert(handle, Arc::new(src));
+                    }
+                    Err(e) => {
+                        tracing::warn!(handle = %handle, root = %root.display(), error = %e, "skipping disk screen repo: invalid manifest");
+                    }
+                },
+                DiskSource::Local(root) => match LocalScreenRepoSource::load(&root) {
+                    Ok(src) => {
+                        registry.insert(handle, Arc::new(src));
+                    }
+                    Err(e) => {
+                        tracing::warn!(handle = %handle, root = %root.display(), error = %e, "skipping local screen repo: invalid manifest");
+                    }
+                },
             }
         }
 
         ScreenRepoLoader { registry }
+    }
+
+    /// The registered source for `handle`, or `None` if unregistered. Used by
+    /// tests and by `ScreenStore` to read/write a specific handle's source
+    /// directly.
+    pub fn source_for(&self, handle: &str) -> Option<Arc<dyn ScreenRepoSource>> {
+        self.registry.get(handle).cloned()
     }
 
     /// Resolve `"handle/path"` to a screen. `None` if the handle is unknown, the
@@ -403,7 +806,7 @@ mod tests {
 
         let loader = std::sync::Arc::new(crate::assets::AssetLoader::new(None, None, None));
         let mut disk = HashMap::new();
-        disk.insert("acme".to_string(), tmp.clone());
+        disk.insert("acme".to_string(), DiskSource::Git(tmp.clone()));
         let pl = ScreenRepoLoader::new(loader, disk);
 
         let r = pl.resolve("acme/weather/forecast").expect("resolve");
@@ -453,7 +856,7 @@ mod tests {
         let secret = tmp.parent().unwrap().join("byonk_secret_marker.txt");
         fs::write(&secret, "TOP SECRET").unwrap();
 
-        let src = DiskScreenRepoSource::load(&tmp).expect("load");
+        let src = GitScreenRepoSource::load(&tmp).expect("load");
         // Legitimate read works.
         assert_eq!(
             src.read_string("lib/util.lua").as_deref(),
@@ -474,5 +877,191 @@ mod tests {
         let loader = std::sync::Arc::new(crate::assets::AssetLoader::new(None, None, None));
         let pl = ScreenRepoLoader::new(loader, HashMap::new());
         assert!(pl.handles().contains(&"byonk-builtin".to_string()));
+    }
+
+    #[test]
+    fn embedded_and_git_sources_are_read_only() {
+        let loader = std::sync::Arc::new(AssetLoader::new(None, None, None));
+        let src = EmbeddedBuiltinSource::load(loader).unwrap();
+        assert!(
+            src.writable_root().is_none(),
+            "embedded builtin must be read-only"
+        );
+    }
+
+    #[test]
+    fn local_source_is_writable_and_reads_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("byonk-screens.yaml"),
+            "name: local\ndescription: d\nauthor: a\nlicense: MIT\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("clock")).unwrap();
+        std::fs::write(
+            dir.path().join("clock/meta.yaml"),
+            "title: Clock\ndescription: d\nbyonk: \"0.15\"\n",
+        )
+        .unwrap();
+        let src = LocalScreenRepoSource::load(dir.path()).unwrap();
+        assert_eq!(src.writable_root(), Some(dir.path()));
+        assert!(src.screen_paths().iter().any(|p| p == "clock"));
+    }
+
+    /// Important 1: a `SCREENS_DIR/byonk-screens.yaml` (the `local` repo's
+    /// own manifest, at the same relative path `EmbeddedBuiltinSource`
+    /// reads) must never change what `byonk-builtin` reports. Non-vacuous:
+    /// before the fix, `EmbeddedBuiltinSource::load` read the manifest via
+    /// `AssetLoader::read_screen`, which prefers `SCREENS_DIR` over the
+    /// embedded tree for any relative path — so this assertion would fail
+    /// (name would come back "local", not "byonk-builtin") against the
+    /// reverted code.
+    #[test]
+    fn builtin_manifest_is_not_shadowed_by_local_manifest_under_screens_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("byonk-screens.yaml"),
+            "name: local\ndescription: Your own screens.\nauthor: you\nlicense: UNLICENSED\n",
+        )
+        .unwrap();
+
+        let loader = Arc::new(AssetLoader::new(Some(dir.path().to_path_buf()), None, None));
+        let src = EmbeddedBuiltinSource::load(loader).expect("byonk-builtin must still load");
+        assert_eq!(
+            src.manifest().name,
+            "byonk-builtin",
+            "the local SCREENS_DIR manifest must not shadow byonk-builtin's identity"
+        );
+        assert_eq!(src.manifest().author, "Byonk");
+    }
+
+    /// Important 1: an *invalid* `SCREENS_DIR/byonk-screens.yaml` must not
+    /// unregister the `byonk-builtin` handle or break `byonk-builtin/default`
+    /// — since the manifest read is embedded-only, the overlay file's
+    /// validity is simply irrelevant to `byonk-builtin`. Non-vacuous: before
+    /// the fix, `EmbeddedBuiltinSource::load` would read this invalid
+    /// overlay file and fail to parse it, returning `Err` — this
+    /// `.expect(...)` would panic against the reverted code.
+    #[test]
+    fn builtin_survives_invalid_local_manifest_under_screens_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        // Missing required fields (author/license) -> ScreenRepoManifest::from_yaml errors.
+        std::fs::write(dir.path().join("byonk-screens.yaml"), "name: local\n").unwrap();
+
+        let loader = Arc::new(AssetLoader::new(Some(dir.path().to_path_buf()), None, None));
+        let src = EmbeddedBuiltinSource::load(loader.clone())
+            .expect("an invalid local manifest must not break byonk-builtin");
+        assert_eq!(src.manifest().name, "byonk-builtin");
+
+        // End to end through the registry too: byonk-builtin/default still resolves.
+        let pl = ScreenRepoLoader::new(loader, HashMap::new());
+        assert!(pl.handles().contains(&BUILTIN_HANDLE.to_string()));
+        assert!(pl.resolve("byonk-builtin/default").is_some());
+    }
+
+    /// Important 1, the `root:` variant the finding calls out explicitly: a
+    /// perfectly legal `root:` key in the overlay `SCREENS_DIR` manifest
+    /// must not re-root `byonk-builtin` — its `root_prefix` must always come
+    /// from the embedded manifest (which has none).
+    #[test]
+    fn builtin_root_prefix_is_not_reroot_by_local_manifest_root_key() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("byonk-screens.yaml"),
+            "name: local\ndescription: d\nauthor: you\nlicense: UNLICENSED\nroot: somewhere/else\n",
+        )
+        .unwrap();
+
+        let loader = Arc::new(AssetLoader::new(Some(dir.path().to_path_buf()), None, None));
+        let src = EmbeddedBuiltinSource::load(loader).expect("byonk-builtin must still load");
+        assert!(
+            src.screen_paths().iter().any(|p| p == "default"),
+            "byonk-builtin's root must stay the embedded tree's root, unaffected by the overlay manifest's root: key"
+        );
+    }
+
+    /// Important 1: `SCREENS_DIR` is the `local` repo, not part of
+    /// `byonk-builtin`. A user screen sitting there must NOT be enumerated as
+    /// a builtin screen — otherwise it appears twice in
+    /// `GET /api/admin/screens` and `byonk-builtin/<x>` resolves to something
+    /// `byonk-builtin` doesn't ship. Non-vacuous: against the reverted code
+    /// (`screen_paths` reading `loader.list_screens()`) both assertions fail.
+    #[test]
+    fn builtin_does_not_enumerate_screens_dir_overlay_screens() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("myclock")).unwrap();
+        std::fs::write(
+            dir.path().join("myclock/meta.yaml"),
+            "title: C\ndescription: d\nbyonk: \"0.17\"\n",
+        )
+        .unwrap();
+
+        let loader = Arc::new(AssetLoader::new(Some(dir.path().to_path_buf()), None, None));
+        let src = EmbeddedBuiltinSource::load(loader).unwrap();
+        assert!(
+            !src.screen_paths().iter().any(|p| p == "myclock"),
+            "a SCREENS_DIR screen must not be enumerated as a byonk-builtin screen: {:?}",
+            src.screen_paths()
+        );
+        // ...while the embedded set is of course still all there.
+        assert!(src.screen_paths().iter().any(|p| p == "default"));
+    }
+
+    /// Important 1, the overlay half that must NOT change: an upgraded
+    /// install's customized `SCREENS_DIR/default/screen.svg` still wins over
+    /// the embedded bytes when read. Narrowing enumeration must not turn into
+    /// silently reverting people's edits.
+    #[test]
+    fn builtin_read_still_prefers_the_screens_dir_overlay_for_its_own_screens() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("default")).unwrap();
+        std::fs::write(dir.path().join("default/screen.svg"), "<svg id=\"mine\"/>").unwrap();
+
+        let loader = Arc::new(AssetLoader::new(Some(dir.path().to_path_buf()), None, None));
+        let src = EmbeddedBuiltinSource::load(loader).unwrap();
+        assert_eq!(
+            src.read_string("default/screen.svg").as_deref(),
+            Some("<svg id=\"mine\"/>"),
+            "the customized on-disk copy must still win on read"
+        );
+    }
+
+    /// Important A: `EmbeddedBuiltinSource::read` consults the `SCREENS_DIR`
+    /// filesystem overlay, so the trait's read-then-check default (correct
+    /// for a source whose bytes are always resident in the binary) would
+    /// load an oversized overlay file fully into memory before checking its
+    /// size. `read_limited` must override that default and refuse the file
+    /// via a `stat`, never reading it.
+    #[test]
+    fn builtin_read_limited_caps_the_screens_dir_overlay() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("default")).unwrap();
+        std::fs::write(dir.path().join("default/script.lua"), vec![b'x'; 16]).unwrap();
+
+        let loader = Arc::new(AssetLoader::new(Some(dir.path().to_path_buf()), None, None));
+        let src = EmbeddedBuiltinSource::load(loader).unwrap();
+
+        assert!(matches!(
+            src.read_limited("default/script.lua", 8),
+            ReadOutcome::TooLarge
+        ));
+        // A file within the cap still reads through the overlay normally.
+        match src.read_limited("default/script.lua", 16) {
+            ReadOutcome::Found(b) => assert_eq!(b, vec![b'x'; 16]),
+            other => panic!("expected Found, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn builtin_embeds_only_default_and_calibration() {
+        let loader = std::sync::Arc::new(AssetLoader::new(None, None, None));
+        let src = EmbeddedBuiltinSource::load(loader).unwrap();
+        let paths = src.screen_paths();
+        assert!(paths.iter().any(|p| p == "default"));
+        assert!(paths.iter().any(|p| p.starts_with("calibration/")));
+        assert!(
+            !paths.iter().any(|p| p == "hello" || p == "mandelbrot"),
+            "examples must not be builtin"
+        );
     }
 }

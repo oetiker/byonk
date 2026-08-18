@@ -51,7 +51,7 @@ Devices are mapped to screens in `config.yaml`:
 ```yaml
 devices:
   "94:A9:90:8C:6D:18":
-    screen: byonk-builtin/useful/swiss-departure-board
+    screen: examples/swiss-departure-board
     params:
       station: "Olten, Bahnhof"
 
@@ -66,10 +66,11 @@ devices:
 ```
 
 A screen is referenced by a qualified `handle/path` reference: `handle` names a
-registered package and `path` locates the screen folder within it. The bundled
-screens live in the embedded `byonk-builtin` package (for example
-`byonk-builtin/useful/swiss-departure-board`); third-party packages are
-referenced through their own handle (for example `weather/forecast`).
+registered package and `path` locates the screen folder within it. A minimal
+`default` + `calibration/*` set lives in the embedded `byonk-builtin` package;
+worked examples such as `swiss-departure-board` live in the embedded `examples`
+package (for example `examples/swiss-departure-board`); third-party packages
+are referenced through their own handle (for example `weather/forecast`).
 
 ### Lookup Order
 

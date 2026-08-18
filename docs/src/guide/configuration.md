@@ -17,9 +17,11 @@ folder containing a `meta.yaml` is a screen. Each screen folder holds three fixe
 | `screen.svg` | Tera SVG template |
 
 Byonk auto-discovers these screens; you reference one by its **`handle/path`** ref (e.g.
-`byonk-builtin/useful/swiss-departure-board`). The bundled screens ship in the embedded
-`byonk-builtin` screen repo. See [Your First Screen](../tutorial/first-screen.md) for how to
-author one, and [Admin API](../api/admin-api.md) for the screen repo/screen listing endpoints.
+`examples/swiss-departure-board`). A minimal `default` + `calibration/*` set ships in the
+embedded `byonk-builtin` screen repo; worked examples like `swiss-departure-board` and
+`hello` ship separately in the embedded `examples` screen repo. See
+[Your First Screen](../tutorial/first-screen.md) for how to author one, and
+[Admin API](../api/admin-api.md) for the screen repo/screen listing endpoints.
 
 ## Configuration Structure
 
@@ -27,13 +29,13 @@ author one, and [Admin API](../api/admin-api.md) for the screen repo/screen list
 # Device-to-screen mapping
 devices:
   "94:A9:90:8C:6D:18":                              # Device MAC address
-    screen: byonk-builtin/useful/swiss-departure-board  # handle/path screen ref
+    screen: examples/swiss-departure-board  # handle/path screen ref
     params:                                          # Parameters passed to script.lua
       station: "Olten, Bahnhof"
       limit: 8
 
   "AA:BB:CC:DD:EE:FF":
-    screen: byonk-builtin/example/hello
+    screen: examples/hello
     params:
       name: "Zurich"
 
@@ -57,7 +59,7 @@ Each device entry maps a MAC address to a screen:
 | `colors` | No | Override display palette (comma-separated hex RGB, e.g. `"#000000,#FFFFFF,#FF0000"`) |
 | `dither` | No | Dithering algorithm (see [Dither Algorithms](#dither-algorithms) below) |
 | `panel` | No | Panel profile name (references `panels` section) |
-| `error_clamp` | No | Error clamp for dithering (e.g. `0.08`). Limits error diffusion amplitude. |
+| `error_clamp` | No | Caps how much accumulated dithering error one pixel may carry (e.g. `1.0`, the default). Lower values suppress error diffusion; very low values make saturated areas render flat. |
 | `noise_scale` | No | Blue noise jitter scale (e.g. `0.6`). Controls noise modulation strength. |
 | `chroma_clamp` | No | Chroma clamp for dithering. Limits chromatic error propagation. |
 | `strength` | No | Error diffusion strength (0.0–2.0, default 1.0). Lower = less dithering texture. |
@@ -144,17 +146,37 @@ screen_repos:
   weather:      { repo: https://github.com/acme/screens, pin: v1.4.0 }
   weather-beta: { repo: https://github.com/acme/screens, pin: v2.0.0 }  # same repo, different pin
   private:      { repo: https://github.com/acme/secret, pin: v1.0.0, token: ${GITHUB_TOKEN} }
+  drafts:       { path: /data/drafts }                    # writable local directory
 ```
 
 | Property | Required | Description |
 |----------|----------|-------------|
-| `repo` | No | Source git repo, as a full URL **with a scheme** — `https://…`, `git://…`, `ssh://…`, scp-style `git@host:owner/repo`, or `file:///path` for a local repo. A schemeless value like `github.com/acme/screens` is rejected (it would otherwise be read as a local path). Omit for the embedded built-in. |
-| `pin` | No | Commit sha, tag, or branch to fetch. |
-| `token` | No | Auth token for private repos (redacted in read APIs). |
+| `repo` | No | Source git repo, as a full URL **with a scheme** — `https://…`, `git://…`, `ssh://…`, scp-style `git@host:owner/repo`, or `file:///path` for a local repo. A schemeless value like `github.com/acme/screens` is rejected (it would otherwise be read as a local path). Mutually exclusive with `path`. Omit both for the embedded built-in. |
+| `path` | No | A writable local directory to register as this handle, as an alternative to a git-fetched `repo`. Mutually exclusive with `repo`. Unlike `repo`-backed screen repos, `path`-backed ones can be written to (see [Screen Authoring](authoring.md)). |
+| `pin` | No | Commit sha, tag, or branch to fetch. Only meaningful with `repo`. |
+| `token` | No | Auth token for private repos (redacted in read APIs). Only meaningful with `repo`. |
 
 A screen ref's first segment is the handle: `weather/forecast` resolves the `forecast` screen
 in the `weather` screen repo. Registering the same repo under two handles at different pins
 lets you run two versions side by side.
+
+### Auto-registered `local` and `examples` handles
+
+Two handles auto-register from filesystem paths, without needing a
+`screen_repos:` entry — unless you add one yourself, which always wins:
+
+- `local` — `SCREENS_DIR`, your own writable screen repo.
+- `examples` — the shipped worked-example screens, seeded once to
+  `<SCREENS_DIR>/../examples` by default (override with the `EXAMPLES_DIR`
+  env var). See [Installation](installation.md#environment-variables) for
+  the env vars and the seeding-vs-registration precedence note (an explicit
+  `screen_repos.examples` config entry wins for registration, but seeding
+  always follows `EXAMPLES_DIR`/the derived default, not the configured
+  path).
+
+See [Screen Authoring](authoring.md) for how the built-in, example, and
+your-own-screens layers fit together, and how to fork a read-only screen
+into a writable one.
 
 ## Device Registration
 
@@ -167,7 +189,7 @@ registration:
 devices:
   # Register using the code shown on the device screen
   "ABCDE-FGHJK":
-    screen: byonk-builtin/useful/swiss-departure-board
+    screen: examples/swiss-departure-board
     params:
       station: "Olten"
 ```
@@ -213,13 +235,13 @@ registration:
 devices:
   # By registration code (read from device screen)
   "ABCDE-FGHJK":
-    screen: byonk-builtin/useful/swiss-departure-board
+    screen: examples/swiss-departure-board
     params:
       station: "Olten"
 
   # By MAC address (found in logs)
   "AA:BB:CC:DD:EE:FF":
-    screen: byonk-builtin/example/hello
+    screen: examples/hello
 ```
 
 ### Custom Registration Screen
@@ -274,20 +296,20 @@ which hot-reloads after writes).
 devices:
   # Kitchen display - bus departures
   "94:A9:90:8C:6D:18":
-    screen: byonk-builtin/useful/swiss-departure-board
+    screen: examples/swiss-departure-board
     params:
       station: "Olten, Südwest"
       limit: 8
 
   # Office display - room booking (webscrape example)
   "AA:BB:CC:DD:EE:FF":
-    screen: byonk-builtin/example/webscrape
+    screen: examples/webscrape
     params:
       room: "Rosa"
 
   # Lobby display - different bus stop
   "BB:CC:DD:EE:FF:00":
-    screen: byonk-builtin/useful/swiss-departure-board
+    screen: examples/swiss-departure-board
     params:
       station: "Olten, Bahnhof"
       limit: 6
@@ -343,13 +365,13 @@ panels:
     colors: "#000000,#FFFFFF,#FF0000,#FFFF00"
     colors_actual: "#303030,#D0D0C8,#C04040,#D0D020"
     dither:
-      error_clamp: 0.1         # flat default for all algorithms
+      error_clamp: 1.0         # flat default for all algorithms
       noise_scale: 5.0
       floyd-steinberg:          # per-algorithm override
-        error_clamp: 0.08
+        error_clamp: 0.8
         noise_scale: 4.0
       atkinson:
-        error_clamp: 0.12
+        error_clamp: 1.2
 ```
 
 The `dither` section supports:
@@ -381,7 +403,7 @@ Panels are assigned to devices in three ways (highest priority first):
 ```yaml
 devices:
   "ABCDE-FGHJK":
-    screen: byonk-builtin/useful/swiss-departure-board
+    screen: examples/swiss-departure-board
     panel: trmnl_og_4grey  # explicit panel assignment
 ```
 

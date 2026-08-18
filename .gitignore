@@ -1,7 +1,9 @@
 target/
 *.swp
 .DS_Store
-.claude
+.claude/*
+# ...except shared skills, which are part of the project's agent setup
+!.claude/skills/
 config-google.yaml
 
 # Local-only working files (kept on disk, never committed)
@@ -18,10 +20,21 @@ docs/mermaid-init.js
 docs/src/images/
 
 .venv/
+.venv-fonts/
 __pycache__/
 *.pyc
 .pytest_cache/
 
+# Downloaded X.Org BDF tarballs for the font importer (pinned by checksum in
+# fonts/x11importer/sources.py, so re-fetching them is free)
+fonts/.x11-cache/
+
 # Home Assistant test VM artifacts (large/binary, machine-local)
 tools/ha-vm/work/
 tools/ha-vm/ssh/
+
+# Dev-server seeding (make dev/make run set SCREENS_DIR=screens): the local
+# screen repo manifest and shipped examples get seeded into the tracked
+# source tree — never commit them.
+screens/byonk-screens.yaml
+/examples/

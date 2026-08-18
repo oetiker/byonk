@@ -1,0 +1,8 @@
+# Build-time dependencies for the X11 bitmap font importer (fonts/x11-importer.py).
+#
+# Deliberately tiny: the importer writes the sfnt tables itself, so it needs no
+# FontForge, no potrace and no X11 installation. `make fonts-setup` installs
+# these into .venv-fonts, kept separate from the Home Assistant test venv so the
+# two dependency sets cannot collide.
+fonttools==4.61.1
+pytest==9.0.0

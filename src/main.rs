@@ -35,7 +35,9 @@ enum Commands {
         #[arg(short, long)]
         output: PathBuf,
 
-        /// Device type: "og" (800x480) or "x" (1872x1404)
+        /// Fallback render size when the device has no configured panel:
+        /// "og" (800x480) or "x" (1872x1404). A device whose `panel:` is set
+        /// renders at that panel's own dimensions and ignores this.
         #[arg(short, long, default_value = "og")]
         device: String,
 
@@ -58,10 +60,22 @@ enum Commands {
         /// Display colors as comma-separated hex RGB (e.g. "#000000,#FFFFFF,#FF0000")
         #[arg(long)]
         colors: Option<String>,
+
+        /// Draw the output PNG in the panel's measured colours — what the
+        /// screen will actually look like — instead of the spec colours that
+        /// are sent to the panel. Defaults to on whenever the device's panel
+        /// has a calibration. This changes only how the PNG is drawn; the
+        /// dithering always targets the measured colours when they resolve.
+        /// Bare `--use-actual` means `true`; `--use-actual false` opts out.
+        #[arg(long, num_args = 0..=1, default_missing_value = "true")]
+        use_actual: Option<bool>,
     },
     /// Extract embedded assets to filesystem for customization
     Init {
-        /// Extract screen files (Lua scripts and SVG templates)
+        /// Initialize your local screens directory (writes a
+        /// byonk-screens.yaml manifest so it registers as the writable
+        /// `local` screen repo; byonk-builtin itself is embedded-only and
+        /// is never copied here)
         #[arg(long)]
         screens: bool,
 
@@ -130,6 +144,7 @@ async fn main() -> anyhow::Result<()> {
             firmware,
             registration_code,
             colors,
+            use_actual,
         }) => run_render_command(
             &mac,
             &output,
@@ -139,6 +154,7 @@ async fn main() -> anyhow::Result<()> {
             firmware,
             registration_code,
             colors,
+            use_actual,
         ),
         Some(Commands::Init {
             screens,
@@ -157,6 +173,32 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
+/// The size `byonk render` draws at.
+///
+/// **The device's own panel wins.** `--device` offers exactly two sizes,
+/// `og` (800x480) and `x` (1872x1404), so on its own it cannot express the
+/// 1200x1600 reTerminal E1004, either 296x128 Xiao, or any panel an operator
+/// defines themselves — a device configured for one of those used to render at
+/// 800x480 while correctly using that panel's *palette*, producing a
+/// plausible-looking PNG of the wrong size. The render-scale warning cannot
+/// catch it either: a screen built from `layout.width`/`layout.height` builds
+/// itself to whatever it is told, so the SVG and the render agree and only the
+/// panel disagrees.
+///
+/// `--device` stays as the fallback for a MAC with no device config, and
+/// for a panel that declares no dimensions.
+fn resolve_cli_display_spec(
+    panel_size: Option<(u32, u32)>,
+    device_type: &str,
+) -> anyhow::Result<byonk::models::DisplaySpec> {
+    use byonk::models::DisplaySpec;
+    match panel_size {
+        Some((w, h)) => Ok(DisplaySpec::from_dimensions(w, h)?),
+        None if device_type == "x" => Ok(DisplaySpec::X),
+        None => Ok(DisplaySpec::OG),
+    }
+}
+
 /// Render a screen directly to a PNG file (no server needed)
 #[allow(clippy::too_many_arguments)]
 fn run_render_command(
@@ -168,9 +210,9 @@ fn run_render_command(
     firmware: Option<String>,
     registration_code: Option<String>,
     colors: Option<String>,
+    use_actual_flag: Option<bool>,
 ) -> anyhow::Result<()> {
     use byonk::assets::AssetLoader;
-    use byonk::models::DisplaySpec;
     use byonk::services::DeviceContext;
 
     // Minimal logging for CLI
@@ -186,8 +228,12 @@ fn run_render_command(
     let screens_dir = std::env::var("SCREENS_DIR").ok().map(PathBuf::from);
     let fonts_dir = std::env::var("FONTS_DIR").ok().map(PathBuf::from);
     let config_file = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
+    let examples_dir = std::env::var("EXAMPLES_DIR").ok().map(PathBuf::from);
 
-    let asset_loader = Arc::new(AssetLoader::new(screens_dir, fonts_dir, config_file));
+    let asset_loader = Arc::new(
+        AssetLoader::new(screens_dir, fonts_dir, config_file)
+            .with_examples_dir_override(examples_dir),
+    );
 
     // Seed if configured paths are empty
     if let Err(e) = asset_loader.seed_if_configured() {
@@ -206,11 +252,29 @@ fn run_render_command(
             .expect("Failed to initialize content pipeline"),
     );
 
-    // Parse device type
-    let display_spec = match device_type {
-        "x" => DisplaySpec::X,
-        _ => DisplaySpec::OG,
-    };
+    // Device config -> panel -> colors/dither/measured/size, resolved once
+    // here (before the device context and reused after the script runs) so
+    // this chain can't drift between what the script sees as
+    // `device.colors_actual` and what the final render actually dithers
+    // against — see Task 1 review, which found `main.rs` recomputing this
+    // chain twice, ~80 lines apart. `registration_code` is borrowed here and
+    // moved into DeviceContext below.
+    let device_config = config.get_device_config(mac).or_else(|| {
+        registration_code
+            .as_deref()
+            .and_then(|code| config.get_device_config_for_code(code))
+    });
+    let dc_colors = device_config.and_then(|dc| dc.colors.clone());
+    let dc_dither = device_config.and_then(|dc| dc.dither.clone());
+    let dc_panel = device_config.and_then(|dc| dc.panel.clone());
+    let panel = dc_panel.as_deref().and_then(|name| config.get_panel(name));
+    let panel_colors = panel.map(|p| p.colors.clone());
+
+    // The panel is part of that same chain: it knows its own dimensions, and
+    // taking the size from anywhere else is how a device configured for a
+    // 1200x1600 panel rendered at 800x480 in that panel's colours.
+    let display_spec =
+        resolve_cli_display_spec(panel.and_then(|p| Some((p.width?, p.height?))), device_type)?;
 
     // Build initial palette from --colors flag or device type default
     let cli_palette: Vec<(u8, u8, u8)> = if let Some(ref colors_str) = colors {
@@ -225,6 +289,14 @@ fn run_render_command(
     } else {
         vec![(0, 0, 0), (85, 85, 85), (170, 170, 170), (255, 255, 255)]
     };
+    let measured: Option<Vec<(u8, u8, u8)>> = panel
+        .and_then(|p| p.colors_actual.as_deref())
+        .map(byonk::api::display::parse_colors_header);
+    // Pre-script chain for the final measured-colour resolution after the
+    // script runs — the CLI has no dev-override or header layer (see
+    // `resolve_render_params`'s doc comment).
+    let pre_script_measured_candidates: [byonk::api::display::MeasuredCandidate; 1] =
+        [(byonk::api::display::SRC_PANEL_ACTUAL, measured.clone())];
 
     // Create device context with all provided fields
     let device_context = DeviceContext {
@@ -236,7 +308,16 @@ fn run_render_command(
         width: Some(display_spec.width),
         height: Some(display_spec.height),
         registration_code,
-        colors: Some(byonk::api::display::colors_to_hex_strings(&cli_palette)),
+        colors: Some(byonk::api::display::colors_to_hex_strings(
+            &byonk::api::display::resolve_ctx_palette(
+                dc_colors.as_deref(),
+                panel_colors.as_deref(),
+                &cli_palette,
+            ),
+        )),
+        colors_actual: measured
+            .as_deref()
+            .map(byonk::api::display::colors_to_hex_strings),
         ..Default::default()
     };
 
@@ -249,11 +330,14 @@ fn run_render_command(
         svg_content,
         final_palette,
         dither,
-        preserve_exact,
         cli_error_clamp,
         cli_noise_scale,
         cli_chroma_clamp,
         cli_strength,
+        measured_colors,
+        measured_source,
+        cli_gamut,
+        script_font_hinting,
     ) = if is_unregistered {
         let code = device_context.registration_code.as_deref().unwrap();
 
@@ -290,34 +374,56 @@ fn run_render_command(
             )
         };
 
-        (svg, cli_palette, None, true, None, None, None, None)
+        // No script runs on the unregistered path. `is_unregistered` is the
+        // negation of `is_device_registered`, which is true iff
+        // `device_config` resolves — so here `device_config` is always
+        // `None`, `panel` is always `None`, and
+        // `pre_script_measured_candidates` is always `[(SRC_PANEL_ACTUAL,
+        // None)]`. This call therefore always yields `SRC_NONE` with no
+        // colors and no warning; it's kept (rather than hardcoded) so this
+        // stays correct if the unregistered path ever grows a measured
+        // source of its own.
+        let measured = byonk::api::display::resolve_measured_colors(
+            cli_palette.len(),
+            &pre_script_measured_candidates,
+        );
+        if let Some(w) = &measured.warning {
+            tracing::warn!(mac = %mac, "{w}");
+        }
+
+        (
+            svg,
+            cli_palette,
+            None,
+            None,
+            None,
+            None,
+            None,
+            measured.colors,
+            measured.source,
+            byonk::models::GamutTuningValues::default(),
+            // The registration screen is byonk's own; it carries no screen
+            // directive, so the panel's adaptive default applies.
+            None,
+        )
     } else {
         // Normal render path
         let script_result = content_pipeline
             .run_script_for_device(mac, Some(device_context.clone()))
-            .map_err(|e| anyhow::anyhow!("Script error: {e}"))?;
+            // `ContentError` already labels its own kind ("Script error: …",
+            // "Template error: …"), so adding a prefix here both doubled it up
+            // and mislabelled every variant that is not a script failure.
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        // Resolve device config for palette/dither/panel (single lookup, same as display.rs)
-        let device_config = config.get_device_config(mac).or_else(|| {
-            device_context
-                .registration_code
-                .as_deref()
-                .and_then(|code| config.get_device_config_for_code(code))
-        });
-        let dc_colors = device_config.and_then(|dc| dc.colors.clone());
-        let dc_dither = device_config.and_then(|dc| dc.dither.clone());
-        let dc_panel = device_config.and_then(|dc| dc.panel.clone());
-        let panel = dc_panel.as_deref().and_then(|name| config.get_panel(name));
-        let panel_colors = panel.map(|p| p.colors.clone());
-        let measured = panel
-            .and_then(|p| p.colors_actual.as_deref())
-            .map(byonk::api::display::parse_colors_header);
-
+        // device_config/panel/dc_colors/dc_dither/panel_colors/measured were
+        // already resolved once above (before the device context) and are
+        // reused here rather than looked up a second time.
         let dc_tuning = byonk::models::DitherTuningValues {
             error_clamp: device_config.and_then(|dc| dc.error_clamp),
             noise_scale: device_config.and_then(|dc| dc.noise_scale),
             chroma_clamp: device_config.and_then(|dc| dc.chroma_clamp),
             strength: device_config.and_then(|dc| dc.strength),
+            gamut: device_config.map(|dc| dc.gamut.clone()).unwrap_or_default(),
         };
 
         // Resolve panel dither tuning for the effective algorithm
@@ -337,21 +443,26 @@ fn run_render_command(
             noise_scale: script_result.script_noise_scale,
             chroma_clamp: script_result.script_chroma_clamp,
             strength: script_result.script_strength,
+            gamut: script_result.script_gamut.clone().unwrap_or_default(),
         };
         let tuning = byonk::api::display::resolve_tuning(&script_tuning, &dc_tuning, &panel_tuning);
 
+        let mut measured_warning: Option<String> = None;
         let render_params = byonk::api::display::resolve_render_params(
             script_result.script_colors.as_deref(),
+            script_result.script_colors_actual.as_deref(),
             script_result.script_dither.as_deref(),
-            script_result.script_preserve_exact,
             dc_colors.as_deref(),
             dc_dither.as_deref(),
             panel_colors.as_deref(),
             &cli_palette,
-            measured,
-            None,
+            &pre_script_measured_candidates,
             &tuning,
+            &mut measured_warning,
         );
+        if let Some(w) = &measured_warning {
+            tracing::warn!(mac = %mac, "{w}");
+        }
 
         let svg = content_pipeline
             .render_svg_from_script(&script_result, Some(&device_context))
@@ -361,11 +472,14 @@ fn run_render_command(
             svg,
             render_params.palette,
             render_params.dither,
-            render_params.preserve_exact,
             render_params.error_clamp,
             render_params.noise_scale,
             render_params.chroma_clamp,
             render_params.strength,
+            render_params.measured_colors,
+            render_params.measured_source,
+            render_params.gamut,
+            script_result.font_hinting,
         )
     };
 
@@ -375,30 +489,54 @@ fn run_render_command(
         error_clamp: cli_error_clamp,
         chroma_clamp: cli_chroma_clamp,
         noise_scale: cli_noise_scale,
-        exact_absorb_error: None,
         strength: cli_strength,
+        gamut: Some(cli_gamut.resolve()),
     };
     let has_cli_tuning = cli_tuning.error_clamp.is_some()
         || cli_tuning.chroma_clamp.is_some()
         || cli_tuning.noise_scale.is_some()
-        || cli_tuning.strength.is_some();
+        || cli_tuning.strength.is_some()
+        || !cli_gamut.is_empty();
 
+    // Measured colours always steer the dithering when they resolve; the
+    // flag governs only the palette the file is written in. The rule itself
+    // lives in `api::display` so the CLI, `/dev/render` and the authoring
+    // path share one copy.
+    let use_actual =
+        byonk::api::display::resolve_use_actual(use_actual_flag, measured_colors.is_some());
+
+    tracing::info!(
+        measured_source = measured_source,
+        use_actual = use_actual,
+        "CLI render measured-colour resolution"
+    );
+
+    let mut scale_warning: Option<String> = None;
     let png_bytes = content_pipeline
         .render_png_from_svg(
             &svg_content,
             display_spec,
             &final_palette,
-            None,
-            false,
+            measured_colors.as_deref(),
+            use_actual,
             dither.as_deref(),
-            preserve_exact,
             if has_cli_tuning {
                 Some(&cli_tuning)
             } else {
                 None
             },
+            script_font_hinting.as_ref(),
+            &mut scale_warning,
         )
         .map_err(|e| anyhow::anyhow!("Render error: {e}"))?;
+
+    // The CLI does not print the script log, so this is the only way the
+    // warning reaches whoever ran the render — and a probe SVG rendered at the
+    // wrong scale is exactly the mistake this command invites. stderr, so it
+    // stays out of anything piping the success line.
+    if let Some(w) = scale_warning {
+        eprintln!("warning: {w}");
+    }
 
     // Write to file
     std::fs::write(output, &png_bytes)?;
@@ -418,10 +556,27 @@ fn run_init_command(
 ) -> anyhow::Result<()> {
     use byonk::assets::{AssetCategory, AssetLoader};
 
+    // Create asset loader with paths from env vars (or defaults) — needed by
+    // both `--list` (to enumerate the `examples` embed) and extraction below.
+    let screens_dir = std::env::var("SCREENS_DIR").ok().map(PathBuf::from);
+    let fonts_dir = std::env::var("FONTS_DIR").ok().map(PathBuf::from);
+    let config_file = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
+
+    let loader = AssetLoader::new(screens_dir, fonts_dir, config_file);
+
     if list {
         println!("Embedded assets:\n");
-        println!("Screens:");
+        println!(
+            "Built-in screens (embedded, read-only — `init --screens` does not extract these):"
+        );
         for f in AssetLoader::list_embedded(AssetCategory::Screens) {
+            println!("  {f}");
+        }
+        println!(
+            "\nExample screens (embedded, seeded automatically to the examples directory on \
+             server start — `init --screens` does not extract these either):"
+        );
+        for f in loader.list_examples() {
             println!("  {f}");
         }
         println!("\nFonts:");
@@ -432,6 +587,11 @@ fn run_init_command(
         for f in AssetLoader::list_embedded(AssetCategory::Config) {
             println!("  {f}");
         }
+        println!(
+            "\nNote: `init --screens` writes only a byonk-screens.yaml manifest to SCREENS_DIR, \
+             registering it as the writable `local` screen repo — it does not copy any of the \
+             built-in or example screens listed above."
+        );
         return Ok(());
     }
 
@@ -452,13 +612,6 @@ fn run_init_command(
         eprintln!("\nRun 'byonk init --list' to see embedded assets.");
         std::process::exit(1);
     }
-
-    // Create asset loader with paths from env vars (or defaults)
-    let screens_dir = std::env::var("SCREENS_DIR").ok().map(PathBuf::from);
-    let fonts_dir = std::env::var("FONTS_DIR").ok().map(PathBuf::from);
-    let config_file = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
-
-    let loader = AssetLoader::new(screens_dir, fonts_dir, config_file);
 
     // Extract assets
     let report = loader.init(&categories, force)?;
@@ -497,6 +650,7 @@ fn run_status_command() {
     let config_file = std::env::var("CONFIG_FILE").ok();
     let screens_dir = std::env::var("SCREENS_DIR").ok();
     let fonts_dir = std::env::var("FONTS_DIR").ok();
+    let examples_dir_env = std::env::var("EXAMPLES_DIR").ok();
 
     // Header
     println!("Byonk v{VERSION} - Bring Your Own Ink");
@@ -505,20 +659,26 @@ fn run_status_command() {
     // Environment variables section
     println!("Environment Variables:");
     println!(
-        "  BIND_ADDR   = {}",
+        "  BIND_ADDR    = {}",
         bind_addr.as_deref().unwrap_or("0.0.0.0:3000 (default)")
     );
     println!(
-        "  CONFIG_FILE = {}",
+        "  CONFIG_FILE  = {}",
         config_file.as_deref().unwrap_or("(not set)")
     );
     println!(
-        "  SCREENS_DIR = {}",
+        "  SCREENS_DIR  = {}",
         screens_dir.as_deref().unwrap_or("(not set)")
     );
     println!(
-        "  FONTS_DIR   = {}",
+        "  FONTS_DIR    = {}",
         fonts_dir.as_deref().unwrap_or("(not set)")
+    );
+    println!(
+        "  EXAMPLES_DIR = {}",
+        examples_dir_env
+            .as_deref()
+            .unwrap_or("(not set, derived from SCREENS_DIR)")
     );
 
     // Asset sources section
@@ -529,7 +689,8 @@ fn run_status_command() {
         screens_dir.clone().map(PathBuf::from),
         fonts_dir.clone().map(PathBuf::from),
         config_file.clone().map(PathBuf::from),
-    );
+    )
+    .with_examples_dir_override(examples_dir_env.clone().map(PathBuf::from));
 
     // Config source
     let config_source = if let Some(ref path) = config_file {
@@ -605,6 +766,26 @@ fn run_status_command() {
         );
     }
 
+    // Examples source — where the shipped `examples` screen repo lands once
+    // seeded (default `<SCREENS_DIR>/../examples`, or EXAMPLES_DIR if set).
+    match loader.examples_dir() {
+        Some(examples_path) => {
+            if examples_path.exists() {
+                println!("  Examples: {}", examples_path.display());
+            } else {
+                println!(
+                    "  Examples: {} (not yet seeded; seeds on next server start)",
+                    examples_path.display()
+                );
+            }
+        }
+        None => {
+            println!(
+                "  Examples: (none — set SCREENS_DIR or EXAMPLES_DIR to seed the shipped examples)"
+            );
+        }
+    }
+
     // Commands section
     println!("\nCommands:");
     println!("  byonk serve    Start the HTTP server");
@@ -612,6 +793,48 @@ fn run_status_command() {
     println!("  byonk render   Render a screen to PNG file");
     println!("  byonk init     Extract embedded assets");
     println!("\nRun 'byonk --help' for more details.");
+}
+
+/// Seed configured-but-empty asset directories, then run the one-time
+/// `byonk-builtin` -> `local` migration for pre-existing installs.
+///
+/// Shared by `run_server` and `run_dev_server` so the two can't drift: a
+/// `byonk dev` run reads and writes the very same `SCREENS_DIR` and
+/// `config.yaml` a `byonk serve` run does, so skipping the migration in one
+/// of them leaves an unmigrated tree behind for the other (and, now that
+/// `byonk-builtin` no longer enumerates the `SCREENS_DIR` overlay, an
+/// unmigrated `byonk-builtin/<user-screen>` ref simply stops resolving).
+///
+/// Both steps are best-effort: neither may prevent the server from starting.
+/// Order matters — the migration reads the `byonk-screens.yaml` manifest that
+/// seeding may have just written, and both must complete before app state is
+/// built from the config they may have rewritten.
+fn seed_and_migrate(asset_loader: &Arc<byonk::assets::AssetLoader>) {
+    match asset_loader.seed_if_configured() {
+        Ok(report) if !report.is_empty() => {
+            tracing::info!(
+                screens = report.screens_seeded.len(),
+                examples = report.examples_seeded.len(),
+                fonts = report.fonts_seeded.len(),
+                config = report.config_seeded,
+                "Seeded empty directories with embedded assets"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(%e, "Failed to seed assets");
+        }
+        _ => {}
+    }
+
+    // One-time migration of pre-existing installs: older byonk versions copied
+    // their builtin screens into SCREENS_DIR under the `byonk-builtin` handle.
+    // This rewrites the leftover manifest and any device refs still pointing at
+    // `byonk-builtin/<x>` where `<x>` is actually a screen SCREENS_DIR will
+    // serve as `local`, to the `local` handle. No-op (and logs nothing) once
+    // already migrated.
+    if let Some(dir) = asset_loader.screens_dir() {
+        byonk::services::migrate_builtin_overlay_to_local(dir, asset_loader.config_path());
+    }
 }
 
 /// Run the HTTP server
@@ -644,37 +867,25 @@ async fn run_server() -> anyhow::Result<()> {
     let screens_dir = std::env::var("SCREENS_DIR").ok().map(PathBuf::from);
     let fonts_dir = std::env::var("FONTS_DIR").ok().map(PathBuf::from);
     let config_file = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
+    let examples_dir_env = std::env::var("EXAMPLES_DIR").ok().map(PathBuf::from);
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
 
-    let asset_loader = Arc::new(AssetLoader::new(
-        screens_dir.clone(),
-        fonts_dir.clone(),
-        config_file.clone(),
-    ));
+    let asset_loader = Arc::new(
+        AssetLoader::new(screens_dir.clone(), fonts_dir.clone(), config_file.clone())
+            .with_examples_dir_override(examples_dir_env.clone()),
+    );
 
     // Log asset sources
     tracing::info!(
         screens = ?screens_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
         fonts = ?fonts_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
         config = ?config_file.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
+        examples = ?asset_loader.examples_dir().map(|p| p.display().to_string()).unwrap_or_else(|| "none".to_string()),
         "Asset sources configured"
     );
 
-    // Seed if configured paths are empty
-    match asset_loader.seed_if_configured() {
-        Ok(report) if !report.is_empty() => {
-            tracing::info!(
-                screens = report.screens_seeded.len(),
-                fonts = report.fonts_seeded.len(),
-                config = report.config_seeded,
-                "Seeded empty directories with embedded assets"
-            );
-        }
-        Err(e) => {
-            tracing::warn!(%e, "Failed to seed assets");
-        }
-        _ => {}
-    }
+    // Seed empty configured directories, then migrate a pre-existing install.
+    seed_and_migrate(&asset_loader);
 
     // Create application state, injecting the add-on admin token (if any) into config.
     // Explicit BYONK_ADMIN_TOKEN env still wins (server resolves env before config.admin.token).
@@ -769,37 +980,27 @@ async fn run_dev_server() -> anyhow::Result<()> {
     let screens_dir = std::env::var("SCREENS_DIR").ok().map(PathBuf::from);
     let fonts_dir = std::env::var("FONTS_DIR").ok().map(PathBuf::from);
     let config_file = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
+    let examples_dir_env = std::env::var("EXAMPLES_DIR").ok().map(PathBuf::from);
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
 
-    let asset_loader = Arc::new(AssetLoader::new(
-        screens_dir.clone(),
-        fonts_dir.clone(),
-        config_file.clone(),
-    ));
+    let asset_loader = Arc::new(
+        AssetLoader::new(screens_dir.clone(), fonts_dir.clone(), config_file.clone())
+            .with_examples_dir_override(examples_dir_env.clone()),
+    );
 
     // Log asset sources
     tracing::info!(
         screens = ?screens_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
         fonts = ?fonts_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
         config = ?config_file.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
+        examples = ?asset_loader.examples_dir().map(|p| p.display().to_string()).unwrap_or_else(|| "none".to_string()),
         "Asset sources configured"
     );
 
-    // Seed if configured paths are empty
-    match asset_loader.seed_if_configured() {
-        Ok(report) if !report.is_empty() => {
-            tracing::info!(
-                screens = report.screens_seeded.len(),
-                fonts = report.fonts_seeded.len(),
-                config = report.config_seeded,
-                "Seeded empty directories with embedded assets"
-            );
-        }
-        Err(e) => {
-            tracing::warn!(%e, "Failed to seed assets");
-        }
-        _ => {}
-    }
+    // Seed empty configured directories, then migrate a pre-existing install —
+    // exactly as `run_server` does, so `byonk dev` and `byonk serve` leave the
+    // same SCREENS_DIR/config.yaml state behind.
+    seed_and_migrate(&asset_loader);
 
     // Create file watcher for screens directory
     let file_watcher = Arc::new(FileWatcher::new(screens_dir.clone()));
@@ -842,7 +1043,7 @@ async fn run_dev_server() -> anyhow::Result<()> {
         .route("/render", get(handle_render))
         .route("/resolve-mac", get(handle_resolve_mac))
         .route("/panel-colors", post(handle_set_panel_colors))
-        .route("/panel-colors/:panel", delete(handle_delete_panel_colors))
+        .route("/panel-colors/{panel}", delete(handle_delete_panel_colors))
         .with_state(dev_state);
 
     // Build router: start with shared API routes, add dev routes
@@ -861,4 +1062,118 @@ async fn run_dev_server() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use byonk::assets::AssetLoader;
+
+    /// Minor 5: `byonk dev` and `byonk serve` must leave the same on-disk
+    /// state behind. They do so by both calling `seed_and_migrate` and
+    /// nothing else — this asserts that helper really does both halves
+    /// (seed, then migrate), so "did `dev` migrate?" reduces to "does `dev`
+    /// call the helper?", which is checkable by reading two lines.
+    ///
+    /// Non-vacuous: drop the `migrate_builtin_overlay_to_local` call from
+    /// `seed_and_migrate` (which is what `run_dev_server` effectively did
+    /// before this change) and the manifest/ref assertions fail.
+    #[test]
+    fn seed_and_migrate_both_seeds_and_migrates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let screens_dir = tmp.path().join("screens");
+        let config_path = tmp.path().join("config.yaml");
+
+        // A pre-split install: SCREENS_DIR is the old byonk-builtin overlay
+        // copy, with one of the user's own screens in it, and a device ref
+        // still pointing at `byonk-builtin/myclock`.
+        std::fs::create_dir_all(screens_dir.join("myclock")).unwrap();
+        std::fs::write(
+            screens_dir.join("byonk-screens.yaml"),
+            "name: byonk-builtin\ndescription: Built-in screens.\nauthor: Byonk\nlicense: MIT\n",
+        )
+        .unwrap();
+        std::fs::write(
+            screens_dir.join("myclock/meta.yaml"),
+            "title: C\ndescription: d\nbyonk: \"0.17\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &config_path,
+            "devices:\n  AA:BB:\n    screen: byonk-builtin/myclock\n",
+        )
+        .unwrap();
+
+        // `examples_dir` pinned inside the tempdir: its derived default is
+        // `<SCREENS_DIR>/../examples`, and seeding must not escape the fixture.
+        let loader = Arc::new(
+            AssetLoader::new(Some(screens_dir.clone()), None, Some(config_path.clone()))
+                .with_examples_dir_override(Some(tmp.path().join("examples"))),
+        );
+
+        seed_and_migrate(&loader);
+
+        // Migrated: the leftover manifest now names the `local` repo...
+        let manifest = std::fs::read_to_string(screens_dir.join("byonk-screens.yaml")).unwrap();
+        assert!(
+            manifest.contains("name: local"),
+            "manifest must be migrated to the `local` handle:\n{manifest}"
+        );
+        // ...and the device ref follows it.
+        let cfg = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            cfg.contains("screen: local/myclock"),
+            "device ref must be migrated to the `local` handle:\n{cfg}"
+        );
+
+        // Seeded: the shipped examples landed in the pinned examples dir.
+        assert!(tmp.path().join("examples/byonk-screens.yaml").exists());
+    }
+
+    /// The case the two-valued `--device` flag cannot express at all.
+    ///
+    /// `byonk render` used to size every render from that flag alone, so a
+    /// device configured for the 1200x1600 reTerminal E1004 got an 800x480
+    /// PNG — in the E1004's own 6-colour palette, because the palette half of
+    /// the panel chain was already wired up. The result looked plausible and
+    /// was the wrong size for the device it named.
+    #[test]
+    fn a_panel_the_device_type_flag_cannot_express_still_renders_at_its_own_size() {
+        let spec = resolve_cli_display_spec(Some((1200, 1600)), "og").unwrap();
+        assert_eq!(
+            (spec.width, spec.height),
+            (1200, 1600),
+            "a configured panel's dimensions must reach the render"
+        );
+    }
+
+    /// The control that makes the test above about the *panel* rather than
+    /// about `from_dimensions` accepting anything: the flag names a size, the
+    /// panel names a different one, and the panel has to win. Without this, an
+    /// implementation that preferred the flag would still pass the E1004 case
+    /// whenever the flag happened to agree.
+    #[test]
+    fn the_configured_panel_outranks_the_device_type_flag() {
+        let spec = resolve_cli_display_spec(Some((800, 480)), "x").unwrap();
+        assert_eq!(
+            (spec.width, spec.height),
+            (800, 480),
+            "`--device x` must not override the device's own panel"
+        );
+    }
+
+    /// The fallback still works, for a MAC with no device config and for a
+    /// panel that declares no dimensions. Both arrive here as `None`.
+    #[test]
+    fn without_a_panel_the_device_type_flag_still_chooses_the_size() {
+        let x = resolve_cli_display_spec(None, "x").unwrap();
+        assert_eq!((x.width, x.height), (1872, 1404));
+
+        let og = resolve_cli_display_spec(None, "og").unwrap();
+        assert_eq!((og.width, og.height), (800, 480));
+
+        // Anything unrecognised is OG, which is what the old `match` did.
+        let other = resolve_cli_display_spec(None, "nonsense").unwrap();
+        assert_eq!((other.width, other.height), (800, 480));
+    }
 }

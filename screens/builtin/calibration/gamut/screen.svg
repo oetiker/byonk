@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
+  <!-- White background; the gaps between patches read as the grid. -->
+  <rect width="{{ data.width }}" height="{{ data.height }}" fill="#FFFFFF"/>
+
+  <!-- Hue labels (degrees) across the top -->
+  {% for l in data.hue_labels %}
+  <text x="{{ l.x }}" y="{{ data.label_y }}" text-anchor="middle" font-family="X11Misc6x" font-size="{{ data.font_size }}" fill="#000000">{{ l.text }}</text>
+  {% endfor %}
+
+  <!-- Lightness labels (percent) down the left -->
+  {% for l in data.level_labels %}
+  <text x="{{ data.label_w }}" y="{{ l.y }}" text-anchor="end" font-family="X11Misc6x" font-size="{{ data.font_size }}" fill="#000000">{{ l.text }}</text>
+  {% endfor %}
+
+  <!-- Patch grid: one flat requested colour per cell.
+       Each cell is outlined because the most striking failures come out pure
+       white (hues the panel cannot mix at all collapse to white), which would
+       otherwise be indistinguishable from the background and read as a
+       missing patch rather than as the result it is. -->
+  {% for p in data.patches %}
+  <rect x="{{ p.x }}" y="{{ p.y }}" width="{{ p.width }}" height="{{ p.height }}" fill="{{ p.color }}" stroke="#000000" stroke-width="1" shape-rendering="crispEdges"/>
+  {% endfor %}
+</svg>

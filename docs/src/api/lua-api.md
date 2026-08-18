@@ -51,11 +51,75 @@ end
 | `height` | number or nil | Display height in pixels (480 or 1404) |
 | `board` | string or nil | Board identifier (e.g., "trmnl_og_4clr") |
 | `colors` | table or nil | Display palette as hex RGB strings (e.g., {"#000000", "#FFFFFF"}) |
+| `colors_actual` | table or nil | The panel's measured colours, index-parallel to `colors` (see below) |
 | `dither` | table | Pre-script resolved dither tuning (see below) |
 
 **Type:** `table`
 
 > **Note:** Device fields may be `nil` if the device doesn't report them. Always check before using.
+
+#### device.colors_actual
+
+The colours the panel **really** shows, as measured — index-parallel to
+`device.colors`. `nil` when the panel has no measured colours configured.
+
+This is deliberately **not** filled in from `device.colors` when absent, so a
+script can tell an uncalibrated panel from one that measures exactly to spec.
+
+> **⚠️ Use measured colours to *decide*, never to *paint*.**
+>
+> A measured value is the right input for a judgement — "is this ink dark
+> enough that I need white text on it?" — because it is what the eye will
+> see. It is the **wrong** thing to write into a `fill` or `stroke`.
+>
+> Ordinary (non-`continuous`) content is matched against the **official**
+> palette, so an official colour like `#00FF00` matches at distance zero and
+> comes out as that one ink, flat. A measured value like `#0D876B` is not an
+> official entry, cannot match exactly, and **dithers** — the flat block you
+> wanted breaks up into speckle. Paint `device.colors[i]`; the panel maps the
+> index to its real ink for you.
+
+```lua
+local shown = device.colors_actual or device.colors
+
+-- DECIDE with the measured colour: pick a foreground that genuinely
+-- contrasts on this panel, not one that only contrasts in the spec.
+local fg = luminance(shown[i]) < 128 and "#FFFFFF" or "#000000"
+
+-- PAINT with the official colour, so the block pins to a single ink.
+local bg = device.colors[i]
+```
+
+`screens/builtin/calibration/color` is the worked example: its solid patches
+are filled from `device.colors` and pick their label colour from
+`device.colors_actual`.
+
+`device.colors_actual` is resolved *before* this script runs, so it reflects
+whichever of these applies first: the dev colour-tuning override (or, when
+rendering via the `render_screen` MCP tool, its `colors_actual` argument) >
+`panel.colors_actual` in `config.yaml` > the `Measured-Colors` header > none.
+
+A script can still go one step further and override what actually gets
+dithered against by *returning* its own `colors_actual` — see below. That
+return, when present, wins over everything `device.colors_actual` could have
+reported: the full chain for a render is `script > dev-override /
+render-opts > panel.colors_actual > measured header > none`. A mismatched
+length anywhere in that chain never fails the render — the offending layer is
+skipped with a warning and the next one down is tried.
+
+**Which palette a pixel is matched against depends on how it is marked.**
+Content inside a `data-byonk-tone="continuous"` region is matched against the
+**measured** colours; everything else is matched against the **official**
+ones. So measured colours steer the palette **index** only for the parts of
+the document you marked as continuous-tone — see
+[Marking continuous-tone content](../tutorial/svg-templates.md#marking-continuous-tone-content).
+
+Either way, the PNG that gets sent to a real device is drawn in the *nominal*
+palette (`colors`) — the device itself maps index to physical ink, so sending
+it nominal colours is correct whichever palette the matching targeted. This
+split only matters if you're inspecting the raw PNG bytes; `render_screen`'s
+`use_actual` (see the MCP guide) exists precisely so an authoring agent can
+instead see what the panel will really look like.
 
 #### device.dither
 
@@ -64,7 +128,7 @@ The `device.dither` sub-table contains the pre-script resolved dither tuning val
 ```lua
 -- Read current tuning
 local algo = device.dither.algorithm       -- "floyd-steinberg" (resolved algorithm)
-local ec = device.dither.error_clamp       -- 0.08 (from panel/device config)
+local ec = device.dither.error_clamp       -- 1.0 (from panel/device config)
 local ns = device.dither.noise_scale       -- 4.0
 local cc = device.dither.chroma_clamp      -- nil (not set)
 local st = device.dither.strength          -- 1.0 (default)
@@ -73,7 +137,7 @@ local st = device.dither.strength          -- 1.0 (default)
 return {
   data = { ... },
   refresh_rate = 300,
-  error_clamp = (device.dither.error_clamp or 0.1) * 0.5,
+  error_clamp = (device.dither.error_clamp or 1.0) * 0.5,
   -- noise_scale not returned -> keeps panel/device value
 }
 ```
@@ -258,7 +322,13 @@ local colors = layout.colors                 -- Display palette colors
 
 ## HTTP Functions
 
-Byonk provides three HTTP functions: `http_request` (full control), `http_get` (GET shorthand), and `http_post` (POST shorthand).
+Byonk provides four HTTP functions: `http_request` (full control), `http_get` (GET
+shorthand), `http_post` (POST shorthand), and `http_response`, which returns the whole
+reply so a script can check whether the request actually succeeded.
+
+**Which to use.** `http_get` and friends return only the body, so a 404 or a 500 arrives
+looking exactly like data. If the screen should react to a failure — or say what went
+wrong — use `http_response`.
 
 ### http_request(url, options?)
 
@@ -440,6 +510,49 @@ if not ok then
   log_error("Request failed: " .. tostring(response))
 end
 ```
+
+### http_response(url, options?)
+
+Makes a request and returns the whole reply instead of just the body. Takes exactly the
+same options as `http_request`.
+
+**Unlike the other three, it does not raise when the request fails.** A refused
+connection, a timeout and a 500 are all outcomes the script can inspect and decide about,
+because what a failure means is the screen's business, not byonk's.
+
+```lua
+local reply = http_response("https://api.example.com/data", { timeout = 15 })
+
+if not reply.ok then
+  -- reply.error is set when nothing arrived at all; otherwise it was a bad status.
+  error("Could not reach the API: " .. (reply.error or ("HTTP " .. tostring(reply.status))))
+end
+
+local data = json_decode(reply.body)
+```
+
+**Returns:** `table`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ok` | boolean | `true` only for a 2xx status |
+| `status` | number | The HTTP status, or `nil` if no reply arrived |
+| `body` | string | The response body, or `nil` if no reply arrived |
+| `headers` | table | Response headers, with lowercased names |
+| `error` | string | Why nothing arrived, or `nil` if a reply did |
+| `from_cache` | boolean | Whether this came from the `cache_ttl` cache |
+
+**Notes:**
+
+- `ok` is about the status only. A 404 that returns a helpful JSON error body still has
+  `ok = false`, and its body is there for you to read.
+- Only successful responses are cached, so an error page is never served as data for the
+  rest of a `cache_ttl` window.
+- **If a screen has no sensible way to carry on, raise.** Calling `error()` makes byonk
+  draw its own error screen on the device, naming the screen and your message, and makes
+  `byonk render` exit non-zero. That is far more useful than a screen that renders with
+  pieces missing.
+
 
 ## JSON Functions
 
@@ -710,7 +823,7 @@ local ts = time_parse("2024-12-27 14:30", "%Y-%m-%d %H:%M")
 Reads a file from the current screen's own folder.
 
 ```lua
--- From screens/example/hello/script.lua, reads screens/example/hello/logo.png
+-- From screens/examples/hello/script.lua, reads screens/examples/hello/logo.png
 local logo_bytes = read_asset("logo.png")
 ```
 
@@ -726,7 +839,7 @@ local logo_bytes = read_asset("logo.png")
 **Asset location convention:**
 
 ```
-screens/example/hello/     # The "hello" screen folder
+screens/examples/hello/     # The "hello" screen folder
 ├── meta.yaml              # Title, description, params
 ├── script.lua             # Data-fetch logic
 ├── screen.svg             # Template
@@ -735,7 +848,7 @@ screens/example/hello/     # The "hello" screen folder
 ```
 
 When `read_asset("logo.png")` is called from this screen's `script.lua`, it reads
-`screens/example/hello/logo.png` — a file sitting alongside `script.lua` in the
+`screens/examples/hello/logo.png` — a file sitting alongside `script.lua` in the
 screen's own folder.
 
 **Example: Embedding an image in data:**
@@ -782,6 +895,149 @@ local image_src = "data:image/png;base64," .. base64_encode(image_bytes)
 ```
 
 See [Embedding Remote Images](../tutorial/advanced.md#embedding-remote-images) for a complete example with error handling.
+
+## Image Functions
+
+### image_process(bytes, options)
+
+Prepares a photograph for an e-ink panel: decodes it, optionally crops and
+resizes it, tone-maps it, sharpens it, and re-encodes it as a `data:` URI
+ready to drop into an SVG `<image href="...">`.
+
+An e-ink panel is a low-dynamic-range display with a handful of colours. A
+photograph sent to it untouched loses its shadows to a black sink, blows its
+highlights to paper white, and desaturates until nothing reaches a coloured
+palette entry. These options exist to fix that before dithering ever sees
+the image.
+
+```lua
+local photo = http_get("https://example.com/photo.jpg")
+local src, w, h = image_process(photo, {
+  preset        = "eink",
+  palette_aware = true,
+  fit           = "cover",
+  width         = layout.width,
+  height        = layout.height,
+})
+
+return { data = { image_src = src, image_w = w, image_h = h } }
+```
+
+**Parameters:**
+| Name | Type | Description |
+|------|------|-------------|
+| `bytes` | string | Encoded image bytes (PNG, JPEG, etc.), e.g. from `http_get` |
+| `options` | table (optional) | Geometry, tone and output options (see below) |
+
+**Returns:** `string, integer, integer` — the `data:` URI, and the result's
+actual width and height in pixels. With `fit = "cover"` or `"stretch"` these
+always equal the `width`/`height` you asked for. With `fit = "contain"` or
+`"none"` they can differ — see the `fit` table below — so use the returned
+values, not the ones you passed in, when positioning the image in the SVG.
+
+**All options are optional.** `image_process(bytes, {})` decodes and
+re-encodes without changing anything.
+
+**Geometry options:**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `crop` | table | none | `{ x = ..., y = ..., w = ..., h = ... }`, each 0–1, normalised to the *decoded* image (after EXIF orientation is applied, before resizing). `x`/`y` default to 0; `w`/`h` are required if `crop` is given at all. The region must lie within the image or `image_process` raises an error. |
+| `fit` | string | `"cover"` | How the (possibly cropped) image meets `width`/`height`. One of `"cover"`, `"contain"`, `"stretch"`, `"none"` — see below. |
+| `width`, `height` | integer | none | Target size in pixels, up to 4096 each. Give both, one, or neither — see `fit` below for what each combination does. |
+
+**How the four `fit` modes differ** — this is the part a screen author most
+often gets wrong:
+
+| `fit` | Behaviour |
+|-------|-----------|
+| `cover` (default) | Fills the `width`×`height` box exactly, cropping whatever doesn't fit. The result is always exactly `width`×`height`. Use this for a full-bleed photo. |
+| `contain` | Scales to fit *inside* the box, preserving aspect ratio, and crops nothing. **The result is not padded up to `width`×`height`** — one dimension comes out smaller than requested (e.g. asking for 80×48 on a 200×100 source returns 80×40). Read the two return values to find out how big it actually is. |
+| `stretch` | Fills the box exactly like `cover`, but scales each axis independently instead of cropping — the image distorts if the box's aspect ratio doesn't match the source's. |
+| `none` | Ignores `width`/`height` entirely and keeps the (cropped) source's own pixel size. Set this only when you want the source resolution and are positioning the `<image>` yourself. |
+
+If you give only one of `width`/`height` (in any `fit` mode except `none`),
+the other is derived from the source's aspect ratio.
+
+**Photo (tone) options.** Order is fixed and not something you control:
+crop → resize → exposure → white balance → auto-levels/blacks/whites →
+highlights/shadows → contrast → curve → clarity → vibrance → saturation →
+grayscale/invert → sharpen. Resizing first is what keeps a 24-megapixel
+source cheap; sharpening last, at output size, is what makes it mean
+anything.
+
+| Option | Range | Effect |
+|---|---|---|
+| `exposure` | −5…5 | Stops of exposure, applied in linear light |
+| `temperature` | −100…100 | Positive is warmer, applied in linear light |
+| `tint` | −100…100 | Positive is greener, applied in linear light |
+| `auto_levels` | boolean | Stretch the histogram to the full range before the other tone options |
+| `blacks`, `whites` | −100…100 | Nudge where the black/white points land |
+| `highlights`, `shadows` | −100…100 | Recover the two ends. The most useful pair on e-ink |
+| `contrast` | −100…100 | S-curve about mid-grey |
+| `curve` | `{ {in, out}, ... }` | Point tone curve, sorted by input, for anything the sliders miss |
+| `clarity` | −100…100 | Large-radius local contrast. The single option that makes a dithered photo readable |
+| `vibrance` | −100…100 | Saturation boost weighted toward dull pixels, so muted colours reach a coloured palette entry |
+| `saturation` | −100…100 | Global saturation |
+| `grayscale`, `invert` | boolean | |
+| `sharpen` | `{ amount = 0…100, radius = 0.3…10 }` | Applied last, at output size. `amount` defaults to 40 and `radius` to 1.0 if you set the table but omit one of them |
+| `preset` | `"eink"` \| `"none"` (default) | A tuned base layer: turns on `auto_levels`, opens up `shadows`, pulls back `highlights`, and adds `clarity`, `vibrance` and a light `sharpen`. Any of those fields you set explicitly yourself overrides the preset's value for that field — the rest of the preset still applies |
+| `palette_aware` | boolean | See below |
+
+There are 17 fields in total on the underlying pipeline (16 tone/geometry
+options above plus the palette-derived black/white points `palette_aware`
+sets internally) — `preset = "eink"` is a starting point for most of them,
+not a replacement for the ones you still need to set (`fit`, `width`,
+`height`).
+
+**`palette_aware`**, when `true`, places the tone-mapped black and white
+points at the panel's real darkest and lightest measurable colours instead
+of pure black/white, so the tone mapping doesn't spend range the panel can't
+show. It looks at `device.colors_actual` (the panel's measured colours)
+first, falling back to `device.colors` (the configured palette) if the
+device isn't calibrated. If neither is available, it does nothing and logs
+a warning — a screen using it still renders everywhere, just without the
+adjustment on unconfigured devices.
+
+**Output options:**
+
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `format` | `"png"` \| `"jpeg"` | `"png"` | Output image format |
+| `quality` | 1–100 | 90 | JPEG quality. Ignored for PNG |
+
+**Throws:** Error if the image can't be decoded, if `crop` lies outside the
+image, if the source exceeds internal size limits (32 MB encoded, 40
+megapixels decoded, 4096px per output dimension), or if a tone option is
+out of range. Wrap in `pcall` if a screen should survive a bad image:
+
+```lua
+local ok, src = pcall(function()
+  return image_process(photo, { preset = "eink" })
+end)
+if not ok then
+  log_error("image failed: " .. tostring(src))
+end
+```
+
+Out-of-range tone values (`exposure`, `temperature`, `tint`, `blacks`,
+`whites`, `highlights`, `shadows`, `contrast`, `clarity`, `vibrance`,
+`saturation`, `sharpen.amount`, `sharpen.radius`) are **errors, not silent
+clamps**, and the error message names the field, the value you gave, and
+the valid range — so `exposure = 30` (a typo for `3.0`) is caught instead of
+quietly producing a blown-out image. Unknown `fit`, `preset` or `format`
+strings are errors too, for the same reason.
+
+**A wrong-*typed* value is different: it is silently ignored, not
+rejected**, matching `http_request`, `qr_svg` and the dither options
+elsewhere in this API. `image_process` reads each option with Lua's normal
+number/string coercion, so `exposure = "3.0"` works exactly like
+`exposure = 3.0` — but `exposure = "abc"`, `width = "twenty"`,
+`crop = "half"` or `sharpen = "lots"` fail that coercion and are dropped as
+if you hadn't set them at all, with no error and no log line. Likewise
+`quality = 300` doesn't fit in the underlying integer type and silently
+falls back to the default of 90. If a photo option doesn't seem to be
+taking effect, double-check its type before assuming a bug.
 
 ## URL Encoding Functions
 
@@ -984,9 +1240,9 @@ return {
   refresh_rate = 300,       -- Seconds until next refresh
   skip_update = false,      -- Optional: skip rendering, just check back later
   colors = { "#000000", "#FFFFFF", "#FF0000" },  -- Optional: override display palette
+  colors_actual = { "#0A0A0A", "#E8E6E0", "#A83A30" },  -- Optional: override measured colours
   dither = "atkinson",      -- Optional: dither algorithm
-  preserve_exact = true,    -- Optional: preserve exact palette matches (default: true)
-  error_clamp = 0.08,       -- Optional: error diffusion clamp
+  error_clamp = 1.0,        -- Optional: cap on accumulated diffusion error
   noise_scale = 0.6,        -- Optional: blue noise jitter scale
   chroma_clamp = 2.0,       -- Optional: chromatic error clamp
   strength = 0.8,           -- Optional: error diffusion strength (default 1.0)
@@ -1045,6 +1301,37 @@ return {
 }
 ```
 
+### colors_actual
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `colors_actual` | table or nil | Optional array of hex RGB strings overriding the measured colours used for dithering, for this render only |
+
+This does not change the display palette itself (`colors`, above) — it changes what the dithering
+algorithm targets while still emitting that palette. It's how a screen adapts its own render to a
+calibration it has computed, or how an author previews one:
+
+```lua
+return {
+  data = { ... },
+  colors        = { "#000000", "#FFFFFF", "#FF0000", "#00FF00" },
+  colors_actual = { "#0A0A0A", "#E8E6E0", "#A83A30", "#3F7A45" },
+}
+```
+
+Must have the same number of entries as the resolved palette (`colors`, above). If it does not,
+the render still succeeds: the value is ignored, the next source in the chain is used instead, and
+a warning is written to the script log. On the authoring path this is visible in the MCP
+`render_screen` tool's `log` field; on `/dev/render` the warning goes only to the server's
+`tracing` output — the dev UI receives raw PNG bytes and has no log surface to show it on.
+
+A script that returns `colors_actual` wins over every other source, including the dev
+colour-tuning popup. The winning source isn't rendered anywhere in the dev UI, but it is visible
+as `measured_source` in the MCP `render_screen` tool's diagnostics, and as a `tracing` field in
+server logs — so it's inspectable rather than mysterious, just not from the dev UI itself. See
+`device.colors_actual` above for the full precedence chain and why measured colours steer
+dithering while the emitted PNG palette can still be the nominal one.
+
 ### dither
 
 | Field | Type | Description |
@@ -1081,27 +1368,56 @@ return {
 }
 ```
 
-### preserve_exact
+### font_hinting
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `preserve_exact` | boolean or nil | Whether to preserve exact palette color matches (default: true) |
+| `font_hinting` | table, `false`, or nil | Overrides how byonk hints this screen's text |
 
-When `true` (default), pixels that exactly match a palette color are kept as-is without dithering. This preserves sharp edges for text, lines, and borders. Set to `false` to force all pixels through the dithering pipeline.
+**Omit it.** Byonk already hints text for you, choosing per render from the
+panel: mono hinting with 1-bit glyphs on a black-and-white panel, smooth
+anti-aliased hinting once there are greys. This key is only for overriding that.
 
 ```lua
 return {
   data = { ... },
   refresh_rate = 300,
-  preserve_exact = false  -- force all pixels through dithering
+  font_hinting = {
+    engine = "auto",                             -- interpreter | auto | auto_fallback
+    target = "mono",                             -- or a table, see below
+    variants = {
+      ["Crisp Body"] = { font = "Outfit", hinting = { target = "mono" } },
+    },
+  },
 }
 ```
+
+- `font_hinting = false` turns hinting off entirely.
+- `target` is `"mono"`, `"smooth"`, `"light"`, `"lcd"`, `"vertical_lcd"`, or a
+  table: `{ mode = "mono", aliased = false }`, or
+  `{ mode = "light", symmetric = true, preserve_linear_metrics = false }`.
+- A directive that only declares `variants` **keeps** byonk's adaptive default;
+  state a `target` to replace it.
+- A **variant** is a name you invent for a font hinted a particular way, so one
+  screen can render the same family two ways. Its `font` must be an installed
+  family and its name must *not* be — both are checked when the script runs, and
+  a mistake is an error rather than a silently different font.
+
+Errors here are hard errors, unlike the dither knobs above, which ignore a
+malformed value. A mistyped hinting target would otherwise render as something
+you never asked for with nothing said about it.
+
+**See [Font Hinting](font-hinting.md)** for the full reference, including the
+one trap: on a black-and-white panel a variant that opts out of mono hinting is
+still drawn 1-bit and its stems can drop out. The fix is
+`text-rendering="optimizeLegibility"` on those elements — byonk warns when a
+screen sets this up.
 
 ### error_clamp, noise_scale, chroma_clamp, strength
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `error_clamp` | number or nil | Limits error diffusion amplitude (e.g. 0.08) |
+| `error_clamp` | number or nil | Caps the accumulated diffusion error a pixel may carry (default 1.0) |
 | `noise_scale` | number or nil | Blue noise jitter scale (e.g. 0.6) |
 | `chroma_clamp` | number or nil | Limits chromatic error propagation (e.g. 2.0) |
 | `strength` | number or nil | Error diffusion strength multiplier (0.0 = no diffusion, 1.0 = standard, default) |
@@ -1118,7 +1434,7 @@ return {
   data = { ... },
   refresh_rate = 3600,
   dither = "floyd-steinberg",
-  error_clamp = 0.08,
+  error_clamp = 1.0,
   noise_scale = 0.5,
   strength = 0.8
 }

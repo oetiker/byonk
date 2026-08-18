@@ -66,8 +66,6 @@ pub struct RenderQuery {
     pub panel: Option<String>,
     /// Show actual measured panel colors in preview (default: true when panel has measured colors)
     pub use_actual: Option<bool>,
-    /// Whether to preserve exact palette matches (default: true)
-    pub preserve_exact: Option<bool>,
     /// Dither algorithm override from dev UI (e.g. "atkinson", "floyd-steinberg")
     pub dither: Option<String>,
     /// Measured/actual colors override from dev UI color tuning
@@ -350,6 +348,7 @@ pub async fn handle_render(
         dc_noise_scale,
         dc_chroma_clamp,
         dc_strength,
+        dc_gamut,
     ) = if let Some(ref mac) = query.mac {
         // Try MAC lookup first, then registration code lookup
         match state
@@ -371,6 +370,7 @@ pub async fn handle_render(
                     dc.noise_scale,
                     dc.chroma_clamp,
                     dc.strength,
+                    dc.gamut.clone(),
                 )
             }
             None => {
@@ -397,6 +397,7 @@ pub async fn handle_render(
             None,
             None,
             None,
+            crate::models::GamutTuningValues::default(),
         )
     } else {
         return (
@@ -410,10 +411,8 @@ pub async fn handle_render(
     };
 
     // Determine dimensions from model or explicit values
-    let (width, height) = match query.model.as_str() {
-        "x" => (query.width.unwrap_or(1872), query.height.unwrap_or(1404)),
-        _ => (query.width.unwrap_or(800), query.height.unwrap_or(480)),
-    };
+    let (width, height) =
+        crate::api::display::resolve_preview_dimensions(&query.model, query.width, query.height);
 
     // Parse custom params (these override resolved params from MAC)
     let mut custom_params: HashMap<String, serde_json::Value> = resolved_params.unwrap_or_default();
@@ -429,18 +428,8 @@ pub async fn handle_render(
 
     // Build initial palette from colors param or model default (acts as "firmware header")
     // Priority chain: script_colors > device_config_colors > panel_colors > query.colors > model default
-    let query_palette: Vec<(u8, u8, u8)> = if let Some(ref colors_str) = query.colors {
-        crate::api::display::parse_colors_header(colors_str)
-    } else if query.model == "x" {
-        (0..16)
-            .map(|i| {
-                let v = (i * 255 / 15) as u8;
-                (v, v, v)
-            })
-            .collect()
-    } else {
-        crate::api::display::parse_colors_header("#000000,#555555,#AAAAAA,#FFFFFF")
-    };
+    let query_palette: Vec<(u8, u8, u8)> =
+        crate::api::display::resolve_query_palette(&query.model, query.colors.as_deref());
 
     // Resolve panel: query.panel (UI override) > device_config_panel > None
     let panel = query
@@ -451,13 +440,11 @@ pub async fn handle_render(
     let panel_colors: Option<String> = panel.as_ref().map(|p| p.colors.clone());
 
     // Apply priority chain: device_config_colors > panel_colors > query/model default
-    let default_palette: Vec<(u8, u8, u8)> = if let Some(ref config_colors) = device_config_colors {
-        crate::api::display::parse_colors_header(config_colors)
-    } else if let Some(ref pc) = panel_colors {
-        crate::api::display::parse_colors_header(pc)
-    } else {
-        query_palette.clone()
-    };
+    let default_palette: Vec<(u8, u8, u8)> = crate::api::display::resolve_ctx_palette(
+        device_config_colors.as_deref(),
+        panel_colors.as_deref(),
+        &query_palette,
+    );
 
     // Pre-script dither algorithm: query dither > device config > "atkinson"
     let pre_script_algo = query
@@ -477,8 +464,35 @@ pub async fn handle_render(
         noise_scale: dc_noise_scale,
         chroma_clamp: dc_chroma_clamp,
         strength: dc_strength,
+        gamut: dc_gamut.clone(),
     };
     let pre_script_tuning = pre_dc_tuning.or(&pre_panel_tuning);
+
+    // Resolve measured colors: query param (from dev UI color tuning) > panel.colors_actual
+    let query_actual_parsed: Option<Vec<(u8, u8, u8)>> = query
+        .colors_actual
+        .as_deref()
+        .map(crate::api::display::parse_colors_header);
+    let panel_actual_parsed: Option<Vec<(u8, u8, u8)>> = panel
+        .as_ref()
+        .and_then(|p| p.colors_actual.as_deref())
+        .map(crate::api::display::parse_colors_header);
+    // Pre-script chain, in precedence order, for the final measured-colour
+    // resolution after the script runs (see `resolve_render_params`'s doc
+    // comment) — the dev UI's `colors_actual` query param stands in for a
+    // "dev override" layer.
+    let pre_script_measured_candidates: Vec<crate::api::display::MeasuredCandidate> = vec![
+        (crate::api::display::SRC_DEV_OVERRIDE, query_actual_parsed),
+        (crate::api::display::SRC_PANEL_ACTUAL, panel_actual_parsed),
+    ];
+    // Pre-script winner, used only to populate `DeviceContext.colors_actual`
+    // (what the script sees before it runs). Derived from the candidate
+    // array above rather than its own `.or_else` chain so the two can't
+    // silently drift on precedence (see Task 1's `main.rs` finding, of
+    // which a separately-maintained duplicate here would be a recurrence).
+    let measured_colors: Option<Vec<(u8, u8, u8)>> = pre_script_measured_candidates
+        .iter()
+        .find_map(|(_, c)| c.clone());
 
     // Create device context
     let device_ctx = DeviceContext {
@@ -494,11 +508,17 @@ pub async fn handle_render(
         height: Some(height),
         registration_code: None,
         colors: Some(crate::api::display::colors_to_hex_strings(&default_palette)),
+        colors_actual: measured_colors
+            .as_deref()
+            .map(crate::api::display::colors_to_hex_strings),
         dither_algorithm: Some(pre_script_algo.to_string()),
         dither_error_clamp: pre_script_tuning.error_clamp,
         dither_noise_scale: pre_script_tuning.noise_scale,
         dither_chroma_clamp: pre_script_tuning.chroma_clamp,
         dither_strength: pre_script_tuning.strength,
+        dither_gamut_knee: pre_script_tuning.gamut.knee,
+        dither_gamut_amount: pre_script_tuning.gamut.amount,
+        dither_gamut_max_compression: pre_script_tuning.gamut.max_compression,
         ..Default::default()
     };
 
@@ -514,6 +534,7 @@ pub async fn handle_render(
             custom_params,
             Some(ctx.clone()),
             timestamp_override,
+            None,
         )?;
 
         // Render SVG
@@ -525,23 +546,27 @@ pub async fn handle_render(
             (
                 String,
                 Option<Vec<String>>,
+                Option<Vec<String>>,
                 Option<String>,
-                Option<bool>,
                 Option<f32>,
                 Option<f32>,
                 Option<f32>,
                 Option<f32>,
+                Option<crate::models::GamutTuningValues>,
+                Option<crate::rendering::font_config::FontHintingDirective>,
             ),
             String,
         >((
             svg,
             script_result.script_colors,
+            script_result.script_colors_actual,
             script_result.script_dither,
-            script_result.script_preserve_exact,
             script_result.script_error_clamp,
             script_result.script_noise_scale,
             script_result.script_chroma_clamp,
             script_result.script_strength,
+            script_result.script_gamut,
+            script_result.font_hinting,
         ))
     })
     .await;
@@ -549,12 +574,14 @@ pub async fn handle_render(
     let (
         svg,
         script_colors,
+        script_colors_actual,
         script_dither,
-        script_preserve_exact,
         script_error_clamp,
         script_noise_scale,
         script_chroma_clamp,
         script_strength,
+        script_gamut,
+        script_font_hinting,
     ) = match result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
@@ -579,22 +606,11 @@ pub async fn handle_render(
         }
     };
 
-    // Resolve measured colors: query param (from dev UI color tuning) > panel.colors_actual
-    let measured_colors: Option<Vec<(u8, u8, u8)>> = if let Some(ref ca) = query.colors_actual {
-        Some(crate::api::display::parse_colors_header(ca))
-    } else {
-        panel
-            .as_ref()
-            .and_then(|p| p.colors_actual.as_deref())
-            .map(crate::api::display::parse_colors_header)
-    };
-
     tracing::debug!(
         screen = ?query.screen,
         mac = ?query.mac,
         script_colors = ?script_colors,
         script_dither = ?script_dither,
-        script_preserve_exact = ?script_preserve_exact,
         dc_colors = ?device_config_colors,
         dc_dither = ?device_config_dither,
         panel_colors = ?panel_colors,
@@ -649,6 +665,7 @@ pub async fn handle_render(
                     noise_scale: query.noise_scale,
                     chroma_clamp: query.chroma_clamp,
                     strength: query.strength,
+                    gamut: Default::default(),
                 },
             );
         } else {
@@ -673,52 +690,64 @@ pub async fn handle_render(
         noise_scale: dc_noise_scale,
         chroma_clamp: dc_chroma_clamp,
         strength: dc_strength,
+        gamut: dc_gamut.clone(),
     };
 
     // Resolve tuning: query params (dev UI) > script > device config > panel > None
-    let tuning = if query.error_clamp.is_some()
-        || query.noise_scale.is_some()
-        || query.chroma_clamp.is_some()
-        || query.strength.is_some()
-    {
-        crate::models::DitherTuningValues {
-            error_clamp: query.error_clamp,
-            noise_scale: query.noise_scale,
-            chroma_clamp: query.chroma_clamp,
-            strength: query.strength,
-        }
-    } else {
-        let script_tuning = crate::models::DitherTuningValues {
-            error_clamp: script_error_clamp,
-            noise_scale: script_noise_scale,
-            chroma_clamp: script_chroma_clamp,
-            strength: script_strength,
-        };
-        crate::api::display::resolve_tuning(&script_tuning, &dc_tuning, &panel_tuning)
+    // `gamut` deliberately keeps its `Default::default()` placeholder here:
+    // there are no gamut query parameters, so a dev-UI tuning override never
+    // carries gamut knobs. Adding that would be new query-string surface,
+    // not threading (see Task 12's amendment F).
+    let query_tuning = crate::models::DitherTuningValues {
+        error_clamp: query.error_clamp,
+        noise_scale: query.noise_scale,
+        chroma_clamp: query.chroma_clamp,
+        strength: query.strength,
+        gamut: Default::default(),
     };
+    let script_tuning = crate::models::DitherTuningValues {
+        error_clamp: script_error_clamp,
+        noise_scale: script_noise_scale,
+        chroma_clamp: script_chroma_clamp,
+        strength: script_strength,
+        gamut: script_gamut.clone().unwrap_or_default(),
+    };
+    let tuning = crate::api::display::resolve_effective_tuning(
+        &query_tuning,
+        &script_tuning,
+        &dc_tuning,
+        &panel_tuning,
+    );
 
+    let mut measured_warning: Option<String> = None;
     let render_params = crate::api::display::resolve_render_params(
         script_colors.as_deref(),
+        script_colors_actual.as_deref(),
         effective_script_dither,
-        script_preserve_exact,
         device_config_colors.as_deref(),
         effective_device_dither,
         panel_colors.as_deref(),
         &query_palette,
-        measured_colors.clone(),
-        query.preserve_exact,
+        &pre_script_measured_candidates,
         &tuning,
+        &mut measured_warning,
     );
+    if let Some(w) = &measured_warning {
+        tracing::warn!(screen = ?query.screen, mac = ?query.mac, "{w}");
+    }
+
+    let (tuning, has_tuning) = crate::api::display::resolve_dither_tuning(&render_params);
 
     let final_palette = render_params.palette;
     let final_dither = render_params.dither;
-    let preserve_exact = render_params.preserve_exact;
+    let measured_source = render_params.measured_source;
+    let measured_colors = render_params.measured_colors;
 
     tracing::debug!(
         resolved_palette = ?crate::api::display::colors_to_hex_strings(&final_palette),
         resolved_dither = ?final_dither,
-        resolved_preserve_exact = preserve_exact,
         has_measured = measured_colors.is_some(),
+        measured_source = measured_source,
         "Resolved dev render params"
     );
 
@@ -726,24 +755,10 @@ pub async fn handle_render(
     let display_spec = DisplaySpec::from_dimensions(width, height).unwrap_or(DisplaySpec::OG);
 
     // Dev mode uses measured colors for preview.
-    // Respect explicit query param; default to true when panel has measured colors.
-    let use_actual = query
-        .use_actual
-        .unwrap_or_else(|| measured_colors.is_some())
-        && measured_colors.is_some();
-
-    let tuning = crate::rendering::svg_to_png::DitherTuning {
-        serpentine: None,
-        error_clamp: render_params.error_clamp,
-        chroma_clamp: render_params.chroma_clamp,
-        noise_scale: render_params.noise_scale,
-        exact_absorb_error: None,
-        strength: render_params.strength,
-    };
-    let has_tuning = tuning.error_clamp.is_some()
-        || tuning.chroma_clamp.is_some()
-        || tuning.noise_scale.is_some()
-        || tuning.strength.is_some();
+    // Respect explicit query param; default to true when panel has measured
+    // colors. Shared rule — see `resolve_use_actual`'s doc comment.
+    let use_actual =
+        crate::api::display::resolve_use_actual(query.use_actual, measured_colors.is_some());
 
     match state.content_pipeline.render_png_from_svg(
         &svg,
@@ -752,8 +767,12 @@ pub async fn handle_render(
         measured_colors.as_deref(),
         use_actual,
         final_dither.as_deref(),
-        preserve_exact,
         if has_tuning { Some(&tuning) } else { None },
+        script_font_hinting.as_ref(),
+        // `/dev/render` answers with an image and nothing else — it does not
+        // carry the script log either (see `run_script_direct`), so there is
+        // nowhere to put this.
+        &mut None,
     ) {
         Ok(png_bytes) => (
             StatusCode::OK,

@@ -4,7 +4,7 @@
 use mlua::{Lua, Result as LuaResult, Table, UserData, UserDataMethods, Value};
 use scraper::{Html, Selector};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::DeviceContext;
 use crate::assets::AssetLoader;
@@ -21,10 +21,13 @@ pub struct ScriptResult {
     pub skip_update: bool,
     /// Optional color palette override from script (hex RGB strings)
     pub colors: Option<Vec<String>>,
+    /// Optional measured-colour override from script (hex RGB strings),
+    /// index-parallel to `colors`. Wins the measured chain when its length
+    /// matches the resolved official palette; see
+    /// `crate::api::display::resolve_measured_colors`.
+    pub colors_actual: Option<Vec<String>>,
     /// Optional dither mode from script ("photo" or "graphics")
     pub dither: Option<String>,
-    /// Optional preserve_exact override from script
-    pub preserve_exact: Option<bool>,
     /// Optional error clamp override from script
     pub error_clamp: Option<f32>,
     /// Optional blue noise jitter scale override from script
@@ -33,6 +36,495 @@ pub struct ScriptResult {
     pub chroma_clamp: Option<f32>,
     /// Optional dither strength override from script
     pub strength: Option<f32>,
+    /// Optional gamut mapping knobs from the script return. Only takes effect
+    /// where the SVG marks a region `data-byonk-tone="continuous"`.
+    pub gamut: Option<crate::models::GamutTuningValues>,
+    /// Font hinting from the script's `font_hinting` directive.
+    ///
+    /// `None` means the script had no directive at all, so the server's
+    /// adaptive default applies untouched. See
+    /// [`crate::rendering::font_config::FontHintingDirective`] for how a
+    /// present directive is resolved against the panel — in particular why a
+    /// directive that only names variants keeps the adaptive default rather
+    /// than replacing it.
+    pub font_hinting: Option<crate::rendering::font_config::FontHintingDirective>,
+    /// Messages captured from `log_info`/`log_warn`/`log_error` calls during
+    /// this run, in call order (each prefixed with its level, e.g.
+    /// `"[warn] ..."`). In addition to — not a replacement for — the
+    /// existing `tracing` calls those hooks make; this is for
+    /// authoring-time diagnostics (`ScreenStore::render`) that need the
+    /// log output back in the response rather than in the server's log
+    /// stream.
+    pub logs: Vec<String>,
+}
+
+/// Cap on `log_*` lines captured per script run. Guards against a script
+/// logging inside a tight loop building an unbounded `Vec<String>` for a
+/// single render — the production `/api/display` path captures logs too
+/// (via `run_script`'s always-present sink) even though nothing reads
+/// `ScriptResult::logs` there today. Once hit, further lines are dropped;
+/// a single truncation marker is appended so a caller that *does* read
+/// `logs` (i.e. `ScreenStore::render`) can tell output was cut off.
+const MAX_LOG_ENTRIES: usize = 500;
+
+/// Push a captured `log_*` line onto `sink`, capped at `MAX_LOG_ENTRIES`
+/// (see its doc comment).
+fn push_log(sink: &Arc<Mutex<Vec<String>>>, line: String) {
+    if let Ok(mut logs) = sink.lock() {
+        if logs.len() < MAX_LOG_ENTRIES {
+            logs.push(line);
+        } else if logs.len() == MAX_LOG_ENTRIES {
+            logs.push(format!(
+                "[warn] log capture truncated at {MAX_LOG_ENTRIES} entries"
+            ));
+        }
+    }
+}
+
+/// Translate a Lua options table into the three typed structs the pipeline
+/// needs. Unknown `preset` and `fit` values are errors, never silent no-ops:
+/// a typo that silently does nothing is worse than one that fails loudly.
+/// Everything one Lua HTTP call needs, as plain owned data.
+///
+/// It is collected in the Lua callback and then handed to a thread of our
+/// own, because `reqwest::blocking` builds a private tokio runtime and tokio
+/// panics if such a runtime is dropped while a tokio context is active.
+///
+/// Byonk's server paths happen to call Lua from inside `spawn_blocking`,
+/// where blocking is permitted, so they never hit it. `byonk render` drives
+/// the same code straight from `#[tokio::main]`, where it is not — so no
+/// screen that fetched anything had ever rendered from the command line.
+/// Doing the request off-runtime fixes it once, here, rather than leaving
+/// every caller to remember a rule that fails silently when forgotten.
+struct HttpRequestSpec {
+    url: String,
+    method: String,
+    timeout_secs: u64,
+    follow_redirects: bool,
+    max_redirects: usize,
+    danger_accept_invalid_certs: bool,
+    ca_cert_path: Option<String>,
+    client_cert_path: Option<String>,
+    client_key_path: Option<String>,
+    params: Option<Vec<(String, String)>>,
+    headers: Option<Vec<(String, String)>>,
+    basic_auth: Option<(String, String)>,
+    body: Option<String>,
+    /// The body came from the `json` option, so it carries a JSON content type.
+    body_is_json: bool,
+}
+
+/// A reply that arrived. The status is kept because a script otherwise cannot
+/// tell an error page from data — `http_get` returns only the body.
+struct HttpOutcome {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+/// Build the client, send the request, read the body. Runs on the worker
+/// thread, never on a tokio thread.
+fn send_http_request(spec: HttpRequestSpec) -> Result<HttpOutcome, String> {
+    let mut client_builder = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(spec.timeout_secs));
+
+    client_builder = if spec.follow_redirects {
+        client_builder.redirect(reqwest::redirect::Policy::limited(spec.max_redirects))
+    } else {
+        client_builder.redirect(reqwest::redirect::Policy::none())
+    };
+
+    if spec.danger_accept_invalid_certs {
+        tracing::warn!(url = %spec.url, "Accepting invalid TLS certificates - this is insecure!");
+        client_builder = client_builder.danger_accept_invalid_certs(true);
+    }
+
+    if let Some(ref ca_path) = spec.ca_cert_path {
+        let ca_data = std::fs::read(ca_path)
+            .map_err(|e| format!("Failed to read CA certificate file '{ca_path}': {e}"))?;
+        let ca_cert = reqwest::Certificate::from_pem(&ca_data)
+            .map_err(|e| format!("Failed to parse CA certificate: {e}"))?;
+        client_builder = client_builder.add_root_certificate(ca_cert);
+        tracing::debug!(ca_cert = %ca_path, "Added custom CA certificate");
+    }
+
+    match (&spec.client_cert_path, &spec.client_key_path) {
+        (Some(cert_path), Some(key_path)) => {
+            let cert_data = std::fs::read(cert_path).map_err(|e| {
+                format!("Failed to read client certificate file '{cert_path}': {e}")
+            })?;
+            let key_data = std::fs::read(key_path)
+                .map_err(|e| format!("Failed to read client key file '{key_path}': {e}"))?;
+            let mut pem_buffer = cert_data;
+            pem_buffer.push(b'\n');
+            pem_buffer.extend_from_slice(&key_data);
+            let identity = reqwest::Identity::from_pem(&pem_buffer)
+                .map_err(|e| format!("Failed to create client identity from cert/key: {e}"))?;
+            client_builder = client_builder.identity(identity);
+            tracing::debug!(client_cert = %cert_path, client_key = %key_path, "Added client certificate for mTLS");
+        }
+        (None, None) => {}
+        _ => {
+            return Err(
+                "Both client_cert and client_key must be provided together for mTLS".to_string(),
+            )
+        }
+    }
+
+    let client = client_builder
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+    let mut request = match spec.method.to_uppercase().as_str() {
+        "GET" => client.get(&spec.url),
+        "POST" => client.post(&spec.url),
+        "PUT" => client.put(&spec.url),
+        "DELETE" => client.delete(&spec.url),
+        "PATCH" => client.patch(&spec.url),
+        "HEAD" => client.head(&spec.url),
+        other => return Err(format!("Unsupported HTTP method: {other}")),
+    };
+
+    if let Some(ref params) = spec.params {
+        request = request.query(params);
+    }
+    if let Some(ref headers) = spec.headers {
+        for (name, value) in headers {
+            request = request.header(name, value);
+        }
+    }
+    if let Some((ref username, ref password)) = spec.basic_auth {
+        request = request.basic_auth(username, Some(password));
+    }
+    if let Some(ref body) = spec.body {
+        if spec.body_is_json {
+            request = request.header("Content-Type", "application/json");
+        }
+        request = request.body(body.clone());
+    }
+
+    let response = request
+        .send()
+        .map_err(|e| format!("HTTP request failed: {e}"))?;
+    let status = response.status().as_u16();
+    let headers = response
+        .headers()
+        .iter()
+        .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    let body = response
+        .bytes()
+        .map_err(|e| format!("Failed to read response: {e}"))?
+        .to_vec();
+
+    Ok(HttpOutcome {
+        status,
+        headers,
+        body,
+    })
+}
+
+/// Read a Lua options table into an `HttpRequestSpec`, and work out the cache
+/// key while the pieces are still to hand. Shared by `http_request` and
+/// `http_response` so the two cannot drift on what an option means.
+fn build_http_spec(
+    lua: &Lua,
+    url: String,
+    options: Option<Table>,
+) -> LuaResult<(HttpRequestSpec, Option<u64>, Option<String>)> {
+    const KNOWN_OPTIONS: &[&str] = &[
+        "method",
+        "params",
+        "headers",
+        "body",
+        "json",
+        "basic_auth",
+        "timeout",
+        "follow_redirects",
+        "max_redirects",
+        "danger_accept_invalid_certs",
+        "ca_cert",
+        "client_cert",
+        "client_key",
+        "cache_ttl",
+    ];
+
+    let method = options
+        .as_ref()
+        .and_then(|opts| opts.get::<String>("method").ok())
+        .unwrap_or_else(|| "GET".to_string());
+
+    tracing::debug!(url = %url, method = %method, "Lua http_request");
+
+    let mut spec = HttpRequestSpec {
+        url,
+        method,
+        timeout_secs: 30,
+        follow_redirects: true,
+        max_redirects: 10,
+        danger_accept_invalid_certs: false,
+        ca_cert_path: None,
+        client_cert_path: None,
+        client_key_path: None,
+        params: None,
+        headers: None,
+        basic_auth: None,
+        body: None,
+        body_is_json: false,
+    };
+    let mut cache_ttl: Option<u64> = None;
+
+    if let Some(ref opts) = options {
+        for key in opts
+            .clone()
+            .pairs::<String, Value>()
+            .flatten()
+            .map(|(k, _)| k)
+        {
+            if !KNOWN_OPTIONS.contains(&key.as_str()) {
+                tracing::warn!(
+                    option = %key,
+                    "http_request: unknown option (valid options: {})",
+                    KNOWN_OPTIONS.join(", ")
+                );
+            }
+        }
+
+        if let Ok(t) = opts.get::<u64>("timeout") {
+            spec.timeout_secs = t;
+        }
+        if let Ok(f) = opts.get::<bool>("follow_redirects") {
+            spec.follow_redirects = f;
+        }
+        if let Ok(m) = opts.get::<usize>("max_redirects") {
+            spec.max_redirects = m;
+        }
+        if let Ok(d) = opts.get::<bool>("danger_accept_invalid_certs") {
+            spec.danger_accept_invalid_certs = d;
+        }
+        if let Ok(ca) = opts.get::<String>("ca_cert") {
+            spec.ca_cert_path = Some(ca);
+        }
+        if let Ok(cert) = opts.get::<String>("client_cert") {
+            spec.client_cert_path = Some(cert);
+        }
+        if let Ok(key) = opts.get::<String>("client_key") {
+            spec.client_key_path = Some(key);
+        }
+        if let Ok(ttl) = opts.get::<u64>("cache_ttl") {
+            cache_ttl = Some(ttl);
+        }
+
+        if let Ok(params_table) = opts.get::<Table>("params") {
+            let params: Vec<(String, String)> = params_table
+                .pairs::<String, Value>()
+                .flatten()
+                .map(|(k, v)| {
+                    let v_str = match v {
+                        Value::String(s) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
+                        Value::Integer(i) => i.to_string(),
+                        Value::Number(n) => n.to_string(),
+                        Value::Boolean(b) => b.to_string(),
+                        _ => String::new(),
+                    };
+                    (k, v_str)
+                })
+                .collect();
+            spec.params = Some(params);
+        }
+
+        if let Ok(headers_table) = opts.get::<Table>("headers") {
+            spec.headers = Some(headers_table.pairs::<String, String>().flatten().collect());
+        }
+
+        if let Ok(auth_table) = opts.get::<Table>("basic_auth") {
+            let username: String = auth_table.get("username").unwrap_or_default();
+            let password: String = auth_table.get("password").unwrap_or_default();
+            if !username.is_empty() {
+                spec.basic_auth = Some((username, password));
+            }
+        }
+
+        // `json` takes precedence over `body`.
+        if let Ok(json_table) = opts.get::<Table>("json") {
+            let json_value = lua_value_to_json(lua, Value::Table(json_table))?;
+            let json_str = serde_json::to_string(&json_value)
+                .map_err(|e| mlua::Error::external(format!("JSON encode error: {e}")))?;
+            spec.body = Some(json_str);
+            spec.body_is_json = true;
+        } else if let Ok(body) = opts.get::<String>("body") {
+            spec.body = Some(body);
+        }
+    }
+
+    let cache_key = cache_ttl.map(|_| {
+        super::http_cache::compute_cache_key(
+            &spec.url,
+            &spec.method,
+            spec.params.as_deref(),
+            spec.headers.as_deref(),
+            spec.body.as_deref(),
+        )
+    });
+
+    Ok((spec, cache_ttl, cache_key))
+}
+
+/// Run `send_http_request` on a thread with no tokio context, whatever
+/// context byonk itself was called from. See `HttpRequestSpec`.
+fn send_http_request_off_runtime(spec: HttpRequestSpec) -> Result<HttpOutcome, String> {
+    std::thread::spawn(move || send_http_request(spec))
+        .join()
+        .map_err(|_| "the HTTP worker thread panicked".to_string())?
+}
+
+fn parse_image_opts(
+    opts: Option<&Table>,
+    palette_hex: Option<&[String]>,
+    log_sink: &Arc<Mutex<Vec<String>>>,
+) -> Result<
+    (
+        crate::services::image_process::GeometryOpts,
+        eink_photo::Params,
+        crate::services::image_process::OutputFormat,
+    ),
+    String,
+> {
+    use crate::services::image_process::{Fit, GeometryOpts, OutputFormat};
+
+    let Some(t) = opts else {
+        return Ok((
+            GeometryOpts::default(),
+            eink_photo::Params::default(),
+            OutputFormat::Png,
+        ));
+    };
+
+    let num = |k: &str| -> Option<f32> { t.get::<f32>(k).ok() };
+    let flag = |k: &str| -> Option<bool> {
+        match t.get::<Value>(k) {
+            Ok(Value::Boolean(b)) => Some(b),
+            _ => None,
+        }
+    };
+
+    // --- geometry ---
+    let crop = match t.get::<Table>("crop") {
+        Ok(c) => Some((
+            c.get::<f32>("x").unwrap_or(0.0),
+            c.get::<f32>("y").unwrap_or(0.0),
+            c.get::<f32>("w")
+                .map_err(|_| "crop.w is required".to_string())?,
+            c.get::<f32>("h")
+                .map_err(|_| "crop.h is required".to_string())?,
+        )),
+        Err(_) => None,
+    };
+    let fit = match t.get::<String>("fit").ok().as_deref() {
+        None | Some("cover") => Fit::Cover,
+        Some("contain") => Fit::Contain,
+        Some("stretch") => Fit::Stretch,
+        Some("none") => Fit::None,
+        Some(other) => {
+            return Err(format!(
+                "unknown fit {other:?}; expected cover, contain, stretch or none"
+            ))
+        }
+    };
+    let geometry = GeometryOpts {
+        crop,
+        fit,
+        width: t.get::<u32>("width").ok(),
+        height: t.get::<u32>("height").ok(),
+    };
+
+    // --- tone params ---
+    let preset = match t.get::<String>("preset").ok().as_deref() {
+        None | Some("none") => eink_photo::Preset::None,
+        Some("eink") => eink_photo::Preset::Eink,
+        Some(other) => return Err(format!("unknown preset {other:?}; expected eink or none")),
+    };
+
+    let curve = match t.get::<Table>("curve") {
+        Ok(c) => {
+            let mut pts = Vec::new();
+            for i in 1..=c.raw_len() {
+                let pair: Table = c
+                    .raw_get(i)
+                    .map_err(|_| "curve entries must be {input, output} pairs".to_string())?;
+                let x: f32 = pair
+                    .raw_get(1)
+                    .map_err(|_| "curve point missing input".to_string())?;
+                let y: f32 = pair
+                    .raw_get(2)
+                    .map_err(|_| "curve point missing output".to_string())?;
+                pts.push((x, y));
+            }
+            Some(pts)
+        }
+        Err(_) => None,
+    };
+
+    let sharpen = match t.get::<Table>("sharpen") {
+        Ok(s) => Some(eink_photo::Sharpen {
+            amount: s.get::<f32>("amount").unwrap_or(40.0),
+            radius: s.get::<f32>("radius").unwrap_or(1.0),
+        }),
+        Err(_) => None,
+    };
+
+    // --- palette_aware ---
+    let output_endpoints = if flag("palette_aware").unwrap_or(false) {
+        match palette_hex {
+            Some(hex) if !hex.is_empty() => {
+                let rgb = crate::api::display::parse_colors_header(&hex.join(","));
+                eink_photo::palette_endpoints(&rgb)
+            }
+            _ => {
+                push_log(
+                    log_sink,
+                    "[warn] image_process: palette_aware was requested but this device \
+                     has no palette; ignoring it"
+                        .to_string(),
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let params = eink_photo::Params {
+        preset,
+        exposure: num("exposure"),
+        temperature: num("temperature"),
+        tint: num("tint"),
+        auto_levels: flag("auto_levels"),
+        blacks: num("blacks"),
+        whites: num("whites"),
+        highlights: num("highlights"),
+        shadows: num("shadows"),
+        contrast: num("contrast"),
+        curve,
+        clarity: num("clarity"),
+        vibrance: num("vibrance"),
+        saturation: num("saturation"),
+        grayscale: flag("grayscale"),
+        invert: flag("invert"),
+        sharpen,
+        output_endpoints,
+    };
+
+    // --- output format ---
+    let format = match t.get::<String>("format").ok().as_deref() {
+        None | Some("png") => OutputFormat::Png,
+        Some("jpeg") | Some("jpg") => OutputFormat::Jpeg {
+            quality: t.get::<u8>("quality").unwrap_or(90),
+        },
+        Some(other) => return Err(format!("unknown format {other:?}; expected png or jpeg")),
+    };
+
+    Ok((geometry, params, format))
 }
 
 /// Error type for Lua script execution
@@ -43,6 +535,304 @@ pub enum ScriptError {
 
     #[error("Script not found: {0}")]
     NotFound(String),
+
+    /// The script's `font_hinting` directive could not be understood.
+    ///
+    /// Deliberately an error rather than a silent default: the neighbouring
+    /// `error_clamp`/`noise_scale` parsers use `.ok()`, which swallows a
+    /// malformed value, and a mistyped hinting target would then render as
+    /// something the author never asked for with nothing said about it.
+    #[error("font_hinting: {0}")]
+    FontHinting(String),
+}
+
+/// Parses the optional `font_hinting` directive off a script's return table.
+///
+/// Every failure is an error naming the offending value. That is a deliberate
+/// break from the neighbouring `error_clamp` / `noise_scale` parsers, which use
+/// `.ok()` and silently drop a malformed value: a mistyped hinting target would
+/// otherwise render as something the author never asked for, with nothing said.
+///
+/// `known_families` is what the renderer's fontdb actually holds. Variant base
+/// families are checked against it here because the font resolver cannot report
+/// a miss — `select_font` falls through to the default selector when
+/// `db.query` finds nothing, so an unresolvable base family silently lands
+/// wherever unresolved families land, which is the generic mapping.
+fn parse_font_hinting(
+    result: &Table,
+    known_families: &HashMap<String, Vec<FontFaceInfo>>,
+) -> Result<Option<crate::rendering::font_config::FontHintingDirective>, String> {
+    use crate::rendering::font_config::FontHintingDirective;
+
+    let raw: Value = result
+        .get("font_hinting")
+        .map_err(|e| format!("could not be read: {e}"))?;
+
+    let table = match raw {
+        Value::Nil => return Ok(None),
+        Value::Boolean(false) => {
+            return Ok(Some(FontHintingDirective {
+                default: Some(None),
+                variants: Default::default(),
+            }))
+        }
+        Value::Boolean(true) => {
+            return Err(
+                "`true` says nothing about how to hint. Omit font_hinting to get the \
+                        server's adaptive default, use `false` to turn hinting off, or give a \
+                        table."
+                    .to_string(),
+            )
+        }
+        Value::Table(t) => t,
+        other => {
+            return Err(format!(
+                "expected a table or false, got {}",
+                other.type_name()
+            ))
+        }
+    };
+
+    let engine = match table.get::<Value>("engine").map_err(|e| e.to_string())? {
+        Value::Nil => crate::rendering::font_config::HintingEngine::Auto,
+        Value::String(s) => parse_engine(&s.to_string_lossy())?,
+        other => {
+            return Err(format!(
+                "engine must be a string, got {}",
+                other.type_name()
+            ))
+        }
+    };
+
+    // A directive that says nothing about the target leaves the adaptive
+    // default in place; only an explicit target replaces it.
+    let default = match table.get::<Value>("target").map_err(|e| e.to_string())? {
+        Value::Nil => None,
+        Value::Boolean(false) => Some(None),
+        v => Some(Some(crate::rendering::font_config::HintingSpec {
+            engine,
+            target: parse_target(v)?,
+        })),
+    };
+
+    let variants = parse_variants(&table, known_families)?;
+
+    Ok(Some(FontHintingDirective { default, variants }))
+}
+
+fn parse_engine(s: &str) -> Result<crate::rendering::font_config::HintingEngine, String> {
+    use crate::rendering::font_config::HintingEngine;
+    match s {
+        "interpreter" => Ok(HintingEngine::Interpreter),
+        "auto" => Ok(HintingEngine::Auto),
+        "auto_fallback" => Ok(HintingEngine::AutoFallback),
+        other => Err(format!(
+            "unknown engine {other:?} — expected \"interpreter\", \"auto\" or \"auto_fallback\""
+        )),
+    }
+}
+
+/// Parses a `target`, which is either a shorthand string or a table whose
+/// `mode` picks the style. `mode` is the discriminator so that mono's extra
+/// knob (`aliased`) and smooth's two (`symmetric`, `preserve_linear_metrics`)
+/// each have a home.
+fn parse_target(v: Value) -> Result<crate::rendering::font_config::HintingTarget, String> {
+    use crate::rendering::font_config::{HintingMode, HintingTarget};
+
+    // Smooth's defaults match what the adaptive default gives a grey panel, so
+    // `target = "smooth"` produces the same thing byonk would have chosen.
+    const SMOOTH_SYMMETRIC: bool = false;
+    const SMOOTH_PRESERVE: bool = true;
+
+    let (mode, table) = match v {
+        Value::String(s) => (s.to_string_lossy().to_string(), None),
+        Value::Table(t) => {
+            let mode = match t.get::<Value>("mode").map_err(|e| e.to_string())? {
+                Value::Nil => "smooth".to_string(),
+                Value::String(s) => s.to_string_lossy().to_string(),
+                other => {
+                    return Err(format!(
+                        "target mode must be a string, got {}",
+                        other.type_name()
+                    ))
+                }
+            };
+            (mode, Some(t))
+        }
+        other => {
+            return Err(format!(
+                "target must be a string or a table, got {}",
+                other.type_name()
+            ))
+        }
+    };
+
+    let get_bool = |key: &str, fallback: bool| -> Result<bool, String> {
+        match &table {
+            None => Ok(fallback),
+            Some(t) => match t.get::<Value>(key).map_err(|e| e.to_string())? {
+                Value::Nil => Ok(fallback),
+                Value::Boolean(b) => Ok(b),
+                other => Err(format!(
+                    "target {key} must be a boolean, got {}",
+                    other.type_name()
+                )),
+            },
+        }
+    };
+
+    let smooth = |mode: HintingMode| -> Result<HintingTarget, String> {
+        Ok(HintingTarget::Smooth {
+            mode,
+            symmetric_rendering: get_bool("symmetric", SMOOTH_SYMMETRIC)?,
+            preserve_linear_metrics: get_bool("preserve_linear_metrics", SMOOTH_PRESERVE)?,
+        })
+    };
+
+    match mode.as_str() {
+        // Aliasing defaults on because mono hinting is what makes aliasing
+        // safe, and asking for mono on its own is almost always asking for
+        // crisp 1-bit text. `aliased = false` is there for a grey panel that
+        // still wants stems on the grid.
+        "mono" => Ok(HintingTarget::Mono {
+            aliased: get_bool("aliased", true)?,
+        }),
+        "smooth" | "normal" => smooth(HintingMode::Normal),
+        "light" => smooth(HintingMode::Light),
+        "lcd" => smooth(HintingMode::Lcd),
+        "vertical_lcd" => smooth(HintingMode::VerticalLcd),
+        other => Err(format!(
+            "unknown target {other:?} — expected \"mono\", \"smooth\", \"light\", \"lcd\" or \
+             \"vertical_lcd\""
+        )),
+    }
+}
+
+fn parse_variants(
+    table: &Table,
+    known_families: &HashMap<String, Vec<FontFaceInfo>>,
+) -> Result<std::collections::BTreeMap<String, crate::rendering::font_config::FontVariant>, String>
+{
+    use crate::rendering::font_config::{FontVariant, HintingSpec};
+
+    let variants_table = match table.get::<Value>("variants").map_err(|e| e.to_string())? {
+        Value::Nil => return Ok(Default::default()),
+        Value::Table(t) => t,
+        other => {
+            return Err(format!(
+                "variants must be a table, got {}",
+                other.type_name()
+            ))
+        }
+    };
+
+    let mut out = std::collections::BTreeMap::new();
+    for pair in variants_table.pairs::<String, Value>() {
+        let (alias, value) = pair.map_err(|e| e.to_string())?;
+
+        // The alias is a name `select_font` intercepts before the default
+        // selector runs. If it is also a real family, the interception shadows
+        // that family and every element asking for it silently gets something
+        // else.
+        if known_families.contains_key(&alias) {
+            return Err(format!(
+                "variant name {alias:?} is already an installed font family. A variant name is \
+                 an alias you invent for byonk to intercept, so it must not be a real family — \
+                 name it for its purpose instead, e.g. \"Crisp Body\"."
+            ));
+        }
+
+        let vt = match value {
+            Value::Table(t) => t,
+            other => {
+                return Err(format!(
+                    "variant {alias:?} must be a table, got {}",
+                    other.type_name()
+                ))
+            }
+        };
+
+        let font = match vt.get::<Value>("font").map_err(|e| e.to_string())? {
+            Value::String(s) => s.to_string_lossy().to_string(),
+            Value::Nil => {
+                return Err(format!(
+                    "variant {alias:?} has no `font` — a variant needs the family it is a \
+                     variant of"
+                ))
+            }
+            other => {
+                return Err(format!(
+                    "variant {alias:?} font must be a string, got {}",
+                    other.type_name()
+                ))
+            }
+        };
+        if !known_families.contains_key(&font) {
+            return Err(format!(
+                "variant {alias:?} names font {font:?}, which is not installed. \
+                 `fonts.families()` lists what this server has."
+            ));
+        }
+
+        let strikes = match vt.get::<Value>("strikes").map_err(|e| e.to_string())? {
+            Value::Nil => None,
+            Value::Boolean(b) => Some(b),
+            other => {
+                return Err(format!(
+                    "variant {alias:?} strikes must be a boolean, got {}",
+                    other.type_name()
+                ))
+            }
+        };
+
+        // Outer None = inherit the document default; Some(None) = off for this
+        // variant only.
+        let hinting = match vt.get::<Value>("hinting").map_err(|e| e.to_string())? {
+            Value::Nil => None,
+            Value::Boolean(false) => Some(None),
+            Value::Boolean(true) => {
+                return Err(format!(
+                    "variant {alias:?} hinting `true` says nothing — omit it to inherit, use \
+                     `false` to turn hinting off, or give a table"
+                ))
+            }
+            Value::Table(ht) => {
+                let engine = match ht.get::<Value>("engine").map_err(|e| e.to_string())? {
+                    Value::Nil => crate::rendering::font_config::HintingEngine::Auto,
+                    Value::String(s) => parse_engine(&s.to_string_lossy())?,
+                    other => {
+                        return Err(format!(
+                            "variant {alias:?} engine must be a string, got {}",
+                            other.type_name()
+                        ))
+                    }
+                };
+                let target = match ht.get::<Value>("target").map_err(|e| e.to_string())? {
+                    Value::Nil => {
+                        return Err(format!("variant {alias:?} hinting table has no `target`"))
+                    }
+                    v => parse_target(v)?,
+                };
+                Some(Some(HintingSpec { engine, target }))
+            }
+            other => {
+                return Err(format!(
+                    "variant {alias:?} hinting must be a table or false, got {}",
+                    other.type_name()
+                ))
+            }
+        };
+
+        out.insert(
+            alias,
+            FontVariant {
+                font,
+                strikes,
+                hinting,
+            },
+        );
+    }
+    Ok(out)
 }
 
 /// Information about a single font face, for exposing to Lua
@@ -82,6 +872,10 @@ impl ScreenRepoSource for AssetScreensSource {
     fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
         unreachable!("AssetScreensSource::manifest() is not used")
     }
+
+    fn screen_files(&self, _screen_path: &str) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Lua runtime for executing screen scripts
@@ -116,6 +910,19 @@ impl LuaRuntime {
     /// modules and `read_asset()` for sibling files. `screen_name` (a `handle/path`
     /// ref) is used for logging. `screen_dir` is the screen's screen-repo-relative
     /// directory, against which `read_asset(path)` reads through `source`.
+    ///
+    /// `caller_log_sink`, if given, is used as the `log_*` capture sink
+    /// *instead of* an internally-created one — critically, it is a
+    /// reference the caller still owns after this call returns, including
+    /// when it returns `Err`. `lua.load(script_src).eval()?` below can
+    /// short-circuit *before* `ScriptResult` (and its `logs` field) is
+    /// built, which would otherwise discard every `log_*` call the script
+    /// made before it failed — exactly the diagnostic an author debugging
+    /// that failure needs most. `ScreenStore::render` passes its own sink
+    /// and reads it directly in its error branches; every other caller
+    /// passes `None` and is unaffected (an internal sink is created and
+    /// still drained into `ScriptResult::logs` on success, unchanged from
+    /// before).
     #[allow(clippy::too_many_arguments)]
     pub fn run_script(
         &self,
@@ -126,8 +933,22 @@ impl LuaRuntime {
         params: &HashMap<String, serde_yaml::Value>,
         device_ctx: Option<&DeviceContext>,
         timestamp_override: Option<i64>,
+        caller_log_sink: Option<&Arc<Mutex<Vec<String>>>>,
     ) -> Result<ScriptResult, ScriptError> {
         let lua = Lua::new();
+        // Captures log_info/log_warn/log_error output for this run, in
+        // addition to the tracing calls those hooks already make (see
+        // `ScriptResult::logs`). Uses the caller's sink when given (see
+        // `caller_log_sink` doc above) so logs survive an `Err` return;
+        // otherwise creates one that only this call will ever see.
+        let owned_sink: Arc<Mutex<Vec<String>>>;
+        let log_sink: &Arc<Mutex<Vec<String>>> = match caller_log_sink {
+            Some(sink) => sink,
+            None => {
+                owned_sink = Arc::new(Mutex::new(Vec::new()));
+                &owned_sink
+            }
+        };
 
         // Set up the Lua environment
         self.setup_globals(
@@ -138,6 +959,7 @@ impl LuaRuntime {
             source,
             screen_dir,
             timestamp_override,
+            log_sink,
         )?;
 
         // Install the sandboxed `require()` scoped to this screen repo + byonk-base.
@@ -162,15 +984,20 @@ impl LuaRuntime {
             })
             .filter(|v| !v.is_empty());
 
+        // Parse optional measured-colour array from script return. Same shape
+        // as `colors` above: positive integer keys, empty means None.
+        let colors_actual = result
+            .get::<Table>("colors_actual")
+            .ok()
+            .map(|t| {
+                (1..=t.raw_len())
+                    .filter_map(|i| t.raw_get::<String>(i).ok())
+                    .collect::<Vec<String>>()
+            })
+            .filter(|v| !v.is_empty());
+
         // Parse optional dither mode from script return
         let dither = result.get::<String>("dither").ok();
-
-        // Parse optional preserve_exact from script return
-        // Note: can't use get::<bool>().ok() because mlua converts nil to false
-        let preserve_exact = match result.get::<Value>("preserve_exact") {
-            Ok(Value::Boolean(b)) => Some(b),
-            _ => None,
-        };
 
         // Parse optional dither tuning parameters from script return
         let error_clamp = result.get::<f32>("error_clamp").ok();
@@ -178,17 +1005,59 @@ impl LuaRuntime {
         let chroma_clamp = result.get::<f32>("chroma_clamp").ok();
         let strength = result.get::<f32>("strength").ok();
 
+        // Parse the optional gamut sub-table from the script return.
+        let gamut = result
+            .get::<Table>("gamut")
+            .ok()
+            .map(|t| crate::models::GamutTuningValues {
+                knee: t.get::<f32>("knee").ok(),
+                amount: t.get::<f32>("amount").ok(),
+                max_compression: t.get::<f32>("max_compression").ok(),
+            });
+
+        let font_hinting =
+            parse_font_hinting(&result, &self.font_families).map_err(ScriptError::FontHinting)?;
+
+        // Warn where a variant escapes the document's aliasing. Pushed into the
+        // script's own log sink so it reaches the author the same way their
+        // `log_warn` calls do.
+        if let Some(directive) = font_hinting.as_ref() {
+            // The panel is not known here, and the state is only reachable when
+            // the document is aliased mono — which the adaptive default gives a
+            // black-and-white panel. Checking against grey_count 2 asks
+            // "would this be wrong on the panel where it can be wrong?".
+            let escaping = directive.variants_escaping_aliasing(2);
+            if !escaping.is_empty() {
+                if let Ok(mut sink) = log_sink.lock() {
+                    sink.push(format!(
+                        "[warn] font_hinting: on a black-and-white panel this screen's text is \
+                         drawn 1-bit, and variant(s) {} turn off mono hinting. Glyph aliasing is \
+                         per-document while hinting is per-face, so on such a panel their stems \
+                         can drop out. Set text-rendering=\"optimizeLegibility\" on the elements \
+                         using them to restore anti-aliasing while keeping hinting \
+                         (geometricPrecision would disable hinting instead).",
+                        escaping.join(", ")
+                    ));
+                }
+            }
+        }
+
+        let logs = log_sink.lock().map(|g| g.clone()).unwrap_or_default();
+
         Ok(ScriptResult {
             data,
             refresh_rate,
             skip_update,
             colors,
+            colors_actual,
             dither,
-            preserve_exact,
             error_clamp,
             noise_scale,
             chroma_clamp,
             strength,
+            gamut,
+            font_hinting,
+            logs,
         })
     }
 
@@ -227,6 +1096,7 @@ impl LuaRuntime {
             params,
             device_ctx,
             timestamp_override,
+            None,
         )
     }
 
@@ -294,6 +1164,7 @@ impl LuaRuntime {
         source: &Arc<dyn ScreenRepoSource>,
         screen_dir: &str,
         timestamp_override: Option<i64>,
+        log_sink: &Arc<Mutex<Vec<String>>>,
     ) -> LuaResult<()> {
         let globals = lua.globals();
 
@@ -344,6 +1215,15 @@ impl LuaRuntime {
                 }
                 device_table.set("colors", colors_table)?;
             }
+            // Measured panel colours. Absent (nil in Lua) rather than mirrored
+            // from `colors` when uncalibrated — see DeviceContext::colors_actual.
+            if let Some(ref actual) = ctx.colors_actual {
+                let actual_table = lua.create_table()?;
+                for (i, color) in actual.iter().enumerate() {
+                    actual_table.set(i + 1, color.as_str())?;
+                }
+                device_table.set("colors_actual", actual_table)?;
+            }
             // Add dither sub-table with pre-script resolved values
             let dither_table = lua.create_table()?;
             if let Some(ref algo) = ctx.dither_algorithm {
@@ -361,6 +1241,17 @@ impl LuaRuntime {
             if let Some(st) = ctx.dither_strength {
                 dither_table.set("strength", st)?;
             }
+            let gamut_table = lua.create_table()?;
+            if let Some(v) = ctx.dither_gamut_knee {
+                gamut_table.set("knee", v)?;
+            }
+            if let Some(v) = ctx.dither_gamut_amount {
+                gamut_table.set("amount", v)?;
+            }
+            if let Some(v) = ctx.dither_gamut_max_compression {
+                gamut_table.set("max_compression", v)?;
+            }
+            dither_table.set("gamut", gamut_table)?;
             device_table.set("dither", dither_table)?;
         }
         globals.set("device", device_table)?;
@@ -526,6 +1417,28 @@ impl LuaRuntime {
         })?;
         globals.set("read_asset", read_asset)?;
 
+        // image_process(bytes, opts) -> data_uri, width, height
+        //
+        // One call, fixed order (see the eink-photo crate docs). Raises a Lua
+        // error on failure, matching http_get's contract and the `pcall`
+        // idiom the examples use.
+        let ctx_palette_hex: Option<Vec<String>> =
+            device_ctx.and_then(|c| c.colors_actual.clone().or_else(|| c.colors.clone()));
+        let img_log_sink = log_sink.clone();
+        let image_process =
+            lua.create_function(move |_, (bytes, opts): (mlua::String, Option<Table>)| {
+                let bytes = bytes.as_bytes();
+                let (geometry, params, format) =
+                    parse_image_opts(opts.as_ref(), ctx_palette_hex.as_deref(), &img_log_sink)
+                        .map_err(mlua::Error::external)?;
+                let (uri, w, h) = crate::services::image_process::process_image(
+                    &bytes, &geometry, &params, format,
+                )
+                .map_err(mlua::Error::external)?;
+                Ok((uri, w, h))
+            })?;
+        globals.set("image_process", image_process)?;
+
         // http_request(url, options?) -> string
         // Core HTTP function with method option
         // options:
@@ -545,257 +1458,89 @@ impl LuaRuntime {
         //   cache_ttl: number of seconds to cache the response (default: no caching)
         let http_request =
             lua.create_function(|lua, (url, options): (String, Option<Table>)| {
-                use super::http_cache;
+                let (spec, cache_ttl, cache_key) = build_http_spec(lua, url, options)?;
 
-                let method = options
-                    .as_ref()
-                    .and_then(|opts| opts.get::<String>("method").ok())
-                    .unwrap_or_else(|| "GET".to_string());
-
-                tracing::debug!(url = %url, method = %method, "Lua http_request");
-
-                let mut client_builder = reqwest::blocking::Client::builder();
-                let mut timeout_secs = 30u64;
-                let mut follow_redirects = true;
-                let mut max_redirects = 10usize;
-                let mut danger_accept_invalid_certs = false;
-                let mut cache_ttl: Option<u64> = None;
-
-                // Certificate paths (will be parsed from options)
-                let mut ca_cert_path: Option<String> = None;
-                let mut client_cert_path: Option<String> = None;
-                let mut client_key_path: Option<String> = None;
-
-                // For cache key computation
-                let mut params_for_cache: Option<Vec<(String, String)>> = None;
-                let mut headers_for_cache: Option<Vec<(String, String)>> = None;
-                let mut body_for_cache: Option<String> = None;
-
-                // Parse options if provided
-                if let Some(ref opts) = options {
-                    if let Ok(t) = opts.get::<u64>("timeout") {
-                        timeout_secs = t;
-                    }
-                    if let Ok(f) = opts.get::<bool>("follow_redirects") {
-                        follow_redirects = f;
-                    }
-                    if let Ok(m) = opts.get::<usize>("max_redirects") {
-                        max_redirects = m;
-                    }
-                    if let Ok(d) = opts.get::<bool>("danger_accept_invalid_certs") {
-                        danger_accept_invalid_certs = d;
-                    }
-                    if let Ok(ca) = opts.get::<String>("ca_cert") {
-                        ca_cert_path = Some(ca);
-                    }
-                    if let Ok(cert) = opts.get::<String>("client_cert") {
-                        client_cert_path = Some(cert);
-                    }
-                    if let Ok(key) = opts.get::<String>("client_key") {
-                        client_key_path = Some(key);
-                    }
-                    if let Ok(ttl) = opts.get::<u64>("cache_ttl") {
-                        cache_ttl = Some(ttl);
-                    }
-                }
-
-                client_builder =
-                    client_builder.timeout(std::time::Duration::from_secs(timeout_secs));
-
-                // Configure redirect policy
-                if follow_redirects {
-                    client_builder =
-                        client_builder.redirect(reqwest::redirect::Policy::limited(max_redirects));
-                } else {
-                    client_builder = client_builder.redirect(reqwest::redirect::Policy::none());
-                }
-
-                // Configure TLS certificate validation
-                if danger_accept_invalid_certs {
-                    tracing::warn!(url = %url, "Accepting invalid TLS certificates - this is insecure!");
-                    client_builder = client_builder.danger_accept_invalid_certs(true);
-                }
-
-                // Add custom CA certificate if provided
-                if let Some(ca_path) = ca_cert_path {
-                    let ca_data = std::fs::read(&ca_path).map_err(|e| {
-                        mlua::Error::external(format!("Failed to read CA certificate file '{}': {}", ca_path, e))
-                    })?;
-                    let ca_cert = reqwest::Certificate::from_pem(&ca_data).map_err(|e| {
-                        mlua::Error::external(format!("Failed to parse CA certificate: {}", e))
-                    })?;
-                    client_builder = client_builder.add_root_certificate(ca_cert);
-                    tracing::debug!(ca_cert = %ca_path, "Added custom CA certificate");
-                }
-
-                // Add client certificate for mTLS if both cert and key are provided
-                if let (Some(cert_path), Some(key_path)) = (client_cert_path.clone(), client_key_path.clone()) {
-                    // Read and combine certificate and key into a single PEM buffer
-                    let cert_data = std::fs::read(&cert_path).map_err(|e| {
-                        mlua::Error::external(format!("Failed to read client certificate file '{}': {}", cert_path, e))
-                    })?;
-                    let key_data = std::fs::read(&key_path).map_err(|e| {
-                        mlua::Error::external(format!("Failed to read client key file '{}': {}", key_path, e))
-                    })?;
-
-                    // Create combined PEM buffer (cert + key)
-                    let mut pem_buffer = cert_data.clone();
-                    pem_buffer.push(b'\n');
-                    pem_buffer.extend_from_slice(&key_data);
-
-                    let identity = reqwest::Identity::from_pem(&pem_buffer).map_err(|e| {
-                        mlua::Error::external(format!("Failed to create client identity from cert/key: {}", e))
-                    })?;
-                    client_builder = client_builder.identity(identity);
-                    tracing::debug!(client_cert = %cert_path, client_key = %key_path, "Added client certificate for mTLS");
-                } else if client_cert_path.is_some() || client_key_path.is_some() {
-                    return Err(mlua::Error::external(
-                        "Both client_cert and client_key must be provided together for mTLS"
-                    ));
-                }
-
-                let client = client_builder.build().map_err(|e| {
-                    mlua::Error::external(format!("Failed to build HTTP client: {e}"))
-                })?;
-
-                let mut request = match method.to_uppercase().as_str() {
-                    "GET" => client.get(&url),
-                    "POST" => client.post(&url),
-                    "PUT" => client.put(&url),
-                    "DELETE" => client.delete(&url),
-                    "PATCH" => client.patch(&url),
-                    "HEAD" => client.head(&url),
-                    _ => {
-                        return Err(mlua::Error::external(format!(
-                            "Unsupported HTTP method: {method}"
-                        )))
-                    }
-                };
-
-                if let Some(ref opts) = options {
-                    // Warn about unknown options
-                    const KNOWN_OPTIONS: &[&str] = &[
-                        "method",
-                        "params",
-                        "headers",
-                        "body",
-                        "json",
-                        "basic_auth",
-                        "timeout",
-                        "follow_redirects",
-                        "max_redirects",
-                        "danger_accept_invalid_certs",
-                        "ca_cert",
-                        "client_cert",
-                        "client_key",
-                        "cache_ttl",
-                    ];
-                    for key in opts.clone().pairs::<String, Value>().flatten() {
-                        if !KNOWN_OPTIONS.contains(&key.0.as_str()) {
-                            tracing::warn!(
-                                option = %key.0,
-                                "http_request: unknown option (valid options: {})",
-                                KNOWN_OPTIONS.join(", ")
-                            );
-                        }
-                    }
-
-                    // Add query parameters
-                    if let Ok(params_table) = opts.get::<Table>("params") {
-                        let params: Vec<(String, String)> = params_table
-                            .pairs::<String, Value>()
-                            .flatten()
-                            .map(|(k, v)| {
-                                let v_str = match v {
-                                    Value::String(s) => {
-                                        s.to_str().map(|s| s.to_string()).unwrap_or_default()
-                                    }
-                                    Value::Integer(i) => i.to_string(),
-                                    Value::Number(n) => n.to_string(),
-                                    Value::Boolean(b) => b.to_string(),
-                                    _ => String::new(),
-                                };
-                                (k, v_str)
-                            })
-                            .collect();
-                        params_for_cache = Some(params.clone());
-                        request = request.query(&params);
-                    }
-
-                    // Add custom headers
-                    if let Ok(headers_table) = opts.get::<Table>("headers") {
-                        let mut headers_vec = Vec::new();
-                        for (name, value) in headers_table.pairs::<String, String>().flatten() {
-                            headers_vec.push((name.clone(), value.clone()));
-                            request = request.header(&name, &value);
-                        }
-                        headers_for_cache = Some(headers_vec);
-                    }
-
-                    // Add basic auth
-                    if let Ok(auth_table) = opts.get::<Table>("basic_auth") {
-                        let username: String = auth_table.get("username").unwrap_or_default();
-                        let password: String = auth_table.get("password").unwrap_or_default();
-                        if !username.is_empty() {
-                            request = request.basic_auth(username, Some(password));
-                        }
-                    }
-
-                    // Add body - json takes precedence over body
-                    if let Ok(json_table) = opts.get::<Table>("json") {
-                        let json_value = lua_value_to_json(lua, Value::Table(json_table))?;
-                        let json_str = serde_json::to_string(&json_value).map_err(|e| {
-                            mlua::Error::external(format!("JSON encode error: {e}"))
-                        })?;
-                        body_for_cache = Some(json_str.clone());
-                        request = request
-                            .header("Content-Type", "application/json")
-                            .body(json_str);
-                    } else if let Ok(body) = opts.get::<String>("body") {
-                        body_for_cache = Some(body.clone());
-                        request = request.body(body);
-                    }
-                }
-
-                // Compute cache key and check cache if caching is enabled
-                let cache_key = cache_ttl.map(|_| {
-                    http_cache::compute_cache_key(
-                        &url,
-                        &method,
-                        params_for_cache.as_deref(),
-                        headers_for_cache.as_deref(),
-                        body_for_cache.as_deref(),
-                    )
-                });
-
-                // Check cache first if caching is enabled
                 if let Some(ref key) = cache_key {
-                    if let Some(cached_response) = http_cache::get_cached(key) {
-                        return lua.create_string(&cached_response);
+                    if let Some(cached) = super::http_cache::get_cached(key) {
+                        return lua.create_string(&cached);
                     }
                 }
 
-                // Make the actual request
-                let response_bytes = match request.send() {
-                    Ok(response) => match response.bytes() {
-                        Ok(bytes) => bytes.to_vec(),
-                        Err(e) => {
-                            return Err(mlua::Error::external(format!(
-                                "Failed to read response: {e}"
-                            )))
-                        }
-                    },
-                    Err(e) => return Err(mlua::Error::external(format!("HTTP request failed: {e}"))),
-                };
+                let outcome = send_http_request_off_runtime(spec).map_err(mlua::Error::external)?;
 
-                // Store in cache if caching is enabled
+                // Only a success is worth remembering. Caching an error page
+                // would serve it as data for the whole TTL, and this function
+                // gives the script no way to notice.
                 if let (Some(key), Some(ttl)) = (cache_key, cache_ttl) {
-                    http_cache::store_cached(key, response_bytes.clone(), ttl);
+                    if (200..300).contains(&outcome.status) {
+                        super::http_cache::store_cached(key, outcome.body.clone(), ttl);
+                    }
                 }
 
-                lua.create_string(&response_bytes)
+                lua.create_string(&outcome.body)
             })?;
         globals.set("http_request", http_request.clone())?;
+
+        // http_response(url, options?) -> table
+        //
+        // Same options as `http_request`, but returns the whole reply instead
+        // of just the body, and does NOT raise when the request fails:
+        //   ok      boolean   true for a 2xx status
+        //   status  number    the HTTP status, or nil if no reply arrived
+        //   body    string    the body, or nil if no reply arrived
+        //   headers table      response headers, lowercased names
+        //   error   string    why nothing arrived, or nil
+        //
+        // `http_get` hands back only the body, so a script cannot tell an
+        // error page from data. Deciding what a 500 means belongs to the
+        // script, so this reports and lets it choose.
+        let http_response =
+            lua.create_function(|lua, (url, options): (String, Option<Table>)| {
+                let (spec, cache_ttl, cache_key) = build_http_spec(lua, url, options)?;
+                let result = lua.create_table()?;
+
+                // Only successes are cached, so a hit is always a success.
+                if let Some(ref key) = cache_key {
+                    if let Some(cached) = super::http_cache::get_cached(key) {
+                        result.set("ok", true)?;
+                        result.set("status", 200)?;
+                        result.set("body", lua.create_string(&cached)?)?;
+                        result.set("headers", lua.create_table()?)?;
+                        result.set("from_cache", true)?;
+                        return Ok(result);
+                    }
+                }
+
+                match send_http_request_off_runtime(spec) {
+                    Ok(outcome) => {
+                        let ok = (200..300).contains(&outcome.status);
+                        if let (Some(key), Some(ttl)) = (cache_key, cache_ttl) {
+                            if ok {
+                                super::http_cache::store_cached(key, outcome.body.clone(), ttl);
+                            }
+                        }
+                        let headers = lua.create_table()?;
+                        for (name, value) in &outcome.headers {
+                            headers.set(name.as_str(), value.as_str())?;
+                        }
+                        result.set("ok", ok)?;
+                        result.set("status", outcome.status)?;
+                        result.set("body", lua.create_string(&outcome.body)?)?;
+                        result.set("headers", headers)?;
+                        result.set("from_cache", false)?;
+                    }
+                    Err(e) => {
+                        // Nothing arrived: no status, no body, and a reason.
+                        result.set("ok", false)?;
+                        result.set("error", e)?;
+                        result.set("headers", lua.create_table()?)?;
+                        result.set("from_cache", false)?;
+                    }
+                }
+
+                Ok(result)
+            })?;
+        globals.set("http_response", http_response)?;
 
         // http_get(url, options?) - convenience wrapper for GET requests
         let http_get = http_request.clone();
@@ -865,21 +1610,29 @@ impl LuaRuntime {
         })?;
         globals.set("json_encode", json_encode)?;
 
-        // Logging functions
-        let log_info = lua.create_function(|_, msg: String| {
+        // Logging functions. Each appends to `log_sink` (for
+        // `ScriptResult::logs`, capped — see `push_log`) in addition to its
+        // existing tracing call.
+        let sink = log_sink.clone();
+        let log_info = lua.create_function(move |_, msg: String| {
             tracing::info!(script = true, "{}", msg);
+            push_log(&sink, format!("[info] {msg}"));
             Ok(())
         })?;
         globals.set("log_info", log_info)?;
 
-        let log_warn = lua.create_function(|_, msg: String| {
+        let sink = log_sink.clone();
+        let log_warn = lua.create_function(move |_, msg: String| {
             tracing::warn!(script = true, "{}", msg);
+            push_log(&sink, format!("[warn] {msg}"));
             Ok(())
         })?;
         globals.set("log_warn", log_warn)?;
 
-        let log_error = lua.create_function(|_, msg: String| {
+        let sink = log_sink.clone();
+        let log_error = lua.create_function(move |_, msg: String| {
             tracing::error!(script = true, "{}", msg);
+            push_log(&sink, format!("[error] {msg}"));
             Ok(())
         })?;
         globals.set("log_error", log_error)?;
@@ -1343,6 +2096,9 @@ mod require_tests {
         fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
             unreachable!("manifest() not used by require()")
         }
+        fn screen_files(&self, _screen_path: &str) -> Vec<String> {
+            vec![]
+        }
     }
 
     #[test]
@@ -1351,7 +2107,7 @@ mod require_tests {
         let src: Arc<dyn ScreenRepoSource> = Arc::new(MockSource);
         let script = "local u = require('lib/util'); return { data = { m = u.greet() } }";
         let res = rt
-            .run_script(script, &src, "t", "", &Default::default(), None, None)
+            .run_script(script, &src, "t", "", &Default::default(), None, None, None)
             .unwrap();
         assert_eq!(res.data["m"], serde_json::json!("hi"));
     }
@@ -1376,13 +2132,16 @@ mod require_tests {
             fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
                 unreachable!()
             }
+            fn screen_files(&self, _screen_path: &str) -> Vec<String> {
+                vec![]
+            }
         }
         let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
         let src: Arc<dyn ScreenRepoSource> = Arc::new(CounterSource);
         let script =
             "local a = require('lib/c'); local b = require('lib/c'); return { data = { a = a, b = b } }";
         let res = rt
-            .run_script(script, &src, "t", "", &Default::default(), None, None)
+            .run_script(script, &src, "t", "", &Default::default(), None, None, None)
             .unwrap();
         assert_eq!(res.data["a"], serde_json::json!(1));
         assert_eq!(res.data["b"], serde_json::json!(1));
@@ -1394,7 +2153,7 @@ mod require_tests {
         let src: Arc<dyn ScreenRepoSource> = Arc::new(MockSource);
         let script = "local x = require('nope/missing'); return { data = {} }";
         let err = rt
-            .run_script(script, &src, "t", "", &Default::default(), None, None)
+            .run_script(script, &src, "t", "", &Default::default(), None, None, None)
             .unwrap_err();
         assert!(
             err.to_string().contains("module 'nope/missing' not found"),
@@ -1410,7 +2169,7 @@ mod require_tests {
         let src: Arc<dyn ScreenRepoSource> = Arc::new(MockSource);
         let script = "local x = require('../escape'); return { data = {} }";
         let err = rt
-            .run_script(script, &src, "t", "", &Default::default(), None, None)
+            .run_script(script, &src, "t", "", &Default::default(), None, None, None)
             .unwrap_err();
         assert!(
             err.to_string().contains("module '../escape' not found"),
@@ -1438,12 +2197,24 @@ mod require_tests {
             fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
                 unreachable!()
             }
+            fn screen_files(&self, _screen_path: &str) -> Vec<String> {
+                vec![]
+            }
         }
         let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
         let src: Arc<dyn ScreenRepoSource> = Arc::new(AssetSource);
         let script = "return { data = { c = read_asset('data.txt') } }";
         let res = rt
-            .run_script(script, &src, "acme/s", "s", &Default::default(), None, None)
+            .run_script(
+                script,
+                &src,
+                "acme/s",
+                "s",
+                &Default::default(),
+                None,
+                None,
+                None,
+            )
             .unwrap();
         assert_eq!(res.data["c"], serde_json::json!("hello-asset"));
     }
@@ -1454,11 +2225,85 @@ mod require_tests {
         let src: Arc<dyn ScreenRepoSource> = Arc::new(MockSource);
         let script = "return { data = { c = read_asset('../../etc/passwd') } }";
         let err = rt
-            .run_script(script, &src, "t", "s", &Default::default(), None, None)
+            .run_script(
+                script,
+                &src,
+                "t",
+                "s",
+                &Default::default(),
+                None,
+                None,
+                None,
+            )
             .unwrap_err();
         assert!(
             err.to_string().contains("Failed to read asset"),
             "unexpected error: {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod gamut_tests {
+    use super::*;
+    use crate::services::screen_repo_loader::ScreenRepoSource;
+    use std::sync::Arc;
+
+    /// Screen repo source with no files: these scripts never `require()`.
+    struct EmptySource;
+    impl ScreenRepoSource for EmptySource {
+        fn read(&self, _rel: &str) -> Option<Vec<u8>> {
+            None
+        }
+        fn screen_paths(&self) -> Vec<String> {
+            vec![]
+        }
+        fn svg_files(&self) -> Vec<String> {
+            vec![]
+        }
+        fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
+            unreachable!("manifest() not used by these tests")
+        }
+        fn screen_files(&self, _screen_path: &str) -> Vec<String> {
+            vec![]
+        }
+    }
+
+    fn run_test_script(script: &str) -> Result<ScriptResult, ScriptError> {
+        let rt = LuaRuntime::new(Arc::new(crate::assets::AssetLoader::new(None, None, None)));
+        let src: Arc<dyn ScreenRepoSource> = Arc::new(EmptySource);
+        rt.run_script(script, &src, "t", "", &Default::default(), None, None, None)
+    }
+
+    #[test]
+    fn script_can_return_gamut_knobs() {
+        let result = run_test_script(
+            r#"
+            return {
+                data = {},
+                gamut = { knee = 0.45, amount = 0.8, max_compression = 3.0 },
+            }
+            "#,
+        )
+        .expect("script must run");
+        let g = result.gamut.expect("gamut table must be parsed");
+        assert_eq!(g.knee, Some(0.45));
+        assert_eq!(g.amount, Some(0.8));
+        assert_eq!(g.max_compression, Some(3.0));
+    }
+
+    #[test]
+    fn a_partial_gamut_table_leaves_the_rest_unset() {
+        let result = run_test_script(r#"return { data = {}, gamut = { amount = 0 } }"#)
+            .expect("script must run");
+        let g = result.gamut.expect("gamut table must be parsed");
+        assert_eq!(g.amount, Some(0.0));
+        assert_eq!(g.knee, None);
+    }
+
+    #[test]
+    fn no_gamut_table_means_none() {
+        let result = run_test_script(r#"return { data = {} }"#).expect("script must run");
+        assert!(result.gamut.is_none());
     }
 }

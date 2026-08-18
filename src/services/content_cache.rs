@@ -26,8 +26,6 @@ pub struct CachedContent {
     pub colors_actual: Option<Vec<(u8, u8, u8)>>,
     /// Dither mode ("photo" or "graphics"), None = default (graphics)
     pub dither: Option<String>,
-    /// Whether to preserve exact palette matches (None = default true)
-    pub preserve_exact: Option<bool>,
     /// Optional error clamp for dithering
     pub error_clamp: Option<f32>,
     /// Optional blue noise jitter scale for dithering
@@ -36,6 +34,12 @@ pub struct CachedContent {
     pub chroma_clamp: Option<f32>,
     /// Optional dither strength
     pub strength: Option<f32>,
+    /// Optional gamut mapping knobs for dithering
+    pub gamut: crate::models::GamutTuningValues,
+    /// The screen's `font_hinting` directive, cached alongside the other
+    /// script-derived render knobs. `None` means the panel's adaptive default
+    /// applies, so a screen that says nothing still gets hinted text.
+    pub font_hinting: Option<crate::rendering::font_config::FontHintingDirective>,
 }
 
 impl CachedContent {
@@ -47,16 +51,17 @@ impl CachedContent {
             content_hash,
             screen_name,
             generated_at: chrono::Utc::now(),
+            font_hinting: None,
             width,
             height,
             colors: None,
             colors_actual: None,
             dither: None,
-            preserve_exact: None,
             error_clamp: None,
             noise_scale: None,
             chroma_clamp: None,
             strength: None,
+            gamut: Default::default(),
         }
     }
 
@@ -78,9 +83,12 @@ impl CachedContent {
         self
     }
 
-    /// Set the preserve_exact flag
-    pub fn with_preserve_exact(mut self, preserve_exact: Option<bool>) -> Self {
-        self.preserve_exact = preserve_exact;
+    /// Attach the screen's font-hinting directive.
+    pub fn with_font_hinting(
+        mut self,
+        font_hinting: Option<crate::rendering::font_config::FontHintingDirective>,
+    ) -> Self {
+        self.font_hinting = font_hinting;
         self
     }
 
@@ -90,6 +98,7 @@ impl CachedContent {
         self.noise_scale = tuning.noise_scale;
         self.chroma_clamp = tuning.chroma_clamp;
         self.strength = tuning.strength;
+        self.gamut = tuning.gamut.clone();
         self
     }
 }
@@ -229,6 +238,38 @@ mod tests {
 
         // Same SVG content should produce same hash regardless of screen name or dimensions
         assert_eq!(content1.content_hash, content2.content_hash);
+    }
+
+    #[test]
+    fn with_tuning_carries_gamut() {
+        // `with_tuning` copies its fields by hand rather than deriving from
+        // `DitherTuningValues`, so adding a field to `CachedContent` doesn't
+        // force this method to be updated — a struct-copy site the compiler
+        // can't flag. This test exists to catch a regression there: without
+        // it, `self.gamut = tuning.gamut.clone();` could be deleted and the
+        // full suite would still pass.
+        let content = CachedContent::new(
+            "<svg></svg>".to_string(),
+            "test_screen".to_string(),
+            800,
+            480,
+        )
+        .with_tuning(&crate::models::DitherTuningValues {
+            error_clamp: Some(0.1),
+            noise_scale: Some(5.0),
+            chroma_clamp: Some(2.0),
+            strength: Some(0.8),
+            gamut: crate::models::GamutTuningValues {
+                knee: Some(0.3),
+                ..Default::default()
+            },
+        });
+
+        assert_eq!(content.error_clamp, Some(0.1));
+        assert_eq!(content.noise_scale, Some(5.0));
+        assert_eq!(content.chroma_clamp, Some(2.0));
+        assert_eq!(content.strength, Some(0.8));
+        assert_eq!(content.gamut.knee, Some(0.3));
     }
 
     #[test]

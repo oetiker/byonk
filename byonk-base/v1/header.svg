@@ -1,18 +1,21 @@
-<!--
-  Reusable header component with title and timestamp.
+{#
+  Reusable header component: a black title bar across the top 60px.
 
-  Usage: {% include "byonk-base-v1/header.svg" %}
+  Usage:
+    {% set title = data.title %}
+    {% include "byonk-base-v1/header.svg" %}
+
+  A screen's Lua data arrives under `data.*`, so name each variable with
+  `{% set %}` before including. Anything left unset falls back to a default.
 
   Expected variables:
-    - title: Header title text
-    - updated_at: Timestamp string (optional)
--->
+    - title: Header title text (optional, defaults to "BYONK")
+
+  The header deliberately leaves its top-right corner empty: that is where
+  `status_bar.svg` draws. For a timestamp use `footer.svg`, which prints
+  `updated_at` along the bottom.
+#}
 <rect x="0" y="0" width="100%" height="60" fill="black"/>
 <text x="20" y="40" fill="white" font-family="sans-serif" font-size="24" font-weight="bold">
   {{ title | default(value="BYONK") }}
 </text>
-{% if updated_at %}
-<text x="{{ width | default(value=800) - 20 }}" y="40" text-anchor="end" fill="rgb(180,180,180)" font-family="sans-serif" font-size="16">
-  {{ updated_at }}
-</text>
-{% endif %}

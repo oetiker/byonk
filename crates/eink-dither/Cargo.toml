@@ -7,3 +7,6 @@ license = "MIT"
 
 [dev-dependencies]
 palette = "0.7"
+# Only for the #[ignore] visual comparison generator, which writes side-by-side
+# PNGs so algorithm choices can be judged by eye rather than by dE alone.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

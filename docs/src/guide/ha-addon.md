@@ -66,10 +66,12 @@ continue to work from the [Byonk integration](ha-integration.md).
 ## Configuration, screens, and fonts
 
 The app maps an editable, persistent folder to `/config` inside the container,
-holding `config.yaml`, `screens/`, and `fonts/`. Edit these with the **File
-editor** or **Studio Code Server** app. Empty folders are seeded with the
-embedded defaults on first start. Edits to `config.yaml` are applied without a
-restart.
+holding `config.yaml`, `screens/` (your writable `local` screen repo),
+`examples/` (the shipped worked-example screens, seeded once so you can read,
+run, and fork them), and `fonts/`. Edit these with the **File editor** or
+**Studio Code Server** app. Empty folders are seeded with the embedded
+defaults on first start — see [Screen Authoring](authoring.md) for what gets
+seeded where. Edits to `config.yaml` are applied without a restart.
 
 > **Note:** while running as the app, the `screen_repos:` section and the
 > `auth_mode` / `screen_repo_refresh_interval` settings in `config.yaml` are

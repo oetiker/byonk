@@ -65,7 +65,7 @@ The Render Options panel exposes three tuning parameters:
 
 | Control | Effect |
 |---------|--------|
-| **Error clamp** | Limits how much error is diffused. Lower values (0.05–0.1) reduce oscillation in smooth gradients. |
+| **Error clamp** | Caps how much accumulated error one pixel may carry into its neighbours. The default is 1.0 — full scale in a channel. Lowering it suppresses diffusion, which quietens oscillation but makes saturated areas render flat. |
 | **Noise scale** | Controls blue noise jitter strength. Higher values break "worm" artifacts more aggressively. |
 | **Chroma clamp** | Limits chromatic error propagation. Prevents color bleeding on chromatic palettes. |
 
@@ -98,6 +98,69 @@ The calibrator shows everything you need to evaluate dithering quality:
 
 Use the calibrator on your physical device while adjusting tuning in dev mode — the live sync means every change you make is immediately visible on the display.
 
+### Gamut Patch Screen
+
+`byonk-builtin/calibration/gamut` answers a narrower question: which colors can
+this panel actually mix, and which does it give up on?
+
+```yaml
+devices:
+  "ABCDE-FGHJK":
+    screen: byonk-builtin/calibration/gamut
+    panel: my_panel
+    params:
+      hues: 24      # hue columns around the full circle (2-48)
+      levels: 6     # lightness rows (1-12)
+```
+
+It draws the hue circle as isolated flat patches rather than the calibrator's
+smooth gradient. That difference is the point: in a gradient, neighbouring hues
+bleed together, so a hue the panel cannot reproduce still looks like it is doing
+something. Here each patch stands alone, so you can read it directly:
+
+- **A speckled patch** — the ditherer mixed several palette colors to approximate
+  the request. This is what working output looks like.
+- **A solid patch** — the ditherer picked one palette entry for every pixel. On a
+  6-color panel expect solid blue across roughly 225°–270°: that genuinely is the
+  best the palette offers, not a bug.
+- **A solid white patch** (drawn outlined, so it doesn't read as a missing cell) —
+  the request collapsed to white entirely. Cyan around 180° does this on 6-color
+  panels, whose bluest and greenest inks are both dark.
+
+Rows vary lightness because reachability depends on it — a hue may mix cleanly
+when dark and collapse when light.
+
+### Tone Marker A/B Screen
+
+`byonk-builtin/calibration/tone` answers a different question again: what does
+the gamut mapper actually change on real content, on your real panel?
+
+```yaml
+devices:
+  "ABCDE-FGHJK":
+    screen: byonk-builtin/calibration/tone
+    panel: my_panel
+    params:
+      hues: 12      # patch grid hue columns (2-48)
+      levels: 5     # patch grid rows (1-12)
+```
+
+It renders the same content — a photograph, a hue sweep, and a colour patch
+grid, top to bottom — twice, side by side. The two columns are identical
+markup with one difference: only the right-hand column is marked
+`data-byonk-tone="continuous"`. That mark drives three things at once — the
+right column is matched against the panel's *measured* colours and gamut
+mapped, while the left column is matched against the *official* palette and
+exact-match pinned (see
+[Marking continuous-tone content](../tutorial/svg-templates.md#marking-continuous-tone-content)).
+The left column is the untouched control. Whatever visibly differs between the
+two columns on your device is what that whole difference in treatment is doing
+to your content. The hue sweep is a fixed gradient of 12 equal hue steps, not
+driven by either param.
+
+There are no gamut-mapping knobs on this screen — it deliberately shows you
+what a real screen gets, not a tuning surface.
+
 ### Calibration Workflow
 
 1. **Assign the `byonk-builtin/calibration/color` screen** to your device in `config.yaml`
@@ -117,10 +180,10 @@ panels:
 
 devices:
   "ABCDE-FGHJK":
-    screen: byonk-builtin/useful/gphoto
+    screen: examples/gphoto
     panel: my_panel
     dither: floyd-steinberg
-    error_clamp: 0.08   # from dev mode tuning
+    error_clamp: 1.0    # from dev mode tuning
     noise_scale: 0.5    # from dev mode tuning
 ```
 

@@ -24,7 +24,9 @@ use crate::error::ApiError;
 use crate::models::{config::ScreenRepoRef, AppConfig, DitherTuningValues};
 use crate::services::screen_repo_cache::ScreenRepoCache;
 use crate::services::screen_repo_manager::ScreenRepoManager;
-use crate::services::{ContentCache, ContentPipeline, InMemoryRegistry, RenderService};
+use crate::services::{
+    ContentCache, ContentPipeline, InMemoryRegistry, RenderService, ScreenStore,
+};
 
 /// Runtime overrides set by the dev GUI and consumed by production handlers.
 ///
@@ -80,6 +82,10 @@ pub struct AppState {
     /// True when byonk started as an HA Supervisor add-on (i.e. `/data/options.json`
     /// was present). In add-on mode, global-config admin writes are read-only.
     pub addon_mode: bool,
+    /// Screen-authoring core (read/write/validate/render a screen's source
+    /// files). Not yet consumed by any route — the MCP plan (spec 1
+    /// Component 5) and the web-UI plan (spec 2) are its consumers.
+    pub screen_store: Arc<ScreenStore>,
 }
 
 /// Create application state from an asset loader.
@@ -141,11 +147,21 @@ pub fn build_screen_repo_manager(
         .map(|dir| collect_disk_packages(std::path::Path::new(&dir), &config.load().screen_repos))
         .unwrap_or_default();
 
+    // `SCREENS_DIR` auto-registers as the writable `local` screen repo handle,
+    // and the seeded examples dir (`<SCREENS_DIR>/../examples`) auto-registers
+    // as the writable `examples` handle — unless `config.screen_repos` already
+    // has an explicit entry for that handle — see
+    // `ScreenRepoManager::build_disk_sources`.
+    let screens_dir = asset_loader.screens_dir().map(|p| p.to_path_buf());
+    let examples_dir = asset_loader.examples_dir().map(|p| p.to_path_buf());
+
     let manager = ScreenRepoManager::new(
         asset_loader,
         config,
         ScreenRepoCache::new(cache_root),
         extra_disk,
+        screens_dir,
+        examples_dir,
     );
     manager.rebuild_loader();
     manager
@@ -180,6 +196,15 @@ pub fn create_app_state_with_overrides(
     );
     let content_cache = Arc::new(ContentCache::new());
 
+    // `screen_repo_manager` is the SAME `Arc` handed to `content_pipeline`
+    // above — `ScreenStore::render` resolves through the pipeline's
+    // manager, everything else through this one directly; see
+    // `ScreenStore::new`'s doc comment for why they must match.
+    let screen_store = Arc::new(ScreenStore::new(
+        screen_repo_manager.clone(),
+        content_pipeline.clone(),
+    ));
+
     Ok(AppState {
         config: shared_config,
         asset_loader,
@@ -192,6 +217,7 @@ pub fn create_app_state_with_overrides(
         dev_overrides,
         screen_repo_manager,
         addon_mode: false,
+        screen_store,
     })
 }
 
@@ -209,14 +235,14 @@ pub fn reload_config(state: &AppState) -> anyhow::Result<()> {
 /// It includes the `Connection: close` header to prevent connection
 /// accumulation from ESP32 clients.
 pub fn build_router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         // TRMNL API endpoints (with and without trailing slashes for firmware compatibility)
         // TRMNL firmware 1.6.9+ sends requests with trailing slashes
         .route("/api/setup", get(handle_setup))
         .route("/api/setup/", get(handle_setup))
         .route("/api/display", get(handle_display))
         .route("/api/display/", get(handle_display))
-        .route("/api/image/:hash", get(handle_image))
+        .route("/api/image/{hash}", get(handle_image))
         .route("/api/log", post(api::handle_log))
         .route("/api/log/", post(api::handle_log))
         .route("/api/time", get(api::handle_time))
@@ -224,7 +250,12 @@ pub fn build_router(state: AppState) -> Router {
         // Health check
         .route("/health", get(|| async { "OK" }))
         // Admin API
-        .nest("/api/admin", crate::api::admin::admin_router())
+        .nest("/api/admin", crate::api::admin::admin_router());
+
+    // MCP endpoint — gated by the same admin token as /api/admin/*.
+    let router = crate::mcp::mount(router, &state);
+
+    router
         // Add state and tracing with request IDs
         .with_state(state)
         .layer(TraceLayer::new_for_http().make_span_with(RequestIdSpan))
@@ -285,6 +316,50 @@ mod reload_tests {
     use super::*;
 
     #[test]
+    fn build_router_accepts_brace_path_syntax() {
+        // axum 0.8 panics at router-build time on old `:param` syntax; this
+        // exercises build_router (and the nested admin_router) to confirm
+        // all routes use `{param}` brace syntax and construct cleanly.
+        let loader = Arc::new(AssetLoader::new(None, None, None));
+        let state = create_app_state(loader).unwrap();
+        let _ = build_router(state);
+    }
+
+    /// Basic sanity check that `AppState.screen_store` is wired to a live
+    /// writable `local` repo and can create + render a screen through it.
+    /// The specific "does `screen_store` share `content_pipeline`'s
+    /// `ScreenRepoManager` Arc" invariant has a dedicated regression test
+    /// in `tests/screen_store_wiring_test.rs` (it needs a config-reload
+    /// scenario to actually discriminate a wiring bug from correct
+    /// behavior, which doesn't fit this unit-test module).
+    #[test]
+    fn screen_store_can_create_and_render_a_local_screen() {
+        use crate::services::screen_store::{RenderOpts, StarterKind};
+
+        let dir = tempfile::tempdir().unwrap();
+        let screens_dir = dir.path().join("screens");
+        let loader = Arc::new(AssetLoader::new(Some(screens_dir), None, None));
+        loader.seed_if_configured().expect("seed");
+
+        let state = create_app_state(loader).unwrap();
+
+        state
+            .screen_store
+            .create_screen("local", "wiretest", StarterKind::Minimal)
+            .expect("create_screen via screen_store");
+
+        let result = state
+            .screen_store
+            .render("local/wiretest", RenderOpts::default());
+        assert!(
+            result.error.is_none(),
+            "render must see the screen create_screen just wrote: {:?}",
+            result.error
+        );
+        assert!(!result.png.is_empty());
+    }
+
+    #[test]
     fn test_appstate_has_package_manager_resolving_builtin() {
         let loader = Arc::new(AssetLoader::new(None, None, None));
         let cfg = AppConfig::default();
@@ -294,6 +369,33 @@ mod reload_tests {
             .loader()
             .resolve("byonk-builtin/default")
             .is_some());
+    }
+
+    /// End-to-end (Task 11): seeding an empty `SCREENS_DIR` through the real
+    /// production wiring (`AssetLoader::new` -> `seed_if_configured` ->
+    /// `create_app_state` -> `build_screen_repo_manager`) must (a) register
+    /// the seeded `examples` directory so `examples/hello` actually resolves,
+    /// and (b) never copy built-in screens into `SCREENS_DIR` itself.
+    #[test]
+    fn seeded_examples_dir_resolves_end_to_end_and_screens_dir_gets_no_builtin_copies() {
+        let dir = tempfile::tempdir().unwrap();
+        let screens_dir = dir.path().join("screens");
+        let loader = Arc::new(AssetLoader::new(Some(screens_dir.clone()), None, None));
+        loader.seed_if_configured().expect("seed");
+
+        let state = create_app_state(loader).unwrap();
+        assert!(
+            state
+                .screen_repo_manager
+                .loader()
+                .resolve("examples/hello")
+                .is_some(),
+            "seeded examples dir must resolve examples/hello end to end"
+        );
+
+        assert!(screens_dir.join("byonk-screens.yaml").exists());
+        assert!(!screens_dir.join("default").exists());
+        assert!(!screens_dir.join("calibration").exists());
     }
 
     #[test]

@@ -7,6 +7,46 @@ use std::collections::HashMap;
 /// former `default_screen` + `registration.screen` settings.
 pub const RESERVED_DEFAULT_KEY: &str = "DEFAULT";
 
+/// Gamut mapping knobs, at every level of the tuning priority chain.
+///
+/// Frame-level, not per adaptation group: groups change only which pixels are
+/// measured together to derive the compression factor, not the curve's shape.
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
+pub struct GamutTuningValues {
+    /// Where compression begins, as a fraction of the reachable chroma limit.
+    pub knee: Option<f32>,
+    /// 0 = no mapping, 1 = full. Only 1 guarantees in-gamut output.
+    pub amount: Option<f32>,
+    /// Cap on the compression factor.
+    pub max_compression: Option<f32>,
+}
+
+impl GamutTuningValues {
+    /// Merge: self takes priority, other fills gaps.
+    pub fn or(&self, other: &GamutTuningValues) -> GamutTuningValues {
+        GamutTuningValues {
+            knee: self.knee.or(other.knee),
+            amount: self.amount.or(other.amount),
+            max_compression: self.max_compression.or(other.max_compression),
+        }
+    }
+
+    /// Returns true if all fields are None.
+    pub fn is_empty(&self) -> bool {
+        self.knee.is_none() && self.amount.is_none() && self.max_compression.is_none()
+    }
+
+    /// Fill the gaps from the crate defaults.
+    pub fn resolve(&self) -> eink_dither::GamutOptions {
+        let d = eink_dither::GamutOptions::default();
+        eink_dither::GamutOptions {
+            knee: self.knee.unwrap_or(d.knee),
+            amount: self.amount.unwrap_or(d.amount),
+            max_compression: self.max_compression.unwrap_or(d.max_compression),
+        }
+    }
+}
+
 /// Dither tuning values for error_clamp, noise_scale, chroma_clamp, strength.
 ///
 /// Used at every level of the tuning priority chain:
@@ -17,6 +57,8 @@ pub struct DitherTuningValues {
     pub noise_scale: Option<f32>,
     pub chroma_clamp: Option<f32>,
     pub strength: Option<f32>,
+    #[serde(default)]
+    pub gamut: GamutTuningValues,
 }
 
 impl DitherTuningValues {
@@ -27,6 +69,7 @@ impl DitherTuningValues {
             noise_scale: self.noise_scale.or(other.noise_scale),
             chroma_clamp: self.chroma_clamp.or(other.chroma_clamp),
             strength: self.strength.or(other.strength),
+            gamut: self.gamut.or(&other.gamut),
         }
     }
 
@@ -36,6 +79,7 @@ impl DitherTuningValues {
             && self.noise_scale.is_none()
             && self.chroma_clamp.is_none()
             && self.strength.is_none()
+            && self.gamut.is_empty()
     }
 }
 
@@ -112,6 +156,9 @@ impl<'de> Deserialize<'de> for PanelDitherConfig {
                         "strength" => {
                             defaults.strength = Some(map.next_value()?);
                         }
+                        "gamut" => {
+                            defaults.gamut = map.next_value()?;
+                        }
                         _ => {
                             // Treat as algorithm name with sub-map of tuning values
                             let tuning: DitherTuningValues = map.next_value()?;
@@ -144,7 +191,12 @@ pub fn normalize_algorithm_name(name: &str) -> String {
         "jjn" | "jarvis-judice-ninke" | "jarvis_judice_ninke" => "jarvis-judice-ninke".to_string(),
         "sierra" => "sierra".to_string(),
         "sierra-two-row" | "sierra_two_row" | "sierratworow" => "sierra-two-row".to_string(),
-        "sierra-lite" | "sierra_lite" | "sierralite" => "sierra-lite".to_string(),
+        // "sierra-light" is a long-standing misspelling of "sierra-lite" that
+        // reached shipped config and the admin API's algorithm list. Kept as
+        // an alias so those configs select the algorithm they name instead of
+        // falling through to the Atkinson default.
+        "sierra-lite" | "sierra_lite" | "sierralite" | "sierra-light" | "sierra_light"
+        | "sierralight" => "sierra-lite".to_string(),
         "stucki" => "stucki".to_string(),
         "burkes" => "burkes".to_string(),
         other => other.to_string(),
@@ -158,11 +210,27 @@ pub fn normalize_algorithm_name(name: &str) -> String {
 pub struct ScreenRepoRef {
     #[serde(default)]
     pub repo: Option<String>,
+    /// Writable local directory backing this screen repo, as an alternative
+    /// to a git `repo`. Mutually exclusive with `repo`.
+    #[serde(default)]
+    pub path: Option<String>,
     #[serde(default)]
     pub pin: Option<String>,
     /// Secret token; redacted in read APIs.
     #[serde(default)]
     pub token: Option<String>,
+}
+
+impl ScreenRepoRef {
+    /// Reject nonsensical combinations. `handle` is only for the error message.
+    pub fn validate(&self, handle: &str) -> Result<(), String> {
+        if self.repo.is_some() && self.path.is_some() {
+            return Err(format!(
+                "screen repo '{handle}': set either 'repo' or 'path', not both"
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Application configuration loaded from config.yaml
@@ -251,6 +319,10 @@ pub struct DeviceConfig {
     /// Optional dither strength override (0.0 = no diffusion, 1.0 = standard)
     pub strength: Option<f32>,
 
+    /// Optional gamut mapping overrides for continuous-tone regions
+    #[serde(default)]
+    pub gamut: GamutTuningValues,
+
     /// Optional per-device refresh override in seconds (0/absent = use Lua/screen default)
     #[serde(default)]
     pub refresh: Option<u32>,
@@ -309,9 +381,23 @@ impl AppConfig {
         let config: Self = serde_yaml::from_str(&content)
             .map_err(|e| anyhow::anyhow!("Invalid config.yaml: {e}"))?;
 
+        config.validate().map_err(|e| anyhow::anyhow!(e))?;
+
         tracing::info!(devices = config.devices.len(), "Loaded configuration");
 
         Ok(config)
+    }
+
+    /// Validate cross-field invariants not expressible via serde alone.
+    ///
+    /// Currently checks that no `screen_repos` entry sets both `repo` and
+    /// `path` (they are mutually exclusive: one is a git remote, the other a
+    /// writable local directory).
+    pub fn validate(&self) -> Result<(), String> {
+        for (handle, entry) in &self.screen_repos {
+            entry.validate(handle)?;
+        }
+        Ok(())
     }
 
     /// Check if a device is registered (by MAC or by registration code)
@@ -357,6 +443,37 @@ impl AppConfig {
             }
         }
         self.devices.get(&normalized)
+    }
+
+    /// Resolve the `config.devices` key an existing entry is stored under,
+    /// given identifiers a device might be looked up by: its MAC
+    /// (case-insensitive) and/or its registration code. Mirrors the lookup
+    /// order `get_device_config` / `get_device_config_for_code` use, but
+    /// returns the key the entry actually lives under instead of the entry
+    /// itself — callers that need to mutate the entry in place (rather than
+    /// risk creating a shadowing duplicate under a different key) need the
+    /// key, not just confirmation that *some* entry resolves.
+    pub fn resolve_device_key(&self, mac: &str, code: Option<&str>) -> Option<String> {
+        if self.devices.contains_key(mac) {
+            return Some(mac.to_string());
+        }
+        let upper = mac.to_uppercase();
+        if upper != mac && self.devices.contains_key(&upper) {
+            return Some(upper);
+        }
+        if let Some(code) = code {
+            let normalized = code.to_uppercase().replace('-', "");
+            if normalized.len() == 10 {
+                let hyphenated = format!("{}-{}", &normalized[..5], &normalized[5..]);
+                if self.devices.contains_key(&hyphenated) {
+                    return Some(hyphenated);
+                }
+            }
+            if self.devices.contains_key(&normalized) {
+                return Some(normalized);
+            }
+        }
+        None
     }
 
     /// Get a panel config by name
@@ -434,7 +551,7 @@ mod tests {
         let yaml = r#"
 devices:
   "AA:BB:CC:DD:EE:FF":
-    screen: byonk-builtin/example/hello
+    screen: examples/hello
     params:
       name: "Test User"
 "#;
@@ -444,7 +561,7 @@ devices:
         assert!(config.devices.contains_key("AA:BB:CC:DD:EE:FF"));
 
         let device = config.devices.get("AA:BB:CC:DD:EE:FF").unwrap();
-        assert_eq!(device.screen, "byonk-builtin/example/hello");
+        assert_eq!(device.screen, "examples/hello");
     }
 
     #[test]
@@ -494,6 +611,55 @@ registration:
         assert!(!config.is_device_registered("00:00:00:00:00:00", Some("UNKNOWNCODE")));
     }
 
+    /// `sierra-light` is a misspelling that reached shipped config and the
+    /// admin API's advertised algorithm list. The renderer only matches
+    /// canonical names and otherwise falls back to Atkinson silently, so
+    /// before this alias existed a device configured for `sierra-light` was
+    /// quietly rendered with Atkinson AND lost its per-algorithm panel
+    /// tuning, with nothing in the output to say so.
+    #[test]
+    fn test_sierra_light_misspelling_resolves_to_sierra_lite() {
+        for name in [
+            "sierra-light",
+            "sierra_light",
+            "SierraLight",
+            "SIERRA-LIGHT",
+        ] {
+            assert_eq!(
+                normalize_algorithm_name(name),
+                "sierra-lite",
+                "`{name}` must canonicalize to sierra-lite, not fall through"
+            );
+        }
+        // The correct spellings keep working.
+        assert_eq!(normalize_algorithm_name("sierra-lite"), "sierra-lite");
+        assert_eq!(normalize_algorithm_name("sierralite"), "sierra-lite");
+        // And it must not swallow the other Sierra variants.
+        assert_eq!(normalize_algorithm_name("sierra"), "sierra");
+        assert_eq!(normalize_algorithm_name("sierra-two-row"), "sierra-two-row");
+    }
+
+    /// Per-algorithm panel tuning is keyed by canonical name, so a config
+    /// written with the misspelling must still find its tuning block.
+    #[test]
+    fn test_panel_tuning_found_via_sierra_light_alias() {
+        let yaml = r#"
+defaults:
+  error_clamp: 0.5
+sierra-lite:
+  error_clamp: 0.11
+  noise_scale: 5
+"#;
+        let cfg: PanelDitherConfig = serde_yaml::from_str(yaml).unwrap();
+        let tuning = cfg.resolve_for_algorithm(Some("sierra-light"));
+        assert_eq!(
+            tuning.error_clamp,
+            Some(0.11),
+            "misspelled algorithm must still resolve its per-algorithm tuning"
+        );
+        assert_eq!(tuning.noise_scale, Some(5.0));
+    }
+
     #[test]
     fn test_dither_tuning_values_or() {
         let a = DitherTuningValues {
@@ -501,12 +667,14 @@ registration:
             noise_scale: None,
             chroma_clamp: Some(2.0),
             strength: None,
+            gamut: Default::default(),
         };
         let b = DitherTuningValues {
             error_clamp: Some(0.2),
             noise_scale: Some(5.0),
             chroma_clamp: None,
             strength: Some(0.8),
+            gamut: Default::default(),
         };
         let merged = a.or(&b);
         assert_eq!(merged.error_clamp, Some(0.1)); // a wins
@@ -699,6 +867,27 @@ colors: "#000000,#FFFFFF"
     }
 
     #[test]
+    fn screen_repo_path_variant_parses() {
+        let yaml = "screen_repos:\n  local:\n    path: /config/screens\n";
+        let cfg: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            cfg.screen_repos["local"].path.as_deref(),
+            Some("/config/screens")
+        );
+    }
+
+    #[test]
+    fn screen_repo_rejects_repo_and_path_together() {
+        let r = ScreenRepoRef {
+            repo: Some("github.com/a/b".into()),
+            path: Some("/x".into()),
+            pin: None,
+            token: None,
+        };
+        assert!(r.validate("weather").is_err());
+    }
+
+    #[test]
     fn test_default_device_screen_accessor() {
         let mut config = AppConfig::default();
         assert_eq!(config.default_device_screen(), None);
@@ -714,5 +903,58 @@ colors: "#000000,#FFFFFF"
             config.default_device_screen(),
             Some("byonk-builtin/default")
         );
+    }
+
+    #[test]
+    fn gamut_values_resolve_against_the_crate_defaults() {
+        let defaults = eink_dither::GamutOptions::default();
+        assert_eq!(GamutTuningValues::default().resolve(), defaults);
+
+        let partial = GamutTuningValues {
+            knee: Some(0.4),
+            ..Default::default()
+        };
+        let resolved = partial.resolve();
+        assert_eq!(resolved.knee, 0.4);
+        assert_eq!(resolved.amount, defaults.amount);
+        assert_eq!(resolved.max_compression, defaults.max_compression);
+    }
+
+    #[test]
+    fn gamut_values_merge_with_self_winning() {
+        let hi = GamutTuningValues {
+            knee: Some(0.4),
+            ..Default::default()
+        };
+        let lo = GamutTuningValues {
+            knee: Some(0.9),
+            amount: Some(0.5),
+            max_compression: None,
+        };
+        let merged = hi.or(&lo);
+        assert_eq!(merged.knee, Some(0.4), "self must win");
+        assert_eq!(merged.amount, Some(0.5), "other must fill the gap");
+    }
+
+    #[test]
+    fn dither_tuning_carries_gamut_through_the_chain() {
+        let script = DitherTuningValues {
+            gamut: GamutTuningValues {
+                amount: Some(0.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let panel = DitherTuningValues {
+            gamut: GamutTuningValues {
+                knee: Some(0.55),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let merged = script.or(&panel);
+        assert_eq!(merged.gamut.amount, Some(0.0));
+        assert_eq!(merged.gamut.knee, Some(0.55));
+        assert!(!merged.is_empty());
     }
 }

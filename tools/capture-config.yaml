@@ -1,0 +1,268 @@
+# Byonk Configuration
+# Maps devices to screens and provides screen definitions
+
+# Device Registration (enabled by default)
+# New devices show a 10-character registration code on screen.
+# Add the code (hyphenated format) to the 'devices' section below.
+# Set enabled: false to allow any device to connect.
+registration:
+  enabled: true
+
+# Authentication mode advertised to devices via /api/setup
+# "api_key" (default) - devices send Access-Token header
+# "ed25519" - devices use Ed25519 signature authentication
+# Note: /api/display always accepts both methods regardless of this setting
+auth_mode: api_key
+
+# Panel profiles with measured display colors
+# Each panel maps official (ideal) colors to measured (actual) colors.
+# Dev mode uses measured colors to preview what the panel really shows.
+# colors: official palette sent to device
+# colors_actual: measured colors as they appear on the physical display
+# match: exact match against firmware Board header for auto-detection
+panels:
+  trmnl_og:
+    name: "TRMNL OG (4-grey)"
+    match: "trmnl_og"
+    width: 800
+    height: 480
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#6E6E6E,#9C9C9C,#B8B8B0"
+  trmnl_og_4clr:
+    name: "TRMNL OG (4-color)"
+    match: "trmnl_og_4clr"
+    width: 800
+    height: 480
+    colors: "#000000,#FFFFFF,#FF0000,#FFFF00"
+    colors_actual: "#383038,#B8B8B0,#9C484B,#D0BE47"
+  trmnl_x:
+    name: "TRMNL X (16-grey)"
+    match: "trmnl_x"
+    width: 1872
+    height: 1404
+    colors: "#000000,#111111,#222222,#333333,#444444,#555555,#666666,#777777,#888888,#999999,#AAAAAA,#BBBBBB,#CCCCCC,#DDDDDD,#EEEEEE,#FFFFFF"
+    colors_actual: "#383838,#434343,#4E4E4E,#595959,#646464,#6E6E6E,#787878,#828282,#8B8B8B,#949494,#9C9C9C,#A3A3A3,#AAAAAA,#B0B0B0,#B5B5B2,#B8B8B0"
+  xteink_x4:
+    name: "XTEink X4 (4-grey)"
+    match: "xteink_x4"
+    width: 800
+    height: 480
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#6E6E6E,#9C9C9C,#B8B8B0"
+  waveshare:
+    name: "Waveshare (4-grey)"
+    match: "waveshare"
+    width: 800
+    height: 480
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#6E6E6E,#9C9C9C,#B8B8B0"
+  seeed_xiao_c3:
+    name: "Seeed Xiao C3 (4-grey)"
+    match: "seeed_xiao_c3"
+    width: 296
+    height: 128
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#6E6E6E,#9C9C9C,#B8B8B0"
+  seeed_xiao_s3:
+    name: "Seeed Xiao S3 (4-grey)"
+    match: "seeed_xiao_s3"
+    width: 296
+    height: 128
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#6E6E6E,#9C9C9C,#B8B8B0"
+  xiao_epaper:
+    name: "Seeed Xiao ePaper (4-grey)"
+    match: "xiao_epaper"
+    width: 296
+    height: 128
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#383838,#6E6E6E,#9C9C9C,#B8B8B0"
+  xiao_epaper_3clr:
+    name: "Seeed Xiao 3-Color"
+    match: "xiao_epaper_3clr"
+    width: 296
+    height: 128
+    colors: "#000000,#FFFFFF,#FF0000"
+    colors_actual: "#383038,#B8B8B0,#9C484B"
+  reterminal_e1001:
+    name: "reTerminal E1001 (4-grey)"
+    match: "reterminal_e1001"
+    width: 800
+    height: 480
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#000000,#2A2A2A,#676767,#FFFFFF"
+  reterminal_e1002:
+    name: "reTerminal E1002 (6-color)"
+    match: "reterminal_e1002"
+    width: 800
+    height: 480
+    colors: "#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00"
+    colors_actual: "#000000,#FFFFFF,#B50303,#FFEE00,#205497,#0D876B"
+  reterminal_e1004:
+    name: "reTerminal E1004 (6-color, 13.3\")"
+    # E1004 firmware reports its identity in the `Model` header (not `Board`),
+    # which the panel matcher now also checks.
+    match: "reterminal_e1004"
+    width: 1200
+    height: 1600
+    colors: "#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00"
+    # Measured on the physical E1004 panel via the dev-mode calibrator.
+    colors_actual: "#000000,#FFFFFF,#C20000,#FFE042,#2160C4,#00994D"
+
+screens:
+  # Default screen - shows time and a message
+  default:
+    script: default.lua
+    template: default.svg
+    default_refresh: 300
+    
+  # Floerli room booking display
+  floerli:
+    script: floerli.lua
+    template: floerli.svg
+    default_refresh: 900
+
+  # Public transport departures
+  transit:
+    script: transit.lua
+    template: transit.svg
+    default_refresh: 60
+
+  # Gray level test
+  graytest:
+    script: graytest.lua
+    template: graytest.svg
+    default_refresh: 3600
+
+  # Bitmap font demo (parameterized by font_prefix)
+  fontdemo-bitmap:
+    script: fontdemo-bitmap.lua
+    template: fontdemo-bitmap.svg
+    default_refresh: 3600
+
+  # Hinting demo - comparing engines and targets
+  hintdemo:
+    script: hintdemo.lua
+    template: hintdemo.svg
+    default_refresh: 3600
+
+  # Hello world tutorial screen
+  hello:
+    script: hello.lua
+    template: hello.svg
+    default_refresh: 60
+
+  # Random Mandelbrot set view
+  mandelbrot:
+    script: mandelbrot.lua
+    template: mandelbrot.svg
+    default_refresh: 600
+
+  # CMYK gradient and palette calibrator
+  calibrator:
+    script: calibrator.lua
+    template: calibrator.svg
+    default_refresh: 3600
+
+
+# Devices for the resvg byonk-base render-capture harness (tools/capture-renders.sh).
+# Every screen ref is `handle/path`; deterministic calibration/example screens use
+# an explicit `panel:` so the render uses real palette colors, not a fallback grey.
+#
+# DEFAULT deliberately points at `byonk-builtin/calibration/grey`, NOT
+# `byonk-builtin/default` (fix round 2 — see capture-renders.sh's header
+# comment). Any device below whose own `screen:` fails to resolve silently
+# falls through to whatever DEFAULT points at (verified in
+# src/services/content_pipeline.rs::run_script_for_device); making that
+# target a screen the harness already captures byte-for-byte turns "did a
+# screen silently fall back" into a plain byte comparison the distinctness
+# check can do, for one or many mis-resolved screens, without depending on
+# the wall clock. `byonk-builtin/default` itself is still captured directly
+# under its own device (AA:BB:CC:00:00:12, "builtin-default") — that
+# capture is unaffected by this change and remains in the nondet bucket
+# since it shows the clock.
+devices:
+  DEFAULT:
+    screen: byonk-builtin/calibration/grey
+  "AA:BB:CC:00:00:01":
+    panel: trmnl_og
+    screen: byonk-builtin/calibration/gamut
+  "AA:BB:CC:00:00:02":
+    panel: trmnl_og
+    screen: byonk-builtin/calibration/tone
+  "AA:BB:CC:00:00:03":
+    panel: trmnl_og
+    screen: byonk-builtin/calibration/grey
+  "AA:BB:CC:00:00:04":
+    panel: trmnl_og_4clr
+    screen: byonk-builtin/calibration/color
+  "AA:BB:CC:00:00:05":
+    panel: trmnl_og
+    screen: examples/mandelbrot
+  "AA:BB:CC:00:00:06":
+    panel: trmnl_og
+    screen: examples/demo/font/bitmap
+  "AA:BB:CC:00:00:07":
+    panel: trmnl_og
+    screen: examples/demo/font/ttf
+  "AA:BB:CC:00:00:08":
+    panel: trmnl_og
+    screen: examples/demo/font/hinting
+  "AA:BB:CC:00:00:11":
+    panel: trmnl_og
+    screen: examples/hello
+  "AA:BB:CC:00:00:12":
+    panel: trmnl_og
+    screen: byonk-builtin/default
+  "AA:BB:CC:00:00:13":
+    panel: trmnl_og
+    screen: examples/gphoto
+  "AA:BB:CC:00:00:14":
+    panel: trmnl_og
+    screen: examples/webscrape
+  "AA:BB:CC:00:00:15":
+    panel: trmnl_og
+    screen: examples/swiss-departure-board
+  # --- Panel coverage -----------------------------------------------------
+  # Everything above runs on trmnl_og (4-grey), with one screen on
+  # trmnl_og_4clr — which left byonk's two hardest palettes, 16-grey and
+  # 6-colour, completely unexercised by this harness. The four calibration
+  # screens all build their SVG from layout.width/layout.height, so they
+  # render natively at any panel size and any aspect; that is what makes
+  # this coverage cheap. Each pairing below is chosen for what the panel
+  # makes visible, not for completeness:
+  #   grey  -> the palette ramp itself
+  #   tone  -> a photograph plus patches, mapped vs. pinned side by side
+  #   gamut -> the hue circle across lightness, which is the whole question
+  #            on a 6-colour panel
+  "AA:BB:CC:00:00:21":
+    panel: trmnl_x
+    screen: byonk-builtin/calibration/grey
+  "AA:BB:CC:00:00:22":
+    panel: trmnl_x
+    screen: byonk-builtin/calibration/tone
+  "AA:BB:CC:00:00:23":
+    panel: reterminal_e1002
+    screen: byonk-builtin/calibration/color
+  "AA:BB:CC:00:00:24":
+    panel: reterminal_e1002
+    screen: byonk-builtin/calibration/gamut
+  "AA:BB:CC:00:00:25":
+    panel: reterminal_e1002
+    screen: byonk-builtin/calibration/tone
+  # The only portrait panel byonk ships a profile for, and the only one over
+  # 1 Mpx — worth capturing for the aspect alone, not just the palette.
+  "AA:BB:CC:00:00:26":
+    panel: reterminal_e1004
+    screen: byonk-builtin/calibration/gamut
+  # Canary: a deliberately nonexistent screen ref. capture-renders.sh renders
+  # this first and records whether it exits 0 (silent fallback to whatever
+  # DEFAULT points at above — the current, verified behavior even for a
+  # *registered* device, per `run_script_for_device` in
+  # src/services/content_pipeline.rs) or errors (fallback path is gone).
+  # Either way the manifest states which one happened, so a human reading it
+  # later knows whether `exit=0` elsewhere means "this screen rendered" or
+  # merely "something rendered."
+  "AA:BB:CC:00:00:99":
+    panel: trmnl_og
+    screen: byonk-builtin/__capture_canary_nonexistent__

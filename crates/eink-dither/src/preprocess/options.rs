@@ -53,13 +53,6 @@ pub struct PreprocessOptions {
     /// - 1.1 = 10% boost (default for photos)
     /// - 1.5 = high contrast
     pub contrast: f32,
-
-    /// Whether to preserve exact palette matches.
-    ///
-    /// When enabled, pixels that exactly match a palette color are not
-    /// preprocessed, preserving their original values. This keeps text
-    /// and solid UI elements crisp.
-    pub preserve_exact_matches: bool,
 }
 
 impl Default for PreprocessOptions {
@@ -69,7 +62,6 @@ impl Default for PreprocessOptions {
             target_height: None,
             saturation: 1.0,
             contrast: 1.0,
-            preserve_exact_matches: true,
         }
     }
 }
@@ -123,16 +115,6 @@ impl PreprocessOptions {
         self.contrast = factor;
         self
     }
-
-    /// Set exact match preservation mode.
-    ///
-    /// # Arguments
-    /// * `enabled` - Whether to preserve pixels that exactly match palette colors
-    #[inline]
-    pub fn preserve_exact_matches(mut self, enabled: bool) -> Self {
-        self.preserve_exact_matches = enabled;
-        self
-    }
 }
 
 #[cfg(test)]
@@ -158,10 +140,6 @@ mod tests {
             (opts.contrast - 1.0).abs() < f32::EPSILON,
             "contrast should default to 1.1"
         );
-        assert!(
-            opts.preserve_exact_matches,
-            "preserve_exact_matches should default to true"
-        );
     }
 
     #[test]
@@ -173,10 +151,6 @@ mod tests {
         assert_eq!(new_opts.target_height, default_opts.target_height);
         assert!((new_opts.saturation - default_opts.saturation).abs() < f32::EPSILON);
         assert!((new_opts.contrast - default_opts.contrast).abs() < f32::EPSILON);
-        assert_eq!(
-            new_opts.preserve_exact_matches,
-            default_opts.preserve_exact_matches
-        );
     }
 
     #[test]
@@ -187,7 +161,6 @@ mod tests {
         // Other values unchanged
         assert!((opts.saturation - 1.0).abs() < f32::EPSILON);
         assert!((opts.contrast - 1.0).abs() < f32::EPSILON);
-        assert!(opts.preserve_exact_matches);
     }
 
     #[test]
@@ -198,7 +171,6 @@ mod tests {
         assert!(opts.target_width.is_none());
         assert!(opts.target_height.is_none());
         assert!((opts.contrast - 1.0).abs() < f32::EPSILON);
-        assert!(opts.preserve_exact_matches);
     }
 
     #[test]
@@ -209,18 +181,6 @@ mod tests {
         assert!(opts.target_width.is_none());
         assert!(opts.target_height.is_none());
         assert!((opts.saturation - 1.0).abs() < f32::EPSILON);
-        assert!(opts.preserve_exact_matches);
-    }
-
-    #[test]
-    fn test_builder_preserve_exact_matches() {
-        let opts = PreprocessOptions::new().preserve_exact_matches(false);
-        assert!(!opts.preserve_exact_matches);
-        // Other values unchanged
-        assert!(opts.target_width.is_none());
-        assert!(opts.target_height.is_none());
-        assert!((opts.saturation - 1.0).abs() < f32::EPSILON);
-        assert!((opts.contrast - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -228,14 +188,12 @@ mod tests {
         let opts = PreprocessOptions::new()
             .resize(1024, 768)
             .saturation(1.8)
-            .contrast(1.2)
-            .preserve_exact_matches(false);
+            .contrast(1.2);
 
         assert_eq!(opts.target_width, Some(1024));
         assert_eq!(opts.target_height, Some(768));
         assert!((opts.saturation - 1.8).abs() < f32::EPSILON);
         assert!((opts.contrast - 1.2).abs() < f32::EPSILON);
-        assert!(!opts.preserve_exact_matches);
     }
 
     #[test]

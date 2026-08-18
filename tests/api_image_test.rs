@@ -109,3 +109,87 @@ async fn test_image_different_screen_sizes() {
         common::assert_png(&image_response);
     }
 }
+
+/// Pins `handle_display`'s pre-script measured-colour candidate array
+/// (`src/api/display.rs`, `[SRC_DEV_OVERRIDE, SRC_PANEL_ACTUAL,
+/// SRC_MEASURED_HEADER]`) at the real HTTP call site, not just via a
+/// hand-built array inside a unit test.
+///
+/// Note on technique: `/api/display`'s PNG output always uses the OFFICIAL
+/// palette as its PLTE (`src/api/display.rs`, `render_png_from_svg(..,
+/// false, ..)` — "production always uses official colors"), by design: the
+/// device maps palette index -> physical ink regardless of what byonk
+/// measured. So which measured-colour candidate won can NOT be observed by
+/// decoding PLTE on this path (unlike the authoring path in
+/// `src/services/screen_store.rs`, which sets `use_actual = true` and
+/// really does put the winning candidate's RGB values in PLTE). The
+/// measured colours only affect *dithering*, i.e. which palette index each
+/// pixel is assigned — so this test instead holds the panel's
+/// `colors_actual` fixed and varies the `Measured-Colors` header between
+/// two very different values, then asserts the two renders are
+/// byte-identical: if the panel is really winning, the header is inert and
+/// can't change the output at all. If `SRC_PANEL_ACTUAL` and
+/// `SRC_MEASURED_HEADER` were swapped in the array, the header would win
+/// instead and the two renders would differ (the official palette's first
+/// and last entries are pure black/white and therefore B&W-forced
+/// regardless of source — see `build_eink_palette` — so the two header
+/// variants deliberately disagree only on the two non-B&W entries, the
+/// ones that variant actually exercises).
+#[tokio::test]
+async fn test_display_panel_colors_actual_wins_over_measured_colors_header() {
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = r##"
+registration:
+  enabled: true
+auth_mode: api_key
+panels:
+  test_panel:
+    name: "Test Panel"
+    colors: "#000000,#555555,#AAAAAA,#FFFFFF"
+    colors_actual: "#000000,#303030,#808080,#FFFFFF"
+devices:
+  "TE:ST:PL:TE:00:01":
+    screen: byonk-builtin/calibration/grey
+    panel: test_panel
+"##;
+    let (app, _config_path) = TestApp::new_with_config_yaml(yaml, dir.path());
+
+    let mac = "TE:ST:PL:TE:00:01";
+    let api_key = app.register_device(mac).await;
+
+    async fn fetch_display_png(
+        app: &TestApp,
+        mac: &str,
+        api_key: &str,
+        measured_colors_header: &str,
+    ) -> Vec<u8> {
+        let mut headers = fixtures::display_headers(mac, api_key);
+        headers.push(("Measured-Colors", measured_colors_header.to_string()));
+        let display_response = app
+            .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
+            .await;
+        let image_url = common::assert_valid_display_response(&display_response);
+        let path = image_url
+            .split("localhost:3000")
+            .nth(1)
+            .expect("Should have path after host");
+        let image_response = app.get(path).await;
+        common::assert_png(&image_response);
+        image_response.body
+    }
+
+    // Two headers, deliberately far apart on the two non-B&W entries
+    // (index 1 and 2) — must have zero effect on the output if the panel
+    // is correctly winning.
+    let png_header_a =
+        fetch_display_png(&app, mac, &api_key, "#000000,#707070,#C0C0C0,#FFFFFF").await;
+    let png_header_b =
+        fetch_display_png(&app, mac, &api_key, "#000000,#101010,#909090,#FFFFFF").await;
+
+    assert_eq!(
+        png_header_a, png_header_b,
+        "the Measured-Colors header must be inert once panel.colors_actual is \
+         present — the two renders differ, which means the header (not the \
+         panel) won the measured-colour chain"
+    );
+}

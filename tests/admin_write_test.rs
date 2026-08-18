@@ -6,17 +6,28 @@ use common::TestApp;
 const AUTH: (&str, &str) = ("Authorization", "Bearer secret");
 
 // Device `screen` values are always qualified `handle/path` package refs.
-const HELLO: &str = "byonk-builtin/example/hello";
-const GREY: &str = "byonk-builtin/calibration/grey";
-const GPHOTO: &str = "byonk-builtin/useful/gphoto";
+//
+// Most of these tests just need "some known, resolvable non-default builtin
+// screen" — `calibration/color` and `calibration/grey`, the only other
+// screens left in the minimal `byonk-builtin` repo, stand in wherever the
+// test doesn't care about params. The two params-patch tests below use
+// `TRANSIT` (`examples/swiss-departure-board`, registered as a real screen
+// repo handle since Task 11) instead, so they validate against a real,
+// non-empty params schema rather than an unknown-and-ignored param.
 const COLOR: &str = "byonk-builtin/calibration/color";
-const TRANSIT: &str = "byonk-builtin/useful/swiss-departure-board";
+const GREY: &str = "byonk-builtin/calibration/grey";
 const UNKNOWN: &str = "byonk-builtin/does-not-exist";
+// A real, params-bearing screen (declares `station`/`limit`), now that Task 11
+// registers `examples` as a real screen repo handle. Used by the two
+// params-patch tests below so they exercise `validate_params` against a
+// non-empty schema instead of an unknown-and-therefore-ignored param on a
+// screen with no schema at all.
+const TRANSIT: &str = "examples/swiss-departure-board";
 
 #[tokio::test]
 async fn test_write_on_embedded_config_returns_409() {
     let app = TestApp::new_admin("secret"); // embedded-only
-    let body = format!(r#"{{"key":"CC:DD:EE:FF:00:11","screen":"{HELLO}"}}"#);
+    let body = format!(r#"{{"key":"CC:DD:EE:FF:00:11","screen":"{COLOR}"}}"#);
     let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
     assert_eq!(resp.status, StatusCode::CONFLICT);
 }
@@ -26,7 +37,7 @@ async fn test_add_device_persists_and_hot_reloads() {
     let dir = tempfile::tempdir().unwrap();
     let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
 
-    let body = format!(r#"{{"key":"CC:DD:EE:FF:00:11","screen":"{HELLO}"}}"#);
+    let body = format!(r#"{{"key":"CC:DD:EE:FF:00:11","screen":"{COLOR}"}}"#);
     let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
     assert_eq!(resp.status, StatusCode::OK);
 
@@ -34,7 +45,7 @@ async fn test_add_device_persists_and_hot_reloads() {
     let on_disk = std::fs::read_to_string(&path).unwrap();
     assert!(on_disk.contains("CC:DD:EE:FF:00:11"));
     assert!(
-        on_disk.contains(HELLO),
+        on_disk.contains(COLOR),
         "qualified screen ref written to disk"
     );
 
@@ -48,7 +59,7 @@ async fn test_add_device_persists_and_hot_reloads() {
         .find(|d| d["mac"] == "CC:DD:EE:FF:00:11")
         .expect("device present after hot reload");
     assert_eq!(
-        row["screen"], HELLO,
+        row["screen"], COLOR,
         "screen reads back as the qualified ref"
     );
 }
@@ -77,7 +88,7 @@ async fn test_add_builtin_ref_screen_is_accepted() {
     // A qualified builtin ref that ships in the embedded package must be assignable.
     let dir = tempfile::tempdir().unwrap();
     let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
-    let body = format!(r#"{{"key":"CC:DD:EE:FF:00:11","screen":"{GPHOTO}"}}"#);
+    let body = format!(r#"{{"key":"CC:DD:EE:FF:00:11","screen":"{COLOR}"}}"#);
     let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
     assert_eq!(resp.status, StatusCode::OK);
 }
@@ -88,7 +99,7 @@ async fn test_patch_default_device_screen_persists() {
     // endpoint (the reserved DEFAULT device ships in the embedded config).
     let dir = tempfile::tempdir().unwrap();
     let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
-    let body = format!(r#"{{"screen":"{GPHOTO}"}}"#);
+    let body = format!(r#"{{"screen":"{COLOR}"}}"#);
     let resp = app
         .patch_json("/api/admin/devices/DEFAULT", &[AUTH], &body)
         .await;
@@ -96,8 +107,8 @@ async fn test_patch_default_device_screen_persists() {
 
     let on_disk = std::fs::read_to_string(&path).unwrap();
     assert!(
-        on_disk.contains(GPHOTO),
-        "expected '{GPHOTO}' on disk:\n{on_disk}"
+        on_disk.contains(COLOR),
+        "expected '{COLOR}' on disk:\n{on_disk}"
     );
 }
 
@@ -160,7 +171,7 @@ async fn test_patch_then_delete_device() {
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        &format!(r#"{{"key":"CC:DD","screen":"{HELLO}"}}"#),
+        &format!(r#"{{"key":"CC:DD","screen":"{COLOR}"}}"#),
     )
     .await;
 
@@ -289,8 +300,10 @@ async fn test_patch_panel_and_dither_read_back_for_seen_device() {
 async fn test_patch_params_submap_reads_back_with_populated_devices() {
     // Repro for the nested-params write bug: with a populated devices map, the
     // config writer mis-indented the params sub-map so it parsed back empty.
+    // Uses `TRANSIT` (declares a `station` param) rather than `COLOR` so the
+    // params PATCH below is validated against a real, non-empty schema.
     let dir = tempfile::tempdir().unwrap();
-    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+    let app = TestApp::new_admin_with_screens("secret", dir.path());
 
     // Two devices -> populated devices map (exercises the non-empty write path).
     app.post_json(
@@ -302,7 +315,7 @@ async fn test_patch_params_submap_reads_back_with_populated_devices() {
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        &format!(r#"{{"key":"CC:DD","screen":"{HELLO}"}}"#),
+        &format!(r#"{{"key":"CC:DD","screen":"{TRANSIT}"}}"#),
     )
     .await;
 
@@ -329,9 +342,11 @@ async fn test_patch_params_submap_reads_back_with_populated_devices() {
 #[tokio::test]
 async fn test_patch_params_merge_preserves_other_keys() {
     // Editing one param (no screen change) must merge, not replace: a second
-    // single-key PATCH must not drop the first key.
+    // single-key PATCH must not drop the first key. Uses `TRANSIT` (declares
+    // `station`/`limit` params) so both PATCHes are validated against a real,
+    // non-empty schema.
     let dir = tempfile::tempdir().unwrap();
-    let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
+    let app = TestApp::new_admin_with_screens("secret", dir.path());
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
@@ -369,13 +384,15 @@ async fn test_patch_params_merge_preserves_other_keys() {
 
 #[tokio::test]
 async fn test_patch_with_screen_change_replaces_params() {
-    // A screen change replaces params wholesale (new screen's defaults).
+    // A screen change replaces params wholesale with whatever the caller
+    // provides — not with the new screen's defaults; there is no meta.yaml
+    // defaults lookup in this path.
     let dir = tempfile::tempdir().unwrap();
     let (app, _) = TestApp::new_admin_with_file("secret", dir.path());
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        &format!(r#"{{"key":"AA:BB","screen":"{HELLO}"}}"#),
+        &format!(r#"{{"key":"AA:BB","screen":"{COLOR}"}}"#),
     )
     .await;
     app.patch_json(
@@ -437,7 +454,7 @@ async fn test_patch_name_reads_back_and_clears() {
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        &format!(r#"{{"key":"AA:BB","screen":"{HELLO}"}}"#),
+        &format!(r#"{{"key":"AA:BB","screen":"{COLOR}"}}"#),
     )
     .await;
     app.patch_json("/api/admin/devices/AA:BB", &[AUTH], r#"{"name":"Kitchen"}"#)
@@ -475,7 +492,7 @@ async fn test_patch_refresh_reads_back() {
     app.post_json(
         "/api/admin/devices",
         &[AUTH],
-        &format!(r#"{{"key":"AA:BB","screen":"{HELLO}"}}"#),
+        &format!(r#"{{"key":"AA:BB","screen":"{COLOR}"}}"#),
     )
     .await;
     let resp = app
@@ -505,4 +522,16 @@ async fn test_patch_refresh_reads_back() {
         .find(|d| d["key"] == "AA:BB")
         .unwrap();
     assert_eq!(row["refresh"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn test_add_device_on_embedded_config_returns_409_even_with_no_key() {
+    // Regression for the apply_device_add extraction: the embedded/read-only
+    // config check must still run before the body is validated, so a request
+    // missing `key` against an embedded config 409s (not 400) — same as it
+    // did before the shared core existed.
+    let app = TestApp::new_admin("secret"); // embedded-only, no key in body
+    let body = format!(r#"{{"screen":"{COLOR}"}}"#);
+    let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
+    assert_eq!(resp.status, StatusCode::CONFLICT);
 }

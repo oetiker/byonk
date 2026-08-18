@@ -2,6 +2,11 @@
 target/
 *.swp
 
+# Local test rigs — tools/ha-vm/work/ holds a multi-GB HAOS VM image, which
+# nothing in the image needs but which otherwise lands in the build context
+# and makes `podman build` fail while uploading it.
+tools/
+
 # Documentation
 docs/node_modules/
 docs/doc_build/

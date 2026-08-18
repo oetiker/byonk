@@ -39,16 +39,6 @@ pub struct DitherOptions {
     /// Default: `true`
     pub serpentine: bool,
 
-    /// Preserve exact palette matches without dithering.
-    ///
-    /// When a pixel exactly matches a palette color (byte-for-byte), skip
-    /// dithering entirely. This keeps text and solid UI elements crisp.
-    /// These pixels absorb any accumulated error from neighbors, acting
-    /// as error sinks that prevent color bleed across hard boundaries.
-    ///
-    /// Default: `true`
-    pub preserve_exact_matches: bool,
-
     /// Maximum error magnitude per channel (in linear RGB space).
     ///
     /// Accumulated error is clamped to this range to prevent "blooming"
@@ -97,16 +87,6 @@ pub struct DitherOptions {
     /// Default: `5.0`
     pub noise_scale: f32,
 
-    /// Whether exact-match pixels absorb accumulated error.
-    ///
-    /// When `true`, exact-match pixels act as error sinks — accumulated error
-    /// from neighbors is discarded, preventing color bleed across boundaries.
-    /// When `false`, accumulated error passes through (original behavior),
-    /// maintaining smooth gradient continuity but allowing bleed.
-    ///
-    /// Default: `true` (absorb — prevents bleed across boundaries)
-    pub exact_absorb_error: bool,
-
     /// Error diffusion strength multiplier.
     ///
     /// Scales the diffused error uniformly before propagation to neighbors:
@@ -129,19 +109,45 @@ pub struct DitherOptions {
     ///
     /// Default: `false`
     pub hybrid_propagation: bool,
+
+    /// Fraction of accumulated error a pinned pixel passes on to its neighbours.
+    ///
+    /// A pinned pixel is one that already sits exactly on a palette ink in a
+    /// region the caller marked as eligible. It outputs that ink and ignores the
+    /// error diffused into it, so its own quantisation error is zero. This value
+    /// decides what happens to the error that arrived:
+    ///
+    /// - `1.0` — pass it on unchanged. Total error is conserved, so no seam, but
+    ///   error can travel the full width of a large pinned region and dump as a
+    ///   fringe at its far edge.
+    /// - `0.0` — absorb it. Crisp, but a coincidental match mid-gradient drops
+    ///   its neighbours' error and leaves a seam across a smooth ramp.
+    /// - between — the error decays geometrically with depth into the region.
+    ///   At depth `n` the surviving fraction is `pin_carry^n`. A 2 px grid line
+    ///   or a text stroke is crossed in one or two steps and passes error through
+    ///   nearly intact; a wide flat area absorbs it within a few pixels of its
+    ///   edge.
+    ///
+    /// The count of pinned pixels the error has crossed IS its distance into the
+    /// region, measured along the path the error actually travelled. That is why
+    /// no distance transform is needed.
+    ///
+    /// Has no effect unless the caller supplies a pin map.
+    ///
+    /// Default: `0.9`
+    pub pin_carry: f32,
 }
 
 impl Default for DitherOptions {
     fn default() -> Self {
         Self {
             serpentine: true,
-            preserve_exact_matches: true,
-            error_clamp: 0.5,
+            error_clamp: 1.0,
             chroma_clamp: f32::INFINITY,
             noise_scale: 5.0,
-            exact_absorb_error: true,
             strength: 1.0,
             hybrid_propagation: false,
+            pin_carry: 0.9,
         }
     }
 }
@@ -162,16 +168,6 @@ impl DitherOptions {
     #[inline]
     pub fn serpentine(mut self, enabled: bool) -> Self {
         self.serpentine = enabled;
-        self
-    }
-
-    /// Set exact match preservation mode.
-    ///
-    /// # Arguments
-    /// * `enabled` - Whether to preserve pixels that exactly match palette colors
-    #[inline]
-    pub fn preserve_exact_matches(mut self, enabled: bool) -> Self {
-        self.preserve_exact_matches = enabled;
         self
     }
 
@@ -208,16 +204,6 @@ impl DitherOptions {
         self
     }
 
-    /// Set whether exact-match pixels absorb accumulated error.
-    ///
-    /// # Arguments
-    /// * `absorb` - When true, exact matches discard error; when false, error passes through
-    #[inline]
-    pub fn exact_absorb_error(mut self, absorb: bool) -> Self {
-        self.exact_absorb_error = absorb;
-        self
-    }
-
     /// Set error diffusion strength.
     ///
     /// # Arguments
@@ -237,6 +223,17 @@ impl DitherOptions {
         self.hybrid_propagation = enabled;
         self
     }
+
+    /// Set the fraction of accumulated error a pinned pixel passes on.
+    ///
+    /// Clamped to `[0.0, 1.0]`. Values outside that range have no physical
+    /// meaning: below zero would invert the error, above one would amplify it
+    /// with depth.
+    #[inline]
+    pub fn pin_carry(mut self, value: f32) -> Self {
+        self.pin_carry = value.clamp(0.0, 1.0);
+        self
+    }
 }
 
 #[cfg(test)]
@@ -248,12 +245,8 @@ mod tests {
         let opts = DitherOptions::default();
         assert!(opts.serpentine, "serpentine should default to true");
         assert!(
-            opts.preserve_exact_matches,
-            "preserve_exact_matches should default to true"
-        );
-        assert!(
-            (opts.error_clamp - 0.5).abs() < f32::EPSILON,
-            "error_clamp should default to 0.5"
+            (opts.error_clamp - 1.0).abs() < f32::EPSILON,
+            "error_clamp should default to 1.0"
         );
     }
 
@@ -263,10 +256,6 @@ mod tests {
         let default_opts = DitherOptions::default();
 
         assert_eq!(new_opts.serpentine, default_opts.serpentine);
-        assert_eq!(
-            new_opts.preserve_exact_matches,
-            default_opts.preserve_exact_matches
-        );
         assert!((new_opts.error_clamp - default_opts.error_clamp).abs() < f32::EPSILON);
     }
 
@@ -275,17 +264,7 @@ mod tests {
         let opts = DitherOptions::new().serpentine(false);
         assert!(!opts.serpentine);
         // Other values unchanged
-        assert!(opts.preserve_exact_matches);
-        assert!((opts.error_clamp - 0.5).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn test_builder_preserve_exact_matches() {
-        let opts = DitherOptions::new().preserve_exact_matches(false);
-        assert!(!opts.preserve_exact_matches);
-        // Other values unchanged
-        assert!(opts.serpentine);
-        assert!((opts.error_clamp - 0.5).abs() < f32::EPSILON);
+        assert!((opts.error_clamp - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -294,18 +273,13 @@ mod tests {
         assert!((opts.error_clamp - 0.3).abs() < f32::EPSILON);
         // Other values unchanged
         assert!(opts.serpentine);
-        assert!(opts.preserve_exact_matches);
     }
 
     #[test]
     fn test_builder_chaining() {
-        let opts = DitherOptions::new()
-            .serpentine(false)
-            .preserve_exact_matches(false)
-            .error_clamp(0.25);
+        let opts = DitherOptions::new().serpentine(false).error_clamp(0.25);
 
         assert!(!opts.serpentine);
-        assert!(!opts.preserve_exact_matches);
         assert!((opts.error_clamp - 0.25).abs() < f32::EPSILON);
     }
 
@@ -324,6 +298,23 @@ mod tests {
         assert!((opts.strength - 0.5).abs() < f32::EPSILON);
         // Other values unchanged
         assert!(opts.serpentine);
-        assert!((opts.error_clamp - 0.5).abs() < f32::EPSILON);
+        assert!((opts.error_clamp - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn pin_carry_defaults_to_the_shipping_value() {
+        assert!(
+            (DitherOptions::default().pin_carry - 0.9).abs() < f32::EPSILON,
+            "pin_carry default changed; the sweep in the plan's Task 5 chose 0.9 \
+             provisionally and any change needs re-measuring"
+        );
+    }
+
+    #[test]
+    fn pin_carry_is_clamped_to_a_meaningful_range() {
+        // Above 1.0 the carry would amplify error with depth into a pinned
+        // region rather than decaying it; below 0.0 it would invert the sign.
+        assert!((DitherOptions::new().pin_carry(2.0).pin_carry - 1.0).abs() < f32::EPSILON);
+        assert!((DitherOptions::new().pin_carry(-1.0).pin_carry - 0.0).abs() < f32::EPSILON);
     }
 }

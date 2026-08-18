@@ -249,12 +249,12 @@ fn resolve_pin(repo: &gix::Repository, pin: &str) -> Option<(gix::ObjectId, PinK
         }
     }
     if let Ok(mut r) = repo.find_reference(format!("refs/tags/{pin}").as_str()) {
-        if let Ok(id) = r.peel_to_id_in_place() {
+        if let Ok(id) = r.peel_to_id() {
             return Some((id.detach(), PinKind::Tag));
         }
     }
     if let Ok(mut r) = repo.find_reference(format!("refs/remotes/{REMOTE_NAME}/{pin}").as_str()) {
-        if let Ok(id) = r.peel_to_id_in_place() {
+        if let Ok(id) = r.peel_to_id() {
             return Some((id.detach(), PinKind::Branch));
         }
     }
@@ -517,10 +517,10 @@ mod tests {
         // environment without any git config.
         let mut config = repo.config_snapshot_mut();
         config
-            .set_raw_value(&gix::config::tree::User::NAME, "byonk-test")
+            .set_raw_value(gix::config::tree::User::NAME, "byonk-test")
             .expect("set user.name");
         config
-            .set_raw_value(&gix::config::tree::User::EMAIL, "byonk-test@example.com")
+            .set_raw_value(gix::config::tree::User::EMAIL, "byonk-test@example.com")
             .expect("set user.email");
         config.commit().expect("commit config");
 
@@ -569,8 +569,8 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("create fixture dir");
         let mut repo = gix::init(&dir).expect("init fixture repo");
 
-        let manifest_blob = repo.write_blob(b"root: .\n".to_vec()).unwrap().detach();
-        let meta_blob = repo.write_blob(b"title: F\n".to_vec()).unwrap().detach();
+        let manifest_blob = repo.write_blob(b"root: .\n").unwrap().detach();
+        let meta_blob = repo.write_blob(b"title: F\n").unwrap().detach();
 
         let forecast_tree_id = {
             let mut tree = gix::objs::Tree::empty();
@@ -611,10 +611,10 @@ mod tests {
 
         let mut config = repo.config_snapshot_mut();
         config
-            .set_raw_value(&gix::config::tree::User::NAME, "byonk-test")
+            .set_raw_value(gix::config::tree::User::NAME, "byonk-test")
             .expect("set user.name");
         config
-            .set_raw_value(&gix::config::tree::User::EMAIL, "byonk-test@example.com")
+            .set_raw_value(gix::config::tree::User::EMAIL, "byonk-test@example.com")
             .expect("set user.email");
         config.commit().expect("commit config");
 

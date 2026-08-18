@@ -153,6 +153,14 @@ jobs:
         if: matrix.cross
         run: cargo install cross --git https://github.com/cross-rs/cross
 
+      # rustls' aws-lc-rs provider builds aws-lc-sys from C, which needs NASM
+      # to assemble its x86_64 routines on MSVC. The Windows runner image ships
+      # CMake but not NASM, so install it here. The Linux cross images and the
+      # macOS runners already provide everything aws-lc-sys needs.
+      - name: Install NASM (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+
       - name: Build binary
         run: |
           if [ "${{ matrix.cross }}" = "true" ]; then

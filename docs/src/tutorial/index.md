@@ -21,14 +21,15 @@ Byonk comes with several example screens you can learn from. Each screen is a
 **folder** containing three fixed-name files — `meta.yaml` (title, description,
 and its `params:` schema), `script.lua` (the data-fetch logic), and `screen.svg`
 (the Tera template). Those folders live inside a **package**, and each screen is
-referenced by its qualified `handle/path`. The bundled screens ship in the
-embedded `byonk-builtin` package:
+referenced by its qualified `handle/path`. A minimal `default` + `calibration/*`
+set ships in the embedded `byonk-builtin` package; the worked examples below ship
+separately in the embedded `examples` package:
 
 ### Default Screen
 A simple clock display showing time and date. Referenced as `byonk-builtin/default`.
 
 ```
-screens/default/
+screens/builtin/default/
 ├── meta.yaml     - Title, description, params
 ├── script.lua    - Script
 └── screen.svg    - Template
@@ -36,10 +37,10 @@ screens/default/
 
 ### Transit Departures
 Real-time public transport departures from Swiss OpenData. Referenced as
-`byonk-builtin/useful/swiss-departure-board`.
+`examples/swiss-departure-board`.
 
 ```
-screens/useful/swiss-departure-board/
+screens/examples/swiss-departure-board/
 ├── meta.yaml     - Title, description, params
 ├── script.lua    - Fetches from transport.opendata.ch API
 └── screen.svg    - Displays departure list with colors
@@ -47,10 +48,10 @@ screens/useful/swiss-departure-board/
 
 ### Room Booking (Web Scrape)
 Scrapes a web page to show room availability. Referenced as
-`byonk-builtin/example/webscrape`.
+`examples/webscrape`.
 
 ```
-screens/example/webscrape/
+screens/examples/webscrape/
 ├── meta.yaml     - Title, description, params
 ├── script.lua    - HTML scraping example
 └── screen.svg    - Shows current/upcoming bookings
@@ -61,7 +62,7 @@ Demonstrates the display palette colors available on e-ink. Referenced as
 `byonk-builtin/calibration/grey`.
 
 ```
-screens/calibration/grey/
+screens/builtin/calibration/grey/
 ├── meta.yaml     - Title, description, params
 ├── script.lua    - Adapts to device palette
 └── screen.svg    - Shows palette color swatches and dithering test
@@ -73,8 +74,9 @@ screens/calibration/grey/
 
 | Type | Location |
 |------|----------|
-| Package manifest | `screens/byonk-screens.yaml` |
-| Screen folder | `screens/<path>/` (each with `meta.yaml`, `script.lua`, `screen.svg`) |
+| `byonk-builtin` manifest | `screens/builtin/byonk-screens.yaml` |
+| `examples` manifest | `screens/examples/byonk-screens.yaml` |
+| Screen folder | `screens/builtin/<path>/` or `screens/examples/<path>/` (each with `meta.yaml`, `script.lua`, `screen.svg`) |
 | Configuration | `config.yaml` |
 | Custom fonts | `fonts/` |
 

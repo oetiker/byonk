@@ -7,4 +7,4 @@ mod error;
 mod palette;
 
 pub use error::{PaletteError, ParseColorError};
-pub use palette::{DistanceMetric, Palette};
+pub use palette::{ColourModel, DistanceMetric, Palette};

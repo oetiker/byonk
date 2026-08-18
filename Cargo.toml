@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/eink-dither"]
+members = [".", "crates/eink-dither", "crates/eink-photo"]
 
 [package]
 name = "byonk"
@@ -10,23 +10,35 @@ license = "MIT"
 
 [dependencies]
 eink-dither = { path = "crates/eink-dither" }
+eink-photo = { path = "crates/eink-photo" }
+# Decoders (png, zune-jpeg, image-webp) are already in the tree via resvg;
+# this adds the façade, not a new decoder stack. Default features are off to
+# keep the format list to what a screen actually embeds.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 # HTTP server
-axum = "0.7"
+axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "trace", "set-header"] }
 
 # Rendering
-resvg = "0.46"
-tiny-skia = "0.11"
+resvg = "0.48.1"
+# Direct dependency (not just transitively via resvg) so byonk can name
+# usvg's font hinting types in src/rendering/font_config.rs.
+usvg = "0.48.1"
+tiny-skia = "0.12"
 png = "0.17"
-fontdb = "0.23"
+fontdb = "0.24"
+# Bitmap strike introspection. Replaces the `bitmap_strikes` field byonk's
+# fontdb fork carried; see src/rendering/font_strikes.rs. Pinned to the version
+# usvg uses so the tree holds one copy.
+skrifa = "0.44"
 
 # Scripting & Templating
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
 tera = "1"
 scraper = "0.22"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "query"] }
 rustls-pemfile = "2"
 
 # Serialization
@@ -36,7 +48,7 @@ serde_yaml = "0.9"
 
 # OpenAPI documentation
 utoipa = { version = "5", features = ["axum_extras"] }
-utoipa-swagger-ui = { version = "8", features = ["axum"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
 
 # Error handling
 thiserror = "2"
@@ -59,7 +71,11 @@ semver = "1"
 # Git package distribution (clone/fetch a screen-package repo at a pin).
 # We clone bare into scratch space and export the resolved tree ourselves
 # (see git_fetch.rs), so no worktree-checkout feature is needed here.
-gix = { version = "0.66", default-features = false, features = ["blocking-network-client", "blocking-http-transport-reqwest"] }
+gix = { version = "0.86", default-features = false, features = ["sha1", "blocking-network-client", "blocking-http-transport-reqwest"] }
+
+# MCP server (Model Context Protocol) — streamable HTTP transport mounted at /mcp.
+# Pinned to the 2.x stable line; 3.0 is a prerelease.
+rmcp = { version = "2.2", features = ["server", "macros", "transport-streamable-http-server"] }
 
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
@@ -68,6 +84,7 @@ async-trait = "0.1"
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
+blake3 = "1"
 ed25519-dalek = { version = "2", features = ["std"] }
 
 # Logging
@@ -86,6 +103,10 @@ regex = "1"
 fast_qr = { version = "0.13", features = ["svg"] }
 percent-encoding = "2"
 oxipng = { version = "10.1.0", default-features = false, features = ["zopfli", "parallel"] }
+# Streaming XML read+write for the tone-mask rewriter (src/rendering/tone_mask.rs).
+# Needed because the mask document must round-trip everything it does not touch;
+# roxmltree (already present via usvg) is read-only.
+quick-xml = "0.41.0"
 
 [dev-dependencies]
 # HTTP testing
@@ -115,8 +136,8 @@ tempfile = "3"
 base64 = "0.22"
 
 [patch.crates-io]
-# Use our patched resvg with variable font support
-# https://github.com/oetiker/resvg
-resvg = { git = "https://github.com/oetiker/resvg.git", branch = "skrifa" }
-usvg = { git = "https://github.com/oetiker/resvg.git", branch = "skrifa" }
-fontdb = { git = "https://github.com/oetiker/resvg.git", branch = "skrifa" }
+# resvg with bitmap glyph rendering, font hinting, and the per-font hinting and
+# bitmap-strike resolver hooks. Everything else is upstream 0.48.1.
+# https://github.com/oetiker/resvg/tree/byonk-base
+resvg = { git = "https://github.com/oetiker/resvg.git", branch = "byonk-base" }
+usvg  = { git = "https://github.com/oetiker/resvg.git", branch = "byonk-base" }

@@ -1,7 +1,7 @@
 //! Core preprocessing logic for e-ink dithering.
 //!
 //! The [`Preprocessor`] struct transforms input images for optimal e-ink output
-//! by resizing, detecting exact palette matches, boosting saturation, and adjusting contrast.
+//! by resizing, boosting saturation, and adjusting contrast.
 //!
 //! # Processing Pipeline
 //!
@@ -9,18 +9,11 @@
 //!    - Lanczos3 resampling for high-quality scaling
 //!    - Happens first to ensure optimal quality at target size
 //!
-//! 2. **Exact match detection** (on resized pixels)
-//!    - Pixels matching palette colors are flagged for preservation
-//!    - Detection uses Srgb bytes, not transformed values
-//!    - Note: resize may destroy exact matches - this is expected for photos
-//!
-//! 3. **Saturation boost** (Oklch chroma scaling)
+//! 2. **Saturation boost** (Oklch chroma scaling)
 //!    - Perceptually correct: no hue shift
-//!    - Only applied to non-matching pixels
 //!
-//! 4. **Contrast adjustment** (linear RGB midpoint scaling)
+//! 3. **Contrast adjustment** (linear RGB midpoint scaling)
 //!    - Scales around 0.5 midpoint
-//!    - Only applied to non-matching pixels
 //!
 //! # Example
 //!
@@ -33,28 +26,26 @@
 //!
 //! // Configure preprocessing with resize
 //! let options = PreprocessOptions::new().resize(100, 100);
-//! let preprocessor = Preprocessor::new(&palette, options);
+//! let preprocessor = Preprocessor::new(options);
 //!
 //! // Process an image (2x1 pixels: black and mid-gray)
 //! let input = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(128, 128, 128)];
 //! let result = preprocessor.process(&input, 2, 1);
 //!
-//! // Result contains processed pixels, dimensions, and exact matches
+//! // Result contains processed pixels and dimensions
 //! assert_eq!(result.width, 100); // Resized
 //! assert_eq!(result.height, 100);
 //! ```
 
 use crate::color::{LinearRgb, Oklab, Srgb};
-use crate::palette::Palette;
 use crate::preprocess::PreprocessOptions;
+use crate::Oklch;
 
-use super::oklch::Oklch;
 use super::resize::resize_lanczos;
 
 /// Result of preprocessing an image.
 ///
-/// Contains the processed pixels, updated dimensions (after resize), and
-/// exact match information for dithering optimization.
+/// Contains the processed pixels and updated dimensions (after resize).
 ///
 /// # Example
 ///
@@ -63,7 +54,7 @@ use super::resize::resize_lanczos;
 ///
 /// let colors = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)];
 /// let palette = Palette::new(&colors, None).unwrap();
-/// let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
+/// let preprocessor = Preprocessor::new(PreprocessOptions::new());
 ///
 /// let input = [Srgb::from_u8(128, 128, 128)];
 /// let result = preprocessor.process(&input, 1, 1);
@@ -83,66 +74,49 @@ pub struct PreprocessResult {
 
     /// Height after resize (may differ from input if resize was specified).
     pub height: usize,
-
-    /// Exact match map for each pixel.
-    ///
-    /// `Some(palette_idx)` if the pixel exactly matched a palette color
-    /// (before enhancement), `None` otherwise.
-    ///
-    /// Dithering algorithms can skip error diffusion for exact matches
-    /// to preserve crisp edges in text and UI elements.
-    pub exact_matches: Vec<Option<u8>>,
 }
 
-/// Image preprocessor with exact match detection and color enhancement.
+/// Image preprocessor with color enhancement.
 ///
 /// `Preprocessor` transforms images for optimal e-ink display output using
 /// a multi-phase pipeline:
 ///
 /// 1. **Resize** to target dimensions (Lanczos3 filter)
-/// 2. **Detect exact matches** against actual palette colors
-/// 3. **Boost saturation** for non-matching pixels (Oklch chroma)
-/// 4. **Adjust contrast** for non-matching pixels (linear RGB)
+/// 2. **Boost saturation** (Oklch chroma)
+/// 3. **Adjust contrast** (linear RGB)
 ///
-/// # Two-Phase Detection Strategy
+/// Enhancement is applied uniformly to every pixel. Pixels that already sit
+/// exactly on a palette colour used to be detected here and passed through
+/// untouched, to keep text and logos crisp. That detection is gone from this
+/// stage, but the concern was real and the reason first given for dropping it
+/// was wrong: such a pixel does have zero quantisation error of its own, but
+/// error diffused INTO it from saturated neighbours still takes it over. In the
+/// tone calibration screen, pure-black grid lines abutting saturated patches
+/// came back only 73.2% black.
 ///
-/// Exact match detection uses **official colors** (what the input content
-/// references), not actual measured colors. Input SVG/images use official
-/// palette values, so matching must target those same values.
+/// The half of that reasoning which does hold is the seam: pinning also caught
+/// pixels whose value merely happened to coincide with a palette entry
+/// mid-gradient, and discarding their error left a seam across a smooth ramp.
 ///
-/// Matching pixels are flagged but NOT enhanced - they pass through unchanged
-/// to preserve crisp edges in text, logos, and UI elements.
-///
-/// # Photo vs Graphics Intent
-///
-/// Use presets for common scenarios:
-/// - [`PreprocessOptions::new()`]: Enhances photos with saturation/contrast boost
-/// - [`PreprocessOptions::new()`]: No enhancement for logos/text/UI
-///
-/// The preprocessor holds a reference to the palette and cannot outlive it.
-///
-/// # Lifetime
-///
-/// The `'a` lifetime ties the preprocessor to its palette reference.
-/// The preprocessor cannot outlive the palette it references.
+/// Both are addressed where the error actually moves, not here — see
+/// [`crate::api::EinkDitherer::dither_with_regions`] and
+/// [`crate::dither::DitherOptions::pin_carry`], which hold the exact-match pixel
+/// AND carry its incoming error onward rather than dropping it.
 ///
 /// # Thread Safety
 ///
-/// `Preprocessor` is `Send + Sync` if the palette is. Multiple threads can
-/// share an immutable preprocessor for parallel image processing.
+/// `Preprocessor` is `Send + Sync`. Multiple threads can share an immutable
+/// preprocessor for parallel image processing.
 #[derive(Debug)]
-pub struct Preprocessor<'a> {
-    /// Reference to palette for exact match detection
-    palette: &'a Palette,
+pub struct Preprocessor {
     /// Preprocessing configuration
     options: PreprocessOptions,
 }
 
-impl<'a> Preprocessor<'a> {
+impl Preprocessor {
     /// Create a new preprocessor with the given palette and options.
     ///
     /// # Arguments
-    /// * `palette` - Palette for exact match detection
     /// * `options` - Preprocessing configuration
     ///
     /// # Example
@@ -152,33 +126,11 @@ impl<'a> Preprocessor<'a> {
     ///
     /// let colors = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)];
     /// let palette = Palette::new(&colors, None).unwrap();
-    /// let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
+    /// let preprocessor = Preprocessor::new(PreprocessOptions::new());
     /// ```
     #[inline]
-    pub fn new(palette: &'a Palette, options: PreprocessOptions) -> Self {
-        Self { palette, options }
-    }
-
-    /// Check if a pixel exactly matches any palette color (by Srgb bytes).
-    ///
-    /// Matches against the OFFICIAL colors (what the input content uses), not actual
-    /// measured colors. Input SVG/images reference official palette values.
-    ///
-    /// # Arguments
-    /// * `pixel` - The pixel to check
-    ///
-    /// # Returns
-    /// `Some(index)` if pixel matches palette entry, `None` otherwise
-    #[inline]
-    pub fn find_exact_match_srgb(&self, pixel: Srgb) -> Option<u8> {
-        let pixel_bytes = pixel.to_bytes();
-        for i in 0..self.palette.len() {
-            let palette_bytes = self.palette.official(i).to_bytes();
-            if pixel_bytes == palette_bytes {
-                return Some(i as u8);
-            }
-        }
-        None
+    pub fn new(options: PreprocessOptions) -> Self {
+        Self { options }
     }
 
     /// Process an image with the complete preprocessing pipeline.
@@ -189,14 +141,10 @@ impl<'a> Preprocessor<'a> {
     ///    - Lanczos3 resampling for high-quality scaling
     ///    - If only some dimensions match, no resize occurs (both must be specified)
     ///
-    /// 2. **Exact match detection** (on resized pixels)
-    ///    - Detect pixels matching palette colors exactly
-    ///    - Note: resize may destroy exact matches, which is expected for photos
-    ///
-    /// 3. **Saturation boost** (for non-matching pixels)
+    /// 2. **Saturation boost**
     ///    - Perceptually correct Oklch chroma scaling
     ///
-    /// 4. **Contrast adjustment** (for non-matching pixels)
+    /// 3. **Contrast adjustment**
     ///    - Linear RGB midpoint scaling
     ///
     /// # Arguments
@@ -209,7 +157,6 @@ impl<'a> Preprocessor<'a> {
     /// - `pixels`: Processed pixels in linear RGB space
     /// - `width`: Width after resize (may differ from input)
     /// - `height`: Height after resize (may differ from input)
-    /// - `exact_matches`: Map of exact palette matches
     ///
     /// # Example
     ///
@@ -218,7 +165,7 @@ impl<'a> Preprocessor<'a> {
     ///
     /// let colors = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)];
     /// let palette = Palette::new(&colors, None).unwrap();
-    /// let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
+    /// let preprocessor = Preprocessor::new(PreprocessOptions::new());
     ///
     /// let input = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(128, 128, 128)];
     /// let result = preprocessor.process(&input, 2, 1);
@@ -248,32 +195,14 @@ impl<'a> Preprocessor<'a> {
                 _ => (input.to_vec(), width, height),
             };
 
-        let working_total = working_width * working_height;
-
-        // Step 2: Detect exact matches (on resized pixels)
-        let exact_matches: Vec<Option<u8>> = if self.options.preserve_exact_matches {
-            working_pixels
-                .iter()
-                .map(|&pixel| self.find_exact_match_srgb(pixel))
-                .collect()
-        } else {
-            vec![None; working_total]
-        };
-
-        // Step 3 & 4: Convert to LinearRgb, applying enhancements to non-matches
+        // Step 2: Convert to LinearRgb, applying enhancements uniformly.
         let pixels: Vec<LinearRgb> = working_pixels
             .iter()
-            .zip(exact_matches.iter())
-            .map(|(&pixel, &exact_match)| {
+            .map(|&pixel| {
                 // WHY LinearRgb as working space: All arithmetic (contrast scaling,
                 // saturation adjustment) must operate on physically linear light
                 // values. sRGB's gamma curve would distort midpoints and ratios.
                 let mut linear = LinearRgb::from(pixel);
-
-                // Skip enhancement for exact matches
-                if exact_match.is_some() {
-                    return linear;
-                }
 
                 // Apply saturation boost (if factor != 1.0)
                 if (self.options.saturation - 1.0).abs() > f32::EPSILON {
@@ -293,7 +222,6 @@ impl<'a> Preprocessor<'a> {
             pixels,
             width: working_width,
             height: working_height,
-            exact_matches,
         }
     }
 
@@ -345,12 +273,6 @@ impl<'a> Preprocessor<'a> {
 mod tests {
     use super::*;
 
-    /// Helper to create a simple black/white palette
-    fn bw_palette() -> Palette {
-        let colors = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)];
-        Palette::new(&colors, None).unwrap()
-    }
-
     /// Helper to check approximate equality for f32
     fn approx_eq(a: f32, b: f32, tol: f32) -> bool {
         (a - b).abs() < tol
@@ -360,93 +282,13 @@ mod tests {
     // Exact Match Detection Tests
     // =========================================================================
 
-    #[test]
-    fn test_exact_match_detection_black() {
-        let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
-
-        let black = Srgb::from_u8(0, 0, 0);
-        assert_eq!(
-            preprocessor.find_exact_match_srgb(black),
-            Some(0),
-            "Black should match palette index 0"
-        );
-    }
-
-    #[test]
-    fn test_exact_match_detection_white() {
-        let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
-
-        let white = Srgb::from_u8(255, 255, 255);
-        assert_eq!(
-            preprocessor.find_exact_match_srgb(white),
-            Some(1),
-            "White should match palette index 1"
-        );
-    }
-
-    #[test]
-    fn test_exact_match_detection_gray_no_match() {
-        let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
-
-        let gray = Srgb::from_u8(128, 128, 128);
-        assert_eq!(
-            preprocessor.find_exact_match_srgb(gray),
-            None,
-            "Mid-gray should not match any palette color"
-        );
-    }
-
-    #[test]
-    fn test_exact_match_detection_near_black() {
-        let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
-
-        // 1 LSB off from black
-        let near_black = Srgb::from_u8(1, 0, 0);
-        assert_eq!(
-            preprocessor.find_exact_match_srgb(near_black),
-            None,
-            "Near-black should not match (exact byte comparison)"
-        );
-    }
-
-    #[test]
-    fn test_exact_match_uses_official_colors() {
-        // Create palette where official != actual
-        let official = [Srgb::from_u8(255, 0, 0)]; // Official red
-        let actual = [Srgb::from_u8(200, 50, 50)]; // Actual muddy red
-        let palette = Palette::new(&official, Some(&actual)).unwrap();
-
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
-
-        // Input matches OFFICIAL color (bright red) - should match
-        let bright_red = Srgb::from_u8(255, 0, 0);
-        assert_eq!(
-            preprocessor.find_exact_match_srgb(bright_red),
-            Some(0),
-            "Should match official color, not actual"
-        );
-
-        // Input matches ACTUAL color (muddy red) - should NOT match
-        let muddy_red = Srgb::from_u8(200, 50, 50);
-        assert_eq!(
-            preprocessor.find_exact_match_srgb(muddy_red),
-            None,
-            "Should not match actual color when official differs"
-        );
-    }
-
     // =========================================================================
     // Process Pipeline Tests
     // =========================================================================
 
     #[test]
     fn test_process_returns_correct_lengths() {
-        let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
+        let preprocessor = Preprocessor::new(PreprocessOptions::new());
 
         let input = [
             Srgb::from_u8(0, 0, 0),
@@ -456,60 +298,8 @@ mod tests {
         let result = preprocessor.process(&input, 3, 1);
 
         assert_eq!(result.pixels.len(), 3, "Should return 3 processed pixels");
-        assert_eq!(
-            result.exact_matches.len(),
-            3,
-            "Should return 3 match entries"
-        );
         assert_eq!(result.width, 3, "Width should be 3");
         assert_eq!(result.height, 1, "Height should be 1");
-    }
-
-    #[test]
-    fn test_process_detects_exact_matches() {
-        let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
-
-        let input = [
-            Srgb::from_u8(0, 0, 0),       // Black - matches
-            Srgb::from_u8(128, 128, 128), // Gray - no match
-            Srgb::from_u8(255, 255, 255), // White - matches
-        ];
-        let result = preprocessor.process(&input, 3, 1);
-
-        assert_eq!(
-            result.exact_matches[0],
-            Some(0),
-            "Black should match index 0"
-        );
-        assert_eq!(result.exact_matches[1], None, "Gray should not match");
-        assert_eq!(
-            result.exact_matches[2],
-            Some(1),
-            "White should match index 1"
-        );
-    }
-
-    #[test]
-    fn test_process_respects_preserve_exact_matches_flag() {
-        let palette = bw_palette();
-
-        // With preservation disabled
-        let options = PreprocessOptions::new().preserve_exact_matches(false);
-        let preprocessor = Preprocessor::new(&palette, options);
-
-        let input = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)];
-        let result = preprocessor.process(&input, 2, 1);
-
-        // All should be None when preservation is disabled
-        assert_eq!(
-            result.exact_matches[0], None,
-            "Should be None when preservation disabled"
-        );
-        assert_eq!(
-            result.exact_matches[1], None,
-            "Should be None when preservation disabled"
-        );
     }
 
     // =========================================================================
@@ -518,8 +308,7 @@ mod tests {
 
     #[test]
     fn test_boost_saturation_increases_chroma() {
-        let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
+        let preprocessor = Preprocessor::new(PreprocessOptions::new());
 
         // A saturated red color
         let red = LinearRgb::new(0.8, 0.2, 0.1);
@@ -539,8 +328,7 @@ mod tests {
 
     #[test]
     fn test_boost_saturation_gray_stays_gray() {
-        let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
+        let preprocessor = Preprocessor::new(PreprocessOptions::new());
 
         // Pure gray (no chroma to boost)
         let gray = LinearRgb::new(0.5, 0.5, 0.5);
@@ -563,8 +351,7 @@ mod tests {
 
     #[test]
     fn test_boost_saturation_preserves_hue() {
-        let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
+        let preprocessor = Preprocessor::new(PreprocessOptions::new());
 
         // Orange color
         let orange = LinearRgb::new(0.7, 0.3, 0.1);
@@ -583,8 +370,7 @@ mod tests {
 
     #[test]
     fn test_boost_saturation_preserves_lightness() {
-        let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
+        let preprocessor = Preprocessor::new(PreprocessOptions::new());
 
         let color = LinearRgb::new(0.6, 0.3, 0.2);
         let boosted = preprocessor.boost_saturation(color, 1.5);
@@ -606,8 +392,7 @@ mod tests {
 
     #[test]
     fn test_adjust_contrast_midpoint_unchanged() {
-        let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
+        let preprocessor = Preprocessor::new(PreprocessOptions::new());
 
         // Mid-gray at exactly 0.5
         let midpoint = LinearRgb::new(0.5, 0.5, 0.5);
@@ -632,8 +417,7 @@ mod tests {
 
     #[test]
     fn test_adjust_contrast_dark_gets_darker() {
-        let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
+        let preprocessor = Preprocessor::new(PreprocessOptions::new());
 
         // Dark gray below midpoint
         let dark = LinearRgb::new(0.3, 0.3, 0.3);
@@ -655,8 +439,7 @@ mod tests {
 
     #[test]
     fn test_adjust_contrast_light_gets_lighter() {
-        let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
+        let preprocessor = Preprocessor::new(PreprocessOptions::new());
 
         // Light gray above midpoint
         let light = LinearRgb::new(0.7, 0.7, 0.7);
@@ -678,8 +461,7 @@ mod tests {
 
     #[test]
     fn test_adjust_contrast_factor_one_no_change() {
-        let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
+        let preprocessor = Preprocessor::new(PreprocessOptions::new());
 
         let color = LinearRgb::new(0.3, 0.5, 0.7);
         let adjusted = preprocessor.adjust_contrast(color, 1.0);
@@ -694,48 +476,16 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_exact_match_not_enhanced() {
-        let palette = bw_palette();
-        // High saturation and contrast that would change pixels
-        let options = PreprocessOptions::new().saturation(2.0).contrast(2.0);
-        let preprocessor = Preprocessor::new(&palette, options);
-
-        // Process a colored pixel that matches palette (black)
-        let input = [Srgb::from_u8(0, 0, 0)];
-        let result = preprocessor.process(&input, 1, 1);
-
-        // Black matches palette
-        assert_eq!(result.exact_matches[0], Some(0));
-
-        // Should be converted directly without enhancement
-        let expected = LinearRgb::from(input[0]);
-        assert!(
-            approx_eq(result.pixels[0].r, expected.r, 1e-6),
-            "Exact match should not be enhanced"
-        );
-        assert!(
-            approx_eq(result.pixels[0].g, expected.g, 1e-6),
-            "Exact match should not be enhanced"
-        );
-        assert!(
-            approx_eq(result.pixels[0].b, expected.b, 1e-6),
-            "Exact match should not be enhanced"
-        );
-    }
-
-    #[test]
     fn test_non_match_is_enhanced() {
-        let palette = bw_palette();
         // Significant saturation boost
         let options = PreprocessOptions::new().saturation(2.0).contrast(1.0);
-        let preprocessor = Preprocessor::new(&palette, options);
+        let preprocessor = Preprocessor::new(options);
 
         // A colored pixel that doesn't match palette
         let input = [Srgb::from_u8(200, 100, 50)];
         let result = preprocessor.process(&input, 1, 1);
 
         // Doesn't match
-        assert_eq!(result.exact_matches[0], None);
 
         // Should be different from direct conversion (enhanced)
         let direct = LinearRgb::from(input[0]);
@@ -755,8 +505,7 @@ mod tests {
 
     #[test]
     fn test_process_with_photo_preset() {
-        let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
+        let preprocessor = Preprocessor::new(PreprocessOptions::new());
 
         let input = [
             Srgb::from_u8(0, 0, 0),       // Black (exact match)
@@ -766,9 +515,6 @@ mod tests {
         let result = preprocessor.process(&input, 3, 1);
 
         // Verify matches
-        assert_eq!(result.exact_matches[0], Some(0), "Black matches");
-        assert_eq!(result.exact_matches[1], None, "Orange no match");
-        assert_eq!(result.exact_matches[2], Some(1), "White matches");
 
         // Verify processed has 3 LinearRgb values
         assert_eq!(result.pixels.len(), 3);
@@ -776,8 +522,7 @@ mod tests {
 
     #[test]
     fn test_process_with_graphics_preset() {
-        let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
+        let preprocessor = Preprocessor::new(PreprocessOptions::new());
 
         let input = [Srgb::from_u8(128, 64, 32)];
         let result = preprocessor.process(&input, 1, 1);
@@ -801,8 +546,7 @@ mod tests {
 
     #[test]
     fn test_process_2d_image() {
-        let palette = bw_palette();
-        let preprocessor = Preprocessor::new(&palette, PreprocessOptions::new());
+        let preprocessor = Preprocessor::new(PreprocessOptions::new());
 
         // 2x2 image
         let input = [
@@ -814,25 +558,15 @@ mod tests {
         let result = preprocessor.process(&input, 2, 2);
 
         assert_eq!(result.pixels.len(), 4);
-        assert_eq!(result.exact_matches.len(), 4);
-
-        // Check corner matches
-        assert_eq!(result.exact_matches[0], Some(0), "Top-left black matches");
-        assert_eq!(
-            result.exact_matches[3],
-            Some(1),
-            "Bottom-right white matches"
-        );
     }
 
     #[test]
     fn test_saturation_then_contrast_order() {
         // Verify the processing order: saturation first, then contrast
-        let palette = bw_palette();
 
         // Use settings where order matters
         let options = PreprocessOptions::new().saturation(1.5).contrast(1.2);
-        let preprocessor = Preprocessor::new(&palette, options);
+        let preprocessor = Preprocessor::new(options);
 
         // A colored pixel
         let input = [Srgb::from_u8(200, 100, 50)];
@@ -870,10 +604,9 @@ mod tests {
     #[test]
     #[ignore = "requires image crate for actual resize"]
     fn test_process_with_resize() {
-        let palette = bw_palette();
         // Set up resize to 50x50
         let options = PreprocessOptions::new().resize(50, 50);
-        let preprocessor = Preprocessor::new(&palette, options);
+        let preprocessor = Preprocessor::new(options);
 
         // 100x100 solid gray image
         let input = vec![Srgb::from_u8(128, 128, 128); 100 * 100];
@@ -883,19 +616,13 @@ mod tests {
         assert_eq!(result.width, 50, "Width should be 50 after resize");
         assert_eq!(result.height, 50, "Height should be 50 after resize");
         assert_eq!(result.pixels.len(), 2500, "Should have 50*50 pixels");
-        assert_eq!(
-            result.exact_matches.len(),
-            2500,
-            "Should have 50*50 match entries"
-        );
     }
 
     #[test]
     fn test_process_without_resize() {
-        let palette = bw_palette();
         // No resize specified
         let options = PreprocessOptions::new();
-        let preprocessor = Preprocessor::new(&palette, options);
+        let preprocessor = Preprocessor::new(options);
 
         let input = vec![Srgb::from_u8(128, 128, 128); 100 * 100];
         let result = preprocessor.process(&input, 100, 100);
@@ -910,11 +637,10 @@ mod tests {
     #[ignore = "requires image crate for actual resize"]
     fn test_resize_before_enhancement() {
         // Verify resize happens before saturation/contrast
-        let palette = bw_palette();
 
         // Create a small image with a specific pattern
         let options = PreprocessOptions::new().resize(2, 2);
-        let preprocessor = Preprocessor::new(&palette, options);
+        let preprocessor = Preprocessor::new(options);
 
         // 4x4 gradient-like input
         let input = vec![
@@ -946,9 +672,8 @@ mod tests {
     #[test]
     #[ignore = "requires image crate for actual resize"]
     fn test_resize_full_pipeline_with_photo_preset() {
-        let palette = bw_palette();
         let options = PreprocessOptions::new().resize(10, 10);
-        let preprocessor = Preprocessor::new(&palette, options);
+        let preprocessor = Preprocessor::new(options);
 
         // 50x50 image with mix of colors
         let mut input = Vec::with_capacity(50 * 50);
@@ -965,46 +690,5 @@ mod tests {
         assert_eq!(result.width, 10);
         assert_eq!(result.height, 10);
         assert_eq!(result.pixels.len(), 100);
-        assert_eq!(result.exact_matches.len(), 100);
-
-        // All enhancements should be applied (photo preset has saturation 1.2, contrast 1.1)
-        // Since this is a gradient, most pixels won't be exact matches
-        let non_matches: Vec<_> = result
-            .exact_matches
-            .iter()
-            .filter(|m| m.is_none())
-            .collect();
-        assert!(
-            non_matches.len() > 0,
-            "Some pixels should not be exact matches"
-        );
-    }
-
-    #[test]
-    #[ignore = "requires image crate for actual resize"]
-    fn test_resize_preserves_palette_matches_in_graphics_mode() {
-        // In graphics mode (no enhancement), solid color images should stay solid
-        let colors = [
-            Srgb::from_u8(0, 0, 0),
-            Srgb::from_u8(255, 255, 255),
-            Srgb::from_u8(128, 128, 128),
-        ];
-        let palette = Palette::new(&colors, None).unwrap();
-
-        let options = PreprocessOptions::new().resize(5, 5);
-        let preprocessor = Preprocessor::new(&palette, options);
-
-        // Solid gray (matches palette)
-        let input = vec![Srgb::from_u8(128, 128, 128); 10 * 10];
-        let result = preprocessor.process(&input, 10, 10);
-
-        // After resize, center should still match (Lanczos might affect edges)
-        // Check center pixel
-        let center_idx = 2 * 5 + 2; // (2, 2) in 5x5
-        assert_eq!(
-            result.exact_matches[center_idx],
-            Some(2),
-            "Center of solid color resized image should still match palette"
-        );
     }
 }

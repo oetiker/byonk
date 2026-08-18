@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
+  <defs>
+    <style>
+    /* Deliberately NO `font-family` on the bare `text` rule. A CSS rule
+       outranks a presentation attribute in SVG, so `text { font-family: … }`
+       here would override every cell's own `font-family="'Grid …'"` and the
+       variants would silently never be selected — which is exactly how this
+       demo once shipped with nine identical-looking cells. The labels name
+       the family on their own classes instead; the cells name theirs on the
+       element. */
+    text { font-weight: 500; fill: #000000; }
+    .header { font-family: Outfit; font-size: 11px; font-weight: 700; fill: #ffffff; }
+    .col-header { font-family: Outfit; font-size: 14px; font-weight: 700; text-anchor: middle; }
+    .row-header { font-family: Outfit; font-size: 13px; font-weight: 700; text-anchor: middle; }
+    .note { font-family: Outfit; font-size: 9px; font-weight: 400; fill: #555555; }
+    </style>
+  </defs>
+
+  <rect width="{{ data.width }}" height="{{ data.height }}" fill="#ffffff"/>
+
+  <!-- Header -->
+  <rect width="{{ data.width }}" height="16" fill="#000000"/>
+  <text class="header" x="4" y="12">Hinting Demo — font_hinting variants over Outfit: engine × target</text>
+  <!-- The expected coincidences, stated in the image so nobody reads a
+       duplicate cell as a broken one. See script.lua for the measurement. -->
+  <text class="note" x="{{ data.width - 4 }}" y="12" text-anchor="end" fill="#AAAAAA">"off" = control · auto = auto_fallback · interpreter ignores target</text>
+
+  <!-- Column headers -->
+  {% for ch in data.col_headers %}
+  <text class="col-header" x="{{ ch.x }}" y="{{ data.top + 14 }}">{{ ch.label }}</text>
+  {% endfor %}
+
+  <!-- Row headers (vertical) and grid lines -->
+  {% for rh in data.row_headers %}
+  <text class="row-header" x="{{ rh.x }}" y="{{ rh.y }}" transform="rotate(-90, {{ rh.x }}, {{ rh.y }})">{{ rh.label }}</text>
+  {% if rh.show_line %}
+  <line x1="{{ data.grid_x1 }}" y1="{{ rh.line_y }}" x2="{{ data.grid_x2 }}" y2="{{ rh.line_y }}" stroke="#000000" stroke-width="0.5"/>
+  {% endif %}
+  {% endfor %}
+
+  <!-- Column grid lines -->
+  {% for cl in data.col_lines %}
+  <line x1="{{ cl.x }}" y1="{{ data.grid_y1 }}" x2="{{ cl.x }}" y2="{{ data.grid_y2 }}" stroke="#000000" stroke-width="0.5"/>
+  {% endfor %}
+
+  <!-- Outer grid border -->
+  <rect x="{{ data.grid_x1 }}" y="{{ data.grid_y1 }}" width="{{ data.grid_x2 - data.grid_x1 }}" height="{{ data.grid_y2 - data.grid_y1 }}" fill="none" stroke="#000000" stroke-width="0.5"/>
+
+  <!-- Cell contents.
+       The family name is quoted, because an unquoted family containing
+       anything but plain identifiers is invalid CSS and falls back silently.
+
+       Every cell states its own `text-rendering`, because that is where a
+       variant's aliasing comes from — the Lua `aliased` flag is document-level
+       and a variant cannot carry it. `optimizeSpeed` draws the glyph 1-bit,
+       which is only safe on the mono-hinted column; `optimizeLegibility`
+       restores anti-aliasing and keeps hinting (`geometricPrecision` would
+       restore anti-aliasing but switch hinting off). -->
+  {% for cell in data.cells %}
+  {% for line in cell.lines %}
+  <text x="{{ line.x }}" y="{{ line.y }}" font-size="{{ line.size }}" font-family="'{{ cell.family }}', '{{ data.base }}'" text-rendering="{{ cell.text_rendering }}">{{ line.text }}</text>
+  {% endfor %}
+  {% endfor %}
+</svg>

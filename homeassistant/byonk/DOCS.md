@@ -67,7 +67,9 @@ This Configuration tab is the source of truth for Byonk's server-global settings
   button).
 - **Screen repos** — the screen repo registry: one row per remote repo with
   `handle`, `repo`, optional `pin` (branch, tag, or commit SHA) and `token` (for
-  private repos).
+  private repos). The handles `local`, `examples` and `byonk-builtin` are
+  reserved (Byonk registers those itself); a row using one is ignored with a
+  warning in the log.
 
 These settings are read-only over the admin API — the integration deliberately
 does not edit them, so this tab stays the single editor.

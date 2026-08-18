@@ -9,6 +9,26 @@ pub fn engine_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// The `byonk:` requirement value a newly authored screen should declare:
+/// the running engine's `major.minor`, which `compat_warning` reads as a
+/// caret range covering exactly this engine series.
+///
+/// Derived from `CARGO_PKG_VERSION` rather than written out as a literal so a
+/// scaffolded screen can never be born already warning "requires byonk `0.15`
+/// but this engine is 0.17.1" — the drift a hardcoded starter value
+/// guarantees at the next release.
+pub fn engine_compat_req() -> String {
+    let v = engine_version();
+    let mut parts = v.split('.');
+    match (parts.next(), parts.next()) {
+        (Some(major), Some(minor)) => format!("{major}.{minor}"),
+        // A version string without a minor component shouldn't happen (Cargo
+        // requires semver), but fall back to the full version rather than
+        // emitting something unparseable.
+        _ => v.to_string(),
+    }
+}
+
 /// Returns `Some(warning)` if `engine` does not satisfy `req`, else `None`.
 /// A bare `"0.15"` is parsed as `^0.15`. Malformed input fails soft: it warns.
 pub fn compat_warning(engine: &str, req: &str) -> Option<String> {
@@ -53,11 +73,34 @@ mod tests {
 
     #[test]
     fn test_explicit_range_ok() {
-        assert_eq!(compat_warning("0.15.0", ">=0.14, <0.17").is_none(), true);
+        assert!(compat_warning("0.15.0", ">=0.14, <0.17").is_none());
     }
 
     #[test]
     fn test_bad_requirement_warns_not_panics() {
         assert!(compat_warning("0.15.0", "not-a-version").is_some());
+    }
+
+    /// The whole point of `engine_compat_req`: a screen scaffolded by
+    /// `ScreenStore::create_screen` must never warn against the engine that
+    /// scaffolded it. Non-vacuous — with the old hardcoded `"0.15"` this
+    /// fails at every engine version from 0.16.0 on.
+    #[test]
+    fn starter_requirement_never_warns_against_its_own_engine() {
+        let req = engine_compat_req();
+        assert_eq!(
+            compat_warning(engine_version(), &req),
+            None,
+            "a screen created with byonk: \"{req}\" must not warn on engine {}",
+            engine_version()
+        );
+    }
+
+    #[test]
+    fn engine_compat_req_is_major_minor() {
+        // Shape check that doesn't hardcode the current version.
+        let req = engine_compat_req();
+        assert_eq!(req.split('.').count(), 2, "expected major.minor, got {req}");
+        assert!(engine_version().starts_with(&format!("{req}.")));
     }
 }

@@ -8,6 +8,8 @@
 - [Home Assistant App](guide/ha-addon.md)
 - [Home Assistant Integration](guide/ha-integration.md)
 - [Configuration](guide/configuration.md)
+- [Screen Authoring](guide/authoring.md)
+- [Authoring with an LLM (MCP)](guide/mcp.md)
 - [Dev Mode](guide/dev-mode.md)
 
 # Concepts
@@ -29,3 +31,4 @@
 - [HTTP API](api/http-api.md)
 - [Admin API](api/admin-api.md)
 - [Lua API](api/lua-api.md)
+- [Font Hinting](api/font-hinting.md)

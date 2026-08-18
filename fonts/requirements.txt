@@ -5,4 +5,4 @@
 # these into .venv-fonts, kept separate from the Home Assistant test venv so the
 # two dependency sets cannot collide.
 fonttools==4.61.1
-pytest==9.0.0
+pytest==9.0.3

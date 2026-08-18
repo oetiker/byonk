@@ -707,7 +707,13 @@ impl ContentPipeline {
     }
 
     /// Run a screen directly by its `handle/path` ref (for dev mode — no device
-    /// config consulted). Params come in as JSON and are converted to YAML.
+    /// config consulted).
+    ///
+    /// Params are YAML, the same representation `DeviceConfig::params` and
+    /// `run_resolved` use. A caller holding JSON (query-string params on
+    /// `/dev/render`) converts with [`json_params_to_yaml`] — the conversion
+    /// lives at that call site rather than here so callers whose params are
+    /// already YAML don't get a lossy YAML→JSON→YAML round trip.
     ///
     /// `caller_log_sink`, if given, is forwarded to `run_resolved` /
     /// `LuaRuntime::run_script` so the caller can read captured `log_*`
@@ -717,22 +723,11 @@ impl ContentPipeline {
     pub fn run_script_direct(
         &self,
         screen_ref: &str,
-        params: HashMap<String, serde_json::Value>,
+        params: HashMap<String, serde_yaml::Value>,
         device_ctx: Option<DeviceContext>,
         timestamp_override: Option<i64>,
         caller_log_sink: Option<&Arc<Mutex<Vec<String>>>>,
     ) -> Result<ScriptResult, String> {
-        // Convert JSON params to YAML params for consistency
-        let yaml_params: HashMap<String, serde_yaml::Value> = params
-            .into_iter()
-            .filter_map(|(k, v)| {
-                serde_json::to_string(&v)
-                    .ok()
-                    .and_then(|s| serde_yaml::from_str(&s).ok())
-                    .map(|yv| (k, yv))
-            })
-            .collect();
-
         let resolved = self
             .screen_repo_manager
             .loader()
@@ -741,13 +736,34 @@ impl ContentPipeline {
 
         self.run_resolved(
             &resolved,
-            &yaml_params,
+            &params,
             device_ctx.as_ref(),
             timestamp_override,
             caller_log_sink,
         )
         .map_err(|e| e.to_string())
     }
+}
+
+/// Convert JSON params to the YAML representation the script runtime uses.
+///
+/// Via a string round-trip, because `serde_yaml::Value` and
+/// `serde_json::Value` share no conversion impl. A value that fails to make
+/// the trip is dropped rather than failing the render — the same
+/// tolerate-and-continue behaviour this had while it lived inside
+/// `run_script_direct`.
+pub fn json_params_to_yaml(
+    params: HashMap<String, serde_json::Value>,
+) -> HashMap<String, serde_yaml::Value> {
+    params
+        .into_iter()
+        .filter_map(|(k, v)| {
+            serde_json::to_string(&v)
+                .ok()
+                .and_then(|s| serde_yaml::from_str(&s).ok())
+                .map(|yv| (k, yv))
+        })
+        .collect()
 }
 
 #[cfg(test)]

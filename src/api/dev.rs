@@ -531,7 +531,7 @@ pub async fn handle_render(
         // Run the Lua script with optional timestamp override
         let script_result = pipeline.run_script_direct(
             &screen_ref,
-            custom_params,
+            crate::services::content_pipeline::json_params_to_yaml(custom_params),
             Some(ctx.clone()),
             timestamp_override,
             None,

@@ -115,3 +115,4 @@ jobs:
           chmod +x tools/release/*.sh
           tools/release/test-bump-addon-version.sh
           tools/release/test-bump-integration-version.sh
+          tools/release/test-bump-screen-engine.sh

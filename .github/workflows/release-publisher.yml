@@ -1,123 +1,144 @@
-name: Release
+name: Release publisher
+
+# Second half of the release. `Create release PR` prepares a PR; merging it lands
+# the rolled CHANGES.md and every version bump on main, and that merge triggers
+# this workflow, which tags, builds, publishes and deploys.
+#
+# Nothing here pushes to a branch. `main` is protected by the `main-protect`
+# ruleset and GITHUB_TOKEN cannot be granted a bypass, so no PAT is needed or used.
+# Tagging is unaffected: the ruleset targets branches, and tags are a separate ref
+# namespace.
+#
+# The version is read back out of the repository rather than passed in, which is
+# what makes this safe to fire on any push. An unrelated commit that touches
+# Cargo.toml -- a dependency bump, say -- starts this workflow, finds the release
+# already published and exits in seconds.
+#
+# There is deliberately no workflow_dispatch: publishing should be a consequence of
+# merging a release PR, never something started by hand. Recovery does not need one
+# either. The guard below asks whether the *GitHub release* exists, not whether the
+# tag exists, so a run that died after tagging can simply be re-run from the
+# Actions UI and will pick up where it failed.
 
 on:
-  workflow_dispatch:
-    inputs:
-      release_type:
-        description: 'Release type'
-        required: true
-        type: choice
-        options:
-          - bugfix
-          - feature
-          - major
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+
+concurrency:
+  group: release-publisher
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
   PAGES_URL: "https://oetiker.github.io/byonk"
 
-# Least-privilege default. Jobs that need more (write/push, publish container,
-# create release, deploy pages) declare their own block below, which fully
-# overrides this default for that job — so this only tightens the two jobs that
-# otherwise ran with broad scopes: build-binaries and build-docs (checkout +
-# build + upload-artifact, all read-only).
 permissions:
   contents: read
 
 jobs:
-  version:
-    name: Bump Version
+  guard:
+    name: Decide whether to publish
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    timeout-minutes: 10
     outputs:
-      version: ${{ steps.version.outputs.version }}
-      tag: ${{ steps.version.outputs.tag }}
+      publish: ${{ steps.decide.outputs.publish }}
+      version: ${{ steps.decide.outputs.version }}
+      tag: ${{ steps.decide.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          # This job pushes the version-bump commit + tag to the protected
-          # `main` branch. The default GITHUB_TOKEN cannot push under the
-          # `main-protect` ruleset, so use RELEASE_TOKEN — a PAT whose owner is
-          # on the ruleset's bypass list. See docs/superpowers/ha-publishing.md.
-          token: ${{ secrets.RELEASE_TOKEN }}
 
-      - name: Verify main branch
+      - name: Read and cross-check the version
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
-            echo "::error::Releases must be created from the main branch"
+          set -euo pipefail
+
+          # Cargo.toml is the source of truth. The two Home Assistant manifests are
+          # bumped in the same release commit, so a disagreement means a hand edit
+          # went wrong -- and shipping it would point the add-on at the wrong image.
+          VERSION=$(sed -n '/^\[package\]/,/^\[/ s/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          INTEGRATION=$(jq -r '.version' custom_components/byonk/manifest.json)
+          ADDON=$(sed -n 's/^version: *"\(.*\)"/\1/p' homeassistant/byonk/config.yaml | head -1)
+
+          echo "Cargo.toml:  ${VERSION}"
+          echo "integration: ${INTEGRATION}"
+          echo "add-on:      ${ADDON}"
+
+          if [ -z "$VERSION" ]; then
+            echo "::error title=No version::Could not read the package version from Cargo.toml"
+            exit 1
+          fi
+          if [ "$INTEGRATION" != "$VERSION" ] || [ "$ADDON" != "$VERSION" ]; then
+            echo "::error title=Version drift::Cargo.toml says ${VERSION}, integration says ${INTEGRATION}, add-on says ${ADDON}"
             exit 1
           fi
 
-      - name: Calculate new version
-        id: version
-        run: |
-          # Get latest tag or default to v0.0.0
-          LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1 || echo "v0.0.0")
-          if [ -z "$LATEST" ]; then
-            LATEST="v0.0.0"
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+          # The release, not the tag, is what says "this version shipped".
+          #
+          # "No such release" and "could not ask" are different answers, and only
+          # the first one means publish. Treating every failure as "not released"
+          # would let a transient API error start a second publish of a version
+          # that already shipped -- re-pushing its images and rewriting its
+          # release assets.
+          set +e
+          ERR=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" 2>&1 >/dev/null)
+          RC=$?
+          set -e
+
+          if [ "$RC" -eq 0 ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Already released::${TAG} already has a GitHub release - nothing to do"
+            echo "Nothing to publish: \`${TAG}\` is already released." >> "$GITHUB_STEP_SUMMARY"
+          elif printf '%s' "$ERR" | grep -q 'HTTP 404'; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Publishing::${TAG}"
+          else
+            echo "::error title=Cannot determine release state::Asking whether ${TAG} is released failed with something other than a 404: ${ERR}"
+            exit 1
           fi
 
-          # Parse version components
-          MAJOR=$(echo "$LATEST" | sed 's/v\([0-9]*\)\.\([0-9]*\)\.\([0-9]*\)/\1/')
-          MINOR=$(echo "$LATEST" | sed 's/v\([0-9]*\)\.\([0-9]*\)\.\([0-9]*\)/\2/')
-          PATCH=$(echo "$LATEST" | sed 's/v\([0-9]*\)\.\([0-9]*\)\.\([0-9]*\)/\3/')
+  tag:
+    name: Tag ${{ needs.guard.outputs.tag }}
+    needs: guard
+    if: needs.guard.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
-          # Calculate new version based on release type
-          case "${{ inputs.release_type }}" in
-            major)
-              NEW_VERSION="$((MAJOR+1)).0.0"
-              ;;
-            feature)
-              NEW_VERSION="${MAJOR}.$((MINOR+1)).0"
-              ;;
-            bugfix)
-              NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH+1))"
-              ;;
-          esac
-
-          echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
-          echo "tag=v${NEW_VERSION}" >> $GITHUB_OUTPUT
-          echo "New version: ${NEW_VERSION}"
-
-      - name: Update Cargo.toml version
+      - name: Create and push the tag
+        env:
+          TAG: ${{ needs.guard.outputs.tag }}
         run: |
-          sed -i 's/^version = ".*"/version = "${{ steps.version.outputs.version }}"/' Cargo.toml
-
-      - name: Update CHANGES.md
-        run: |
-          DATE=$(date +%Y-%m-%d)
-          VERSION="${{ steps.version.outputs.version }}"
-
-          # Update changelog: move Unreleased content to new version section
-          perl -i -0777 -pe '
-            s/## Unreleased\n+(### New\n(.*?))?(\n### Changed\n(.*?))?(\n### Fixed\n(.*?))?\n+(?=##|\z)/
-              "## Unreleased\n\n### New\n\n### Changed\n\n### Fixed\n\n" .
-              "## '"$VERSION"' - '"$DATE"'\n" .
-              ($2 ? "\n### New\n$2" : "") .
-              ($4 ? "\n### Changed\n$4" : "") .
-              ($6 ? "\n### Fixed\n$6" : "") .
-              "\n"
-            /se' CHANGES.md
-
-      - name: Update integration manifest version
-        run: |
-          chmod +x tools/release/bump-integration-version.sh
-          tools/release/bump-integration-version.sh "${{ steps.version.outputs.version }}"
-
-      - name: Commit and tag
-        run: |
+          set -euo pipefail
+          # Create-if-missing rather than fail-if-present: a re-run after a failed
+          # build must be able to get past this step.
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "::notice title=Tag exists::${TAG} is already tagged; continuing"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml CHANGES.md custom_components/byonk/manifest.json
-          git commit -m "Release ${{ steps.version.outputs.tag }}"
-          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
-          git push origin main --tags
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin "${TAG}"
+          echo "::notice title=Tagged::${TAG}"
 
   build-binaries:
     name: Build ${{ matrix.target }}
-    needs: version
+    needs: [guard, tag]
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -140,9 +161,9 @@ jobs:
             os: windows-latest
             archive: zip
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ needs.guard.outputs.tag }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -172,10 +193,12 @@ jobs:
 
       - name: Create archive (Unix)
         if: matrix.archive == 'tar.gz'
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
         run: |
           mkdir -p dist
           BINARY="target/${{ matrix.target }}/release/byonk"
-          ARCHIVE="byonk-${{ needs.version.outputs.version }}-${{ matrix.target }}.tar.gz"
+          ARCHIVE="byonk-${VERSION}-${{ matrix.target }}.tar.gz"
 
           # Create staging directory
           mkdir -p staging/byonk
@@ -187,15 +210,16 @@ jobs:
           cp LICENSE staging/byonk/
 
           tar -czvf "dist/${ARCHIVE}" -C staging byonk
-          echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
         shell: bash
 
       - name: Create archive (Windows)
         if: matrix.archive == 'zip'
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
         run: |
           mkdir dist
           $BINARY = "target/${{ matrix.target }}/release/byonk.exe"
-          $ARCHIVE = "byonk-${{ needs.version.outputs.version }}-${{ matrix.target }}.zip"
+          $ARCHIVE = "byonk-$env:VERSION-${{ matrix.target }}.zip"
 
           # Create staging directory
           mkdir staging/byonk
@@ -207,35 +231,35 @@ jobs:
           Copy-Item LICENSE staging/byonk/
 
           Compress-Archive -Path staging/byonk -DestinationPath "dist/$ARCHIVE"
-          echo "ARCHIVE=$ARCHIVE" >> $env:GITHUB_ENV
         shell: pwsh
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: byonk-${{ matrix.target }}
           path: dist/*
 
   build-container:
     name: Build Container
-    needs: [version, build-binaries]
+    needs: [guard, tag, build-binaries]
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ needs.guard.outputs.tag }}
 
       - name: Download Linux AMD64 binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: byonk-x86_64-unknown-linux-musl
           path: artifacts/amd64
 
       - name: Download Linux ARM64 binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: byonk-aarch64-unknown-linux-musl
           path: artifacts/arm64
@@ -247,13 +271,13 @@ jobs:
           tar -xzf artifacts/arm64/byonk-*-aarch64-unknown-linux-musl.tar.gz -C binaries/arm64 --strip-components=1
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -261,15 +285,16 @@ jobs:
 
       - name: Calculate version tags
         id: tags
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
         run: |
-          VERSION="${{ needs.version.outputs.version }}"
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
           MINOR=$(echo "$VERSION" | cut -d. -f1-2)
-          echo "major=$MAJOR" >> $GITHUB_OUTPUT
-          echo "minor=$MINOR" >> $GITHUB_OUTPUT
+          echo "major=$MAJOR" >> "$GITHUB_OUTPUT"
+          echo "minor=$MINOR" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile.release
@@ -277,71 +302,48 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ needs.version.outputs.version }}
+            ghcr.io/${{ github.repository }}:${{ needs.guard.outputs.version }}
             ghcr.io/${{ github.repository }}:${{ steps.tags.outputs.minor }}
             ghcr.io/${{ github.repository }}:${{ steps.tags.outputs.major }}
           build-args: |
             BINARY_DIR=binaries
 
-  update-addon-version:
-    name: Bump Add-on Version
-    needs: [version, build-container]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          # Pushes the add-on version bump to protected `main`; needs the
-          # bypass PAT, same as the version job above.
-          token: ${{ secrets.RELEASE_TOKEN }}
-
-      - name: Bump add-on config + changelog
-        run: |
-          chmod +x tools/release/bump-addon-version.sh
-          tools/release/bump-addon-version.sh \
-            "${{ needs.version.outputs.version }}" \
-            "${{ inputs.release_type }}"
-
-      - name: Commit and push to main
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add homeassistant/byonk/config.yaml homeassistant/byonk/CHANGELOG.md
-          git commit -m "Bump add-on to ${{ needs.version.outputs.version }}"
-          git pull --rebase origin main
-          git push origin main
-
   create-release:
     name: Create GitHub Release
-    needs: [version, build-binaries, build-container]
+    needs: [guard, tag, build-binaries, build-container]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ needs.guard.outputs.tag }}
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: byonk-*
           merge-multiple: true
 
       - name: Extract release notes
-        id: changelog
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
         run: |
-          # Extract the changelog section for this version
-          VERSION="${{ needs.version.outputs.version }}"
-          NOTES=$(sed -n "/^## ${VERSION}/,/^## [0-9]/p" CHANGES.md | sed '$d')
-
-          # Write to file for the release
-          echo "$NOTES" > release-notes.md
-
-          # Also output for debugging
+          set -euo pipefail
+          # This version's section, heading included, up to the next `## <version>`
+          # heading or EOF. Perl rather than a sed range because the range form has
+          # to strip a trailing heading that is only sometimes there, and the idiom
+          # that does it is GNU-only -- untestable on a maintainer's Mac.
+          perl -0777 -ne '
+            my $v = quotemeta $ENV{VERSION};
+            if (/^(\#\# $v [^\n]*\n.*?)(?=\n\#\# [0-9]|\z)/ms) {
+              my $s = $1; $s =~ s/\s+$//; print "$s\n";
+            } else {
+              die "no section for $ENV{VERSION} in CHANGES.md\n";
+            }
+          ' CHANGES.md > release-notes.md
           echo "Release notes:"
           cat release-notes.md
 
@@ -349,10 +351,10 @@ jobs:
         run: ls -la artifacts/
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ needs.version.outputs.tag }}
-          name: Byonk ${{ needs.version.outputs.tag }}
+          tag_name: ${{ needs.guard.outputs.tag }}
+          name: Byonk ${{ needs.guard.outputs.tag }}
           body_path: release-notes.md
           files: artifacts/*
           fail_on_unmatched_files: true
@@ -361,18 +363,19 @@ jobs:
 
   build-docs:
     name: Build Release Documentation
-    needs: version
+    needs: [guard, tag]
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ needs.guard.outputs.tag }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -393,7 +396,7 @@ jobs:
           mkdir -p ~/bin
           curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.5.2/mdbook-v0.5.2-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C ~/bin
           curl -sSL https://github.com/badboy/mdbook-mermaid/releases/download/v0.17.0/mdbook-mermaid-v0.17.0-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C ~/bin
-          echo "$HOME/bin" >> $GITHUB_PATH
+          echo "$HOME/bin" >> "$GITHUB_PATH"
 
       - name: Setup mermaid assets
         run: mdbook-mermaid install docs
@@ -403,7 +406,7 @@ jobs:
         run: mdbook build
 
       - name: Upload docs artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: docs-release
           path: docs/book
@@ -411,8 +414,9 @@ jobs:
 
   deploy-docs:
     name: Deploy Release Documentation
-    needs: [version, build-docs, create-release]
+    needs: [guard, tag, build-docs, create-release]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       pages: write
@@ -421,12 +425,12 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: .github/scripts
 
       - name: Download docs artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: docs-release
           path: new-docs
@@ -449,11 +453,12 @@ jobs:
           ls -la site/byonk/ 2>/dev/null || echo "(empty or no byonk dir)"
 
       - name: Add new version to site
+        env:
+          TAG: ${{ needs.guard.outputs.tag }}
         run: |
-          VERSION="${{ needs.version.outputs.tag }}"
-          mkdir -p "site/byonk/$VERSION"
-          cp -r new-docs/* "site/byonk/$VERSION/"
-          echo "Added version $VERSION"
+          mkdir -p "site/byonk/${TAG}"
+          cp -r new-docs/* "site/byonk/${TAG}/"
+          echo "Added version ${TAG}"
 
       - name: Update versions and redirect
         run: |
@@ -471,13 +476,13 @@ jobs:
           cat site/byonk/versions.json
 
       - name: Setup Pages
-        uses: actions/configure-pages@v4
+        uses: actions/configure-pages@v6
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site/byonk
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

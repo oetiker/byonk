@@ -14,7 +14,7 @@ bugs**. **The branch is pushed and `make check` is green. The next job is to mer
 | PR | **#30**, OPEN against `main` — https://github.com/oetiker/byonk/pull/30 |
 | HEAD | `bac40ee` — **tree clean, fully pushed** (`origin` is at `bac40ee`) |
 | Verified | `make check` on `bac40ee`'s content: **1138 passed, 0 failed**; clippy clean under `-D warnings` |
-| CI | Green on `e7fe213` (all 10 checks). **Four commits landed after that** — re-check with `gh pr checks 30` before merging. |
+| CI | **All 10 checks green on `e31eedf`** (Build, Test, Check & Lint, HA Validation, Release Scripts, CodeQL, 4× Analyze) |
 | Push gotcha | The ssh-agent holds **no identities**, so `git push origin …` fails on publickey. `gh` is authenticated over HTTPS — `git push https://github.com/oetiker/byonk.git <branch>` works and leaves the remote config alone. |
 
 **resvg work happens in a different repo.** `oetiker/resvg` carries `feat/bitmap-mask-glyphs`
@@ -36,9 +36,9 @@ holds what its name claims.** `git log` on `oetiker/resvg` is the truth for resv
 
 # What to do next
 
-1. **Merge PR #30.** `make check` is green locally on `bac40ee`; confirm CI is too (it was
-   last verified on `e7fe213`, four commits back). Nothing else is outstanding against it.
-   See `superpowers:finishing-a-development-branch` for the integration checklist.
+1. **Merge PR #30.** It is ready: `make check` green locally and all 10 CI checks green on
+   `e31eedf`. Nothing is outstanding against it. See
+   `superpowers:finishing-a-development-branch` for the integration checklist.
 2. **Decide the 16-grey tone question** below — the one thing this session found and did
    *not* resolve.
 3. Then pick from *Queued work* below. Nothing there blocks the merge.

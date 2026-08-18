@@ -1,0 +1,283 @@
+name: Create release PR
+
+# First half of the release. This prepares a release *proposal* and stops: it
+# opens a PR that rolls CHANGES.md and moves every version-bearing file. Nothing
+# is tagged, no image is pushed and no release exists until that PR is merged.
+# Closing it cancels the release with no cleanup.
+#
+# Merging the PR pushes to main, which triggers `Release publisher` -- the second
+# half, which does the tagging and publishing.
+#
+# Nothing here pushes to main, so no PAT is involved. `main` is protected by the
+# `main-protect` ruleset and GITHUB_TOKEN cannot be granted a bypass (the bypass
+# list takes users, teams and GitHub Apps, not the built-in Actions token), but
+# GITHUB_TOKEN *can* push an ordinary branch and open a PR, which is all this needs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release type'
+        required: true
+        default: 'bugfix'
+        type: choice
+        options:
+          - bugfix   # x.y.Z
+          - feature  # x.Y.0
+          - major    # X.0.0
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify main is releasable
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Verify main branch
+        run: |
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "::error title=Wrong branch::Releases must be cut from main, not ${{ github.ref }}"
+            exit 1
+          fi
+
+      # An early warning, not the gate: the release PR still has to pass the full
+      # required set (Build, Test, Check & Lint and both CodeQL analyses) before it
+      # can merge. This exists because it is easy to fire a release seconds after a
+      # merge, while that merge's CI is still running -- and then discover the
+      # breakage only after a tag and a container image already exist.
+      - name: Verify CI passed for this commit
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const sha = context.sha;
+            const short = sha.slice(0, 7);
+            const DEADLINE = Date.now() + 20 * 60 * 1000;
+            const POLL_MS = 15000;
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+            // The newest run for this exact commit is the verdict; a re-run
+            // supersedes an earlier failure.
+            async function latestRun() {
+              const { data } = await github.rest.actions.listWorkflowRuns({
+                owner, repo, workflow_id: 'ci.yml', head_sha: sha, per_page: 50,
+              });
+              if (data.workflow_runs.length === 0) return null;
+              return data.workflow_runs
+                .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            }
+
+            for (;;) {
+              const run = await latestRun();
+
+              if (run && run.status === 'completed') {
+                if (run.conclusion === 'success') {
+                  core.notice(`CI passed for ${short}`);
+                  await core.summary
+                    .addRaw(`CI passed for \`${short}\` `)
+                    .addLink('(run)', run.html_url)
+                    .write();
+                  return;
+                }
+                core.setFailed(
+                  `CI concluded "${run.conclusion}" for ${short}. Fix main before releasing: ${run.html_url}`,
+                );
+                return;
+              }
+
+              if (Date.now() > DEADLINE) {
+                core.setFailed(
+                  run
+                    ? `Timed out after 20 minutes with CI still ${run.status}: ${run.html_url}`
+                    : `No CI run found for ${short}. Every push to main runs CI, so this commit reaching main without one means something is wrong.`,
+                );
+                return;
+              }
+
+              core.info(run ? `CI is ${run.status}; waiting...` : 'No CI run yet; waiting...');
+              await sleep(POLL_MS);
+            }
+
+  prepare:
+    name: Prepare release PR
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Calculate new version
+        id: version
+        run: |
+          set -euo pipefail
+          LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+          if [ -z "$LATEST" ]; then
+            LATEST="v0.0.0"
+          fi
+          echo "Latest tag: ${LATEST}"
+
+          IFS=. read -r MAJOR MINOR PATCH <<< "${LATEST#v}"
+
+          case "${{ inputs.release_type }}" in
+            major)   NEW_VERSION="$((MAJOR+1)).0.0" ;;
+            feature) NEW_VERSION="${MAJOR}.$((MINOR+1)).0" ;;
+            bugfix)  NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH+1))" ;;
+          esac
+
+          if git rev-parse -q --verify "refs/tags/v${NEW_VERSION}" >/dev/null; then
+            echo "::error title=Tag exists::v${NEW_VERSION} is already tagged"
+            exit 1
+          fi
+
+          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "::notice title=New version::${LATEST} -> v${NEW_VERSION}"
+
+      - name: Update Cargo.toml and Cargo.lock
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+
+          # Cargo.lock records byonk's own version too, so it has to move with
+          # Cargo.toml. If it does not, the release commit is internally
+          # inconsistent: the tag is dirty the moment anyone builds it.
+          #
+          # Not `--offline`: this job never fetched the registry, and an offline
+          # resolve cannot find a single dependency. `--workspace` keeps the update
+          # to the workspace's own entries, so no dependency is touched -- which is
+          # what makes running it here safe.
+          cargo update --workspace
+
+          # Fail here rather than three jobs later if the lock did not take.
+          if ! grep -A1 '^name = "byonk"$' Cargo.lock | grep -qx "version = \"${VERSION}\""; then
+            echo "::error title=Lockfile not updated::Cargo.lock does not record version ${VERSION}"
+            exit 1
+          fi
+
+      - name: Update CHANGES.md
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          DATE=$(date +%Y-%m-%d)
+
+          # Move the Unreleased content into a new version section and reset
+          # Unreleased to empty subsections.
+          perl -i -0777 -pe '
+            s/## Unreleased\n+(### New\n(.*?))?(\n### Changed\n(.*?))?(\n### Fixed\n(.*?))?\n+(?=##|\z)/
+              "## Unreleased\n\n### New\n\n### Changed\n\n### Fixed\n\n" .
+              "## '"$VERSION"' - '"$DATE"'\n" .
+              ($2 ? "\n### New\n$2" : "") .
+              ($4 ? "\n### Changed\n$4" : "") .
+              ($6 ? "\n### Fixed\n$6" : "") .
+              "\n"
+            /se' CHANGES.md
+
+          # The publisher turns this section into the GitHub release body, so an
+          # empty one ships a release that says nothing about itself.
+          # Subsection headings are not content: a section holding nothing but a
+          # bare `### New` still ships an empty release body. The roll above does
+          # not produce that shape, but a hand-edited changelog can.
+          BODY=$(perl -0777 -ne '
+            my $v = quotemeta $ENV{VERSION};
+            next unless /^\#\# $v [^\n]*\n(.*?)(?=\n\#\# [0-9]|\z)/ms;
+            my $s = $1;
+            $s =~ s/^\#.*$//mg;
+            $s =~ s/\s+//g;
+            print $s;
+          ' CHANGES.md)
+          if [ -z "$BODY" ]; then
+            echo "::error title=Nothing to release::The Unreleased section of CHANGES.md is empty, so ${VERSION} would ship with empty release notes."
+            exit 1
+          fi
+
+      - name: Update Home Assistant integration version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          chmod +x tools/release/bump-integration-version.sh
+          tools/release/bump-integration-version.sh "${VERSION}"
+
+      # The add-on's `version:` is the tag Supervisor pulls from
+      # ghcr.io/oetiker/byonk, so between this PR merging and the publisher pushing
+      # the image (~15-20 min) the add-on store advertises a version that is not
+      # there yet. An HA user who refreshes inside that window gets a pull failure
+      # and succeeds on a later retry. Accepted deliberately in exchange for one PR
+      # per release; the alternative was a second, auto-merged PR after the push.
+      - name: Update Home Assistant add-on version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          chmod +x tools/release/bump-addon-version.sh
+          tools/release/bump-addon-version.sh "${VERSION}" "${{ inputs.release_type }}"
+
+      - name: Open release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          BRANCH="release/${TAG}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+
+          git add Cargo.toml Cargo.lock CHANGES.md \
+                  custom_components/byonk/manifest.json \
+                  homeassistant/byonk/config.yaml homeassistant/byonk/CHANGELOG.md
+
+          if git diff --cached --quiet; then
+            echo "::error title=Nothing to commit::No version-bearing file changed"
+            exit 1
+          fi
+
+          git commit -m "Release ${TAG}"
+          git push origin "$BRANCH"
+
+          PR_URL=$(gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "Release ${TAG}" \
+            --body "$(printf '%s\n' \
+              "Prepared automatically by the **Create release PR** workflow." \
+              "" \
+              "- rolls the \`CHANGES.md\` \`Unreleased\` section into \`## ${VERSION}\`" \
+              "- moves \`Cargo.toml\` and \`Cargo.lock\` to \`${VERSION}\`" \
+              "- syncs \`custom_components/byonk/manifest.json\`" \
+              "- syncs \`homeassistant/byonk/config.yaml\` and its changelog" \
+              "" \
+              "Review the changelog, then merge. Merging triggers **Release publisher**, which tags \`${TAG}\`, builds the binaries and the container, publishes the GitHub release and deploys the docs." \
+              "" \
+              "Nothing is tagged or published until this is merged; closing it cancels the release." \
+              "" \
+              "The add-on's \`version:\` is the ghcr image tag, so it points at an image that does not exist until the publisher finishes -- roughly 15-20 minutes after the merge.")")
+
+          echo "::notice title=Release PR opened::${PR_URL}"
+          {
+            echo "## Release ${TAG} prepared"
+            echo ""
+            echo "Review and merge to publish: ${PR_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -912,6 +912,11 @@ const DENIED_OS_MEMBERS: [&str; 7] = [
 /// the mapped host directories. So the library set is named explicitly and the
 /// leftover sharp edges are removed from the globals.
 fn new_sandboxed_lua() -> LuaResult<Lua> {
+    // These are the *optional* libraries. Lua's base library — `pcall`,
+    // `type`, `tostring`, `pairs` — is not among them and cannot be opted out
+    // of: mlua opens it at state creation, outside this bitmask. Its sharp
+    // edges are taken off below instead.
+    //
     // `io` and `package` are left out wholesale. `package` costs nothing:
     // `install_require` supplies `require`, and mlua's safe mode already
     // refuses `package.loadlib` and C modules.
@@ -1028,7 +1033,15 @@ impl LuaRuntime {
         // screen repo could ship crafted bytecode and walk straight out of the
         // VM. A screen's script.lua is source code; refuse to read it as
         // anything else. Same reasoning in `install_require`.
-        let result: Table = lua.load(script_src).set_mode(ChunkMode::Text).eval()?;
+        // `set_name` matters for the same reason: mlua otherwise labels the
+        // chunk with the Rust call site, so a screen's own error came back
+        // reading `src/services/lua_runtime.rs:<line>` — byonk taking the
+        // blame for the author's typo.
+        let result: Table = lua
+            .load(script_src)
+            .set_name(screen_name)
+            .set_mode(ChunkMode::Text)
+            .eval()?;
 
         // Extract data, refresh_rate, skip_update, and colors
         let data = self.table_to_json(&lua, result.get::<Table>("data")?)?;

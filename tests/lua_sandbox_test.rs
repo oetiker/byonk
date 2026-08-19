@@ -79,6 +79,7 @@ fn dangerous_stdlib_entries_are_absent_from_a_screen_script() {
             data = {
                 io = gone(io),
                 package = gone(package),
+                debug = gone(debug),
                 dofile = gone(dofile),
                 loadfile = gone(loadfile),
                 load = gone(load),
@@ -109,6 +110,7 @@ fn dangerous_stdlib_entries_are_absent_from_a_screen_script() {
     for name in [
         "io",
         "package",
+        "debug",
         "dofile",
         "loadfile",
         "load",
@@ -152,6 +154,41 @@ fn a_screen_script_is_loaded_as_text_never_as_bytecode() {
     assert!(
         err.to_string().contains("attempt to load a binary chunk"),
         "byonk fed the chunk to the bytecode loader instead of refusing it: {err}"
+    );
+}
+
+/// A sandbox that refuses things has to say whose script it refused. Without a
+/// chunk name mlua labels the chunk with the Rust call site, so every screen
+/// error read `src/services/lua_runtime.rs:<line>` — byonk blaming itself for
+/// the author's typo.
+#[test]
+fn a_script_error_names_the_screen_not_byonks_own_source() {
+    let script = r#"error("boom")"#;
+
+    let (_temp_dir, asset_loader) = setup_test_env(&[("broken.lua", script)]);
+    let runtime = LuaRuntime::new(asset_loader);
+
+    let err = runtime
+        .run_script_from_asset(
+            std::path::Path::new("broken.lua"),
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .expect_err("the script raises");
+    let message = err.to_string();
+
+    assert!(
+        message.contains("boom"),
+        "the author's own message must survive: {message}"
+    );
+    assert!(
+        message.contains("broken"),
+        "the error must name the screen it came from: {message}"
+    );
+    assert!(
+        !message.contains("lua_runtime.rs"),
+        "the error points at byonk's source instead of the screen: {message}"
     );
 }
 

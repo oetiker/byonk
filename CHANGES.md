@@ -49,6 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `os.difftime` — are untouched, as are `require`, `read_asset` and the HTTP
   functions. The Lua API reference now lists exactly what is withheld.
 
+- **Errors from a screen script now name the screen.** They used to be labelled
+  with a line inside byonk's own Rust source — `[string
+  "src/services/lua_runtime.rs:1031:33"]:1: boom` — which read as though byonk
+  had broken rather than the script. The screen's name appears instead.
+
 ## 0.18.0 - 2026-08-18
 
 ### New

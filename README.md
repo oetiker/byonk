@@ -18,25 +18,20 @@ Point your TRMNL device to `http://your-server:3000` and it will start displayin
 
 ## Home Assistant
 
-Byonk runs on Home Assistant in two parts — install both:
+Byonk installs itself as a Home Assistant app, and brings its own integration
+with it — device onboarding, entities, and automatic token provisioning:
 
-- **The Byonk app** (formerly "add-on") — the server itself, running under
-  Supervisor and serving your TRMNL devices on host port 3000.
-- **The Byonk integration** (via HACS) — onboards TRMNL devices as Home Assistant
-  devices with entities for screen selection, battery, signal and screen
-  parameters, and provisions the admin token automatically.
+1. In Home Assistant, go to **Settings → Apps → App store**.
+2. Open the **⋮** menu, choose **Repositories**, add
+   `https://github.com/oetiker/byonk` and select **Add**.
+3. Find **Byonk** in the store, select **Install**, then **Start**.
+4. Byonk asks you to restart Home Assistant. Do that
+   (**Settings → System → Restart**).
+5. After the restart, a **Byonk** card is waiting in
+   **Settings → Devices & Services**. Select **Configure**.
 
-Install the integration first and it installs and starts the app for you,
-zero-touch:
-
-1. **HACS → Integrations → ⋮ → Custom repositories**, add
-   `https://github.com/oetiker/byonk` as an **Integration**, install it and
-   restart Home Assistant.
-2. **Settings → Devices & Services → Add Integration** → *Byonk*.
-
-See the [Home Assistant App](https://oetiker.github.io/byonk/dev/guide/ha-addon.html)
-and [Home Assistant Integration](https://oetiker.github.io/byonk/dev/guide/ha-integration.html)
-guides for details.
+See the [Home Assistant guide](https://oetiker.github.io/byonk/dev/guide/home-assistant.html)
+for details.
 
 ## Dev Mode
 
@@ -55,8 +50,7 @@ Then open `http://localhost:3000/dev` in your browser:
 Full documentation is available at **[oetiker.github.io/byonk](https://oetiker.github.io/byonk)**:
 
 - [Installation Guide](https://oetiker.github.io/byonk/dev/guide/installation.html)
-- [Home Assistant App](https://oetiker.github.io/byonk/dev/guide/ha-addon.html)
-- [Home Assistant Integration](https://oetiker.github.io/byonk/dev/guide/ha-integration.html)
+- [Home Assistant](https://oetiker.github.io/byonk/dev/guide/home-assistant.html)
 - [Configuration](https://oetiker.github.io/byonk/dev/guide/configuration.html)
 - [Creating Your First Screen](https://oetiker.github.io/byonk/dev/tutorial/first-screen.html)
 - [Lua API Reference](https://oetiker.github.io/byonk/dev/api/lua-api.html)

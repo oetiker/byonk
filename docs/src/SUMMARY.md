@@ -5,8 +5,7 @@
 # Getting Started
 
 - [Installation](guide/installation.md)
-- [Home Assistant App](guide/ha-addon.md)
-- [Home Assistant Integration](guide/ha-integration.md)
+- [Home Assistant](guide/home-assistant.md)
 - [Configuration](guide/configuration.md)
 - [Screen Authoring](guide/authoring.md)
 - [Authoring with an LLM (MCP)](guide/mcp.md)

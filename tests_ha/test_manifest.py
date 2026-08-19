@@ -16,8 +16,3 @@ def test_manifest_has_required_keys():
     assert "version" in data and data["version"]
     for key in ("documentation", "issue_tracker"):
         assert data[key].startswith("https://github.com/oetiker/byonk")
-
-
-def test_hacs_json_parses():
-    data = json.loads(Path("hacs.json").read_text())
-    assert data["name"]

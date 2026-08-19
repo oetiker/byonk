@@ -1,12 +1,17 @@
-# Byonk — Home Assistant Publishing (maintainer runbook)
+# Byonk — Home Assistant Integration Icon (maintainer runbook)
 
-Getting byonk into the HACS default store, with a proper icon.
+Where the integration's brand icon comes from and why no `home-assistant/brands`
+PR is needed.
+
+> HACS was dropped on 2026-08-19 — see
+> `docs/superpowers/specs/2026-08-19-addon-installs-integration-design.md`.
+> The Supervisor app now installs the integration itself, so HACS has no
+> remaining role.
 
 > **2026-07 update — the home-assistant/brands PR is obsolete.** Since Home
 > Assistant **2026.3**, custom integrations ship their **own** brand images in a
 > `brand/` directory, which take priority over the CDN. `home-assistant/brands`
-> **no longer accepts** custom-integration icons (PRs are auto-closed). HACS
-> likewise now accepts a local `brand/` directory instead of a brands entry.
+> **no longer accepts** custom-integration icons (PRs are auto-closed).
 > See https://developers.home-assistant.io/blog/2026/02/24/brands-proxy-api
 
 ## 1. Brand images — shipped in-repo (done)
@@ -22,21 +27,3 @@ Getting byonk into the HACS default store, with a proper icon.
 No `manifest.json` change is needed — HA auto-detects the directory. The icon
 renders on HA **2026.3+**; on older cores it falls back to the CDN (generic
 icon, since byonk is intentionally not in `home-assistant/brands`).
-
-## 2. hacs/default PR (default-store inclusion)
-
-Prerequisites, all met: `custom_components/byonk/` (single integration),
-`hacs.json`, `manifest.json` with `domain`/`name`/`version`/`documentation`/
-`issue_tracker`/`codeowners`, a published release, and the local `brand/` dir
-(HACS requires at least `brand/icon.png`).
-
-1. Fork `https://github.com/hacs/default`.
-2. In the `integration` file, add `oetiker/byonk` on its own line, keeping the
-   list alphabetically sorted.
-3. Open the PR. The HACS bot validates the repo (release present, `hacs.json`,
-   `manifest.json`, local brand icon reachable).
-
-## 3. After the hacs/default PR merges
-
-- Switch `docs/src/guide/ha-integration.md` install steps from the custom-repo
-  URL flow to the default-store search flow.

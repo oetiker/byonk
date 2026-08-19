@@ -1497,8 +1497,35 @@ Byonk uses Lua 5.4. Standard library functions available include:
 - `math.min`, `math.max`
 - `math.random`
 
+### Time
+- `os.time`, `os.date`, `os.clock`, `os.difftime`
+
+(For formatting and parsing, prefer byonk's own
+[`time_format`](#time_formattimestamp-format) and
+[`time_parse`](#time_parsestr-format), which take a timezone.)
+
 ### Other
 - `tonumber`, `tostring`, `type`
 - `pcall` (for error handling)
 
-**Not available:** File I/O, OS functions, network (except `http_get`)
+### Not available
+
+A screen script runs in a sandbox. It gets no filesystem, no subprocess and no
+environment — the only ways out are the HTTP functions above and
+[`read_asset`](#read_assetpath), which stays inside the screen's own folder.
+
+The following are removed and evaluate to `nil`:
+
+| Removed | Why |
+|---------|-----|
+| the whole `io` library | file access |
+| the whole `package` library | `require` still works, but is a byonk resolver limited to the screen's own repo and `byonk-base` |
+| `dofile`, `loadfile` | file access |
+| `load` | compiles arbitrary bytecode, which can escape the VM |
+| `os.execute`, `os.exit` | run programs / stop the server |
+| `os.getenv`, `os.setlocale` | read the server's environment / change its global state |
+| `os.remove`, `os.rename`, `os.tmpname` | file access |
+| `debug` | Lua's introspection escape hatch |
+
+This matters because a screen repo is re-fetched on a timer: an upstream change
+runs new Lua on your server without anyone reading it first.

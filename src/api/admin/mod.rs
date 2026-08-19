@@ -1,5 +1,6 @@
 //! Admin/management API (`/api/admin/*`), gated by a bearer token.
 
+pub mod preview;
 pub mod read;
 pub mod write;
 
@@ -48,6 +49,7 @@ pub fn admin_router() -> Router<AppState> {
             "/devices/{key}",
             patch(write::patch_device).delete(write::delete_device),
         )
+        .route("/devices/{key}/preview", get(preview::device_preview))
         .route("/pending", get(read::pending))
         .route("/config", get(read::get_config))
         .route("/screens", get(read::screens))

@@ -136,6 +136,12 @@ pub struct DevicePreview {
     pub dither: Option<String>,
     /// `DeviceConfig`'s dither tuning fields, as one layer.
     pub tuning: DitherTuningValues,
+    /// `DeviceConfig::refresh` — the per-device refresh override, in seconds.
+    /// Feeds `DeviceContext::refresh_override`, so `RenderResult::refresh_rate`
+    /// comes back as the rate this device actually runs at rather than the
+    /// screen's own. The preview cache uses it as the entry's TTL, which is
+    /// what keeps a preview exactly as fresh as the panel it stands for.
+    pub refresh: Option<u32>,
 }
 
 /// Options for `ScreenStore::render`. Mirrors the knobs `/dev/render`
@@ -1099,7 +1105,11 @@ impl ScreenStore {
         // Pre-script dither algorithm + tuning, for the device context the
         // script sees via `device.dither.*` — same resolution `/dev/render`
         // does before running the script.
-        let pre_script_algo = opts.dither.as_deref().or(device_dither).unwrap_or("atkinson");
+        let pre_script_algo = opts
+            .dither
+            .as_deref()
+            .or(device_dither)
+            .unwrap_or("atkinson");
         let panel_dither_config = panel.and_then(|p| p.dither.clone());
         let pre_panel_tuning = panel_dither_config
             .as_ref()
@@ -1146,6 +1156,7 @@ impl ScreenStore {
             dither_gamut_knee: pre_panel_tuning.gamut.knee,
             dither_gamut_amount: pre_panel_tuning.gamut.amount,
             dither_gamut_max_compression: pre_panel_tuning.gamut.max_compression,
+            refresh_override: opts.device.as_ref().and_then(|d| d.refresh),
             ..Default::default()
         };
 

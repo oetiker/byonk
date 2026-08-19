@@ -294,7 +294,10 @@ fn device_config_dither_decides_when_the_script_has_no_opinion() {
     let store = dither_store(dir.path());
 
     let atkinson = store.render("testrepo/plain", with_device_dither(Some("atkinson")));
-    let floyd = store.render("testrepo/plain", with_device_dither(Some("floyd-steinberg")));
+    let floyd = store.render(
+        "testrepo/plain",
+        with_device_dither(Some("floyd-steinberg")),
+    );
     assert!(atkinson.error.is_none(), "{:?}", atkinson.error);
     assert!(floyd.error.is_none(), "{:?}", floyd.error);
     assert!(!atkinson.png.is_empty());

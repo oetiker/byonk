@@ -1,208 +1,185 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-19 (session 30). The screen preview (#38) and the Lua sandbox fix (#39)
-are both **merged**. This session designed a new initiative — **the Byonk app installs its own
-Home Assistant integration, and HACS is dropped** — and stopped at a committed spec and plan.
-**No implementation has started. Nothing is pushed.**_
+_Last updated: 2026-08-19 (session 31). The **app-installs-its-own-integration** initiative is
+**implemented, reviewed and validated end to end on the QEMU HAOS VM**. All nine plan tasks are
+done. **Nothing is pushed and no PR exists.**_
 
 ## Where the work lives
 
 | | |
 |---|---|
-| Branch | `feat/addon-installs-integration`, cut from `main` @ `958b14f` |
-| HEAD | `799f83c` — **2 commits, docs only, tree clean, NOT pushed** |
-| `main` | `958b14f` (merge of #39, the Lua sandbox fix). Latest tag **`v0.18.0`** |
-| Open PR | **#40** `ci: check the whole workspace, not just the root package`, head `011a7b5`, MERGEABLE. It touches **only `.github/workflows/ci.yml`** — the same file this branch's Task 7 edits. Different regions, so it should merge, but **merge #40 first** and rebase rather than find out during a task |
-| Stray worktree | `/private/tmp/.../scratchpad/byonk-ci-workspace-checks` @ `c90440f` on `ci/workspace-wide-checks`. Origin has `011a7b5` on that branch, so the worktree is **behind**. It is in a scratchpad and can be removed |
+| Branch | `feat/addon-installs-integration`, rebased onto `origin/main` @ `36e2384` (the #40 merge) |
+| HEAD | `41a1b3b` — 18 commits, tree clean, **NOT pushed** |
+| `main` | `36e2384`. Latest tag **`v0.18.0`** |
+| Open PRs | none |
 | Push gotcha | ssh-agent holds **no identities**, so `git push origin …` fails on publickey. `gh` is authenticated over HTTPS — `git push https://github.com/oetiker/byonk.git <branch>` works and leaves the remote config alone |
 | `main` protection | Ruleset `main-protect`: PR required (0 approvals), 5 required checks (`Build`, `Test`, `Check & Lint`, `Analyze (actions)`, `Analyze (rust)`), strict up-to-date. Bypass: **Repository admin** — the owner can always merge, no PAT can |
 
-The two commits:
+---
 
-| Commit | What |
+# What this branch does
+
+**A Home Assistant user installs one thing — the Byonk app — and Byonk works.**
+
+At startup in add-on mode the app copies `custom_components/byonk` out of its own image into the
+Home Assistant config directory (`/homeassistant`), posts a "restart Home Assistant" persistent
+notification, and posts a Supervisor discovery message so a **Byonk** card is waiting after the
+restart. HACS is removed from the project entirely.
+
+Spec: `docs/superpowers/specs/2026-08-19-addon-installs-integration-design.md`
+Plan: `docs/superpowers/plans/2026-08-19-addon-installs-integration.md`
+
+## The shape of it, in code
+
+| Piece | Where |
 |---|---|
-| `646e027` | The design spec |
-| `799f83c` | The nine-task implementation plan |
+| The writer | `src/ha_integration.rs` — `install()`, `notify_restart()`, `announce_discovery()`, `install_and_announce()` |
+| The call site | `src/main.rs:896-903`, gated on `addon_mode`, `tokio::spawn`ed so it can never delay the listener |
+| Manifest capabilities | `homeassistant/byonk/config.yaml` — `homeassistant_config:rw`, `homeassistant_api: true`, `discovery: [byonk]` |
+| The image | `Dockerfile.release` — `COPY custom_components/byonk ./custom_components/byonk` on **both** arch stages |
+| The Discovered card | `custom_components/byonk/config_flow.py` — `async_step_hassio` / `async_step_hassio_confirm`, sharing `_async_create_hub_entry` with the manual route |
+| The version warning | `coordinator.py::_async_check_version` + `addon.py::async_get_addon_version` |
 
 ---
 
-# The active initiative
+# What to do next
 
-**Goal: a Home Assistant user installs one thing — the Byonk app — and Byonk works.**
+**1. Open the PR.** The branch is finished, reviewed and hardware-validated. Nothing is blocking
+it.
 
-The integration already installs the app (`config_flow.py:94` → `addon.py:39`). The missing half
-is the reverse, and that is what this builds: at startup in add-on mode, byonk copies
-`custom_components/byonk` out of its own image into the Home Assistant config directory, posts a
-"restart Home Assistant" notification, and posts a Supervisor discovery message so a **Byonk**
-Discovered card is waiting after the restart.
+**2. Two decisions the owner should make** (below): whether `tests_ha` should run in CI, and
+whether to notify the user when the install is *refused*.
 
-**Read these two, in order:**
-
-1. `docs/superpowers/specs/2026-08-19-addon-installs-integration-design.md`
-2. `docs/superpowers/plans/2026-08-19-addon-installs-integration.md`
-
-## The five decisions behind it
-
-1. **The app carries the integration.** Byonk needs the app anyway, so the "Get HACS" pattern — a
-   throwaway installer app — would be pure overhead.
-2. **HACS is dropped entirely.** `hacs.json`, the `hacs/action` CI job, `test_hacs_json_parses`
-   and all HACS docs go. **hacs/default PR #9310 has been closed by the owner.** Do not re-file it.
-3. **The restart nudge is a persistent notification**, not a log line and not an app that restarts
-   Home Assistant by itself.
-4. **Version skew warns, it does not block.** Entities keep working; a repair issue points at the
-   restart.
-5. **The docs merge into one task-ordered page.** `ha-addon.md` + `ha-integration.md` →
-   `home-assistant.md`, one nav entry. The owner's steer: *"most HA users will not care about the
-   tech details — install byonk in HA and it works."* The words *app* and *integration* appear
-   only where a user must click on one.
-
-## What to do next
-
-**1. Pick an execution mode and run the plan.** That is exactly where this session stopped — the
-choice was offered and the answer was "write a handover first". Subagent-driven development is
-recommended (fresh subagent per task, review between tasks); `superpowers:executing-plans` is the
-inline alternative.
-
-**2. Merge PR #40 before Task 7**, or expect to rebase `.github/workflows/ci.yml`.
-
-**3. Task 9 is not optional.** Nothing before it proves the chain: that Supervisor accepts the new
-manifest, that the mount lands at `/homeassistant`, that the card appears. It needs the VM.
+**3. After merge**, the release path is unchanged — Actions → *Create release PR* → pick the
+type → review → merge.
 
 ---
 
-# Facts already established — do not re-derive these
+# Validated on the VM — do not re-run these to confirm
 
-Every one was read from current upstream source this session, not assumed. Re-deriving them costs
-a dozen fetches.
+All nine checklist items pass, on HA core 2026.7.2 with the app built from source. This is what
+the branch actually does, observed, not inferred.
 
-| Fact | Source |
+| # | Result |
 |---|---|
-| `addon_config:rw` mounts at `/config`; `homeassistant_config:rw` mounts at `/homeassistant`. No clash with byonk's existing `/config` use | `supervisor/docker/const.py:193-194`, `docker/app.py:456-491` |
-| The app **security rating ignores `map` and `homeassistant_api`**. It scores AppArmor, ingress, privileges, `hassio_role`, host namespaces | `supervisor/apps/utils.py:19-86` |
-| Discovery service names are free-form strings; the only rule is that the app lists the service in its `discovery:` key | `supervisor/api/discovery.py` |
-| `/discovery.*` needs **no API role** — it is in the security middleware's `api_bypass` set | `supervisor/api/middleware/security.py:105` |
-| Discovery messages **dedupe on (app, service)** — `config` and `uuid` are `compare=False`. Posting every start is idempotent | `supervisor/discovery/__init__.py:31-99` |
-| If Home Assistant is down, the message is **stored and the push skipped**; HA re-reads the list at `EVENT_HOMEASSISTANT_START`. First install produces no error | `supervisor/discovery/__init__.py:117-121`, `core/components/hassio/discovery.py:36-52` |
-| HA turns a discovery message into a config flow **for the domain named by `service`**, source `hassio`. Custom integrations resolve normally | `core/components/hassio/discovery.py:113-140` |
-| `/core/api/*` is gated on `homeassistant_api: true`; only `hassio*` paths are denied to apps, so `persistent_notification/create` is reachable | `supervisor/api/proxy.py:38,99-116,170-175` |
-| `hacs.json` is **optional** — HACS recognises a repo from `custom_components/<domain>/manifest.json`. Deleting it breaks no existing install | HACS publish docs |
-| The release workflow already fails unless `Cargo.toml`, `manifest.json` and the app `config.yaml` agree on the version | `.github/workflows/release-publisher.yml:64-66` |
+| 1 | Supervisor accepted the new manifest — app installed and started, no schema error |
+| 2 | `/homeassistant/custom_components/byonk` appeared on first start, all files incl. `brand/` and `translations/`, manifest version matching the app, no staging dirs left behind |
+| 3 | Notification: *"Byonk installed its Home Assistant integration (0.18.0). Restart Home Assistant to finish setting up Byonk."* |
+| 4 | After the HA restart, a **Byonk** Discovered card appeared, with byonk's own icon — the in-repo `brand/` directory works |
+| 5 | The card opened the `hassio_confirm` form; **Submit** created the hub entry with no token prompt |
+| 6 | Hub and **Byonk Default** entities all present |
+| 7 | Restarting the app alone: no second write, no second notification, entries healthy |
+| 8 | A planted foreign `custom_components/byonk` was **refused** with a warning and left untouched, marker file intact; removing it self-healed on the next app start |
+| 9 | An older installed version produced *"updated from 0.17.0 to 0.18.0"* (replacing, not stacking); the version-mismatch repair issue appeared with correct placeholders and **cleared** once the versions agreed |
 
-Two traps the plan already works around, found in self-review:
+**Limitation, stated honestly:** the VM builds from source with its own
+`/addons/byonk/Dockerfile`, so this validates the manifest keys, the mount, the write, the
+notification, discovery and the card — but **not `Dockerfile.release` itself**. Only a
+published-image install exercises that, which is post-release.
 
-- **`reqwest`'s `json` feature is not enabled** in `Cargo.toml`. `RequestBuilder::json` will not
-  compile until Task 3 turns it on.
-- **Adding a Supervisor call to `_async_update_data` breaks every existing HA test**, because they
-  all drive the coordinator through the `byonk` fixture and there is no Supervisor in the harness.
-  Task 6 extends the fixture *first*, before the feature exists.
+## Two traps in the VM rig, both now fixed in-repo
 
----
+- **`tools/ha-vm/rebuild.sh` did not sync `custom_components`**, so a from-source app had no
+  `/app/custom_components/byonk` and `install` failed on every start — *quietly*, because
+  `make ha-deploy` writes the directory by hand and the VM looks healthy. Fixed; `custom_components`
+  is now in the sync list.
+- **That fix is necessary but not sufficient, and this will bite a fresh VM.** The VM's local
+  add-on does **not** build from `Dockerfile.release` — it builds from `/addons/byonk/Dockerfile`,
+  which lives only inside the VM and is **not tracked in this repo**. It has no
+  `COPY custom_components …` line. On this VM it was added by hand during Task 9:
 
-# The test VM
+  ```dockerfile
+  COPY --from=builder /build/custom_components/byonk /app/custom_components/byonk
+  ```
 
-See the `ha-vm-testing` skill. Its state as of session 29:
+  Without it, `make ha-rebuild` still produces an app with no integration and `install` logs
+  "no readable manifest.json" on every start, with nothing else looking wrong. The same is true
+  of `/addons/byonk/config.yaml`, which is also VM-only and needed the three new manifest keys
+  added by hand.
+- **`make ha-rebuild` still does not sync the app manifest.** A change to
+  `homeassistant/byonk/config.yaml` needs a manual version bump in `/addons/byonk/config.yaml`,
+  then `ha store reload`, then `ha addons update local_byonk`. **`ha store reload` is the working
+  command — `ha addons reload` silently leaves `version_latest` stale.**
 
-| | |
-|---|---|
-| byonk | **`local_byonk` only**, built from source, running |
-| Published add-on | **uninstalled** (owner approved) — it was holding port 3000 |
-| Config entries | hub + `Byonk Default`, healthy |
-| HA core | **2026.7.2** (2026.8.x is out) |
+Two smaller VM facts worth keeping:
 
-- **`make ha-rebuild` does not sync the app manifest.** This branch changes
-  `homeassistant/byonk/config.yaml`, so the VM needs a manual version bump plus `POST
-  /store/reload` and `ha addons update`, or the new `map`, `homeassistant_api` and `discovery`
-  keys will not be live. **Task 9 fails silently and confusingly without this.**
-- **Two byonk apps cannot coexist** — both want port 3000; the loser sits in state `error`.
-- **`ha core restart` returns long before HA is up.** Poll `http://localhost:8123/` for `200`.
-- **Chrome on the Mac host holds a live HA session**, so the UI can be driven with the
-  `claude-in-chrome` tools with no password. HA's frontend is shadow-DOM heavy: `find` and
-  `read_page` return almost nothing — **work from screenshots and coordinates**. Dialogs animate;
-  screenshot again before clicking. The device page jumps to the top when a dialog closes.
-- **Never print the admin token.** Verify through the UI, or curl from the Mac host on port 3000
-  (not from the Terminal add-on). A token-free liveness check: the endpoint answers **401** when
-  the route exists and **404** when the binary is too old.
-
-## A real bug Task 9 will probably hit
-
-`custom_components/byonk/addon.py:29` — `_async_find_addon_item` returns the **first** store item
-whose slug ends in `_byonk`, and the config entry stores that slug forever. With two byonk apps
-installed (published `<hash>_byonk` and from-source `local_byonk`), **which one the integration
-adopts is down to Supervisor's listing order.** Reauth re-reads the *stored* slug and never
-re-discovers (`config_flow.py:128`), so a wrongly-bound entry **cannot heal itself**: `401`,
-restart the wrong app, "port 3000 is already in use". The cure is deleting and re-adding the
-entry, which orphans every device entry (they store the hub's `entry_id`, `__init__.py:62`).
-
-Left unfixed deliberately — it needs a decision about what "the byonk app" means when there are
-two. Task 9 runs with `local_byonk` only, which sidesteps it.
+- `make ha-ssh CMD="a; b"` runs only the first command remotely and the rest **on the Mac** (the
+  Makefile does not quote `$(CMD)`). Use `bash tools/ha-vm/ssh.sh "…"`.
+- A persistent notification does **not** survive the HA restart it asks for — they are in-memory.
+  Harmless, since the restart is the action it wanted.
 
 ---
 
-# Build / verify
+# Decisions taken during execution that the owner may want to revisit
 
-- `make check` = fmt + clippy + full suite, **~15–40 min here — background it**; it runs
-  `cargo fmt`, not `--check`, so it rewrites files.
-- `make ha-check` = `ruff` + `pytest tests_ha`. Needs `make ha-setup` once. **Instant** (~2 s).
-- **`cargo test` links each test binary serially and slowly here** (~1–2 min per binary, 40
-  binaries). `cargo test --test <name>` is the fast loop.
-- **Never `git add -A`.** `examples/` is an untracked near-copy of `screens/examples/`. Add by
-  explicit path; check `git diff --cached` before committing.
-- **Never run `make check` while the tree is being edited.** And `make check > log; echo "EXIT=$?"`
-  reports the *echo's* status — same trap with any pipe. This bites in background jobs too.
-- **A sleeping laptop looks exactly like a hung build.** `ps -eo pid,etime,command` reports *wall*
-  time. An IDE `cargo check --workspace` also holds the build lock.
-- **Subagents must not run `make check`** — the 600 s watchdog kills them.
-- **IDE diagnostics lie in this tree.** Only an actual cargo run counts.
-- **Editing an embedded asset forces a rebuild** (`api/lua-api.md`, `tutorial/svg-templates.md`,
-  `guide/authoring.md`, `byonk-base/`, `screens/{builtin,examples}/`).
-- **In a debug build rust-embed reads from disk at runtime**, so screen edits take effect with no
-  rebuild — but "no change" is then indistinguishable from a stale binary, so **prove disk-backing
-  with a visible sabotage first**.
-- `make docs` = `mdbook build`. `docs/book/` and `docs/src/images/` are gitignored.
-- Capture every bundled screen on every panel:
-  `BYONK_BIN=./target/debug/byonk ./tools/capture-renders.sh /path/to/out` — seconds, 19 captures
-  across 5 panels. **Not into `/tmp`** (that is how the previous baselines were lost). A capture is
-  only as wide as `tools/capture-config.yaml`'s device map.
+Twelve rulings were made while running the plan; these three changed behaviour and are worth
+knowing about. The full list is in the session's final message.
 
-## Changelog discipline
-
-- **User-facing only.** CI, tooling, version automation and dev process do not belong in
-  `CHANGES.md`.
-- **Read `Unreleased` as a set, not a stream of appends.** Five sessions of appending once produced
-  two entries that contradicted each other and two under the wrong heading.
-
-## The release process
-
-Two workflows; **nothing pushes to `main`**, so no PAT is involved.
-
-| Workflow | Trigger | Does |
-|---|---|---|
-| `create-release-pr.yml` | `workflow_dispatch` + bugfix/feature/major | waits for CI green on the exact commit, computes the version from tags, bumps everything, opens a `release/vX.Y.Z` PR. **Nothing tagged or published** |
-| `release-publisher.yml` | `push` to `main` touching `Cargo.toml` | tags, builds 5 binaries, builds and pushes the container, publishes the release, deploys docs. **No `workflow_dispatch` by design** |
-
-To cut a release: Actions → *Create release PR* → pick the type → review → merge. Things to know:
-
-- **The app version *is* the ghcr image tag.** For ~15–20 minutes between merge and publish, the
-  app store advertises a version that does not exist. A user hitting that window gets a pull
-  failure and succeeds on retry. **Deliberate owner decision**, in exchange for one PR per release.
-- The publisher's guard asks whether the GitHub **release** exists, not the tag, so a failed run is
-  **re-runnable from the Actions UI**. A non-404 failure when asking stops the run.
-- **The publisher fires on any push touching `Cargo.toml`** — a dependabot PR will start it.
-- A cancelled release leaves its branch; `create-release-pr.yml` clears a stale `release/v*` branch
-  **unless it still has an open PR**.
-- Both guards have been exercised for real, **exactly once each**.
+1. **The ownership guard runs before the version check** in `install()`. The plan had it the
+   other way round, which meant a foreign `custom_components/byonk` carrying byonk's *own*
+   version string was silently treated as "already installed" — no refusal, no warning. The spec
+   makes ownership the gate. Pinned by `refuses_a_foreign_directory_even_when_its_version_string_matches_ours`,
+   and exercised for real as VM checklist item 8.
+2. **The swap is rename-based**, not delete-then-rename. `remove_dir_all` is not atomic over a
+   multi-file directory; a partial failure left the target half-destroyed *and* permanently
+   wedged, because the remains no longer carried a `manifest.json` naming `domain: byonk`, so
+   every later start hit the ownership guard and refused forever. Now: stage into `.byonk-new`,
+   rename the old target aside to `.byonk-old`, rename staging into place, restore on failure,
+   delete the backup last. A crash between the renames leaves the target simply **absent**, so
+   the next start installs fresh.
+3. **The integration's own version is read through the loader**, never from `manifest.json` on
+   disk — the app has already overwritten that file, so a disk read would make the two numbers
+   always agree and the warning could never fire. `test_compares_against_the_loaded_integration_not_the_manifest_file`
+   pins it, and was falsified (made to fail against a disk-reading implementation) before being
+   accepted.
 
 ---
 
-# Queued work
+# Open items the owner should decide
+
+## Should `tests_ha` run in CI?
+
+It does not today. Task 7 removed the `hacs/action` job, so **`hassfest` is now the only
+integration check in CI**, and the 98 Python tests plus ruff run only under `make ha-check`
+locally. The stakes went up with this branch: the integration is now baked into the released app
+image, so a Python regression ships inside the server. Carried since session 30; worth settling
+now.
+
+## Should a refused install tell the user?
+
+`install_and_announce` announces discovery on **every** start, including when the install was
+`Refused` or `Failed`. That is what the spec asks for, but it means a user with a foreign
+`custom_components/byonk` in the way, or a read-only config dir, gets a **Byonk** Discovered card
+with nothing working behind it — and the only trace is a `tracing::warn!` in the app log. The
+notification channel is already open two lines below; a refusal notification would cost almost
+nothing and turn a silent dead end into a readable one.
+
+## Smaller things the final review left open, deliberately
+
+- `install()`'s scratch-directory cleanup sits *behind* the version short-circuit, so a
+  `.byonk-new`/`.byonk-old` left by a killed container is only cleared on a start that also
+  writes. Self-healing whenever versions differ; one `if` away from unconditional.
+- `_async_check_version` runs inside the coordinator's `_async_update_data`, so every 60 s
+  refresh adds a Supervisor round-trip, and an exception that is neither `AddonError` nor
+  `KeyError` would fail the whole data update. Both known failure modes are handled.
+- `reqwest::Client::new()` sets no timeout, so a wedged Supervisor leaks one detached task.
+- The merged guide documents first install only — it never describes what an app *update* looks
+  like, though that is when the repair issue and the update notification appear.
+- `docs/src/guide/home-assistant.md` hard-codes "before version 0.19.0" while the tree is at
+  0.18.0. Correct only if the next release is 0.19.0.
+- The guide asserts that HACS's removal deletes the integration files from disk. That is
+  standard HACS behaviour but was **not observed** here. The instructions are safe either way —
+  restarting the app before restarting Home Assistant is correct whether or not HACS deletes.
+
+---
+
+# Queued work (carried forward)
 
 | ID | What |
 |---|---|
-| — | **Execute the plan** — the whole active initiative |
 | — | **Delete the `RELEASE_TOKEN` secret and revoke the PAT.** `gh secret list` still shows it (created 2026-07-17). 0.18.0 released without it. Carried since session 27 |
-| — | **Decide whether `tests_ha` should run in CI.** It does not today, and after Task 7 removes the HACS job, `hassfest` is the only integration check in CI. The 90 Python tests run only under `make ha-check` |
-| — | `addon.py:29` picks the first `*_byonk` app; decide what "the byonk app" means when there are two |
-| — | Prove *Preview measured colors* on a panel that **has** a calibration. On `DEFAULT` (grey, uncalibrated) measured and spec palettes are identical, so nothing changes — correct behaviour, zero evidence |
+| — | `addon.py:29` picks the first `*_byonk` app; decide what "the byonk app" means when there are two. A wrongly-bound entry **cannot heal itself** — reauth re-reads the stored slug and never re-discovers |
+| — | Prove *Preview measured colors* on a panel that **has** a calibration. On `DEFAULT` (grey, uncalibrated) measured and spec palettes are identical, so nothing changes |
 | — | Check the device page on **HA 2026.8.x**; the camera-vs-image comparison rests on 2026.7.2's layout |
 | F13 | Extend `screens/examples/demo/font/{ttf,bitmap,hinting}/` to cover Source |
 | F14 | Licence + notice files. **`FONTS.md`'s "X11LuType is proportional" is wrong — it is monospaced** |
@@ -213,76 +190,106 @@ To cut a release: Actions → *Create release PR* → pick the type → review �
 
 ---
 
-# Open items the owner should decide
+# Build / verify
 
-## Marking costs shadow detail at 16 grey levels
+- `make check` = fmt + clippy + full suite, **~15–40 min here — background it**; it runs
+  `cargo fmt`, not `--check`, so it rewrites files.
+- `make ha-check` = `ruff` + `pytest tests_ha`. **Instant** (~2 s), 98 tests.
+- **`make check > log; echo "EXIT=$?"` reports the *echo's* status.** This bit for real this
+  session: a background wrapper reported "exit code 0" while clippy had failed with 101. Log the
+  exit code inside the file and read it.
+- **`cargo test` links each test binary serially and slowly here.** `cargo test --test <name>` is
+  the fast loop.
+- **Never `git add -A`.** `examples/` is an untracked near-copy of `screens/examples/`.
+- **Subagents must not run `make check`** — the 600 s watchdog kills them. They also must not
+  background anything: three agents this session stalled waiting on a background job that never
+  woke them.
+- **`clippy::await_holding_lock` is deny-level here.** A `std::sync::MutexGuard` held across
+  `.await` will not compile; use `tokio::sync::Mutex`.
+- **A sleeping laptop looks exactly like a hung build.**
+- **IDE diagnostics lie in this tree.** Only an actual cargo run counts.
+- `make docs` = `mdbook build`. `docs/book/` and `docs/src/images/` are gitignored.
 
-On `calibration/tone` the marked (measured, mapped) half should show what gamut mapping buys. On
-the 4-grey panel the halves are close. **On `trmnl_x` the marked half is markedly darker and loses
-shadow separation** the unmarked half keeps. `trmnl_x`'s measured palette runs `#383838`–`#B8B8B0`,
-so mapping into it *should* darken — **but the unmarked half dithers against that same measured
-palette**, so the gap comes from the mapping, not the inks. **Not diagnosed.** Decide which half is
-the better preview before touching the mapper.
+## Changelog discipline
 
-## Two TLS tests are flaky
+- **User-facing only.** CI, tooling, version automation and dev process do not belong in
+  `CHANGES.md`.
+- **Read `Unreleased` as a set, not a stream of appends.**
 
-`lua_https_tests::{test_https_with_custom_ca_cert, test_https_with_client_certificate}` fail with
-`error sending request for url (https://127.0.0.1:…)` — the shape a 30 s timeout takes. Roughly
-**one full run in six**.
+## The release process
 
-**The best explanation is the laptop suspending, not CPU contention.** A 30 s timeout is *wall
-clock*. **Before spending anything on a fix, check whether a failing run coincides with a sleep**
-(`pmset -g log | grep -i sleep`). The null hypothesis — reverting `c850ea7`'s HTTP change — has
-still never been tested. **If it needs fixing, do not loosen the test:** cache the
-`reqwest::blocking::Client` instead of building one per request. A single shared worker thread is
-the wrong answer — it would serialise every screen's HTTP on the server path.
+Two workflows; **nothing pushes to `main`**, so no PAT is involved.
 
-## Three carried-forward questions
+| Workflow | Trigger | Does |
+|---|---|---|
+| `create-release-pr.yml` | `workflow_dispatch` + bugfix/feature/major | waits for CI green on the exact commit, computes the version from tags, bumps everything, opens a `release/vX.Y.Z` PR. **Nothing tagged or published** |
+| `release-publisher.yml` | `push` to `main` touching `Cargo.toml` | tags, builds 5 binaries, builds and pushes the container, publishes the release, deploys docs |
 
-1. **`grey_count <= 2` may be the wrong rule.** On the 4-grey panel at 10–12 px mono+aliased beats
-   smooth, but at 14 px smooth wins — the fix may be a **size term**. *Always name panels by config
-   key:* the **4-colour** `trmnl_og_4clr` already counts as `grey_count = 2`; it is **4-grey**
-   `trmnl_og` that is in question, and they behave oppositely. `FontConfig::adaptive_default` is
-   the single place the rule lives.
-2. **`HintingMode::Light` is byte-identical to `Normal`** — one genuinely inert knob.
-3. `for_error_diffusion()` is applied to **every** dither (`api/builder.rs`), so HyAB and its
-   `kchroma = 10` tuning are not on the crate's dithering path at all.
+- **The app version *is* the ghcr image tag.** For ~15–20 minutes between merge and publish the
+  app store advertises a version that does not exist. **Deliberate owner decision.**
+- The publisher's guard asks whether the GitHub **release** exists, not the tag, so a failed run
+  is **re-runnable from the Actions UI**.
+- **The publisher fires on any push touching `Cargo.toml`** — a dependabot PR will start it.
+- The release guard already fails unless `Cargo.toml`, `custom_components/byonk/manifest.json`
+  and `homeassistant/byonk/config.yaml` agree on the version, so **the image can never ship an
+  integration whose version disagrees with the app** — which is exactly what the repair issue
+  compares.
 
 ---
 
 # Settled — do not reopen
 
 - **HACS is gone.** PR #9310 closed by the owner on 2026-08-19; the app is byonk's distribution
-  channel. The HACS lore (PR template rules, `hacs-bot` link requirements, alphabetical sorting) is
-  history.
-- **`home-assistant/brands` is obsolete for custom integrations.** Since HA 2026.3 the integration
-  ships its own `brand/` directory, which beats the CDN; brands auto-closes such PRs. Shipped in
-  0.17.1. This is **unrelated** to the HACS decision and still true.
-- **The device preview is a `camera`, and the reason is the more-info dialog size (~990 px vs
-  ~775 px) and the square thumbnail** — *not* full-width rendering, which does not happen. Settled
-  by building the `image` variant, comparing side by side on the same page, and deleting it.
-  `ImageEntity`'s trap, if you ever revisit: its `state` is `None` until `image_last_updated` is
-  stamped, so it shows nothing at all with no error anywhere.
-- **The Lua sandbox withholds `io`, `os.execute` and `os.exit`.** Merged in #39; the time helpers
-  screens actually use stay. `tests/lua_sandbox_test.rs` pins it.
-- **Warn on any render-scale mismatch, no integer-zoom exemption.** Owner decision, re-confirmed by
-  a positive control that fires on an exact 2×.
-- **Authoring warnings reach the author, not the operator.** `tracing::warn!` reaches the server
-  log, not the screen's author.
-- **A variant CAN be aliased.** `HintingSpec::to_usvg()` drops `aliased` because it is
-  document-level, but `text-rendering` is an inheritable SVG property. Always pair `optimizeSpeed`
-  with mono hinting.
-- **No bundled font carries a hinting program** (measured across every glyph), so `interpreter` is
-  effectively unhinted and `auto ≡ auto_fallback`. The engine axis is **not** dead — it is what
-  *shows* these facts.
-- **Terminus is NOT buggy.** Terminus @14 and @18 render 1 px/glyph wider — that is correct. Raised
-  twice, settled twice.
-- **The fonts and the resvg pin must move together.** `test_bitmap_font_render` fails if the pin
-  regresses.
-- **Falsified, do not chase again:** X11 vertical-metric overflow (real malformation, causes
-  nothing); ink overhang in oblique faces (normal); the fvar `wght` default does not leak; Source
-  Serif 4 is not pinned at `opsz` 20; upstream will not change `AutoFallback`
-  (googlefonts/fontations#1151, closed); `font-weight` does not disable hinting.
+  channel. The HACS lore is history.
+- **`home-assistant/brands` is obsolete for custom integrations.** Since HA 2026.3 the
+  integration ships its own `brand/` directory, which beats the CDN. Confirmed working on the VM
+  this session — the Discovered card carries byonk's own icon.
+- **The Discovered card's button is labelled "Add", not "Configure".** Verified on screen; the
+  docs said "Configure" and were wrong in five places, now fixed.
+- **The device preview is a `camera`**, and the reason is the more-info dialog size and the
+  square thumbnail — *not* full-width rendering, which does not happen.
+- **The Lua sandbox withholds `io`, `os.execute` and `os.exit`.** Checked again this session from
+  the other direction: the new `homeassistant_api: true` and `homeassistant_config:rw`
+  privileges are **not reachable from screen Lua**, because `os.getenv` and `io` are both denied.
+- **Warn on any render-scale mismatch, no integer-zoom exemption.**
+- **Authoring warnings reach the author, not the operator.**
+- **A variant CAN be aliased.** Always pair `optimizeSpeed` with mono hinting.
+- **No bundled font carries a hinting program**, so `interpreter` is effectively unhinted.
+- **Terminus is NOT buggy.** Raised twice, settled twice.
+- **The fonts and the resvg pin must move together.**
+- **Falsified, do not chase again:** X11 vertical-metric overflow; ink overhang in oblique faces;
+  the fvar `wght` default does not leak; Source Serif 4 is not pinned at `opsz` 20; upstream will
+  not change `AutoFallback`; `font-weight` does not disable hinting.
+
+---
+
+# Open items carried forward, unrelated to this branch
+
+## Marking costs shadow detail at 16 grey levels
+
+On `calibration/tone` the marked half should show what gamut mapping buys. **On `trmnl_x` the
+marked half is markedly darker and loses shadow separation** the unmarked half keeps — and the
+unmarked half dithers against that same measured palette, so the gap comes from the mapping, not
+the inks. **Not diagnosed.** Decide which half is the better preview before touching the mapper.
+
+## Two TLS tests are flaky
+
+`lua_https_tests::{test_https_with_custom_ca_cert, test_https_with_client_certificate}` fail with
+`error sending request for url (https://127.0.0.1:…)` — the shape a 30 s timeout takes. Roughly
+**one full run in six**. **The best explanation is the laptop suspending, not CPU contention**;
+check `pmset -g log | grep -i sleep` against a failing run before spending anything. **If it
+needs fixing, do not loosen the test:** cache the `reqwest::blocking::Client` instead of building
+one per request.
+
+## Three carried-forward questions
+
+1. **`grey_count <= 2` may be the wrong rule.** At 10–12 px mono+aliased beats smooth, but at
+   14 px smooth wins — the fix may be a **size term**. *Always name panels by config key:* the
+   **4-colour** `trmnl_og_4clr` already counts as `grey_count = 2`; it is **4-grey** `trmnl_og`
+   that is in question, and they behave oppositely.
+2. **`HintingMode::Light` is byte-identical to `Normal`** — one genuinely inert knob.
+3. `for_error_diffusion()` is applied to **every** dither, so HyAB and its `kchroma = 10` tuning
+   are not on the crate's dithering path at all.
 
 ---
 
@@ -290,63 +297,57 @@ the wrong answer — it would serialise every screen's HTTP on the server path.
 
 **New this session:**
 
-- **Check whether the thing you are about to build already exists.** The first design here was a
-  throwaway installer app, mirroring "Get HACS" — before establishing that byonk's integration
-  *already* installs the app. Half the motivation evaporated on one `grep`. Ask what the codebase
-  already does before designing around a gap.
-- **For a permission or behaviour question, read the upstream source, not the docs.** The HA
-  developer docs could not say where `homeassistant_config` mounts or what lowers a security
-  rating. `supervisor/docker/const.py` and `apps/utils.py` answered both in minutes — and the
-  rating answer (it ignores `map` entirely) reversed a recommendation.
-- **A feature you assume a crate has may be behind a flag.** `reqwest`'s `.json()` needs the `json`
-  feature; the plan compiled only on paper until that was checked.
-- **Adding a call inside a shared code path breaks every test that exercises it.** A version check
-  in `_async_update_data` reaches all 90 HA tests through one fixture. Look at the fixtures before
-  writing the feature, not after the suite goes red.
-- **A live runbook is not a historical record.** `docs/superpowers/ha-publishing.md` was nearly
-  filed under "historical, leave alone" when its entire subject had just been abandoned.
+- **A premise about someone else's UI is a claim until you look.** The docs told users to select
+  **Configure** on the Discovered card, through a spec, a plan, an implementation and two
+  reviews. Home Assistant renders **Add**. One screenshot settled it.
+- **Test the upgrade path you actively instruct.** The final review caught that our own
+  HACS-removal instructions — remove from HACS, restart Home Assistant — would leave a working
+  install broken, because the app writes the integration only when *the app* starts. Every
+  checklist item passed; the one path nobody walked was the one the docs recommend.
+- **A trailing `echo` eats the exit code.** `make check > log 2>&1; echo "EXIT=$?"` in a
+  background job reported success while clippy had failed with 101. Log the status *into* the
+  file and read it back.
+- **A fix that reorders a guard needs a test that fails under the old order.** Ruling 6's test
+  plants a foreign directory carrying byonk's *own* version — the one case the old ordering got
+  wrong. It then caught the same thing for real on the VM.
+- **When an implementer flags a deviation, that is the process working.** Every escalation this
+  session was correct, and the one finding that mattered in Task 8 was the deviation that was
+  *not* disclosed.
 
 **Standing:**
 
-- **A design premise about someone else's UI is a claim, not a fact.** "HA renders a camera
-  full-width" survived a whole session of implementation and a written handover before anyone
-  opened a browser. It was false.
-- **When a premise falls, rebuild the alternative rather than reason about it.** Twenty minutes.
-- **A base class's `__init__` can undo your attribute.** `Camera.__init__` sets
-  `content_type = "image/jpeg"` unconditionally.
+- **When a premise falls, rebuild the alternative rather than reason about it.**
+- **A base class's `__init__` can undo your attribute.**
 - **A parameter slot doing double duty is a trap for the next caller.**
-- **Don't fabricate a default that reads as a measurement.** 4.2 V for a device that never reported
-  its battery is worse than showing nothing.
+- **Don't fabricate a default that reads as a measurement.**
 - **Put view options in the cache key, not the fingerprint.**
-- **Hash a `HashMap` through a `BTreeMap`.** Iteration order varies per process, so a fingerprint
-  built from one is a cache that never hits — and it looks like the cache "just doesn't work".
+- **Hash a `HashMap` through a `BTreeMap`.**
 - **A raw string ends at the first `"#`, and hex colours are full of them.** Use `r##"…"##`.
-- **A mock rebound after the patch is applied does nothing.** Mutate the existing mock's
-  `side_effect`.
-- **Test the cache where time is injectable, test the wiring over HTTP.**
+- **A mock rebound after the patch is applied does nothing.**
 - **Demonstrate the check fails when the thing is broken.** A test written *after* the
   implementation has never been shown to fail; sabotage stands in for the RED step.
-- **"No warnings" is not coverage until the mechanism has been shown to fire**, and **a toggle that
-  changes nothing visible has not been proven to work**.
+- **"No warnings" is not coverage until the mechanism has been shown to fire.**
 - **Assert on the geometry, not the pixels, when the question is "is this legible".**
 - **A CSS rule beats a presentation attribute in SVG.**
-- **Fix the docs when they are the bug.** `docs/src/tutorial/svg-templates.md` has been the bug
-  twice; it is embedded and served to LLM authors over MCP.
+- **Fix the docs when they are the bug.**
 - **Work left by an agent that died is not verified work.**
 
 ---
 
 # Carried forward
 
-Session 29's handover — the preview verified in a browser, the camera-vs-image comparison in full,
-the preview endpoint and `PreviewCache` design — is in `git show bdb9473:docs/HANDOVER.md`. **Read
-it before touching `camera.py`, `preview_cache.rs` or `ScreenStore::render`**, in particular its
-warning not to pass a device's configured dither as `RenderOpts::dither` (that is the *override*
-slot, above the script).
+Session 30's handover — the spec and plan for this initiative, and the upstream Supervisor facts
+they rest on — is in `git show 48befad:docs/HANDOVER.md`. Those facts (where each mapping mounts,
+what the security rating scores, how discovery dedupes and replays) were all confirmed correct in
+practice this session.
 
-Session 26's detail (the resvg `byonk-base` initiative, the render sweep, the two calibration bugs,
-font licensing, the whole hinting settlement) is in `git show bf48594~1:docs/HANDOVER.md` — **read
-it before touching fonts, hinting or resvg**. Session 27's (the PR-based release) is in
-`git show bf48594:docs/HANDOVER.md`. The pinning initiative's detail is in
-`git show 3b32762:docs/HANDOVER.md` — read before touching `eink-dither`, gamut mapping or colour
-models. Keep the branch `docs/handover-session-27` @ `bf48594`; those two references live on it.
+Session 29's (the screen preview, the camera-vs-image comparison, `PreviewCache`) is in
+`git show bdb9473:docs/HANDOVER.md` — **read it before touching `camera.py`, `preview_cache.rs` or
+`ScreenStore::render`**, in particular its warning not to pass a device's configured dither as
+`RenderOpts::dither`.
+
+Session 26's (the resvg `byonk-base` initiative, the render sweep, font licensing, the hinting
+settlement) is in `git show bf48594~1:docs/HANDOVER.md` — **read it before touching fonts, hinting
+or resvg**. Session 27's (the PR-based release) is in `git show bf48594:docs/HANDOVER.md`. The
+pinning initiative's detail is in `git show 3b32762:docs/HANDOVER.md`. Keep the branch
+`docs/handover-session-27` @ `bf48594`; those two references live on it.

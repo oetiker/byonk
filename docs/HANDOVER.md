@@ -272,14 +272,24 @@ marked half is markedly darker and loses shadow separation** the unmarked half k
 unmarked half dithers against that same measured palette, so the gap comes from the mapping, not
 the inks. **Not diagnosed.** Decide which half is the better preview before touching the mapper.
 
-## Two TLS tests are flaky
+## Two TLS tests are flaky — and the sleep hypothesis is now FALSIFIED
 
 `lua_https_tests::{test_https_with_custom_ca_cert, test_https_with_client_certificate}` fail with
 `error sending request for url (https://127.0.0.1:…)` — the shape a 30 s timeout takes. Roughly
-**one full run in six**. **The best explanation is the laptop suspending, not CPU contention**;
-check `pmset -g log | grep -i sleep` against a failing run before spending anything. **If it
-needs fixing, do not loosen the test:** cache the `reqwest::blocking::Client` instead of building
-one per request.
+**one full run in six**. They failed again in this session's full `make check`.
+
+**The standing explanation — "the laptop suspending, not CPU contention" — is wrong.** The check
+this handover has been prescribing for several sessions was finally run against a real failing
+run: `pmset -g log` shows **zero sleep or wake transitions** in the hours around it (the last was
+19:04, the run ended 23:05), and pmset reports `caffeinate` was actively preventing sleep
+throughout. The machine was meanwhile running the QEMU HAOS VM, several subagents and a docs
+build at once. **So contention — the explanation previously dismissed — is the surviving one.**
+Re-running the binary alone on a quiet machine: 8 passed, 0 failed.
+
+**If it needs fixing, do not loosen the test:** cache the `reqwest::blocking::Client` instead of
+building one per request. That prescription is unchanged, and now better motivated. A single
+shared worker thread is still the wrong answer — it would serialise every screen's HTTP on the
+server path.
 
 ## Three carried-forward questions
 
@@ -305,8 +315,12 @@ one per request.
   install broken, because the app writes the integration only when *the app* starts. Every
   checklist item passed; the one path nobody walked was the one the docs recommend.
 - **A trailing `echo` eats the exit code.** `make check > log 2>&1; echo "EXIT=$?"` in a
-  background job reported success while clippy had failed with 101. Log the status *into* the
-  file and read it back.
+  background job reported success while clippy had failed with 101 — and again later while the
+  suite had failed with 2. Log the status *into* the file and read it back. It bit twice in one
+  session.
+- **Run the diagnostic the last session left you.** The "laptop suspending" explanation for the
+  flaky TLS tests survived several handovers because nobody spent the two minutes on
+  `pmset -g log`. It was wrong.
 - **A fix that reorders a guard needs a test that fails under the old order.** Ruling 6's test
   plants a foreign directory carrying byonk's *own* version — the one case the old ordering got
   wrong. It then caught the same thing for real on the VM.

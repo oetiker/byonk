@@ -7,6 +7,7 @@ pub mod addon_options;
 pub mod api;
 pub mod assets;
 pub mod error;
+pub mod ha_integration;
 pub mod mcp;
 pub mod models;
 pub mod rendering;

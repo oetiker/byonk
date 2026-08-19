@@ -99,6 +99,10 @@
     "screen_repo_error": {
       "title": "Screen repo \"{handle}\" failed to update",
       "description": "Byonk could not fetch the screen repo \"{handle}\" ({repo}).\n\nError: {error}\n\nCheck the repo URL, pin (branch/tag/commit) and access token in the Byonk app configuration, then use the \"Update screen repos\" button to retry."
+    },
+    "version_mismatch": {
+      "title": "Restart Home Assistant to finish updating Byonk",
+      "description": "The Byonk app is version {addon}, but the Byonk integration Home Assistant is running is version {integration}.\n\nThe app has already installed the matching integration; Home Assistant loads it on the next restart. Everything keeps working in the meantime."
     }
   }
 }

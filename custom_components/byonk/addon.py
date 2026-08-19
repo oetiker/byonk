@@ -93,3 +93,10 @@ async def async_get_base_url(hass: HomeAssistant, slug: str) -> str:
     mgr = _get_addon_manager(hass, slug)
     info = await mgr.async_get_addon_info()
     return f"http://{info.hostname}:{DEFAULT_PORT}"
+
+
+async def async_get_addon_version(hass: HomeAssistant, slug: str) -> str | None:
+    """Return the installed add-on version, or None if Supervisor won't say."""
+    mgr = _get_addon_manager(hass, slug)
+    info = await mgr.async_get_addon_info()
+    return info.version

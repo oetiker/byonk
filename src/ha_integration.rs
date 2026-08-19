@@ -90,10 +90,11 @@ fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 /// Write the integration from `src` into `<ha_config>/custom_components/byonk`.
 ///
-/// The swap deletes a directory inside the user's Home Assistant config, so it
-/// happens only when the target does not exist, or its `manifest.json` names
-/// byonk's own domain. Nothing else under `ha_config` is read, walked or
-/// removed.
+/// The swap stages the new copy beside the target and moves it into place by
+/// rename, setting any existing target aside first and restoring it if the
+/// final rename fails; the swap happens only when the target does not exist,
+/// or its `manifest.json` names byonk's own domain. Nothing else under
+/// `ha_config` is read, walked or removed.
 pub fn install(src: &Path, ha_config: &Path) -> InstallOutcome {
     let Some(ours) = manifest_field(src, "version") else {
         return InstallOutcome::Failed(format!("no readable manifest.json in {}", src.display()));

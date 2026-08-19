@@ -11,7 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Installing Byonk in Home Assistant now takes one step: install the Byonk app
   from the app store and it sets up its own integration. HACS is no longer
-  used or needed. If you installed Byonk through HACS before, remove it there.
+  used or needed. If you installed Byonk through HACS before, remove it there,
+  then restart the Byonk app before restarting Home Assistant — see the
+  Home Assistant guide's upgrade section for why the order matters.
 - Home Assistant shows a repair notice when the Byonk app has been updated but
   Home Assistant has not been restarted yet, so the integration is still the
   older version.

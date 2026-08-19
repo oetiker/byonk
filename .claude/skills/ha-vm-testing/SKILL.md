@@ -13,8 +13,13 @@ forwards host ports **8123** (HA UI), **3000** (byonk), **4445** (Samba), **2222
   VM, its own `Dockerfile`). The add-on reads screens/fonts from `SCREENS_DIR=/config/screens`
   (the `addon_configs/local_byonk/` Samba share) at runtime, and embeds `default-config.yaml`
   at compile time — so **screen file edits are hot** but **Rust changes need an add-on rebuild**.
-- **Integration** (`custom_components/byonk/`) deploys with `SMB_USER=byonk SMB_PASS=byonk make ha-deploy`,
-  then reload it in the HA UI (or restart HA).
+- **Integration** (`custom_components/byonk/`): an app built by `make ha-rebuild` now installs its own
+  integration at startup (`custom_components` is one of the synced build inputs, and
+  `Dockerfile.release` bakes it into the image), so for normal testing you just restart the
+  app and reload the integration in the HA UI. `make ha-deploy` writes `custom_components/byonk/`
+  straight into the VM's HA config over Samba instead — still useful for iterating on Python
+  without an add-on rebuild, but the app will overwrite that hand-deployed copy the next time
+  it starts.
 - **SSH** (one-time: install the Terminal & SSH add-on with `tools/ha-vm/ssh/id_ed25519.pub`):
   - `make ha-ssh` — shell in the VM; `make ha-ssh CMD="ha addons info local_byonk"` — one command.
   - `SMB_USER=byonk SMB_PASS=byonk make ha-rebuild` — sync server source + rebuild the add-on.

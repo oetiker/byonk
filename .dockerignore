@@ -2,6 +2,13 @@
 target/
 *.swp
 
+# Stale Python bytecode — Dockerfile.release copies custom_components/byonk
+# into the image; without this a local build would carry whatever .pyc files
+# happen to be sitting in the working tree, including ones for modules that
+# no longer exist.
+__pycache__/
+*.pyc
+
 # Local test rigs — tools/ha-vm/work/ holds a multi-GB HAOS VM image, which
 # nothing in the image needs but which otherwise lands in the build context
 # and makes `podman build` fail while uploading it.

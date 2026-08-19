@@ -258,7 +258,16 @@ re-provision the token automatically — no manual input is needed.
 
 ## Upgrading from an earlier install
 
-If you installed Byonk through HACS before version 0.19.0, remove it from
-HACS. The Byonk app now keeps the integration up to date by itself, and HACS
-would otherwise offer you a second, competing copy. Nothing else is needed —
-your devices and settings are unaffected.
+If you installed Byonk through HACS before version 0.19.0, switch over in
+this order:
+
+1. **Remove Byonk from HACS.**
+2. **Restart the Byonk app** (**Settings → Apps → Byonk → Restart**). HACS's
+   removal deletes the integration files from disk; restarting the app writes
+   them straight back, now managed by the app instead of HACS.
+3. **Restart Home Assistant.**
+
+Doing the HACS removal and the Home Assistant restart back-to-back — without
+restarting the Byonk app in between — leaves Home Assistant with no byonk
+integration at all until the app is restarted. Your devices and settings are
+unaffected either way.

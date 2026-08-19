@@ -87,18 +87,23 @@ pub fn install(src: &Path, ha_config: &Path) -> InstallOutcome {
 
     let custom_components = ha_config.join("custom_components");
     let target = custom_components.join("byonk");
-    let installed = manifest_field(&target, "version");
 
-    if installed.as_deref() == Some(ours.as_str()) {
-        return InstallOutcome::NotNeeded;
-    }
-
-    // Refusal guard. An existing target must identify itself as byonk's.
+    // Refusal guard. Ownership is the gate: an existing target must identify
+    // itself as byonk's before anything else about it — including its version
+    // — is trusted. This must run before the version check below, or a
+    // foreign directory that happens to carry our version string would be
+    // reported as "already up to date" instead of refused.
     if target.exists() && manifest_field(&target, "domain").as_deref() != Some("byonk") {
         return InstallOutcome::Refused(format!(
             "{} exists but is not byonk's integration; leaving it alone",
             target.display()
         ));
+    }
+
+    let installed = manifest_field(&target, "version");
+
+    if installed.as_deref() == Some(ours.as_str()) {
+        return InstallOutcome::NotNeeded;
     }
 
     if !ha_config.is_dir() {

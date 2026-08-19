@@ -119,6 +119,39 @@ fn refuses_a_directory_that_is_not_byonks() {
 }
 
 #[test]
+fn refuses_a_foreign_directory_even_when_its_version_string_matches_ours() {
+    // Ownership must be checked before the version short-circuit. If the
+    // version check ran first, a foreign directory that happens to carry our
+    // version string would compare equal and be reported as "already up to
+    // date" — silently leaving a directory that isn't byonk's in place,
+    // without ever warning the user it's standing in the way.
+    let src_dir = TempDir::new().unwrap();
+    let ha = TempDir::new().unwrap();
+    make_src(src_dir.path(), "0.18.0");
+
+    let target = target_of(ha.path());
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(
+        target.join("manifest.json"),
+        r#"{"domain": "something_else", "version": "0.18.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(target.join("precious.py"), "keep me").unwrap();
+
+    let outcome = install(src_dir.path(), ha.path());
+
+    assert!(
+        matches!(outcome, InstallOutcome::Refused(_)),
+        "got {outcome:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(target.join("precious.py")).unwrap(),
+        "keep me",
+        "a refusal must change nothing"
+    );
+}
+
+#[test]
 fn refuses_a_directory_with_no_manifest_at_all() {
     let src_dir = TempDir::new().unwrap();
     let ha = TempDir::new().unwrap();

@@ -123,3 +123,44 @@ async fn update_notification_names_both_versions() {
         "{message}"
     );
 }
+
+#[tokio::test]
+async fn install_and_announce_notifies_once_then_only_announces() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    use byonk::ha_integration::install_and_announce;
+
+    let (url, seen) = fake_supervisor().await;
+    let src = tempfile::TempDir::new().unwrap();
+    let ha = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        src.path().join("manifest.json"),
+        r#"{"domain": "byonk", "version": "0.18.0"}"#,
+    )
+    .unwrap();
+
+    unsafe {
+        std::env::set_var("BYONK_SUPERVISOR_URL", &url);
+        std::env::set_var("BYONK_INTEGRATION_SRC", src.path());
+        std::env::set_var("BYONK_HA_CONFIG_DIR", ha.path());
+        std::env::set_var("SUPERVISOR_TOKEN", "tok");
+    }
+
+    install_and_announce().await;
+    install_and_announce().await;
+
+    let paths: Vec<String> = seen.lock().unwrap().iter().map(|r| r.0.clone()).collect();
+    assert_eq!(
+        paths
+            .iter()
+            .filter(|p| p.contains("persistent_notification"))
+            .count(),
+        1,
+        "the restart notification is posted only when something changed: {paths:?}"
+    );
+    assert_eq!(
+        paths.iter().filter(|p| *p == "/discovery").count(),
+        2,
+        "discovery is announced on every start: {paths:?}"
+    );
+}

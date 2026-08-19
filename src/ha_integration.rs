@@ -249,3 +249,49 @@ pub async fn announce_discovery(client: &reqwest::Client, token: &str) -> anyhow
         .error_for_status()?;
     Ok(())
 }
+
+/// Install the integration if needed, then announce byonk to Supervisor.
+///
+/// Called once per start in add-on mode. Discovery is announced every time, not
+/// only after a write: the Discovered card must also appear on the restart that
+/// follows a first install, when there is nothing left to write.
+pub async fn install_and_announce() {
+    let src = integration_src();
+    let ha_config = ha_config_dir();
+    let outcome = install(&src, &ha_config);
+
+    match &outcome {
+        InstallOutcome::NotNeeded => {
+            tracing::debug!("Home Assistant integration is already up to date");
+        }
+        InstallOutcome::Installed {
+            from: Some(previous),
+            to,
+        } => {
+            tracing::info!("Updated the Home Assistant integration {previous} -> {to}");
+        }
+        InstallOutcome::Installed { from: None, to } => {
+            tracing::info!("Installed the Home Assistant integration {to}");
+        }
+        InstallOutcome::Refused(why) => tracing::warn!("{why}"),
+        InstallOutcome::Failed(why) => {
+            tracing::warn!("Could not install the Home Assistant integration: {why}")
+        }
+    }
+
+    let Ok(token) = std::env::var("SUPERVISOR_TOKEN") else {
+        tracing::warn!("No SUPERVISOR_TOKEN; skipping the Home Assistant notification");
+        return;
+    };
+    let client = reqwest::Client::new();
+
+    if let InstallOutcome::Installed { from, to } = &outcome {
+        if let Err(e) = notify_restart(&client, &token, from.as_deref(), to).await {
+            tracing::warn!("Could not post the restart notification: {e}");
+        }
+    }
+
+    if let Err(e) = announce_discovery(&client, &token).await {
+        tracing::warn!("Could not announce byonk to Supervisor: {e}");
+    }
+}

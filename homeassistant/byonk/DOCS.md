@@ -12,11 +12,12 @@ token provisioning. There is nothing else to install.
 
 ## Installation
 
-You've already started this app — two steps left:
+You've already installed this app — a few steps left:
 
-1. Byonk asks you to restart Home Assistant. Do that
+1. **Start** this app if it is not running yet.
+2. Byonk asks you to restart Home Assistant. Do that
    (**Settings → System → Restart**).
-2. After the restart, a **Byonk** card is waiting in
+3. After the restart, a **Byonk** card is waiting in
    **Settings → Devices & Services**. Select **Configure**.
 
 That is the whole setup. Byonk generates its own management token, and no
@@ -36,9 +37,9 @@ pick its screen.
 This Configuration tab is the source of truth for Byonk's server-global settings.
 **Changes apply on app restart.**
 
-- **Admin token** — leave blank. The Byonk integration provisions and manages it
-  automatically. While blank, the management API is disabled (this does not affect
-  serving screens to devices).
+- **Admin token** — leave blank. Managed automatically by Byonk. While blank,
+  the management API is disabled (this does not affect serving screens to
+  devices).
 - **Log level** — server log verbosity (default `info`).
 - **Auth mode** — device authentication mode, `api_key` or `ed25519`.
 - **Screen repo refresh interval** — seconds between automatic screen repo

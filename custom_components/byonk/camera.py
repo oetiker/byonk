@@ -1,8 +1,17 @@
 """Byonk screen preview — what a device's panel is showing.
 
-A camera rather than an image entity, because Home Assistant renders a camera
-on the device page as a full-width picture; an image entity appears only as a
-row thumbnail, which is too small to judge a screen by.
+A camera rather than an image entity. Neither is drawn full-width on the
+device page — both are a row in the Sensors card — so the choice was settled
+by building both and looking, on HA 2026.7.2:
+
+- the camera's picture fills the more-info dialog edge to edge, about 990 px
+  wide against an image entity's inset ~775 px;
+- the camera's row thumbnail is square, where an image entity's is cropped to
+  a circle and loses the corners of an 800x480 screen.
+
+An image entity would in exchange give a "last updated" state and drop the
+`PyTurboJPEG` requirement, which was judged not worth a smaller, corner-cropped
+picture.
 
 Home Assistant never polls a camera (`Camera._attr_should_poll` is `False`).
 Frames are pulled only while a browser holds the picture open, so a device

@@ -14,8 +14,9 @@ type Captured = Arc<Mutex<Vec<(String, Option<String>, Value)>>>;
 /// its own fake Supervisor to be the one that's "live" while it runs. Cargo
 /// runs these tests on parallel threads within one process, so without a
 /// shared lock one test's URL could still be set when another test's client
-/// sends its request. Each test takes this guard for its whole body.
-static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// sends its request. Each test takes this guard for its whole body, holding
+/// it across `.await` points, so it must be an async-aware mutex.
+static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 async fn record(
     State(seen): State<Captured>,
@@ -53,7 +54,7 @@ async fn fake_supervisor() -> (String, Captured) {
 
 #[tokio::test]
 async fn announces_discovery_for_the_byonk_service() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = ENV_LOCK.lock().await;
 
     let (url, seen) = fake_supervisor().await;
     // SAFETY: single-threaded test body; the var is read on the next line.
@@ -76,7 +77,7 @@ async fn announces_discovery_for_the_byonk_service() {
 
 #[tokio::test]
 async fn first_install_notification_says_finish_setup() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = ENV_LOCK.lock().await;
 
     let (url, seen) = fake_supervisor().await;
     unsafe { std::env::set_var("BYONK_SUPERVISOR_URL", &url) };
@@ -103,7 +104,7 @@ async fn first_install_notification_says_finish_setup() {
 
 #[tokio::test]
 async fn update_notification_names_both_versions() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = ENV_LOCK.lock().await;
 
     let (url, seen) = fake_supervisor().await;
     unsafe { std::env::set_var("BYONK_SUPERVISOR_URL", &url) };
@@ -126,7 +127,7 @@ async fn update_notification_names_both_versions() {
 
 #[tokio::test]
 async fn install_and_announce_notifies_once_then_only_announces() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = ENV_LOCK.lock().await;
 
     use byonk::ha_integration::install_and_announce;
 

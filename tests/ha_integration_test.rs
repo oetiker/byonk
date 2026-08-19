@@ -216,3 +216,56 @@ fn clears_a_leftover_staging_dir_from_a_crashed_run() {
     assert!(!staging.exists(), "staging is consumed by the swap");
     assert!(!target_of(ha.path()).join("junk.py").exists());
 }
+
+#[test]
+fn clears_a_leftover_backup_dir_from_a_crashed_run() {
+    // The rename-based swap uses `.byonk-old` as well as `.byonk-new`; a
+    // crash between the two renames can leave `.byonk-old` behind non-empty.
+    // The swap only reaches `.byonk-old` via `rename(target, backup)`, which
+    // requires an existing target -- so this installs first, then plants the
+    // leftover before upgrading. A rename onto a non-empty directory fails
+    // outright, so without the early clear this upgrade would report
+    // `Failed`, not `Installed`: the assertion below is load-bearing, not
+    // just a tidiness check.
+    let src_dir = TempDir::new().unwrap();
+    let ha = TempDir::new().unwrap();
+    make_src(src_dir.path(), "0.18.0");
+    install(src_dir.path(), ha.path());
+
+    let backup = ha.path().join("custom_components").join(".byonk-old");
+    std::fs::create_dir_all(&backup).unwrap();
+    std::fs::write(backup.join("junk.py"), "half-restored").unwrap();
+
+    make_src(src_dir.path(), "0.19.0");
+    let outcome = install(src_dir.path(), ha.path());
+
+    assert!(
+        matches!(outcome, InstallOutcome::Installed { .. }),
+        "got {outcome:?}"
+    );
+    assert!(!backup.exists(), "leftover backup is cleared, not reused");
+    assert!(!target_of(ha.path()).join("junk.py").exists());
+}
+
+#[test]
+fn upgrade_leaves_no_scratch_dirs_behind() {
+    // A successful swap must not leave `.byonk-new` (already consumed by the
+    // rename into place) or `.byonk-old` (the superseded version, deleted
+    // once the swap has landed) sitting next to the target. If the final
+    // cleanup step were dropped, this is the test that would catch it.
+    let src_dir = TempDir::new().unwrap();
+    let ha = TempDir::new().unwrap();
+    make_src(src_dir.path(), "0.18.0");
+    install(src_dir.path(), ha.path());
+
+    make_src(src_dir.path(), "0.19.0");
+    let outcome = install(src_dir.path(), ha.path());
+
+    assert!(
+        matches!(outcome, InstallOutcome::Installed { .. }),
+        "got {outcome:?}"
+    );
+    let custom_components = ha.path().join("custom_components");
+    assert!(!custom_components.join(".byonk-new").exists());
+    assert!(!custom_components.join(".byonk-old").exists());
+}

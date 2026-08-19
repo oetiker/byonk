@@ -23,6 +23,11 @@ const DEFAULT_INTEGRATION_SRC: &str = "/app/custom_components/byonk";
 /// Staging directory name, a sibling of the target inside `custom_components/`.
 const STAGING_NAME: &str = ".byonk-new";
 
+/// Backup directory name, a sibling of the target inside `custom_components/`.
+/// Holds the previous install for the duration of the swap, so it can be put
+/// back if the final rename fails.
+const BACKUP_NAME: &str = ".byonk-old";
+
 /// Home Assistant config dir. `BYONK_HA_CONFIG_DIR` overrides it (tests, and an
 /// escape hatch), mirroring `addon_options::options_path`.
 pub fn ha_config_dir() -> PathBuf {
@@ -56,6 +61,15 @@ fn manifest_field(dir: &Path, field: &str) -> Option<String> {
     let text = std::fs::read_to_string(dir.join("manifest.json")).ok()?;
     let json: serde_json::Value = serde_json::from_str(&text).ok()?;
     json.get(field)?.as_str().map(str::to_string)
+}
+
+/// Remove `dir` if it exists. Used to clear leftover scratch directories from
+/// a crashed earlier run; a no-op if there is nothing to clear.
+fn clear_if_present(dir: &Path) -> std::io::Result<()> {
+    if dir.exists() {
+        std::fs::remove_dir_all(dir)?;
+    }
+    Ok(())
 }
 
 /// Copy `src` into `dst` recursively, creating `dst`.
@@ -113,34 +127,56 @@ pub fn install(src: &Path, ha_config: &Path) -> InstallOutcome {
         ));
     }
 
-    // Stage the new copy beside the target, then swap. A crashed earlier run can
-    // leave staging behind; the name is ours, so clearing it is safe.
+    // Stage the new copy beside the target, then swap by rename. A crashed
+    // earlier run can leave either scratch dir behind; both names are ours,
+    // so clearing them is safe.
     let staging = custom_components.join(STAGING_NAME);
+    let backup = custom_components.join(BACKUP_NAME);
     if let Err(e) = std::fs::create_dir_all(&custom_components) {
         return InstallOutcome::Failed(format!(
             "could not create {}: {e}",
             custom_components.display()
         ));
     }
-    if staging.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&staging) {
-            return InstallOutcome::Failed(format!("could not clear {}: {e}", staging.display()));
-        }
+    if let Err(e) = clear_if_present(&staging) {
+        return InstallOutcome::Failed(format!("could not clear {}: {e}", staging.display()));
+    }
+    if let Err(e) = clear_if_present(&backup) {
+        return InstallOutcome::Failed(format!("could not clear {}: {e}", backup.display()));
     }
     if let Err(e) = copy_dir(src, &staging) {
         let _ = std::fs::remove_dir_all(&staging);
         return InstallOutcome::Failed(format!("could not stage the integration: {e}"));
     }
+
+    // The swap itself is two renames, each atomic within `custom_components/`.
+    // A crash between them leaves the target simply absent rather than
+    // half-deleted, so the next start passes the ownership guard above and
+    // installs fresh instead of refusing forever. Do not collapse this back
+    // into a delete-then-rename: `remove_dir_all` over a multi-file directory
+    // is not atomic, and a partial failure there leaves a directory that
+    // exists but no longer has byonk's manifest -- refused permanently.
     if target.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&target) {
+        if let Err(e) = std::fs::rename(&target, &backup) {
             let _ = std::fs::remove_dir_all(&staging);
-            return InstallOutcome::Failed(format!("could not replace {}: {e}", target.display()));
+            return InstallOutcome::Failed(format!(
+                "could not set aside the existing {}: {e}",
+                target.display()
+            ));
         }
     }
     if let Err(e) = std::fs::rename(&staging, &target) {
-        let _ = std::fs::remove_dir_all(&staging);
+        // Put the original back so the user is not left without any
+        // integration at all. Best effort: if this also fails there is
+        // nothing more we can safely do here.
+        let _ = std::fs::rename(&backup, &target);
         return InstallOutcome::Failed(format!("could not move the integration into place: {e}"));
     }
+
+    // The swap is complete; the old version is no longer needed. A failure to
+    // delete it is not a failure of the install -- the new integration is
+    // already in place -- so this is best effort and unreported.
+    let _ = std::fs::remove_dir_all(&backup);
 
     InstallOutcome::Installed {
         from: installed,

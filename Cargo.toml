@@ -38,7 +38,7 @@ skrifa = "0.44"
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
 tera = "1"
 scraper = "0.22"
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "query"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "query", "json"] }
 rustls-pemfile = "2"
 
 # Serialization

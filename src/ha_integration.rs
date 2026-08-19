@@ -183,3 +183,69 @@ pub fn install(src: &Path, ha_config: &Path) -> InstallOutcome {
         to: ours,
     }
 }
+
+/// Supervisor's in-container base URL. `BYONK_SUPERVISOR_URL` overrides it.
+const DEFAULT_SUPERVISOR_URL: &str = "http://supervisor";
+
+/// Notification id, so a repeated notification replaces the previous one
+/// instead of stacking up.
+const NOTIFICATION_ID: &str = "byonk_integration";
+
+/// Base URL for Supervisor API calls.
+pub fn supervisor_url() -> String {
+    std::env::var("BYONK_SUPERVISOR_URL").unwrap_or_else(|_| DEFAULT_SUPERVISOR_URL.to_string())
+}
+
+/// Ask the user to restart Home Assistant, through Supervisor's Core API proxy.
+///
+/// Reachable because the app declares `homeassistant_api: true`; the proxy
+/// blocks only `hassio*` paths (`supervisor/api/proxy.py`).
+pub async fn notify_restart(
+    client: &reqwest::Client,
+    token: &str,
+    from: Option<&str>,
+    to: &str,
+) -> anyhow::Result<()> {
+    let message = match from {
+        Some(previous) => format!(
+            "Byonk updated its Home Assistant integration from {previous} to {to}. \
+             Restart Home Assistant to load it."
+        ),
+        None => format!(
+            "Byonk installed its Home Assistant integration ({to}). \
+             Restart Home Assistant to finish setting up Byonk."
+        ),
+    };
+    client
+        .post(format!(
+            "{}/core/api/services/persistent_notification/create",
+            supervisor_url()
+        ))
+        .bearer_auth(token)
+        .json(&serde_json::json!({
+            "notification_id": NOTIFICATION_ID,
+            "title": "Byonk",
+            "message": message,
+        }))
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(())
+}
+
+/// Tell Supervisor the byonk service is here, which makes Home Assistant offer
+/// a Discovered card for the integration.
+///
+/// Supervisor stores the message and dedupes on (app, service), so calling this
+/// on every start is harmless; if Home Assistant is down the message is kept and
+/// replayed when it starts (`supervisor/discovery/__init__.py`).
+pub async fn announce_discovery(client: &reqwest::Client, token: &str) -> anyhow::Result<()> {
+    client
+        .post(format!("{}/discovery", supervisor_url()))
+        .bearer_auth(token)
+        .json(&serde_json::json!({ "service": "byonk", "config": {} }))
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(())
+}

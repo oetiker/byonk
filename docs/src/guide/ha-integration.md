@@ -71,7 +71,7 @@ with no screen of its own. Changes apply live, no restart required.
 | Signal strength | Sensor | Wi-Fi RSSI (dBm) |
 | Last seen | Sensor | Timestamp of last check-in |
 | Firmware version | Sensor | Firmware version string |
-| Screen preview | Camera | Picture of what the panel is showing, rendered by Byonk. Appears full-width on the device page. |
+| Screen preview | Camera | Picture of what the panel is showing, rendered by Byonk. It sits in the **Sensors** card; click it for a full-size view. |
 | Refresh preview | Button | Re-render the screen preview now (see [Screen Preview](#screen-preview)) |
 | Preview dithering | Switch | On: the dithered image the panel receives. Off: the screen before dithering, in full color. Affects the preview only |
 | Preview measured colors | Switch | On: the measured colors a calibration says the panel really produces. Off: the spec colors byonk sends to it. Affects the preview only |

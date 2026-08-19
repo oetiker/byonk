@@ -78,8 +78,15 @@ class ByonkClient:
         headers = {"Authorization": f"Bearer {self._token}"}
         try:
             async with self._session.get(url, headers=headers) as resp:
-                if resp.status in (401, 404):
-                    raise ByonkAuthError(f"GET {path} -> {resp.status}")
+                if resp.status == 401:
+                    raise ByonkAuthError(f"GET {path} -> 401")
+                if resp.status == 404:
+                    # Deliberately *not* an auth error, unlike `_request`. A 404
+                    # from `/devices/{key}/preview` means the key has no device
+                    # config — an ordinary answer, not a dormant admin API. An
+                    # auth error would reach `ConfigEntryAuthFailed` and start a
+                    # reauth flow over a device that simply has nothing to show.
+                    raise ByonkApiError(f"GET {path} -> 404")
                 resp.raise_for_status()
                 return await resp.read()
         except aiohttp.ClientError as err:

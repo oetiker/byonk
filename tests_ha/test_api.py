@@ -3,6 +3,7 @@ import pytest
 from aioresponses import aioresponses
 
 from custom_components.byonk.api import (
+    ByonkApiError,
     ByonkAuthError,
     ByonkClient,
     ByonkReadOnlyError,
@@ -74,3 +75,25 @@ async def test_update_all_screen_repos_posts(mock_aioresponse):
     async with aiohttp.ClientSession() as session:
         client = ByonkClient(session, BASE, "secret")
         assert await client.async_update_screen_repos() == {"ok": True}
+
+
+async def test_preview_401_is_an_auth_error(mock_aioresponse):
+    mock_aioresponse.get(f"{BASE}/api/admin/devices/AA:BB/preview", status=401)
+    async with aiohttp.ClientSession() as session:
+        client = ByonkClient(session, BASE, "stale")
+        with pytest.raises(ByonkAuthError):
+            await client.async_get_device_preview("AA:BB")
+
+
+async def test_preview_404_is_not_an_auth_error(mock_aioresponse):
+    """A device with no config is an ordinary answer, not a dormant admin API.
+
+    Classifying it as an auth error would reach `ConfigEntryAuthFailed` and
+    start a reauth flow over a device that simply has nothing to show.
+    """
+    mock_aioresponse.get(f"{BASE}/api/admin/devices/AA:BB/preview", status=404)
+    async with aiohttp.ClientSession() as session:
+        client = ByonkClient(session, BASE, "secret")
+        with pytest.raises(ByonkApiError) as exc:
+            await client.async_get_device_preview("AA:BB")
+    assert not isinstance(exc.value, ByonkAuthError)

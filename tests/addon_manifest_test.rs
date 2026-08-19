@@ -114,3 +114,35 @@ fn addon_config_matches_design() {
          screen_repo_refresh_interval, and packages"
     );
 }
+
+#[test]
+fn addon_config_declares_integration_install_capabilities() {
+    let cfg = load_yaml("homeassistant/byonk/config.yaml");
+
+    // The app writes custom_components/byonk into the HA config dir, which
+    // Supervisor mounts at /homeassistant for this mapping.
+    let map: Vec<&str> = cfg["map"]
+        .as_sequence()
+        .expect("map seq")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        map.contains(&"homeassistant_config:rw"),
+        "map must grant write access to the HA config dir, got {map:?}"
+    );
+
+    // Needed to POST the "restart Home Assistant" notification through
+    // /core/api on the Supervisor proxy.
+    assert_eq!(cfg["homeassistant_api"].as_bool(), Some(true));
+
+    // Supervisor rejects a discovery message for a service the app does not
+    // list here (supervisor/api/discovery.py::set_discovery).
+    let discovery: Vec<&str> = cfg["discovery"]
+        .as_sequence()
+        .expect("discovery seq")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert_eq!(discovery, vec!["byonk"]);
+}

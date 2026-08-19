@@ -8,6 +8,9 @@ COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 WORKDIR /app
 ARG BINARY_DIR=binaries
 COPY ${BINARY_DIR}/amd64/byonk /app/byonk
+# The app installs this into the Home Assistant config dir at startup, so the
+# integration always matches the server that wrote it.
+COPY custom_components/byonk ./custom_components/byonk
 COPY fonts ./fonts
 COPY screens ./screens
 # Ship the device-free default; config.yaml is the developer's local test config.
@@ -22,6 +25,9 @@ COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 WORKDIR /app
 ARG BINARY_DIR=binaries
 COPY ${BINARY_DIR}/arm64/byonk /app/byonk
+# The app installs this into the Home Assistant config dir at startup, so the
+# integration always matches the server that wrote it.
+COPY custom_components/byonk ./custom_components/byonk
 COPY fonts ./fonts
 COPY screens ./screens
 # Ship the device-free default; config.yaml is the developer's local test config.

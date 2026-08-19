@@ -1,7 +1,10 @@
 // Arc<Html> is used in single-threaded Lua context, so Send+Sync not required
 #![allow(clippy::arc_with_non_send_sync)]
 
-use mlua::{Lua, Result as LuaResult, Table, UserData, UserDataMethods, Value};
+use mlua::{
+    ChunkMode, Lua, LuaOptions, Result as LuaResult, StdLib, Table, UserData, UserDataMethods,
+    Value,
+};
 use scraper::{Html, Selector};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -878,6 +881,60 @@ impl ScreenRepoSource for AssetScreensSource {
     }
 }
 
+/// Base-library globals a screen script has no business calling. Each one
+/// opens a file by name, which is the reach this sandbox exists to deny;
+/// `load` additionally compiles attacker-chosen bytecode, and crafted bytecode
+/// escapes the VM outright. `require` is not among them — `install_require`
+/// replaces it with a resolver confined to the screen repo and `byonk-base`.
+const DENIED_BASE_GLOBALS: [&str; 3] = ["dofile", "loadfile", "load"];
+
+/// `os` members a screen script has no business calling. `exit` would take the
+/// whole server down with one screen; `getenv` reads the process environment,
+/// which under the Home Assistant app is where byonk's own configuration
+/// lives. What stays is the clock: `time`, `date`, `clock`, `difftime`.
+const DENIED_OS_MEMBERS: [&str; 7] = [
+    "execute",
+    "exit",
+    "getenv",
+    "remove",
+    "rename",
+    "setlocale",
+    "tmpname",
+];
+
+/// Build the Lua VM a screen script runs in.
+///
+/// `Lua::new()` loads `StdLib::ALL_SAFE`, and "safe" there means only that
+/// `debug` and `ffi` stay out — `io`, `os` and `package` are all in. Screens
+/// come from screen repos that byonk re-fetches on a timer, so an upstream
+/// change runs new Lua unreviewed; a screen that can call `io.open` can write
+/// anywhere the byonk process can, which under the Home Assistant app means
+/// the mapped host directories. So the library set is named explicitly and the
+/// leftover sharp edges are removed from the globals.
+fn new_sandboxed_lua() -> LuaResult<Lua> {
+    // `io` and `package` are left out wholesale. `package` costs nothing:
+    // `install_require` supplies `require`, and mlua's safe mode already
+    // refuses `package.loadlib` and C modules.
+    let libs = StdLib::COROUTINE
+        | StdLib::TABLE
+        | StdLib::STRING
+        | StdLib::UTF8
+        | StdLib::MATH
+        | StdLib::OS;
+    let lua = Lua::new_with(libs, LuaOptions::default())?;
+
+    let globals = lua.globals();
+    for name in DENIED_BASE_GLOBALS {
+        globals.set(name, Value::Nil)?;
+    }
+    let os: Table = globals.get("os")?;
+    for name in DENIED_OS_MEMBERS {
+        os.set(name, Value::Nil)?;
+    }
+
+    Ok(lua)
+}
+
 /// Lua runtime for executing screen scripts
 pub struct LuaRuntime {
     asset_loader: Arc<AssetLoader>,
@@ -935,7 +992,7 @@ impl LuaRuntime {
         timestamp_override: Option<i64>,
         caller_log_sink: Option<&Arc<Mutex<Vec<String>>>>,
     ) -> Result<ScriptResult, ScriptError> {
-        let lua = Lua::new();
+        let lua = new_sandboxed_lua()?;
         // Captures log_info/log_warn/log_error output for this run, in
         // addition to the tracing calls those hooks already make (see
         // `ScriptResult::logs`). Uses the caller's sink when given (see
@@ -965,8 +1022,13 @@ impl LuaRuntime {
         // Install the sandboxed `require()` scoped to this screen repo + byonk-base.
         self.install_require(&lua, source)?;
 
-        // Execute the script
-        let result: Table = lua.load(script_src).eval()?;
+        // Execute the script. `set_mode(Text)` is part of the sandbox, not a
+        // formality: mlua sniffs the source and switches to the bytecode
+        // loader by itself, and that loader trusts what it is given, so a
+        // screen repo could ship crafted bytecode and walk straight out of the
+        // VM. A screen's script.lua is source code; refuse to read it as
+        // anything else. Same reasoning in `install_require`.
+        let result: Table = lua.load(script_src).set_mode(ChunkMode::Text).eval()?;
 
         // Extract data, refresh_rate, skip_update, and colors
         let data = self.table_to_json(&lua, result.get::<Table>("data")?)?;
@@ -1145,7 +1207,12 @@ impl LuaRuntime {
                 code.ok_or_else(|| mlua::Error::external(format!("module '{name}' not found")))?;
 
             // 5. Evaluate, cache, return.
-            let value: Value = lua.load(&code).set_name(&name).eval()?;
+            // Text only — see the `set_mode` note in `run_script`.
+            let value: Value = lua
+                .load(&code)
+                .set_name(&name)
+                .set_mode(ChunkMode::Text)
+                .eval()?;
             cache.set(name.clone(), value.clone())?;
             Ok(value)
         })?;

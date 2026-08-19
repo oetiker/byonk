@@ -37,6 +37,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Screen scripts can no longer reach the filesystem or the process.** The Lua
+  API reference has always said file I/O and OS functions were unavailable, but
+  the sandbox did not actually withhold them: a script could call `io.open` and
+  write anywhere byonk could, `os.getenv` to read byonk's own environment, or
+  `os.exit` to stop the server. That reach is now gone — `io`, `package`,
+  `dofile`, `loadfile`, `load`, `debug` and the dangerous half of `os` all
+  evaluate to `nil`. It matters because byonk re-fetches screen repositories on
+  a timer, so an upstream change runs new Lua on your server unreviewed. The
+  clock functions screens do use — `os.time`, `os.date`, `os.clock`,
+  `os.difftime` — are untouched, as are `require`, `read_asset` and the HTTP
+  functions. The Lua API reference now lists exactly what is withheld.
+
 ## 0.18.0 - 2026-08-18
 
 ### New

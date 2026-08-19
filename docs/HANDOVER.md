@@ -486,8 +486,8 @@ every screen's HTTP on the server path.
 Neither tool is installed; both download as a single binary into the scratchpad:
 
 ```bash
-curl -sSL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_darwin_arm64.tar.gz | tar -xz actionlint
-curl -sSL https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.darwin.aarch64.tar.xz | tar -xJ
+curl -sSL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_darwin_arm64.tar.gz | tar -xzf - actionlint
+curl -sSL https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.darwin.aarch64.tar.xz | tar -xJf - --strip-components=1 shellcheck-v0.10.0/shellcheck
 PATH="$PWD:$PATH" ./actionlint .github/workflows/*.yml
 ```
 

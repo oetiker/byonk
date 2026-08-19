@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- **The Home Assistant device page now shows a picture of the screen.** Each
+  device gets a *Screen preview* camera rendered by byonk from that device's own
+  screen, parameters, panel and dither settings, so changing the Screen select
+  shows you the result instead of making you walk over to the device. The
+  reserved Default device has one too.
+
+  It is free while you are not looking at it: Home Assistant only pulls frames
+  while the picture is open on screen, and byonk re-serves a rendered image until
+  the device's configuration changes or the screen's own refresh rate elapses.
+  A screen whose data moves on its own — a clock, a forecast — can therefore sit
+  still in the preview; the new *Refresh preview* button forces a render. A
+  screen that fails to render shows the error image the panel itself would show.
+
+  Two switches change how the preview is drawn, without touching what the
+  device displays: *Preview dithering* off shows the screen before dithering,
+  in full colour and at no palette restriction — the version to look at when
+  you are checking a layout — and *Preview measured colors* off draws the spec
+  colours byonk sends to the panel instead of the measured ones a calibration
+  says it really produces.
+
+- **New admin endpoint `GET /api/admin/devices/:key/preview`**, returning that
+  PNG. `?force` skips the cache, `?dither=off` returns the undithered render
+  and `?measured=off` the spec colours.
+
 ### Changed
 
 ### Fixed

@@ -102,10 +102,58 @@ pub struct ValidationReport {
     pub issues: Vec<Issue>,
 }
 
+/// A real device, for a render made on its behalf: its registry identity
+/// plus the device-config layer of the resolution chain.
+///
+/// `ScreenStore::render` is an authoring path and normally invents a
+/// `dev-simulator` identity with an empty device-config layer, because there
+/// is no device. A device preview has both, and both matter:
+///
+/// * **Identity** — a screen that reads `device.mac` or
+///   `device.battery_voltage` must see the real values or the preview is not
+///   a preview of *that* device. Every telemetry field is passed through
+///   as-is, so a device the registry has never heard from reports `None`,
+///   which reaches Lua as a missing key. It deliberately does *not* fall
+///   back to the authoring placeholders — showing 4.2 V for a device that
+///   has never reported its battery is a fabricated reading, not a default.
+///
+/// * **Config layer** — `colors`, `dither` and `tuning` occupy the
+///   *device-config* slots of `resolve_ctx_palette`,
+///   `resolve_render_params` and `resolve_effective_tuning`, which sit
+///   *below* the script's own choices and *above* the panel's. Passing a
+///   device's configured dither as `RenderOpts::dither` instead would put it
+///   in the override slot, where it beats the script — the preview would
+///   then disagree with the panel for any screen that sets its own dither.
+#[derive(Debug, Clone, Default)]
+pub struct DevicePreview {
+    pub mac: String,
+    pub firmware_version: Option<String>,
+    pub battery_voltage: Option<f32>,
+    pub rssi: Option<i32>,
+    /// `DeviceConfig::colors` — comma-separated hex palette override.
+    pub colors: Option<String>,
+    /// `DeviceConfig::dither` — algorithm name.
+    pub dither: Option<String>,
+    /// `DeviceConfig`'s dither tuning fields, as one layer.
+    pub tuning: DitherTuningValues,
+    /// `DeviceConfig::refresh` — the per-device refresh override, in seconds.
+    /// Feeds `DeviceContext::refresh_override`, so `RenderResult::refresh_rate`
+    /// comes back as the rate this device actually runs at rather than the
+    /// screen's own. The preview cache uses it as the entry's TTL, which is
+    /// what keeps a preview exactly as fresh as the panel it stands for.
+    pub refresh: Option<u32>,
+}
+
 /// Options for `ScreenStore::render`. Mirrors the knobs `/dev/render`
 /// (`crate::api::dev::handle_render`) accepts for a screen-name (non-MAC)
-/// render: no device lookup, no custom Lua params — an authoring-time
-/// preview of the screen as it stands on disk.
+/// render — an authoring-time preview of the screen as it stands on disk.
+///
+/// `params` and `device` are the two exceptions, and they are what lets the
+/// same function serve a *device* preview (`/api/admin/devices/{key}/preview`)
+/// instead of a second, drift-prone copy of the resolution chain: supply the
+/// device's configured params and its registry identity and the render is the
+/// device's, not the author's. Both default to empty/absent, which is exactly
+/// the authoring behaviour this function has always had.
 ///
 /// `model` selects the default width/height/palette when `width`/`height`
 /// aren't given (`"og"` → 800x480 4-grey, anything else, including `"x"`,
@@ -143,6 +191,12 @@ pub struct RenderOpts {
     /// panel.colors_actual > none`. Lets an agent preview a calibration
     /// without writing a panel into the config.
     pub colors_actual: Option<String>,
+    /// Lua `params` table for the run. Empty for an authoring render; a
+    /// device preview supplies the device's configured params.
+    pub params: HashMap<String, serde_yaml::Value>,
+    /// The device this render is on behalf of, if any. `None` keeps the
+    /// authoring `dev-simulator` identity (see `DevicePreview`).
+    pub device: Option<DevicePreview>,
 }
 
 impl Default for RenderOpts {
@@ -164,6 +218,8 @@ impl Default for RenderOpts {
             include_svg: false,
             use_actual: None,
             colors_actual: None,
+            params: HashMap::new(),
+            device: None,
         }
     }
 }
@@ -1026,29 +1082,66 @@ impl ScreenStore {
             .iter()
             .find_map(|(_, c)| c.clone());
 
-        // The palette the script sees via `device.colors` — panel colors
-        // fold in over the model default, same as `/dev/render`'s
-        // `default_palette` (there is no device-config layer in an
-        // authoring render, so that step of the chain is always absent).
-        let ctx_palette: Vec<(u8, u8, u8)> =
-            crate::api::display::resolve_ctx_palette(None, panel_colors.as_deref(), &query_palette);
+        // The device-config layer of every chain below. Absent for an
+        // authoring render (there is no device), populated for a device
+        // preview — see `DevicePreview`.
+        let device_colors: Option<&str> = opts.device.as_ref().and_then(|d| d.colors.as_deref());
+        let device_dither: Option<&str> = opts.device.as_ref().and_then(|d| d.dither.as_deref());
+        let device_tuning: DitherTuningValues = opts
+            .device
+            .as_ref()
+            .map(|d| d.tuning.clone())
+            .unwrap_or_default();
+
+        // The palette the script sees via `device.colors` — device-config
+        // colors, then panel colors, then the model default, same as
+        // `/dev/render`'s `default_palette`.
+        let ctx_palette: Vec<(u8, u8, u8)> = crate::api::display::resolve_ctx_palette(
+            device_colors,
+            panel_colors.as_deref(),
+            &query_palette,
+        );
 
         // Pre-script dither algorithm + tuning, for the device context the
         // script sees via `device.dither.*` — same resolution `/dev/render`
         // does before running the script.
-        let pre_script_algo = opts.dither.as_deref().unwrap_or("atkinson");
+        let pre_script_algo = opts
+            .dither
+            .as_deref()
+            .or(device_dither)
+            .unwrap_or("atkinson");
         let panel_dither_config = panel.and_then(|p| p.dither.clone());
         let pre_panel_tuning = panel_dither_config
             .as_ref()
             .map(|pdc| pdc.resolve_for_algorithm(Some(pre_script_algo)))
             .unwrap_or_default();
 
+        // Device identity: the real one when this render is on a device's
+        // behalf, else the authoring placeholders. Kept as a whole-identity
+        // switch rather than per-field `or`s — a real device with no
+        // telemetry yet must report nothing, not inherit `4.2 V` from the
+        // simulator (see `DevicePreview`).
+        let (ctx_mac, ctx_fw, ctx_battery, ctx_rssi) = match opts.device.as_ref() {
+            Some(d) => (
+                d.mac.clone(),
+                d.firmware_version.clone(),
+                d.battery_voltage,
+                d.rssi,
+            ),
+            None => (
+                "dev-simulator".to_string(),
+                Some("dev".to_string()),
+                Some(4.2),
+                Some(-50),
+            ),
+        };
+
         let device_ctx = DeviceContext {
-            mac: "dev-simulator".to_string(),
-            battery_voltage: Some(4.2),
-            rssi: Some(-50),
+            mac: ctx_mac,
+            battery_voltage: ctx_battery,
+            rssi: ctx_rssi,
             model: Some(opts.model.clone()),
-            firmware_version: Some("dev".to_string()),
+            firmware_version: ctx_fw,
             width: Some(width),
             height: Some(height),
             colors: Some(crate::api::display::colors_to_hex_strings(&ctx_palette)),
@@ -1063,6 +1156,7 @@ impl ScreenStore {
             dither_gamut_knee: pre_panel_tuning.gamut.knee,
             dither_gamut_amount: pre_panel_tuning.gamut.amount,
             dither_gamut_max_compression: pre_panel_tuning.gamut.max_compression,
+            refresh_override: opts.device.as_ref().and_then(|d| d.refresh),
             ..Default::default()
         };
 
@@ -1079,7 +1173,7 @@ impl ScreenStore {
         // is the same entry point `/dev/render` uses for a screen-name preview.
         let script_result = match self.pipeline.run_script_direct(
             screen_ref,
-            HashMap::new(),
+            opts.params.clone(),
             Some(device_ctx.clone()),
             opts.timestamp,
             Some(&log_sink),
@@ -1159,7 +1253,7 @@ impl ScreenStore {
         let tuning = crate::api::display::resolve_effective_tuning(
             &opts_tuning,
             &script_tuning,
-            &DitherTuningValues::default(),
+            &device_tuning,
             &panel_tuning,
         );
 
@@ -1168,8 +1262,15 @@ impl ScreenStore {
             script_result.script_colors.as_deref(),
             script_result.script_colors_actual.as_deref(),
             effective_script_dither,
-            None,
-            dither_override,
+            device_colors,
+            // `resolve_render_params` resolves dither as
+            // `script_dither.or(device_config_dither)`, and an explicit
+            // override already blanked `effective_script_dither` above — so
+            // the override rides in this slot when present, and the device's
+            // configured dither takes it otherwise. That ordering is what
+            // keeps override > script > device-config intact with only two
+            // slots to put three layers in.
+            dither_override.or(device_dither),
             panel_colors.as_deref(),
             &query_palette,
             &pre_script_measured_candidates,

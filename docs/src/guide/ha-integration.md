@@ -71,6 +71,10 @@ with no screen of its own. Changes apply live, no restart required.
 | Signal strength | Sensor | Wi-Fi RSSI (dBm) |
 | Last seen | Sensor | Timestamp of last check-in |
 | Firmware version | Sensor | Firmware version string |
+| Screen preview | Camera | Picture of what the panel is showing, rendered by Byonk. It sits in the **Sensors** card; click it for a full-size view. |
+| Refresh preview | Button | Re-render the screen preview now (see [Screen Preview](#screen-preview)) |
+| Preview dithering | Switch | On: the dithered image the panel receives. Off: the screen before dithering, in full color. Affects the preview only |
+| Preview measured colors | Switch | On: the measured colors a calibration says the panel really produces. Off: the spec colors byonk sends to it. Affects the preview only |
 | Model | Sensor | Verbatim `Model` header reported by the device |
 | Screen | Select | Active screen assigned to this device |
 | Dither | Select | Dither algorithm override |
@@ -119,6 +123,55 @@ when you change the device's screen.
 **Device naming**: the device's name is owned by Home Assistant. Rename the device
 the usual way (device card → pencil icon) and byonk will mirror the name automatically
 when you rename the device in Home Assistant. No changes are needed in byonk's config directly.
+
+## Screen Preview
+
+Each device page shows a **Screen preview** camera: a picture of what that
+device's panel is displaying, rendered by Byonk from the device's own screen,
+parameters, panel profile and dither settings. Change the **Screen** select and
+the picture follows, so you can see the effect of a setting without walking over
+to the device.
+
+The **Byonk Default** device has one too — that is the screen every
+un-onboarded or unassigned device shows.
+
+**It costs nothing while you are not looking at it.** Home Assistant never polls
+a camera; frames are only pulled while a browser has the picture open. Byonk in
+turn keeps the rendered image and only re-renders when the device's configuration
+changes or the screen's own refresh rate elapses, so an open device page does not
+turn into a render loop or hammer whatever APIs the screen's script calls.
+
+That last rule has one consequence worth knowing: a screen whose *data* moves on
+its own — a clock, a weather forecast — can sit still in the preview while the
+panel has moved on. Press **Refresh preview** to force a fresh render.
+
+A screen that fails to render shows the error image the panel itself would
+display, rather than an empty box.
+
+### What the preview shows
+
+Two switches on the device page change how the preview is drawn. **Neither
+changes what the device displays** — they are Home Assistant's own view
+settings, stored on the device's config entry, and nothing is written back to
+Byonk's device configuration.
+
+**Preview dithering** — on by default. Off returns the screen *before*
+dithering: a full-color rasterization with no palette restriction. That is the
+version to look at when you are checking a layout, since dithering at card size
+obscures fine detail. Turn it back on to judge how the screen will actually
+reproduce on e-ink.
+
+**Preview measured colors** — on by default. Byonk draws the palette in the
+*measured* colors a [panel calibration](configuration.md) says the panel really
+produces, which is what makes the preview look like the physical device rather
+than like an idealised screen. Off draws the *spec* colors Byonk sends to the
+panel instead. With no calibration configured the two are the same. This switch
+has no effect while **Preview dithering** is off, because an undithered render
+has no palette to map.
+
+> **Note:** the preview is rendered at the panel's own resolution and scaled to
+> fit the card. E-ink dither patterns are fine-grained, so some of that texture is
+> lost at card size — click the picture to see it full size.
 
 ## Monitoring Screen Repos
 

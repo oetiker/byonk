@@ -17,12 +17,21 @@ CONF_BASE_URL = "base_url"
 CONF_DEVICE_KEY = "device_key"
 CONF_HUB_ENTRY_ID = "hub_entry_id"
 
+# Per-device *view* options for the screen preview, stored in the device config
+# entry's `options`. They change only how the preview is drawn — never what the
+# panel shows — so they are Home Assistant's own state and are deliberately not
+# written back to byonk's device configuration. Both default to on, which is
+# byonk's normal render.
+OPT_PREVIEW_DITHER = "preview_dither"
+OPT_PREVIEW_MEASURED = "preview_measured"
+
 # Reserved device key whose screen every un-onboarded / unassigned device shows.
 # Mirrors byonk's RESERVED_DEFAULT_KEY.
 DEFAULT_DEVICE_KEY = "DEFAULT"
 
 PLATFORMS: list[Platform] = [
     Platform.BUTTON,
+    Platform.CAMERA,
     Platform.SENSOR,
     Platform.SELECT,
     Platform.SWITCH,

@@ -72,6 +72,26 @@ class ByonkClient:
         except aiohttp.ClientError as err:
             raise ByonkConnectionError(str(err)) from err
 
+    async def _request_bytes(self, path: str) -> bytes:
+        """GET a binary body. Separate from `_request`, which always parses JSON."""
+        url = f"{self._base}{path}"
+        headers = {"Authorization": f"Bearer {self._token}"}
+        try:
+            async with self._session.get(url, headers=headers) as resp:
+                if resp.status == 401:
+                    raise ByonkAuthError(f"GET {path} -> 401")
+                if resp.status == 404:
+                    # Deliberately *not* an auth error, unlike `_request`. A 404
+                    # from `/devices/{key}/preview` means the key has no device
+                    # config — an ordinary answer, not a dormant admin API. An
+                    # auth error would reach `ConfigEntryAuthFailed` and start a
+                    # reauth flow over a device that simply has nothing to show.
+                    raise ByonkApiError(f"GET {path} -> 404")
+                resp.raise_for_status()
+                return await resp.read()
+        except aiohttp.ClientError as err:
+            raise ByonkConnectionError(str(err)) from err
+
     async def async_get_devices(self) -> list[dict]:
         return await self._request("GET", "/api/admin/devices")
 
@@ -110,6 +130,38 @@ class ByonkClient:
 
     async def async_update_screen_repos(self) -> dict:
         return await self._request("POST", "/api/admin/screen-repos/update")
+
+    async def async_get_device_preview(
+        self,
+        key: str,
+        force: bool = False,
+        dither: bool = True,
+        measured: bool = True,
+    ) -> bytes:
+        """PNG of what this device's panel shows.
+
+        byonk caches the render and only redoes it when the device's
+        configuration changes or the screen's own refresh rate elapses, so
+        calling this per camera frame is cheap. `force` skips that cache.
+
+        `dither=False` returns the screen before dithering — a full-colour
+        rasterization with no palette restriction. `measured=False` draws the
+        palette in the spec colors byonk sends to the panel rather than the
+        measured colors a calibration says it really produces; it has no
+        effect when `dither` is off, since an undithered render has no palette
+        to map. Neither changes what the device displays.
+        """
+        query = []
+        if force:
+            query.append("force=1")
+        if not dither:
+            query.append("dither=off")
+        if not measured:
+            query.append("measured=off")
+        path = f"/api/admin/devices/{key}/preview"
+        if query:
+            path += "?" + "&".join(query)
+        return await self._request_bytes(path)
 
 
 async def _safe_json(resp: aiohttp.ClientResponse) -> dict:

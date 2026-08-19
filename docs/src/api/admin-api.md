@@ -468,6 +468,54 @@ Remove a device mapping from `config.yaml`.
 
 ---
 
+### GET /api/admin/devices/:key/preview
+
+Render what this device's panel is showing, as a PNG.
+
+The render uses the device's own configuration — its screen, parameters, panel
+profile, dither algorithm and tuning — and its identity from the registry, so a
+screen that reads `device.mac` or `device.battery_voltage` sees the real values.
+A device that has never checked in reports no telemetry rather than placeholder
+values.
+
+**Query parameters**:
+
+| Parameter | Meaning |
+|-----------|---------|
+| `force` | Present in any form (`?force`, `?force=1`) — re-render instead of serving the cached copy |
+| `dither` | `off`/`0`/`false`/`no` returns the screen *before* dithering: the full-colour rasterization, with no palette restriction. Anything else, or absent, keeps the dithered render the panel receives |
+| `measured` | `off`/`0`/`false`/`no` draws the palette in the **spec** colors byonk sends to the panel, instead of the **measured** colors a calibration says it really produces. No effect when `dither` is off — an undithered render has no palette to map |
+
+Only an explicit no turns an option off; `dither=on`, `dither=1` and `dither=true`
+all keep it on. Neither parameter changes what the device displays — they select
+how this picture is drawn, nothing more. Each combination is cached separately, so
+flipping one back and forth does not re-render.
+
+**Caching**: a rendered preview is held and re-served until either the device's
+configuration changes or the screen's own `refresh_rate` elapses (with a floor of
+30 seconds). This is what makes it safe for a client to poll the endpoint every
+few seconds. The cache does *not* notice edits to a screen's source files — the
+refresh rate bounds how long that can be stale, and `?force` ends it immediately.
+
+**Responses**:
+
+| Status | Meaning |
+|--------|---------|
+| `200` | `image/png`. `Cache-Control: no-store`, plus `X-Byonk-Preview: hit\|miss` naming whether it was re-served or rendered |
+| `404` | No device configuration for that key — nothing is assigned, so there is nothing to preview |
+
+A screen that fails to render still returns `200` with a PNG: the error image the
+panel itself would display. A broken-image icon would say only that something
+went wrong, not what.
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3000/api/admin/devices/AA:BB:CC:DD:EE:FF/preview \
+  -o preview.png
+```
+
+---
+
 ### PATCH /api/admin/settings
 
 Update global settings in `config.yaml`. All fields are optional; only provided fields are

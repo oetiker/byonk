@@ -1,362 +1,303 @@
 # Handover — Byonk
 
-_Last updated: 2026-08-18 (session 26). **The resvg `byonk-base` initiative is COMPLETE:
-all 10 plan tasks done.** Session 26 landed the last two — Task 9 (the render sweep) and
-Task 10 (`test_bitmap_font_render`) — reconciled the changelog, and then, at the owner's
-request, extended the sweep to the 16-grey and 6-colour panels, **which found and fixed two
-bugs**. **The branch is pushed and `make check` is green. The next job is to merge PR #30.**_
+_Last updated: 2026-08-19 (session 29). The device-page screen preview built in session 28 has
+now **been looked at in a browser on the VM**, which was the one thing session 28 could not
+claim. It works — but **the reason it was built as a camera turned out to be false**, and that
+was checked by building the alternative and comparing. The branch is tested, verified in a real
+UI, and **still unpushed with no PR**._
 
 ## Where the work lives
 
 | | |
 |---|---|
-| Branch | `feat/screen-store-authoring-core` |
-| PR | **#30**, OPEN against `main` — https://github.com/oetiker/byonk/pull/30 |
-| HEAD | `bac40ee` — **tree clean, fully pushed** (`origin` is at `bac40ee`) |
-| Verified | `make check` on `bac40ee`'s content: **1138 passed, 0 failed**; clippy clean under `-D warnings` |
-| CI | **All 10 checks green on `e31eedf`** (Build, Test, Check & Lint, HA Validation, Release Scripts, CodeQL, 4× Analyze) |
-| Push gotcha | The ssh-agent holds **no identities**, so `git push origin …` fails on publickey. `gh` is authenticated over HTTPS — `git push https://github.com/oetiker/byonk.git <branch>` works and leaves the remote config alone. |
+| Branch | `feat/ha-device-preview`, based on `origin/main` @ `94d0c8c` |
+| HEAD | `ec0be6c` — **tree clean, 5 commits, NOT pushed, no PR yet** |
+| `main` | `94d0c8c` (merge of #36, `Release v0.18.0`). Latest tag **`v0.18.0`** |
+| Open PRs | Two stale dependabot PRs, **#25** and **#32**. Nothing else |
+| Keep this branch | `docs/handover-session-27` @ `bf48594` — never merged. **Do not delete it**: the *Carried forward* section reaches sessions 26 and 27 through `bf48594` and `bf48594~1` |
+| Push gotcha | The ssh-agent holds **no identities**, so `git push origin …` fails on publickey. `gh` is authenticated over HTTPS — `git push https://github.com/oetiker/byonk.git <branch>` works and leaves the remote config alone |
+| `main` protection | Ruleset `main-protect`: PR required (0 approvals), 5 required checks (`Build`, `Test`, `Check & Lint`, `Analyze (actions)`, `Analyze (rust)`), strict up-to-date. Bypass: **Repository admin** — you can always merge, no PAT can |
 
-**resvg work happens in a different repo.** `oetiker/resvg` carries `feat/bitmap-mask-glyphs`
-(upstream PR #1115), `feat/font-hinting` (upstream PR #1116), and `byonk-base`, which merges
-them and is what byonk's `[patch.crates-io]` pins. **Current pin: `2e766508`** (in
-`Cargo.lock`; `Cargo.toml` tracks the branch).
+The five commits, oldest first:
 
-**The plan** — `docs/superpowers/plans/2026-08-15-resvg-byonk-base-integration.md` — is now
-**spent**. Every task is done. Do not resume from it. Task 11 in that file (the hinted-font
-trio decision) was never part of the 10 and is listed under *Queued work* below. **The plan
-was wrong in eleven of eleven tasks touched**; if you ever reread it, verify every symbol.
-
-**The ledger:** `.superpowers/sdd/2026-08-15-resvg-byonk-base-integration/progress.md`
-(git-ignored). Also there: `f11-report.md`, `f15-report.md`, `font-licensing-research.md`,
-`f9-brief.md`, `f10-brief.md`, `f16-probe/`. **Ignore the two `f15-*.patch` files — neither
-holds what its name claims.** `git log` on `oetiker/resvg` is the truth for resvg work.
+| Commit | What |
+|---|---|
+| `f4b754e` | `RenderOpts::params` + `RenderOpts::device` — lets `ScreenStore::render` stand in for a device |
+| `7c039a0` | `GET /api/admin/devices/{key}/preview` + `PreviewCache` |
+| `2f03c1f` | The Home Assistant camera, the two view switches, the refresh button |
+| `fea552d` | Session 28's handover |
+| `ec0be6c` | The camera docstring, corrected against what the UI actually does |
 
 ---
 
 # What to do next
 
-1. **Merge PR #30.** It is ready: `make check` green locally and all 10 CI checks green on
-   `e31eedf`. Nothing is outstanding against it. See
-   `superpowers:finishing-a-development-branch` for the integration checklist.
-2. **Decide the 16-grey tone question** below — the one thing this session found and did
-   *not* resolve.
-3. Then pick from *Queued work* below. Nothing there blocks the merge.
+**1. Push the branch and open a PR.** Everything below is verified. Nothing is outstanding
+against the branch itself.
 
-## Before merging — one thing already done, one still open
+**2. Confirm the layout on HA 2026.8.2 before you trust the comparison.** The VM runs
+**2026.7.2**; 2026.8.2 is out. The entire camera-vs-image decision rests on one version's device
+page layout, and that layout is exactly the thing that already proved false once.
 
-- **`CHANGES.md`'s Unreleased section has now been read as a whole** (session 26, `e7fe213`).
-  Three problems were fixed: two entries contradicted each other about the generic font
-  families, one framed its change against a mid-cycle interim state instead of against 0.16.0,
-  and two entries were filed under *Fixed* that are a new feature and a breaking behaviour
-  change. **This item is closed** — do not redo it.
-- **Still open:** two overstated test names in `dither/mod.rs`. Not a merge blocker.
+**3. Carried over from session 27, still not done: delete the `RELEASE_TOKEN` secret and revoke
+the PAT.** `gh secret list` still shows it (created 2026-07-17). 0.18.0 released without it.
+
+**4. Decide whether `tests_ha` should run in CI.** `.github/workflows/ci.yml` runs hassfest and
+HACS validation but **not the 90 Python tests** — `make ha-check` is the only thing that does. A
+broken integration would pass CI today.
 
 ---
 
-# Session 26 — what landed
+# Session 29 — the preview, seen at last
 
-## Task 9 — the render sweep (`6346790`, plus the artifact)
+## The finding that matters
 
-**All 13 bundled screens render correctly.** Nothing overflows, collides or vanishes. Every
-one was opened and judged individually. The 7 deterministic screens are **byte-identical
-across two consecutive captures**, so the harness's det/nondet bucketing still holds. (The
-sweep grew to 19 captures across 5 panels later in the session — see below.)
+**Home Assistant does not render a camera full-width on the device page.** On 2026.7.2 it is a
+row in the *Sensors* card with a small thumbnail. That claim was the stated reason the preview
+was built as a `camera` and not an `image` entity, and it is wrong.
 
-**Owner artifact (every render embedded, plus the findings):**
-https://claude.ai/code/artifact/7e3a6c8d-763d-4985-8f12-69c7d7fdcc99
+It was not corrected by argument. An `image` entity variant was **built, deployed and compared
+side by side on the same device page**, and the camera still won — on different grounds:
 
-Three things changed about what a capture proves:
-
-- **The harness was hiding stderr.** `tools/capture-renders.sh` sent every render's stderr to
-  `/dev/null`, and since Task 4 that is the *only* channel the render-scale warning uses on
-  the CLI. It would have reported a clean sweep for a tree byonk was complaining about. Fixed:
-  per-screen `<name>.stderr` beside the PNG, any non-empty one quoted into `MANIFEST.txt`.
-- **`BYONK_BIN` now selects the binary.** `BYONK_BIN=./target/debug/byonk
-  ./tools/capture-renders.sh <dir>` captures the whole set in **seconds**. The default is
-  still `cargo run --release` so a fresh checkout works.
-- **The canary flipped, and it is an improvement.** An unresolved screen ref used to fall back
-  to DEFAULT and exit 0; `3a35030` made it hard-error. So **`exit=0` now genuinely means "this
-  screen rendered"**. The script's header claimed the opposite and was corrected. Keep both
-  branches — the manifest should *state* which behaviour was live, not assert one.
-
-**The positive control matters more than the thirteen clean screens.** A scratch screen
-authored at `400x240` was driven through the real `byonk render` first; it printed the scale
-warning to stderr. Only then is "0 warnings" distinguishable from a dead mechanism. It also
-fired on an **exact 2× zoom** — the case the plan's rule would have exempted, so the owner's
-"warn on any mismatch" decision is vindicated by a second independent check.
-
-**The planned pixel diff was dropped, with the owner's agreement — plan error #11.** Step 2
-wanted state 3 diffed against a `state2b` baseline captured at `d3d410d`. That baseline lived
-in `/tmp` and is gone. More importantly it would no longer isolate anything: eight commits
-since `d3d410d` change text rendering on *every* screen (generics repointed to the Source
-trio, hinting on by default, X11 fonts rebuilt, screens migrated off the hinting partial). The
-diff would report 7 of 7 changed with nothing attributable. **Do not resurrect it.**
-
-One thing that looks like a defect and is not: `gphoto` renders a near-blank
-*"Device Registered"* screen. That text is inside `screens/examples/gphoto/screen.svg` — it is
-gphoto's own "registered but not linked to Google Photos" state, not a fallback. It is also
-the one nondet screen that is byte-stable between runs, because that state carries no clock.
-Likewise `demo-font-ttf` omits the 32 px bold rows **by design**: `script.lua:58` drops
-entries that would not fit rather than overflowing.
-
-## Task 10 — `test_bitmap_font_render` (`58aa3e0`)
-
-The old test rendered X11Helv, wrote a PNG to a hardcoded `/tmp` path and **asserted nothing**.
-
-**The plan's proposed fix was vacuous** and its own Step 3 would have caught it: it wanted the
-same text at a strike size vs. a non-strike size, asserting the two differ — but two different
-`font-size` values differ whether or not any strike is consulted.
-
-The replacement holds text, size and face constant and toggles the one input `select_bitmap`
-actually reads, **`FontVariant::strikes`**, with two controls: `strikes = true` must reproduce
-the no-variant baseline byte for byte, and the same flag on an outline font (Outfit) must
-change nothing. **Sabotage-verified**: with `select_bitmap` forced to always return `true` the
-test fails on the intended assertion; the source was restored and diffed byte-identical
-against a backup.
-
-**This closes F15.** Byonk's own suite now fails if the resvg pin regresses.
-
-## The owner asked for the other panels — and that found two bugs (`b7a896f`, `70fbdef`, `bac40ee`)
-
-The sweep above covered `trmnl_og` twelve times and `trmnl_og_4clr` once. **The 16-grey and
-both 6-colour panels had never been rendered by anything.** Six pairings are now permanent in
-`tools/capture-config.yaml`, so a sweep is 19 captures across 5 panels. The four calibration
-screens build from `layout.width`/`layout.height`, which is what makes this cheap.
-
-**Bug 1 — `byonk render` ignored the device's panel size (`b7a896f`).** The first attempt
-returned *every* screen at 800×480, including those on 1872×1404 and 1200×1600 panels. The CLI
-sized renders only from `--device`, which has two values. The palette half of the chain was
-already wired, so an E1004 device rendered **in that panel's six colours at the wrong size**.
-Also hit all three 296×128 Xiao panels and any operator-defined panel. **The scale warning
-cannot catch this** — a screen built from `layout.*` builds itself to whatever it is told, so
-the SVG and the render agree and only the panel disagrees. Now in one pure function,
-`resolve_cli_display_spec`, with three tests, sabotage-verified.
-
-**Bug 2 — `calibration/grey` fell apart at 16 entries (`bac40ee`).** One row gave each
-`#RRGGBB` label a sixteenth of the width; labels smeared together, circles overlapped, the
-leftmost hung off the screen. Swatches now wrap past 8 entries (4×4 at 16, 3×3 at 9); labels
-and marks are sized from the *cell*, not the panel (30% of a cell is under one cap height,
-which clipped row 0); the block grows to fill the band a tall panel left empty; each swatch is
-labelled once instead of printing its hex twice. Rendered at 2, 4, 6, 9, 12, 16.
-`tests/calibration_grey_layout_test.rs` guards it by **reading back the geometry the script
-computed** — a smeared render is structurally valid, so pixels cannot tell you if text is
-legible. Sabotage-verified.
-
-> **`calibration/color` already handled 6 entries cleanly.** If another screen needs the same
-> treatment, that is the one to copy.
-
----
-
-# Open items the owner should decide
-
-## NEW — marking costs shadow detail at 16 grey levels
-
-On `calibration/tone` the marked (measured, mapped) half is supposed to show what gamut
-mapping buys. On the 4-grey panel the two halves are close. **On `trmnl_x` the marked half is
-markedly darker and loses shadow separation** the unmarked half keeps — visible in the hair and
-the left of the face. Capture: `calibration-tone-16grey`, and in the artifact below.
-
-There is a reading where this is honest: `trmnl_x`'s measured palette runs `#383838`–`#B8B8B0`,
-a narrow real range, so mapping into it *should* darken. **But the unmarked half dithers
-against that same measured palette**, so the gap comes from the mapping, not the inks — and on
-a panel with 16 levels, losing shadow separation is the opposite of what the extra levels are
-for. **Not diagnosed.** Decide which half is the better preview before touching the mapper.
-It only became visible because the harness had never rendered this panel.
-
-## Two TLS tests are flaky
-
-`lua_https_tests::{test_https_with_custom_ca_cert, test_https_with_client_certificate}`.
-They fail with `error sending request for url (https://127.0.0.1:…)`, the shape a 30 s timeout
-takes. Observed **once in three** full `make check` runs in session 24; sessions 25 and 26 were
-clean across three more runs, so it is now **once in six**.
-
-**The null hypothesis has still never been tested** — nobody has run the suite with `c850ea7`'s
-HTTP change reverted, so "my change caused it" is unproven.
-
-**The best explanation is now the laptop suspending, not CPU contention.** The owner pointed
-out (session 26) that the alarming load averages on this machine — 78 in session 25, 40 in
-session 26 — are an **artefact of the device sleeping**, not real contention. That reframes it
-usefully: a 30 s timeout is *wall clock*, so a suspend in the middle of a test blows it
-instantly no matter how idle the CPU is. That fits a failure that is rare, unreproducible, and
-confined to the two tests with the longest network waits. **Before spending anything on a fix,
-check whether the failing runs coincide with a sleep** (`pmset -g log | grep -i sleep`, or
-`log show --predicate 'eventMessage contains "Wake"'`).
-
-**If it needs fixing, do not loosen the test.** Cache the `reqwest::blocking::Client` instead
-of building one per request. The original panic was on *dropping* the client's runtime inside a
-tokio context, so a cached client never drops there — that removes the extra thread *and* the
-original bug, with less machinery than today. A single shared worker thread is the wrong
-answer: it would serialise every screen's HTTP on the server path.
-
----
-
-# Settled — do not reopen
-
-## Byonk warns when a screen renders at the wrong scale (Task 4)
-
-`SvgRenderer::scale_warning(svg_w, svg_h, spec) -> Option<String>`, next to `fit_transform` and
-fed the same numbers so the two cannot disagree. **Owner chose: warn on any size mismatch, no
-integer-zoom exemption.** Session 26's positive control re-confirmed it fires on an exact 2×.
-
-`rasterize_svg` fills a **`&mut Option<String>` out-parameter**. Each caller decides:
-`ScreenStore::render` → `RenderResult::log` as `[warn] …`; `main.rs` (`byonk render`) →
-**stderr**; `api/display.rs`, `api/dev.rs`, `render_to_raw_png` and `content_pipeline`'s
-internal call → `&mut None`.
-
-**Authoring warnings reach the author, not the operator.** `tracing::warn!` was rejected: it
-reaches the server log, not the screen's author. A new warning of this kind belongs in the
-script log sink and on the CLI's stderr — never only in `tracing`.
-
-## Why integer zoom is not a free pass — read from the pinned resvg, not reasoned
-
-Source: `~/.cargo/git/checkouts/resvg-b4a0ccb9ea26de88/2e76650/`
-
-- `crates/usvg/src/text/flatten.rs:283` — `let ppem = glyph.font_size();`, and the
-  `GlyphHinting::ppem` doc says it outright: *"Derived from the font size, so hinted glyphs
-  only land on whole pixels at an unscaled render."* The hinting ppem is the **user-unit** font
-  size; the render transform is not involved.
-- `crates/usvg/src/text/flatten.rs:68` — `snap_bitmap_glyph` returns early unless the scale is
-  1.0 within `1e-4`. **Bitmap faces lose strike snapping at any zoom**, integer included.
-- And the plain one: every dimension the author chose is displayed at the wrong size.
-
-## A variant CAN be aliased. The flag is document-level; the effect is not.
-
-`HintingSpec::to_usvg()` deliberately drops `aliased`, because aliasing reaches usvg through
-`Options::text_rendering`, which is document-level. **But `text-rendering` is an ordinary
-inheritable SVG property, so the element using a variant asks for it directly.**
-
-Measured, and pinned by `a_mono_variant_plus_optimize_speed_equals_the_document_level_aliased_mono`
-(sabotage-verified):
-
-| comparison | result |
-|---|---|
-| `docsmooth` == `varsmooth` | identical — **control**: loading a 2nd copy of the font is not itself a difference |
-| `docmono` == `varmono` | identical — a variant honours `target = "mono"` |
-| `docmonoalias` == `varmonoalias` | **identical** — variant + `text-rendering="optimizeSpeed"` reaches full mono+aliased |
-| `varmonoalias` != `varsmoothalias` | differ — aliased-without-mono is the known-bad state |
-
-**This is the point of variants**: part of a screen can be made genuinely 1-bit crisp, on a
-grey panel as well as a black-and-white one. Always pair `optimizeSpeed` with mono hinting.
-
-## No bundled font carries a hinting program
-
-Measured with fontTools across **every glyph**, not just `fpgm`/`prep`:
-
-| font | glyphs | hinted glyphs | instruction bytes |
-|---|---|---|---|
-| Outfit, Source Sans 3, Source Serif 4, Source Code Pro | 414–2478 | **0** | 0 |
-| Terminus TTF | 1359 | 1 | 46 |
-| all X11 faces | 0 outlines | 0 | 0 |
-
-Consequences, all confirmed by render: **`interpreter` is effectively unhinted**,
-**`auto` ≡ `auto_fallback`** (byonk's `resolve_auto_fallback` doing its job), and `interpreter`
-is *visibly worse* when aliased.
-
-> The engine axis is **not** dead — that earlier call was wrong, an artefact of a demo bug. It
-> is the axis that *shows* these facts, and `auto ≡ auto_fallback` is a live check that byonk's
-> auto-fallback fix still works.
-
-## Smooth hinting is real but cannot look dramatic
-
-Document `smooth` vs document `off` differ on 35–72% of the ink — but almost entirely as
-**grey-level shifts on anti-aliased edges**, not changed coverage. Only aliasing makes hinting
-visually obvious. `hinting = false` on a variant is byte-identical to document-level
-`font_hinting = false`, so "off" is genuinely off.
-
----
-
-# Carried forward — still binding
-
-## Owner decisions
-
-1. **Bundle the Source trio** as generic-family fallbacks: `sans-serif` → Source Sans 3,
-   `serif` → Source Serif 4, `monospace` → Source Code Pro. **Outfit stays** as the house sans.
-2. **No fallback magic.** Designers choose bitmap faces explicitly.
-3. **Fonts need licence files** (table below).
-4. **Bitmap fonts should have no outlines if possible** — delivered by F16.
-5. **F20: status icons own the header corner; the timestamp lives in the footer.**
-6. **byonk intervenes only when Lua crashes.** The two fetching examples call `error()` when
-   they cannot carry on, which puts the message on the device's error screen
-   (`display.rs:1032`) and exits the CLI non-zero.
-7. **Authoring warnings reach the author, not the operator** (see *Settled*).
-
-## The Lua surface, as shipped
-
-```lua
-font_hinting = false            -- hinting off entirely
-font_hinting = {
-  engine = "auto",              -- interpreter | auto | auto_fallback
-  target = "mono",              -- shorthand for { mode = "mono" }
-  -- target = { mode = "mono", aliased = false },
-  variants = {
-    ["Crisp Body"] = { font = "Outfit", hinting = { target = "mono" } },
-  },
-}
-```
-
-`mode` is the discriminator: mono's extra knob is `aliased`, smooth's are `symmetric` and
-`preserve_linear_metrics` (the real field is `symmetric_rendering`). A variant also takes
-`strikes = true|false`, which is what `select_bitmap` reads — **that knob is now the basis of
-the bitmap regression test, so do not remove it.** A directive that names **only** variants
-keeps the panel's adaptive default — pinned by
-`naming_only_variants_keeps_the_panel_s_adaptive_default`.
-
-**F1 constraint, binding on anything touching hinting:** aliasing is per-element and
-inheritable; hinting is per-face. An element choosing smooth/no hinting on a BW panel inherits
-`optimizeSpeed` and lands in the known-bad aliased-without-mono state (tiny-skia has no dropout
-control). Escape hatch: **`text-rendering: optimizeLegibility`** — restores AA *and keeps
-hinting*. **Trap: `geometricPrecision` restores AA but disables hinting.** Byonk warns, naming
-the offending variants, checked against `grey_count = 2`.
-
-## Naming rule for variant aliases
-
-**Name them for their purpose, never `<RealFamily> <TechnicalTerm>`.** `"Outfit Mono"` reads as
-a monospaced Outfit; use `["Crisp Body"] = { font = "Outfit", … }`. Byonk enforces the "not a
-real family" half at parse time. **Always name the fallback in the document:**
-`font-family="'Crisp Body', Outfit"` — and see the CSS trap in *Lessons*.
-
-## F15 / F16 — the bitmap work, done and live
-
-- **The fonts and the resvg pin must move together.** If the pin is rolled back, roll the fonts
-  back with it. **Byonk now has a test that fails when this happens** (Task 10).
-- **Terminus is NOT buggy. Terminus @14 and @18 render 1 px/glyph wider — that is correct.**
-  Raised twice, settled twice.
-- **Merge trap:** `byonk-base` has host hooks upstream does not (`FontResolver::select_bitmap`,
-  `select_font`). A clean *textual* merge is **not** evidence the semantics survived. Diff the
-  merge result against the pre-merge tree.
-- **A bitmap face only renders as a bitmap at a size it has a strike for**, and nothing warns
-  you. `fonts/FONTS.md` lists the sizes per family.
-
-## Falsified — do not chase again
-
-- **X11 vertical-metric overflow**: real malformation, **not** a cause of anything.
-- **Ink overhang in the oblique faces**: slanted bitmap faces overhang normally.
-- **F10's two hazards, both FALSE**: the fvar `wght` default does not leak, and Source Serif 4
-  is not pinned at `opsz` 20.
-- **F9 / `AutoFallback`:** upstream will not change it (googlefonts/fontations#1151, closed).
-  byonk sets `Auto` explicitly and `resolve_auto_fallback` corrects the interpreter choice —
-  keep both. Do not PR it.
-- **`font-weight` does not disable hinting.** Measured at weight 400 and 500, both hinted.
-
-## Font licensing — researched, awaiting F14
-
-`.superpowers/sdd/…/font-licensing-research.md`. Redistribution and modification are permitted
-for everything in the tree; what is missing is **notices** — `fonts/` has no licence file.
-
-| Family | Licence | Obligation |
+| | Camera | Image entity |
 |---|---|---|
-| Outfit, Terminus (TTF), Source trio | OFL 1.1 | ship OFL text |
-| X11Helv | Adobe + DEC, MIT/X11-style | notice in copies **and documentation** |
-| X11LuSans, X11LuType | **Lucida** (Bigelow & Holmes) | verbatim notice in user docs **and code comments** |
-| X11Term | **DEC 1991 *and* Bitstream** | both notices, in one file |
-| X11Misc5x–10x | public domain | none |
-| **X11Misc12x**, **X11Misc8x @16** | **Sony Corp. 1987/88** | its own notice |
+| Device page | Row in *Sensors*, **square** thumbnail | Row in *Sensors*, **circle-cropped** thumbnail — an 800×480 screen loses its corners |
+| More-info dialog | Fills it edge to edge, **~990 px** | Inset, plus a header row, **~775 px** |
+| State | `Idle` | a relative timestamp — genuinely more useful |
+| Refresh while open | automatic, every 10 s | only when `image_last_updated` moves |
+| Requirement | `PyTurboJPEG` | none |
 
-- **`X11Misc*` is a cell-width grouping, not a licence grouping.** Notices must be per source
-  file.
-- **Do not rename `X11LuSans`/`X11LuType` toward "Lucida"** — the trademark licence covers
-  unmodified fonts only, and byonk modified them.
+The experiment was then deleted. `camera.py`'s docstring now records the measured reasons
+(`ec0be6c`). **If you ever revisit this, `ImageEntity` has a trap worth knowing: its `state` is
+`None` until `image_last_updated` is set, so an image entity that never stamps it shows nothing
+at all, with no error anywhere.**
+
+## What else the browser confirmed
+
+| Question session 28 could not answer | Answer |
+|---|---|
+| Does the `camera` component set up cleanly on HAOS? | **Yes.** No errors; the on-demand `PyTurboJPEG` install path is fine |
+| Is the PNG served correctly? | **Yes** — the `content_type` fix holds; the picture renders |
+| Does the dither texture survive being scaled? | **Yes**, at dialog size it is completely legible. That worry was unfounded |
+| Does a toggle change the picture? | **Yes** — *Preview dithering* off gives the full-colour pre-dither render, visibly and promptly |
+| Does *Preview measured colors* work? | **Unproven.** No visible change on `DEFAULT`, which is a grey panel with no calibration — so measured and spec palettes are identical there. Not evidence of a bug; not evidence of correctness either. **To test it you need a device on a panel with a calibration** |
+
+## A real bug found on the way, not fixed
+
+`custom_components/byonk/addon.py:29` — `_async_find_addon_item` returns the **first** store item
+whose slug ends in `_byonk`, and the config entry then stores that slug forever. With two byonk
+add-ons installed (the published `<hash>_byonk` and a from-source `local_byonk`), **which one the
+integration adopts is down to the order the Supervisor happens to list them.**
+
+This is not only a test-VM curiosity: reauth re-reads the *stored* slug and never re-discovers
+(`config_flow.py:128`), so an entry bound to the wrong add-on **cannot heal itself** — it fails
+with `401`, tries to restart the wrong add-on, and hits "port 3000 is already in use". The only
+cure is deleting and re-adding the entry, which also orphans every device entry, because those
+store the hub's `entry_id` (`__init__.py:62`).
+
+Left unfixed deliberately — it needs a decision about what "the byonk add-on" means when there
+are two.
+
+## State of the test VM, which is now different
+
+| | |
+|---|---|
+| byonk | **`local_byonk` only**, built from this branch's source, running |
+| Published add-on | **uninstalled** (owner approved) — it was holding port 3000 and blocking the from-source build |
+| Config entries | hub + `Byonk Default`, both freshly re-added and healthy |
+| `TRMNL 94:A9:90:8C:6D:18` | **gone.** That device lived in the published add-on's config; the new server reports one device |
+| HA core | 2026.7.2 |
+
+The add-on still reports version `0.17.1-src3` — that string is the VM's add-on manifest, not
+the code, which is current. Chrome on the Mac host holds a live HA session as *Byonk Admin*, so
+the UI can be driven without credentials. **The HA owner password is not written down anywhere
+in this repo** — `byonk`/`byonk` in `tools/ha-vm/README.md` is the *Samba* add-on's.
+
+---
+
+# The feature itself, as built in session 28
+
+## The byonk side
+
+`GET /api/admin/devices/{key}/preview` → `image/png`, admin-token guarded.
+
+| Query | Effect |
+|---|---|
+| *(none)* | The dithered image the panel receives |
+| `?force` | Re-render regardless of the cache |
+| `?dither=off` | The pre-dither, full-colour rasterization — no palette restriction |
+| `?measured=off` | Spec colours byonk sends to the panel, not a calibration's measured ones |
+
+`off`/`0`/`false`/`no` (any case) mean no; **anything else means yes**. `404` when the key has no
+device config. A **failed render returns 200 with the error image the panel itself would show**;
+a broken-image icon would say only that something went wrong, not what. Responses carry
+`Cache-Control: no-store` and **`X-Byonk-Preview: hit|miss`**, which is what makes the cache
+observable from a test and from a running add-on.
+
+### Why it goes through `ScreenStore::render` and not `handle_display`
+
+`handle_display` is built around firmware headers — `Colors`, `Board`, `Measured-Colors`,
+`Width`/`Height` — that a preview request does not have and **must not invent**. Instead
+`ScreenStore::render` gained the two things it lacked:
+
+- **`RenderOpts::params`** — the device's configured Lua params.
+- **`RenderOpts::device: Option<DevicePreview>`** — the registry identity *and* the device-config
+  layer.
+
+`DevicePreview` carries both halves deliberately:
+
+- **Identity** (`mac`, `firmware_version`, `battery_voltage`, `rssi`) passes through as-is. A
+  device the registry has never heard from reports `None`, which reaches Lua as a missing key. It
+  does **not** fall back to the authoring placeholders — showing 4.2 V for a device that has never
+  reported its battery is a fabricated reading, not a default.
+- **Config layer** (`colors`, `dither`, `tuning`, `refresh`) occupies the *device-config* slots of
+  `resolve_ctx_palette` / `resolve_render_params` / `resolve_effective_tuning`.
+
+> **Do not "simplify" this by passing a device's configured dither as `RenderOpts::dither`.**
+> That is the *override* slot, which sits **above** the script. The preview would then dither
+> differently from the panel for any screen that picks its own algorithm. Pinned by
+> `script_dither_beats_the_device_config` and its contrast case in
+> `tests/screen_store_render_params_test.rs`.
+
+One subtlety worth re-reading before touching `ScreenStore::render`: `resolve_render_params` has
+only two dither slots for three layers, and resolves them as
+`script_dither.or(device_config_dither)`. The override rides in the device-config slot **because
+an explicit override has already blanked `effective_script_dither` above it**. There is a comment
+saying so at the call site.
+
+`run_script_direct` became YAML-native (matching `run_resolved` and `DeviceConfig::params`); the
+JSON→YAML conversion moved out to `content_pipeline::json_params_to_yaml` at the one caller that
+actually holds JSON, `/dev/render`'s query params.
+
+### `PreviewCache`
+
+`src/services/preview_cache.rs`. A rendered PNG is re-served until **either**:
+
+1. **The fingerprint moves** — screen ref, params, panel, dither, colours, tuning, refresh, model,
+   geometry. Hashed through a **`BTreeMap`**, because `DeviceConfig::params` is a `HashMap` and a
+   fingerprint that varies per process is a cache that never hits.
+2. **It ages past the device's effective refresh rate**, floored at **`MIN_TTL_SECS = 30`**.
+
+**Nothing runs on a timer.** Entries are examined only when a request arrives, so a preview
+nobody watches costs nothing at all. That property is the whole design; do not add a background
+refresh.
+
+**The view options are in the cache *key*, not the fingerprint** — `"{key}#{dithered}{measured}"`.
+Folding them into the fingerprint would leave one slot per device and re-render on every toggle
+flip. Capacity is 64 because keys are per device *and* per variant.
+
+`reload_config` calls `PreviewCache::clear()`. A device's fingerprint covers its own config but
+not a **panel profile it merely points at**.
+
+**Known gap, accepted:** the fingerprint cannot see a *screen's source files*. Editing a screen
+over MCP does not invalidate the preview; the TTL bounds it and the refresh button ends it
+immediately. Documented in `docs/src/api/admin-api.md`.
+
+## The Home Assistant side
+
+`custom_components/byonk/camera.py`, plus switches in `switch.py` and a button in `button.py`.
+
+**Why it costs nothing idle.** `Camera._attr_should_poll = False` — Home Assistant never polls a
+camera. Frames are pulled only while a browser holds the picture open. Verified by reading
+`components/camera/__init__.py:442`, not assumed.
+
+**`_attr_frame_interval = 10.0`.** Without `CameraEntityFeature.STREAM` the frontend opens the
+MJPEG still-stream, and `async_get_still_stream` calls `async_camera_image()` once per
+`frame_interval` — whose default is `MIN_STREAM_INTERVAL = 0.5` **seconds**, meant for video.
+
+**A bug found while building this, fixed:** `Camera.__init__` sets `content_type = "image/jpeg"`.
+Left at that, the PNG is served mislabelled **and** `_async_get_image` — which picks the scaling
+path *purely by content type* — hands it to `scale_jpeg_camera_image`, i.e. libturbojpeg, which
+cannot read a PNG. Pinned by `test_the_camera_reports_png`.
+
+**The two toggles live in the device config entry's `options`, never in byonk.** Writing them to
+byonk's device config would alter the real screen in order to change a picture of it.
+`test_turning_off_dithering_asks_for_the_undithered_render` asserts `update_device` is never
+called. No options-update listener is registered, so `async_update_entry` does **not** reload the
+entry — the camera reads the current value on its next frame.
+
+**A failed fetch returns `None`, never raises.** An exception escaping `async_camera_image` marks
+the entity unavailable and takes the device page's screen/dither/panel controls down with it.
+Pinned by `test_a_failed_fetch_leaves_the_camera_alive`.
+
+**The refresh button forces the variant on display**, not byonk's default one.
+
+`PyTurboJPEG==1.8.0` is in `requirements_test.txt`: `homeassistant.components.camera` imports it
+at module load, so without it the test module will not even collect.
+
+## One reading the owner has not confirmed
+
+The owner said **"color mapping"**. It was implemented as byonk's **measured-vs-spec** mapping
+(`use_actual`). The other candidate reading, the palette restriction itself, is already covered by
+the dithering toggle. **It was flagged and they have not responded.** If they say otherwise,
+`?measured` is the knob to change. Note this toggle is also the one still unproven in a browser.
+
+---
+
+# Verification state
+
+| Suite | Result |
+|---|---|
+| `cargo test --workspace` | **1172 passed, 0 failed, 52 ignored** across 40 binaries, on this branch's code |
+| `tests/admin_preview_test.rs` | 15 passed (auth, 404, PNG, no-store, cache hit/miss, force, config change, error image, both toggles, spelling variants, per-variant cache slots) |
+| `src/services/preview_cache.rs` unit tests | 9 passed (time is injected — nothing sleeps) |
+| `tests/screen_store_render_params_test.rs` | 10 passed |
+| `tests_ha` | **90 passed**. `ruff` clean |
+| `cargo clippy --all-targets --all-features -- -D warnings` | clean |
+| **In a browser, on the VM** | **Done.** See *Session 29* |
+
+---
+
+# The release process, as it now works
+
+Two workflows. **Nothing pushes to `main`, so no PAT is involved anywhere.** `GITHUB_TOKEN`
+cannot push to protected `main`, but it can push an ordinary branch, open a PR, and push a
+**tag** — the ruleset targets branches, and tags are a separate ref namespace.
+
+| Workflow | Trigger | Does |
+|---|---|---|
+| `create-release-pr.yml` | `workflow_dispatch` + bugfix/feature/major | waits for CI to be green on the exact commit, computes the version from tags, bumps everything, opens a `release/vX.Y.Z` PR. **Nothing is tagged or published** |
+| `release-publisher.yml` | `push` to `main` touching `Cargo.toml` | tags, builds 5 binaries, builds and pushes the container, publishes the GitHub release, deploys the docs. **No `workflow_dispatch` by design** |
+
+**To cut a release:** Actions → *Create release PR* → pick the type → review the PR it opens →
+merge it. **0.18.0 was the first full end-to-end run and it worked.**
+
+## What the release PR bumps — all in one commit, all together
+
+| File | By |
+|---|---|
+| `Cargo.toml` + **`Cargo.lock`** | `cargo update --workspace`, then verified |
+| `CHANGES.md` | rolls `Unreleased` into `## X.Y.Z - date` |
+| `custom_components/byonk/manifest.json` | `tools/release/bump-integration-version.sh` |
+| `homeassistant/byonk/config.yaml` + its `CHANGELOG.md` | `tools/release/bump-addon-version.sh` |
+| `screens/**/meta.yaml` **and** `docs/src/**/*.md` | `tools/release/bump-screen-engine.sh` |
+
+All three bump scripts have test scripts run by CI's **`Release Scripts`** job.
+
+## Things about it you need to know
+
+- **The add-on version *is* the ghcr image tag.** For the ~15–20 minutes between merging and the
+  publisher pushing the image, the add-on store advertises a version that does not exist yet. A
+  user refreshing in that window gets a pull failure and succeeds on a retry. **Owner decision,
+  deliberate**, in exchange for one PR per release.
+- **The publisher's guard asks whether the GitHub *release* exists, not the tag.** As built, a
+  failed publisher run is **re-runnable from the Actions UI**.
+- **A non-404 failure when asking about the release stops the run.**
+- **A cancelled release leaves its branch behind.** `create-release-pr.yml` clears a stale
+  `release/v*` branch **unless it still has an open PR**.
+- **The publisher fires on any push touching `Cargo.toml`** — a dependabot PR will start it.
+- Both new guards were exercised for real on 2026-08-18 and both worked — but **each has run
+  exactly once**.
+
+---
+
+# Changelog discipline
+
+`CHANGES.md`'s `Unreleased` section has session 28's entry under **New**. Two standing rules:
+
+- **User-facing only.** CI, tooling, version automation and dev process do not belong there.
+- **Read the section as a set, not as a stream of appends.** Five sessions of appending once
+  produced two entries that contradicted each other and two under the wrong heading.
 
 ---
 
@@ -364,146 +305,123 @@ for everything in the tree; what is missing is **notices** — `fonts/` has no l
 
 | ID | What |
 |---|---|
-| — | **Merge PR #30.** The only thing actually pending. |
-| F13 | Extend `screens/examples/demo/font/{ttf,bitmap,hinting}/` to cover Source. |
-| F14 | Licence + notice files per the table above. **`FONTS.md`'s "X11LuType is proportional" is wrong — it is monospaced.** |
-| F22 | Cosmetic: the WiFi glyph reads as a caret at 8×12. Redraw or drop it. |
-| F23 | The two fetching examples fail in a sandbox with `Cannot drop a runtime…` *from the fetch error path* — `c850ea7` covers the request itself, but check whether any other blocking call in `lua_runtime.rs` shares the hazard. |
-| F24 | `/dev/render` shows the author nothing but an image — it passes `None` for the script log sink, so neither their `log_*` output nor byonk's authoring warnings reach the browser preview. Worth deciding whether that is intended. |
-| Plan Task 11 | The hinted-font-trio **decision** (specimens + recommendation), never part of the 10. See the plan file from line 1430. Bundling whatever is chosen is separate work. |
-
-**F15 is CLOSED** (Task 10 gave it the byonk-side regression test it was owed).
+| — | **Push the branch + open a PR.** The only thing actually pending |
+| — | **Check the device page on HA 2026.8.2** before trusting the camera-vs-image comparison |
+| — | **Delete `RELEASE_TOKEN` and revoke the PAT** (carried from session 27) |
+| — | Decide whether `tests_ha` should run in CI |
+| — | `addon.py:29` picks the first `*_byonk` add-on; decide what to do when there are two |
+| — | Prove *Preview measured colors* on a panel that has a calibration |
+| — | Two stale dependabot PRs, #25 and #32 |
+| F13 | Extend `screens/examples/demo/font/{ttf,bitmap,hinting}/` to cover Source |
+| F14 | Licence + notice files. **`FONTS.md`'s "X11LuType is proportional" is wrong — it is monospaced** |
+| F22 | Cosmetic: the WiFi glyph reads as a caret at 8×12. Redraw or drop it |
+| F23 | The two fetching examples fail in a sandbox with `Cannot drop a runtime…` *from the fetch error path*; check whether any other blocking call in `lua_runtime.rs` shares the hazard |
+| F24 | `/dev/render` shows the author nothing but an image — it passes `None` for the script log sink, so neither their `log_*` output nor byonk's authoring warnings reach the browser preview |
+| Plan Task 11 | The hinted-font-trio **decision** (specimens + recommendation) |
 
 ---
 
-# Open questions for the owner
+# Open items the owner should decide
 
-1. **`grey_count <= 2` may be the wrong rule.** On the 4-grey panel at 10–12 px mono+aliased
-   beats smooth, but at 14 px smooth wins — the fix may be a **size term**, not a wider grey
-   threshold. *Always name panels by config key:* the **4-colour** `trmnl_og_4clr` already
-   counts as `grey_count = 2`; it is **4-grey** `trmnl_og` that is in question, and they behave
-   oppositely. `FontConfig::adaptive_default` is the single place the rule lives.
-2. **One genuinely inert knob remains:** `HintingMode::Light` is byte-identical to `Normal`.
+## Marking costs shadow detail at 16 grey levels
+
+On `calibration/tone` the marked (measured, mapped) half is supposed to show what gamut mapping
+buys. On the 4-grey panel the two halves are close. **On `trmnl_x` the marked half is markedly
+darker and loses shadow separation** the unmarked half keeps. `trmnl_x`'s measured palette runs
+`#383838`–`#B8B8B0`, so mapping into it *should* darken — **but the unmarked half dithers against
+that same measured palette**, so the gap comes from the mapping, not the inks. **Not diagnosed.**
+Decide which half is the better preview before touching the mapper.
+
+## Two TLS tests are flaky
+
+`lua_https_tests::{test_https_with_custom_ca_cert, test_https_with_client_certificate}` fail with
+`error sending request for url (https://127.0.0.1:…)`, the shape a 30 s timeout takes. Roughly
+**once in six** full runs.
+
+**The best explanation is the laptop suspending, not CPU contention.** A 30 s timeout is *wall
+clock*. **Before spending anything on a fix, check whether a failing run coincides with a sleep**
+(`pmset -g log | grep -i sleep`). The null hypothesis — reverting `c850ea7`'s HTTP change — has
+still never been tested.
+
+**If it needs fixing, do not loosen the test.** Cache the `reqwest::blocking::Client` instead of
+building one per request. A single shared worker thread is the wrong answer: it would serialise
+every screen's HTTP on the server path.
+
+## Three carried-forward questions
+
+1. **`grey_count <= 2` may be the wrong rule.** On the 4-grey panel at 10–12 px mono+aliased beats
+   smooth, but at 14 px smooth wins — the fix may be a **size term**. *Always name panels by config
+   key:* the **4-colour** `trmnl_og_4clr` already counts as `grey_count = 2`; it is **4-grey**
+   `trmnl_og` that is in question, and they behave oppositely. `FontConfig::adaptive_default` is
+   the single place the rule lives.
+2. **`HintingMode::Light` is byte-identical to `Normal`** — one genuinely inert knob.
 3. `for_error_diffusion()` is applied to **every** dither (`api/builder.rs`), so HyAB and its
    `kchroma = 10` tuning are not on the crate's dithering path at all.
 
-**Owner-facing artifacts** (URLs outlive their ephemeral sources; to update, republish
-**passing the existing URL**, or a second artifact is created):
-
-| What | URL |
-|---|---|
-| **Render sweep — 19 captures across 5 panels, the two bugs it found, Task 10** (session 26) | https://claude.ai/code/artifact/7e3a6c8d-763d-4985-8f12-69c7d7fdcc99 |
-| Task 8 + the three demo bugs + the fetch fix (session 24) | https://claude.ai/code/artifact/dede3454-3192-47d6-8e45-97a71440a08f |
-| X11 Bitmap Specimens — all 26 rebuilt faces, F16 before/after, the pitch table (session 22) | https://claude.ai/code/artifact/ef06c1db-b5ba-467c-8cc3-3a7069e00488 |
-| Bitmap vs outline; F15 before/after; F16 diagnosis; F17 (session 20) | https://claude.ai/code/artifact/8fe47446-49b6-4256-9db6-429aa3b8bfb6 |
-| Type trials: specimens, two bugs, the data (session 19) | https://claude.ai/code/artifact/f7ef39be-1a9d-4c97-bd95-d9b3422a515e |
-
 ---
 
-# Lessons — these keep paying off
+# Settled — do not reopen
 
-- **"No warnings" is not coverage until the mechanism has been shown to fire.** Thirteen clean
-  screens prove nothing on their own — a warning that is never wired up produces the same
-  output. Build a positive control that must trip it. Session 26 did, and only then was the
-  sweep worth reporting.
-- **Coverage that is wide in one dimension can be nil in another.** The harness rendered 13
-  screens and looked thorough — on one of five panels. Both bugs session 26 found lived in the
-  dimension nobody was varying. Ask what the sweep holds *constant*, not just what it covers.
-- **A parameter that is only ever passed one value is untested, not correct.** `--device` had
-  two settings and everything used the default, so nothing noticed it was the *only* input to
-  a decision the panel should have owned. The palette half of the same chain was already right,
-  which made the wrong half look right too.
-- **A tool that hides a channel makes every future run lie.** The capture harness discarded
-  stderr, which is the only place the CLI puts authoring warnings. Whenever a new output
-  channel is added, **check what the existing harnesses do with it** — they were written before
-  it existed.
-- **Ask what a check would prove *today*, not what it proved when it was written.** The state2b
-  diff was a good idea in Task 3's world and worthless in Task 9's, because eight intervening
-  commits made everything change for known reasons. A stale comparison that reports "all
-  changed" reads like coverage.
-- **Demonstrate the check fails when the thing is broken.** A test written *after* the
-  implementation has never been shown to fail, so sabotage stands in for the RED step. Sessions
-  25 and 26 each sabotaged; back the file up first and diff after restoring.
-- **A rule can be right about the mechanism and still wrong about the decision.** The plan's
-  integer-zoom exemption was *correct* that integer zoom keeps a hinted outline on whole
-  pixels — and still wrong, because that was never the main cost. **Check that a rule's stated
-  justification actually covers the case that motivated the rule.**
-- **The plan's code is not evidence. Eleven of eleven tasks touched were wrong.** Verify every
-  symbol.
-- **A default nothing asks for is a default that goes missing.** Resolve such defaults at the
-  single choke point. Five callers each having to remember `spawn_blocking` is how the CLI
-  forgot; the same shape produced the scale warning's out-param design.
-- **Always carry a control through a measurement.** Cells that *must* be identical differ by
-  244–284 px purely from position, because error diffusion depends on position. **Only
-  grey-free (aliased) content is exactly comparable.**
-- **Two things that look the same are not necessarily the same thing.** "Why do these cells
-  look alike" turned out to be three independent causes stacked on each other.
-- **A CSS rule beats a presentation attribute in SVG.** `text { font-family: … }` silently
-  overrides every `font-family="…"` attribute on matching elements, and the text still renders
-  — in the wrong face. Third font-family failure this initiative, after F17's unquoted
-  parentheses and the `Source Sans 3` digit-suffix trap.
-- **Put text on whole-pixel positions, not just whole-pixel sizes.** A fractional baseline
-  slides the fitted glyph straight back off the grid.
-- **Fix the docs when they are the bug.** `docs/src/tutorial/svg-templates.md` has been the bug
-  **twice** in this initiative. It is embedded and served to LLM authors over MCP, so a stale
-  line there teaches the reader least able to check.
-- **Read a changelog section as a set, not as a stream of appends.** Five sessions of appending
-  produced two entries that contradicted each other and two filed under the wrong heading. The
-  reader sees it all at once even though it was never written that way.
-- **Assert on the geometry, not the pixels, when the question is "is this legible".** A screen
-  whose labels overlap into a smear renders perfectly validly; no pixel comparison catches it.
-  `RenderResult::data` hands back exactly what the script computed and the SVG places things
-  with, which makes screen layout testable — see `tests/calibration_grey_layout_test.rs`.
-- **A raw string ends at the first `"#`, and hex colours are full of them.** `r#"…"#` around
-  YAML containing `colors: "#000000,…"` fails to parse in a way that reads as nonsense
-  (`expected `;`, found `000000``). Use `r##"…"##`. Third time on this branch.
-- **A sleeping laptop looks exactly like a hung build.** `ps -eo pid,etime,command` reports
-  *wall* time, which keeps counting through sleep. Check `uptime` too — this machine hit **load
-  average 78** and a normally-2-minute compile took over 20. An IDE `cargo check --workspace`
-  also holds the build lock and will stall your `cargo test` with "Blocking waiting for file
-  lock".
-- **`cargo check --lib --tests` is the fast way to see a signature-change RED.**
-- **Verify a background job is actually running before reporting on it.** The log's mtime plus
-  `ps` settles it; a `pgrep` pattern that misses `cargo-clippy` does not.
-- **A screen that renders is not a screen that rendered what you asked for.** Carry a canary
-  string *in the render itself*.
-- **`test -s` both files before believing a `cmp`.** `cmp -s a b` against a non-existent `b`
-  exits non-zero, exactly like "the files differ".
-- **A flattering test string hides font defects.** `illiIL1 xXHv`, not `Render jpq 0123`.
-- **When the data is right and the render is still wrong, suspect the consumer's guards.**
-- **Work left by an agent that died is not verified work.**
-- **Never run `make check` while the tree is being edited.** Also `make check > log; echo
-  "EXIT=$?"` reports the *echo's* status — use `|| echo FAILED >> log`. Same trap with any
-  pipe: `cmd | tail; echo $?` reports `tail`. **This bites in background jobs too**: a
-  backgrounded `cargo test … | tail` reports exit 0 while the test text says FAILED, and it
-  emits nothing until it finishes, so there is no interim progress to read.
-- **A saved artifact is not evidence that it holds what its name says.**
+- **The preview is a camera, and the reason is the dialog size and the square thumbnail** — not
+  full-width rendering, which does not happen. Settled by building both and looking.
+- **Warn on any render-scale mismatch, no integer-zoom exemption.** Owner decision, re-confirmed
+  by a positive control that fires on an exact 2×.
+- **Authoring warnings reach the author, not the operator.** `tracing::warn!` reaches the server
+  log, not the screen's author.
+- **A variant CAN be aliased.** `HintingSpec::to_usvg()` drops `aliased` because it is
+  document-level, but `text-rendering` is an inheritable SVG property. Always pair `optimizeSpeed`
+  with mono hinting.
+- **No bundled font carries a hinting program** (measured across every glyph). So `interpreter` is
+  effectively unhinted and `auto ≡ auto_fallback`. The engine axis is **not** dead — it is what
+  *shows* these facts.
+- **Terminus is NOT buggy.** Terminus @14 and @18 render 1 px/glyph wider — that is correct.
+  Raised twice, settled twice.
+- **The fonts and the resvg pin must move together.** `test_bitmap_font_render` fails if the pin
+  regresses.
+- **Falsified, do not chase again:** X11 vertical-metric overflow (real malformation, causes
+  nothing); ink overhang in oblique faces (normal); the fvar `wght` default does not leak; Source
+  Serif 4 is not pinned at `opsz` 20; upstream will not change `AutoFallback`
+  (googlefonts/fontations#1151, closed); `font-weight` does not disable hinting.
 
 ---
 
 # Build / verify
 
-- `make check` = fmt + clippy + full suite, **~15 min — background it**; it runs `cargo fmt`,
-  not `--check`, so it rewrites files. **Green state = 1138 passed, 0 failed.**
-- **Changing `Cargo.lock`'s resvg pin forces a full rebuild of usvg/resvg — 10+ min.**
-- **Editing an embedded asset forces a rebuild.** `EmbeddedDocs` embeds exactly three files
-  (`api/lua-api.md`, `tutorial/svg-templates.md`, `guide/authoring.md`); `EmbeddedBase` embeds
-  `byonk-base/`; `EmbeddedScreens`/`EmbeddedExamples` embed `screens/{builtin,examples}/`.
-  Editing any of those mid-`make check` corrupts the run. Other `docs/src/` pages are free.
-- **In a debug build rust-embed reads from disk at runtime**, so screen / `byonk-base` edits
-  take effect with **no rebuild**. This makes render-probe iteration fast — but "no change" is
-  then indistinguishable from a stale binary, so **prove disk-backing with a visible sabotage
-  first**.
+- `make check` = fmt + clippy + full suite, **~15–40 min on this machine — background it**; it
+  runs `cargo fmt`, not `--check`, so it rewrites files.
+- `make ha-check` = `ruff` + `pytest tests_ha`. Needs `make ha-setup` once. **Instant** (~2 s).
+- **`cargo test` links each test binary serially and slowly here** (~1–2 min per binary, 40
+  binaries). `cargo test --test <name>` for a single file is the fast loop.
+- **Never `git add -A`.** `examples/` is an untracked near-copy of `screens/examples/`. Add by
+  explicit path and check `git diff --cached` before committing.
+- **Never run `make check` while the tree is being edited.** Also `make check > log; echo
+  "EXIT=$?"` reports the *echo's* status. Same trap with any pipe: `cmd | tail; echo $?` reports
+  `tail`. **This bites in background jobs too.**
+- **A sleeping laptop looks exactly like a hung build.** `ps -eo pid,etime,command` reports *wall*
+  time. An IDE `cargo check --workspace` also holds the build lock.
+- **Editing an embedded asset forces a rebuild** (`api/lua-api.md`, `tutorial/svg-templates.md`,
+  `guide/authoring.md`, `byonk-base/`, `screens/{builtin,examples}/`).
+- **In a debug build rust-embed reads from disk at runtime**, so screen edits take effect with no
+  rebuild — but "no change" is then indistinguishable from a stale binary, so **prove disk-backing
+  with a visible sabotage first**.
 - **Subagents must not run `make check`** — the 600 s watchdog kills them.
-- `CARGO_BUILD_JOBS=2` — shared machine. `cargo test` takes only **one** filter, and a filter
-  matches the *whole path*, so `--lib 'rendering::svg_to_png::tests::a'` is how you run a
-  group of tests whose names share no substring.
-- Pre-existing `#[ignore]` failures, unrelated: `preprocess::preprocessor::tests::{…}`.
-- **Never `git add -A`.** `examples/` is an untracked near-copy of `screens/examples/`.
-- **IDE diagnostics lie in this tree**, and they lag behind scripted rewrites. Only an actual
-  cargo run counts.
-- `make docs` = `mdbook build`; mdbook is installed. `docs/book/` is gitignored.
-- **`docs/src/images/` is gitignored** — `hintdemo.png` is refreshed locally, never committed.
+- **IDE diagnostics lie in this tree.** Only an actual cargo run counts.
+- `make docs` = `mdbook build`. `docs/book/` and `docs/src/images/` are gitignored.
+
+## Working the HA VM
+
+See the `ha-vm-testing` skill. Beyond it:
+
+- **`make ha-rebuild` does not sync the add-on manifest.** An options-schema change needs a manual
+  version bump plus `POST /store/reload` and `ha addons update` on the VM.
+- **Two byonk add-ons cannot coexist** — they both want port 3000, and the loser sits in state
+  `error`. `ha addons` lists what is installed.
+- **`ha core restart` returns long before HA is up.** Poll `http://localhost:8123/` for `200`.
+- **Chrome on the Mac host holds a live HA session**, so the UI can be driven with the
+  `claude-in-chrome` tools without any password. HA's frontend is shadow-DOM heavy: `find` and
+  `read_page` return almost nothing, so **work from screenshots and coordinates**. Dialogs animate
+  — screenshot again before clicking, or the click lands on nothing.
+- **The device page jumps to the top** when a dialog closes; re-screenshot before the next click.
 
 ## Capturing every bundled screen, on every panel
 
@@ -511,77 +429,81 @@ for everything in the tree; what is missing is **notices** — `fonts/` has no l
 BYONK_BIN=./target/debug/byonk ./tools/capture-renders.sh /path/to/out
 ```
 
-Seconds, not minutes. **19 captures across 5 panels** — 4-grey, 4-colour, 16-grey and both
-6-colour. Writes `MANIFEST.txt` with the canary verdict, per-screen exit codes, any stderr
-byonk produced, and the distinctness verdict. **Do not put the output in `/tmp`** — that is how
-the previous baselines were lost. Deterministic screens land at the top level,
-non-deterministic ones in `nondeterministic/`.
+Seconds, not minutes. **19 captures across 5 panels.** **Do not put the output in `/tmp`** — that
+is how the previous baselines were lost. **A capture is only as wide as
+`tools/capture-config.yaml`'s device map**; when adding a panel profile, add a device for it here
+too.
 
-**A capture is only as wide as `tools/capture-config.yaml`'s device map.** Twelve of the
-original thirteen devices were on one panel, and two bugs hid in that gap for the whole
-initiative. When adding a panel profile, add a device for it here too.
+## Testing the preview endpoint by hand
 
-## Rendering a scratch screen
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3000/api/admin/devices/DEFAULT/preview -o preview.png
+curl -sD- -o /dev/null -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:3000/api/admin/devices/DEFAULT/preview?dither=off' | grep -i x-byonk
+```
 
-Validated end to end in sessions 25 and 26 — this recipe works:
+`X-Byonk-Preview` tells you whether it rendered or re-served. On the VM, curl from the **Mac
+host** on port 3000, not from the Terminal add-on, and **never print the admin token**. A quick
+liveness check that needs no token: the endpoint answers **401** when the route exists and
+**404** when the binary is too old.
 
-1. Make a directory with a `byonk-screens.yaml` manifest (`name`, `description`, `author`,
-   `license`). **Without the manifest the repo is skipped and every render silently falls
-   back.**
-2. Each screen needs `meta.yaml` (`title`, `description`, `byonk`, `refresh`), `script.lua`
-   and `screen.svg`. A bare `name:` in `meta.yaml` is **not** enough.
-3. **`script.lua` must return `{ data = { … }, refresh_rate = N }`** — a bare table of values
-   fails with `error converting Lua nil to table`. **The template reads them under `data.`**:
-   `{{ data.foo }}`, not `{{ foo }}`. Both cost a round trip in session 26.
-4. Register it in a config copy. **`EXAMPLES_DIR` registers under the fixed handle `examples`,
-   NOT the manifest's `name:`**, so use the config instead:
-   ```yaml
-   screen_repos:
-     probe: { path: /abs/path/to/dir }
-   devices:
-     "AA:BB:CC:00:00:71": { panel: trmnl_og, screen: probe/myscreen }
-   ```
-   Seed the copy from `tools/capture-config.yaml`, which already has the panels and a
-   `DEFAULT` device.
-5. `CONFIG_FILE=<cfg> ./target/debug/byonk render --mac AA:BB:CC:00:00:71 --output x.png`
+---
 
-Notes:
+# Lessons — these keep paying off
 
-- **Build the SVG from `layout.width`/`layout.height`.** Byonk warns on stderr if you do not.
-- **Put text at integer x/y in any probe that judges hinting.**
-- **Renders are dithered, and error diffusion depends on position** — two identical treatments
-  at different places on one page do *not* come out byte-identical.
-- `--colors "#000000,#FFFFFF"` forces a 2-colour panel — the BW/mono-hinting case.
-- `--use-actual false` gives spec colours (pixel diffs); the default gives measured colours
-  (judging type).
-- **Swapping fonts without rebuilding:** `FONTS_DIR=<dir>` overrides embedded fonts **by
-  filename**.
-- PIL is available; `Image.NEAREST` at 3–6× is what makes pixel-level differences legible.
-
-## Fonts
-
-- `make fonts-setup` (once) → `.venv-fonts`; `make fonts-check` (18 tests, instant);
-  `make fonts` (rebuild all 26, deterministic). Downloads cache in `fonts/.x11-cache/`.
-- **`.venv-fonts/bin/python` has fontTools** — use it to interrogate the bundled faces
-  directly (hinting programs, strikes, metrics) instead of inferring from renders.
-- **Working on resvg:** clone `oetiker/resvg` into the scratchpad. Its suite is fast (~11 s,
-  1750 tests) and safe in the foreground. To test byonk against a local resvg, point
-  `[patch.crates-io]` at `<clone>/crates/{resvg,usvg}` — **back up `Cargo.toml` and
-  `Cargo.lock` first and restore them after.**
-- The patched resvg source is readable at
-  `~/.cargo/git/checkouts/resvg-b4a0ccb9ea26de88/<rev>/` — faster than cloning when you only
-  need to check what usvg does. Session 25 settled the whole integer-zoom question from
-  `crates/usvg/src/text/flatten.rs` without building anything.
+- **A design premise about someone else's UI is a claim, not a fact.** "HA renders a camera
+  full-width" survived a whole session of implementation and a written handover before anyone
+  opened a browser. It was false. **Nothing about a rendered layout is verified until it has been
+  looked at.**
+- **When a premise falls, rebuild the alternative rather than reason about it.** The camera still
+  won, but the honest reasons were only visible with both entities on the same page. It cost about
+  twenty minutes.
+- **Read the framework's source before designing around it.** "Does HA poll a camera?",
+  "what does `frame_interval` default to?", and "why does an image entity show nothing?" were each
+  settled in minutes from the package in `.venv/`.
+- **A base class's `__init__` can undo your attribute.** `Camera.__init__` sets
+  `content_type = "image/jpeg"` unconditionally. Neither `Camera` nor `ByonkDeviceEntity` calls
+  `super().__init__()`, so both must be called explicitly.
+- **An entity whose state is `None` renders as nothing, silently.** `ImageEntity` has no state
+  until `image_last_updated` is stamped, and reports no error when it is missing.
+- **A parameter slot doing double duty is a trap for the next caller.**
+  `resolve_render_params`'s device-config dither slot was carrying the *override*.
+- **Don't fabricate a default that reads as a measurement.** A preview showing 4.2 V for a device
+  that has never reported its battery is worse than showing nothing.
+- **Put view options in the cache key, not the fingerprint.**
+- **Hash a `HashMap` through a `BTreeMap`.** Iteration order varies per process, so a fingerprint
+  built from one is a cache that never hits — and it will look like the cache "just doesn't work".
+- **A raw string ends at the first `"#`, and hex colours are full of them.** Use `r##"…"##`.
+  Fourth time in this repo.
+- **A mock rebound after the patch is applied does nothing.** Mutate the existing mock's
+  `side_effect`.
+- **Not every attribute is a state attribute.** `frame_interval` is read off the entity by
+  `handle_async_still_stream`, not published in `state.attributes`.
+- **Test the cache where time is injectable, test the wiring over HTTP.**
+- **Demonstrate the check fails when the thing is broken.** A test written *after* the
+  implementation has never been shown to fail; sabotage stands in for the RED step.
+- **"No warnings" is not coverage until the mechanism has been shown to fire.**
+- **A toggle that changes nothing visible has not been proven to work.** *Preview measured colors*
+  looks identical on a panel with no calibration — which is correct behaviour and zero evidence.
+- **Coverage that is wide in one dimension can be nil in another.**
+- **Assert on the geometry, not the pixels, when the question is "is this legible".**
+- **A CSS rule beats a presentation attribute in SVG.**
+- **Fix the docs when they are the bug.** `docs/src/tutorial/svg-templates.md` has been the bug
+  twice; it is embedded and served to LLM authors over MCP.
+- **Work left by an agent that died is not verified work.**
 
 ---
 
 # Carried forward
 
-The pinning initiative is done and reviewed; detail in `git show 3b32762:docs/HANDOVER.md` —
-read before touching `eink-dither`, gamut mapping or colour models. Session 23's detail (F20,
-F21, Task 7 archaeology) is in `git show 6e6e214:docs/HANDOVER.md`; session 24's (Task 8, the
-CLI fetch fix, `http_response()`, the hinting demo) is in `git show 4cefe83:docs/HANDOVER.md`;
-session 25's (Task 4 in full, the docs bug it uncovered) is in
-`git show 5a531a1:docs/HANDOVER.md`.
+Session 28's handover — the preview's design in the form it was first written, before the
+full-width claim fell — is in `git show fea552d:docs/HANDOVER.md`. Session 26's detail (the resvg
+`byonk-base` initiative in full, the render sweep, the two calibration bugs, font licensing, the
+whole hinting settlement) is in `git show bf48594~1:docs/HANDOVER.md` — **read it before touching
+fonts, hinting or resvg**. Session 27's (the PR-based release) is in
+`git show bf48594:docs/HANDOVER.md`. The pinning initiative's detail is in
+`git show 3b32762:docs/HANDOVER.md` — read before touching `eink-dither`, gamut mapping or colour
+models.
 
 `git worktree list` is clean.

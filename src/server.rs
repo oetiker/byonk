@@ -25,7 +25,7 @@ use crate::models::{config::ScreenRepoRef, AppConfig, DitherTuningValues};
 use crate::services::screen_repo_cache::ScreenRepoCache;
 use crate::services::screen_repo_manager::ScreenRepoManager;
 use crate::services::{
-    ContentCache, ContentPipeline, InMemoryRegistry, RenderService, ScreenStore,
+    ContentCache, ContentPipeline, InMemoryRegistry, PreviewCache, RenderService, ScreenStore,
 };
 
 /// Runtime overrides set by the dev GUI and consumed by production handlers.
@@ -86,6 +86,9 @@ pub struct AppState {
     /// files). Not yet consumed by any route — the MCP plan (spec 1
     /// Component 5) and the web-UI plan (spec 2) are its consumers.
     pub screen_store: Arc<ScreenStore>,
+    /// Rendered device previews for `/api/admin/devices/{key}/preview`.
+    /// Keeps a Home Assistant camera's frame pulls from re-rendering.
+    pub preview_cache: Arc<PreviewCache>,
 }
 
 /// Create application state from an asset loader.
@@ -218,6 +221,7 @@ pub fn create_app_state_with_overrides(
         screen_repo_manager,
         addon_mode: false,
         screen_store,
+        preview_cache: Arc::new(PreviewCache::new()),
     })
 }
 
@@ -226,6 +230,11 @@ pub fn reload_config(state: &AppState) -> anyhow::Result<()> {
     let fresh = AppConfig::load_from_assets(&state.asset_loader)?;
     state.config.store(Arc::new(fresh));
     state.screen_repo_manager.rebuild_loader();
+    // A device preview's fingerprint only covers that device's own config, so
+    // a change to something it merely references — a panel profile's colours
+    // or dither tuning — would otherwise keep serving a stale render until the
+    // TTL elapsed. See `PreviewCache::clear`.
+    state.preview_cache.clear();
     Ok(())
 }
 

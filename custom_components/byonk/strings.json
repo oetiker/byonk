@@ -14,6 +14,10 @@
       "dev_params": {
         "title": "Screen parameters",
         "description": "Configure the screen's dynamic parameters."
+      },
+      "hassio_confirm": {
+        "title": "Set up Byonk",
+        "description": "The Byonk app is running. Set up Byonk to onboard your TRMNL devices and control their screens from Home Assistant."
       }
     },
     "abort": {

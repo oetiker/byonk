@@ -15,6 +15,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.hassio import is_hassio
+from homeassistant.helpers.service_info.hassio import HassioServiceInfo
 
 from .addon import (
     async_ensure_addon_installed,
@@ -82,14 +83,12 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
                 return entry
         return None
 
-    async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        if any(e.unique_id == DOMAIN for e in self._async_current_entries(include_ignore=False)):
-            return self.async_abort(reason="single_instance_allowed")
-        if not is_hassio(self.hass):
-            return self.async_abort(reason="not_hassio")
+    async def _async_create_hub_entry(self) -> ConfigFlowResult:
+        """Install and start the app, provision the token, create the hub entry.
 
+        Shared by the manual route (`user`) and the Supervisor discovery route
+        (`hassio`), which differ only in how they are triggered.
+        """
         try:
             slug = await async_ensure_addon_installed(self.hass)
             token = await async_read_token(self.hass, slug)
@@ -99,9 +98,8 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
         except AddonError:
             return self.async_abort(reason="addon_error")
 
-        # Provisioning restarts the add-on; retry the probe while byonk's HTTP
-        # comes back up. If it never answers/authenticates, abort cleanly
-        # (e.g. an image too old to expose the admin API) instead of raising 500.
+        # Provisioning restarts the add-on; byonk's HTTP comes back up a moment
+        # later. If it never answers, abort cleanly rather than raising.
         if not await _async_probe_ready(self.hass, base_url, token):
             return self.async_abort(reason="addon_unhealthy")
 
@@ -110,6 +108,38 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
             title="Byonk",
             data={CONF_ADDON_SLUG: slug, CONF_BASE_URL: base_url},
         )
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if self._hub_entry() is not None:
+            return self.async_abort(reason="single_instance_allowed")
+        if not is_hassio(self.hass):
+            return self.async_abort(reason="not_hassio")
+        return await self._async_create_hub_entry()
+
+    async def async_step_hassio(
+        self, discovery_info: HassioServiceInfo
+    ) -> ConfigFlowResult:
+        """The Byonk app told Supervisor it is running.
+
+        The app writes this integration into the config dir and announces
+        itself, so this is the normal way a user reaches setup: a Discovered
+        card in Settings > Devices & Services.
+        """
+        if self._hub_entry() is not None:
+            return self.async_abort(reason="single_instance_allowed")
+        self.context["title_placeholders"] = {"name": discovery_info.name}
+        return await self.async_step_hassio_confirm()
+
+    async def async_step_hassio_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is None:
+            return self.async_show_form(
+                step_id="hassio_confirm", data_schema=vol.Schema({})
+            )
+        return await self._async_create_hub_entry()
 
     async def async_step_reauth(
         self, entry_data: Mapping[str, Any]

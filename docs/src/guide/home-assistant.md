@@ -21,7 +21,7 @@ automatic token provisioning — so there is nothing separate to install.
 4. Byonk asks you to restart Home Assistant. Do that
    (**Settings → System → Restart**).
 5. After the restart, a **Byonk** card is waiting in
-   **Settings → Devices & Services**. Select **Configure**.
+   **Settings → Devices & Services**. Select **Add**.
 
 That is the whole setup. Byonk generates its own management token, and no
 token or password is ever asked of you.
@@ -40,7 +40,7 @@ When a TRMNL device boots for the first time, it contacts Byonk and displays a
 A **Discovered** card for the new device appears automatically in
 **Settings → Devices & Services**.
 
-1. Click **Configure** on the Discovered card.
+1. Click **Add** on the Discovered card.
 2. In the *Set up TRMNL device* form, choose the screen you want displayed on the
    device. Optionally set a dither algorithm and panel type.
 3. If the chosen screen declares parameters (via the `params` schema in its `meta.yaml`), a second form

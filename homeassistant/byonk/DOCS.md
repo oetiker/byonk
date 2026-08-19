@@ -18,7 +18,7 @@ You've already installed this app — a few steps left:
 2. Byonk asks you to restart Home Assistant. Do that
    (**Settings → System → Restart**).
 3. After the restart, a **Byonk** card is waiting in
-   **Settings → Devices & Services**. Select **Configure**.
+   **Settings → Devices & Services**. Select **Add**.
 
 That is the whole setup. Byonk generates its own management token, and no
 token or password is ever asked of you.
@@ -29,7 +29,7 @@ The app publishes Byonk on host port **3000**. Configure your TRMNL device to
 use `http://<your-home-assistant-host>:3000` as its server.
 
 A newly booted device shows a **registration code** on its screen and appears as a
-**Discovered** card in **Settings → Devices & Services** — click **Configure** to
+**Discovered** card in **Settings → Devices & Services** — click **Add** to
 pick its screen.
 
 ## Configuration

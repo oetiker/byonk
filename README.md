@@ -28,7 +28,7 @@ with it — device onboarding, entities, and automatic token provisioning:
 4. Byonk asks you to restart Home Assistant. Do that
    (**Settings → System → Restart**).
 5. After the restart, a **Byonk** card is waiting in
-   **Settings → Devices & Services**. Select **Configure**.
+   **Settings → Devices & Services**. Select **Add**.
 
 See the [Home Assistant guide](https://oetiker.github.io/byonk/dev/guide/home-assistant.html)
 for details.

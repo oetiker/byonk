@@ -97,6 +97,12 @@ async def async_get_base_url(hass: HomeAssistant, slug: str) -> str:
 
 async def async_get_addon_version(hass: HomeAssistant, slug: str) -> str | None:
     """Return the installed add-on version, or None if Supervisor won't say."""
-    mgr = _get_addon_manager(hass, slug)
-    info = await mgr.async_get_addon_info()
+    try:
+        mgr = _get_addon_manager(hass, slug)
+        info = await mgr.async_get_addon_info()
+    except KeyError:
+        # The hassio integration itself is not set up (it's an after_dependency,
+        # not a hard dependency, so this can happen), so there is no Supervisor
+        # to ask.
+        return None
     return info.version

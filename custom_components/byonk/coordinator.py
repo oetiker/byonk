@@ -136,11 +136,8 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
         """
         try:
             addon_version = await async_get_addon_version(self.hass, self.slug)
-        except (AddonError, KeyError):
-            # AddonError: supervisor hiccup. KeyError: the hassio integration
-            # itself isn't set up (e.g. non-Supervisor test harnesses). Either
-            # way, stay quiet rather than guess.
-            return
+        except AddonError:
+            return  # supervisor hiccup: stay quiet rather than guess
 
         # Read the version through the loader, never from manifest.json: the
         # loader hands back the manifest as read when Home Assistant started,

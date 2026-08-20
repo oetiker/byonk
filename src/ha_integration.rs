@@ -192,6 +192,12 @@ const DEFAULT_SUPERVISOR_URL: &str = "http://supervisor";
 /// instead of stacking up.
 const NOTIFICATION_ID: &str = "byonk_integration";
 
+/// How long to wait on a Supervisor call before giving up. Generous for an
+/// in-container hop — Home Assistant can be slow to answer the Core API proxy
+/// while it is still starting — but bounded, so a wedged proxy cannot pin the
+/// task forever.
+const SUPERVISOR_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Base URL for Supervisor API calls.
 pub fn supervisor_url() -> String {
     std::env::var("BYONK_SUPERVISOR_URL").unwrap_or_else(|_| DEFAULT_SUPERVISOR_URL.to_string())
@@ -281,10 +287,26 @@ pub async fn install_and_announce() {
     }
 
     let Ok(token) = std::env::var("SUPERVISOR_TOKEN") else {
-        tracing::warn!("No SUPERVISOR_TOKEN; skipping the Home Assistant notification");
+        tracing::warn!(
+            "No SUPERVISOR_TOKEN; skipping the restart notification and the discovery announcement"
+        );
         return;
     };
-    let client = reqwest::Client::new();
+
+    // Supervisor is in-container and normally answers in milliseconds. The
+    // timeout is here so a wedged proxy cannot leave this spawned task pending
+    // for the life of the process — both calls are best effort, and giving up
+    // with a warning beats hanging silently.
+    let client = match reqwest::Client::builder()
+        .timeout(SUPERVISOR_TIMEOUT)
+        .build()
+    {
+        Ok(client) => client,
+        Err(e) => {
+            tracing::warn!("Could not build the Supervisor HTTP client: {e}");
+            return;
+        }
+    };
 
     if let InstallOutcome::Installed { from, to } = &outcome {
         if let Err(e) = notify_restart(&client, &token, from.as_deref(), to).await {

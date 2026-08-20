@@ -349,6 +349,7 @@ dependencies = [
  "blake3",
  "chrono",
  "clap",
+ "crc32fast",
  "ed25519-dalek",
  "eink-dither",
  "eink-photo",

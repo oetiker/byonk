@@ -330,6 +330,66 @@ pub struct DeviceConfig {
     /// Optional friendly name (mirrored from Home Assistant; absent = identify by MAC)
     #[serde(default)]
     pub name: Option<String>,
+
+    /// Optional e-ink refresh profile, sent to the device in the `/api/display`
+    /// response. `default` | `a` | `b`. Absent means `default`.
+    ///
+    /// What this does depends on which panel is listening, and the two cases
+    /// have almost nothing in common:
+    ///
+    /// - **TRMNL OG / Gen2 / DIY (`bb_epaper` builds)** — indexes a table of
+    ///   waveform look-up tables (`dpList[]` in the firmware's `display.cpp`),
+    ///   picking a different drive waveform for the 1-bit and 2-bit modes.
+    /// - **TRMNL X (`BOARD_X_CLASS`, FastEPD)** — no waveform table exists.
+    ///   The value is used once, as a boolean: any non-`default` profile
+    ///   upgrades the pre-draw clearing from `CLEAR_FAST` (2 phases) to
+    ///   `CLEAR_SLOW` (4 phases of 8 passes) on *every* update instead of only
+    ///   every 8th. `a` and `b` are therefore indistinguishable on an X.
+    ///
+    /// TRMNL's documented remedy for ghosting is to try the profiles, so on an
+    /// X expect heavier flashing and less residue, not a different waveform.
+    /// Requires firmware >= 1.8.4.
+    ///
+    /// `c` is deliberately **not** accepted: firmware 1.8.14 still has its
+    /// mapping commented out in `parse_response_api_display.cpp`, so a device
+    /// silently reads `c` as `default` and turns the extra clearing back off.
+    #[serde(default)]
+    pub temperature_profile: Option<String>,
+
+    /// Optional "maximum compatibility" flag, sent to the device in the
+    /// `/api/display` response.
+    ///
+    /// Makes the firmware disable fast refresh and force a full-waveform
+    /// refresh on every update. The cost is real: full refreshes flash visibly
+    /// and take longer, and the firmware also drops 2-bit support. Absent means
+    /// absent from the response, leaving the device on its own default.
+    ///
+    /// **No effect on a TRMNL X.** The flag is parsed and logged there, but
+    /// every line that reads it sits inside `#ifdef BB_EPAPER`, which
+    /// `BOARD_X_CLASS` does not define (`display.cpp:18`). The X has no partial
+    /// refresh path at all — it always calls `fullUpdate()` — so there is
+    /// nothing for the flag to switch off. Keep it for the other panels.
+    #[serde(default)]
+    pub maximum_compatibility: Option<bool>,
+
+    /// Optional minimum size, in bytes, of the PNG served to this device.
+    /// Absent means no padding.
+    ///
+    /// A last lever for TRMNL X ghosting, and an unusual one: the X selects its
+    /// grayscale rendering matrix from the **byte size** of the image it
+    /// downloaded, not from its content. Above 102 400 bytes it uses a 38-pass
+    /// gray table; below, a 9-pass one (`display.cpp:1902`). Byonk's PNGs run
+    /// 3–60 KB, so an X has never reached the good table.
+    ///
+    /// Setting this to `102401` pads the file with an ancillary `tEXt` chunk
+    /// that decoders skip, so the image is pixel-identical and only the byte
+    /// count changes. The X accepts up to 750 000 bytes.
+    ///
+    /// Pointless on any other panel: their firmware caps downloads at 90 000
+    /// bytes, below the threshold, so the 38-pass table is unreachable there by
+    /// construction.
+    #[serde(default)]
+    pub min_png_bytes: Option<u32>,
 }
 
 /// Admin/management API settings.

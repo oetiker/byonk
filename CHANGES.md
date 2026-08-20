@@ -9,9 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- **Ghosting fix for devices that need a stronger refresh.** If a faint image of
+  the previous screen stays visible under the current one, set
+  `temperature_profile: a` on the device in `config.yaml` — Byonk then tells the
+  device to drive its panel harder and flash more, which clears the residue. Try
+  `a` first, then `b`. The tell-tale sign is ghosting that shows in mid-greys but
+  is invisible in solid black and solid white areas. Unset behaves exactly as
+  before, so nothing changes for devices that are fine. On a TRMNL X this needs
+  device firmware 1.8.4 or newer. See the configuration guide's *Ghosting*
+  section.
+- **`maximum_compatibility` device setting**, asking the device to use a full
+  refresh on every update. Note it has no effect on a TRMNL X — that model
+  always does a full update and its firmware ignores the setting.
+- **`min_png_bytes` device setting.** A TRMNL X picks how carefully it renders
+  greys from the size in bytes of the image it downloads, and Byonk's images are
+  normally too small to reach its better setting. Setting `min_png_bytes: 102401`
+  pads the image with data that decoders ignore, so the picture is unchanged and
+  only the size grows. Updates take longer in exchange. Useful on a TRMNL X only.
+
 ### Changed
 
+- The configuration guide's *Ghosting* section now explains what
+  `temperature_profile` actually does on each model — on a TRMNL X it controls
+  how hard the panel is cleared rather than which waveform is used, so `a` and
+  `b` behave identically there — and adds a *Burn-in* section for the case no
+  setting can fix: a panel that has shown the same picture for weeks keeps a
+  trace of it, and needs hours of cycling rather than a stronger refresh.
+
 ### Fixed
+
+- `temperature_profile: c` is now refused with a warning instead of being sent
+  to the device. TRMNL's documentation lists `c`, but device firmware up to
+  1.8.14 never implemented it and silently reads it as `default` — which turns
+  off the very anti-ghosting behaviour the setting was meant to enable. Use `a`
+  or `b`.
 
 ## 0.19.0 - 2026-08-20
 

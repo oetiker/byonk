@@ -310,6 +310,43 @@ pub fn resolve_measured_colors(
 
 /// Resolve all rendering parameters after script execution.
 ///
+/// Resolve the e-ink waveform temperature profile sent to the device.
+///
+/// The panel selects its refresh waveform from look-up tables indexed by
+/// temperature, because colder particles need longer, stronger drive pulses.
+/// A non-`default` profile makes the firmware drive harder and flash more than
+/// the measured ambient calls for, which is TRMNL's documented remedy for
+/// ghosting: partial refreshes reach the black and white rails but leave
+/// mid-greys carrying residue of the previous frame.
+///
+/// `default` stays the fallback even though it is the value that ghosts, so
+/// that upgrading changes nothing for devices that are fine.
+///
+/// An unrecognised value is refused rather than forwarded. This string is
+/// consumed by device firmware over the wire, so a typo that reaches it fails
+/// silently on the glass — the one place nobody is watching a log.
+///
+/// `c` is refused for exactly that reason, even though TRMNL's documentation
+/// lists it: firmware 1.8.14 still has `else if (tp == "c") u32TP = 3;`
+/// commented out in `parse_response_api_display.cpp`, so a device that receives
+/// `c` reads it as `default` — the opposite of what the operator asked for.
+fn resolve_temperature_profile(configured: Option<&str>) -> String {
+    const VALID: [&str; 3] = ["default", "a", "b"];
+    let Some(raw) = configured else {
+        return "default".to_string();
+    };
+    let normalized = raw.trim().to_ascii_lowercase();
+    if VALID.contains(&normalized.as_str()) {
+        normalized
+    } else {
+        tracing::warn!(
+            configured = raw,
+            "unknown temperature_profile, sending 'default' instead (valid: default, a, b)"
+        );
+        "default".to_string()
+    }
+}
+
 /// Palette:  script_colors > device_config_colors > panel_colors > fallback
 /// Measured: script_colors_actual > pre_script_measured_candidates (in the
 ///           order the caller supplies them, e.g. dev override >
@@ -629,8 +666,12 @@ pub async fn handle_display<R: DeviceRegistry>(
                 firmware_url: None,
                 refresh_rate,
                 reset_firmware: false,
+                // Unconditional: this device has no config yet -- it is being
+                // shown the registration code. That screen is high-contrast
+                // text, the content ghosting hurts least.
                 temperature_profile: Some("default".to_string()),
                 special_function: None,
+                maximum_compatibility: None,
             })
             .into_response());
         }
@@ -878,6 +919,7 @@ pub async fn handle_display<R: DeviceRegistry>(
     let header_colors_for_chain = header_colors_str.map(|s| s.to_string());
     let dc_colors = device_config_colors;
     let dc_dither = device_config_dither;
+    let dc_min_png_bytes = device_config.and_then(|dc| dc.min_png_bytes);
     let dev_dither = dev_dither_override;
     let dev_tuning = dev_tuning_override;
     let dc_tuning_for_closure = dc_tuning;
@@ -991,6 +1033,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                                 .with_colors_actual(params.measured_colors)
                                 .with_dither(params.dither)
                                 .with_font_hinting(result.font_hinting.clone())
+                                .with_min_png_bytes(dc_min_png_bytes)
                                 .with_tuning(&tuning);
                                 let hash = cached.content_hash.clone();
                                 cache.store(cached);
@@ -1074,6 +1117,21 @@ pub async fn handle_display<R: DeviceRegistry>(
         None
     };
 
+    // Resolved and logged rather than inlined into the struct below: this value
+    // is consumed by device firmware and has no visible effect on the server,
+    // so when a panel keeps ghosting there is otherwise no way to tell "byonk
+    // never sent a profile" apart from "the firmware ignored the one we sent".
+    // That ambiguity cost a full debugging cycle.
+    let temperature_profile =
+        resolve_temperature_profile(device_config.and_then(|dc| dc.temperature_profile.as_deref()));
+    let maximum_compatibility = device_config.and_then(|dc| dc.maximum_compatibility);
+    tracing::info!(
+        device = %device_id_str,
+        temperature_profile = %temperature_profile,
+        maximum_compatibility = ?maximum_compatibility,
+        "Resolved display refresh settings for device"
+    );
+
     // Return JSON response
     // Note: firmware expects status=0 for success (not 200!)
     // The filename is a hash of the SVG content, so TRMNL can detect changes
@@ -1085,8 +1143,9 @@ pub async fn handle_display<R: DeviceRegistry>(
         firmware_url: None,
         refresh_rate,
         reset_firmware: false,
-        temperature_profile: Some("default".to_string()),
+        temperature_profile: Some(temperature_profile),
         special_function: None,
+        maximum_compatibility,
     })
     .into_response())
 }
@@ -1179,6 +1238,25 @@ pub async fn handle_image<R: DeviceRegistry>(
         &mut None,
     )?;
 
+    let png_bytes = match cached.min_png_bytes {
+        Some(min) => {
+            let rendered = png_bytes.len();
+            let padded = crate::rendering::png_pad::pad_png_to_min_size(png_bytes, min as usize);
+            if padded.len() != rendered {
+                // Logged because the whole point is a size the *firmware* reads;
+                // if this line is missing, the device never saw the padding.
+                tracing::info!(
+                    rendered_bytes = rendered,
+                    padded_bytes = padded.len(),
+                    min_png_bytes = min,
+                    "Padded PNG to reach the device's minimum image size"
+                );
+            }
+            padded
+        }
+        None => png_bytes,
+    };
+
     tracing::info!(size_bytes = png_bytes.len(), "Image rendered and served");
 
     // Return PNG as binary response
@@ -1218,11 +1296,103 @@ pub struct DisplayJsonResponse {
     /// Special function to execute ('identify', 'sleep', etc.)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub special_function: Option<String>,
+
+    /// Force full-waveform refreshes on the device, disabling fast refresh.
+    ///
+    /// Omitted from the JSON when unset so the device keeps its own default —
+    /// sending `false` would actively assert "use fast refresh", which is not
+    /// the same as having no opinion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maximum_compatibility: Option<bool>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn temperature_profile_defaults_when_unset() {
+        assert_eq!(resolve_temperature_profile(None), "default");
+    }
+
+    #[test]
+    fn temperature_profile_passes_through_valid_values() {
+        for v in ["default", "a", "b"] {
+            assert_eq!(resolve_temperature_profile(Some(v)), v);
+        }
+    }
+
+    #[test]
+    fn temperature_profile_normalizes_case_and_whitespace() {
+        // YAML makes " A " and "A" easy to write by accident, and firmware
+        // compares the string it receives.
+        assert_eq!(resolve_temperature_profile(Some(" A ")), "a");
+        assert_eq!(resolve_temperature_profile(Some("B")), "b");
+    }
+
+    #[test]
+    fn maximum_compatibility_is_omitted_from_json_when_unset() {
+        // Absent must mean "no opinion", not "use fast refresh": serializing
+        // `false` would actively override a device default we never chose.
+        let r = DisplayJsonResponse {
+            status: 0,
+            image_url: None,
+            filename: "x".into(),
+            update_firmware: false,
+            firmware_url: None,
+            refresh_rate: 60,
+            reset_firmware: false,
+            temperature_profile: Some("default".into()),
+            special_function: None,
+            maximum_compatibility: None,
+        };
+        let j = serde_json::to_string(&r).expect("serializes");
+        assert!(
+            !j.contains("maximum_compatibility"),
+            "unset must be omitted entirely, got {j}"
+        );
+    }
+
+    #[test]
+    fn maximum_compatibility_is_sent_when_set() {
+        let r = DisplayJsonResponse {
+            status: 0,
+            image_url: None,
+            filename: "x".into(),
+            update_firmware: false,
+            firmware_url: None,
+            refresh_rate: 60,
+            reset_firmware: false,
+            temperature_profile: Some("a".into()),
+            special_function: None,
+            maximum_compatibility: Some(true),
+        };
+        let j = serde_json::to_string(&r).expect("serializes");
+        assert!(
+            j.contains("\"maximum_compatibility\":true"),
+            "must reach the firmware verbatim, got {j}"
+        );
+    }
+
+    /// Firmware 1.8.14 never implemented `c` — it parses to `default`, which
+    /// silently *disables* the extra clearing the operator asked for. Refusing
+    /// it server-side turns a silent wrong-on-glass into a log line.
+    #[test]
+    fn temperature_profile_refuses_c_because_firmware_ignores_it() {
+        assert_eq!(resolve_temperature_profile(Some("c")), "default");
+    }
+
+    #[test]
+    fn temperature_profile_refuses_unknown_values() {
+        // Must not reach firmware: a bad profile fails on the glass, silently.
+        for v in ["", "d", "1", "profile-a", "true"] {
+            assert_eq!(
+                resolve_temperature_profile(Some(v)),
+                "default",
+                "unknown profile {v:?} must fall back rather than be forwarded"
+            );
+        }
+    }
 
     /// Pins the three settled cases of the `use_actual` rule (see
     /// `resolve_use_actual`'s doc comment): no explicit flag defaults to

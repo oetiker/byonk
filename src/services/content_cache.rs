@@ -40,6 +40,10 @@ pub struct CachedContent {
     /// script-derived render knobs. `None` means the panel's adaptive default
     /// applies, so a screen that says nothing still gets hinted text.
     pub font_hinting: Option<crate::rendering::font_config::FontHintingDirective>,
+    /// Minimum byte size for the served PNG, from the device's `min_png_bytes`.
+    /// Carried on the cache entry because `/api/image/{hash}.png` is addressed
+    /// by content hash alone and has no device to ask.
+    pub min_png_bytes: Option<u32>,
 }
 
 impl CachedContent {
@@ -52,6 +56,7 @@ impl CachedContent {
             screen_name,
             generated_at: chrono::Utc::now(),
             font_hinting: None,
+            min_png_bytes: None,
             width,
             height,
             colors: None,
@@ -89,6 +94,12 @@ impl CachedContent {
         font_hinting: Option<crate::rendering::font_config::FontHintingDirective>,
     ) -> Self {
         self.font_hinting = font_hinting;
+        self
+    }
+
+    /// Set the minimum served PNG size (see the field's docs).
+    pub fn with_min_png_bytes(mut self, min_png_bytes: Option<u32>) -> Self {
+        self.min_png_bytes = min_png_bytes;
         self
     }
 

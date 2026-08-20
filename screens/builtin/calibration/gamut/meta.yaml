@@ -1,6 +1,6 @@
 title: Gamut Patches
 description: Flat patches across the full hue circle at several lightness levels — shows which hues the panel can actually mix and which collapse to a single flat colour.
-byonk: "0.18"
+byonk: "0.19"
 refresh: 3600
 params:
   hues:

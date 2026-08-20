@@ -581,7 +581,7 @@ on every device write.
 # <screen>/meta.yaml
 title: My Screen
 description: What this screen shows.
-byonk: "0.18"
+byonk: "0.19"
 params:
   <param-name>:
     type: <type>
@@ -617,7 +617,7 @@ The bundled `examples/swiss-departure-board` screen declares its params in
 # examples/swiss-departure-board/meta.yaml
 title: Swiss Departure Board
 description: Live public-transport departures for a Swiss stop.
-byonk: "0.18"
+byonk: "0.19"
 params:
   station:
     type: string

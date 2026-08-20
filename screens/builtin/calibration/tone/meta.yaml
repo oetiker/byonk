@@ -1,6 +1,6 @@
 title: Tone Marker A/B
 description: The same photograph, hue sweep and patch grid rendered twice — left untouched, right marked as continuous-tone so the gamut mapper compresses it into the panel's reachable colours. Shows what the tone marker actually changes.
-byonk: "0.18"
+byonk: "0.19"
 refresh: 3600
 params:
   hues:

@@ -1,6 +1,6 @@
 title: Google Photos Album
 description: Shows photos from a shared Google Photos album, one per refresh.
-byonk: "0.18"
+byonk: "0.19"
 params:
   album_url:
     type: url

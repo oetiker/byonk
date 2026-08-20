@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The error screen now wraps long messages.** The whole message was drawn as
+  a single centred line of text, which ran off both edges of the panel and
+  showed only its middle. Lua errors were worst affected: they arrive as a
+  message plus a multi-line stack traceback, and every line break was collapsed
+  into one unreadable run. Messages are now wrapped and left-aligned, and a
+  message too long for the box ends with an ellipsis so a clipped error cannot
+  be mistaken for a complete one.
 - **Assigning a screen to a device no longer deletes the device's other
   settings.** Changing a device's screen — from the admin API, the web UI or an
   MCP client — rewrote the device's whole entry in `config.yaml` and silently

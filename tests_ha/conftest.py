@@ -1,4 +1,6 @@
 """Shared fixtures for Byonk integration tests."""
+import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -22,6 +24,12 @@ PNG_1PX = (
     b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01"
     b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
 )
+
+# The version the integration really ships, so the default fixture state has the
+# app and the integration in agreement and no test sees a spurious repair issue.
+INTEGRATION_VERSION = json.loads(
+    (Path(__file__).resolve().parent.parent / "custom_components" / "byonk" / "manifest.json").read_text()
+)["version"]
 
 DEFAULT_SCREENS = {
     "screen_repos": [{"handle": "byonk-builtin", "name": "byonk-builtin",
@@ -82,9 +90,14 @@ def byonk():
         delete_screen_repo=AsyncMock(return_value={"ok": True}),
         update_screen_repos=AsyncMock(return_value={"ok": True}),
         get_device_preview=AsyncMock(return_value=PNG_1PX),
+        addon_version=INTEGRATION_VERSION,
     )
     with (
         patch("custom_components.byonk.async_read_token", new=AsyncMock(return_value="tok")),
+        patch(
+            "custom_components.byonk.coordinator.async_get_addon_version",
+            new=AsyncMock(side_effect=lambda *a, **k: state.addon_version),
+        ),
         patch.multiple(
             "custom_components.byonk.coordinator.ByonkClient",
             async_get_devices=AsyncMock(side_effect=lambda *a, **k: list(state.devices)),

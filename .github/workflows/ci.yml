@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 # Least-privilege default for GITHUB_TOKEN: every job here only reads the repo
-# (build/test/lint, hassfest, and hacs/action's API reads). No job writes.
+# (build/test/lint and hassfest). No job writes.
 permissions:
   contents: read
 
@@ -97,13 +97,6 @@ jobs:
 
       - name: Hassfest
         uses: home-assistant/actions/hassfest@master
-
-      - name: HACS validation
-        uses: hacs/action@main
-        with:
-          category: integration
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release-scripts:
     name: Release Scripts

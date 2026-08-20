@@ -132,3 +132,59 @@ async def test_probe_retries_through_addon_restart(hass):
         result = await _start(hass)
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert probe.await_count == 3
+
+
+async def _start_hassio(hass):
+    from homeassistant.helpers.service_info.hassio import HassioServiceInfo
+
+    return await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": config_entries.SOURCE_HASSIO},
+        data=HassioServiceInfo(
+            config={}, name="Byonk", slug="abcd1234_byonk", uuid="u-1"
+        ),
+    )
+
+
+async def test_supervisor_discovery_offers_a_confirm_form(hass):
+    result = await _start_hassio(hass)
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "hassio_confirm"
+
+
+async def test_supervisor_discovery_creates_the_hub_entry(hass):
+    with (
+        patch(
+            "custom_components.byonk.config_flow.async_ensure_addon_installed",
+            new=AsyncMock(return_value="abcd1234_byonk"),
+        ),
+        patch(
+            "custom_components.byonk.config_flow.async_read_token",
+            new=AsyncMock(return_value="tok"),
+        ),
+        patch(
+            "custom_components.byonk.config_flow.async_get_base_url",
+            new=AsyncMock(return_value="http://addon:3000"),
+        ),
+        patch(
+            "custom_components.byonk.config_flow.ByonkClient.async_get_config",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
+        result = await _start_hassio(hass)
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"] == {
+        "addon_slug": "abcd1234_byonk",
+        CONF_BASE_URL: "http://addon:3000",
+    }
+
+
+async def test_supervisor_discovery_aborts_when_already_configured(hass):
+    from tests_ha.conftest import make_hub_entry
+
+    make_hub_entry(hass)
+    result = await _start_hassio(hass)
+    assert result["type"] == FlowResultType.ABORT
+    assert result["reason"] == "single_instance_allowed"

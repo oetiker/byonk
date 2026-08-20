@@ -14,6 +14,10 @@ ports_description:
   3000/tcp: TRMNL device + admin API access (point your device here)
 map:
   - addon_config:rw
+  - homeassistant_config:rw
+homeassistant_api: true
+discovery:
+  - byonk
 environment:
   CONFIG_FILE: /config/config.yaml
   SCREENS_DIR: /config/screens

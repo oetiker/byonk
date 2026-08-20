@@ -896,6 +896,13 @@ async fn run_server() -> anyhow::Result<()> {
     // admin writes to read-only (the add-on Options form is the sole editor).
     state.addon_mode = matches!(addon, byonk::addon_options::ReadResult::Parsed(_));
 
+    // In add-on mode byonk owns its Home Assistant integration: write it into
+    // the HA config dir and announce ourselves. Spawned so a slow or wedged
+    // Supervisor can never delay the listener.
+    if state.addon_mode {
+        tokio::spawn(byonk::ha_integration::install_and_announce());
+    }
+
     // Startup screen repo fetch: bring every configured screen repo up to date once at
     // boot, independent of the periodic interval. Without this, screen repos are
     // not fetched on startup and — because the periodic loop below never

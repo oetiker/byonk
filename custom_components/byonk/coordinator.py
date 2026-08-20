@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 import logging
 
+from homeassistant.components.hassio import AddonError
 from homeassistant.config_entries import (
     SOURCE_INTEGRATION_DISCOVERY,
     ConfigEntry,
@@ -14,7 +15,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.loader import async_get_integration
 
+from .addon import async_get_addon_version
 from .api import ByonkApiError, ByonkAuthError, ByonkClient
 from .const import CONF_DEVICE_KEY, DEFAULT_DEVICE_KEY, DOMAIN, UPDATE_INTERVAL_SECONDS
 
@@ -121,7 +124,43 @@ class ByonkCoordinator(DataUpdateCoordinator[ByonkData]):
         self._async_sync_discovery(data)
         self._async_provision_default(data)
         self._async_reconcile_repo_issues(data)
+        await self._async_check_version()
         return data
+
+    async def _async_check_version(self) -> None:
+        """Warn when the running app and the loaded integration disagree.
+
+        The app rewrites custom_components/byonk whenever it starts, so after an
+        app update the files on disk are new while Home Assistant is still
+        running the integration it loaded at boot. One restart fixes it.
+        """
+        try:
+            addon_version = await async_get_addon_version(self.hass, self.slug)
+        except AddonError:
+            return  # supervisor hiccup: stay quiet rather than guess
+
+        # Read the version through the loader, never from manifest.json: the
+        # loader hands back the manifest as read when Home Assistant started,
+        # which is the code actually running. The file on disk has already been
+        # overwritten by the app, so it would always look like a match.
+        integration = await async_get_integration(self.hass, DOMAIN)
+        loaded_version = str(integration.version) if integration.version else None
+
+        if addon_version and loaded_version and addon_version != loaded_version:
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                "version_mismatch",
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="version_mismatch",
+                translation_placeholders={
+                    "addon": addon_version,
+                    "integration": loaded_version,
+                },
+            )
+        else:
+            ir.async_delete_issue(self.hass, DOMAIN, "version_mismatch")
 
     def _async_reconcile_repo_issues(self, data: ByonkData) -> None:
         """Raise a repair issue for every screen repo currently in `error`, and

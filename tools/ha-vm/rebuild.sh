@@ -36,7 +36,13 @@ mkdir -p "$dst"
 # (src/assets.rs) embeds three pages from it with rust-embed so the MCP server
 # can serve them as authoring contracts. Omit it and the build fails with
 # "folder '/build/docs/src/' does not exist".
-for item in src crates fonts screens byonk-base static docs/src Cargo.toml Cargo.lock default-config.yaml; do
+#
+# `custom_components` is a build input too: `Dockerfile.release` copies it to
+# `/app/custom_components/byonk`, and the app installs it into the Home
+# Assistant config dir itself at startup (see src/ha_integration.rs). Omit it
+# and an app built by this script fails on every start with "no readable
+# manifest.json".
+for item in src crates fonts screens byonk-base static docs/src custom_components Cargo.toml Cargo.lock default-config.yaml; do
   [ -e "$REPO_ROOT/$item" ] || continue
   if [ -d "$REPO_ROOT/$item" ]; then
     mkdir -p "$dst/$item"

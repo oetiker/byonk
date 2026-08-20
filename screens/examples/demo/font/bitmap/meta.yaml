@@ -1,6 +1,6 @@
 title: Bitmap Font Demo
 description: Showcase of embedded bitmap fonts rendered at their native sizes.
-byonk: "0.18"
+byonk: "0.19"
 refresh: 3600
 params:
   font_prefix:

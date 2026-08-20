@@ -1,4 +1,4 @@
 title: Font Hinting Demo
 description: 3x3 grid of font_hinting variants — engine against target, with an unhinted control.
-byonk: "0.18"
+byonk: "0.19"
 refresh: 3600

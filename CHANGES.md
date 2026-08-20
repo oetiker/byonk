@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.19.0 - 2026-08-20
+
+### New
+
 - Installing Byonk in Home Assistant now takes one step: install the Byonk app
   from the app store and it sets up its own integration. HACS is no longer
   used or needed. If you installed Byonk through HACS before, remove it there,
@@ -40,7 +48,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **New admin endpoint `GET /api/admin/devices/:key/preview`**, returning that
   PNG. `?force` skips the cache, `?dither=off` returns the undithered render
   and `?measured=off` the spec colours.
-
 ### Changed
 
 ### Fixed

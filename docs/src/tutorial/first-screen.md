@@ -64,7 +64,7 @@ Create `screens/hello/meta.yaml`. It describes the screen and (later) its parame
 ```yaml
 title: Hello World
 description: Displays a greeting with the current time.
-byonk: "0.18"       # byonk engine series this screen targets (caret range)
+byonk: "0.19"       # byonk engine series this screen targets (caret range)
 refresh: 60         # default refresh in seconds (script.lua may override)
 ```
 
@@ -186,7 +186,7 @@ Let's make the greeting customizable. First declare the parameter in the screen'
 ```yaml
 title: Hello World
 description: Displays a greeting with the current time.
-byonk: "0.18"
+byonk: "0.19"
 refresh: 60
 params:
   name:

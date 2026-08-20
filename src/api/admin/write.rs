@@ -84,6 +84,45 @@ fn validate_screen_and_params(
 }
 
 /// Build the YAML mapping for a device block from the provided fields.
+/// The device keys `device_block` writes for itself. Anything else found in an
+/// existing entry is carried across verbatim by [`unmanaged_device_keys`].
+///
+/// Kept as a list rather than derived from `DeviceWrite`'s fields because the
+/// mapping is not one-to-one: `key` is the entry name, not a key inside it.
+const MANAGED_DEVICE_KEYS: [&str; 7] = [
+    "screen", "panel", "dither", "colors", "refresh", "name", "params",
+];
+
+/// Every key of an existing device entry that this writer does not model.
+///
+/// `upsert_device` replaces the whole block, so without this a patch deletes
+/// every setting `DeviceWrite` happens not to carry — `temperature_profile`,
+/// `maximum_compatibility`, `min_png_bytes` and the dither tuning knobs among
+/// them. That failure is silent and only shows up on the glass hours later,
+/// which is exactly how it was found. Preserving by exclusion rather than by
+/// enumeration means a field added to `DeviceConfig` tomorrow survives without
+/// anyone remembering to come back here.
+fn unmanaged_device_keys(yaml: &str, key: &str) -> serde_yaml::Mapping {
+    let mut out = serde_yaml::Mapping::new();
+    let Ok(root) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
+        return out;
+    };
+    let Some(block) = root
+        .get("devices")
+        .and_then(|d| d.get(key))
+        .and_then(|d| d.as_mapping())
+    else {
+        return out;
+    };
+    for (k, v) in block {
+        let managed = k.as_str().is_some_and(|s| MANAGED_DEVICE_KEYS.contains(&s));
+        if !managed {
+            out.insert(k.clone(), v.clone());
+        }
+    }
+    out
+}
+
 fn device_block(w: &DeviceWrite, screen: &str) -> serde_yaml::Mapping {
     let mut m = serde_yaml::Mapping::new();
     m.insert("screen".into(), screen.into());
@@ -259,11 +298,16 @@ pub async fn apply_device_patch(
     let empty = HashMap::new();
     validate_screen_and_params(state, &screen, merged.params.as_ref().unwrap_or(&empty))?;
 
-    let block = device_block(&merged, &screen);
     let yaml = state
         .asset_loader
         .read_config_string()
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let mut block = device_block(&merged, &screen);
+    // Carry across everything this writer does not model, so a screen
+    // assignment cannot quietly strip the device's other settings.
+    for (k, v) in unmanaged_device_keys(&yaml, key) {
+        block.insert(k, v);
+    }
     let new_yaml = config_writer::upsert_device(&yaml, key, &block)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     persist(state, &path, new_yaml)?;
@@ -604,6 +648,68 @@ mod tests {
             .expect("create app state");
         state.addon_mode = addon_mode;
         state
+    }
+
+    const DEVICE_YAML: &str = "\
+devices:
+  \"1C:DB:D4:66:5B:50\":
+    screen: local/gradient-lab
+    panel: trmnl_x
+    dither: floyd-steinberg
+    temperature_profile: a
+    maximum_compatibility: true
+    min_png_bytes: 102401
+    error_clamp: 0.8
+    params:
+      station: Olten
+";
+
+    /// The bug this guards against cost a live panel its anti-ghosting
+    /// settings: `upsert_device` replaces the whole block, so assigning a
+    /// screen silently deleted every key `DeviceWrite` does not carry. It
+    /// failed on the glass, not in a log.
+    #[test]
+    fn unmanaged_device_keys_are_preserved() {
+        let kept = unmanaged_device_keys(DEVICE_YAML, "1C:DB:D4:66:5B:50");
+        for key in [
+            "temperature_profile",
+            "maximum_compatibility",
+            "min_png_bytes",
+            "error_clamp",
+        ] {
+            assert!(
+                kept.contains_key(serde_yaml::Value::from(key)),
+                "{key} must survive a device patch, kept: {kept:?}"
+            );
+        }
+        assert_eq!(
+            kept.get(serde_yaml::Value::from("temperature_profile")),
+            Some(&serde_yaml::Value::from("a")),
+            "value must carry across unchanged, not just the key"
+        );
+    }
+
+    /// Keys the writer sets itself must NOT come back through the side door,
+    /// or a patch clearing `name` or `refresh` would be undone by its own
+    /// preservation step.
+    #[test]
+    fn managed_device_keys_are_not_preserved() {
+        let kept = unmanaged_device_keys(DEVICE_YAML, "1C:DB:D4:66:5B:50");
+        for key in MANAGED_DEVICE_KEYS {
+            assert!(
+                !kept.contains_key(serde_yaml::Value::from(key)),
+                "{key} is written by device_block and must not be carried over"
+            );
+        }
+    }
+
+    #[test]
+    fn unmanaged_device_keys_tolerates_missing_device_and_bad_yaml() {
+        // Preservation is best-effort: it must never be the thing that fails
+        // a write.
+        assert!(unmanaged_device_keys(DEVICE_YAML, "NO:SUCH:MAC").is_empty());
+        assert!(unmanaged_device_keys("::: not yaml :::", "1C:DB:D4:66:5B:50").is_empty());
+        assert!(unmanaged_device_keys("", "1C:DB:D4:66:5B:50").is_empty());
     }
 
     #[test]

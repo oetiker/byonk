@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Assigning a screen to a device no longer deletes the device's other
+  settings.** Changing a device's screen — from the admin API, the web UI or an
+  MCP client — rewrote the device's whole entry in `config.yaml` and silently
+  dropped every setting it did not know how to write: `temperature_profile`,
+  `maximum_compatibility`, `min_png_bytes` and the dither tuning values
+  `error_clamp`, `noise_scale`, `chroma_clamp`, `strength` and `gamut`. Nothing
+  reported an error; the settings were simply gone, and the only symptom was
+  the panel looking wrong again some time later. If a device of yours has lost
+  such a setting, add it back to `config.yaml` — it will stay now.
 - `temperature_profile: c` is now refused with a warning instead of being sent
   to the device. TRMNL's documentation lists `c`, but device firmware up to
   1.8.14 never implemented it and silently reads it as `default` — which turns

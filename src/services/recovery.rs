@@ -30,6 +30,20 @@ pub const MAX_WIPES: u32 = 200;
 /// Wipes requested when the caller does not say.
 pub const DEFAULT_WIPES: u32 = 20;
 
+/// Refresh rate served to a device while a recovery run is in progress.
+///
+/// A run has to set its own poll cadence. A screen's `refresh` says how often
+/// its *content* goes stale, which tells us nothing about how fast a wipe
+/// sequence should proceed -- and obeying it between wipes is what stretched a
+/// 10-wipe run from 45 minutes to 10 hours on 2026-08-21, when the panel was
+/// showing a calibration screen with `refresh: 3600`.
+///
+/// 5 s is not a number invented here: it is the firmware's own fast-poll
+/// interval (`RefreshInterval::fastPollSeconds` in `lib/trmnl`), and
+/// `applyServerRate()` stores whatever the server sends without clamping. So
+/// this is a cadence the device already runs at during normal setup.
+pub const RECOVERY_REFRESH_RATE_SECS: u32 = 5;
+
 /// A recovery run in progress for one device.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoverySession {

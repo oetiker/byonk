@@ -360,3 +360,98 @@ async fn test_unregistered_device_shows_default_device_screen_with_code() {
         cached.rendered_svg
     );
 }
+
+/// A device that is not in `config.devices` is answered with the registration
+/// screen long before the recovery branch runs, so a recovery test has to use
+/// a device the config actually knows about.
+fn app_with_configured_device(mac: &str) -> TestApp {
+    use byonk::assets::AssetLoader;
+    use byonk::models::AppConfig;
+
+    let loader = AssetLoader::new(None, None, None);
+    let mut config = AppConfig::load_from_assets(&loader).expect("load embedded config");
+    let mut device = config
+        .devices
+        .get("DEFAULT")
+        .expect("embedded config has a reserved DEFAULT device")
+        .clone();
+    // Static content: this test is about the refresh rate, not the pixels.
+    device.screen = "byonk-builtin/calibration/grey".to_string();
+    config.devices.insert(mac.to_string(), device);
+    TestApp::from_config(config)
+}
+
+/// A recovery run must set its own poll cadence.
+///
+/// The firmware polls twice per wipe: once for the instruction, then again the
+/// moment the wipe finishes. That second poll is deliberately served content,
+/// and it is the one that decides how long the device sleeps before the next
+/// wipe. Serving the screen's own rate there is what stretched a 10-wipe run
+/// from 45 minutes to 10 hours on a panel showing a `refresh: 3600` screen.
+#[tokio::test]
+async fn recovery_shortens_the_sleep_before_the_next_wipe() {
+    let app = app_with_configured_device(macs::HELLO_DEVICE);
+    let api_key = app.register_device(macs::HELLO_DEVICE).await;
+    let device = byonk::models::DeviceId::new(macs::HELLO_DEVICE);
+
+    app.recovery.start(&device, 3).await;
+
+    let headers = fixtures::display_headers(macs::HELLO_DEVICE, &api_key);
+    let wipe: serde_json::Value = app
+        .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
+        .await
+        .json();
+    assert_eq!(
+        wipe["filename"], "screen_wiper.png",
+        "first poll of a run must be answered with the wipe instruction"
+    );
+
+    let post_wipe: serde_json::Value = app
+        .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
+        .await
+        .json();
+    assert_ne!(
+        post_wipe["filename"], "screen_wiper.png",
+        "the firmware's follow-up poll gets content, not a second wipe"
+    );
+    assert_eq!(
+        post_wipe["refresh_rate"].as_u64().unwrap(),
+        byonk::services::RECOVERY_REFRESH_RATE_SECS as u64,
+        "with wipes still to run, the device must come back promptly"
+    );
+}
+
+/// The override is scoped to the run. Once the last wipe has been handed out
+/// the session is gone, so the panel goes back to the screen's own cadence.
+#[tokio::test]
+async fn the_screens_own_refresh_rate_returns_once_the_run_is_over() {
+    let app = app_with_configured_device(macs::HELLO_DEVICE);
+    let api_key = app.register_device(macs::HELLO_DEVICE).await;
+    let device = byonk::models::DeviceId::new(macs::HELLO_DEVICE);
+    let headers = fixtures::display_headers(macs::HELLO_DEVICE, &api_key);
+
+    let normal: serde_json::Value = app
+        .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
+        .await
+        .json();
+    let normal_rate = normal["refresh_rate"].as_u64().unwrap();
+    assert_ne!(
+        normal_rate,
+        byonk::services::RECOVERY_REFRESH_RATE_SECS as u64,
+        "test is only meaningful if the screen's rate differs from the recovery rate"
+    );
+
+    app.recovery.start(&device, 1).await;
+    app.get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
+        .await; // the one and only wipe
+
+    let after: serde_json::Value = app
+        .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
+        .await
+        .json();
+    assert_eq!(
+        after["refresh_rate"].as_u64().unwrap(),
+        normal_rate,
+        "after the final wipe the run is over and normal cadence resumes"
+    );
+}

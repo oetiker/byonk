@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check on it with `GET`, and stop it early with `DELETE`. Each wipe is a few
   minutes of the device flashing its panel black and white; content reappears
   between wipes and normal operation resumes by itself when the run finishes.
+  While a run is in progress the device checks back every few seconds, so the
+  wipes follow one another closely even when the screen it is showing has a
+  long `refresh` interval.
   Runs are not saved: restarting Byonk, rebooting the device, or simply
   unplugging it all end the run safely. Needs device firmware 1.8.14 or newer —
   on older firmware the device ignores the request and keeps showing content.

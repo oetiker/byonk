@@ -1145,10 +1145,9 @@ pub async fn handle_display<R: DeviceRegistry>(
     // cycles with panel power held, ~190 s -- instead of showing the image. The image
     // URL still rides along, because the firmware handles the response
     // normally before it inspects the filename.
-    let recovery = recovery
-        .on_poll(&crate::models::DeviceId::new(device_id_str))
-        .await;
-    if let Some(ref session) = recovery {
+    let recovery_device_id = crate::models::DeviceId::new(device_id_str);
+    let wipe = recovery.on_poll(&recovery_device_id).await;
+    if let Some(ref session) = wipe {
         tracing::info!(
             device = %device_id_str,
             done = session.done,
@@ -1158,13 +1157,32 @@ pub async fn handle_display<R: DeviceRegistry>(
         );
     }
 
+    // A run sets its own poll cadence, overriding the screen's `refresh`.
+    //
+    // The decisive poll is the firmware's follow-up after a wipe: it is served
+    // content, so without this it sleeps for however long the *content* takes
+    // to go stale before the next wipe. A calibration screen's `refresh: 3600`
+    // turned a 10-wipe run into a 10-hour one.
+    //
+    // Note this asks the registry again rather than reusing `wipe`. They differ
+    // exactly where it matters: the follow-up poll returns `None` while the run
+    // is still going. `on_poll` also drops the session as the final wipe goes
+    // out, so the follow-up poll after that one correctly gets the screen's own
+    // rate back.
+    let recovery_active = wipe.is_some() || recovery.get(&recovery_device_id).await.is_some();
+    let refresh_rate = if recovery_active {
+        crate::services::RECOVERY_REFRESH_RATE_SECS
+    } else {
+        refresh_rate
+    };
+
     // Return JSON response
     // Note: firmware expects status=0 for success (not 200!)
     // The filename is a hash of the SVG content, so TRMNL can detect changes
     Ok(Json(DisplayJsonResponse {
         status: 0,
         image_url,
-        filename: if recovery.is_some() {
+        filename: if wipe.is_some() {
             SCREEN_WIPER_FILENAME.to_string()
         } else {
             content_hash.unwrap_or_else(|| "unchanged".to_string())

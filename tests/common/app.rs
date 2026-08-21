@@ -11,13 +11,14 @@ use tower::ServiceExt;
 use byonk::assets::AssetLoader;
 use byonk::models::AppConfig;
 use byonk::server::{build_router, create_app_state, create_app_state_with_config, AppState};
-use byonk::services::{ContentCache, DeviceRegistry, InMemoryRegistry};
+use byonk::services::{ContentCache, DeviceRegistry, InMemoryRegistry, RecoveryRegistry};
 
 /// Test application with router and direct access to services
 pub struct TestApp {
     router: axum::Router,
     pub registry: Arc<InMemoryRegistry>,
     pub content_cache: Arc<ContentCache>,
+    pub recovery: Arc<RecoveryRegistry>,
 }
 
 impl TestApp {
@@ -32,6 +33,7 @@ impl TestApp {
         // Keep references for test assertions
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
+        let recovery = state.recovery.clone();
 
         // Build router using shared server module (same as production)
         let router = build_router(state);
@@ -40,6 +42,7 @@ impl TestApp {
             router,
             registry,
             content_cache,
+            recovery,
         }
     }
 
@@ -56,12 +59,14 @@ impl TestApp {
 
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
+        let recovery = state.recovery.clone();
         let router = build_router(state);
 
         Self {
             router,
             registry,
             content_cache,
+            recovery,
         }
     }
 
@@ -83,12 +88,14 @@ impl TestApp {
 
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
+        let recovery = state.recovery.clone();
         let router = build_router(state);
 
         Self {
             router,
             registry,
             content_cache,
+            recovery,
         }
     }
 
@@ -163,11 +170,13 @@ impl TestApp {
         let state = create_app_state_with_config(asset_loader, config).expect("create state");
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
+        let recovery = state.recovery.clone();
         let router = build_router(state);
         Self {
             router,
             registry,
             content_cache,
+            recovery,
         }
     }
 
@@ -177,11 +186,13 @@ impl TestApp {
         let state = create_app_state_with_config(asset_loader, config).expect("create state");
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
+        let recovery = state.recovery.clone();
         let router = build_router(state);
         Self {
             router,
             registry,
             content_cache,
+            recovery,
         }
     }
 
@@ -195,12 +206,14 @@ impl TestApp {
         let state = create_app_state_with_config(asset_loader, config).expect("create state");
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
+        let recovery = state.recovery.clone();
         let router = build_router(state);
         (
             Self {
                 router,
                 registry,
                 content_cache,
+                recovery,
             },
             config_path,
         )
@@ -220,12 +233,14 @@ impl TestApp {
         let state = create_app_state_with_config(asset_loader, config).expect("create state");
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
+        let recovery = state.recovery.clone();
         let router = build_router(state);
         (
             Self {
                 router,
                 registry,
                 content_cache,
+                recovery,
             },
             config_path,
         )
@@ -298,11 +313,13 @@ impl TestApp {
         let state = create_app_state_with_config(asset_loader, config).expect("create state");
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
+        let recovery = state.recovery.clone();
         let router = build_router(state);
         Self {
             router,
             registry,
             content_cache,
+            recovery,
         }
     }
 

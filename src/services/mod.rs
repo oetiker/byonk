@@ -28,7 +28,9 @@ pub use file_watcher::{FileChangeEvent, FileWatcher, SharedFileWatcher};
 pub use image_process::{process_image, Fit, GeometryOpts, ImageProcessError, OutputFormat};
 pub use lua_runtime::{FontFaceInfo, LuaRuntime, ScriptError, ScriptResult};
 pub use preview_cache::PreviewCache;
-pub use recovery::{RecoveryRegistry, RecoverySession, DEFAULT_WIPES, MAX_WIPES};
+pub use recovery::{
+    RecoveryRegistry, RecoverySession, DEFAULT_WIPES, MAX_WIPES, RECOVERY_REFRESH_RATE_SECS,
+};
 pub use renderer::RenderService;
 pub use screen_migration::{migrate_builtin_overlay_to_local, MigrationReport};
 pub use screen_store::ScreenStore;

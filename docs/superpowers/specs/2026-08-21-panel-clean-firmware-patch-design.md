@@ -165,7 +165,7 @@ only path that reaches X-class hardware.
 **Protocol.** One new integer field in the `/api/display` response:
 
 ```json
-{ "status": 0, "panel_clean": 200, "refresh_rate": 5 }
+{ "status": 0, "panel_clean": 200, "refresh_rate": 1 }
 ```
 
 - Absent or `0` means normal operation. Backward compatible: existing servers are
@@ -257,7 +257,21 @@ with an active session polls, byonk:
 - decrements `cycles_remaining` and drops the session when it reaches 0,
 - **skips rendering entirely** and omits `image_url` (already `Option` with
   `skip_serializing_if`, so no struct surgery),
-- sends a short `refresh_rate` so bursts follow each other closely.
+- sends **`refresh_rate: 1`** (see below).
+
+**Why `refresh_rate: 1` and not something larger.** `refresh_rate` is the gap the
+device sleeps *after* it finishes, before polling again — not a period. Each poll
+costs roughly **6-7 s of fixed radio overhead** on this device regardless of the
+value, and during a recovery session that is dead time. The burst does all the
+useful work in-device with panel power held, so any gap added on top of the
+overhead is pure waste. There is no battery argument (sessions run on USB) and no
+thermal argument — warmth helps recovery, so idling to cool the panel would be
+counterproductive.
+
+**`cycles_per_burst` is therefore the only pacing knob.** Larger bursts amortise
+the fixed poll overhead better: a 60 s burst against a 7 s poll runs at about 90%
+efficiency. The right default falls out of the cycles-per-minute measurement in
+7.3; 200 is the starting guess, not a derived value.
 
 **Firmware-version gate.** Old firmware parses `panel_clean` as 0 and would then
 receive a response with no image, leaving it idle. Byonk therefore refuses to start

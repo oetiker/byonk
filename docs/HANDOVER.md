@@ -82,8 +82,8 @@ Recovery endpoints confirmed live (401 unauth vs 404 on a bogus path). A 5-wipe
 run completed successfully on device `1C:DB:D4:66:5B:50`.
 
 **`~/scratch/trmnl-firmware`** — branch `feat/panel-clean` @ `30f9ae0`
-(`panel_clean` parsing, 7/7 tests). **Task 4 was never written** and probably
-should not be; see §4. `local/validation` @ `d5af13e` is its base.
+(`panel_clean` parsing, 7/7 tests) — **abandoned, see §4**. Task 4 was never
+written and will not be. `local/validation` @ `d5af13e` is its base.
 **Device currently runs the 1.8.14 control build** (stock FastEPD, reports
 1.8.15 — the version bump is in shared `config.h`, so control and patched
 builds are indistinguishable by version; use the FastEPD object fingerprint:
@@ -97,19 +97,23 @@ carry a byte-identical patch. Now only useful as an upstream defect report.
 
 ---
 
-## 4. The open question: is `panel_clean` worth building?
+## 4. `panel_clean` — decided: not building it
 
-Measured, not guessed: of each 268 s cycle, **191 s is wiping and 77 s (29%) is
-overhead** — boot, WiFi, image download, content repaint, sleep. A single long
-`panel_clean` burst would pay that overhead once instead of per wipe, and would
-skip repainting the burnt-in image between wipes.
+**Owner ruling 2026-08-21: use the firmware's built-in wiper. No firmware fork.**
 
-- **Worth building** if the panel needs hours of wiping.
-- **Not worth it** if 20 wipes clears it.
+`display_wipe()` (§2) already does what a `panel_clean` command would do, and
+byonk already drives it through the recovery endpoints. That is the shipping
+mechanism.
 
-The wipe rate is panel-limited (~1 black/white cycle per second), so
-`panel_clean` cannot wipe *faster* — only with less overhead. Decide after a
-longer run. Task 3 (`30f9ae0`) is committed and costs nothing to drop.
+For the record, the cost we chose to accept: of each 268 s poll cycle, 191 s is
+wiping and 77 s (29%) is overhead — boot, WiFi, image download, content repaint,
+sleep. A single long burst would have paid that overhead once instead of per
+wipe. It would not have wiped *faster* — the rate is panel-limited at ~1
+black/white cycle per second — only with less overhead. Not worth a fork.
+
+Follow-up: `~/scratch/trmnl-firmware` branch `feat/panel-clean` @ `30f9ae0`
+(Task 3, `panel_clean` parsing) is now dead code. It is in the owner's scratch
+repo; drop it whenever convenient. Task 4 stays unwritten.
 
 ---
 

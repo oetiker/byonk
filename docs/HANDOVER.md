@@ -1,11 +1,12 @@
-# Handover — the mid-panel split is a power-up transient, and we are patching it upstream
+# Handover — Tasks 1 and 2 are done; everything now waits on Gate A
 
-**Date:** 2026-08-21 · **Branch:** `feat/panel-clean-recovery` · **HEAD:** `335d58a`
+**Date:** 2026-08-21 · **Branch:** `feat/panel-clean-recovery` · **HEAD:** `73b2f12`
 **Base:** `fix/trmnl-x-ghosting-levers` @ `254705d` (itself off `main` @ `5c67c62`, protected)
 
-> Supersedes the 2026-08-20 handover. That one's diagnosis (burn-in) still
-> holds and is not repeated here; §1 below is the **new** finding that came out
-> of a slow-motion recording, and it changes what we are building.
+> Supersedes the earlier 2026-08-21 handover. The diagnosis in §1 is unchanged
+> and still correct. What changed is §3: Task 2 is finished, and three
+> environment traps were found and fixed along the way — read §6, they will
+> bite again.
 
 ---
 
@@ -63,56 +64,43 @@ byonk admin-driven recovery sessions.
 
 ## 3. Exact state — verify against git, do not trust this snapshot
 
-**byonk** (`feat/panel-clean-recovery`): three commits, all docs.
-`eb3fb82` spec · `e08fd7b` spec fixup (`refresh_rate` pinned to 1) · `335d58a` plan.
+**byonk** (`feat/panel-clean-recovery`): four commits, all docs.
+`eb3fb82` spec · `e08fd7b` spec fixup (`refresh_rate` pinned to 1) ·
+`335d58a` plan · `73b2f12` previous handover.
 **No byonk source has been touched yet.** Tasks 5–8 do that.
 
-**`~/scratch/fastepd`** — both branches done, both carry the patch:
+**`~/scratch/fastepd`** — both branches carry a byte-identical power-up hunk:
 - `validate/upseq-carta1300` @ `2d4a40e`, off the **pinned** `855ce9a4` ← Gate A flashes this
 - `feat/upseq-carta1300` @ `c46bda2`, off `main` `8dc8c74` ← the upstream PR
-- Currently checked out: `validate/upseq-carta1300` (correct)
+- Currently checked out: `validate/upseq-carta1300` (correct). Tree clean.
 
-**`~/scratch/trmnl-firmware`** — `local/validation`, **2 files dirty and uncommitted**
-(`include/config.h`, `platformio.ini`). Task 2 was mid-flight when this session
-ended: the local build env and version bump are written but not committed, and
-the two verification builds had not landed.
+The only differences between the two branches are `main`'s own drift in the
+panel row: clock `26666666`→`20000000`, `BB_PANEL_FLAG_DARK`→`SLOW_SPH`, line
+padding `16`→`44`. Our added `| BB_PANEL_FLAG_UPSEQ_MC2` is identical on both.
 
-**Task status:** Task 1 complete and reviewed clean. Task 2 **in flight** —
-resume it, do not restart it.
+**`~/scratch/trmnl-firmware`** — `local/validation` @ `d5af13e`, **tree clean**.
+Three files committed: `platformio.ini`, `include/config.h`,
+`sdkconfigs/sdkconfig.TRMNL_X_LOCAL`.
 
-Task 2's implementer stopped at a precise point: both fastepd branches are
-committed, the two trmnl-firmware files are edited but **not** committed, and
-the first verification build was still running when the session ended:
+**Task status:** Tasks 1 and 2 complete. Task 2 review pending. Then **Gate A**.
 
-```
-cd ~/scratch/trmnl-firmware && pio run -e TRMNL_X_LOCAL
-# log: ~/scratch/panel-evidence-build-validate.log
-```
-
-First check whether it finished and what it said:
-
-```bash
-tail -20 ~/scratch/panel-evidence-build-validate.log
-pgrep -fl "pio run"          # empty means it is done
-ls ~/scratch/trmnl-firmware/.pio/build/TRMNL_X_LOCAL/*.bin
-```
-
-If it succeeded, the remaining Task 2 work is: commit the two dirty files
-(Step 10), then run the second build with `feat/upseq-carta1300` checked out
-in fastepd, then leave `validate/upseq-carta1300` checked out.
+**The built artifact is ready to flash.** `.pio/build/TRMNL_X_LOCAL/firmware.bin`
+reports `1.8.15`, and its FastEPD object matches the validate-branch
+fingerprint `18bb0faa51d397e57a4d2ceb85eba3dc` (see §6 for how that was
+established and why the obvious check does not work).
 
 ---
 
 ## 4. How to resume
 
-1. Read the ledger. It carries seven rulings and the pre-flight conflict scan.
-2. Finish Task 2 from its brief (`.superpowers/sdd/.../task-2-brief.md`):
-   commit the two dirty trmnl-firmware files, then run the **amended** Step 9 —
-   build `pio run -e TRMNL_X_LOCAL` once with each fastepd branch checked out,
-   leaving `validate/upseq-carta1300` checked out at the end.
-3. Review Task 2, then **stop at Gate A**. It is the user's: flash, film five
-   updates at 240 fps, measure. `~/scratch/panel-evidence/GATE-A.md` has every
-   command with the port already filled in.
+1. Read the ledger. It now carries **ten rulings**, the pre-flight conflict
+   scan, and the Task 2 closeout.
+2. Review Task 2 (`git log 6bff55b..d5af13e` in trmnl-firmware; the two fastepd
+   commits). Note Task 2 deviated from its brief in one deliberate way —
+   Ruling 8 — and the deviation is load-bearing, not cosmetic.
+3. **Stop at Gate A.** It is the user's: flash, film five updates at 240 fps,
+   measure. `~/scratch/panel-evidence/GATE-A.md` has every command with the
+   port already filled in.
 4. Gate A decides everything downstream. PASS → Tasks 3–8 and two upstream PRs.
    FAIL → the split is a hardware defect; the clean mode still has value but the
    FastEPD PR becomes a defect report.
@@ -127,6 +115,9 @@ Continue with `superpowers:subagent-driven-development`.
   TRMNL ships, including ESP32-S3 parallel bit-banging and row-start-timing
   changes. Validating off `main` would leave a vanished step unattributable.
   Both clones were shallow (depth 1) and have been unshallowed.
+- **`sdkconfigs/sdkconfig.TRMNL_X_LOCAL` must exist and must stay a byte copy
+  of `sdkconfig.TRMNL_X`.** See §6 — without it the validation firmware is not
+  configuration-identical to the shipped build, and Gate A proves nothing.
 - **`refresh_rate: 1` during a burst.** Each poll costs ~6–7 s of fixed radio
   overhead; any gap beyond it is dead time. `cycles_per_burst` is the only
   pacing knob.
@@ -140,12 +131,66 @@ Continue with `superpowers:subagent-driven-development`.
 
 ---
 
-## 6. Environment
+## 6. Environment — three traps found on 2026-08-21, all still live
+
+**Trap 1: esptool's dependencies live in the Homebrew venv, and `brew upgrade`
+will wipe them.** `pio` here is the Homebrew build and runs
+`/opt/homebrew/Cellar/platformio/6.1.19_2/libexec/bin/python`, **not**
+`~/.platformio/penv`. PlatformIO upgraded `tool-esptoolpy` to 5.1.2, whose
+dependencies were missing there, so every post-build `merge_bin` failed with
+`ModuleNotFoundError: No module named 'rich_click'`. Fix — reinstall the list
+from the package's own `pyproject.toml`:
+
+```bash
+/opt/homebrew/Cellar/platformio/*/libexec/bin/python -m pip install \
+  "bitstring>=3.1.6,!=4.2.0" "cryptography>=43.0.0" "pyserial>=3.3" \
+  "reedsolo>=1.5.3,<1.8" "PyYAML>=5.1" intelhex "rich_click<2" "click<9"
+```
+
+Verify with `pio pkg exec -p tool-esptoolpy -- esptool.py version`.
+
+**Trap 2: a new PlatformIO env silently gets a default ESP-IDF config.**
+`platformio.ini:503` sets the config path from the env *name*:
+
+```ini
+board_build.esp-idf.sdkconfig_path = sdkconfigs/sdkconfig.${this.__env__}
+```
+
+`extends = env:TRMNL_X` inherits that line verbatim, so `TRMNL_X_LOCAL`
+resolved to a file that did not exist and PlatformIO generated one from ESP-IDF
+defaults — **330 lines** away from the shipped config, including bootloader
+optimisation level, log levels and `CONFIG_BOOTLOADER_RESERVE_RTC_SIZE` — and
+**still reported SUCCESS**. Any new env needs its sdkconfig seeded from the
+shipped one and committed.
+
+**Trap 3: changing an sdkconfig does not regenerate `memory.ld`.** PlatformIO
+recompiles the sources but keeps the stale linker script, which then fails with
+`region 'rtc_reserved_seg' overflowed by 16 bytes` (stale `(0 + 24)` vs correct
+`((0x10 aligned to 8) + 24)` = 40). After any sdkconfig change run
+`pio run -e <env> -t clean` first. Branch switches in the symlinked FastEPD do
+**not** need a clean — incremental builds track them correctly (proven below).
+
+**How to check which FastEPD branch is baked into a build.** The obvious test —
+searching `firmware.bin` for the panel clock constant `26666666` vs `20000000` —
+is **invalid**; the `env:TRMNL_X` control built from pinned `855ce9a4` shows
+identical counts. Fingerprint the object instead:
+
+```bash
+# the libNNN/ dir is a PlatformIO hash and can change — find it, don't hardcode it
+md5 -q $(find ~/scratch/trmnl-firmware/.pio/build/TRMNL_X_LOCAL -name FastEPD.cpp.o)
+# 18bb0faa51d397e57a4d2ceb85eba3dc = validate/upseq-carta1300
+# 0a1c395c8d393c272180b2ae6b86f93d = feat/upseq-carta1300
+```
+
+**Other environment notes**
 
 - TRMNL X on **`/dev/cu.usbmodem101`**. PlatformIO Core 6.1.19 (`symlink://` OK).
-  esptool via `pio pkg exec -- esptool.py`.
 - **Never `erase_flash` or `pio run -t erase`** — wipes NVS, taking WiFi
   credentials and the byonk registration with it. Upload the app only.
+- `env:TRMNL_X` is the clean control build: if a local build fails, build that
+  one first to find out whether the repo or your env is at fault.
+- Build logs: `~/scratch/panel-evidence-build-validate.log`,
+  `-build-pr.log`, `-build-shipped.log`.
 - `homeio.oetiker.ch` still runs `local_byonk` 0.19.0-dev3 on `:3000` with
   `log_level: debug`. Sandbox blocks outbound TCP — `ssh`/`curl` need
   `dangerouslyDisableSandbox: true`.

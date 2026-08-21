@@ -1141,8 +1141,8 @@ pub async fn handle_display<R: DeviceRegistry>(
 
     // A panel-recovery session replaces this poll's content with a wipe
     // instruction. `screen_wiper.png` is TRMNL's own trigger: the firmware
-    // recognises the filename and runs display_wipe() -- ~1000 black/white
-    // passes with panel power held -- instead of showing the image. The image
+    // recognises the filename and runs display_wipe() -- ~200 black/white
+    // cycles with panel power held, ~190 s -- instead of showing the image. The image
     // URL still rides along, because the firmware handles the response
     // normally before it inspects the filename.
     let recovery = recovery

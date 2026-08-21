@@ -3,9 +3,11 @@
 //! A recovery session asks a device to run full-panel wipes instead of showing
 //! content, to clear ghosting and burn-in. The device-side work is TRMNL's own
 //! `display_wipe()`, which the firmware runs whenever the display response's
-//! `filename` is `screen_wiper.png`. Each wipe is roughly 1000 black/white
-//! passes with panel power held for the whole burst; holding power matters,
-//! because every power-up costs a transient.
+//! `filename` is `screen_wiper.png`. One wipe is 100 x `fullUpdate(CLEAR_SLOW)`
+//! with panel power held for the whole burst, which the panel runs at about
+//! one black/white cycle per second: ~200 cycles taking ~190 s, measured on a
+//! TRMNL X on 2026-08-21. Holding power across the burst is the point --
+//! otherwise each cycle would pay its own power-up.
 //!
 //! Sessions live in memory only. A byonk restart cancels every run, which is
 //! the same way [`crate::models::Device`] already treats runtime state, and it
@@ -21,8 +23,8 @@ use crate::models::DeviceId;
 
 /// Upper bound on wipes per session.
 ///
-/// One wipe is already ~1000 panel passes, so this is a generous ceiling that
-/// still stops a typo from tying a panel up for days.
+/// One wipe measured ~190 s end to end and a full poll cycle ~270 s, so this
+/// ceiling is roughly 15 hours of wiping. Generous, but still short of a day.
 pub const MAX_WIPES: u32 = 200;
 
 /// Wipes requested when the caller does not say.

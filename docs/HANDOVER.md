@@ -1,240 +1,273 @@
-# Handover — the split hypothesis died, the wiper shipped, and the panel needs a real calibration
+# Handover — the panel has two tone curves, and the PNG's byte size picks one
 
-**Date:** 2026-08-21 (evening) · **Branch:** `feat/panel-clean-recovery` · **HEAD:** `c880e32`
+**Date:** 2026-08-21 (late) · **Branch:** `feat/panel-clean-recovery` · **HEAD:** `ce2e3ef`
 **Base:** `fix/trmnl-x-ghosting-levers` @ `254705d` (off `main` @ `5c67c62`, protected)
 
-> Supersedes the two earlier 2026-08-21 handovers. **Section 1 is a reversal** —
-> the diagnosis those handovers were built on did not survive contact with the
-> panel. Read §1 and §6 before doing anything.
+> Supersedes the three earlier 2026-08-21 handovers. **§1 is a reversal of the
+> previous §5**: "this panel's ink levels are badly wrong" was the wrong frame.
+> The levels are a property of a *firmware grey table*, and which table runs is
+> decided by how many bytes the PNG happens to compress to. Read §1 before
+> touching calibration. §2 records numbers that are finally trustworthy.
 
 ---
 
-## 1. What Gate A actually showed — the hypothesis is dead
+## 1. The finding: two grey tables, selected by image size
 
-The plan assumed the mid-panel split was a FastEPD power-up sequencing fault
-(TPS65185 UPSEQ writes positioned after PWRUP, where the chip has already
-reloaded its defaults). Gate A ran. **The split was gone before the patch was
-ever flashed.**
+`src/display.cpp:1903` in the TRMNL firmware:
 
-Sequence, all measured:
+```c
+#define FASTEPD_LARGE_IMAGE_THRESHOLD (100 * 1024)
+...
+if (data_size > FASTEPD_LARGE_IMAGE_THRESHOLD) {
+    bbep.setCustomMatrix(u8_graytable_big, sizeof(u8_graytable_big));   // 38-pass
+} else {
+    bbep.setCustomMatrix(u8_graytable, sizeof(u8_graytable));           // 9-pass
+}
+```
 
-| Time | Firmware | Split |
-|---|---|---|
-| 09:07 | 1.8.13 (as found) | **+21** at band 55 |
-| 11:21 | 1.8.14, FastEPD **unpatched** | **+2** — noise floor |
-| ~11:35 | 1.8.13 restored byte-for-byte | **still gone** (owner, by eye) |
+Two hand-tuned waveform tables, chosen by the **downloaded PNG's byte count**.
+PNG size depends on how compressible the picture is, so **the panel's tone
+response flips silently with screen content**: flat cells compress small and get
+the 9-pass table, a dithered photo does not and gets the 38-pass one.
 
-The split did not return when the original firmware was restored, so it was a
-persistent change to the **panel**, not firmware behaviour. Most likely cause:
-1.8.14 ships `display_wipe()` (`6bcf466 Add screen wiper (#537)`), and a
-full-panel clear equalises charge at the gate-driver boundary.
+That is what produced every confusing observation in the earlier handovers. Ink
+Field rendered to **4285 bytes** (9-pass, smooth ramp); Gradient Lab to
+**~146 400 bytes** (38-pass, huge jumps). Same panel, same session, same
+lighting — different tables.
 
-**Consequences.** The FastEPD UPSEQ bug is still a genuine code defect — the
-writes cannot take effect where they sit — but the evidence for why it mattered
-is gone. It is an upstream **defect report**, not a fix with a measured
-before/after. Tasks 3-8's original framing is obsolete; see §3.
+**Proved by A/B, not inferred.** `min_png_bytes: 102401` padded the *same* Ink
+Field screen past the threshold (byonk log: `size_bytes=102401`), and the jumps
+appeared on a screen that had just looked clean. The owner also saw the longer
+build-up on the glass. Note the A/B needs a **content change** to force a
+re-download — byonk names images by the *SVG's* hash, so padding alone leaves
+the hash identical and the device keeps its cached copy. `params: {offset: 8}`
+on Ink Field does that and doubles as a position-independence check.
 
-Two things also eliminated by measurement: the FastEPD pin `855ce9a4` never
-changed between 1.8.13 and 1.8.14 (`git log -S "FastEPD.git#" -- platformio.ini`
-shows only the two commits that introduced it), and `73fdc73 Refactor power
-(#529)` reads USB/charging status pins, not the panel rails.
+**Consequence for byonk:** `colors_actual` is not a property of the panel. It is
+a property of (panel, grey table). A single list cannot be right for both. Pin
+the table with `min_png_bytes` if calibration is to mean anything.
 
 ---
 
-## 2. The feature already existed upstream
+## 2. Measured ink levels — both tables
 
-`display_wipe()` in 1.8.14 is **server-triggerable today**: `src/bl.cpp:1548`
-runs it whenever the display response's `filename` is `screen_wiper.png`. It
-does 100 x `fullUpdate(CLEAR_SLOW, bKeepOn=true)` — panel power held for the
-whole burst, which was the design point the plan called the entire reason to
-build `panel_clean`.
+Method: Ink Field photographed square-on (iPhone ProRAW), `dcraw -4 -T -o 0
+-r 1 1 1 1`, **green plane only** (`ffmpeg -vf extractplanes=g`, no colour
+matrix, no range remap). Latin-square average per ink, cross-checked against an
+ANOVA that fits row and column lighting as free parameters.
 
-So byonk now drives TRMNL's own mechanism and needs **no firmware fork**.
+**Both frames passed their own quality gate**: the two independent estimators
+agreed to **0.27** and **0.22 L\***, residual scatter 5.8% in both. The fitted
+lighting field was large — 19% across rows, 22% across columns — and cancelled,
+which is exactly what the Latin square is for.
 
-**Measured on hardware 2026-08-21:** one wipe = **191 s** (~200 black/white
-cycles at ~1/s, matching `display_wipe`'s own source comment — an earlier
-"~1000 passes" figure was arithmetic from an enum comment and was wrong). A
-full poll cycle at `refresh_rate=60` = **268 s ± 0.4 s**. So 20 wipes ≈ 89 min,
-and `MAX_WIPES=200` ≈ 15 h.
+| | contrast (white/black) | steps indistinguishable from zero (2σ) | worst step |
+|---|---|---|---|
+| **9-pass** | 8.05 : 1 | 2 — inks 0→1, 14→15 | +6.51 L\* |
+| **38-pass** | **9.28 : 1** | **4** — inks 0→1, 8→9, 11→12, 13→14 | **+16.20 L\*** |
 
-**The firmware polls TWICE per wipe** — once for the instruction, then again via
-`downloadAndShow()` the moment the wipe finishes. Counting both spends two wipes
-per wipe performed, and answering the second with the wiper again trips the
-`wiped_this_wake` guard, which returns early and leaves the panel blank.
-`RecoveryRegistry::on_poll`'s `awaiting_post_wipe_poll` handles this and was
-**confirmed correct on hardware** (done went 1 -> 2, not 1 -> 3).
+38-pass L\* (relative to its own white): 39.19, 38.89, 45.69, 50.72, 66.92,
+74.44, 77.67, 84.86, 86.60, 86.21, 92.69, 94.46, 95.59, 97.11, 98.47, 100.00.
+
+**So "38-pass is better" is only ~15% more contrast, paid for with twice as many
+dead levels**, a 16.2 L\* chasm at 3→4, and the top six levels crushed into
+~7 L\*. It is not monotonic within noise (0→1 and 8→9 invert slightly).
+
+**Dead: the old 44:1 figure and the whole `gradient-lab` calibration.** Gradient
+Lab's ramp is spatially ordered, so lighting was inseparable from tone. Ink
+Field replaces it. The owner's earlier by-eye observations were also made on
+Gradient Lab, so they carry the same contamination — that is why they disagree
+with §2 and it is not evidence against the measurement.
+
+**Absolute levels are NOT measured.** Neither frame contained a reference of
+known reflectance, so only the ramp's *shape* is known; the existing white
+(`#B8B8B0`) was carried over as the anchor. Green channel only, so the values
+are neutral by construction — nothing is known about the panel's tint. **Put a
+white card in the next frame** and this limit disappears. (The owner's idea of
+using the bezel as a reference works too, and would let the two tables be
+compared in absolute terms — the contrast ratios above did not need it, being
+ratios within a single frame.)
 
 ---
 
 ## 3. Exact state
 
-**byonk** (`feat/panel-clean-recovery`), 4 commits this session:
-- `0bfe38e` previous handover
-- `166480e` **admin-driven panel recovery** — `GET`/`POST`/`DELETE
-  /api/admin/devices/{key}/recover`, in-memory sessions, 13 tests
-- `cc983a2` measured wipe dose replacing the guessed one
-- `c880e32` **Ink Field** calibration screen (§5)
+**byonk** (`feat/panel-clean-recovery`), this session's commits:
+- `485773f` handover: `panel_clean` abandoned, use the firmware's wiper
+- `ce2e3ef` **fix: a wipe run sets its own poll cadence** (§4)
 
-Verified: build clean, `clippy -D warnings` clean, **542 tests pass**.
+Verified at `ce2e3ef`: `cargo fmt`, `clippy -D warnings` clean,
+**43 test binaries / 1229 tests / 0 failures**.
 
-**Deployed:** `local_byonk` **0.19.0-dev5** running on `homeio.oetiker.ch:3000`.
-Recovery endpoints confirmed live (401 unauth vs 404 on a bogus path). A 5-wipe
-run completed successfully on device `1C:DB:D4:66:5B:50`.
+**Uncommitted: only the owner's four docs-screenshot files** — `config.yaml`,
+`docs/generate-samples.sh`, `docs/src/concepts/content-pipeline.md`,
+`tools/capture-config.yaml`. **Never stage them.** Never `git add -A` here.
 
-**`~/scratch/trmnl-firmware`** — branch `feat/panel-clean` @ `30f9ae0`
-(`panel_clean` parsing, 7/7 tests) — **abandoned, see §4**. Task 4 was never
-written and will not be. `local/validation` @ `d5af13e` is its base.
-**Device currently runs the 1.8.14 control build** (stock FastEPD, reports
-1.8.15 — the version bump is in shared `config.h`, so control and patched
-builds are indistinguishable by version; use the FastEPD object fingerprint:
-control `3208620b…`, patched `18bb0faa…`).
+**Deployed on homeio** (`local_byonk`, `/addon_configs/local_byonk/config.yaml`),
+**none of this is in the repo**:
 
-**`~/scratch/fastepd`** — `validate/upseq-carta1300` checked out; both branches
-carry a byte-identical patch. Now only useful as an upstream defect report.
+| key | value | backup taken |
+|---|---|---|
+| `panels.trmnl_x.colors_actual` | measured 38-pass (below) | `config.yaml.pre-measured-colors` |
+| device `min_png_bytes` | `102401` — pins the 38-pass table | `config.yaml.pre-graytable` |
+| device `params` | `{offset: 8}` — leftover from Ink Field, clear it | — |
+| device `screen` | `local/gradient-lab` | — |
 
-**Full flash backup:** `~/scratch/panel-evidence/flash-backup-2026-08-21.bin`
-(16777216 bytes, contains 1.8.13). Restore writes ~1.5 MB regions — see §6.
-
----
-
-## 4. `panel_clean` — decided: not building it
-
-**Owner ruling 2026-08-21: use the firmware's built-in wiper. No firmware fork.**
-
-`display_wipe()` (§2) already does what a `panel_clean` command would do, and
-byonk already drives it through the recovery endpoints. That is the shipping
-mechanism.
-
-For the record, the cost we chose to accept: of each 268 s poll cycle, 191 s is
-wiping and 77 s (29%) is overhead — boot, WiFi, image download, content repaint,
-sleep. A single long burst would have paid that overhead once instead of per
-wipe. It would not have wiped *faster* — the rate is panel-limited at ~1
-black/white cycle per second — only with less overhead. Not worth a fork.
-
-Follow-up: `~/scratch/trmnl-firmware` branch `feat/panel-clean` @ `30f9ae0`
-(Task 3, `panel_clean` parsing) is now dead code. It is in the owner's scratch
-repo; drop it whenever convenient. Task 4 stays unwritten.
-
----
-
-## 5. The new front: this panel's ink levels are badly wrong
-
-The owner spotted it by eye on the glass. **Confirmed by linear raw** (iPhone
-ProRAW, `dcraw -4 -T -o 0 -r 1 1 1 1`, flat-field corrected per column):
-
-| Owner said | Measured ΔL* |
-|---|---|
-| 0 and 1 almost the same | **+0.68** |
-| 3 and 4 wide gap | **+25.10** |
-| 7 8 9 almost the same | **+1.95, +0.57** |
-| jump to 10 | **+6.31** |
-| 11 and 12 almost the same | **+1.37** |
-
-Even spacing would be 6.06 L*. Real range **0.57 to 25.10 — a 44:1 ratio**,
-plus a second chasm at 1→2 (+20.52). byonk assumes a smooth ramp whose extremes
-differ only 2.6:1. Its `colors_actual` for `trmnl_x` (`default-config.yaml:35`)
-is interpolated from a generic curve six panels share and was never measured.
-
-**Do not use the calibration derived from `gradient-lab`.** Its ramp is
-spatially ordered, so the room's lighting is indistinguishable from the tone
-curve. That is what produced a bogus "two-halves black level step" which a
-second photo from another angle disproved — it was glare.
-
-**`local/inkfield` / `screens/builtin/calibration/inkfield/` (`c880e32`) is the
-fix.** A 16x16 Latin square, ink `(3*row + col) mod 16`, 117x88 px cells. Every
-ink appears once per row and once per column, so a separable lighting field
-cancels *by construction*. Black and white land near every position, so each
-cell normalises against local references — dark-frame plus flat-field from one
-hand-held shot. Reads `layout.colors`, so it generalises to colour panels.
-Renders correctly; **not yet photographed or measured**.
-
-Next: **flush the panel first** (ghosting biases every cell), show `inkfield`,
-one square-on DNG, measure. Then the owner's idea of a **panel auto-calibrator**
-— grid detect, per-cell means, local black/white normalisation, average per ink
-— which is a plain program with no model in the loop.
-
-The screen exists twice: `screens/builtin/…` is its home but needs a byonk
-rebuild; `local/inkfield` on homeio is the live copy. Fold into one once settled.
-
----
-
-## 6. Traps that cost real time today
-
-**The owner's eye beat the instrument twice.** Once on 7-8-9 (the JPEG's local
-tone mapping invented separation that hid a real collision, and invented a
-collision at 5/6 that does not exist), once on the black-level step (glare).
-When a processed measurement disagrees with what the panel looks like, suspect
-the measurement. A phone JPEG's tone mapping is **local**, so it is not a
-monotonic transform and *can* reverse the order of two tones.
-
-**esptool's dependencies live in the Homebrew venv.** `pio` here runs
-`/opt/homebrew/Cellar/platformio/*/libexec/bin/python`, not `~/.platformio/penv`.
-`brew upgrade platformio` will break `merge_bin` again:
-```bash
-/opt/homebrew/Cellar/platformio/*/libexec/bin/python -m pip install \
-  "bitstring>=3.1.6,!=4.2.0" "cryptography>=43.0.0" "pyserial>=3.3" \
-  "reedsolo>=1.5.3,<1.8" "PyYAML>=5.1" intelhex "rich_click<2" "click<9"
+```
+colors_actual: "#404040,#414141,#4C4C4C,#555555,#747474,#838383,#898989,#989898,
+                #9B9B9B,#9C9C9C,#A8A8A8,#ACACAC,#AEAEAE,#B1B1B1,#B4B4B4,#B7B7B7"
 ```
 
-**A new PlatformIO env silently gets a default ESP-IDF config.**
-`sdkconfig_path = sdkconfigs/sdkconfig.${this.__env__}` is inherited by
-`extends`, so a new env resolves to a file that does not exist and PlatformIO
-generates one 330 lines from the shipped config — **and still reports SUCCESS**.
-Seed it and commit it. Also: changing an sdkconfig does **not** regenerate
-`memory.ld`; run `pio run -e <env> -t clean` first or get a bogus
-`rtc_reserved_seg overflowed by 16 bytes`.
+Renders correctly (`measured_source: panel.colors_actual`). **The device had not
+yet polled it when this was written** — it sleeps on `refresh_rate=3600` and
+needs a middle-pad tap. Judging it: bars **B and D** (marked, continuous tone)
+are the test — they go through gamut mapping and should smooth out across the
+old 3→4 gap. The **ink ramp is the control**: it is sent as literal palette
+indices and must look unchanged.
 
-**PlatformIO cannot flash this device.** `-t upload` spends 75 s rebuilding and
-merging while the sleeping device drops USB; `-t nobuild` breaks its esptool 5.x
-argument construction. Drive esptool directly with a retry loop, and **keep
-writes to ~1.5 MB regions** — a 16 MB or even 3 MB write dies with "chip stopped
-responding", while bootloader + partitions + app (1.4 MB) succeeds first try.
+**Measurement kit preserved** at `~/scratch/panel-evidence/inkfield-2026-08-21/`
+— both source DNGs, `run.py` (fit + measure + cross-check), `build_colors.py`,
+`colors.py`, `validate.py`, plus the extracted per-cell arrays. Needs numpy;
+the session venv is gone, so `python3 -m venv venv && venv/bin/pip install numpy`.
+Usage: `run.py <green.raw> <ink offset> <tag> [x0 x1 y0 y1]`.
 
-**byonk does not hot-reload `/config/config.yaml`** on the add-on. Restart it —
-and change config *before* starting a recovery run, since a restart cancels
-in-memory sessions.
+**Firmware / flash** unchanged from the last handover: device runs the 1.8.14
+control build, full flash backup at
+`~/scratch/panel-evidence/flash-backup-2026-08-21.bin`, `feat/panel-clean` @
+`30f9ae0` abandoned.
 
-**`cargo clean` freed 225 GiB.** `target/debug/incremental` alone was 50 GB and
-never self-prunes.
+---
+
+## 4. What shipped in `ce2e3ef`, and why
+
+byonk served the **screen's** `refresh_rate` during a recovery run. The poll that
+matters is the firmware's follow-up after a wipe: it is answered with content, so
+the device then slept for however long the *content* takes to go stale. With Ink
+Field's `refresh: 3600` a 10-wipe run became a **10-hour** one — observed live,
+one wipe ran and the run sat idle.
+
+A run now serves `RECOVERY_REFRESH_RATE_SECS = 5`. That is the firmware's own
+fast-poll interval (`RefreshInterval::fastPollSeconds`), and `applyServerRate()`
+stores whatever the server sends **without clamping**, so it is a cadence the
+device already uses.
+
+The subtle part, and the reason for a comment in the code: the check asks the
+registry **again** rather than reusing `on_poll`'s result. They differ exactly
+where it matters — the follow-up poll returns `None` while the run is still
+going. And because `on_poll` drops the session as the final wipe goes out, the
+screen's own rate returns by itself.
+
+Also fixed two pinned builtin-screen counts left at 5 by `c880e32`, which had
+the suite red (`tests/builtin_package.rs`, `tests/screen_schemas_test.rs`).
+
+---
+
+## 5. Open byonk defects found today
+
+1. **The tone response flips silently with content size.** Nothing in byonk
+   knows about `FASTEPD_LARGE_IMAGE_THRESHOLD`. A user gets one grey table for a
+   text screen and another for a photo, with no way to tell. At minimum byonk
+   should warn when a `trmnl_x` render lands near 100 KiB; arguably
+   `min_png_bytes` should default on for that panel.
+2. **The palette cannot say "these two inks look identical."**
+   `EinkPalette::new` rejects duplicates (`palette error: duplicate color found
+   at index 9`) — it was deployed and *did* break the render until the pair was
+   nudged apart by one 8-bit step. The panel really does have two dead pairs.
+3. **The palette is positional, so usable levels cannot be declared.** The
+   owner's idea — declare only the 14 inks that do something — does not work
+   today: `map_grey_indices` (`src/rendering/svg_to_png.rs`) derives the
+   transmitted grey from an entry's **index**, spreading the list evenly over
+   the output range. Dropping two of sixteen would skip levels **4 and 11**, not
+   the dead 1 and 9, and shift everything above the first gap.
+   **Proposed fix: derive the level from the entry's hex value instead.** The hex
+   already carries it (`#111111` *is* level 1), and for every palette byonk ships
+   the two agree exactly — so it is backwards compatible and only differs when a
+   list has gaps, which is the wanted capability. Note `EinkPalette::new` and
+   `resolve_measured_colors` both require `colors` and `colors_actual` to be the
+   same length, so both lists must shorten together.
+
+---
+
+## 6. Traps
+
+**Do not trust a grid fit that has not proved itself.** `run.py` prints two
+independent estimates and their disagreement; **0.2–0.3 L\* is a good fit, and
+anything above ~1 L\* means the grid is misaligned, not that the panel is
+strange.** A bad fit produced a confident, monotone-looking, completely wrong
+table (49 L\* disagreement, 38% residuals, L\* above 100). The gate caught it.
+
+**The 17 grid lines are evenly spaced, so the fit aliases by whole cells.**
+Nothing pins the phase except the panel border. Weighting the two outer lines
+helps but can latch onto the bezel's *outer* edge. A coarse bbox hint read off
+the brightness profile is the reliable route — the bezel is far brighter
+(~10000–13000) than any ink (≤7458). A full auto-detector is still unbuilt; it
+is the "panel auto-calibrator" idea and it is harder than it looks.
+
+**Tapping the touchbar forces a server fetch** — this is the fastest way to make
+the device poll. Not because the buttons fetch, but because `src/bl.cpp:975`
+takes any **non-timer** wake as a reason to show the logo, clear the displayed
+image and un-register, which forces a refetch. Use the **middle** pad: left and
+right are Back/Next and call `show_cached_image_by_offset()`, which paints a
+*cached* image and sleeps.
+
+**`ha addons` is deprecated** in favour of `ha apps`; it still works but warns.
+
+**homeio's address changed mid-session** and a wedged ssh ControlMaster made
+everything hang. `-o ControlMaster=no -o ControlPath=none` diagnoses it. There is
+no `timeout` binary on this Mac; `curl --retry N --retry-delay S
+--retry-all-errors --retry-connrefused` is the way to wait for a restart, since
+foreground `sleep` is blocked.
+
+**byonk does not hot-reload `/config/config.yaml`.** Restart it — and change
+config *before* starting a recovery run, since a restart cancels in-memory
+sessions.
+
+**Earlier traps still true:** esptool's deps live in the Homebrew venv; a new
+PlatformIO env silently gets a default sdkconfig and still reports SUCCESS;
+PlatformIO cannot flash this device (drive esptool directly, ~1.5 MB regions);
+never `erase_flash`. See `841ed1f` for the full text of those four.
 
 ---
 
 ## 7. Environment
 
-- Device `1C:DB:D4:66:5B:50` on **`/dev/cu.usbmodem101`**, firmware 1.8.14 control.
-- **Never `erase_flash` or `pio run -t erase`** — wipes NVS, WiFi and registration.
-- `env:TRMNL_X` is the clean control build: if a local build fails, build that
-  first to find out whether the repo or your env is at fault.
-- **homeio deploy** (`root@homeio.oetiker.ch`, add-on `local_byonk`, source at
-  `/addons/byonk`):
-  1. `git archive --format=tar HEAD Cargo.toml Cargo.lock src crates fonts screens byonk-base static docs/src custom_components default-config.yaml | ssh root@homeio.oetiker.ch 'tar -xf - -C /addons/byonk'` — sync the **whole** set; a src-only sync failed with `cannot find module or crate crc32fast` because the host's `Cargo.toml` was older.
-  2. Bump `version:` in `/addons/byonk/config.yaml` (the Dockerfile's `BUILD_VERSION` cache-bust key).
-  3. `ha store reload && ha addons update local_byonk`
-  4. Read failures with `ha supervisor logs` — `ha addons update` only says "unknown error".
+- Device `1C:DB:D4:66:5B:50`, `/dev/cu.usbmodem101`, firmware 1.8.14 control.
+- **homeio**: `root@homeio.oetiker.ch` (ssh is fine to run), add-on `local_byonk`,
+  runtime config `/addon_configs/local_byonk/config.yaml`, source `/addons/byonk`.
   Host has `jq`, **no `python3`**. Admin token:
   `ha addons info local_byonk --raw-json | jq -r .data.options.admin_token` —
-  keep it in a shell variable, **never print it** (project CLAUDE.md).
-- Raw workflow: `dcraw` installed via brew. `dcraw -4 -T -o 0 -r 1 1 1 1 x.DNG`
-  gives linear 16-bit; read it with `ffmpeg -pix_fmt gray16le`.
-  **iCloud share links deliver JPEG, not DNG** — export the original from Photos.
+  keep it in a shell variable, **never print it**.
+  Full redeploy recipe unchanged — see `841ed1f` §7.
+- Raw workflow: `dcraw -4 -T -o 0 -r 1 1 1 1 x.DNG` for linear 16-bit; prefer
+  `ffmpeg -vf extractplanes=g -pix_fmt gray16le` over a luma conversion.
+  **iCloud share links deliver JPEG** — export the original from Photos.
 - byonk verify: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo test --lib`. **`make check` has reported exit 0 while tests failed.**
-- SDD ledger (git-ignored, 15 rulings):
-  `.superpowers/sdd/2026-08-21-panel-clean-recovery/progress.md`
+  `cargo test --workspace`. **`make check` has reported exit 0 while tests failed.**
 
 ---
 
-## 8. Still open, unrelated to this branch
+## 8. Next
+
+1. **Look at the calibrated Gradient Lab on the glass** (tap the middle pad).
+   That is the open question this handover stops mid-way through.
+2. **Decide the palette model** — §5.3. The owner favours declaring only the
+   usable inks; that needs the hex-derived level change first, test-first.
+3. **Re-measure with a white card in frame** to get absolute levels, and with a
+   second `offset` to confirm position independence.
+4. **Get the calibration into the repo.** It only exists on homeio.
+   `default-config.yaml` still ships the interpolated generic curve.
+5. **Flush the panel properly before any further measurement** — only one wipe
+   of ten ran, so both frames carry some residual ghost from Gradient Lab.
+
+## 9. Still open, unrelated
 
 1. **PR for `fix/trmnl-x-ghosting-levers`** never opened; its three commits are
    in this branch's history, including a data-loss fix (`0fb5c47`).
 2. **Restore `homeio`**: `log_level` → `info`, stop `local_byonk` and start
-   `43664941_byonk` (currently in `error` state), delete `local/noise-test`.
-   Device is on `local/gradient-lab`, `params: {}`; a backup of the pre-session
-   config is at `/addon_configs/local_byonk/config.yaml.pre-recovery`.
-3. **Timestamped image filenames** — byonk's content-hash names defeat device
-   caching (`filesystem.cpp:141`). Own issue.
-4. **Four uncommitted files are the owner's separate docs-screenshot task** —
-   `config.yaml`, `docs/generate-samples.sh`,
-   `docs/src/concepts/content-pipeline.md`, `tools/capture-config.yaml`.
-   **Never stage them.** Never `git add -A` in this repo.
+   `43664941_byonk` (currently `error`), delete `local/noise-test`. Pre-session
+   config backup: `/addon_configs/local_byonk/config.yaml.pre-recovery`.
+3. **Timestamped image filenames** — content-hash names defeat device caching
+   (`filesystem.cpp:141`). Bit us today: an unchanged hash means the device will
+   not re-download even when the served bytes change.
+4. **SDD ledger** (git-ignored):
+   `.superpowers/sdd/2026-08-21-panel-clean-recovery/progress.md`

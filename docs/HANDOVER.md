@@ -80,6 +80,27 @@ the two verification builds had not landed.
 **Task status:** Task 1 complete and reviewed clean. Task 2 **in flight** —
 resume it, do not restart it.
 
+Task 2's implementer stopped at a precise point: both fastepd branches are
+committed, the two trmnl-firmware files are edited but **not** committed, and
+the first verification build was still running when the session ended:
+
+```
+cd ~/scratch/trmnl-firmware && pio run -e TRMNL_X_LOCAL
+# log: ~/scratch/panel-evidence-build-validate.log
+```
+
+First check whether it finished and what it said:
+
+```bash
+tail -20 ~/scratch/panel-evidence-build-validate.log
+pgrep -fl "pio run"          # empty means it is done
+ls ~/scratch/trmnl-firmware/.pio/build/TRMNL_X_LOCAL/*.bin
+```
+
+If it succeeded, the remaining Task 2 work is: commit the two dirty files
+(Step 10), then run the second build with `feat/upseq-carta1300` checked out
+in fastepd, then leave `validate/upseq-carta1300` checked out.
+
 ---
 
 ## 4. How to resume

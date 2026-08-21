@@ -1,215 +1,235 @@
-# Handover — Tasks 1 and 2 are done; everything now waits on Gate A
+# Handover — the split hypothesis died, the wiper shipped, and the panel needs a real calibration
 
-**Date:** 2026-08-21 · **Branch:** `feat/panel-clean-recovery` · **HEAD:** `73b2f12`
-**Base:** `fix/trmnl-x-ghosting-levers` @ `254705d` (itself off `main` @ `5c67c62`, protected)
+**Date:** 2026-08-21 (evening) · **Branch:** `feat/panel-clean-recovery` · **HEAD:** `c880e32`
+**Base:** `fix/trmnl-x-ghosting-levers` @ `254705d` (off `main` @ `5c67c62`, protected)
 
-> Supersedes the earlier 2026-08-21 handover. The diagnosis in §1 is unchanged
-> and still correct. What changed is §3: Task 2 is finished, and three
-> environment traps were found and fixed along the way — read §6, they will
-> bite again.
+> Supersedes the two earlier 2026-08-21 handovers. **Section 1 is a reversal** —
+> the diagnosis those handovers were built on did not survive contact with the
+> panel. Read §1 and §6 before doing anything.
 
 ---
 
-## 1. What the video proved
+## 1. What Gate A actually showed — the hypothesis is dead
 
-The panel showed a **sharp** horizontal step at mid-panel that was never in any
-burnt-in image, with a chip-on-film bond visible at exactly that row. A 240 fps
-recording settled it.
+The plan assumed the mid-panel split was a FastEPD power-up sequencing fault
+(TPS65185 UPSEQ writes positioned after PWRUP, where the chip has already
+reloaded its defaults). Gate A ran. **The split was gone before the patch was
+ever flashed.**
 
-Measured, not inferred:
+Sequence, all measured:
 
-| Real time | Step at the boundary |
+| Time | Firmware | Split |
+|---|---|---|
+| 09:07 | 1.8.13 (as found) | **+21** at band 55 |
+| 11:21 | 1.8.14, FastEPD **unpatched** | **+2** — noise floor |
+| ~11:35 | 1.8.13 restored byte-for-byte | **still gone** (owner, by eye) |
+
+The split did not return when the original firmware was restored, so it was a
+persistent change to the **panel**, not firmware behaviour. Most likely cause:
+1.8.14 ships `display_wipe()` (`6bcf466 Add screen wiper (#537)`), and a
+full-panel clear equalises charge at the gate-driver boundary.
+
+**Consequences.** The FastEPD UPSEQ bug is still a genuine code defect — the
+writes cannot take effect where they sit — but the evidence for why it mattered
+is gone. It is an upstream **defect report**, not a fix with a measured
+before/after. Tasks 3-8's original framing is obsolete; see §3.
+
+Two things also eliminated by measurement: the FastEPD pin `855ce9a4` never
+changed between 1.8.13 and 1.8.14 (`git log -S "FastEPD.git#" -- platformio.ini`
+shows only the two commits that introduced it), and `73fdc73 Refactor power
+(#529)` reads USB/charging status pins, not the panel rails.
+
+---
+
+## 2. The feature already existed upstream
+
+`display_wipe()` in 1.8.14 is **server-triggerable today**: `src/bl.cpp:1548`
+runs it whenever the display response's `filename` is `screen_wiper.png`. It
+does 100 x `fullUpdate(CLEAR_SLOW, bKeepOn=true)` — panel power held for the
+whole burst, which was the design point the plan called the entire reason to
+build `panel_clean`.
+
+So byonk now drives TRMNL's own mechanism and needs **no firmware fork**.
+
+**Measured on hardware 2026-08-21:** one wipe = **191 s** (~200 black/white
+cycles at ~1/s, matching `display_wipe`'s own source comment — an earlier
+"~1000 passes" figure was arithmetic from an enum comment and was wrong). A
+full poll cycle at `refresh_rate=60` = **268 s ± 0.4 s**. So 20 wipes ≈ 89 min,
+and `MAX_WIPES=200` ≈ 15 h.
+
+**The firmware polls TWICE per wipe** — once for the instruction, then again via
+`downloadAndShow()` the moment the wipe finishes. Counting both spends two wipes
+per wipe performed, and answering the second with the wiper again trips the
+`wiped_this_wake` guard, which returns early and leaves the panel blank.
+`RecoveryRegistry::on_poll`'s `awaiting_post_wipe_poll` handles this and was
+**confirmed correct on hardware** (done went 1 -> 2, not 1 -> 3).
+
+---
+
+## 3. Exact state
+
+**byonk** (`feat/panel-clean-recovery`), 4 commits this session:
+- `0bfe38e` previous handover
+- `166480e` **admin-driven panel recovery** — `GET`/`POST`/`DELETE
+  /api/admin/devices/{key}/recover`, in-memory sessions, 13 tests
+- `cc983a2` measured wipe dose replacing the guessed one
+- `c880e32` **Ink Field** calibration screen (§5)
+
+Verified: build clean, `clippy -D warnings` clean, **542 tests pass**.
+
+**Deployed:** `local_byonk` **0.19.0-dev5** running on `homeio.oetiker.ch:3000`.
+Recovery endpoints confirmed live (401 unauth vs 404 on a bogus path). A 5-wipe
+run completed successfully on device `1C:DB:D4:66:5B:50`.
+
+**`~/scratch/trmnl-firmware`** — branch `feat/panel-clean` @ `30f9ae0`
+(`panel_clean` parsing, 7/7 tests). **Task 4 was never written** and probably
+should not be; see §4. `local/validation` @ `d5af13e` is its base.
+**Device currently runs the 1.8.14 control build** (stock FastEPD, reports
+1.8.15 — the version bump is in shared `config.h`, so control and patched
+builds are indistinguishable by version; use the FastEPD object fingerprint:
+control `3208620b…`, patched `18bb0faa…`).
+
+**`~/scratch/fastepd`** — `validate/upseq-carta1300` checked out; both branches
+carry a byte-identical patch. Now only useful as an upstream defect report.
+
+**Full flash backup:** `~/scratch/panel-evidence/flash-backup-2026-08-21.bin`
+(16777216 bytes, contains 1.8.13). Restore writes ~1.5 MB regions — see §6.
+
+---
+
+## 4. The open question: is `panel_clean` worth building?
+
+Measured, not guessed: of each 268 s cycle, **191 s is wiping and 77 s (29%) is
+overhead** — boot, WiFi, image download, content repaint, sleep. A single long
+`panel_clean` burst would pay that overhead once instead of per wipe, and would
+skip repainting the burnt-in image between wipes.
+
+- **Worth building** if the panel needs hours of wiping.
+- **Not worth it** if 20 wipes clears it.
+
+The wipe rate is panel-limited (~1 black/white cycle per second), so
+`panel_clean` cannot wipe *faster* — only with less overhead. Decide after a
+longer run. Task 3 (`30f9ae0`) is committed and costs nothing to drop.
+
+---
+
+## 5. The new front: this panel's ink levels are badly wrong
+
+The owner spotted it by eye on the glass. **Confirmed by linear raw** (iPhone
+ProRAW, `dcraw -4 -T -o 0 -r 1 1 1 1`, flat-field corrected per column):
+
+| Owner said | Measured ΔL* |
 |---|---|
-| 0–170 ms | −2 (nothing) |
-| 175 ms | +7 — panel powers up |
-| **187 ms** | **+21 — first flash, full strength** |
-| 217 / 250 / 280 ms | +8 / +2 / 0 — decays away |
-| 400, 800, 1300, 1400 ms | **0 or ±1** — four more flashes, no split |
+| 0 and 1 almost the same | **+0.68** |
+| 3 and 4 wide gap | **+25.10** |
+| 7 8 9 almost the same | **+1.95, +0.57** |
+| jump to 10 | **+6.31** |
+| 11 and 12 almost the same | **+1.37** |
 
-Boundary is **band 55 of 104 = 52.9% = row ~743 of 1404** — the gate-driver
-chip boundary.
+Even spacing would be 6.06 L*. Real range **0.57 to 25.10 — a 44:1 ratio**,
+plus a second chasm at 1→2 (+20.52). byonk assumes a smooth ramp whose extremes
+differ only 2.6:1. Its `colors_actual` for `trmnl_x` (`default-config.yaml:35`)
+is interpolated from a generic curve six panels share and was never measured.
 
-**Not a camera artifact.** It stays pinned to one band across 16 consecutive
-video frames (rolling shutter would drift), and it **decays smoothly while the
-panel is already static** — a camera artifact cannot fade on a still scene.
+**Do not use the calibration derived from `gradient-lab`.** Its ramp is
+spatially ordered, so the room's lighting is indistinguishable from the tone
+curve. That is what produced a bogus "two-halves black level step" which a
+second photo from another angle disproved — it was glare.
 
-**Conclusion.** The two panel halves get different drive on the first frame
-after power-up, and only then. The firmware powers the panel down after every
-update (`display.cpp:531`, `:2768`), so this kick lands ~4 500 times a day.
-The overnight recovery run was *adding* to the split while healing the burn-in.
+**`local/inkfield` / `screens/builtin/calibration/inkfield/` (`c880e32`) is the
+fix.** A 16x16 Latin square, ink `(3*row + col) mod 16`, 117x88 px cells. Every
+ink appears once per row and once per column, so a separable lighting field
+cancels *by construction*. Black and white land near every position, so each
+cell normalises against local references — dark-frame plus flat-field from one
+hand-held shot. Reads `layout.colors`, so it generalises to colour panels.
+Renders correctly; **not yet photographed or measured**.
 
-**Suspected cause.** epdiy programs the TPS65185 power-up sequence before
-power-up for this panel (`epd_board_v7_103.c:216-222`, `tps65185.c:122`).
-FastEPD has the equivalent writes **commented out** and positioned **after**
-PWRUP — where they could never take effect, because the chip reloads defaults
-on every WAKEUP deassert. Still a hypothesis; Gate A tests it.
+Next: **flush the panel first** (ghosting biases every cell), show `inkfield`,
+one square-on DNG, measure. Then the owner's idea of a **panel auto-calibrator**
+— grid detect, per-cell means, local black/white normalisation, average per ink
+— which is a plain program with no model in the loop.
 
----
-
-## 2. Where the work lives
-
-| Thing | Path |
-|---|---|
-| Spec (approved) | `docs/superpowers/specs/2026-08-21-panel-clean-firmware-patch-design.md` |
-| Plan (approved) | `docs/superpowers/plans/2026-08-21-panel-clean-recovery.md` |
-| SDD ledger (git-ignored — **read this first**) | `.superpowers/sdd/2026-08-21-panel-clean-recovery/progress.md` |
-| Gate A checklist (user-owned) | `~/scratch/panel-evidence/GATE-A.md` |
-| Measurement tool + baseline | `~/scratch/panel-evidence/` |
-
-Three deliverables, deliberately decoupled: a FastEPD power-up fix, a
-trmnl-firmware `panel_clean` response field plus device-side clean loop, and
-byonk admin-driven recovery sessions.
+The screen exists twice: `screens/builtin/…` is its home but needs a byonk
+rebuild; `local/inkfield` on homeio is the live copy. Fold into one once settled.
 
 ---
 
-## 3. Exact state — verify against git, do not trust this snapshot
+## 6. Traps that cost real time today
 
-**byonk** (`feat/panel-clean-recovery`): four commits, all docs.
-`eb3fb82` spec · `e08fd7b` spec fixup (`refresh_rate` pinned to 1) ·
-`335d58a` plan · `73b2f12` previous handover.
-**No byonk source has been touched yet.** Tasks 5–8 do that.
+**The owner's eye beat the instrument twice.** Once on 7-8-9 (the JPEG's local
+tone mapping invented separation that hid a real collision, and invented a
+collision at 5/6 that does not exist), once on the black-level step (glare).
+When a processed measurement disagrees with what the panel looks like, suspect
+the measurement. A phone JPEG's tone mapping is **local**, so it is not a
+monotonic transform and *can* reverse the order of two tones.
 
-**`~/scratch/fastepd`** — both branches carry a byte-identical power-up hunk:
-- `validate/upseq-carta1300` @ `2d4a40e`, off the **pinned** `855ce9a4` ← Gate A flashes this
-- `feat/upseq-carta1300` @ `c46bda2`, off `main` `8dc8c74` ← the upstream PR
-- Currently checked out: `validate/upseq-carta1300` (correct). Tree clean.
-
-The only differences between the two branches are `main`'s own drift in the
-panel row: clock `26666666`→`20000000`, `BB_PANEL_FLAG_DARK`→`SLOW_SPH`, line
-padding `16`→`44`. Our added `| BB_PANEL_FLAG_UPSEQ_MC2` is identical on both.
-
-**`~/scratch/trmnl-firmware`** — `local/validation` @ `d5af13e`, **tree clean**.
-Three files committed: `platformio.ini`, `include/config.h`,
-`sdkconfigs/sdkconfig.TRMNL_X_LOCAL`.
-
-**Task status:** Tasks 1 and 2 complete. Task 2 review pending. Then **Gate A**.
-
-**The built artifact is ready to flash.** `.pio/build/TRMNL_X_LOCAL/firmware.bin`
-reports `1.8.15`, and its FastEPD object matches the validate-branch
-fingerprint `18bb0faa51d397e57a4d2ceb85eba3dc` (see §6 for how that was
-established and why the obvious check does not work).
-
----
-
-## 4. How to resume
-
-1. Read the ledger. It now carries **ten rulings**, the pre-flight conflict
-   scan, and the Task 2 closeout.
-2. Review Task 2 (`git log 6bff55b..d5af13e` in trmnl-firmware; the two fastepd
-   commits). Note Task 2 deviated from its brief in one deliberate way —
-   Ruling 8 — and the deviation is load-bearing, not cosmetic.
-3. **Stop at Gate A.** It is the user's: flash, film five updates at 240 fps,
-   measure. `~/scratch/panel-evidence/GATE-A.md` has every command with the
-   port already filled in.
-4. Gate A decides everything downstream. PASS → Tasks 3–8 and two upstream PRs.
-   FAIL → the split is a hardware defect; the clean mode still has value but the
-   FastEPD PR becomes a defect report.
-
-Continue with `superpowers:subagent-driven-development`.
-
----
-
-## 5. Decisions that cost real work if reversed
-
-- **Two fastepd branches, not one.** `main` is **38 commits ahead** of what
-  TRMNL ships, including ESP32-S3 parallel bit-banging and row-start-timing
-  changes. Validating off `main` would leave a vanished step unattributable.
-  Both clones were shallow (depth 1) and have been unshallowed.
-- **`sdkconfigs/sdkconfig.TRMNL_X_LOCAL` must exist and must stay a byte copy
-  of `sdkconfig.TRMNL_X`.** See §6 — without it the validation firmware is not
-  configuration-identical to the shipped build, and Gate A proves nothing.
-- **`refresh_rate: 1` during a burst.** Each poll costs ~6–7 s of fixed radio
-  overhead; any gap beyond it is dead time. `cycles_per_burst` is the only
-  pacing knob.
-- **Padding is not optional.** Unpadded solid white gets **1 active drive pass
-  of 9**; padded, level 15 in the 38-pass table gets **36 of 38**, with a full
-  black→white swing. That is the ratio of healing to power-up kicks.
-- **Recovery sessions are in-memory.** A byonk restart cancels a run. Matches
-  how `Device` already treats runtime state, and fails safe.
-- **Task 6's plan test is tautological** (asserts `Option::unwrap_or`) — Ruling 2
-  in the ledger says replace it when Task 6 runs.
-
----
-
-## 6. Environment — three traps found on 2026-08-21, all still live
-
-**Trap 1: esptool's dependencies live in the Homebrew venv, and `brew upgrade`
-will wipe them.** `pio` here is the Homebrew build and runs
-`/opt/homebrew/Cellar/platformio/6.1.19_2/libexec/bin/python`, **not**
-`~/.platformio/penv`. PlatformIO upgraded `tool-esptoolpy` to 5.1.2, whose
-dependencies were missing there, so every post-build `merge_bin` failed with
-`ModuleNotFoundError: No module named 'rich_click'`. Fix — reinstall the list
-from the package's own `pyproject.toml`:
-
+**esptool's dependencies live in the Homebrew venv.** `pio` here runs
+`/opt/homebrew/Cellar/platformio/*/libexec/bin/python`, not `~/.platformio/penv`.
+`brew upgrade platformio` will break `merge_bin` again:
 ```bash
 /opt/homebrew/Cellar/platformio/*/libexec/bin/python -m pip install \
   "bitstring>=3.1.6,!=4.2.0" "cryptography>=43.0.0" "pyserial>=3.3" \
   "reedsolo>=1.5.3,<1.8" "PyYAML>=5.1" intelhex "rich_click<2" "click<9"
 ```
 
-Verify with `pio pkg exec -p tool-esptoolpy -- esptool.py version`.
+**A new PlatformIO env silently gets a default ESP-IDF config.**
+`sdkconfig_path = sdkconfigs/sdkconfig.${this.__env__}` is inherited by
+`extends`, so a new env resolves to a file that does not exist and PlatformIO
+generates one 330 lines from the shipped config — **and still reports SUCCESS**.
+Seed it and commit it. Also: changing an sdkconfig does **not** regenerate
+`memory.ld`; run `pio run -e <env> -t clean` first or get a bogus
+`rtc_reserved_seg overflowed by 16 bytes`.
 
-**Trap 2: a new PlatformIO env silently gets a default ESP-IDF config.**
-`platformio.ini:503` sets the config path from the env *name*:
+**PlatformIO cannot flash this device.** `-t upload` spends 75 s rebuilding and
+merging while the sleeping device drops USB; `-t nobuild` breaks its esptool 5.x
+argument construction. Drive esptool directly with a retry loop, and **keep
+writes to ~1.5 MB regions** — a 16 MB or even 3 MB write dies with "chip stopped
+responding", while bootloader + partitions + app (1.4 MB) succeeds first try.
 
-```ini
-board_build.esp-idf.sdkconfig_path = sdkconfigs/sdkconfig.${this.__env__}
-```
+**byonk does not hot-reload `/config/config.yaml`** on the add-on. Restart it —
+and change config *before* starting a recovery run, since a restart cancels
+in-memory sessions.
 
-`extends = env:TRMNL_X` inherits that line verbatim, so `TRMNL_X_LOCAL`
-resolved to a file that did not exist and PlatformIO generated one from ESP-IDF
-defaults — **330 lines** away from the shipped config, including bootloader
-optimisation level, log levels and `CONFIG_BOOTLOADER_RESERVE_RTC_SIZE` — and
-**still reported SUCCESS**. Any new env needs its sdkconfig seeded from the
-shipped one and committed.
-
-**Trap 3: changing an sdkconfig does not regenerate `memory.ld`.** PlatformIO
-recompiles the sources but keeps the stale linker script, which then fails with
-`region 'rtc_reserved_seg' overflowed by 16 bytes` (stale `(0 + 24)` vs correct
-`((0x10 aligned to 8) + 24)` = 40). After any sdkconfig change run
-`pio run -e <env> -t clean` first. Branch switches in the symlinked FastEPD do
-**not** need a clean — incremental builds track them correctly (proven below).
-
-**How to check which FastEPD branch is baked into a build.** The obvious test —
-searching `firmware.bin` for the panel clock constant `26666666` vs `20000000` —
-is **invalid**; the `env:TRMNL_X` control built from pinned `855ce9a4` shows
-identical counts. Fingerprint the object instead:
-
-```bash
-# the libNNN/ dir is a PlatformIO hash and can change — find it, don't hardcode it
-md5 -q $(find ~/scratch/trmnl-firmware/.pio/build/TRMNL_X_LOCAL -name FastEPD.cpp.o)
-# 18bb0faa51d397e57a4d2ceb85eba3dc = validate/upseq-carta1300
-# 0a1c395c8d393c272180b2ae6b86f93d = feat/upseq-carta1300
-```
-
-**Other environment notes**
-
-- TRMNL X on **`/dev/cu.usbmodem101`**. PlatformIO Core 6.1.19 (`symlink://` OK).
-- **Never `erase_flash` or `pio run -t erase`** — wipes NVS, taking WiFi
-  credentials and the byonk registration with it. Upload the app only.
-- `env:TRMNL_X` is the clean control build: if a local build fails, build that
-  one first to find out whether the repo or your env is at fault.
-- Build logs: `~/scratch/panel-evidence-build-validate.log`,
-  `-build-pr.log`, `-build-shipped.log`.
-- `homeio.oetiker.ch` still runs `local_byonk` 0.19.0-dev3 on `:3000` with
-  `log_level: debug`. Sandbox blocks outbound TCP — `ssh`/`curl` need
-  `dangerouslyDisableSandbox: true`.
-- byonk verify: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo test --lib`. **`make check` has reported exit 0 while tests failed** —
-  read the output.
+**`cargo clean` freed 225 GiB.** `target/debug/incremental` alone was 50 GB and
+never self-prunes.
 
 ---
 
-## 7. Still open from before, unrelated to this branch
+## 7. Environment
 
-1. **PR for `fix/trmnl-x-ghosting-levers`** was never opened. Its three commits
-   are in this branch's history, including a real data-loss fix (`0fb5c47` —
-   assigning a screen wiped every other device setting).
+- Device `1C:DB:D4:66:5B:50` on **`/dev/cu.usbmodem101`**, firmware 1.8.14 control.
+- **Never `erase_flash` or `pio run -t erase`** — wipes NVS, WiFi and registration.
+- `env:TRMNL_X` is the clean control build: if a local build fails, build that
+  first to find out whether the repo or your env is at fault.
+- **homeio deploy** (`root@homeio.oetiker.ch`, add-on `local_byonk`, source at
+  `/addons/byonk`):
+  1. `git archive --format=tar HEAD Cargo.toml Cargo.lock src crates fonts screens byonk-base static docs/src custom_components default-config.yaml | ssh root@homeio.oetiker.ch 'tar -xf - -C /addons/byonk'` — sync the **whole** set; a src-only sync failed with `cannot find module or crate crc32fast` because the host's `Cargo.toml` was older.
+  2. Bump `version:` in `/addons/byonk/config.yaml` (the Dockerfile's `BUILD_VERSION` cache-bust key).
+  3. `ha store reload && ha addons update local_byonk`
+  4. Read failures with `ha supervisor logs` — `ha addons update` only says "unknown error".
+  Host has `jq`, **no `python3`**. Admin token:
+  `ha addons info local_byonk --raw-json | jq -r .data.options.admin_token` —
+  keep it in a shell variable, **never print it** (project CLAUDE.md).
+- Raw workflow: `dcraw` installed via brew. `dcraw -4 -T -o 0 -r 1 1 1 1 x.DNG`
+  gives linear 16-bit; read it with `ffmpeg -pix_fmt gray16le`.
+  **iCloud share links deliver JPEG, not DNG** — export the original from Photos.
+- byonk verify: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --lib`. **`make check` has reported exit 0 while tests failed.**
+- SDD ledger (git-ignored, 15 rulings):
+  `.superpowers/sdd/2026-08-21-panel-clean-recovery/progress.md`
+
+---
+
+## 8. Still open, unrelated to this branch
+
+1. **PR for `fix/trmnl-x-ghosting-levers`** never opened; its three commits are
+   in this branch's history, including a data-loss fix (`0fb5c47`).
 2. **Restore `homeio`**: `log_level` → `info`, stop `local_byonk` and start
-   `43664941_byonk`, reassign `local/gradient-lab`, delete `local/noise-test`.
+   `43664941_byonk` (currently in `error` state), delete `local/noise-test`.
+   Device is on `local/gradient-lab`, `params: {}`; a backup of the pre-session
+   config is at `/addon_configs/local_byonk/config.yaml.pre-recovery`.
 3. **Timestamped image filenames** — byonk's content-hash names defeat device
-   caching, so every download wipes every other byonk image
-   (`filesystem.cpp:141`). Own issue.
+   caching (`filesystem.cpp:141`). Own issue.
 4. **Four uncommitted files are the owner's separate docs-screenshot task** —
    `config.yaml`, `docs/generate-samples.sh`,
    `docs/src/concepts/content-pipeline.md`, `tools/capture-config.yaml`.

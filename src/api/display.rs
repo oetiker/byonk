@@ -15,6 +15,12 @@ use crate::models::{
     DisplaySpec, DitherTuningValues,
 };
 use crate::server::DevOverrides;
+
+/// Filename that makes TRMNL firmware run a full-panel wipe instead of
+/// displaying the image. Recognised in `bl.cpp` right after the display
+/// response is handled; it runs `display_wipe()` and then re-polls. Not a real
+/// file — byonk never serves anything under this name.
+const SCREEN_WIPER_FILENAME: &str = "screen_wiper.png";
 use crate::services::{
     CachedContent, ContentCache, ContentPipeline, DeviceContext, DeviceRegistry, RenderService,
 };
@@ -453,6 +459,7 @@ pub async fn handle_display<R: DeviceRegistry>(
     State(content_pipeline): State<Arc<ContentPipeline>>,
     State(content_cache): State<Arc<ContentCache>>,
     State(dev_overrides): State<DevOverrides>,
+    State(recovery): State<Arc<crate::services::RecoveryRegistry>>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     // Extract required headers
@@ -1132,13 +1139,36 @@ pub async fn handle_display<R: DeviceRegistry>(
         "Resolved display refresh settings for device"
     );
 
+    // A panel-recovery session replaces this poll's content with a wipe
+    // instruction. `screen_wiper.png` is TRMNL's own trigger: the firmware
+    // recognises the filename and runs display_wipe() -- ~1000 black/white
+    // passes with panel power held -- instead of showing the image. The image
+    // URL still rides along, because the firmware handles the response
+    // normally before it inspects the filename.
+    let recovery = recovery
+        .on_poll(&crate::models::DeviceId::new(device_id_str))
+        .await;
+    if let Some(ref session) = recovery {
+        tracing::info!(
+            device = %device_id_str,
+            done = session.done,
+            total = session.total,
+            remaining = session.remaining(),
+            "Panel recovery: serving a wipe instead of content"
+        );
+    }
+
     // Return JSON response
     // Note: firmware expects status=0 for success (not 200!)
     // The filename is a hash of the SVG content, so TRMNL can detect changes
     Ok(Json(DisplayJsonResponse {
         status: 0,
         image_url,
-        filename: content_hash.unwrap_or_else(|| "unchanged".to_string()),
+        filename: if recovery.is_some() {
+            SCREEN_WIPER_FILENAME.to_string()
+        } else {
+            content_hash.unwrap_or_else(|| "unchanged".to_string())
+        },
         update_firmware: false,
         firmware_url: None,
         refresh_rate,

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- **Panel recovery for burnt-in screens.** If a TRMNL X keeps showing a faint
+  image of something it displayed a long time ago, you can now ask it to clear
+  the panel. Start a run with
+  `POST /api/admin/devices/{device}/recover` (optional body `{"wipes": 20}`),
+  check on it with `GET`, and stop it early with `DELETE`. Each wipe is a few
+  minutes of the device flashing its panel black and white; content reappears
+  between wipes and normal operation resumes by itself when the run finishes.
+  Runs are not saved: restarting Byonk, rebooting the device, or simply
+  unplugging it all end the run safely. Needs device firmware 1.8.14 or newer —
+  on older firmware the device ignores the request and keeps showing content.
+
 - **Ghosting fix for devices that need a stronger refresh.** If a faint image of
   the previous screen stays visible under the current one, set
   `temperature_profile: a` on the device in `config.yaml` — Byonk then tells the

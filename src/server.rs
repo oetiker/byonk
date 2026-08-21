@@ -86,6 +86,9 @@ pub struct AppState {
     /// files). Not yet consumed by any route — the MCP plan (spec 1
     /// Component 5) and the web-UI plan (spec 2) are its consumers.
     pub screen_store: Arc<ScreenStore>,
+    /// Panel-recovery sessions in progress, keyed by device. In memory only:
+    /// a restart cancels every run, which fails safe.
+    pub recovery: Arc<crate::services::RecoveryRegistry>,
     /// Rendered device previews for `/api/admin/devices/{key}/preview`.
     /// Keeps a Home Assistant camera's frame pulls from re-rendering.
     pub preview_cache: Arc<PreviewCache>,
@@ -222,6 +225,7 @@ pub fn create_app_state_with_overrides(
         addon_mode: false,
         screen_store,
         preview_cache: Arc::new(PreviewCache::new()),
+        recovery: Arc::new(crate::services::RecoveryRegistry::new()),
     })
 }
 
@@ -301,6 +305,7 @@ async fn handle_display(
         axum::extract::State(state.content_pipeline),
         axum::extract::State(state.content_cache),
         axum::extract::State(state.dev_overrides),
+        axum::extract::State(state.recovery),
         headers,
     )
     .await

@@ -273,14 +273,37 @@ sets it. A regression can then only be attributed to one number.
 ### 5.1 Gates that must go green
 
 1. **`test_neutral_grey_has_no_dominant_chromatic_ink`** — red today by design.
-2. **New, written red first: `test_muted_colour_has_no_dominant_chromatic_ink`**
-   in `domain_tests.rs`, on `panel_measured()`, over the muted and skin colours
-   in §1. Same 50% single-ink rule as the grey test. Today it fails on skin
-   cheek 54.2%, skin warm 52.8%, skin brown B 54.3%, muted scarf 56.7%.
-   **This is the test for the reported bug and it does not exist yet** — the
-   current photo test runs on the idealised palette and cannot see it.
-   Each row also carries a dE ceiling at today's measured value plus ~30%,
-   matching the existing table's convention, making it a two-sided gate.
+2. **New, written red first: `test_in_gamut_census`** in `domain_tests.rs`, on
+   `panel_measured()`. Owner ruling 2026-08-22: *"any colour inside the gamut
+   should be accurate"* — a census beats a colour list somebody picked.
+
+   Enumerate the sRGB cube on a grid of 16 and keep what `Hull::contains`
+   admits: **677 in-gamut colours**. Coarser grids collapse (78 at step 32, 11
+   at step 64) because this panel's gamut is only 16.5% of the cube. Dither
+   each as a 64×64 patch, discarding the first 8 rows where error diffusion is
+   still settling.
+
+   Two independent gates over that set:
+
+   - **Accuracy.** dE below a bound set from the pre-change measurement. This
+     is a no-regression guard: the fix must not make any reachable colour less
+     accurate than it already is.
+   - **No field colour.** For a target whose OKLab chroma is below the
+     *dullest* chromatic ink's chroma, the largest single chromatic ink must
+     stay at or below 50%. The threshold is **derived from the palette, not
+     chosen**: a target duller than every ink cannot legitimately be mostly one
+     of them. On `panel_measured()` the dullest ink is green at chroma 0.068,
+     which covers every grey (0.000) and every skin tone (0.03–0.06) while
+     exempting saturated colours that genuinely are one ink.
+
+   **A dE gate alone would not catch the reported bug.** Grey 128 dithers to
+   77.6% green at dE 0.063; `skin warm` to 52.8% green at dE 0.037. The average
+   is right and the area looks wrong, because the eye reads the majority ink as
+   the colour of the region rather than averaging. That is why there are two
+   gates and not one.
+
+   This supersedes an earlier draft of this section, which proposed a
+   hand-picked list of muted colours.
 3. **`find_nearest_biased(c, m, 0.0, bias) == find_nearest(c, m)`** over a
    colour sweep with arbitrary bias vectors.
 4. **Continuity of the weight field.** Walk lightness ramps at several hues and

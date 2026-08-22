@@ -668,47 +668,66 @@ mod domain_tests {
         // min_chromatic_pct: minimum % of output pixels that must be chromatic
         //   (palette indices > 1). For achromatic inputs this is 0.0.
         //   For chromatic inputs this catches the "looks grey" failure mode.
+        // max_single_chromatic_pct: maximum % of output pixels allowed to use
+        //   any ONE chromatic entry. This catches the opposite failure — a
+        //   near-neutral rendered as a field of a single ink rather than as a
+        //   cancelling intermixture. 100.0 means unconstrained, which is right
+        //   for saturated inputs that legitimately are one ink. See
+        //   `test_neutral_grey_has_no_dominant_chromatic_ink` for why the
+        //   bound is on the largest single ink and not on the chromatic total.
         //
         // Photo colors sampled from real camera shots — these are the muted
         // tones that pop-art if damping doesn't work correctly.
         // Thresholds set ~30% above measured values to catch regressions.
-        let test_colors: &[(&str, Srgb, f32, f32)] = &[
-            //                                           max_de  min_chr%
+        let test_colors: &[(&str, Srgb, f32, f32, f32)] = &[
+            //                                           max_de  min_chr%  max_1ink%
             // Achromatic — no chromatic pixels expected
-            ("mid grey", Srgb::from_u8(128, 128, 128), 0.06, 0.0),
-            ("dark grey", Srgb::from_u8(64, 64, 64), 0.10, 0.0),
-            ("light grey", Srgb::from_u8(192, 192, 192), 0.08, 0.0),
+            ("mid grey", Srgb::from_u8(128, 128, 128), 0.06, 0.0, 50.0),
+            ("dark grey", Srgb::from_u8(64, 64, 64), 0.10, 0.0, 50.0),
+            ("light grey", Srgb::from_u8(192, 192, 192), 0.08, 0.0, 50.0),
             // Exact palette entries — 100% chromatic
-            ("pure red", Srgb::from_u8(255, 0, 0), 0.01, 95.0),
-            ("pure green", Srgb::from_u8(0, 255, 0), 0.01, 95.0),
-            ("pure blue", Srgb::from_u8(0, 0, 255), 0.01, 95.0),
+            ("pure red", Srgb::from_u8(255, 0, 0), 0.01, 95.0, 100.0),
+            ("pure green", Srgb::from_u8(0, 255, 0), 0.01, 95.0, 100.0),
+            ("pure blue", Srgb::from_u8(0, 0, 255), 0.01, 95.0, 100.0),
             // Secondary / mixed saturated colors — should use chromatic entries.
             // Cyan and magenta require combining two palette primaries, so with
             // error_clamp=0.3 (Photo default) the chromatic fraction is lower
             // than with clamp=0.5 because oscillation amplitude is limited.
-            ("cyan", Srgb::from_u8(0, 255, 255), 0.30, 0.0),
-            ("magenta", Srgb::from_u8(255, 0, 255), 0.40, 5.0),
-            ("orange", Srgb::from_u8(255, 165, 0), 0.04, 50.0),
+            ("cyan", Srgb::from_u8(0, 255, 255), 0.30, 0.0, 100.0),
+            ("magenta", Srgb::from_u8(255, 0, 255), 0.40, 5.0, 100.0),
+            ("orange", Srgb::from_u8(255, 165, 0), 0.04, 50.0, 100.0),
             // Real photo colors — sampled from outdoor portrait (overcast sky,
             // skin tones, muted clothing). These are the colors that cause
             // pop-art blowout if chromatic damping isn't working.
             // OKLab chroma for all of these is 0.01-0.06 — well below the
             // 0.12 damping threshold, so they should dither mostly to B&W.
-            ("overcast sky", Srgb::from_u8(175, 198, 230), 0.10, 0.0),
-            ("sky left", Srgb::from_u8(168, 192, 227), 0.10, 0.0),
-            ("skin light", Srgb::from_u8(163, 171, 197), 0.10, 0.0),
-            ("skin cheek", Srgb::from_u8(147, 144, 163), 0.08, 0.0),
-            ("skin dark", Srgb::from_u8(105, 76, 86), 0.08, 0.0),
-            ("skin warm", Srgb::from_u8(137, 102, 102), 0.08, 0.0),
-            ("dark hair", Srgb::from_u8(107, 99, 107), 0.07, 0.0),
-            ("muted scarf", Srgb::from_u8(140, 108, 104), 0.08, 0.0),
-            ("dark clothing", Srgb::from_u8(150, 124, 133), 0.08, 0.0),
-            ("blue shirt", Srgb::from_u8(127, 112, 121), 0.06, 0.0),
-            ("glasses", Srgb::from_u8(161, 161, 172), 0.06, 0.0),
+            (
+                "overcast sky",
+                Srgb::from_u8(175, 198, 230),
+                0.10,
+                0.0,
+                50.0,
+            ),
+            ("sky left", Srgb::from_u8(168, 192, 227), 0.10, 0.0, 50.0),
+            ("skin light", Srgb::from_u8(163, 171, 197), 0.10, 0.0, 50.0),
+            ("skin cheek", Srgb::from_u8(147, 144, 163), 0.08, 0.0, 50.0),
+            ("skin dark", Srgb::from_u8(105, 76, 86), 0.08, 0.0, 50.0),
+            ("skin warm", Srgb::from_u8(137, 102, 102), 0.08, 0.0, 50.0),
+            ("dark hair", Srgb::from_u8(107, 99, 107), 0.07, 0.0, 50.0),
+            ("muted scarf", Srgb::from_u8(140, 108, 104), 0.08, 0.0, 50.0),
+            (
+                "dark clothing",
+                Srgb::from_u8(150, 124, 133),
+                0.08,
+                0.0,
+                50.0,
+            ),
+            ("blue shirt", Srgb::from_u8(127, 112, 121), 0.06, 0.0, 50.0),
+            ("glasses", Srgb::from_u8(161, 161, 172), 0.06, 0.0, 50.0),
         ];
 
         let mut failures = Vec::new();
-        for &(name, color, max_delta, min_chromatic_pct) in test_colors {
+        for &(name, color, max_delta, min_chromatic_pct, max_single_chromatic_pct) in test_colors {
             let r = dither_perceptual_accuracy(color, &palette);
             let chromatic_pct = r.chromatic_fraction * 100.0;
             if r.delta_e > max_delta {
@@ -733,11 +752,88 @@ mod domain_tests {
                     r.output_chroma,
                 ));
             }
+            let total: u32 = r.palette_counts.iter().sum();
+            let (idx, count) = r.palette_counts[2..]
+                .iter()
+                .enumerate()
+                .max_by_key(|&(_, c)| *c)
+                .map(|(i, c)| (i + 2, *c))
+                .expect("palette has chromatic entries");
+            let single_pct = 100.0 * count as f32 / total as f32;
+            if single_pct > max_single_chromatic_pct {
+                failures.push(format!(
+                    "  {name}: palette entry {idx} covers {single_pct:.1}% of the patch \
+                     (max {max_single_chromatic_pct:.0}%) — rendered as a field of one ink \
+                     instead of a cancelling intermixture. DeltaE={:.4}",
+                    r.delta_e,
+                ));
+            }
         }
 
         assert!(
             failures.is_empty(),
             "Perceptual accuracy failures:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    /// A neutral grey must not be laid down as a field of one chromatic ink.
+    ///
+    /// If this breaks, it means: the quantiser is picking a single chromatic
+    /// entry for achromatic targets. `find_nearest` chooses the closest
+    /// palette colour, and on a measured six-ink panel a chromatic ink sits
+    /// far closer to a mid grey than either black or white — so a flat grey
+    /// patch comes out as a coloured field with speckle on it. The perceived
+    /// linear average stays correct, which is why
+    /// `test_dither_perceptual_accuracy_photo` cannot see it: that test
+    /// measures the average, not the ink.
+    ///
+    /// Why "largest single ink" and not "total chromatic share": chromatic
+    /// ink on a neutral is legitimate and often preferable — black and white
+    /// have the maximum per-dot luminance contrast, so a black/white
+    /// checkerboard is the grainiest possible neutral. Measured under this
+    /// same code, the idealised BWRGBY palette reaches 98.8% chromatic on a
+    /// neutral while no single ink exceeds 36% and red, green and blue appear
+    /// in near-equal thirds. That is a cancelling intermixture and it looks
+    /// grey. A total-chromatic gate would reject it just as hard as the
+    /// failure case, so it cannot tell them apart.
+    ///
+    /// Why 50%: an ink covering the majority of the patch is its field
+    /// colour, not a component of a mixture. The bound is reachable — panel
+    /// white is 0.7157 in linear light, so every neutral has an exact
+    /// black+white mixture with zero colour error, and the idealised palette
+    /// shows error diffusion does not need a dominant ink to converge.
+    #[test]
+    fn test_neutral_grey_has_no_dominant_chromatic_ink() {
+        let palette = crate::gamut::test_support::panel_measured();
+        // `panel_measured()`'s entries, in index order.
+        let ink_names = ["black", "white", "red", "yellow", "blue", "green"];
+        let max_single_chromatic_pct = 50.0;
+
+        let mut failures = Vec::new();
+        for grey in (16u8..=240).step_by(16) {
+            let r = dither_perceptual_accuracy(Srgb::from_u8(grey, grey, grey), &palette);
+            let total: u32 = r.palette_counts.iter().sum();
+            let (idx, count) = r.palette_counts[2..]
+                .iter()
+                .enumerate()
+                .max_by_key(|&(_, c)| *c)
+                .map(|(i, c)| (i + 2, *c))
+                .expect("palette has chromatic entries");
+            let pct = 100.0 * count as f32 / total as f32;
+            if pct > max_single_chromatic_pct {
+                failures.push(format!(
+                    "  grey {grey}: {} covers {pct:.1}% of the patch \
+                     (max {max_single_chromatic_pct:.0}%) — a neutral rendered as a \
+                     coloured field. DeltaE={:.4} is fine, which is the point.",
+                    ink_names[idx], r.delta_e,
+                ));
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "Neutral greys dithered to a dominant chromatic ink:\n{}",
             failures.join("\n")
         );
     }

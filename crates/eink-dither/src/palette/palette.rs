@@ -83,7 +83,7 @@ pub enum ColourModel {
 /// Pure greys have chroma=0.0 exactly. Intentional chromatic colors have
 /// chroma > 0.05. Threshold 0.03 provides a clean separation with no
 /// ambiguity even for near-grey device calibration noise.
-const CHROMA_DETECTION_THRESHOLD: f32 = 0.03;
+pub(crate) const CHROMA_DETECTION_THRESHOLD: f32 = 0.03;
 
 /// A color palette with dual color storage and perceptual matching.
 ///

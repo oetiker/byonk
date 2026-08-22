@@ -27,7 +27,7 @@ pub struct CachedContent {
     /// Dither mode ("photo" or "graphics"), None = default (graphics)
     pub dither: Option<String>,
     /// Optional error clamp for dithering
-    pub error_clamp: Option<f32>,
+    pub max_error: Option<f32>,
     /// Optional blue noise jitter scale for dithering
     pub noise_scale: Option<f32>,
     /// Optional chroma clamp for dithering
@@ -62,7 +62,7 @@ impl CachedContent {
             colors: None,
             colors_actual: None,
             dither: None,
-            error_clamp: None,
+            max_error: None,
             noise_scale: None,
             chroma_clamp: None,
             strength: None,
@@ -105,7 +105,7 @@ impl CachedContent {
 
     /// Set dither tuning parameters from a DitherTuningValues
     pub fn with_tuning(mut self, tuning: &crate::models::DitherTuningValues) -> Self {
-        self.error_clamp = tuning.error_clamp;
+        self.max_error = tuning.max_error;
         self.noise_scale = tuning.noise_scale;
         self.chroma_clamp = tuning.chroma_clamp;
         self.strength = tuning.strength;
@@ -266,7 +266,8 @@ mod tests {
             480,
         )
         .with_tuning(&crate::models::DitherTuningValues {
-            error_clamp: Some(0.1),
+            deprecated_error_clamp: None,
+            max_error: Some(0.1),
             noise_scale: Some(5.0),
             chroma_clamp: Some(2.0),
             strength: Some(0.8),
@@ -276,7 +277,7 @@ mod tests {
             },
         });
 
-        assert_eq!(content.error_clamp, Some(0.1));
+        assert_eq!(content.max_error, Some(0.1));
         assert_eq!(content.noise_scale, Some(5.0));
         assert_eq!(content.chroma_clamp, Some(2.0));
         assert_eq!(content.strength, Some(0.8));

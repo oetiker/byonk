@@ -88,7 +88,7 @@ pub struct RenderParams {
     /// length rule), not just a caller's own pre-script layer.
     pub measured_source: &'static str,
     pub dither: Option<String>,
-    pub error_clamp: Option<f32>,
+    pub max_error: Option<f32>,
     pub noise_scale: Option<f32>,
     pub chroma_clamp: Option<f32>,
     pub strength: Option<f32>,
@@ -169,7 +169,7 @@ pub fn resolve_effective_tuning(
     device_config_tuning: &DitherTuningValues,
     panel_tuning: &DitherTuningValues,
 ) -> DitherTuningValues {
-    if override_tuning.error_clamp.is_some()
+    if override_tuning.max_error.is_some()
         || override_tuning.noise_scale.is_some()
         || override_tuning.chroma_clamp.is_some()
         || override_tuning.strength.is_some()
@@ -190,13 +190,13 @@ pub fn resolve_dither_tuning(
 ) -> (crate::rendering::svg_to_png::DitherTuning, bool) {
     let tuning = crate::rendering::svg_to_png::DitherTuning {
         serpentine: None,
-        error_clamp: render_params.error_clamp,
+        max_error: render_params.max_error,
         chroma_clamp: render_params.chroma_clamp,
         noise_scale: render_params.noise_scale,
         strength: render_params.strength,
         gamut: Some(render_params.gamut.resolve()),
     };
-    let has_tuning = tuning.error_clamp.is_some()
+    let has_tuning = tuning.max_error.is_some()
         || tuning.chroma_clamp.is_some()
         || tuning.noise_scale.is_some()
         || tuning.strength.is_some()
@@ -417,7 +417,7 @@ pub fn resolve_render_params(
         measured_colors: measured.colors,
         measured_source: measured.source,
         dither,
-        error_clamp: tuning.error_clamp,
+        max_error: tuning.max_error,
         noise_scale: tuning.noise_scale,
         chroma_clamp: tuning.chroma_clamp,
         strength: tuning.strength,
@@ -865,7 +865,8 @@ pub async fn handle_display<R: DeviceRegistry>(
         None
     };
     let dc_tuning = DitherTuningValues {
-        error_clamp: device_config.and_then(|dc| dc.error_clamp),
+        deprecated_error_clamp: None,
+        max_error: device_config.and_then(|dc| dc.max_error),
         noise_scale: device_config.and_then(|dc| dc.noise_scale),
         chroma_clamp: device_config.and_then(|dc| dc.chroma_clamp),
         strength: device_config.and_then(|dc| dc.strength),
@@ -907,7 +908,7 @@ pub async fn handle_display<R: DeviceRegistry>(
         colors: Some(ctx_color_hex),
         colors_actual: measured_colors.as_deref().map(colors_to_hex_strings),
         dither_algorithm: Some(pre_script_algo.to_string()),
-        dither_error_clamp: pre_script_tuning.error_clamp,
+        dither_max_error: pre_script_tuning.max_error,
         dither_noise_scale: pre_script_tuning.noise_scale,
         dither_chroma_clamp: pre_script_tuning.chroma_clamp,
         dither_strength: pre_script_tuning.strength,
@@ -983,7 +984,8 @@ pub async fn handle_display<R: DeviceRegistry>(
                         .unwrap_or_default();
 
                     let script_tuning = DitherTuningValues {
-                        error_clamp: result.script_error_clamp,
+                        deprecated_error_clamp: None,
+                        max_error: result.script_max_error,
                         noise_scale: result.script_noise_scale,
                         chroma_clamp: result.script_chroma_clamp,
                         strength: result.script_strength,
@@ -1259,13 +1261,13 @@ pub async fn handle_image<R: DeviceRegistry>(
     // Build DitherTuning from cached tuning values (set by script or device config)
     let tuning = crate::rendering::svg_to_png::DitherTuning {
         serpentine: None,
-        error_clamp: cached.error_clamp,
+        max_error: cached.max_error,
         chroma_clamp: cached.chroma_clamp,
         noise_scale: cached.noise_scale,
         strength: cached.strength,
         gamut: Some(cached.gamut.resolve()),
     };
-    let has_tuning = tuning.error_clamp.is_some()
+    let has_tuning = tuning.max_error.is_some()
         || tuning.chroma_clamp.is_some()
         || tuning.noise_scale.is_some()
         || tuning.strength.is_some()
@@ -1787,6 +1789,7 @@ mod tests {
     #[test]
     fn gamut_follows_the_script_over_device_over_panel_priority() {
         let script = DitherTuningValues {
+            deprecated_error_clamp: None,
             gamut: crate::models::GamutTuningValues {
                 knee: Some(0.4),
                 ..Default::default()
@@ -1794,6 +1797,7 @@ mod tests {
             ..Default::default()
         };
         let device = DitherTuningValues {
+            deprecated_error_clamp: None,
             gamut: crate::models::GamutTuningValues {
                 knee: Some(0.7),
                 amount: Some(0.5),
@@ -1802,6 +1806,7 @@ mod tests {
             ..Default::default()
         };
         let panel = DitherTuningValues {
+            deprecated_error_clamp: None,
             gamut: crate::models::GamutTuningValues {
                 knee: Some(0.9),
                 amount: Some(1.0),
@@ -1825,6 +1830,7 @@ mod tests {
         // `resolve_effective_tuning` short-circuits when any override field is
         // set. A gamut-only override must not be silently ignored.
         let over = DitherTuningValues {
+            deprecated_error_clamp: None,
             gamut: crate::models::GamutTuningValues {
                 amount: Some(0.0),
                 ..Default::default()
@@ -1832,13 +1838,14 @@ mod tests {
             ..Default::default()
         };
         let other = DitherTuningValues {
-            error_clamp: Some(0.5),
+            deprecated_error_clamp: None,
+            max_error: Some(0.5),
             ..Default::default()
         };
         let resolved = resolve_effective_tuning(&over, &other, &other, &other);
         assert_eq!(resolved.gamut.amount, Some(0.0));
         assert_eq!(
-            resolved.error_clamp, None,
+            resolved.max_error, None,
             "an explicit override replaces the whole struct"
         );
     }
@@ -1850,7 +1857,7 @@ mod tests {
             measured_colors: None,
             measured_source: SRC_NONE,
             dither: None,
-            error_clamp: None,
+            max_error: None,
             noise_scale: None,
             chroma_clamp: None,
             strength: None,

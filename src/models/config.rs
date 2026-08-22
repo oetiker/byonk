@@ -47,35 +47,50 @@ impl GamutTuningValues {
     }
 }
 
-/// Dither tuning values for error_clamp, noise_scale, chroma_clamp, strength.
+/// Dither tuning values for max_error, noise_scale, chroma_clamp, strength.
 ///
 /// Used at every level of the tuning priority chain:
 /// panel defaults, device config, script overrides, dev UI overrides.
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct DitherTuningValues {
-    pub error_clamp: Option<f32>,
+    pub max_error: Option<f32>,
     pub noise_scale: Option<f32>,
     pub chroma_clamp: Option<f32>,
     pub strength: Option<f32>,
     #[serde(default)]
     pub gamut: GamutTuningValues,
+
+    /// Captured value of the removed `error_clamp` key — never applied.
+    ///
+    /// 0.18.0 changed what the knob bounds: it used to cap the resulting
+    /// pixel value and now caps the accumulated error, moving the useful
+    /// range from around `0.1` to around `1.0`. A stale value still parses
+    /// and still renders, just flat, so honouring it silently would be worse
+    /// than ignoring it. It is kept only so
+    /// [`AppConfig::deprecation_warnings`] can name the line to edit.
+    #[serde(default, rename = "error_clamp")]
+    pub deprecated_error_clamp: Option<f32>,
 }
 
 impl DitherTuningValues {
     /// Merge: self takes priority, other fills gaps.
     pub fn or(&self, other: &DitherTuningValues) -> DitherTuningValues {
         DitherTuningValues {
-            error_clamp: self.error_clamp.or(other.error_clamp),
+            max_error: self.max_error.or(other.max_error),
             noise_scale: self.noise_scale.or(other.noise_scale),
             chroma_clamp: self.chroma_clamp.or(other.chroma_clamp),
             strength: self.strength.or(other.strength),
             gamut: self.gamut.or(&other.gamut),
+            deprecated_error_clamp: self.deprecated_error_clamp.or(other.deprecated_error_clamp),
         }
     }
 
-    /// Returns true if all fields are None.
+    /// Returns true if all fields that are actually applied are None.
+    ///
+    /// `deprecated_error_clamp` is deliberately excluded: a block holding
+    /// only the ignored key configures nothing.
     pub fn is_empty(&self) -> bool {
-        self.error_clamp.is_none()
+        self.max_error.is_none()
             && self.noise_scale.is_none()
             && self.chroma_clamp.is_none()
             && self.strength.is_none()
@@ -85,16 +100,16 @@ impl DitherTuningValues {
 
 /// Panel dither configuration with flat defaults and per-algorithm overrides.
 ///
-/// Deserialized from a YAML map where scalar keys (`error_clamp`, `noise_scale`,
+/// Deserialized from a YAML map where scalar keys (`max_error`, `noise_scale`,
 /// `chroma_clamp`) become `defaults` and map-valued keys become per-algorithm
 /// overrides in `algorithms`.
 ///
 /// ```yaml
 /// dither:
-///   error_clamp: 0.1         # flat default for all algorithms
+///   max_error: 0.1         # flat default for all algorithms
 ///   noise_scale: 5.0
 ///   floyd-steinberg:          # per-algorithm override
-///     error_clamp: 0.08
+///     max_error: 0.08
 ///     noise_scale: 4.0
 /// ```
 #[derive(Debug, Clone, Default)]
@@ -144,8 +159,15 @@ impl<'de> Deserialize<'de> for PanelDitherConfig {
 
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
+                        "max_error" => {
+                            defaults.max_error = Some(map.next_value()?);
+                        }
                         "error_clamp" => {
-                            defaults.error_clamp = Some(map.next_value()?);
+                            // Removed in 0.18.0; captured, warned about and
+                            // ignored. Without this arm it would fall through
+                            // to the algorithm-name branch below and fail to
+                            // parse as a sub-map.
+                            defaults.deprecated_error_clamp = Some(map.next_value()?);
                         }
                         "noise_scale" => {
                             defaults.noise_scale = Some(map.next_value()?);
@@ -307,8 +329,13 @@ pub struct DeviceConfig {
     /// Optional panel profile name (references panels section)
     pub panel: Option<String>,
 
-    /// Optional error clamp override for dithering (e.g. 0.08)
-    pub error_clamp: Option<f32>,
+    /// Optional cap on accumulated dithering error (e.g. 1.0)
+    pub max_error: Option<f32>,
+
+    /// Captured value of the removed `error_clamp` key — never applied.
+    /// See [`DitherTuningValues::deprecated_error_clamp`].
+    #[serde(default, rename = "error_clamp")]
+    pub deprecated_error_clamp: Option<f32>,
 
     /// Optional blue noise jitter scale override (e.g. 0.6)
     pub noise_scale: Option<f32>,
@@ -443,9 +470,61 @@ impl AppConfig {
 
         config.validate().map_err(|e| anyhow::anyhow!(e))?;
 
+        for warning in config.deprecation_warnings() {
+            tracing::warn!("{warning}");
+        }
+
         tracing::info!(devices = config.devices.len(), "Loaded configuration");
 
         Ok(config)
+    }
+
+    /// Every removed config key still present, with the path to edit.
+    ///
+    /// Returns one message per site. `load_from_assets` logs these at WARN;
+    /// they are not errors, because the config is still valid — the key is
+    /// simply ignored.
+    pub fn deprecation_warnings(&self) -> Vec<String> {
+        const RENAME_NOTE: &str = "`error_clamp` was removed in 0.18.0 and is IGNORED. \
+             It bounded the resulting pixel value; the replacement `max_error` bounds the \
+             accumulated error, so the useful range moved from around 0.1 to around 1.0. \
+             Delete the key to take the default, or set `max_error` if you have retuned it.";
+
+        let mut warnings = Vec::new();
+        let mut report = |path: String, value: f32| {
+            warnings.push(format!("{path}: {value} — {RENAME_NOTE}"));
+        };
+
+        let mut panels: Vec<_> = self.panels.iter().collect();
+        panels.sort_by_key(|(name, _)| *name);
+        for (panel_name, panel) in panels {
+            let Some(dither) = &panel.dither else {
+                continue;
+            };
+            if let Some(v) = dither.defaults.deprecated_error_clamp {
+                report(format!("panels.{panel_name}.dither.error_clamp"), v);
+            }
+            let mut algorithms: Vec<_> = dither.algorithms.iter().collect();
+            algorithms.sort_by_key(|(name, _)| *name);
+            for (algorithm, tuning) in algorithms {
+                if let Some(v) = tuning.deprecated_error_clamp {
+                    report(
+                        format!("panels.{panel_name}.dither.{algorithm}.error_clamp"),
+                        v,
+                    );
+                }
+            }
+        }
+
+        let mut devices: Vec<_> = self.devices.iter().collect();
+        devices.sort_by_key(|(key, _)| *key);
+        for (device_key, device) in devices {
+            if let Some(v) = device.deprecated_error_clamp {
+                report(format!("devices.{device_key}.error_clamp"), v);
+            }
+        }
+
+        warnings
     }
 
     /// Validate cross-field invariants not expressible via serde alone.
@@ -705,39 +784,166 @@ registration:
     fn test_panel_tuning_found_via_sierra_light_alias() {
         let yaml = r#"
 defaults:
-  error_clamp: 0.5
+  max_error: 0.5
 sierra-lite:
-  error_clamp: 0.11
+  max_error: 0.11
   noise_scale: 5
 "#;
         let cfg: PanelDitherConfig = serde_yaml::from_str(yaml).unwrap();
         let tuning = cfg.resolve_for_algorithm(Some("sierra-light"));
         assert_eq!(
-            tuning.error_clamp,
+            tuning.max_error,
             Some(0.11),
             "misspelled algorithm must still resolve its per-algorithm tuning"
         );
         assert_eq!(tuning.noise_scale, Some(5.0));
     }
 
+    // ------------------------------------------------------------------
+    // `error_clamp` -> `max_error` deprecation (0.18.0 changed the meaning)
+    // ------------------------------------------------------------------
+
+    /// A pre-0.18.0 `error_clamp` must be captured and IGNORED, never applied.
+    ///
+    /// If this breaks, it means: a stale value is reaching the ditherer. The
+    /// knob used to bound the resulting pixel value and now bounds the error,
+    /// so the useful range moved from ~0.1 to ~1.0. A value like `0.11` still
+    /// parses and still renders — flat. Silently honouring it under the new
+    /// semantics is the failure this guards against.
+    #[test]
+    fn test_deprecated_error_clamp_is_ignored_in_panel_defaults() {
+        let yaml = r#"
+error_clamp: 0.11
+noise_scale: 5.0
+"#;
+        let config: PanelDitherConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            config.defaults.max_error, None,
+            "the deprecated key must not set max_error"
+        );
+        assert_eq!(
+            config.defaults.deprecated_error_clamp,
+            Some(0.11),
+            "the deprecated key must still be captured so it can be warned about"
+        );
+        assert_eq!(config.defaults.noise_scale, Some(5.0));
+        assert!(
+            config.algorithms.is_empty(),
+            "error_clamp must not fall through to the algorithm-name branch"
+        );
+    }
+
+    /// The same, inside a per-algorithm sub-map — the path the E1004's stale
+    /// `sierra-light` block actually takes.
+    #[test]
+    fn test_deprecated_error_clamp_is_ignored_in_per_algorithm_block() {
+        let yaml = r#"
+sierra-lite:
+  error_clamp: 0.11
+  noise_scale: 5
+"#;
+        let config: PanelDitherConfig = serde_yaml::from_str(yaml).unwrap();
+        let tuning = config.resolve_for_algorithm(Some("sierra-lite"));
+        assert_eq!(tuning.max_error, None);
+        assert_eq!(tuning.deprecated_error_clamp, Some(0.11));
+        assert_eq!(tuning.noise_scale, Some(5.0));
+    }
+
+    /// A deprecated key must not make a block count as tuning.
+    #[test]
+    fn test_deprecated_error_clamp_alone_is_empty_tuning() {
+        assert!(
+            DitherTuningValues {
+                deprecated_error_clamp: Some(0.11),
+                ..Default::default()
+            }
+            .is_empty(),
+            "a block holding only the ignored key sets nothing, so it is empty"
+        );
+    }
+
+    /// Every deprecated key in the loaded config must be reported with the
+    /// path the user has to edit.
+    #[test]
+    fn test_deprecation_warnings_name_the_config_path() {
+        let yaml = r##"
+panels:
+  reterminal_e1004:
+    name: reTerminal E1004
+    colors: "#000000,#FFFFFF"
+    dither:
+      error_clamp: 0.2
+      sierra-lite:
+        error_clamp: 0.11
+devices:
+  "44:1B:F6:83:93:38":
+    screen: local/clock
+    error_clamp: 0.5
+"##;
+        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let warnings = config.deprecation_warnings();
+        assert_eq!(
+            warnings.len(),
+            3,
+            "one warning per site, got: {warnings:#?}"
+        );
+        for path in [
+            "panels.reterminal_e1004.dither.error_clamp",
+            "panels.reterminal_e1004.dither.sierra-lite.error_clamp",
+            "devices.44:1B:F6:83:93:38.error_clamp",
+        ] {
+            assert!(
+                warnings.iter().any(|w| w.contains(path)),
+                "no warning names {path}, got: {warnings:#?}"
+            );
+        }
+        assert!(
+            warnings.iter().all(|w| w.contains("max_error")),
+            "every warning must name the replacement, got: {warnings:#?}"
+        );
+    }
+
+    /// A clean config produces no noise.
+    #[test]
+    fn test_no_deprecation_warnings_for_current_keys() {
+        let yaml = r##"
+panels:
+  p:
+    name: P
+    colors: "#000000,#FFFFFF"
+    dither:
+      max_error: 1.0
+      sierra-lite:
+        max_error: 1.0
+devices:
+  "AA:BB:CC:DD:EE:FF":
+    screen: local/clock
+    max_error: 1.0
+"##;
+        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.deprecation_warnings().is_empty());
+    }
+
     #[test]
     fn test_dither_tuning_values_or() {
         let a = DitherTuningValues {
-            error_clamp: Some(0.1),
+            deprecated_error_clamp: None,
+            max_error: Some(0.1),
             noise_scale: None,
             chroma_clamp: Some(2.0),
             strength: None,
             gamut: Default::default(),
         };
         let b = DitherTuningValues {
-            error_clamp: Some(0.2),
+            deprecated_error_clamp: None,
+            max_error: Some(0.2),
             noise_scale: Some(5.0),
             chroma_clamp: None,
             strength: Some(0.8),
             gamut: Default::default(),
         };
         let merged = a.or(&b);
-        assert_eq!(merged.error_clamp, Some(0.1)); // a wins
+        assert_eq!(merged.max_error, Some(0.1)); // a wins
         assert_eq!(merged.noise_scale, Some(5.0)); // b fills gap
         assert_eq!(merged.chroma_clamp, Some(2.0)); // a wins
         assert_eq!(merged.strength, Some(0.8)); // b fills gap
@@ -747,7 +953,8 @@ sierra-lite:
     fn test_dither_tuning_values_is_empty() {
         assert!(DitherTuningValues::default().is_empty());
         assert!(!DitherTuningValues {
-            error_clamp: Some(0.1),
+            deprecated_error_clamp: None,
+            max_error: Some(0.1),
             ..Default::default()
         }
         .is_empty());
@@ -756,11 +963,11 @@ sierra-lite:
     #[test]
     fn test_panel_dither_config_flat_only() {
         let yaml = r#"
-error_clamp: 0.1
+max_error: 0.1
 noise_scale: 5.0
 "#;
         let config: PanelDitherConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.defaults.error_clamp, Some(0.1));
+        assert_eq!(config.defaults.max_error, Some(0.1));
         assert_eq!(config.defaults.noise_scale, Some(5.0));
         assert_eq!(config.defaults.chroma_clamp, None);
         assert!(config.algorithms.is_empty());
@@ -770,34 +977,34 @@ noise_scale: 5.0
     fn test_panel_dither_config_per_algorithm_only() {
         let yaml = r#"
 floyd-steinberg:
-  error_clamp: 0.08
+  max_error: 0.08
   noise_scale: 4.0
 atkinson:
-  error_clamp: 0.12
+  max_error: 0.12
 "#;
         let config: PanelDitherConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(config.defaults.is_empty());
         assert_eq!(config.algorithms.len(), 2);
         let fs = config.algorithms.get("floyd-steinberg").unwrap();
-        assert_eq!(fs.error_clamp, Some(0.08));
+        assert_eq!(fs.max_error, Some(0.08));
         assert_eq!(fs.noise_scale, Some(4.0));
         let atk = config.algorithms.get("atkinson").unwrap();
-        assert_eq!(atk.error_clamp, Some(0.12));
+        assert_eq!(atk.max_error, Some(0.12));
     }
 
     #[test]
     fn test_panel_dither_config_mixed() {
         let yaml = r#"
-error_clamp: 0.1
+max_error: 0.1
 noise_scale: 5.0
 floyd-steinberg:
-  error_clamp: 0.08
+  max_error: 0.08
   noise_scale: 4.0
 atkinson:
-  error_clamp: 0.12
+  max_error: 0.12
 "#;
         let config: PanelDitherConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.defaults.error_clamp, Some(0.1));
+        assert_eq!(config.defaults.max_error, Some(0.1));
         assert_eq!(config.defaults.noise_scale, Some(5.0));
         assert_eq!(config.algorithms.len(), 2);
     }
@@ -805,26 +1012,26 @@ atkinson:
     #[test]
     fn test_panel_dither_config_resolve_for_algorithm() {
         let yaml = r#"
-error_clamp: 0.1
+max_error: 0.1
 noise_scale: 5.0
 floyd-steinberg:
-  error_clamp: 0.08
+  max_error: 0.08
 "#;
         let config: PanelDitherConfig = serde_yaml::from_str(yaml).unwrap();
 
-        // Algorithm match: per-algo error_clamp, default noise_scale
+        // Algorithm match: per-algo max_error, default noise_scale
         let resolved = config.resolve_for_algorithm(Some("floyd-steinberg"));
-        assert_eq!(resolved.error_clamp, Some(0.08));
+        assert_eq!(resolved.max_error, Some(0.08));
         assert_eq!(resolved.noise_scale, Some(5.0)); // from defaults
 
         // Algorithm miss: falls back to defaults
         let resolved = config.resolve_for_algorithm(Some("sierra"));
-        assert_eq!(resolved.error_clamp, Some(0.1));
+        assert_eq!(resolved.max_error, Some(0.1));
         assert_eq!(resolved.noise_scale, Some(5.0));
 
         // None algorithm: falls back to defaults
         let resolved = config.resolve_for_algorithm(None);
-        assert_eq!(resolved.error_clamp, Some(0.1));
+        assert_eq!(resolved.max_error, Some(0.1));
     }
 
     #[test]
@@ -875,19 +1082,19 @@ floyd-steinberg:
     fn test_panel_dither_config_normalizes_aliases() {
         let yaml = r#"
 atkinson:
-  error_clamp: 0.12
+  max_error: 0.12
 jjn:
-  error_clamp: 0.05
+  max_error: 0.05
 "#;
         let config: PanelDitherConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(config.algorithms.contains_key("atkinson"));
         assert!(config.algorithms.contains_key("jarvis-judice-ninke"));
 
         let resolved = config.resolve_for_algorithm(Some("atkinson"));
-        assert_eq!(resolved.error_clamp, Some(0.12));
+        assert_eq!(resolved.max_error, Some(0.12));
 
         let resolved = config.resolve_for_algorithm(Some("jarvis-judice-ninke"));
-        assert_eq!(resolved.error_clamp, Some(0.05));
+        assert_eq!(resolved.max_error, Some(0.05));
     }
 
     #[test]
@@ -896,14 +1103,14 @@ jjn:
 name: "Test Panel"
 colors: "#000000,#FFFFFF"
 dither:
-  error_clamp: 0.1
+  max_error: 0.1
   floyd-steinberg:
-    error_clamp: 0.08
+    max_error: 0.08
 "##;
         let config: PanelConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(config.dither.is_some());
         let dither = config.dither.unwrap();
-        assert_eq!(dither.defaults.error_clamp, Some(0.1));
+        assert_eq!(dither.defaults.max_error, Some(0.1));
         assert!(dither.algorithms.contains_key("floyd-steinberg"));
     }
 
@@ -999,6 +1206,7 @@ colors: "#000000,#FFFFFF"
     #[test]
     fn dither_tuning_carries_gamut_through_the_chain() {
         let script = DitherTuningValues {
+            deprecated_error_clamp: None,
             gamut: GamutTuningValues {
                 amount: Some(0.0),
                 ..Default::default()
@@ -1006,6 +1214,7 @@ colors: "#000000,#FFFFFF"
             ..Default::default()
         };
         let panel = DitherTuningValues {
+            deprecated_error_clamp: None,
             gamut: GamutTuningValues {
                 knee: Some(0.55),
                 ..Default::default()

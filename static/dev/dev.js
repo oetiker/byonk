@@ -1,18 +1,22 @@
 // Byonk Dev Mode JavaScript
 
-// Per-algorithm default values for noise_scale and error_clamp.
+// Per-algorithm default values for noise_scale and max_error.
 // When the user switches dither algorithm, these defaults are applied unless
 // the user has saved per-algorithm overrides in localStorage.
+//
+// These MIRROR `DitherAlgorithm::defaults()` in crates/eink-dither. Keep them
+// in step: a value here that the engine does not agree with makes the dev
+// preview lie about what the device will show.
 const DITHER_DEFAULTS = {
-    'atkinson':            { noiseScale: '0',   errorClamp: '0.08' },
-    'atkinson-hybrid':     { noiseScale: '0',   errorClamp: '0.08' },
-    'floyd-steinberg':     { noiseScale: '4.0', errorClamp: '0.12' },
-    'jarvis-judice-ninke': { noiseScale: '6.0', errorClamp: '0.03' },
-    'sierra':              { noiseScale: '5.5', errorClamp: '0.10' },
-    'sierra-two-row':      { noiseScale: '7.0', errorClamp: '0.10' },
-    'sierra-lite':         { noiseScale: '2.5', errorClamp: '0.11' },
-    'stucki':              { noiseScale: '6.0', errorClamp: '0.03' },
-    'burkes':              { noiseScale: '7.0', errorClamp: '0.10' },
+    'atkinson':            { noiseScale: '8.0',  maxError: '1.0' },
+    'atkinson-hybrid':     { noiseScale: '8.0',  maxError: '1.0' },
+    'floyd-steinberg':     { noiseScale: '8.0',  maxError: '1.0' },
+    'jarvis-judice-ninke': { noiseScale: '16.0', maxError: '1.0' },
+    'sierra':              { noiseScale: '16.0', maxError: '1.0' },
+    'sierra-two-row':      { noiseScale: '16.0', maxError: '1.0' },
+    'sierra-lite':         { noiseScale: '2.5',  maxError: '1.0' },
+    'stucki':              { noiseScale: '16.0', maxError: '1.0' },
+    'burkes':              { noiseScale: '16.0', maxError: '1.0' },
 };
 
 const state = {
@@ -32,7 +36,7 @@ const state = {
     // Map of deviceKey → colors_actual string.  Persisted in localStorage.
     colorOverrides: {},
     // Per-algorithm dither tuning overrides.
-    // Map of algorithm name → { noiseScale, errorClamp }.
+    // Map of algorithm name → { noiseScale, maxError }.
     ditherTuningOverrides: {},
 };
 
@@ -58,7 +62,7 @@ const elements = {
     useActual: document.getElementById('use-actual'),
     useActualLabel: document.getElementById('use-actual-label'),
     preserveExact: document.getElementById('preserve-exact'),
-    errorClamp: document.getElementById('error-clamp'),
+    maxError: document.getElementById('max-error'),
     chromaClamp: document.getElementById('chroma-clamp'),
     noiseScale: document.getElementById('noise-scale'),
     strength: document.getElementById('strength'),
@@ -292,7 +296,7 @@ function setupEventListeners() {
     });
 
     // Dither tunables
-    elements.errorClamp.addEventListener('change', () => {
+    elements.maxError.addEventListener('change', () => {
         saveDitherTuningOverride();
         saveState();
         render();
@@ -328,15 +332,15 @@ function applyDitherDefaults() {
     const override = state.ditherTuningOverrides[algo];
     const defaults = DITHER_DEFAULTS[algo] || DITHER_DEFAULTS['atkinson'];
     elements.noiseScale.value = override?.noiseScale ?? defaults.noiseScale;
-    elements.errorClamp.value = override?.errorClamp ?? defaults.errorClamp;
+    elements.maxError.value = override?.maxError ?? defaults.maxError;
 }
 
-// Save current noise_scale and error_clamp as per-algorithm override
+// Save current noise_scale and max_error as per-algorithm override
 function saveDitherTuningOverride() {
     const algo = elements.ditherSelect.value;
     state.ditherTuningOverrides[algo] = {
         noiseScale: elements.noiseScale.value,
-        errorClamp: elements.errorClamp.value,
+        maxError: elements.maxError.value,
     };
 }
 
@@ -513,9 +517,9 @@ async function render() {
         }
 
         // Dither tunables
-        const errorClamp = elements.errorClamp.value;
-        if (errorClamp !== '' && errorClamp !== '0.08') {
-            queryParams.set('error_clamp', errorClamp);
+        const maxError = elements.maxError.value;
+        if (maxError !== '' && maxError !== '0.08') {
+            queryParams.set('max_error', maxError);
         }
         const chromaClamp = elements.chromaClamp.value;
         if (chromaClamp !== '') {
@@ -621,7 +625,7 @@ function saveState() {
         useActual: elements.useActual.checked,
         preserveExact: elements.preserveExact.checked,
         dither: elements.ditherSelect.value,
-        errorClamp: elements.errorClamp.value,
+        maxError: elements.maxError.value,
         chromaClamp: elements.chromaClamp.value,
         noiseScale: elements.noiseScale.value,
         strength: elements.strength.value,
@@ -672,8 +676,8 @@ function loadSavedState() {
             if (data.dither) {
                 elements.ditherSelect.value = data.dither;
             }
-            if (data.errorClamp) {
-                elements.errorClamp.value = data.errorClamp;
+            if (data.maxError) {
+                elements.maxError.value = data.maxError;
             }
             if (typeof data.chromaClamp === 'string') {
                 elements.chromaClamp.value = data.chromaClamp;

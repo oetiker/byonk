@@ -47,7 +47,7 @@ pub struct ScriptResult {
     /// Optional dither mode from Lua script ("photo" or "graphics")
     pub script_dither: Option<String>,
     /// Optional error clamp override from Lua script
-    pub script_error_clamp: Option<f32>,
+    pub script_max_error: Option<f32>,
     /// Optional blue noise jitter scale override from Lua script
     pub script_noise_scale: Option<f32>,
     /// Optional chroma clamp override from Lua script
@@ -95,7 +95,7 @@ pub struct DeviceContext {
     /// Pre-script resolved dither algorithm name
     pub dither_algorithm: Option<String>,
     /// Pre-script resolved error clamp
-    pub dither_error_clamp: Option<f32>,
+    pub dither_max_error: Option<f32>,
     /// Pre-script resolved noise scale
     pub dither_noise_scale: Option<f32>,
     /// Pre-script resolved chroma clamp
@@ -350,7 +350,7 @@ impl ContentPipeline {
             script_colors: lua_result.colors,
             script_colors_actual: lua_result.colors_actual,
             script_dither: lua_result.dither,
-            script_error_clamp: lua_result.error_clamp,
+            script_max_error: lua_result.max_error,
             script_noise_scale: lua_result.noise_scale,
             script_chroma_clamp: lua_result.chroma_clamp,
             script_strength: lua_result.strength,

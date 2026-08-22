@@ -659,7 +659,7 @@ devices:
     temperature_profile: a
     maximum_compatibility: true
     min_png_bytes: 102401
-    error_clamp: 0.8
+    max_error: 0.8
     params:
       station: Olten
 ";
@@ -675,7 +675,7 @@ devices:
             "temperature_profile",
             "maximum_compatibility",
             "min_png_bytes",
-            "error_clamp",
+            "max_error",
         ] {
             assert!(
                 kept.contains_key(serde_yaml::Value::from(key)),

@@ -168,7 +168,7 @@ pub struct RenderOpts {
     pub height: Option<u32>,
     pub panel: Option<String>,
     pub dither: Option<String>,
-    pub error_clamp: Option<f32>,
+    pub max_error: Option<f32>,
     pub chroma_clamp: Option<f32>,
     pub noise_scale: Option<f32>,
     /// Optional gamut mapping overrides for dithering
@@ -209,7 +209,7 @@ impl Default for RenderOpts {
             height: None,
             panel: None,
             dither: None,
-            error_clamp: None,
+            max_error: None,
             chroma_clamp: None,
             noise_scale: None,
             gamut: Default::default(),
@@ -1149,7 +1149,7 @@ impl ScreenStore {
                 .as_deref()
                 .map(crate::api::display::colors_to_hex_strings),
             dither_algorithm: Some(pre_script_algo.to_string()),
-            dither_error_clamp: pre_panel_tuning.error_clamp,
+            dither_max_error: pre_panel_tuning.max_error,
             dither_noise_scale: pre_panel_tuning.noise_scale,
             dither_chroma_clamp: pre_panel_tuning.chroma_clamp,
             dither_strength: pre_panel_tuning.strength,
@@ -1237,14 +1237,16 @@ impl ScreenStore {
             .unwrap_or_default();
 
         let opts_tuning = DitherTuningValues {
-            error_clamp: opts.error_clamp,
+            deprecated_error_clamp: None,
+            max_error: opts.max_error,
             noise_scale: opts.noise_scale,
             chroma_clamp: opts.chroma_clamp,
             strength: None,
             gamut: opts.gamut.clone(),
         };
         let script_tuning = DitherTuningValues {
-            error_clamp: script_result.script_error_clamp,
+            deprecated_error_clamp: None,
+            max_error: script_result.script_max_error,
             noise_scale: script_result.script_noise_scale,
             chroma_clamp: script_result.script_chroma_clamp,
             strength: script_result.script_strength,

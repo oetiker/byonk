@@ -14,7 +14,7 @@ use eink_dither::{
 #[derive(Debug, Default)]
 pub struct DitherTuning {
     pub serpentine: Option<bool>,
-    pub error_clamp: Option<f32>,
+    pub max_error: Option<f32>,
     pub chroma_clamp: Option<f32>,
     pub noise_scale: Option<f32>,
     pub strength: Option<f32>,
@@ -238,8 +238,8 @@ impl SvgRenderer {
             if let Some(s) = t.serpentine {
                 ditherer = ditherer.serpentine(s);
             }
-            if let Some(ec) = t.error_clamp {
-                ditherer = ditherer.error_clamp(ec);
+            if let Some(ec) = t.max_error {
+                ditherer = ditherer.max_error(ec);
             }
             if let Some(cc) = t.chroma_clamp {
                 ditherer = ditherer.chroma_clamp(cc);

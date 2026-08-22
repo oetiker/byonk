@@ -691,7 +691,7 @@ mod domain_tests {
             ("pure blue", Srgb::from_u8(0, 0, 255), 0.01, 95.0, 100.0),
             // Secondary / mixed saturated colors — should use chromatic entries.
             // Cyan and magenta require combining two palette primaries, so with
-            // error_clamp=0.3 (Photo default) the chromatic fraction is lower
+            // max_error=0.3 (Photo default) the chromatic fraction is lower
             // than with clamp=0.5 because oscillation amplitude is limited.
             ("cyan", Srgb::from_u8(0, 255, 255), 0.30, 0.0, 100.0),
             ("magenta", Srgb::from_u8(255, 0, 255), 0.40, 5.0, 100.0),
@@ -1719,7 +1719,7 @@ mod domain_tests {
         let lin = LinearRgb::from(mid);
         let image = vec![lin; 16];
 
-        let options = DitherOptions::new().error_clamp(0.08).noise_scale(0.0);
+        let options = DitherOptions::new().max_error(0.08).noise_scale(0.0);
 
         let result1 =
             dither_with_kernel_noise(&image, 4, 4, &photo_palette, &ATKINSON, &options, None);
@@ -1803,7 +1803,7 @@ mod domain_tests {
     ///   to an official palette colour is otherwise forced to that entry
     ///   with its error discarded, which pins the pure primaries (0°, 60°,
     ///   120°, 240°) to a single flat colour no matter what else changes.
-    /// - `no-exact+clamp` — additionally widens `error_clamp`. A saturated
+    /// - `no-exact+clamp` — additionally widens `max_error`. A saturated
     ///   hue sits at a channel extreme, so the default 0.08 of headroom
     ///   lets almost no error accumulate and the same entry wins forever.
     ///
@@ -1833,7 +1833,7 @@ mod domain_tests {
 
         const PATCH: usize = 8;
 
-        // (label, error_clamp override)
+        // (label, max_error override)
         let configs: [(&str, Option<f32>); 2] = [("default", None), ("clamp 2.0", Some(2.0))];
 
         eprintln!(
@@ -1857,7 +1857,7 @@ mod domain_tests {
             for (ci, &(_, clamp)) in configs.iter().enumerate() {
                 let mut d = EinkDitherer::new(palette.clone()).algorithm(DitherAlgorithm::Atkinson);
                 if let Some(c) = clamp {
-                    d = d.error_clamp(c);
+                    d = d.max_error(c);
                 }
                 let out = d.dither(&pixels, PATCH, PATCH);
 
@@ -1916,12 +1916,12 @@ mod domain_tests {
         eprintln!("(* = patch is a single flat colour, i.e. no dithering happened at all)");
     }
 
-    /// Isolates the `error_clamp` variable behind the flat-patch collapse
+    /// Isolates the `max_error` variable behind the flat-patch collapse
     /// seen in `test_hue_gamut_sweep_patch_average`.
     ///
     /// `clamp_channel` clamps the *pixel value plus accumulated error* into
-    /// `[-error_clamp, 1 + error_clamp]`. A fully saturated hue already sits
-    /// at a channel extreme (magenta is b=1.0), so at error_clamp=0.08 there
+    /// `[-max_error, 1 + max_error]`. A fully saturated hue already sits
+    /// at a channel extreme (magenta is b=1.0), so at max_error=0.08 there
     /// is only 0.08 of headroom for error to accumulate in that channel: the
     /// same entry wins every pixel and the patch comes out flat.
     ///
@@ -1959,7 +1959,7 @@ mod domain_tests {
         const PATCH: usize = 8;
 
         for &hue_deg in &[120.0f32, 270.0, 300.0, 180.0] {
-            eprintln!("\n=== hue {hue_deg}\u{00b0} vs error_clamp ===");
+            eprintln!("\n=== hue {hue_deg}\u{00b0} vs max_error ===");
             for &ec in &[0.08f32, 0.2, 0.5, 1.0, 2.0] {
                 let (r, g, b) = hsl_to_rgb(hue_deg / 360.0, 1.0, 0.5);
                 let src = Srgb::new(r, g, b);
@@ -1967,7 +1967,7 @@ mod domain_tests {
 
                 let out = EinkDitherer::new(palette.clone())
                     .algorithm(DitherAlgorithm::Atkinson)
-                    .error_clamp(ec)
+                    .max_error(ec)
                     .dither(&pixels, PATCH, PATCH);
 
                 let mut sum = [0.0f32; 3];
@@ -2226,7 +2226,7 @@ mod domain_tests {
         let palette = Palette::new(&official, Some(&actual)).unwrap();
         const PATCH: usize = 16;
 
-        // (label, algorithm, error_clamp override)
+        // (label, algorithm, max_error override)
         let configs: [(&str, DitherAlgorithm, Option<f32>); 4] = [
             ("atkinson", DitherAlgorithm::Atkinson, None),
             ("atkinson+clamp2", DitherAlgorithm::Atkinson, Some(2.0)),
@@ -2255,7 +2255,7 @@ mod domain_tests {
                 for (ci, &(_, algo, clamp)) in configs.iter().enumerate() {
                     let mut d = EinkDitherer::new(palette.clone()).algorithm(algo);
                     if let Some(c) = clamp {
-                        d = d.error_clamp(c);
+                        d = d.max_error(c);
                     }
                     let out = d.dither(&pixels, PATCH, PATCH);
                     let mut acc = [0.0f32; 3];
@@ -2856,13 +2856,13 @@ mod domain_tests {
         );
     }
 
-    /// Sweep `error_clamp` under the new "bound the error" semantics to pick
+    /// Sweep `max_error` under the new "bound the error" semantics to pick
     /// per-algorithm defaults, scoring against the palette's physical bound.
     ///
     /// Run: `cargo test -p eink-dither clamp_sweep -- --nocapture --ignored`
     #[test]
     #[ignore] // diagnostic -- run manually
-    fn test_error_clamp_sweep_against_bound() {
+    fn test_max_error_sweep_against_bound() {
         let official = [
             Srgb::from_u8(0, 0, 0),
             Srgb::from_u8(255, 255, 255),
@@ -2916,7 +2916,7 @@ mod domain_tests {
                     let pixels = vec![*src; PATCH * PATCH];
                     let out = EinkDitherer::new(palette.clone())
                         .algorithm(algo)
-                        .error_clamp(ec)
+                        .max_error(ec)
                         .dither(&pixels, PATCH, PATCH);
                     let mut acc = [0.0f32; 3];
                     for &idx in out.indices() {
@@ -2935,14 +2935,14 @@ mod domain_tests {
         }
     }
 
-    /// Sweep error_clamp against BOTH metrics at once: muted-colour accuracy
+    /// Sweep max_error against BOTH metrics at once: muted-colour accuracy
     /// (which wants a tight bound) and the saturated-patch gamut gap (which
     /// wants a loose one). The default has to satisfy both.
     ///
     /// Run: `cargo test -p eink-dither clamp_tradeoff -- --nocapture --ignored`
     #[test]
     #[ignore] // diagnostic -- run manually
-    fn test_error_clamp_tradeoff() {
+    fn test_max_error_tradeoff() {
         let pal6 = Palette::new(
             &[
                 Srgb::from_u8(0, 0, 0),
@@ -2998,7 +2998,7 @@ mod domain_tests {
                 let out = EinkDitherer::new(pal6.clone())
                     .saturation(1.0)
                     .contrast(1.0)
-                    .error_clamp(ec)
+                    .max_error(ec)
                     .dither(&image, 128, 128);
                 let mut acc = [0.0f32; 3];
                 for &idx in out.indices() {
@@ -3022,7 +3022,7 @@ mod domain_tests {
                 for hue_deg in (0..360).step_by(30) {
                     let (r, g, b) = hsl_to_rgb(hue_deg as f32 / 360.0, 1.0, l);
                     let src = Srgb::new(r, g, b);
-                    let out = EinkDitherer::new(measured.clone()).error_clamp(ec).dither(
+                    let out = EinkDitherer::new(measured.clone()).max_error(ec).dither(
                         &vec![src; 16 * 16],
                         16,
                         16,

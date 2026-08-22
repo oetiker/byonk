@@ -43,6 +43,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`error_clamp` is now called `max_error`, and the old name is ignored.** In
+  0.18.0 the knob stopped capping the resulting pixel value and started capping
+  the accumulated dithering error, which moved its useful range from around
+  `0.1` to around `1.0`. The old name kept working, so a value tuned before
+  0.18.0 went on being applied under a meaning it was never chosen for — and
+  rendered flat, with saturated areas collapsing to a single ink.
+
+  A setting that changes what it means should change its name with it, so it
+  has. `max_error` is the setting; `error_clamp` is read at startup, reported
+  with the exact path to edit, and then discarded. It applies wherever the old
+  name was accepted: `config.yaml` panel and device blocks, a screen's Lua
+  return table, the render API and the dev UI.
+
+  If you never set it, nothing changes. If you did, Byonk tells you where:
+
+  ```text
+  WARN panels.reterminal_e1004.dither.sierra-lite.error_clamp: 0.11 —
+       `error_clamp` was removed in 0.18.0 and is IGNORED. ...
+  ```
+
+  Delete the line to take the default, or set `max_error` if you have retuned
+  it under the new meaning. Lua scripts read the resolved value as
+  `device.dither.max_error`.
+
+- **The dev UI's tuning defaults now match the renderer.** Switching dither
+  algorithm filled the tuning boxes from a table that had not been updated
+  since before 0.18.0: every algorithm got a pre-0.18.0 error cap, and the
+  noise scales disagreed with the renderer's own — Atkinson offered `0` where
+  the renderer uses `8.0`, and four algorithms could not even reach their
+  default because the noise box stopped at `8.0`. The preview therefore showed
+  something the device would not produce. The boxes now start at the values
+  the renderer actually uses.
+
 - The configuration guide's *Ghosting* section now explains what
   `temperature_profile` actually does on each model — on a TRMNL X it controls
   how hard the panel is cleared rather than which waveform is used, so `a` and

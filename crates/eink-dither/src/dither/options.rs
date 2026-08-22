@@ -26,7 +26,7 @@
 /// // Or customize with builder pattern
 /// let options = DitherOptions::new()
 ///     .serpentine(false)
-///     .error_clamp(0.3);
+///     .max_error(0.3);
 /// ```
 #[derive(Debug, Clone)]
 pub struct DitherOptions {
@@ -39,13 +39,18 @@ pub struct DitherOptions {
     /// Default: `true`
     pub serpentine: bool,
 
-    /// Maximum error magnitude per channel (in linear RGB space).
+    /// Maximum accumulated error magnitude per channel (in linear RGB space).
     ///
     /// Accumulated error is clamped to this range to prevent "blooming"
     /// with small palettes where quantization errors can be large.
     ///
-    /// Default: `0.5`
-    pub error_clamp: f32,
+    /// This bounds the *error*, not the resulting pixel value. Before 0.18.0
+    /// the knob was called `error_clamp` and bounded the value instead, so its
+    /// useful range was around `0.1`; under these semantics it is around `1.0`
+    /// and a pre-0.18.0 value renders flat.
+    ///
+    /// Default: `1.0`
+    pub max_error: f32,
 
     /// Chromatic error damping threshold (OKLab chroma units).
     ///
@@ -142,7 +147,7 @@ impl Default for DitherOptions {
     fn default() -> Self {
         Self {
             serpentine: true,
-            error_clamp: 1.0,
+            max_error: 1.0,
             chroma_clamp: f32::INFINITY,
             noise_scale: 5.0,
             strength: 1.0,
@@ -171,13 +176,14 @@ impl DitherOptions {
         self
     }
 
-    /// Set error clamping threshold.
+    /// Set the cap on accumulated error.
     ///
     /// # Arguments
-    /// * `clamp` - Maximum error magnitude per channel (typically 0.3-0.5)
+    /// * `max_error` - Maximum accumulated error magnitude per channel. The
+    ///   useful range is around `1.0`; see [`DitherOptions::max_error`].
     #[inline]
-    pub fn error_clamp(mut self, clamp: f32) -> Self {
-        self.error_clamp = clamp;
+    pub fn max_error(mut self, max_error: f32) -> Self {
+        self.max_error = max_error;
         self
     }
 
@@ -245,8 +251,8 @@ mod tests {
         let opts = DitherOptions::default();
         assert!(opts.serpentine, "serpentine should default to true");
         assert!(
-            (opts.error_clamp - 1.0).abs() < f32::EPSILON,
-            "error_clamp should default to 1.0"
+            (opts.max_error - 1.0).abs() < f32::EPSILON,
+            "max_error should default to 1.0"
         );
     }
 
@@ -256,7 +262,7 @@ mod tests {
         let default_opts = DitherOptions::default();
 
         assert_eq!(new_opts.serpentine, default_opts.serpentine);
-        assert!((new_opts.error_clamp - default_opts.error_clamp).abs() < f32::EPSILON);
+        assert!((new_opts.max_error - default_opts.max_error).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -264,23 +270,23 @@ mod tests {
         let opts = DitherOptions::new().serpentine(false);
         assert!(!opts.serpentine);
         // Other values unchanged
-        assert!((opts.error_clamp - 1.0).abs() < f32::EPSILON);
+        assert!((opts.max_error - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn test_builder_error_clamp() {
-        let opts = DitherOptions::new().error_clamp(0.3);
-        assert!((opts.error_clamp - 0.3).abs() < f32::EPSILON);
+    fn test_builder_max_error() {
+        let opts = DitherOptions::new().max_error(0.3);
+        assert!((opts.max_error - 0.3).abs() < f32::EPSILON);
         // Other values unchanged
         assert!(opts.serpentine);
     }
 
     #[test]
     fn test_builder_chaining() {
-        let opts = DitherOptions::new().serpentine(false).error_clamp(0.25);
+        let opts = DitherOptions::new().serpentine(false).max_error(0.25);
 
         assert!(!opts.serpentine);
-        assert!((opts.error_clamp - 0.25).abs() < f32::EPSILON);
+        assert!((opts.max_error - 0.25).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -298,7 +304,7 @@ mod tests {
         assert!((opts.strength - 0.5).abs() < f32::EPSILON);
         // Other values unchanged
         assert!(opts.serpentine);
-        assert!((opts.error_clamp - 1.0).abs() < f32::EPSILON);
+        assert!((opts.max_error - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]

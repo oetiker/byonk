@@ -330,7 +330,7 @@ fn run_render_command(
         svg_content,
         final_palette,
         dither,
-        cli_error_clamp,
+        cli_max_error,
         cli_noise_scale,
         cli_chroma_clamp,
         cli_strength,
@@ -419,7 +419,8 @@ fn run_render_command(
         // already resolved once above (before the device context) and are
         // reused here rather than looked up a second time.
         let dc_tuning = byonk::models::DitherTuningValues {
-            error_clamp: device_config.and_then(|dc| dc.error_clamp),
+            deprecated_error_clamp: None,
+            max_error: device_config.and_then(|dc| dc.max_error),
             noise_scale: device_config.and_then(|dc| dc.noise_scale),
             chroma_clamp: device_config.and_then(|dc| dc.chroma_clamp),
             strength: device_config.and_then(|dc| dc.strength),
@@ -439,7 +440,8 @@ fn run_render_command(
             .unwrap_or_default();
 
         let script_tuning = byonk::models::DitherTuningValues {
-            error_clamp: script_result.script_error_clamp,
+            deprecated_error_clamp: None,
+            max_error: script_result.script_max_error,
             noise_scale: script_result.script_noise_scale,
             chroma_clamp: script_result.script_chroma_clamp,
             strength: script_result.script_strength,
@@ -472,7 +474,7 @@ fn run_render_command(
             svg,
             render_params.palette,
             render_params.dither,
-            render_params.error_clamp,
+            render_params.max_error,
             render_params.noise_scale,
             render_params.chroma_clamp,
             render_params.strength,
@@ -486,13 +488,13 @@ fn run_render_command(
     // Render to PNG
     let cli_tuning = byonk::rendering::svg_to_png::DitherTuning {
         serpentine: None,
-        error_clamp: cli_error_clamp,
+        max_error: cli_max_error,
         chroma_clamp: cli_chroma_clamp,
         noise_scale: cli_noise_scale,
         strength: cli_strength,
         gamut: Some(cli_gamut.resolve()),
     };
-    let has_cli_tuning = cli_tuning.error_clamp.is_some()
+    let has_cli_tuning = cli_tuning.max_error.is_some()
         || cli_tuning.chroma_clamp.is_some()
         || cli_tuning.noise_scale.is_some()
         || cli_tuning.strength.is_some()

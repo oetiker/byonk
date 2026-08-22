@@ -46,14 +46,14 @@ pub struct EinkDitherer {
     preprocess: PreprocessOptions,
     dither_opts: DitherOptions,
     algorithm: DitherAlgorithm,
-    /// Whether error_clamp was explicitly set by the user (vs algorithm default).
-    error_clamp_explicit: bool,
+    /// Whether max_error was explicitly set by the user (vs algorithm default).
+    max_error_explicit: bool,
 }
 
 impl EinkDitherer {
     /// Create a new ditherer with the given palette.
     ///
-    /// Default algorithm and its error_clamp/noise_scale come from
+    /// Default algorithm and its max_error/noise_scale come from
     /// [`DitherAlgorithm::default`]/[`DitherAlgorithm::defaults`], not restated here.
     /// Preprocessing defaults: saturation 1.0, contrast 1.0 (no enhancement).
     ///
@@ -69,19 +69,19 @@ impl EinkDitherer {
     /// ```
     pub fn new(palette: Palette) -> Self {
         // Derive from the default algorithm rather than restating a constant:
-        // this used to hardcode error_clamp(0.08), so `new()` and
+        // this used to hardcode max_error(0.08), so `new()` and
         // `.algorithm(Atkinson)` could silently disagree about the defaults.
         let algorithm = DitherAlgorithm::default();
-        let (error_clamp, noise_scale) = algorithm.defaults();
+        let (max_error, noise_scale) = algorithm.defaults();
         Self {
             palette,
             preprocess: PreprocessOptions::default(),
             dither_opts: DitherOptions::new()
-                .error_clamp(error_clamp)
+                .max_error(max_error)
                 .noise_scale(noise_scale)
                 .hybrid_propagation(algorithm.is_hybrid_propagation()),
             algorithm,
-            error_clamp_explicit: false,
+            max_error_explicit: false,
         }
     }
 
@@ -118,9 +118,9 @@ impl EinkDitherer {
     /// This explicitly overrides the per-algorithm default and the
     /// greyscale palette auto-detection override.
     #[inline]
-    pub fn error_clamp(mut self, clamp: f32) -> Self {
-        self.dither_opts = self.dither_opts.error_clamp(clamp);
-        self.error_clamp_explicit = true;
+    pub fn max_error(mut self, clamp: f32) -> Self {
+        self.dither_opts = self.dither_opts.max_error(clamp);
+        self.max_error_explicit = true;
         self
     }
 
@@ -158,8 +158,8 @@ impl EinkDitherer {
 
     /// Set the dithering algorithm.
     ///
-    /// Applies per-algorithm defaults for error_clamp and noise_scale.
-    /// Subsequent `.error_clamp()` / `.noise_scale()` calls override these.
+    /// Applies per-algorithm defaults for max_error and noise_scale.
+    /// Subsequent `.max_error()` / `.noise_scale()` calls override these.
     ///
     /// # Example
     ///
@@ -175,13 +175,13 @@ impl EinkDitherer {
     #[inline]
     pub fn algorithm(mut self, algorithm: DitherAlgorithm) -> Self {
         self.algorithm = algorithm;
-        let (error_clamp, noise_scale) = algorithm.defaults();
+        let (max_error, noise_scale) = algorithm.defaults();
         self.dither_opts = self
             .dither_opts
-            .error_clamp(error_clamp)
+            .max_error(max_error)
             .noise_scale(noise_scale)
             .hybrid_propagation(algorithm.is_hybrid_propagation());
-        self.error_clamp_explicit = false;
+        self.max_error_explicit = false;
         self
     }
 
@@ -292,7 +292,7 @@ impl EinkDitherer {
 
         // 2. Resolve dither options.
         //
-        // There used to be a greyscale override raising error_clamp to 0.6
+        // There used to be a greyscale override raising max_error to 0.6
         // here. It compensated for the old clamp semantics, which bounded the
         // resulting value rather than the error: a grey ramp lives near the
         // channel extremes, so it was starved of headroom exactly where it
@@ -420,14 +420,14 @@ mod tests {
             .saturation(1.8)
             .contrast(1.2)
             .serpentine(false)
-            .error_clamp(0.3);
+            .max_error(0.3);
 
         assert_eq!(ditherer.preprocess.target_width, Some(800));
         assert_eq!(ditherer.preprocess.target_height, Some(600));
         assert!((ditherer.preprocess.saturation - 1.8).abs() < f32::EPSILON);
         assert!((ditherer.preprocess.contrast - 1.2).abs() < f32::EPSILON);
         assert!(!ditherer.dither_opts.serpentine);
-        assert!((ditherer.dither_opts.error_clamp - 0.3).abs() < f32::EPSILON);
+        assert!((ditherer.dither_opts.max_error - 0.3).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -523,12 +523,12 @@ mod tests {
         let palette = test_palette();
         let ditherer =
             EinkDitherer::new(palette.clone()).algorithm(DitherAlgorithm::FloydSteinberg);
-        assert!((ditherer.dither_opts.error_clamp - 1.0).abs() < f32::EPSILON);
+        assert!((ditherer.dither_opts.max_error - 1.0).abs() < f32::EPSILON);
         assert!((ditherer.dither_opts.noise_scale - 8.0).abs() < f32::EPSILON);
         assert!(!ditherer.dither_opts.hybrid_propagation);
 
         let ditherer = EinkDitherer::new(palette).algorithm(DitherAlgorithm::AtkinsonHybrid);
-        assert!((ditherer.dither_opts.error_clamp - 1.0).abs() < f32::EPSILON);
+        assert!((ditherer.dither_opts.max_error - 1.0).abs() < f32::EPSILON);
         assert!((ditherer.dither_opts.noise_scale - 8.0).abs() < f32::EPSILON);
         assert!(ditherer.dither_opts.hybrid_propagation);
     }

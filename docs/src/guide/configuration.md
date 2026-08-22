@@ -59,7 +59,7 @@ Each device entry maps a MAC address to a screen:
 | `colors` | No | Override display palette (comma-separated hex RGB, e.g. `"#000000,#FFFFFF,#FF0000"`) |
 | `dither` | No | Dithering algorithm (see [Dither Algorithms](#dither-algorithms) below) |
 | `panel` | No | Panel profile name (references `panels` section) |
-| `error_clamp` | No | Caps how much accumulated dithering error one pixel may carry (e.g. `1.0`, the default). Lower values suppress error diffusion; very low values make saturated areas render flat. |
+| `max_error` | No | Caps how much accumulated dithering error one pixel may carry (e.g. `1.0`, the default). Lower values suppress error diffusion; very low values make saturated areas render flat. |
 | `noise_scale` | No | Blue noise jitter scale (e.g. `0.6`). Controls noise modulation strength. |
 | `chroma_clamp` | No | Chroma clamp for dithering. Limits chromatic error propagation. |
 | `strength` | No | Error diffusion strength (0.0–2.0, default 1.0). Lower = less dithering texture. |
@@ -477,20 +477,38 @@ panels:
     colors: "#000000,#FFFFFF,#FF0000,#FFFF00"
     colors_actual: "#303030,#D0D0C8,#C04040,#D0D020"
     dither:
-      error_clamp: 1.0         # flat default for all algorithms
+      max_error: 1.0         # flat default for all algorithms
       noise_scale: 5.0
       floyd-steinberg:          # per-algorithm override
-        error_clamp: 0.8
+        max_error: 0.8
         noise_scale: 4.0
       atkinson:
-        error_clamp: 1.2
+        max_error: 1.2
 ```
 
 The `dither` section supports:
-- **Flat keys** (`error_clamp`, `noise_scale`, `chroma_clamp`, `strength`): default values for all algorithms
+- **Flat keys** (`max_error`, `noise_scale`, `chroma_clamp`, `strength`): default values for all algorithms
 - **Algorithm sub-sections**: per-algorithm overrides that take priority over flat defaults
 
 Resolution within a panel: per-algorithm value > flat default > None.
+
+> **`error_clamp` was renamed to `max_error` and is now ignored.**
+>
+> Up to 0.17.x the knob was called `error_clamp` and it capped the resulting
+> *pixel value*. Since 0.18.0 it caps the *accumulated error*, which moved the
+> useful range from around `0.1` to around `1.0`. A pre-0.18.0 value still
+> parses under the new meaning and still renders — flat, with saturated areas
+> collapsing to a single ink.
+>
+> Because the name could not keep its old meaning, it changed with it.
+> `error_clamp` is read, reported at startup with the exact path to edit, and
+> then discarded. Delete the key to take the default, or set `max_error` if
+> you have retuned it. The warning looks like:
+>
+> ```text
+> WARN panels.reterminal_e1004.dither.sierra-lite.error_clamp: 0.11 —
+>      `error_clamp` was removed in 0.18.0 and is IGNORED. ...
+> ```
 
 Algorithm names accept aliases (e.g. `jjn` for `jarvis-judice-ninke`).
 
@@ -500,7 +518,7 @@ The overall tuning priority chain is:
 |----------|--------|
 | 1 (highest) | Dev UI overrides |
 | 2 | Lua script return values |
-| 3 | Device config (`error_clamp`, `noise_scale`, `chroma_clamp`, `strength`) |
+| 3 | Device config (`max_error`, `noise_scale`, `chroma_clamp`, `strength`) |
 | 4 | Panel dither defaults |
 | 5 (lowest) | Built-in per-algorithm defaults |
 

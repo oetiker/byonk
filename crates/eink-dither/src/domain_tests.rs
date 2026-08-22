@@ -638,6 +638,141 @@ mod domain_tests {
         }
     }
 
+    /// Dither a uniform patch and report `(dE, ink histogram)`.
+    ///
+    /// `skip_rows` discards the top of the patch, where error diffusion has
+    /// not yet settled. At 255x255 that warm-up is ~3% of the image and is
+    /// ignored elsewhere in this file; at census patch sizes it is ~12% and
+    /// would show up as noise on every reading.
+    fn census_patch(
+        input: Srgb,
+        palette: &Palette,
+        size: usize,
+        skip_rows: usize,
+    ) -> (f32, Vec<u32>) {
+        let image = vec![input; size * size];
+        let out = EinkDitherer::new(palette.clone())
+            .saturation(1.0)
+            .contrast(1.0)
+            .dither(&image, size, size);
+        let indices = &out.indices()[skip_rows * size..];
+        let n = indices.len() as f32;
+        let mut counts = vec![0u32; palette.len()];
+        let (mut r, mut g, mut b) = (0.0f32, 0.0f32, 0.0f32);
+        for &i in indices {
+            counts[i as usize] += 1;
+            let c = palette.actual_linear(i as usize);
+            r += c.r;
+            g += c.g;
+            b += c.b;
+        }
+        let avg = Oklab::from(LinearRgb::new(r / n, g / n, b / n));
+        let target = Oklab::from(LinearRgb::from(input));
+        let de =
+            ((avg.l - target.l).powi(2) + (avg.a - target.a).powi(2) + (avg.b - target.b).powi(2))
+                .sqrt();
+        (de, counts)
+    }
+
+    /// Every colour the panel can physically reproduce must come back
+    /// accurate, and a colour duller than the palette's dullest ink must not
+    /// be rendered as a field of that ink.
+    ///
+    /// Two independent properties, because dE alone cannot see the defect
+    /// this test exists for: grey 128 dithers to 77.6% green at dE 0.063.
+    /// The average is right and the area looks green, because the eye reads
+    /// the majority ink as the colour of the region rather than averaging.
+    ///
+    /// The field-colour rule is derived from the palette: a target with less
+    /// chroma than the dullest chromatic ink cannot legitimately be mostly
+    /// that ink. On `panel_measured()` that ink is green at chroma 0.068,
+    /// which covers every grey and every skin tone while exempting saturated
+    /// colours that genuinely are one ink.
+    #[test]
+    fn test_in_gamut_census() {
+        /// sRGB grid step. 16 yields 677 in-gamut colours; 32 collapses to 78.
+        const STEP: usize = 16;
+        /// Patch edge. 677 patches of this size is ~2.3s in a debug build.
+        const PATCH: usize = 64;
+        /// Rows discarded while error diffusion settles.
+        const SKIP: usize = 8;
+        /// Worst in-gamut dE measured before this change was 0.0847;
+        /// the bound is that rounded up plus 0.01 of headroom. This is a
+        /// no-regression gate: the fix must not make any reachable colour
+        /// less accurate than it already is.
+        const MAX_DE: f32 = 0.10;
+        /// An ink covering the majority of a patch is its field colour.
+        const MAX_SINGLE_INK_PCT: f32 = 50.0;
+
+        let palette = crate::gamut::test_support::panel_measured();
+        let hull = crate::gamut::hull::Hull::from_palette(&palette);
+
+        let dullest_ink_chroma = (2..palette.len())
+            .map(|i| {
+                let c = palette.actual_oklab(i);
+                (c.a * c.a + c.b * c.b).sqrt()
+            })
+            .fold(f32::MAX, f32::min);
+
+        let mut de_failures = Vec::new();
+        let mut field_failures = Vec::new();
+        let mut checked = 0usize;
+        let mut worst_de = 0.0f32;
+
+        for r in (0..=255usize).step_by(STEP) {
+            for g in (0..=255usize).step_by(STEP) {
+                for b in (0..=255usize).step_by(STEP) {
+                    let src = Srgb::from_u8(r as u8, g as u8, b as u8);
+                    if !hull.contains(LinearRgb::from(src)) {
+                        continue;
+                    }
+                    checked += 1;
+                    let (de, counts) = census_patch(src, &palette, PATCH, SKIP);
+                    worst_de = worst_de.max(de);
+                    if de > MAX_DE {
+                        de_failures.push(format!("  #{r:02X}{g:02X}{b:02X}: dE={de:.4}"));
+                    }
+
+                    let target = Oklab::from(LinearRgb::from(src));
+                    let chroma = (target.a * target.a + target.b * target.b).sqrt();
+                    if chroma >= dullest_ink_chroma {
+                        continue;
+                    }
+                    let total: u32 = counts.iter().sum();
+                    let (idx, count) = counts[2..]
+                        .iter()
+                        .enumerate()
+                        .max_by_key(|&(_, c)| *c)
+                        .map(|(i, c)| (i + 2, *c))
+                        .expect("palette has chromatic entries");
+                    let pct = 100.0 * count as f32 / total as f32;
+                    if pct > MAX_SINGLE_INK_PCT {
+                        field_failures.push(format!(
+                            "  #{r:02X}{g:02X}{b:02X} (chroma {chroma:.3}): entry {idx} \
+                             covers {pct:.1}% of the patch (max {MAX_SINGLE_INK_PCT:.0}%) \
+                             — a colour rendered as a field of one ink. dE={de:.4} is \
+                             fine, which is the point."
+                        ));
+                    }
+                }
+            }
+        }
+
+        assert!(checked > 600, "census collapsed to {checked} colours");
+        assert!(
+            de_failures.is_empty(),
+            "In-gamut colours the ditherer cannot reproduce ({} of {checked}):\n{}",
+            de_failures.len(),
+            de_failures.join("\n")
+        );
+        assert!(
+            field_failures.is_empty(),
+            "In-gamut colours rendered as a field of one ink ({} of {checked}):\n{}",
+            field_failures.len(),
+            field_failures.join("\n")
+        );
+    }
+
     /// Perceptual accuracy: dithered uniform blocks should average back
     /// to the original color. Tests a range of achromatic, chromatic, and
     /// muted real-world colors against the 6-color BWRGBY palette.

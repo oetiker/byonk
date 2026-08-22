@@ -266,23 +266,34 @@ fn render_opts_dither_overrides_the_device_config() {
     assert_eq!(out.data["algo"], "burkes");
 }
 
-/// The precedence that matters: `script > device_config`. A screen that picks
-/// its own dither must render identically whether or not the device config
-/// names a different one — otherwise the preview would dither differently
-/// from the panel.
+/// The precedence that matters: `device_config > script`. The dither
+/// algorithm is a property of the panel, so the device decides even on a
+/// screen that names its own — and the preview follows, because the panel
+/// will do the same. A screen's choice still applies when the device is
+/// silent, which the contrast case below pins.
 #[test]
-fn script_dither_beats_the_device_config() {
+fn the_device_config_dither_beats_the_script() {
     let dir = tempfile::tempdir().unwrap();
     let store = dither_store(dir.path());
 
-    let without = store.render("testrepo/opinionated", with_device_dither(None));
-    let with = store.render("testrepo/opinionated", with_device_dither(Some("sierra")));
-    assert!(without.error.is_none(), "{:?}", without.error);
-    assert!(with.error.is_none(), "{:?}", with.error);
-    assert!(!without.png.is_empty());
+    let script_choice = store.render("testrepo/opinionated", with_device_dither(None));
+    let device_choice = store.render("testrepo/opinionated", with_device_dither(Some("sierra")));
+    assert!(script_choice.error.is_none(), "{:?}", script_choice.error);
+    assert!(device_choice.error.is_none(), "{:?}", device_choice.error);
+    assert!(!script_choice.png.is_empty());
+    assert_ne!(
+        script_choice.png, device_choice.png,
+        "a device-config dither must displace the script's own choice"
+    );
+
+    // ...and it lands on the device's algorithm specifically, not just on
+    // "something other than the script's".
+    let plain_sierra = store.render("testrepo/plain", with_device_dither(Some("sierra")));
+    assert!(plain_sierra.error.is_none(), "{:?}", plain_sierra.error);
     assert_eq!(
-        without.png, with.png,
-        "a device-config dither must not displace the script's own choice"
+        device_choice.png, plain_sierra.png,
+        "the opinionated screen must render exactly as the same content does \
+         with no opinion at all, since the device decides in both cases"
     );
 }
 

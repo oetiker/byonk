@@ -522,6 +522,33 @@ The overall tuning priority chain is:
 | 4 | Panel dither defaults |
 | 5 (lowest) | Built-in per-algorithm defaults |
 
+That chain is for the tuning *values*. Choosing the **algorithm** puts the
+device above the screen instead:
+
+| Priority | Source |
+|----------|--------|
+| 1 (highest) | Dev UI override |
+| 2 | Device config `dither` |
+| 3 | Screen's Lua `dither` |
+| 4 (lowest) | `atkinson` |
+
+The algorithm suits the panel rather than the content, and an operator who
+sets it on the device cannot see a screen replacing it. A screen's `dither`
+still applies on any device that does not name one; when both do and they
+differ, Byonk logs which value was dropped.
+
+The **refresh interval** goes the other way, because only the script knows
+when its own content next changes:
+
+| Priority | Source |
+|----------|--------|
+| 1 (highest) | Screen's Lua `refresh_rate` (when greater than 0) |
+| 2 | Device config `refresh` |
+| 3 (lowest) | The screen's `meta.yaml` `refresh`, or 900 seconds |
+
+Byonk logs when a device's `refresh` is displaced by a screen, so an operator
+can see why their setting is inert.
+
 ### Panel Assignment
 
 Panels are assigned to devices in three ways (highest priority first):

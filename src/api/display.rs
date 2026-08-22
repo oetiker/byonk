@@ -357,7 +357,15 @@ fn resolve_temperature_profile(configured: Option<&str>) -> String {
 /// Measured: script_colors_actual > pre_script_measured_candidates (in the
 ///           order the caller supplies them, e.g. dev override >
 ///           panel.colors_actual > Measured-Colors header)
-/// Dither: script_dither > device_config_dither > None
+/// Dither: device_config_dither > script_dither > None
+///
+/// The device outranks the screen because the algorithm is a property of the
+/// panel, not of the content, and the operator who set it on the device
+/// cannot see a screen replacing it. When both are set and they normalise to
+/// different algorithms, the screen's value is dropped and a message naming
+/// both is pushed to `warnings`. Callers that need a third layer above both
+/// (a dev-UI override) pass it in the `device_config_dither` slot and blank
+/// `script_dither`; see `services::screen_store`.
 ///
 /// `pre_script_measured_candidates` is the caller's own pre-script chain —
 /// each entry already parsed and labelled by the caller, in precedence
@@ -367,7 +375,7 @@ fn resolve_temperature_profile(configured: Option<&str>) -> String {
 /// and applies the length rule uniformly across the whole thing, so a
 /// mismatch at ANY position — including inside the caller's own chain —
 /// falls through to the next, not just a mismatch at the very front. A
-/// mismatch never fails the render: it's recorded into `warning_sink` and
+/// mismatch never fails the render: it's recorded into `warnings` and
 /// the resolver falls through (see [`resolve_measured_colors`]). The caller
 /// decides where that warning goes — `tracing::warn!` on device paths, the
 /// script log on authoring paths.
@@ -382,7 +390,7 @@ pub fn resolve_render_params(
     fallback_palette: &[(u8, u8, u8)],
     pre_script_measured_candidates: &[MeasuredCandidate],
     tuning: &DitherTuningValues,
-    warning_sink: &mut Option<String>,
+    warnings: &mut Vec<String>,
 ) -> RenderParams {
     let palette = if let Some(sc) = script_colors {
         parse_colors_header(&sc.join(","))
@@ -399,10 +407,22 @@ pub fn resolve_render_params(
     // disagree about which algorithm was asked for. The renderer matches
     // canonical names only and silently falls back to Atkinson otherwise, so
     // an un-normalized alias reaching it is a silent wrong-algorithm render.
-    let dither = script_dither
-        .map(|s| s.to_string())
-        .or_else(|| device_config_dither.map(|s| s.to_string()))
-        .map(|s| crate::models::normalize_algorithm_name(&s));
+    let normalize = crate::models::normalize_algorithm_name;
+    let device_algo = device_config_dither.map(normalize);
+    let script_algo = script_dither.map(normalize);
+    if let (Some(device_algo), Some(script_algo)) = (&device_algo, &script_algo) {
+        // Compare AFTER normalisation: `sierra-light` and `sierra-lite` are
+        // one algorithm, and reporting them as a conflict would train the
+        // operator to ignore the warning.
+        if device_algo != script_algo {
+            warnings.push(format!(
+                "screen asked for dither `{script_algo}` but the device is configured for \
+                 `{device_algo}`; the device wins. Remove `dither` from the screen, or \
+                 change the device, to stop this."
+            ));
+        }
+    }
+    let dither = device_algo.or(script_algo);
 
     let script_measured = script_colors_actual.map(parse_measured_color_list);
     let mut candidates: Vec<MeasuredCandidate> =
@@ -410,7 +430,7 @@ pub fn resolve_render_params(
     candidates.push((SRC_SCRIPT, script_measured));
     candidates.extend_from_slice(pre_script_measured_candidates);
     let measured = resolve_measured_colors(palette.len(), &candidates);
-    *warning_sink = measured.warning;
+    warnings.extend(measured.warning);
 
     RenderParams {
         palette,
@@ -963,14 +983,15 @@ pub async fn handle_display<R: DeviceRegistry>(
                         (result.script_dither.as_deref(), dc_dither.as_deref())
                     };
 
-                    // Determine final algorithm for panel tuning resolution
+                    // Determine final algorithm for panel tuning resolution.
+                    // Same precedence as `resolve_render_params` — dev
+                    // override > device config > script. If these two ever
+                    // disagree, per-algorithm tuning is looked up for one
+                    // algorithm while another is rendered.
                     let final_algo_str = if dev_dither.is_some() {
                         dev_dither.as_deref()
                     } else {
-                        result
-                            .script_dither
-                            .as_deref()
-                            .or(dc_dither.as_deref())
+                        dc_dither.as_deref().or(result.script_dither.as_deref())
                     };
                     let final_algo_normalized =
                         final_algo_str.map(normalize_algorithm_name);
@@ -999,7 +1020,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                         resolve_tuning(&script_tuning, &dc_tuning_for_closure, &panel_final_tuning)
                     };
 
-                    let mut measured_warning: Option<String> = None;
+                    let mut render_warnings: Vec<String> = Vec::new();
                     let params = resolve_render_params(
                         result.script_colors.as_deref(),
                         result.script_colors_actual.as_deref(),
@@ -1010,9 +1031,9 @@ pub async fn handle_display<R: DeviceRegistry>(
                         &fallback,
                         &pre_script_measured_candidates,
                         &tuning,
-                        &mut measured_warning,
+                        &mut render_warnings,
                     );
-                    if let Some(w) = &measured_warning {
+                    for w in &render_warnings {
                         tracing::warn!(device = %mac, "{w}");
                     }
 
@@ -1653,6 +1674,105 @@ mod tests {
         DitherTuningValues::default()
     }
 
+    /// The device's configured algorithm outranks the screen's.
+    ///
+    /// If this breaks, it means: a screen can silently retune the hardware.
+    /// The dither algorithm is a property of the panel, and the operator who
+    /// set it on the device cannot see that a screen is quietly replacing it.
+    /// Cost of the old order, measured once: a device set to
+    /// `atkinson-hybrid` went on rendering `atkinson` with no indication
+    /// anywhere.
+    #[test]
+    fn resolve_render_params_device_dither_beats_script_dither() {
+        let mut warnings = Vec::new();
+        let params = resolve_render_params(
+            None,
+            None,
+            Some("atkinson"),
+            None,
+            Some("atkinson-hybrid"),
+            None,
+            &[(0, 0, 0), (255, 255, 255)],
+            &[],
+            &default_tuning(),
+            &mut warnings,
+        );
+        assert_eq!(params.dither.as_deref(), Some("atkinson-hybrid"));
+    }
+
+    /// A screen still chooses when the device has no opinion.
+    #[test]
+    fn resolve_render_params_script_dither_applies_when_device_has_none() {
+        let mut warnings = Vec::new();
+        let params = resolve_render_params(
+            None,
+            None,
+            Some("sierra-lite"),
+            None,
+            None,
+            None,
+            &[(0, 0, 0), (255, 255, 255)],
+            &[],
+            &default_tuning(),
+            &mut warnings,
+        );
+        assert_eq!(params.dither.as_deref(), Some("sierra-lite"));
+        assert!(
+            warnings.is_empty(),
+            "nothing was overridden, so nothing to report: {warnings:?}"
+        );
+    }
+
+    /// Losing a setting must never be silent — the warning names both sides.
+    #[test]
+    fn resolve_render_params_warns_when_script_and_device_dither_disagree() {
+        let mut warnings = Vec::new();
+        resolve_render_params(
+            None,
+            None,
+            Some("atkinson"),
+            None,
+            Some("atkinson-hybrid"),
+            None,
+            &[(0, 0, 0), (255, 255, 255)],
+            &[],
+            &default_tuning(),
+            &mut warnings,
+        );
+        assert_eq!(warnings.len(), 1, "got: {warnings:?}");
+        assert!(
+            warnings[0].contains("atkinson-hybrid") && warnings[0].contains("atkinson"),
+            "the warning must name the value that won AND the one that lost: {warnings:?}"
+        );
+    }
+
+    /// Two spellings of one algorithm are not a disagreement.
+    ///
+    /// `sierra-light` is the accepted misspelling of `sierra-lite`. Comparing
+    /// before normalisation would report a conflict that does not exist and
+    /// train the operator to ignore the warning.
+    #[test]
+    fn resolve_render_params_does_not_warn_when_dither_names_are_aliases() {
+        let mut warnings = Vec::new();
+        let params = resolve_render_params(
+            None,
+            None,
+            Some("sierra-light"),
+            None,
+            Some("sierra-lite"),
+            None,
+            &[(0, 0, 0), (255, 255, 255)],
+            &[],
+            &default_tuning(),
+            &mut warnings,
+        );
+        assert_eq!(params.dither.as_deref(), Some("sierra-lite"));
+        assert!(
+            warnings.is_empty(),
+            "aliases of the same algorithm are not a conflict: {warnings:?}"
+        );
+    }
+
     #[test]
     fn resolve_render_params_prefers_script_colors_actual_over_pre_script_chain() {
         // Distinct, non-guessable RGB triples per source so a wrong-source
@@ -1662,7 +1782,7 @@ mod tests {
             SRC_PANEL_ACTUAL,
             Some(vec![(0x99, 0x99, 0x99), (0x88, 0x88, 0x88)]),
         )];
-        let mut warning = None;
+        let mut warnings: Vec<String> = Vec::new();
         let params = resolve_render_params(
             None,
             Some(&script_actual),
@@ -1673,7 +1793,7 @@ mod tests {
             &[(0, 0, 0), (255, 255, 255)],
             &pre_script,
             &default_tuning(),
-            &mut warning,
+            &mut warnings,
         );
         assert_eq!(
             params.measured_colors.unwrap(),
@@ -1685,7 +1805,7 @@ mod tests {
             "measured_source must name the script as the winning layer, not \
              whatever the caller's own pre-script chain resolved to"
         );
-        assert!(warning.is_none());
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     #[test]
@@ -1708,7 +1828,7 @@ mod tests {
                 Some(vec![(0x44, 0x44, 0x44), (0x55, 0x55, 0x55)]),
             ), // never reached
         ];
-        let mut warning = None;
+        let mut warnings: Vec<String> = Vec::new();
         let params = resolve_render_params(
             None,
             None,
@@ -1719,14 +1839,16 @@ mod tests {
             &[(0, 0, 0), (255, 255, 255)],
             &pre_script,
             &default_tuning(),
-            &mut warning,
+            &mut warnings,
         );
         assert_eq!(
             params.measured_colors.unwrap(),
             vec![(0xAA, 0xBB, 0xCC), (0xDD, 0xEE, 0xFF)],
             "must resolve to panel.colors_actual, the second entry in the supplied order"
         );
-        let w = warning.expect("the skipped dev_override mismatch must be reported");
+        let w = warnings
+            .first()
+            .expect("the skipped dev_override mismatch must be reported");
         assert!(
             w.contains(SRC_DEV_OVERRIDE),
             "warning must name the skipped source: {w}"
@@ -1744,7 +1866,7 @@ mod tests {
             SRC_PANEL_ACTUAL,
             Some(vec![(0x10, 0x20, 0x30), (0x40, 0x50, 0x60)]),
         )];
-        let mut warning = None;
+        let mut warnings: Vec<String> = Vec::new();
         let params = resolve_render_params(
             None,
             Some(&script_actual),
@@ -1755,19 +1877,21 @@ mod tests {
             &[(0, 0, 0), (255, 255, 255)],
             &pre_script,
             &default_tuning(),
-            &mut warning,
+            &mut warnings,
         );
         assert_eq!(
             params.measured_colors.unwrap(),
             vec![(0x10, 0x20, 0x30), (0x40, 0x50, 0x60)]
         );
-        let w = warning.expect("the script mismatch must be reported");
+        let w = warnings
+            .first()
+            .expect("the script mismatch must be reported");
         assert!(w.contains(SRC_SCRIPT), "warning must name script: {w}");
     }
 
     #[test]
     fn resolve_render_params_no_candidates_resolve_to_none_without_failing() {
-        let mut warning = None;
+        let mut warnings: Vec<String> = Vec::new();
         let params = resolve_render_params(
             None,
             None,
@@ -1778,10 +1902,10 @@ mod tests {
             &[(0, 0, 0), (255, 255, 255)],
             &[],
             &default_tuning(),
-            &mut warning,
+            &mut warnings,
         );
         assert!(params.measured_colors.is_none());
-        assert!(warning.is_none());
+        assert!(warnings.is_empty(), "{warnings:?}");
         // A render must still produce a palette even with no measured colors.
         assert_eq!(params.palette, vec![(0, 0, 0), (255, 255, 255)]);
     }

@@ -1277,7 +1277,14 @@ In templates, access this data with the `data.` prefix:
 - **300-900**: Regular updates (weather, calendar)
 - **3600+**: Static or slow-changing content
 
-If `refresh_rate` is 0 or omitted, the screen's `default_refresh` from config is used.
+If `refresh_rate` is 0 or omitted, the device's `refresh` is used, and failing
+that the screen's `default_refresh` from config.
+
+**The screen outranks the device here** — the opposite of `dither`. Only the
+script knows when its own content next changes, so a screen that returns
+`refresh_rate` keeps that interval even on a device configured with `refresh`.
+Byonk logs when a device's `refresh` is displaced this way, so an operator can
+see why their setting is inert.
 
 ### colors
 
@@ -1355,9 +1362,15 @@ Controls the dithering algorithm used when converting SVG to e-ink PNG. Availabl
 The dither mode follows a priority chain:
 
 1. **Dev UI override** (strongest) — set in dev mode
-2. **Script `dither`** — returned in the script result table
-3. **Device config `dither`** — set per-device in `config.yaml`
+2. **Device config `dither`** — set per-device in `config.yaml`
+3. **Script `dither`** — returned in the script result table
 4. **Default** — `"atkinson"`
+
+**The device outranks the screen here.** The algorithm suits the panel, not
+the content, and the operator who set it on the device cannot see a screen
+replacing it. A screen's `dither` still applies on any device that does not
+name one. When both name one and they differ, the device's is used and Byonk
+logs which value was dropped.
 
 ```lua
 -- Use Floyd-Steinberg dithering for a screen that displays images

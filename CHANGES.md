@@ -76,6 +76,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   something the device would not produce. The boxes now start at the values
   the renderer actually uses.
 
+- **A device's dither algorithm now wins over a screen's, instead of losing to
+  it silently.** Setting `dither` on a device in `config.yaml` had no effect on
+  any screen that named its own — the screen won, and nothing said so. A device
+  set to `atkinson-hybrid` went on rendering `atkinson`, which took a session
+  to notice. The algorithm suits the panel rather than the content, and the
+  operator who set it on the device is the one who cannot see it being
+  replaced, so the device decides. A screen's `dither` still applies on any
+  device that does not name one, and when the two disagree Byonk logs which
+  value was dropped.
+
+- **A screen's `refresh_rate` still wins over a device's `refresh`, but no
+  longer in silence.** This one keeps its precedence: only the script knows
+  when its own content next changes, so a screen that asks to be run again in
+  three minutes gets three minutes. What was missing was any sign that the
+  device's setting had been passed over — Byonk now logs it, naming both
+  intervals.
+
 - The configuration guide's *Ghosting* section now explains what
   `temperature_profile` actually does on each model — on a TRMNL X it controls
   how hard the panel is cleared rather than which waveform is used, so `a` and

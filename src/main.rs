@@ -449,7 +449,7 @@ fn run_render_command(
         };
         let tuning = byonk::api::display::resolve_tuning(&script_tuning, &dc_tuning, &panel_tuning);
 
-        let mut measured_warning: Option<String> = None;
+        let mut render_warnings: Vec<String> = Vec::new();
         let render_params = byonk::api::display::resolve_render_params(
             script_result.script_colors.as_deref(),
             script_result.script_colors_actual.as_deref(),
@@ -460,9 +460,9 @@ fn run_render_command(
             &cli_palette,
             &pre_script_measured_candidates,
             &tuning,
-            &mut measured_warning,
+            &mut render_warnings,
         );
-        if let Some(w) = &measured_warning {
+        for w in &render_warnings {
             tracing::warn!(mac = %mac, "{w}");
         }
 

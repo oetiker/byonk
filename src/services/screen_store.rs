@@ -1259,29 +1259,28 @@ impl ScreenStore {
             &panel_tuning,
         );
 
-        let mut measured_warning: Option<String> = None;
+        let mut render_warnings: Vec<String> = Vec::new();
         let render_params = crate::api::display::resolve_render_params(
             script_result.script_colors.as_deref(),
             script_result.script_colors_actual.as_deref(),
             effective_script_dither,
             device_colors,
             // `resolve_render_params` resolves dither as
-            // `script_dither.or(device_config_dither)`, and an explicit
+            // `device_config_dither.or(script_dither)`, and an explicit
             // override already blanked `effective_script_dither` above — so
             // the override rides in this slot when present, and the device's
-            // configured dither takes it otherwise. That ordering is what
-            // keeps override > script > device-config intact with only two
-            // slots to put three layers in.
+            // configured dither takes it otherwise. Both layers that outrank
+            // the script share this one slot, in their own priority order.
             dither_override.or(device_dither),
             panel_colors.as_deref(),
             &query_palette,
             &pre_script_measured_candidates,
             &tuning,
-            &mut measured_warning,
+            &mut render_warnings,
         );
         // The authoring path's warning channel is the script log, which
         // render_screen returns to the agent — not the server's log stream.
-        if let Some(w) = measured_warning {
+        for w in render_warnings {
             log.push(format!("[warn] {w}"));
         }
 

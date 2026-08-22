@@ -724,7 +724,7 @@ pub async fn handle_render(
         &panel_tuning,
     );
 
-    let mut measured_warning: Option<String> = None;
+    let mut render_warnings: Vec<String> = Vec::new();
     let render_params = crate::api::display::resolve_render_params(
         script_colors.as_deref(),
         script_colors_actual.as_deref(),
@@ -735,9 +735,9 @@ pub async fn handle_render(
         &query_palette,
         &pre_script_measured_candidates,
         &tuning,
-        &mut measured_warning,
+        &mut render_warnings,
     );
-    if let Some(w) = &measured_warning {
+    for w in &render_warnings {
         tracing::warn!(screen = ?query.screen, mac = ?query.mac, "{w}");
     }
 

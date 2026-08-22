@@ -1,15 +1,18 @@
-# Handover — colour dithering is the problem, not colour calibration
+# Handover — the quantiser is the bug; the cheap fixes are in, the fix is not
 
-**Date:** 2026-08-22 · **Branch:** `feat/panel-clean-recovery` · **HEAD:** `745e94a`
-**Base:** `fix/trmnl-x-ghosting-levers` @ `254705d` (off `main` @ `5c67c62`, protected)
+**Date:** 2026-08-22 · **Branch:** `feat/panel-clean-recovery` · **HEAD:** `a20f2ee`
+**Base:** `main` @ `5c67c62` (v0.19.0, protected). `main` is an ancestor; no rebase needed.
 
-> **Nothing is committed. Again.** Two sessions of panel work now live only on a
-> deployed Home Assistant and in `~/scratch/panel-evidence/`. Section 8 says what
-> to commit first.
+> **`cargo test --workspace` FAILS ON PURPOSE.** Exactly one test is red:
+> `test_neutral_grey_has_no_dominant_chromatic_ink`
+> (`crates/eink-dither/src/domain_tests.rs`). It documents the §1 defect and
+> goes green when the quantiser is fixed. The owner chose this over
+> `#[ignore]` on 2026-08-22. **227 passed / 1 failed in `eink-dither` is the
+> expected state.** Any *other* failure is a real regression.
 >
-> **The initiative moved.** The previous handover treated the reTerminal E1004's
-> green cast as a calibration problem and listed re-measuring the panel as the
-> next step. **That is now disproven.** Read §1 and §2. Do not re-shoot the panel.
+> **Three commits landed this session** — the first repo changes in three
+> sessions. The panel measurement work still lives only in
+> `~/scratch/panel-evidence/` and on the deployed g18 box (§8).
 
 ---
 
@@ -19,26 +22,10 @@
 supports, and the cause is the quantiser — not the calibration, not the dither
 algorithm, and not this particular panel.**
 
-Measured with `~/scratch/panel-evidence/e1004-2026-08-21/greyprobe/`
-(`cargo run --release`, self-documenting, re-runnable against any palette):
-
-**A flat grey patch, dithered by byonk today, with the deployed E1004 palette:**
-
-| grey | ink actually laid down | chromatic | dE |
-|---|---|---|---|
-| 64 | K22% R8% G69% | 77.6% | 0.034 |
-| 96 | R17% Y2% B21% G60% | **100%** | 0.029 |
-| 128 | W0% R13% Y18% B44% G25% | **100%** | 0.017 |
-| 160 | W19% R6% Y22% B46% G7% | 81.2% | 0.007 |
-
-A flat mid-grey contains **no black and no white at all**. And the exact
-solution is trivial: panel white is 0.7157 in linear light, so grey 128 is
-`26% white + 74% black`, error exactly zero.
-
-**Why the quantiser does it.** For a pure neutral with no diffused error,
-`find_nearest` picks green for every neutral from L\* 0.235 to 0.521 and blue
-from 0.57 to 0.67 — 50.4% of the ramp. At L\* 0.413, green is 0.066 away while
-white is 0.482 and black 0.413. Green is six times closer.
+`find_nearest` picks the single closest palette entry. For a pure neutral with
+no diffused error it picks green for every neutral from L\* 0.235 to 0.521 and
+blue from 0.57 to 0.67 — 50.4% of the ramp. At L\* 0.413, green is 0.066 away
+while white is 0.482 and black 0.413. Green is six times closer.
 
 **The greyscale inheritance.** In 1-D the nearest level and the correct mixture
 partner are the *same thing* — the nearest grey always brackets the target. In
@@ -47,9 +34,44 @@ enclosing simplex are unrelated. The proxy was carried over unexamined.
 `palette.rs:365` even records the consequence as intended:
 *"Grey pixels matching dark chromatic entries … is expected and desirable."*
 
-**It is not this panel.** Running the CI's own fixture `panel_measured()`
-(`gamut/mod.rs:40`, an E1002) through the same probe: **100% chromatic at grey
-96**, 147/256 neutrals picking a chromatic ink. Every six-colour panel.
+### The measurement that now lives in the repo
+
+Reproduce it: `cargo test -p eink-dither --lib test_neutral_grey_has_no_dominant_chromatic_ink`.
+Fixture is `gamut::test_support::panel_measured()` — a measured E1002, index
+order `0 black, 1 white, 2 red, 3 yellow, 4 blue, 5 green`.
+
+| grey | total chromatic | largest single ink | dE |
+|---|---|---|---|
+| 96 | 100% | green 45.1% | 0.026 |
+| 112 | 100% | **green 64.2%** | 0.031 |
+| 128 | 98.0% | **green 77.6%** | 0.063 |
+| 144 | 88.0% | **green 69.6%** | 0.037 |
+| 160 | 77.5% | **green 62.2%** | 0.026 |
+| 176 | 65.3% | **green 54.0%** | 0.023 |
+
+A flat mid-grey contains essentially **no black and no white**. The exact
+solution is trivial: panel white is 0.7157 in linear light, so grey 128 is
+`26% white + 74% black`, error exactly zero.
+
+The deployed E1004 palette behaves the same way — 77.6% / 100% / 100% / 81.2%
+chromatic at greys 64/96/128/160, measured last session with
+`~/scratch/panel-evidence/e1004-2026-08-21/greyprobe/`.
+
+### The metric correction — read before writing any gate
+
+The previous handover proposed bounding the **total chromatic share**.
+**Measured, that is the wrong metric** and this session changed it:
+
+| palette | worst total chromatic | worst single ink |
+|---|---|---|
+| `panel_measured()` (real) | 100% | **78% green** |
+| idealised BWRGBY | 98.8% | 36%, R/G/B in near-equal thirds |
+
+A total-chromatic gate rejects both equally. But the idealised palette's 98.8%
+is a genuinely cancelling intermixture that looks grey — exactly the case §3
+says is fine. **Largest single chromatic ink is the metric that separates good
+from bad.** The bound shipped at 50%: an ink covering the majority of a patch
+is its field colour, not a component of a mixture.
 
 ---
 
@@ -58,22 +80,22 @@ enclosing simplex are unrelated. The proxy was carried over unexamined.
 1. **The dither algorithm.** Atkinson 52.0%, Atkinson-hybrid 54.2%,
    Floyd-Steinberg 50.3% chromatic on a neutral ramp. Hybrid is marginally
    *worse*. Changing the kernel does not touch this.
-2. **`sierra-lite`** — the previous handover's top recommendation. Rendered and
-   compared: it produces flat, blocky bands, because the panel config carries
-   `error_clamp: 0.11`, a **pre-0.18.0 value under the old semantics** (see §7.1).
+2. **`sierra-lite`** — an earlier handover's top recommendation. Rendered and
+   compared: flat, blocky bands, because the panel config carried
+   `error_clamp: 0.11`, a pre-0.18.0 value. That knob is now `max_error` and
+   the stale name is ignored (§4), so this comparison is worth **redoing once**
+   with a sane value before writing `sierra-lite` off.
 3. **The calibration.** Two independent checks:
    - Re-running the probe with the *old, more colourful* config palette gives
      **57.8% chromatic — worse**. A more saturated green does not help; it hands
      more of the ramp to blue.
    - Perturbing every ink by the measured photographic uncertainty (2.02% of
-     white) moves the result by at most **dE 0.013, below one JND**. Chromatic
-     cancellation is not fragile at this precision.
-   **Re-shooting the panel would not have changed anything.** The previous
-   handover's items 2 and 3 (black trap, offset check) are therefore demoted.
+     white) moves the result by at most **dE 0.013, below one JND**.
+   **Re-shooting the panel would not have changed anything.**
 4. **A blanket chroma penalty.** `HyAB kchroma=10` cuts chromatic choice on
    neutrals from 50.4% to 9.4% — but the crate's own history records HyAB as
    biased for error diffusion on muted photographic colour. It fixes greys by
-   breaking photographs. It is a diagnostic, not a fix.
+   breaking photographs. A diagnostic, not a fix.
 
 ---
 
@@ -118,10 +140,111 @@ cost = lambda * luminance_variance  +  (1 - lambda) * chroma_variance
 Owner's ruling, 2026-08-22: *"if we can cancel sensibly with our available
 colours we should definitely do that, but there are many instances where this
 will not be possible."* The two-term objective is that ruling, made numeric.
+The 50% single-ink gate in §1 is its first, crudest approximation.
 
 ---
 
-## 4. Prior art IN THIS REPO — read before writing code
+## 4. What landed this session
+
+Three commits, all verified with `cargo fmt --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
+and `mdbook build`.
+
+### `21f9b1b` — the failing test (was defect 9)
+
+`test_neutral_grey_has_no_dominant_chromatic_ink` in
+`crates/eink-dither/src/domain_tests.rs`. Runs on `panel_measured()`, bounds
+the largest single chromatic ink at 50% over greys 16–240. **Red on purpose.**
+
+Also added a `max_single_chromatic_pct` column to
+`test_dither_perceptual_accuracy_photo`'s table (50% for near-neutral rows,
+100.0 = unconstrained for saturated ones). That one is green and is a live
+regression guard against clumping on muted photo colours.
+
+### `3351151` — `error_clamp` → `max_error` (was defects 1 and 2)
+
+0.18.0 changed what the knob bounds and the old name kept working, so stale
+values kept rendering flat. Now:
+
+- `DitherOptions::max_error` in the crate; `error_clamp` gone from the codebase.
+- `DitherTuningValues::deprecated_error_clamp` captures the old YAML key and is
+  **excluded from `is_empty()`**, so a block holding only it configures nothing.
+- `AppConfig::deprecation_warnings()` returns one message per site with the
+  exact path (`panels.X.dither.sierra-lite.error_clamp`), logged at WARN by
+  `load_from_assets`.
+- The hand-written `PanelDitherConfig` visitor **needs its explicit
+  `"error_clamp"` arm** or the key falls through to the algorithm-name branch
+  and fails to parse as a sub-map.
+- Lua scripts returning `error_clamp` get a WARN from `lua_runtime.rs` and are
+  ignored. **No unit test** — `lua_runtime.rs` has no test module and nothing
+  in this repo captures tracing output.
+- **Also fixed the dev UI's tuning table**, a second copy of
+  `DitherAlgorithm::defaults()` that had drifted on every row: pre-0.18.0
+  clamps throughout, Atkinson offering noise `0` where the engine uses `8.0`,
+  and a noise input capped at `8.0` so four algorithms could not reach their
+  own default. Values now mirror the crate. **The duplication remains** (§5.1).
+
+### `a20f2ee` — precedence (was defects 3 and 4)
+
+They looked like one defect and are two, with opposite answers:
+
+- **`dither`: the device now wins.** `resolve_render_params` resolves
+  `device_config_dither.or(script_dither)`. The algorithm suits the panel, not
+  the content. A screen's `dither` still applies where the device names none.
+- **`refresh_rate`: the script still wins** — only it knows when its content
+  next changes. `resolve_refresh_rate` now returns
+  `ResolvedRefresh { rate, ignored_device_override }` and the caller logs the
+  displaced value.
+- `resolve_render_params`'s `warning_sink: &mut Option<String>` became
+  `warnings: &mut Vec<String>` to carry the second message. All four call sites
+  updated.
+- Names are compared **after** normalisation — `sierra-light` and `sierra-lite`
+  are not a conflict.
+- `display.rs`'s `final_algo_str` (which picks the per-algorithm tuning block)
+  was a second copy of the precedence rule and still said script-first. Fixed;
+  `dev.rs`'s copy was already device-first, so this also removed a pre-existing
+  disagreement between them.
+
+---
+
+## 5. byonk defects — what is left
+
+1. **The dev UI duplicates `DitherAlgorithm::defaults()`** (`static/dev/dev.js`,
+   `DITHER_DEFAULTS`). Corrected this session and marked "keep in step", but it
+   *will* drift again. The UI should fetch defaults from the server. **New.**
+2. **`docs/src/concepts/content-pipeline.md:261` still documents `error_clamp`**
+   with a stale `0.05 – 0.5` range. It is one of the owner's four uncommitted
+   files, so it was deliberately left untouched. **The owner must fix that line
+   before committing that file.** **New.**
+3. **A panel's tuned dither parameters silently do nothing when the device picks
+   a different algorithm.** `dither:` is keyed by algorithm name; the E1004's
+   `sierra-light` block is inert under `atkinson-hybrid` with no warning. Same
+   class as the two just fixed, and `deprecation_warnings()` is now the obvious
+   place to report it from.
+4. **`noise_scale: 5`** in the shipped E1002/E1004 blocks; the measured optimum
+   for Sierra Lite is 2.5 (`dither/mod.rs:166`).
+5. **MCP cannot set a device's dither algorithm.** `assign_screen` takes only
+   `mac` and `screen_ref`, while `apply_device_patch` (`write.rs:249`) already
+   accepts `dither`, `panel`, `refresh`, `colors`, `params`, `name`.
+   **Owner ruling: MCP should give direct access, not document the REST API.**
+   The shared-core pattern exists for exactly this (`write.rs:236`). Widen it
+   and rename `assign_screen` → `configure_device`.
+6. **Panels have no write path at all** — no `/panels` route in `admin_router()`,
+   in REST or MCP, in any mode; and global config is read-only under the add-on
+   (`write.rs:46-53`). The whole calibration workflow therefore requires ssh.
+   **Recommendation: carve panels out of "global config" the way device mappings
+   already are** (`write.rs` comment: *"a device mapping is not global config, so
+   it stays writable in add-on mode"*).
+7. **`colors_actual` serves two masters** — an honest preview and the
+   ditherer's ink choice. Carried forward; possibly two fields.
+
+Still open from the TRMNL X work: the palette rejects duplicate colours, and
+`map_grey_indices` derives the level from an entry's **index** rather than its
+hex, so "declare only the usable inks" does not work.
+
+---
+
+## 6. Prior art IN THIS REPO — read before writing quantiser code
 
 `crates/eink-dither/tests/spike_simplex.rs` — 591 lines, `#[ignore]`d, written
 by an earlier session to answer this exact question. **Run it:**
@@ -147,14 +270,14 @@ Its recorded results:
 
 **Why that matters for the new design:** the spike restricted to the support of
 an *unconstrained* optimum, whose support jumps as the target moves. A **fixed**
-partition (§5) has no such jumps in the lightness direction, because white and
+partition (§7) has no such jumps in the lightness direction, because white and
 black are in every cell and never drop out. The spike was defeated by the
 discontinuity of an optimiser, not by mixture-awareness. That is a reason to
 expect the fixed-partition form to survive — and a reason to measure it.
 
 ---
 
-## 5. The literature (four agents, 2026-08-22)
+## 7. The literature (four agents, 2026-08-22)
 
 **The field's name for what byonk is missing is _separation_.** Industry splits
 the job: decide the mixture (colorimetric, constrained), then decide where the
@@ -217,9 +340,7 @@ already says this and computes its hull in linear RGB for that reason.
 found is Floyd–Steinberg or Atkinson with nearest-neighbour quantisation. No
 E Ink or Good Display application note on Spectra 6 halftoning exists publicly.
 
----
-
-## 6. What the existing code has, and what a change would touch
+### What a change would touch
 
 - `gamut/hull.rs` computes a **real 3-D convex hull in linear RGB**, but stores
   only outward half-space planes — the generating vertex triples are computed at
@@ -247,101 +368,57 @@ vector** by optimisation. `test_ink_histogram_versus_optimal_recipe`
 
 ---
 
-## 7. byonk defects — the todo list
-
-1. **`error_clamp` changed meaning in 0.18.0 and old configs were not migrated.**
-   It used to bound the resulting *value*; it now bounds the *error*, and the
-   useful range moved from ~0.1 to 1.0 (`CHANGES.md:419`, `options.rs:145`).
-   A stale value still parses and renders — flat. **Owner ruling: a config knob
-   that changes meaning must change name, and the old one must be deprecated —
-   warned about and ignored.** `apply_error(channel, error, max_error)`
-   (`dither/mod.rs:253`) already names the new meaning: rename to `max_error`.
-2. **Ship a migration warning** for pre-0.18.0 panel dither blocks still in
-   users' `config.yaml`. The g18 box has one right now.
-3. **A screen's `dither` silently overrides the device's.**
-   `display.rs:969-972` is `script_dither.or(dc_dither)`. Cost this session: a
-   device set to `atkinson-hybrid` kept running `atkinson` with no indication.
-   Same class as the `refresh_rate` override (§7.4). **The device is the more
-   specific setting and should win, or at least warn.**
-4. **A screen's `refresh_rate` overrides the device's `refresh`.** Carried
-   forward, still open.
-5. **A panel's tuned dither parameters silently do nothing when the device picks
-   a different algorithm.** `dither:` is keyed by algorithm name; the E1004's
-   `sierra-light` block is inert under `atkinson-hybrid` with no warning.
-6. **`noise_scale: 5`** in the shipped E1002/E1004 blocks; the measured optimum
-   for Sierra Lite is 2.5 (`dither/mod.rs:166`).
-7. **MCP cannot set a device's dither algorithm.** `assign_screen` takes only
-   `mac` and `screen_ref`, while `apply_device_patch` (`write.rs:249`) already
-   accepts `dither`, `panel`, `refresh`, `colors`, `params`, `name`.
-   **Owner ruling: MCP should give direct access, not document the REST API.**
-   The shared-core pattern already exists for exactly this (`write.rs:236`).
-   Widen it and rename `assign_screen` → `configure_device`.
-8. **Panels have no write path at all** — no `/panels` route in `admin_router()`,
-   in REST or MCP, in any mode; and global config is read-only under the add-on
-   (`write.rs:46-53`). The whole calibration workflow therefore requires ssh.
-   **Recommendation: carve panels out of "global config" the way device mappings
-   already are** (`write.rs` comment: *"a device mapping is not global config, so
-   it stays writable in add-on mode"*).
-9. **The test suite cannot see the §1 defect.**
-   `test_dither_perceptual_accuracy_photo` (`domain_tests.rs:654`) has a
-   `min_chromatic_pct` and **no maximum**; for greys it is `0.0`, so the check is
-   vacuous. It also uses `Palette::new(&colors, None)` — idealised primaries with
-   no measured colours. **Add a `max_chromatic_pct` for achromatic inputs and a
-   real measured palette**, and the gate would fail today at 100%.
-10. **`colors_actual` serves two masters** — an honest preview and the
-    ditherer's ink choice. Carried forward; possibly two fields.
-
-Still open from the TRMNL X work: the palette rejects duplicate colours, and
-`map_grey_indices` derives the level from an entry's **index** rather than its
-hex, so "declare only the usable inks" does not work.
-
----
-
 ## 8. Next
 
-1. **Commit something.** Nothing from two sessions is in the repo. Cheapest
-   durable wins, in order:
-   a. **Defect 9** — the missing `max_chromatic_pct` gate, with a measured
-      palette. It is a test-only change that makes the bug visible in CI.
-   b. **Defect 1** — the `error_clamp` → `max_error` rename with deprecation.
-      Self-contained, and the owner has ruled on it.
-   c. **Defects 3 and 4** — device beats screen for `dither` and `refresh`.
-2. **Then the quantiser.** Suggested order:
-   a. Build the four fixed wedges (§5) and, offline in the probe, measure what
+1. **The quantiser.** This is the whole remaining initiative. Suggested order:
+   a. Build the four fixed wedges (§7) and, offline in the probe, measure what
       argmax-barycentric selection gives on neutrals, on the flat-patch census,
       and against `best_reachable()`.
    b. Add the two-term objective (§3) with `lambda` exposed, and find where it
       sits between MBVQ and maximum GCR.
-   c. Only then touch `dither/mod.rs:409`. §6 lists what it drags in.
-   Verify against `test_dither_versus_gamut_bound` and
+   c. Only then touch `dither/mod.rs:409`. §7 lists what it drags in.
+   **The gate to clear is `test_neutral_grey_has_no_dominant_chromatic_ink`.**
+   Also verify against `test_dither_versus_gamut_bound` and
    `test_ink_histogram_versus_optimal_recipe`, both `#[ignore]`d diagnostics.
+2. **Cheap wins still on the table**, in rough order of value: defect 5.3
+   (panel tuning inert under a different algorithm — the reporting machinery
+   now exists), 5.5 (`configure_device` over MCP), 5.4 (`noise_scale: 5`).
 3. **Restore the g18 device to `examples/gphoto`** when finished (§9).
+4. **Open the PR.** This branch now carries three commits of real work plus the
+   TRMNL X ghosting fixes that were never PR'd (`0fb5c47` is a data-loss fix).
+   Consider splitting the shipped fixes from the quantiser work.
 
 ---
 
-## 9. Exact state — deployed only
+## 9. Exact state — repo and deployed
 
-**Repo: nothing committed, nothing added.** The working tree holds only the
-owner's four docs-screenshot files (`config.yaml`, `docs/generate-samples.sh`,
-`docs/src/concepts/content-pipeline.md`, `tools/capture-config.yaml`).
-**Never stage them. Never `git add -A` here.**
+**Repo.** Three commits on `feat/panel-clean-recovery`, HEAD `a20f2ee`. The
+working tree holds only the owner's four docs-screenshot files (`config.yaml`,
+`docs/generate-samples.sh`, `docs/src/concepts/content-pipeline.md`,
+`tools/capture-config.yaml`). **Never stage them. Never `git add -A` here.**
 
-**On `root@10.46.18.3`**, add-on `43664941_byonk` **0.19.0**, config
-`/addon_configs/43664941_byonk/config.yaml`:
+**On `root@10.46.18.3`**, add-on `43664941_byonk` **0.19.0** (does NOT yet have
+this session's changes), config `/addon_configs/43664941_byonk/config.yaml`:
 
 | what | value | note |
 |---|---|---|
-| device `44:1B:F6:83:93:38` `dither` | `atkinson-hybrid` | changed by the owner this session; was `atkinson` |
+| device `44:1B:F6:83:93:38` `dither` | `atkinson-hybrid` | set by the owner |
 | device `44:1B:F6:83:93:38` `screen` | `local/calibration/color` | **was `examples/gphoto`** — restore when done |
 | `panels.reterminal_e1004.colors_actual` | `#000000,#DCDCDC,#B52200,#E1CE00,#2C6CBC,#1E5645` | backups `config.yaml.pre-measured-2026-08-22`, `config.yaml.pre-stretch-2026-08-22` |
-| `panels.reterminal_e1004.dither.sierra-light` | `error_clamp: 0.11, noise_scale: 5` | **stale pre-0.18.0 values, inert but harmful if activated** (§2.2, §7.1) |
+| `panels.reterminal_e1004.dither.sierra-light` | `error_clamp: 0.11, noise_scale: 5` | **once this branch is deployed, `error_clamp` is ignored and announced at startup.** Delete the key. |
 
-**Changed this session:** the line `dither = "atkinson"` was deleted from
-`/addon_configs/43664941_byonk/screens/calibration/color/script.lua` (was line
-165), so the device's algorithm now actually takes effect. **No backup of that
-file was made** — the repo original is `screens/builtin/calibration/color/script.lua`
-(166 lines); the deployed fork differs only in `refresh_rate` 3600 → 180 in
-`script.lua` and `refresh: 180` in `meta.yaml`.
+**Deploying this branch changes behaviour on that box**, and both changes are
+what it currently wants: the stale `error_clamp` stops being a live value, and
+the device's `atkinson-hybrid` now beats any screen that names its own
+algorithm.
+
+**Changed on the box last session:** the line `dither = "atkinson"` was deleted
+from `/addon_configs/43664941_byonk/screens/calibration/color/script.lua` (was
+line 165). **That edit is no longer needed** — `a20f2ee` makes the device win
+regardless. **No backup of that file was made**; the repo original is
+`screens/builtin/calibration/color/script.lua` (166 lines) and the deployed
+fork differs only in `refresh_rate` 3600 → 180 in `script.lua` and
+`refresh: 180` in `meta.yaml`.
 
 **Screens created over MCP** (not in the repo): `local/calibration/inkfield`
 (Ink Field copied from this branch) and `local/calibration/color`.
@@ -349,8 +426,8 @@ file was made** — the repo original is `screens/builtin/calibration/color/scri
 **Measurement kit** at `~/scratch/panel-evidence/e1004-2026-08-21/`:
 `measure.sh`, `prep.sh`, `scout.py`, `run.py`, `gridfit.py`, `warp.py`,
 `deveil.py`, `patches.py`, `synth.py`/`validate.py`, `FINDINGS.md`, venv at
-`./venv/bin/python`. **New this session: `greyprobe/`** — the Rust probe behind
-every number in §1–§3. `cargo run --release`; change `PALETTE` for another panel.
+`./venv/bin/python`, and `greyprobe/` — the Rust probe behind §1–§3.
+`cargo run --release`; change `PALETTE` for another panel.
 
 ---
 
@@ -371,14 +448,16 @@ every number in §1–§3. `cargo run --release`; change `PALETTE` for another p
 - No `timeout` on this Mac and foreground `sleep` is blocked; use
   `curl --retry N --retry-delay S --retry-all-errors --retry-connrefused`.
 - **`ha addons` is deprecated** in favour of `ha apps`; still works, warns.
-- Verify: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo test --workspace`. **`make check` has reported exit 0 while tests failed.**
+- Verify: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace`, `cd docs && mdbook build`.
+  **`make check` has reported exit 0 while tests failed** — run the four
+  commands directly.
 
 ---
 
 ## 11. Carried forward — still true, still unmerged
 
-### Photographic calibration of the E1004 (previous session)
+### Photographic calibration of the E1004
 
 Full write-up: `~/scratch/panel-evidence/e1004-2026-08-21/FINDINGS.md`.
 
@@ -405,7 +484,7 @@ Full write-up: `~/scratch/panel-evidence/e1004-2026-08-21/FINDINGS.md`.
 - Raw workflow: `dcraw -4 -T -o 1 -A <x> <y> <w> <h>`. **iCloud share links
   deliver JPEG** — export the original from Photos.
 
-### TRMNL X (two sessions back)
+### TRMNL X
 
 Full text in commit `814d061`.
 

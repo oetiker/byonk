@@ -506,6 +506,72 @@ impl Palette {
         (best_idx, best_dist)
     }
 
+    /// Like [`find_nearest`](Self::find_nearest), but entry `i`'s distance is
+    /// reduced by `lambda * bias[i]` before the comparison.
+    ///
+    /// `bias` is a mixture: one non-negative weight per palette entry, summing
+    /// to one — see [`WedgeFan::weights`](crate::gamut::wedges::WedgeFan::weights).
+    /// `lambda` is the discount, in OKLab dE, that a full-weight entry earns.
+    ///
+    /// **Why this is not the `kchroma` mistake.** HyAB's chroma coupling is
+    /// biased for error diffusion at every non-zero weight, because it
+    /// penalises a *property of the answer*: no mixture escapes the penalty,
+    /// so the achieved average itself shifts and diffusion cannot correct it.
+    /// This bias instead chooses *between mixtures that all hit the same
+    /// target* — six inks and three equations leave a two-parameter family of
+    /// exact solutions. The error term is untouched, so the average still
+    /// converges; only which of the exact recipes is used changes.
+    ///
+    /// With `lambda == 0.0` this delegates to `find_nearest` and is bit-for-bit
+    /// identical, which is what makes turning the feature off a property of
+    /// the code rather than a claim.
+    ///
+    /// The returned distance is the winner's **unbiased** distance, in the same
+    /// units `find_nearest` returns (squared, for Euclidean).
+    ///
+    /// # Panics
+    ///
+    /// Debug builds assert `bias.len() == self.len()`.
+    pub fn find_nearest_biased(
+        &self,
+        color: Oklab,
+        model: ColourModel,
+        lambda: f32,
+        bias: &[f32],
+    ) -> (usize, f32) {
+        if lambda == 0.0 {
+            return self.find_nearest(color, model);
+        }
+        debug_assert_eq!(bias.len(), self.len());
+
+        let pixel_chroma = (color.a * color.a + color.b * color.b).sqrt();
+        let entries = match model {
+            ColourModel::Nominal => &self.official_oklab,
+            ColourModel::Measured => &self.actual_oklab,
+        };
+        // Euclidean distances are squared; the bias is in dE, so bring them
+        // into the same units before subtracting. `is_euclidean`'s doc already
+        // tells callers needing linear distances to do exactly this.
+        let squared = self.is_euclidean();
+
+        let mut best_idx = 0;
+        let mut best_score = f32::MAX;
+        let mut best_dist = f32::MAX;
+
+        for (i, &palette_color) in entries.iter().enumerate() {
+            let raw = self.distance(color, palette_color, pixel_chroma, i, model);
+            let linear = if squared { raw.sqrt() } else { raw };
+            let score = linear - lambda * bias[i];
+            if score < best_score {
+                best_score = score;
+                best_idx = i;
+                best_dist = raw;
+            }
+        }
+
+        (best_idx, best_dist)
+    }
+
     /// The colour this model says ink `idx` IS.
     ///
     /// The dither loop must use this for the diffused error term with the SAME
@@ -1147,6 +1213,145 @@ mod tests {
         assert!(
             palette.is_euclidean(),
             "Near-grey palette should auto-select Euclidean"
+        );
+    }
+
+    /// `lambda == 0` must be the old code path exactly, so the retreat from
+    /// this whole feature is a property of the code and not a claim.
+    #[test]
+    fn a_zero_lambda_is_plain_nearest_neighbour() {
+        let p = make_6_color_palette();
+        let bias = vec![0.9, 0.1, 0.5, 0.2, 0.7, 0.3];
+        for r in (0..=255u32).step_by(37) {
+            for g in (0..=255u32).step_by(41) {
+                for b in (0..=255u32).step_by(43) {
+                    let c = Oklab::from(LinearRgb::from(Srgb::from_u8(r as u8, g as u8, b as u8)));
+                    for model in [ColourModel::Nominal, ColourModel::Measured] {
+                        assert_eq!(
+                            p.find_nearest_biased(c, model, 0.0, &bias),
+                            p.find_nearest(c, model),
+                            "diverged at {r},{g},{b}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A large enough discount moves the choice to the favoured ink.
+    #[test]
+    fn a_bias_can_move_the_choice() {
+        let p = make_6_color_palette();
+        let grey = Oklab::from(LinearRgb::from(Srgb::from_u8(128, 128, 128)));
+        let (plain, _) = p.find_nearest(grey, ColourModel::Measured);
+
+        let mut bias = vec![0.0; p.len()];
+        let other = (plain + 1) % p.len();
+        bias[other] = 1.0;
+        let (biased, _) = p.find_nearest_biased(grey, ColourModel::Measured, 10.0, &bias);
+        assert_eq!(
+            biased, other,
+            "a discount of 10 dE failed to move the choice"
+        );
+    }
+
+    /// The returned distance keeps `find_nearest`'s units -- squared for
+    /// Euclidean, unsquared for HyAB -- so callers reading it do not have to
+    /// know about the bias. Covers both metrics: `make_6_color_palette`'s
+    /// saturated primaries auto-detect HyAB, so the Euclidean half needs its
+    /// own low-chroma fixture (`make_euclidean_grey_palette`) or the
+    /// Euclidean branch -- the only one production's dither loop ever takes,
+    /// via `Palette::for_error_diffusion` -- would go untested here.
+    #[test]
+    fn the_returned_distance_is_unbiased_and_in_find_nearest_units() {
+        let grey = Oklab::from(LinearRgb::from(Srgb::from_u8(128, 128, 128)));
+
+        let hyab = make_6_color_palette();
+        assert!(
+            !hyab.is_euclidean(),
+            "fixture must exercise the HyAB branch"
+        );
+        let bias = vec![0.0; hyab.len()];
+        let (bi, bd) = hyab.find_nearest_biased(grey, ColourModel::Measured, 0.5, &bias);
+        let (pi, pd) = hyab.find_nearest(grey, ColourModel::Measured);
+        assert_eq!(bi, pi);
+        assert!((bd - pd).abs() < 1e-6, "HyAB: biased {bd}, plain {pd}");
+
+        let euclid = make_euclidean_grey_palette();
+        let bias = vec![0.0; euclid.len()];
+        let (bi, bd) = euclid.find_nearest_biased(grey, ColourModel::Measured, 0.5, &bias);
+        let (pi, pd) = euclid.find_nearest(grey, ColourModel::Measured);
+        assert_eq!(bi, pi);
+        assert!((bd - pd).abs() < 1e-6, "Euclidean: biased {bd}, plain {pd}");
+    }
+
+    /// A low-chroma palette that auto-detects `DistanceMetric::Euclidean` --
+    /// the branch `Palette::for_error_diffusion` sends every palette through
+    /// before dithering, and so the only one bias selection runs under in
+    /// production. `make_6_color_palette`'s saturated primaries never
+    /// exercise it (their chroma sits far above
+    /// `CHROMA_DETECTION_THRESHOLD`, so auto-detection always picks HyAB).
+    fn make_euclidean_grey_palette() -> Palette {
+        let palette = Palette::new(
+            &[
+                Srgb::from_u8(0, 0, 0),
+                Srgb::from_u8(130, 128, 126),
+                Srgb::from_u8(255, 255, 255),
+            ],
+            None,
+        )
+        .unwrap();
+        assert!(
+            palette.is_euclidean(),
+            "fixture must exercise the Euclidean branch"
+        );
+        palette
+    }
+
+    /// A regression that discounted in squared units instead of dE -- e.g. a
+    /// missing or misplaced `.sqrt()` in the Euclidean branch -- would pick
+    /// a different entry here. The fixture picks a `lambda` strictly between
+    /// the squared-unit gap and the dE-unit gap separating the two nearest
+    /// entries, so a discount applied in the wrong units flips the choice
+    /// and a discount applied in the right units (dE, as documented on
+    /// `find_nearest_biased`) does not.
+    #[test]
+    fn the_bias_discount_is_in_de_units_not_squared_units() {
+        let palette = make_euclidean_grey_palette();
+        let color = Oklab::from(LinearRgb::from(Srgb::from_u8(96, 94, 92)));
+
+        let (winner, winner_sq) = palette.find_nearest(color, ColourModel::Measured);
+        let (runner_up, runner_sq) = (0..palette.len())
+            .filter(|&i| i != winner)
+            .map(|i| (i, color.distance_squared(palette.actual_oklab(i))))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .expect("palette has at least two entries");
+
+        let squared_gap = runner_sq - winner_sq;
+        let linear_gap = runner_sq.sqrt() - winner_sq.sqrt();
+        assert!(
+            squared_gap < linear_gap,
+            "fixture must have squared_gap < linear_gap to discriminate units; \
+             squared_gap={squared_gap}, linear_gap={linear_gap}"
+        );
+
+        // Big enough to flip the choice if the discount were (wrongly)
+        // applied in squared units; not big enough to flip it in dE units.
+        let lambda = (squared_gap + linear_gap) / 2.0;
+        let mut bias = vec![0.0; palette.len()];
+        bias[runner_up] = 1.0;
+
+        let (idx, dist) = palette.find_nearest_biased(color, ColourModel::Measured, lambda, &bias);
+
+        assert_eq!(
+            idx, winner,
+            "a dE-unit discount of {lambda} moved the choice to the runner-up; \
+             a units bug (discounting in squared distance instead of dE) would \
+             do exactly this"
+        );
+        assert!(
+            (dist - winner_sq).abs() < 1e-6,
+            "returned distance must stay the winner's unbiased squared distance: got {dist}, want {winner_sq}"
         );
     }
 }

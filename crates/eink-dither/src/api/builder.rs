@@ -156,6 +156,15 @@ impl EinkDitherer {
         self
     }
 
+    /// Set the mixture bias.
+    ///
+    /// See [`DitherOptions::mixture_bias`]. `0.0` is plain nearest-neighbour
+    /// selection.
+    pub fn mixture_bias(mut self, lambda: f32) -> Self {
+        self.dither_opts = self.dither_opts.mixture_bias(lambda);
+        self
+    }
+
     /// Set the dithering algorithm.
     ///
     /// Applies per-algorithm defaults for max_error and noise_scale.
@@ -1079,5 +1088,12 @@ mod tests {
             without.indices(),
             "pinning was applied across a configured resize"
         );
+    }
+
+    #[test]
+    fn the_builder_carries_the_mixture_bias() {
+        let colors = [Srgb::from_u8(0, 0, 0), Srgb::from_u8(255, 255, 255)];
+        let ditherer = EinkDitherer::new(Palette::new(&colors, None).unwrap()).mixture_bias(0.5);
+        assert!((ditherer.dither_opts.mixture_bias - 0.5).abs() < f32::EPSILON);
     }
 }

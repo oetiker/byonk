@@ -1,246 +1,217 @@
-# Handover — the panel has two tone curves, and the PNG's byte size picks one
+# Handover — photographic colour calibration of the reTerminal E1004
 
-**Date:** 2026-08-21 (late) · **Branch:** `feat/panel-clean-recovery` · **HEAD:** `ce2e3ef`
+**Date:** 2026-08-22 (early) · **Branch:** `feat/panel-clean-recovery` · **HEAD:** `814d061`
 **Base:** `fix/trmnl-x-ghosting-levers` @ `254705d` (off `main` @ `5c67c62`, protected)
 
-> Supersedes the three earlier 2026-08-21 handovers. **§1 is a reversal of the
-> previous §5**: "this panel's ink levels are badly wrong" was the wrong frame.
-> The levels are a property of a *firmware grey table*, and which table runs is
-> decided by how many bytes the PNG happens to compress to. Read §1 before
-> touching calibration. §2 records numbers that are finally trustworthy.
+> **New initiative. Nothing was committed this session.** The work moved to a
+> different panel (reTerminal E1004, 6-colour) on a **different Home Assistant
+> instance** (`root@10.46.18.3`), and it is all deployed-only. The previous
+> TRMNL X grey-table findings are still true and still unmerged — see §8.
+>
+> Read §1 and §5 before touching this. §5 is the live open question and it is
+> **not** a calibration problem.
 
 ---
 
-## 1. The finding: two grey tables, selected by image size
+## 1. What was established
 
-`src/display.cpp:1903` in the TRMNL firmware:
+**A photograph can calibrate this panel, to about 2% of white** — provided every
+frame comes from the same camera module at low ISO. Two shots from different
+angles, with different reflections, agreed to **2.02% of white** on every ink
+and channel.
 
-```c
-#define FASTEPD_LARGE_IMAGE_THRESHOLD (100 * 1024)
-...
-if (data_size > FASTEPD_LARGE_IMAGE_THRESHOLD) {
-    bbep.setCustomMatrix(u8_graytable_big, sizeof(u8_graytable_big));   // 38-pass
-} else {
-    bbep.setCustomMatrix(u8_graytable, sizeof(u8_graytable));           // 9-pass
-}
-```
+The full write-up, with numbers, lives at
+`~/scratch/panel-evidence/e1004-2026-08-21/FINDINGS.md`. Read it before
+re-deriving anything.
 
-Two hand-tuned waveform tables, chosen by the **downloaded PNG's byte count**.
-PNG size depends on how compressible the picture is, so **the panel's tone
-response flips silently with screen content**: flat cells compress small and get
-the 9-pass table, a dithered photo does not and gets the 38-pass one.
+**The single durable result:** this panel's **green is about half as colourful
+as `default-config.yaml` claims**. Chroma 0.068 measured (both photos agree to
+3%) against 0.158 in the config. The owner independently described the panel's
+green as *"dull and darkish but still clearly green"*. Every other ink comes back
+near the config once the veil is removed. **This is the finding worth keeping**
+regardless of what happens to the rest of the numbers.
 
-That is what produced every confusing observation in the earlier handovers. Ink
-Field rendered to **4285 bytes** (9-pass, smooth ramp); Gradient Lab to
-**~146 400 bytes** (38-pass, huge jumps). Same panel, same session, same
-lighting — different tables.
-
-**Proved by A/B, not inferred.** `min_png_bytes: 102401` padded the *same* Ink
-Field screen past the threshold (byonk log: `size_bytes=102401`), and the jumps
-appeared on a screen that had just looked clean. The owner also saw the longer
-build-up on the glass. Note the A/B needs a **content change** to force a
-re-download — byonk names images by the *SVG's* hash, so padding alone leaves
-the hash identical and the device keeps its cached copy. `params: {offset: 8}`
-on Ink Field does that and doubles as a position-independence check.
-
-**Consequence for byonk:** `colors_actual` is not a property of the panel. It is
-a property of (panel, grey table). A single list cannot be right for both. Pin
-the table with `min_png_bytes` if calibration is to mean anything.
+**The config was badly wrong in an obvious way.** It claimed black `#000000` and
+white `#FFFFFF` — the extremes — for a panel whose black is ~4% reflectance and
+whose white is about half the picture frame's brightness.
 
 ---
 
-## 2. Measured ink levels — both tables
+## 2. Method, and the four things that fought it
 
-Method: Ink Field photographed square-on (iPhone ProRAW), `dcraw -4 -T -o 0
--r 1 1 1 1`, **green plane only** (`ffmpeg -vf extractplanes=g`, no colour
-matrix, no range remap). Latin-square average per ink, cross-checked against an
-ANOVA that fits row and column lighting as free parameters.
+Ink Field (Latin square) photographed in ProRAW, `dcraw -4 -T -o 1` with the
+white balance taken off the frame border via `-A` (camera space, *before* the
+colour matrix — the only correct order), then measured through a homography.
 
-**Both frames passed their own quality gate**: the two independent estimators
-agreed to **0.27** and **0.22 L\***, residual scatter 5.8% in both. The fitted
-lighting field was large — 19% across rows, 22% across columns — and cancelled,
-which is exactly what the Latin square is for.
+Validated end to end: `synth.py` plants six known colours, wrecks the picture
+with a 22% row gradient, 19% column gradient, 13% vignette, 1.2% noise and a 16%
+veil, and `run.py` recovers the ratios to **0.38% of white**. A wrong number from
+a real photo is therefore the photo or the panel, not the code.
 
-| | contrast (white/black) | steps indistinguishable from zero (2σ) | worst step |
-|---|---|---|---|
-| **9-pass** | 8.05 : 1 | 2 — inks 0→1, 14→15 | +6.51 L\* |
-| **38-pass** | **9.28 : 1** | **4** — inks 0→1, 8→9, 11→12, 13→14 | **+16.20 L\*** |
-
-38-pass L\* (relative to its own white): 39.19, 38.89, 45.69, 50.72, 66.92,
-74.44, 77.67, 84.86, 86.60, 86.21, 92.69, 94.46, 95.59, 97.11, 98.47, 100.00.
-
-**So "38-pass is better" is only ~15% more contrast, paid for with twice as many
-dead levels**, a 16.2 L\* chasm at 3→4, and the top six levels crushed into
-~7 L\*. It is not monotonic within noise (0→1 and 8→9 invert slightly).
-
-**Dead: the old 44:1 figure and the whole `gradient-lab` calibration.** Gradient
-Lab's ramp is spatially ordered, so lighting was inseparable from tone. Ink
-Field replaces it. The owner's earlier by-eye observations were also made on
-Gradient Lab, so they carry the same contamination — that is why they disagree
-with §2 and it is not evidence against the measurement.
-
-**Absolute levels are NOT measured.** Neither frame contained a reference of
-known reflectance, so only the ramp's *shape* is known; the existing white
-(`#B8B8B0`) was carried over as the anchor. Green channel only, so the values
-are neutral by construction — nothing is known about the panel's tint. **Put a
-white card in the next frame** and this limit disappears. (The owner's idea of
-using the bezel as a reference works too, and would let the two tables be
-compared in absolute terms — the contrast ratios above did not need it, being
-ratios within a single frame.)
+1. **Veiling glare — the biggest error by far.** A glossy panel mirrors the room
+   and the reflection is **added** to the ink. The Latin square cancels *gains*,
+   not offsets, so it cannot help. Photo 1 carried 16% of white in its top row.
+   Uncorrected it read black as 12.9% of white instead of 6.7% — the panel looked
+   half as good as it is. `deveil.py` fits gain+veil per row (R² ≥ 0.99).
+   **It has an irreducible limit**: `ink + d` and `veil − gain·d` fit identically,
+   so the ink offset is not identifiable. It is anchored by assuming the least
+   veiled 15% of rows have none, which means **any veil present everywhere
+   survives**, and a veil desaturates. That is why the first measured palette was
+   too flat.
+2. **Camera module.** See §6.1. This one silently destroys a frame set.
+3. **Mixed illuminant.** Photo 1's border ran B/G 1.09 at the top to 1.02 at the
+   bottom — daylight above, warm light below. No single white balance is right
+   for such a frame.
+4. **Geometry — mattered less than expected.** Both panels were rotated in-plane
+   (0.47° and 1.25°) with ~2% keystone. `warp.py` finds the four corners from the
+   panel outline and samples through a homography; it moved the answer by ~1%,
+   well under the veil and illuminant errors. **The originally-planned fiducial
+   marks are therefore not the bottleneck** — the reflection and the light are.
 
 ---
 
-## 3. Exact state
+## 3. The stretch, and why the deployed numbers are not the measured ones
 
-**byonk** (`feat/panel-clean-recovery`), this session's commits:
-- `485773f` handover: `panel_clean` abandoned, use the firmware's wiper
-- `ce2e3ef` **fix: a wipe run sets its own poll cadence** (§4)
+The measured palette was too desaturated (residual uniform veil), and the visible
+symptom was **green speckle in neutral ramps**: measured green had chroma 0.032
+against measured *black's* 0.025 — green was effectively a neutral, so the
+ditherer used it for greys.
 
-Verified at `ce2e3ef`: `cargo fmt`, `clippy -D warnings` clean,
-**43 test binaries / 1229 tests / 0 failures**.
+The owner proposed stretching so black→0 and white→1. **This is principled, not a
+fudge**: a uniform veil is an additive constant in linear light, and subtracting
+the measured black removes exactly that. It keeps what was measured well (where
+the four colours sit *relative to* black and white) and discards what the veil
+corrupted (absolute black, overall contrast). Cost: it asserts a perfect black
+and white, so the *preview* now overstates the panel.
 
-**Uncommitted: only the owner's four docs-screenshot files** — `config.yaml`,
-`docs/generate-samples.sh`, `docs/src/concepts/content-pipeline.md`,
-`tools/capture-config.yaml`. **Never stage them.** Never `git add -A` here.
+Then, empirically, from the glass:
 
-**Deployed on homeio** (`local_byonk`, `/addon_configs/local_byonk/config.yaml`),
-**none of this is in the repo**:
+| observation | change made |
+|---|---|
+| "colours too bright → image too dark" | white `#FFFFFF`→`#DCDCDC`, yellow `#FFED00`→`#E1CE00` |
+| "dark green band in the grey ramp — green too light" | green L\* 0.522 → 0.412 (`#3F7663`→`#1E5645`) |
 
-| key | value | backup taken |
+**Why overstating an ink's brightness makes the picture darker:** byonk concludes
+each such pixel goes a long way and lays down fewer of them.
+
+**Currently deployed:** `#000000,#DCDCDC,#B52200,#E1CE00,#2C6CBC,#1E5645`
+
+---
+
+## 4. Exact state — all of it deployed-only
+
+**Repo: nothing committed, nothing added.** Working tree still has only the
+owner's four docs-screenshot files (`config.yaml`, `docs/generate-samples.sh`,
+`docs/src/concepts/content-pipeline.md`, `tools/capture-config.yaml`).
+**Never stage them. Never `git add -A` here.**
+
+**On `root@10.46.18.3`**, add-on `43664941_byonk`, config
+`/addon_configs/43664941_byonk/config.yaml`:
+
+| what | value | restore |
 |---|---|---|
-| `panels.trmnl_x.colors_actual` | measured 38-pass (below) | `config.yaml.pre-measured-colors` |
-| device `min_png_bytes` | `102401` — pins the 38-pass table | `config.yaml.pre-graytable` |
-| device `params` | `{offset: 8}` — leftover from Ink Field, clear it | — |
-| device `screen` | `local/gradient-lab` | — |
+| `panels.reterminal_e1004.colors_actual` | `#000000,#DCDCDC,#B52200,#E1CE00,#2C6CBC,#1E5645` | `config.yaml.pre-measured-2026-08-22` (original), `config.yaml.pre-stretch-2026-08-22` |
+| device `44:1B:F6:83:93:38` screen | `local/calibration/color` | **was `examples/gphoto`** |
+| device `dither` | `atkinson` | — see §6.2 |
 
-```
-colors_actual: "#404040,#414141,#4C4C4C,#555555,#747474,#838383,#898989,#989898,
-                #9B9B9B,#9C9C9C,#A8A8A8,#ACACAC,#AEAEAE,#B1B1B1,#B4B4B4,#B7B7B7"
-```
+**Screens created over MCP** (not in the repo):
+- `local/calibration/inkfield` — Ink Field copied from this branch, because the
+  released byonk on that host has no such builtin. Pure Lua+SVG, needs no deploy.
+- `local/calibration/color` — fork of the Color Calibrator with
+  **`refresh_rate` 3600 → 180** in `script.lua` *and* `refresh: 180` in
+  `meta.yaml`, so iterating does not cost an hour a round (§6.3).
 
-Renders correctly (`measured_source: panel.colors_actual`). **The device had not
-yet polled it when this was written** — it sleeps on `refresh_rate=3600` and
-needs a middle-pad tap. Judging it: bars **B and D** (marked, continuous tone)
-are the test — they go through gamut mapping and should smooth out across the
-old 3→4 gap. The **ink ramp is the control**: it is sent as literal palette
-indices and must look unchanged.
-
-**Measurement kit preserved** at `~/scratch/panel-evidence/inkfield-2026-08-21/`
-— both source DNGs, `run.py` (fit + measure + cross-check), `build_colors.py`,
-`colors.py`, `validate.py`, plus the extracted per-cell arrays. Needs numpy;
-the session venv is gone, so `python3 -m venv venv && venv/bin/pip install numpy`.
-Usage: `run.py <green.raw> <ink offset> <tag> [x0 x1 y0 y1]`.
-
-**Firmware / flash** unchanged from the last handover: device runs the 1.8.14
-control build, full flash backup at
-`~/scratch/panel-evidence/flash-backup-2026-08-21.bin`, `feat/panel-clean` @
-`30f9ae0` abandoned.
+**Measurement kit** at `~/scratch/panel-evidence/e1004-2026-08-21/`:
+`measure.sh <DNG> <tag>` runs the whole chain. Also `prep.sh` (DNG→linear RGB),
+`scout.py` (find the panel), `run.py` (measure), `gridfit.py`, `warp.py`,
+`deveil.py`, `patches.py` (measure the Color Calibrator's six ink patches),
+`synth.py`/`validate.py` (known-truth check), and `FINDINGS.md`. Needs its venv:
+`./venv/bin/python`. Four source DNGs are in `~/Downloads/IMG_2719..2722.DNG`.
 
 ---
 
-## 4. What shipped in `ce2e3ef`, and why
+## 5. THE LIVE QUESTION — and it is not a calibration problem
 
-byonk served the **screen's** `refresh_rate` during a recovery run. The poll that
-matters is the firmware's follow-up after a wipe: it is answered with content, so
-the device then slept for however long the *content* takes to go stale. With Ink
-Field's `refresh: 3600` a 10-wipe run became a **10-hour** one — observed live,
-one wipe ran and the run sat idle.
+The owner asked: *why does the ditherer pick green for a mid-grey instead of
+dithering black and white, which covers greys perfectly and adds no colour?*
 
-A run now serves `RECOVERY_REFRESH_RATE_SECS = 5`. That is the firmware's own
-fast-poll interval (`RefreshInterval::fastPollSeconds`), and `applyServerRate()`
-stores whatever the server sends **without clamping**, so it is a cadence the
-device already uses.
+**Answer, from `crates/eink-dither/src/palette/palette.rs:365`** — it is
+deliberate. `for_error_diffusion()` downgrades HyAB to plain Euclidean OKLab, and
+the comment says grey pixels matching dark chromatic entries "is expected and
+desirable". Error diffusion is **greedy per pixel**: for a mid-grey at L\*≈0.5 the
+distances are green **0.110**, white 0.39, black 0.50. Green wins every pixel.
 
-The subtle part, and the reason for a comment in the code: the check asks the
-registry **again** rather than reusing `on_poll`'s result. They differ exactly
-where it matters — the follow-up poll returns `None` while the run is still
-going. And because `on_poll` drops the session as the final wipe goes out, the
-screen's own rate returns by itself.
+**This panel has no mid-grey ink** — only black (L\* 0) and white (L\* ≈0.89).
+Red, blue and green all sit near L\*≈0.50, and green has the lowest chroma of the
+three. So *some* green in a neutral ramp is unavoidable here and no value of
+`colors_actual` removes it.
 
-Also fixed two pinned builtin-screen counts left at 5 by `c880e32`, which had
-the suite red (`tests/builtin_package.rs`, `tests/screen_schemas_test.rs`).
+**The owner's criticism is nonetheless correct.** For a neutral target, black+white
+is exactly correct and exactly neutral, needing no compensation; the green route
+is only correct after diffusion compensates nearby, and that compensation is
+imperfect locally. The eye objects far more to low-frequency chromatic clumps
+than to fine luminance noise, so the algorithm optimises the wrong thing.
 
----
+Three routes, **untested — this is where to resume**:
 
-## 5. Open byonk defects found today
-
-1. **The tone response flips silently with content size.** Nothing in byonk
-   knows about `FASTEPD_LARGE_IMAGE_THRESHOLD`. A user gets one grey table for a
-   text screen and another for a photo, with no way to tell. At minimum byonk
-   should warn when a `trmnl_x` render lands near 100 KiB; arguably
-   `min_png_bytes` should default on for that panel.
-2. **The palette cannot say "these two inks look identical."**
-   `EinkPalette::new` rejects duplicates (`palette error: duplicate color found
-   at index 9`) — it was deployed and *did* break the render until the pair was
-   nudged apart by one 8-bit step. The panel really does have two dead pairs.
-3. **The palette is positional, so usable levels cannot be declared.** The
-   owner's idea — declare only the 14 inks that do something — does not work
-   today: `map_grey_indices` (`src/rendering/svg_to_png.rs`) derives the
-   transmitted grey from an entry's **index**, spreading the list evenly over
-   the output range. Dropping two of sixteen would skip levels **4 and 11**, not
-   the dead 1 and 9, and shift everything above the first gap.
-   **Proposed fix: derive the level from the entry's hex value instead.** The hex
-   already carries it (`#111111` *is* level 1), and for every palette byonk ships
-   the two agree exactly — so it is backwards compatible and only differs when a
-   list has gaps, which is the wanted capability. Note `EinkPalette::new` and
-   `resolve_measured_colors` both require `colors` and `colors_actual` to be the
-   same length, so both lists must shorten together.
+1. **Switch the device to `sierra-light`.** The panel config already carries
+   `dither: {sierra-light: {error_clamp: 0.11, noise_scale: 5}}` and the device
+   uses `atkinson`, so **that tuning is currently inert** (§6.2). `error_clamp` is
+   exactly what stops error diffusion chasing an out-of-gamut target — the likely
+   cause of green contaminating the *yellow* ramp, where the target `#FFFF00` is
+   far outside gamut. Try this first; it is one config key.
+2. **The blue-noise / graphics path**, which keeps `HyAB` and its chroma-coupling
+   penalty (kchroma=10 exists precisely to stop chromatic inks capturing greys).
+   Correct-by-design for graphics-like content such as ramps.
+3. **Fix it in byonk**: apply the chroma penalty to the *first* match while
+   leaving the diffused error unbiased, so greys prefer neutrals without
+   distorting chromatic averages. This is the one actually worth having.
 
 ---
 
-## 6. Traps
+## 6. byonk defects found this session
 
-**Do not trust a grid fit that has not proved itself.** `run.py` prints two
-independent estimates and their disagreement; **0.2–0.3 L\* is a good fit, and
-anything above ~1 L\* means the grid is misaligned, not that the panel is
-strange.** A bad fit produced a confident, monotone-looking, completely wrong
-table (49 L\* disagreement, 38% residuals, L\* above 100). The gate caught it.
+1. **Nothing warns when a calibration frame set mixes camera modules.** Not a
+   byonk bug but the trap that cost the most: photo 2 was
+   `iPhone18,2 back telephoto camera` at ISO 500 while 1 and 3 were
+   `back camera` at ISO 64. Its blue channel was an outlier by up to 9.2% of
+   white. The phone switches lenses on its own and **nothing in the picture shows
+   it**. Always check `exiftool -s -UniqueCameraModel -ISO -FocalLength`.
+2. **A panel's tuned dither parameters silently do nothing when the device picks
+   a different algorithm.** `dither:` in the panel config is keyed by algorithm
+   name; a device-level `dither: atkinson` bypasses a `sierra-light` block with no
+   warning. Should warn, or the keying should be reconsidered.
+3. **A screen's `refresh_rate` overrides the device's `refresh`.** The device is
+   configured for 300 s; the Color Calibrator returns 3600, and the panel slept
+   for an hour. Same class as the recovery-cadence bug fixed in `ce2e3ef` on this
+   branch. The device setting should win, or cap the screen's value.
+4. **`colors_actual` serves two masters.** It must make the preview honest *and*
+   tell the ditherer which inks to pick. A veil-contaminated measurement is bad
+   for both; the stretched value is good for the ditherer and dishonest for the
+   preview. Worth a design decision — possibly two fields.
 
-**The 17 grid lines are evenly spaced, so the fit aliases by whole cells.**
-Nothing pins the phase except the panel border. Weighting the two outer lines
-helps but can latch onto the bezel's *outer* edge. A coarse bbox hint read off
-the brightness profile is the reliable route — the bezel is far brighter
-(~10000–13000) than any ink (≤7458). A full auto-detector is still unbuilt; it
-is the "panel auto-calibrator" idea and it is harder than it looks.
-
-**Tapping the touchbar forces a server fetch** — this is the fastest way to make
-the device poll. Not because the buttons fetch, but because `src/bl.cpp:975`
-takes any **non-timer** wake as a reason to show the logo, clear the displayed
-image and un-register, which forces a refetch. Use the **middle** pad: left and
-right are Back/Next and call `show_cached_image_by_offset()`, which paints a
-*cached* image and sleeps.
-
-**`ha addons` is deprecated** in favour of `ha apps`; it still works but warns.
-
-**homeio's address changed mid-session** and a wedged ssh ControlMaster made
-everything hang. `-o ControlMaster=no -o ControlPath=none` diagnoses it. There is
-no `timeout` binary on this Mac; `curl --retry N --retry-delay S
---retry-all-errors --retry-connrefused` is the way to wait for a restart, since
-foreground `sleep` is blocked.
-
-**byonk does not hot-reload `/config/config.yaml`.** Restart it — and change
-config *before* starting a recovery run, since a restart cancels in-memory
-sessions.
-
-**Earlier traps still true:** esptool's deps live in the Homebrew venv; a new
-PlatformIO env silently gets a default sdkconfig and still reports SUCCESS;
-PlatformIO cannot flash this device (drive esptool directly, ~1.5 MB regions);
-never `erase_flash`. See `841ed1f` for the full text of those four.
+Still open from the TRMNL X work: the palette rejects duplicate colours, and
+`map_grey_indices` derives the level from an entry's **index** rather than its
+hex, so "declare only the usable inks" does not work. Full text in `814d061` §5.
 
 ---
 
 ## 7. Environment
 
-- Device `1C:DB:D4:66:5B:50`, `/dev/cu.usbmodem101`, firmware 1.8.14 control.
-- **homeio**: `root@homeio.oetiker.ch` (ssh is fine to run), add-on `local_byonk`,
-  runtime config `/addon_configs/local_byonk/config.yaml`, source `/addons/byonk`.
-  Host has `jq`, **no `python3`**. Admin token:
-  `ha addons info local_byonk --raw-json | jq -r .data.options.admin_token` —
-  keep it in a shell variable, **never print it**.
-  Full redeploy recipe unchanged — see `841ed1f` §7.
-- Raw workflow: `dcraw -4 -T -o 0 -r 1 1 1 1 x.DNG` for linear 16-bit; prefer
-  `ffmpeg -vf extractplanes=g -pix_fmt gray16le` over a luma conversion.
+- **New HA**: `root@10.46.18.3` (ssh authorised by the owner), add-on
+  `43664941_byonk`, config `/addon_configs/43664941_byonk/config.yaml`, screens
+  under `/addon_configs/43664941_byonk/screens/`. **byonk does not hot-reload
+  config — restart the add-on**, and a restart clears the in-memory device
+  registry. MCP server `byonk-g18` talks to it directly.
+- Devices there: `44:1B:F6:83:93:38` reTerminal E1004 (1200×1600, 6-colour) and
+  `94:A9:90:8C:6D:18` TRMNL Classic.
+- **Raw workflow**: `dcraw -4 -T -o 1 -A <x> <y> <w> <h>` — `-o 1` for sRGB
+  primaries while `-4` keeps it linear, `-A` white-balances off the frame border.
   **iCloud share links deliver JPEG** — export the original from Photos.
+- No `timeout` on this Mac and foreground `sleep` is blocked; use
+  `curl --retry N --retry-delay S --retry-all-errors --retry-connrefused` to wait
+  for a restart.
+- **`ha addons` is deprecated** in favour of `ha apps`; still works, warns.
 - byonk verify: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace`. **`make check` has reported exit 0 while tests failed.**
 
@@ -248,26 +219,34 @@ never `erase_flash`. See `841ed1f` for the full text of those four.
 
 ## 8. Next
 
-1. **Look at the calibrated Gradient Lab on the glass** (tap the middle pad).
-   That is the open question this handover stops mid-way through.
-2. **Decide the palette model** — §5.3. The owner favours declaring only the
-   usable inks; that needs the hex-derived level change first, test-first.
-3. **Re-measure with a white card in frame** to get absolute levels, and with a
-   second `offset` to confirm position independence.
-4. **Get the calibration into the repo.** It only exists on homeio.
-   `default-config.yaml` still ships the interpolated generic curve.
-5. **Flush the panel properly before any further measurement** — only one wipe
-   of ten ran, so both frames carry some residual ghost from Gradient Lab.
+1. **§5.1 — switch the device to `sierra-light`** and look at the yellow ramp.
+   One config key, and the most likely win.
+2. **Re-shoot with a black trap in frame** (black velvet, or a deep matte-black
+   box). Whatever it measures *is* the veil, so subtract it. This is the one
+   thing that would end the guessing about green's true chroma, and it also fixes
+   the absolute anchor, which currently assumes the frame border is a perfect 1.0.
+3. **Prove position independence** — every frame so far used `offset: 0`. Set
+   `params: {offset: 3}` on Ink Field and re-measure. Still not done.
+4. **Get something into the repo.** Nothing from this session is committed.
+   The green finding (§1) is defensible on its own; the rest is tuned by eye.
+5. **Restore the device to `examples/gphoto`** when finished.
 
-## 9. Still open, unrelated
+## 9. Carried forward — the TRMNL X work, still unmerged
 
-1. **PR for `fix/trmnl-x-ghosting-levers`** never opened; its three commits are
-   in this branch's history, including a data-loss fix (`0fb5c47`).
-2. **Restore `homeio`**: `log_level` → `info`, stop `local_byonk` and start
-   `43664941_byonk` (currently `error`), delete `local/noise-test`. Pre-session
-   config backup: `/addon_configs/local_byonk/config.yaml.pre-recovery`.
-3. **Timestamped image filenames** — content-hash names defeat device caching
-   (`filesystem.cpp:141`). Bit us today: an unchanged hash means the device will
-   not re-download even when the served bytes change.
-4. **SDD ledger** (git-ignored):
+Unchanged and still true; full text in `814d061`:
+
+1. **Two firmware grey tables selected by PNG byte size**
+   (`FASTEPD_LARGE_IMAGE_THRESHOLD`, 100 KiB). `colors_actual` is a property of
+   *(panel, grey table)*, not of the panel. Pin with `min_png_bytes`.
+2. **Measured both tables** — 9-pass 8.05:1 with 2 dead steps; 38-pass 9.28:1
+   with 4 dead steps and a 16.2 L\* chasm. Deployed on **homeio**, not in the repo.
+3. **PR for `fix/trmnl-x-ghosting-levers`** never opened; its three commits are in
+   this branch's history, including a data-loss fix (`0fb5c47`).
+4. **Restore `homeio`**: `log_level` → `info`, stop `local_byonk`, start
+   `43664941_byonk`, delete `local/noise-test`. Backup:
+   `/addon_configs/local_byonk/config.yaml.pre-recovery`.
+5. **Timestamped image filenames** — content-hash names defeat device caching
+   (`filesystem.cpp:141`); an unchanged hash means no re-download even when the
+   served bytes change.
+6. **SDD ledger** (git-ignored):
    `.superpowers/sdd/2026-08-21-panel-clean-recovery/progress.md`

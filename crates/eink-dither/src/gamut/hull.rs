@@ -37,9 +37,6 @@ struct Facet {
 /// The convex hull of a palette's actual colours in linear RGB.
 #[derive(Debug, Clone)]
 pub struct Hull {
-    /// The palette's actual colours in linear RGB — the points the hull was
-    /// built from. Kept so [`Hull::volume`] can measure each facet's extent.
-    pts: Vec<[f32; 3]>,
     facets: Vec<Facet>,
     shape: HullShape,
     l_min: f32,
@@ -85,7 +82,6 @@ impl Hull {
         };
 
         let mut hull = Self {
-            pts: pts.clone(),
             facets,
             shape,
             l_min: 0.0,
@@ -115,50 +111,6 @@ impl Hull {
         }
         let q = [p.r, p.g, p.b];
         self.facets.iter().all(|f| dot(f.n, q) <= f.d + EPS)
-    }
-
-    /// The volume the hull encloses, in linear-RGB units. Zero for a
-    /// degenerate hull, which encloses nothing.
-    ///
-    /// A convex polytope decomposes into one pyramid per facet, apex at any
-    /// interior point: `V = sum over facets of area * height / 3`. The
-    /// centroid of the palette's points is a convex combination of them and so
-    /// is interior, and `enumerate_facets` already keeps one entry per
-    /// *plane*, so each facet is counted once. A facet's area is the area of
-    /// the convex hull of the palette points lying on its plane — the 2-D hull
-    /// rather than a fan, because a palette point can sit inside a facet
-    /// without being one of its corners.
-    ///
-    /// Callers use this to check that a decomposition of the gamut they built
-    /// themselves actually accounts for all of it; see
-    /// `WedgeFan::from_palette`.
-    pub fn volume(&self) -> f32 {
-        if self.shape != HullShape::Volume {
-            return 0.0;
-        }
-        let n_pts = self.pts.len() as f32;
-        let mut centre = [0.0f32; 3];
-        for p in &self.pts {
-            centre[0] += p[0] / n_pts;
-            centre[1] += p[1] / n_pts;
-            centre[2] += p[2] / n_pts;
-        }
-
-        let mut volume = 0.0f32;
-        for f in &self.facets {
-            let (u, v) = plane_basis(f.n);
-            let on_plane: Vec<[f32; 2]> = self
-                .pts
-                .iter()
-                .filter(|p| (dot(f.n, **p) - f.d).abs() <= EPS)
-                .map(|p| [dot(u, *p), dot(v, *p)])
-                .collect();
-            // Normals point outward, so no interior point is ever above a
-            // facet and the height cannot come out negative.
-            let height = f.d - dot(f.n, centre);
-            volume += hull_area_2d(on_plane) * height / 3.0;
-        }
-        volume
     }
 
     /// The Oklab lightness range reachable on the achromatic axis.
@@ -241,64 +193,6 @@ impl Hull {
         }
         (lo_in, hi_in, true)
     }
-}
-
-/// An orthonormal basis of the plane orthogonal to the unit vector `n`.
-///
-/// Cross `n` with whichever coordinate axis it leans on least, so the result
-/// is never near-degenerate.
-pub(super) fn plane_basis(n: [f32; 3]) -> ([f32; 3], [f32; 3]) {
-    let axis = if n[0].abs() <= n[1].abs() && n[0].abs() <= n[2].abs() {
-        [1.0, 0.0, 0.0]
-    } else if n[1].abs() <= n[2].abs() {
-        [0.0, 1.0, 0.0]
-    } else {
-        [0.0, 0.0, 1.0]
-    };
-    let u = cross(n, axis);
-    let len = norm(u);
-    let u = [u[0] / len, u[1] / len, u[2] / len];
-    (u, cross(n, u))
-}
-
-/// Area of the convex hull of a set of 2-D points.
-///
-/// Andrew's monotone chain: sort lexicographically, sweep once forward for the
-/// lower chain and once back for the upper, then close it with the shoelace
-/// formula. Points inside the hull are discarded by the sweep, so a palette
-/// colour that happens to lie inside a facet does not distort its area.
-fn hull_area_2d(mut pts: Vec<[f32; 2]>) -> f32 {
-    fn turn(o: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
-        (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
-    }
-    if pts.len() < 3 {
-        return 0.0;
-    }
-    pts.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
-
-    let mut chain: Vec<[f32; 2]> = Vec::with_capacity(2 * pts.len());
-    for &p in pts.iter() {
-        while chain.len() >= 2 && turn(chain[chain.len() - 2], chain[chain.len() - 1], p) <= 0.0 {
-            chain.pop();
-        }
-        chain.push(p);
-    }
-    let lower = chain.len() + 1;
-    for &p in pts.iter().rev().skip(1) {
-        while chain.len() >= lower && turn(chain[chain.len() - 2], chain[chain.len() - 1], p) <= 0.0
-        {
-            chain.pop();
-        }
-        chain.push(p);
-    }
-    chain.pop(); // the start point, repeated to close the loop
-
-    let mut twice_area = 0.0f32;
-    for i in 0..chain.len() {
-        let j = (i + 1) % chain.len();
-        twice_area += chain[i][0] * chain[j][1] - chain[j][0] * chain[i][1];
-    }
-    (twice_area * 0.5).abs()
 }
 
 /// Determine whether the points span a volume, a plane, or a line.
@@ -469,39 +363,5 @@ mod tests {
             !hull.is_mappable(),
             "no neutral is reachable, so it must decline"
         );
-    }
-
-    /// `volume()` against closed forms, so the pyramid decomposition is
-    /// checked and not just self-consistent.
-    #[test]
-    fn the_hull_volume_matches_the_closed_form() {
-        // The unit cube itself: eight corners, volume 1.
-        let cube = Palette::new(
-            &[
-                Srgb::from_u8(0, 0, 0),
-                Srgb::from_u8(255, 0, 0),
-                Srgb::from_u8(0, 255, 0),
-                Srgb::from_u8(0, 0, 255),
-                Srgb::from_u8(255, 255, 0),
-                Srgb::from_u8(255, 0, 255),
-                Srgb::from_u8(0, 255, 255),
-                Srgb::from_u8(255, 255, 255),
-            ],
-            None,
-        )
-        .unwrap();
-        let v = Hull::from_palette(&cube).volume();
-        assert!((v - 1.0).abs() < 1e-4, "unit cube measured {v}");
-
-        // `six_colour` is the cube with the cyan and magenta corners removed.
-        // Cutting one corner off a unit cube takes 1/6 of it, so 2/3 is left.
-        let v = Hull::from_palette(&six_colour()).volume();
-        assert!(
-            (v - 2.0 / 3.0).abs() < 1e-4,
-            "six_colour measured {v}, closed form 0.666667"
-        );
-
-        // A degenerate hull encloses nothing.
-        assert_eq!(Hull::from_palette(&four_grey()).volume(), 0.0);
     }
 }

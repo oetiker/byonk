@@ -141,35 +141,6 @@ pub struct DitherOptions {
     ///
     /// Default: `0.9`
     pub pin_carry: f32,
-
-    /// Discount, in OKLab dE, that a palette entry earns for occupying the
-    /// whole of a pixel's exact mixture.
-    ///
-    /// Nearest-neighbour selection picks the single closest ink. Where a
-    /// panel's chromatic inks are dull they crowd the neutral axis, beat black
-    /// and white on distance at every muted colour, and the area is rendered
-    /// as a field of one ink — a grey that looks green, a brown face that
-    /// looks green — at a dE that looks fine, because the eye reads the
-    /// majority ink as the colour of the region rather than averaging.
-    ///
-    /// This discounts each entry by its share of the mixture that actually
-    /// reproduces the colour (see
-    /// [`WedgeFan`](crate::gamut::wedges::WedgeFan)), so black stops being
-    /// unreachable.
-    ///
-    /// - `0.0` — plain nearest-neighbour selection, bit for bit.
-    /// - large — approaches pure argmax-barycentric, maximum grey component
-    ///   replacement, and the E Ink patent rule that E Ink themselves later
-    ///   backed out of (US 11,527,216) for compromising image quality inside
-    ///   the hull. The dial exists so the trade can be measured rather than
-    ///   assumed.
-    ///
-    /// Internal: deliberately absent from byonk's config surface. The right
-    /// value is a property of how dull a panel's inks are, not a taste
-    /// setting. Owner ruling 2026-08-22.
-    ///
-    /// Default: `0.0`
-    pub mixture_bias: f32,
 }
 
 impl Default for DitherOptions {
@@ -182,7 +153,6 @@ impl Default for DitherOptions {
             strength: 1.0,
             hybrid_propagation: false,
             pin_carry: 0.9,
-            mixture_bias: 0.0,
         }
     }
 }
@@ -268,17 +238,6 @@ impl DitherOptions {
     #[inline]
     pub fn pin_carry(mut self, value: f32) -> Self {
         self.pin_carry = value.clamp(0.0, 1.0);
-        self
-    }
-
-    /// Set the mixture bias.
-    ///
-    /// # Arguments
-    /// * `lambda` - Discount in OKLab dE for a full-weight entry. `0.0`
-    ///   disables the feature; see [`DitherOptions::mixture_bias`].
-    #[inline]
-    pub fn mixture_bias(mut self, lambda: f32) -> Self {
-        self.mixture_bias = lambda;
         self
     }
 }

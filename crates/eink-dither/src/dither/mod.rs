@@ -349,15 +349,6 @@ pub(crate) fn dither_with_kernel_noise(
     // Create error buffer with depth = max_dy + 1
     let mut error_buf = ErrorBuffer::new(width, kernel.max_dy + 1);
 
-    // The fan depends only on the palette, so it is built once per call.
-    // Four 3x3 inversions -- far cheaper than `Hull::from_palette`, which the
-    // crate already runs per palette resolve, and skipped entirely when the
-    // feature is off.
-    let fan = (options.mixture_bias > 0.0)
-        .then(|| crate::gamut::wedges::WedgeFan::from_palette(palette))
-        .flatten();
-    let mut mixture = vec![0.0f32; palette.len()];
-
     for y in 0..height {
         let reverse = options.serpentine && y % 2 == 1;
 
@@ -415,19 +406,7 @@ pub(crate) fn dither_with_kernel_noise(
                     original_oklab.a * original_oklab.a + original_oklab.b * original_oklab.b;
 
                 let oklab = Oklab::from(pixel);
-                // The mixture comes from the SOURCE pixel, not the
-                // error-loaded one: it is the recipe for the content, and
-                // taking it from the error-loaded value would make the
-                // guidance drift with the error it bounds. `Nominal` pixels
-                // are flat SVG fills meant to BE an ink (ruling 22) and a fan
-                // built from measured colours does not describe them.
-                let (nearest_idx, _dist) = match (&fan, model) {
-                    (Some(f), ColourModel::Measured) => {
-                        f.weights(image[idx], &mut mixture);
-                        palette.find_nearest_biased(oklab, model, options.mixture_bias, &mixture)
-                    }
-                    _ => palette.find_nearest(oklab, model),
-                };
+                let (nearest_idx, _dist) = palette.find_nearest(oklab, model);
                 output[idx] = nearest_idx as u8;
 
                 let nearest_linear = palette.representative_linear(nearest_idx, model);
@@ -1426,50 +1405,6 @@ mod tests {
         assert!(
             none_out.iter().any(|&i| i != none_out[0]),
             "reference output is uniform, so the comparison is degenerate"
-        );
-    }
-
-    /// The feature ships off. Task 6 of the plan sets the real value.
-    #[test]
-    fn the_mixture_bias_defaults_to_off() {
-        assert_eq!(DitherOptions::default().mixture_bias, 0.0);
-    }
-
-    /// A non-zero bias must actually reach the selection, and must recruit
-    /// the black that plain selection never picks on a dull-ink panel.
-    ///
-    /// Dithered through `for_error_diffusion()`, not the raw palette: that is
-    /// the metric `EinkDitherer` actually dithers under (`builder.rs`
-    /// converts before every call), and the defect this feature fixes is a
-    /// property of THAT metric. `panel_measured()`'s raw palette is
-    /// chromatic, so `Palette::new()` auto-selects HyAB, whose `kchroma`
-    /// already keeps a neutral grey on black/white (~72% black with no bias
-    /// at all) — dithering against it would measure nothing.
-    #[test]
-    fn a_mixture_bias_recruits_black_on_a_neutral() {
-        let palette = crate::gamut::test_support::panel_measured().for_error_diffusion();
-        let image = vec![LinearRgb::from(Srgb::from_u8(128, 128, 128)); 64 * 64];
-        let kernel = &ATKINSON;
-
-        let black_share = |lambda: f32| {
-            let opts = DitherOptions {
-                mixture_bias: lambda,
-                ..Default::default()
-            };
-            let out = dither_with_kernel_noise(&image, 64, 64, &palette, kernel, &opts, None);
-            out.iter().filter(|&&i| i == 0).count() as f32 / out.len() as f32
-        };
-
-        let off = black_share(0.0);
-        let on = black_share(1.0);
-        assert!(
-            off < 0.05,
-            "plain selection already reaches black: {off:.3}"
-        );
-        assert!(
-            on > 0.4,
-            "a bias of 1.0 dE recruited only {on:.3} black on a mid grey; \
-             the exact recipe is 74% black"
         );
     }
 }

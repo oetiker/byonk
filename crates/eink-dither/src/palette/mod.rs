@@ -7,5 +7,4 @@ mod error;
 mod palette;
 
 pub use error::{PaletteError, ParseColorError};
-pub(crate) use palette::CHROMA_DETECTION_THRESHOLD;
 pub use palette::{ColourModel, DistanceMetric, Palette};

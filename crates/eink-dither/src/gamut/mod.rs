@@ -5,7 +5,6 @@ pub mod cmax;
 pub mod hull;
 pub mod knee;
 pub mod mapper;
-pub mod wedges;
 
 pub use mapper::{GamutMapper, GamutOptions};
 

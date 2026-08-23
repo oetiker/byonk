@@ -1,364 +1,348 @@
-# Handover — the quantiser is built and measured; its justification did not survive
+# Handover — the ditherer's core assumption is false, and that explains everything else
 
-**Date:** 2026-08-22 · **Branch:** `feat/panel-clean-recovery` · **HEAD:** `0888e59`
+**Date:** 2026-08-23 · **Branch:** `feat/panel-clean-recovery` · **HEAD:** `32152e7`
 **Base:** `main` @ `5c67c62` (v0.19.0, protected). `main` is an ancestor; no rebase needed.
 
 > **`cargo test --workspace` FAILS ON PURPOSE.** Exactly one test is red:
 > `test_neutral_grey_has_no_dominant_chromatic_ink`
-> (`crates/eink-dither/src/domain_tests.rs`). **247 passed / 1 failed / 28
-> ignored in `eink-dither` is the expected state.** Any *other* failure is a
-> real regression.
+> (`crates/eink-dither/src/domain_tests.rs`). It encodes a premise that has now
+> been disproved — **delete it** (see §2). Any *other* failure is a regression.
 
 ## Resume here
 
-**Do not start Task 6.** The plan's Tasks 1–5 are committed and reviewed. Task 6
-sets the production value, and the evidence that would justify any value is the
-thing that fell over this session. Read §1 before doing anything else.
+Nothing is half-finished. The panel is fixed and running on the shipped add-on.
+The open work is a **new finding** that invalidates an assumption underneath the
+whole dither pipeline. Read §1 first.
 
-1. **§1 — the correction.** The premise the whole initiative rests on does not
-   survive being checked. This is the most important section.
-2. **§2** — what *is* proven, and it is worth having.
-3. **§3** — the one experiment that decides whether this ships.
-4. Spec: `docs/superpowers/specs/2026-08-22-mixture-aware-quantiser-design.md`
-   (now partly superseded — see §4). Plan:
-   `docs/superpowers/plans/2026-08-22-mixture-aware-quantiser.md`.
-5. Ledger (git-ignored):
-   `.superpowers/sdd/2026-08-22-mixture-aware-quantiser/progress.md`. It holds
-   every ruling, every deferred minor, and the commit ranges. Trust it plus
-   `git log` over memory. Reports and renders sit beside it in the same
-   directory.
+1. **§1 — state-dependent dot gain.** The new, measured, load-bearing finding.
+2. **§2 — the mixture-aware quantiser is dead**, and the real root cause.
+3. **§3 — what is applied and live** on the panel right now.
+4. **§4 — method rules.** Four expensive mistakes were made today. Do not repeat.
+5. **§5 — exact state.** Repo, box, and the measurement kit.
+6. **§6 — what to do next.**
 
 ---
 
-## 1. The correction — "the eye reads the majority ink" is not supported
+## 1. The finding: ink coverage depends on what surrounds it
 
-The spec's §1 and the last two handovers all rest on one claim:
+**A pixel does not deliver its nominal colour. What it delivers depends on its
+neighbours, by a factor of about 2.5.**
 
-> **dE is not the symptom.** The average is right and the *field colour* is
-> wrong, because the eye reads the majority ink as the colour of the area
-> rather than averaging.
+Measured on the real E1004 with a purpose-built pattern in which **every cell
+holds exactly 25% ink coverage** and only the surroundings change:
 
-**Measured this session, that does not hold for flat patches.** Take the
-rendered neutral ramp at `mixture_bias = 0.0` and merge the dots the way an eye
-at reading distance does — averaging in **linear light**, which is the only
-correct way — and it comes out neutral:
+| condition | 1px | 2px | 3px | 4px | 6px | 8px | **mean** |
+|---|---|---|---|---|---|---|---|
+| RED on white | 0.351 | 0.348 | 0.346 | 0.343 | 0.336 | 0.295 | **0.336** |
+| RED on black | 0.162 | 0.130 | 0.108 | 0.104 | 0.118 | 0.171 | **0.132** |
+| BLUE on white | 0.355 | 0.348 | 0.353 | 0.342 | 0.351 | 0.311 | **0.343** |
+| BLUE on black | 0.177 | 0.126 | 0.109 | 0.100 | 0.117 | 0.154 | **0.131** |
+| GREEN on white | 0.338 | 0.352 | 0.356 | 0.358 | 0.333 | 0.302 | **0.340** |
+| GREEN on black | 0.274 | 0.105 | 0.051 | 0.040 | 0.084 | 0.280 | **0.139** |
+| YELLOW on white | 0.212 | 0.252 | 0.311 | 0.273 | 0.235 | 0.212 | 0.249 |
+| YELLOW on black | 0.204 | 0.162 | 0.150 | 0.152 | 0.183 | 0.241 | **0.182** |
 
-| merge scale | worst green excess, bias 0.0 | bias 0.5 |
+Nominal is `0.2500` in every cell. **On white the ink over-delivers by ~36%; on
+black it under-delivers by ~46%.**
+
+**Mechanism — one rule covers both directions: the darker state expands into the
+lighter one.** On white the coloured dot is darker, so it grows past its
+electrode. On black the *background* is darker, so it eats the coloured dots.
+Yellow is the lightest ink, is hurt worst on black, and is the only ink that
+behaves near-nominally on white.
+
+### What is NOT established
+
+- **The cluster-size trend within a row.** Much weaker than the background
+  effect. The U-shape on black (green `0.274 → 0.040 → 0.280`) is most likely
+  veiling glare inflating the darkest cells, not physics.
+- **Yellow on white** is unreliable — variants A and B disagree by up to 0.25
+  there, because yellow and white are too close for the endpoint solve to be
+  well-conditioned. Fix by giving yellow its own high-contrast background.
+
+### Why this result is trustworthy when two earlier ones were not
+
+- **Lighting.** The frame was 18.5% brighter on the right, and cluster size ran
+  left→right. The pattern is therefore rendered twice, variant **B** with the
+  columns reversed; the reported numbers are the **mean of A and B**, which
+  cancels any left-right gradient exactly.
+- **Registration.** Sampling windows are certified: measuring at window 0.40 and
+  0.60 must agree. Got `0.0276` (A) and `0.0262` (B) against a 0.03 threshold.
+- **Background effect is gradient-immune anyway** — the on-white and on-black
+  rows occupy the *same columns*, so the difference between them cannot be a
+  lighting artifact.
+
+### Why it matters
+
+1. **Error diffusion assumes a pixel contributes its nominal colour regardless
+   of neighbours.** That is wrong by 2.5×. The ditherer does careful arithmetic
+   on a false premise.
+2. **A solid-patch calibration structurally cannot predict dithered output.** A
+   solid patch has no neighbours in a different state and therefore no
+   spreading. This is why the "correct" photographic green made real images look
+   worse than the owner's hand-tuned value (§2).
+3. It predicts dark images lose saturation and light images gain it.
+
+## 2. The mixture-aware quantiser is dead — and the real cause was a constant
+
+**Drop it.** The initiative was built to fix *"a flat mid grey renders as 87%
+green ink"*. That was never a quantiser defect. It was the ditherer **correctly
+following a wrong `colors_actual` green**.
+
+`colors_actual` steers the ditherer's ink choice, not just the preview (defect
+7). Green ink on the calibration photo's face, Floyd–Steinberg:
+
+| `colors_actual` green | black | red | **green** |
+|---|---|---|---|
+| `#1E5645` — the 2026-08-22 photographic measurement | 61.2% | 14.0% | **17.8%** |
+| `#00994D` — the value checked into `default-config.yaml` | 68.2% | 17.7% | **8.6%** |
+
+Told green is nearly neutral (`#1E5645`, chroma 0.066), the quantiser picks it
+for every dark neutral and paints skin shadows green. Told green is a real
+colour (`#00994D`, chroma 0.158), it reserves green for green things. **The
+owner's panel went from "extreme green tint" to "much better" on that one line.**
+
+> **Do NOT replace `default-config.yaml`'s `#00994D` with the photographic
+> measurement.** It is a validated correction, not a hack. The measurement is
+> too dull because veiling glare adds an offset the Latin square cannot cancel
+> and `deveil.py` cannot identify — which flattens the darkest inks most, and
+> green is the darkest chromatic ink. §1 explains why a solid-patch measurement
+> could never have been right for dithered output anyway.
+
+**Re-tested honestly under Floyd–Steinberg**, the quantiser is harmless at
+`mixture_bias ≤ 0.25` and useless: the green bias it targets is already
+`+0.0012` with the feature off. At 0.5 it posterises — hue sweeps collapse into
+flat blocks with hard walls, shadows crush to black. The owner saw this on the
+panel and in the renders.
+
+**What to keep:** the wedge fan is currently inert (`dither/mod.rs:356` builds it
+only when `mixture_bias > 0.0`, and nothing sets that). ~950 lines with no
+consumer. Owner's call: remove / keep gated / park behind a tag. **Recommendation:
+remove** — the premise failed twice and the real defect was a constant.
+
+**Also delete** `test_neutral_grey_has_no_dominant_chromatic_ink`. It encodes the
+disproved premise.
+
+## 3. What is applied and live
+
+Both changes are on the box in **both** `config.yaml` files
+(`/addon_configs/local_byonk/` and `/addon_configs/43664941_byonk/`), so they
+survive whichever add-on runs. Backups: `config.yaml.pre-kernel-2026-08-23` and
+`config.yaml.pre-green-2026-08-23`.
+
+| | before | now |
 |---|---|---|
-| 8×8 | +1 of 255 | +0 |
-| 16×16 | +5.9 of 255 (in the near-black end) | +0.8 |
-| 32×32 | +4.1 of 255 | +0.3 |
+| device `44:1B:F6:83:93:38` kernel | `atkinson-hybrid` | **`floyd-steinberg`** |
+| panel `reterminal_e1004` green | `#1E5645` (overnight) | **`#00994D`** (restored) |
 
-Column averages of the bias-0.0 ramp: `#3F4041`, `#656566`, `#8C8C8C`. Grey.
+### The kernel evidence
 
-**A trap worth recording:** averaging the same image in **sRGB** instead of
-linear light *does* show a green cast and a large lightness error. That is an
-artifact of averaging gamma-encoded values, and it is what I nearly reported as
-a finding. The codebase already insists on this distinction
-(`test_gamma_correctness_dither_ratios`); apply it to analysis too, not only to
-the ditherer.
+Nine kernels, same photo, measured in `colors_actual`, merged in linear light:
 
-So: it is true that a mid grey is **87% green ink with 0% black**. It is *not*
-established that this looks green. The two were treated as the same thing.
-
-**What remains true and unexplained:** the owner reported *"the face of the
-person is clearly greenish where it is supposed to be brownish"* on the real
-panel, from the calibration photo. That observation is the only ground truth in
-this whole initiative, and **the synthetic flat-patch renders do not reproduce
-it.** Something outside the flat-patch model causes it. Until that is found, no
-value of `mixture_bias` can be justified by the evidence collected so far.
-
-Candidate explanations, none tested:
-
-- Real photographic content has gradients and structure; uniform patches do not.
-  Clumping may behave differently there.
-- The deployed panel runs `atkinson-hybrid`, which no synthetic render here used
-  for the before/after pair.
-- The panel's physical inks may differ from `colors_actual` in a way that an
-  87%-single-ink mixture amplifies and a black/white mixture does not. The spec
-  measured calibration perturbation as worth at most dE 0.013, which argues
-  against this, but it was measured for a different question.
-- Viewing conditions: a glossy panel under room light is not a monitor.
-
-## 2. What *is* proven, and it is worth keeping
-
-### 2.1 Atkinson is the single biggest accuracy cost in the pipeline
-
-`kernel.rs:56` — Atkinson is six taps of weight 1 over a divisor of 8. **It
-propagates 6/8 and discards 25% of its error by construction.** Floyd–Steinberg
-is 16/16.
-
-**With the new feature switched off, on the E1004 palette:**
-
-| kernel | mean dE at `mixture_bias = 0.0` |
-|---|---|
-| Atkinson | 0.0286 |
-| Floyd–Steinberg | **0.0029** |
-
-**Ten times.** The device `44:1B:F6:83:93:38` is set to `atkinson-hybrid`. This
-finding is independent of the quantiser and is worth acting on by itself.
-
-The spec's central defence of the whole approach — *"the error term is
-untouched, so the average still converges"* — is only true for a kernel that
-propagates all of it. Under Atkinson the discarded quarter compounds and the
-mean drifts, worst on the dark near-neutrals whose recipes call for the most
-black. That was the hypothesis; it survived in mechanism.
-
-### 2.2 The lever does what it was designed to do
-
-Floyd–Steinberg, `max_error = 2.0`, `mixture_bias = 0.5`, on `panel_e1004()`:
-
-| | bias 0.0 | bias 0.5 |
+| kernel | colour err | green bias |
 |---|---|---|
-| `#505050` fraction wearing an ink the recipe never called for | 1.0000 | **0.0031** |
-| `#606060` | 1.0000 | 0.0156 |
-| max dE over the in-gamut census | 0.0778 | **0.0741** (bound 0.10) |
+| sierra-lite / floyd-steinberg | 0.0131 / 0.0133 | **+0.0012** |
+| burkes / sierra-two-row / stucki / sierra / jjn | 0.0143–0.0155 | +0.0012 |
+| atkinson-hybrid | 0.0193 | **+0.0085** |
+| atkinson | 0.0226 | +0.0068 |
 
-Accuracy *improves*. The same setting also improves `panel_measured()` (max dE
-0.0962 → 0.0692), so **no panel is traded for another**. `max_error` 1.5/3.0/5.0
-also pass; 1.0 fails at 0.1169 and fully unclamped fails at 0.1037, so 2.0 is a
-real optimum rather than a limit trick. The default `max_error` of 1.0 was
-clamping 17% of channel applications for Floyd–Steinberg and costing accuracy.
+**Every full-error kernel has 5–7× less green bias than either Atkinson.**
+Atkinson propagates 6/8 and discards 25% of its error by construction
+(`kernel.rs:56`), which biases it toward the ink nearest the neutral axis.
+Atkinson is fine for greyscale; it is the wrong kernel for colour.
 
-### 2.3 It introduces a visible seam
+**Caveat: this ranking was measured with the too-dull green.** Floyd–Steinberg
+beating Atkinson is structural and safe. The ordering among the seven good
+kernels should be re-run on the corrected palette before it is treated as
+settled.
 
-Largest single-step change in an ink's share between adjacent colours:
+`floyd-steinberg` was chosen over the marginally better `sierra-lite` because
+`sierra-light` is a **deliberate alias** for `sierra-lite` (`config.rs:214`), so
+the panel's existing `sierra-light:` block is *armed*, not dead — selecting
+sierra-lite would activate `noise_scale: 5` (defect 4 says 2.5) and a stale
+`error_clamp: 0.11`.
 
-| | bias 0.0 | bias 0.5 |
-|---|---|---|
-| e1004 | 0.0290 (`#B0A77E → #B1A87F`) | **0.1680** (`#55332A → #56332B`) |
-| measured | 0.0268 | 0.1445 (`#AC6756 → #AD6756`) |
+**`max_error` is noise on photographs** (0.0131 vs 0.0133 at 2.0) and has *zero*
+effect under Atkinson — those renders were byte-identical. The previous
+handover's §2.2 claim that 2.0 matters was measured on a synthetic census and
+does not transfer.
 
-Both on the warm-brown / skin ramp; the neutral ramp stays ≤ 0.079. For scale,
-an earlier attempt at this fix was abandoned after measuring **0.090**, and
-`wedges.rs`'s own continuity bound is 0.020.
+### Nothing from this branch is needed
 
-**It is visible at 1:1, not only magnified** — I looked. A hard vertical edge
-about halfway along the brown gradient: sparse dots on near-black one side,
-dense red/green mottle the other. Raising `max_error` makes banding worse
-(measured: 0.1311 → 0.1445 → 0.1708 as the clamp goes 1.0 → 2.0 → ∞) while
-improving accuracy, so those two pull against each other.
+Verified by byte comparison: the published `0.19.0` add-on with
+`floyd-steinberg` produces a **byte-identical** PNG to the branch build. Both
+242,481 bytes. The box now runs the shipped add-on.
 
-**Why it bands.** The weights vary continuously — Task 2 proves that
-numerically. But the *winner* is a threshold on the score gap, so when the
-discount is large relative to the error excursions error diffusion produces, a
-whole uniform region flips at once instead of easing over. Lowering the lever
-should restore smoothness at the cost of repair. **Nobody has measured where
-that knee is** — that is a cheap, obvious next measurement if the initiative
-continues.
+## 4. Method rules — four mistakes were made today, each one inverted a conclusion
 
-### 2.4 The renders
+1. **Judge renders in `colors_actual`, never the nominal palette.** The device is
+   *sent* the nominal palette, so `/api/image/*.png` comes back nominal and looks
+   nothing like the panel. Nominal green is `#00FF00`; the real ink is a dull
+   dark teal. Heavy green usage looks catastrophic in nominal and nearly neutral
+   in real. This inverted the quantiser verdict — reported as a 16× improvement,
+   actually 2× worse. The renders are indexed PNGs, so **swap the PLTE
+   index-parallel `colors` → `colors_actual`; no re-render needed.**
+2. **Merge dots by averaging in linear light.** An sRGB resize invents a green
+   cast. Sibling of the same error; cost the previous session a false finding.
+3. **Validate registration before believing any photo measurement.** Two tables
+   were reported and then withdrawn: one confounded by an 18.5% lighting
+   gradient, one by sampling windows that had walked off the cells. **Overlay the
+   sampling boxes on the image and look**, and run the window-size self-check.
+   A global panel-rectangle fit is *not* accurate enough — a few percent of scale
+   error accumulates across six columns. `locate_grid.py` locks onto the
+   pattern's own periodic structure instead.
+4. **Design the confound out rather than correcting for it.** The reversed-column
+   variant B cancels the lighting gradient exactly; the attempted arithmetic
+   correction using the 25px white gaps produced nonsense (yellow at 0.012).
 
-Twelve PNGs and a written index in
-`.superpowers/sdd/2026-08-22-mixture-aware-quantiser/renders/`, plus the two
-`06_neutral_AT_DISTANCE_*` images generated for §1. The neutral-ramp pair is the
-clearest: bias 0.0 is blue/yellow/red/green confetti at 1:1, bias 0.5 is clean
-black-and-white. **The owner's reaction to the confetti was "that looks pretty
-cool" — which is fair, and prompted §1.**
+## 5. Exact state
 
-## 3. The one experiment that decides this
+### Repo — nothing committed today
 
-**Reproduce the owner's actual observation.** Render the calibration photo with
-the face — `local/calibration/color` on the g18 box — before and after, on the
-real panel, and look.
-
-- If the fix visibly helps there, it earns its place and the seam becomes a
-  tuning problem (find the knee, §2.3).
-- If it does not, this whole initiative rests on a test artifact and should be
-  dropped, keeping only §2.1 (the Atkinson finding) and the wedge fan itself,
-  which is sound geometry with its own tests.
-
-`mixture_bias` is internal, so `render_screen` cannot vary it — a before/after
-pair needs two builds on the VM (plan Task 7 Step 1, and the
-`ha-vm-from-source-addon-build` memory has the recipe). **The owner has not yet
-authorised the ssh for this.** Ask.
-
-## 4. Rulings made this session — do not relitigate, but §1 reopens some
-
-Full text with costs-if-wrong in the ledger. The load-bearing ones:
-
-1. **Out-of-gamut colours are projected onto the fan, not extrapolated across
-   it.** The spec's §3.2 claim that clamp-and-renormalise "degrades to the
-   nearest wedge" is **measured false** — the weight field jumped **0.9137**
-   between two colours one 8-bit step apart. `weights()` now keeps the wedge
-   whose nearest point is nearest. Continuity went to 0.019047. Proof and
-   measurement are in commit `88d0f61`'s message.
-2. **The inks are ordered by linear-RGB dihedral angle about the black–white
-   axis, not OKLab hue** (spec §3.1 step 2 superseded). Choosing the partition
-   is mixture geometry, and mixture geometry is linear RGB. The order happens to
-   be identical for both test palettes, so this removed a latent failure.
-3. **The tessellation premise is enforced, not assumed.** `from_palette` refuses
-   the fan unless the wedge volumes sum to the hull volume (1e-3 relative).
-   `Hull::volume()` was added for it. A palette that fails renders exactly as it
-   does today rather than silently contouring.
-4. **The census and the wiring test dither `for_error_diffusion()`.** Euclidean
-   is the only metric production ever dithers under (`builder.rs:313`), and the
-   defect exists only on that path — under raw HyAB a mid grey is already 72.4%
-   black and there is nothing to fix.
-5. **The field-colour rule is replaced by recipe agreement** — half the L1
-   distance between the rendered ink histogram and the fan's exact recipe. The
-   old rule condemned correct output; see §5. **§1 does not invalidate this
-   measure**, which is a good one; it invalidates the claim that a bad score is
-   visible.
-6. **`panel_e1004()` is added to `test_support`** and the census gates on it.
-
-## 5. Why the old gate had to go — do not restore it
-
-The spec justified its field-colour threshold with: *"On `panel_measured()` the
-dullest ink is green at chroma 0.068."* **That number is not `panel_measured()`'s
-green.** Computed directly:
-
-| ink | hex | OKLab chroma |
-|---|---|---|
-| red | `#B50303` | 0.1982 |
-| yellow | `#FFEE00` | 0.1973 |
-| blue | `#205497` | 0.1227 |
-| **green** | `#0D876B` | **0.1062** |
-
-0.068 is the **E1004's** green, `#1E5645` (0.0655). Spec §1 itself says
-`panel_measured()` is an **E1002**. The spec took its evidence from one panel and
-its threshold from another.
-
-With the threshold at 0.106 the rule condemned 261 of 677 colours, including
-`#108070` (a teal, dE 0.0137) for being 92.8% green. **Decisive proof the rule
-was wrong rather than the fix:** `worst 1ink` sat at exactly 100.0% at every
-lambda on the **idealised** BWRGBY palette, where the dullest ink is ~0.21, so a
-near-pure yellow counts as "duller than the dullest ink" and rendering it 100%
-yellow is called a defect. No lever value could ever pass.
-
-## 6. Uncommitted work in the tree — decide before touching anything
-
-`git status` shows six modified files. **Two are this session's unfinished work
-and four are the owner's.**
+HEAD `32152e7`, unchanged. `git status` shows seven modified files:
 
 | file | whose | what |
 |---|---|---|
-| `crates/eink-dither/src/domain_tests.rs` | **mine, +299/−34** | the recipe-agreement rule replacing the field-colour rule, bound left at `f32::INFINITY` and printed rather than asserted |
-| `crates/eink-dither/src/gamut/mod.rs` | **mine, +36** | `panel_e1004()` in `test_support` |
+| `src/rendering/svg_to_png.rs` | **mine — DO NOT COMMIT** | three experiment hooks, marked `EXPERIMENT SCAFFOLDING` at lines 167, 249, 281 |
+| `crates/eink-dither/src/domain_tests.rs` | mine, +299/−34 | recipe-agreement rule; bound left at `f32::INFINITY` |
+| `crates/eink-dither/src/gamut/mod.rs` | mine, +36 | `panel_e1004()` in `test_support` |
 | `config.yaml` | **owner** | never stage |
 | `docs/generate-samples.sh` | **owner** | never stage |
-| `docs/src/concepts/content-pipeline.md` | **owner** | never stage — and it still documents the pre-0.18.0 `error_clamp` at line 261 with a stale `0.05 – 0.5` range; **the owner fixes that line** |
+| `docs/src/concepts/content-pipeline.md` | **owner** | never stage — still documents pre-0.18.0 `error_clamp` at line 261; **the owner fixes that line** |
 | `tools/capture-config.yaml` | **owner** | never stage |
 
-**Never `git add -A` or `git add .` here.** Add by explicit path and check
-`git diff --cached --name-only` before every commit. There is no backup of the
-owner's four files.
+**Never `git add -A` or `git add .`.** Add by explicit path; check
+`git diff --cached --name-only` before every commit.
 
-The two mine are committable on their own merits — `panel_e1004()` is a fact
-about a real panel, and the recipe-agreement measure is better than what it
-replaces — but **the bound cannot be set until §3 resolves**, because its whole
-purpose is to be red before the fix and green after.
+**The scaffolding** reads three files from the add-on config dir each render, so
+a sweep needs no rebuild and no restart:
 
-## 7. Deferred review findings — for whoever opens the PR
+```
+/config/mixture_bias      float, 0.0 = feature off (shipped behaviour)
+/config/dither_override   kernel name, empty/absent = use device config
+/config/max_error         float, applied last so it beats the tuning chain
+```
 
-None blocking; all are in the ledger with context.
+It is genuinely useful for experiments and genuinely unshippable as written. If
+kept, it must become real config plumbing (see §6).
 
-- **Task 1:** `worst_de` is a dead accumulator now that its `println!` is gone.
-- **Task 2:** `a_greyscale_palette_carries_no_fan` passes on the `len < 5` guard,
-  so the `chromatic.len() < 3`, `white == black`, non-mappable-hull and
-  `invert3` branches have no coverage. Each K–W–c face is solved twice on the
-  slow path (4 of 16 point-triangle cases are duplicates). `TOL = 1e-4` in the
-  tessellation test is empirical (measured worst boundary rounding 8e-5) and
-  does not say so. The continuity assert records the conclusion that 0.019047 is
-  a slope but not how to re-derive it. `hull_area_2d` discards points interior to
-  a facet, and neither grounding fixture exercises that.
-- **Task 3:** `find_nearest_biased` duplicates `find_nearest`'s `pixel_chroma`
-  and `entries` setup. Its doc says `bias` sums to one, which the code neither
-  requires nor enforces — the all-zero give-up vector from `WedgeFan::weights`
-  deliberately violates it and degrades to plain nearest-neighbour, correctly.
-- **Task 4:** the `mixture` buffer is allocated even when the feature is off.
-- **Task 5:** the sweep table prints no way to identify *which* colour produced a
-  worst case — that cost a whole separate investigation. Its doc comment's
-  suggested invocation is broken: `--release` sits after `--` so cargo never
-  sees it, and the bare `lambda_sweep` filter collides by substring with
-  `lambda_sweep_diag`. The working form is
-  `cargo test -p eink-dither --release --lib lambda_sweep -- --ignored --nocapture --exact domain_tests::domain_tests::lambda_sweep`.
+### The box — `root@10.46.18.3`, ssh authorised by the owner
 
-## 8. byonk defects — still open, unchanged from last session
+| | |
+|---|---|
+| `43664941_byonk` | **0.19.0, started** — this is the one serving |
+| `local_byonk` | 0.19.0-mix2, stopped. Built from this branch + scaffolding. Rebuild recipe below. |
+| device `44:1B:F6:83:93:38` | `floyd-steinberg`, panel `reterminal_e1004`, screen **`local/calibration/dotgain2b`** |
+| device `94:A9:90:8C:6D:18` | TRMNL Classic, `jarvis-judice-ninke`, unchanged |
+
+**Restore the device to `examples/gphoto` when the dot-gain work is done.**
+
+**Screens created today** (in `/addon_configs/43664941_byonk/screens/calibration/`,
+handle `local`, not in the repo): `dotgain`, `dotgain2a`, `dotgain2b`.
+
+The dot-gain screens are a **pre-built indexed PNG placed 1:1**. Because every
+source pixel is already exactly a palette entry, the ditherer's nearest match
+returns it unchanged with zero error, so the pattern reaches the panel
+pixel-exact. **Verified: all 48 cells still at exactly 0.2500 after the full
+Lua → template → SVG → resvg → dither → PNG path.** That property is what makes
+the screen measure the panel instead of the renderer — preserve it.
+
+**Building `local_byonk` from source** (needed only to change the scaffolding):
+scaffold lives in `/addons/byonk` (config.yaml with `image:` removed, plus a
+Dockerfile on `rust:1.97-slim-bookworm` — Debian, not Alpine, because
+`utoipa-swagger-ui` downloads with `curl` at build time). Ship the build inputs
+by `tar | ssh`, **strip macOS `._*` AppleDouble files** (931 of them got embedded
+by rust-embed from `fonts/` and `screens/` on the first attempt), bump
+`version:` in the scaffold's `config.yaml` (the `ARG BUILD_VERSION` cache-bust
+depends on it), then `ha store reload` → `ha addons update local_byonk`. On this
+HAOS a bare `store reload` *did* pick up the version bump; no supervisor restart
+needed.
+
+### Measurement kit — `~/scratch/panel-evidence/dotgain-2026-08-23/`
+
+| | |
+|---|---|
+| `scripts/find_panel.py` | panel rectangle from the bezel/panel luminance step |
+| `scripts/locate_grid.py` | **the good one** — locks onto the cell grid's own periodic structure |
+| `scripts/measure2.py` | A+B analysis with the registration self-check. `measure2.py <linA.tiff> <linB.tiff>` |
+| `scripts/make_dotgain2.py` | regenerates both pattern variants; verifies exact 25% coverage |
+| `patterns/` | `dotgain2a.png`, `dotgain2b.png` |
+| `photos/` | `IMG_2729` (macro), `IMG_2733` (v1), `IMG_2734` (v2 A), `IMG_2735` (v2 B) |
+| `renders/` | the nine-kernel sweep and the bias sweep |
+
+Raw workflow: `dcraw -4 -T -o 1 -w -q 3 -b N`. **`-4` is linear — pick `N` per
+frame so nothing clips** (A needed `-b 8`, B needed `-b 1`); check
+`h[255]+h[511]+h[767]`. Python has PIL but **no numpy and no rawpy**.
+
+The older kit at `~/scratch/panel-evidence/e1004-2026-08-21/` still holds
+`FINDINGS.md`, the photographic calibration and the `greyprobe/` Rust probe.
+
+## 6. What to do next
+
+**In rough order of value.**
+
+1. **Pin down the dot-gain law properly.** The background effect is solid; the
+   cluster-size trend is not. Improve the pattern:
+   - give **yellow a high-contrast background** so its solve conditions well;
+   - add **mid-grey backgrounds**, not just black and white, to get the shape of
+     the law rather than two endpoints;
+   - sweep **coverage** (12.5% / 25% / 50%), since a spreading model needs more
+     than one coverage to fit;
+   - add **corner fiducials** so registration is trivial instead of inferred;
+   - kill veiling glare — shoot in a dark room with a single diffuse source off
+     axis. It is the prime suspect for the U-shape on black.
+2. **Decide what byonk does with it.** A state-dependent ink model is a real
+   change to the ditherer: the error term for a pixel should depend on its
+   committed neighbours. Cheapest useful version is probably a per-ink
+   "effective coverage" correction applied to the error, not a new quantiser.
+   **Brainstorm before building** — the last initiative that skipped that step
+   cost ~950 lines and was chasing a bad constant.
+3. **Close out the branch.** Remove the wedge fan (owner's ruling pending),
+   delete the red test, strip the scaffolding from `svg_to_png.rs`, keep
+   `panel_e1004()`. Then `cargo test --workspace` should be green.
+4. **Re-run the kernel ranking on the corrected green** to confirm
+   floyd-steinberg over the other six.
+5. **Promote the scaffolding to real config** if the experiment hooks stay
+   useful: `mixture_bias` is gone with the fan, but a `dither` override per
+   render and a working `max_error` are legitimate. Note `DitherTuningValues`
+   plumbing touches ~25 sites (`config.rs`, `display.rs`, `dev.rs`, `main.rs`,
+   `svg_to_png.rs`).
+6. **Restore the g18 device to `examples/gphoto`.**
+7. **Open the PR.** This branch carries three fixes from an earlier session, the
+   quantiser initiative, and the TRMNL X ghosting fixes that were never PR'd
+   (`0fb5c47` is a data-loss fix). Consider splitting.
+
+## 7. byonk defects — carried forward, still open
 
 1. **The dev UI duplicates `DitherAlgorithm::defaults()`** (`static/dev/dev.js`,
    `DITHER_DEFAULTS`). It should fetch defaults from the server.
-2. **`docs/src/concepts/content-pipeline.md:261`** — see §6.
+2. **`docs/src/concepts/content-pipeline.md:261`** — stale `error_clamp` range.
+   The owner's file; the owner fixes it.
 3. **A panel's tuned dither parameters silently do nothing when the device picks
-   a different algorithm.** `dither:` is keyed by algorithm name; the E1004's
-   `sierra-light` block is inert under `atkinson-hybrid` with no warning.
-   `deprecation_warnings()` is the obvious place to report from.
+   a different algorithm.** `dither:` is keyed by algorithm name. Confirmed live
+   today: the E1004's `sierra-light` block was completely inert under
+   `atkinson-hybrid`, with no warning. `deprecation_warnings()` is the obvious
+   place to report from.
 4. **`noise_scale: 5`** in the shipped E1002/E1004 blocks; the measured optimum
    for Sierra Lite is 2.5 (`dither/mod.rs:166`).
 5. **MCP cannot set a device's dither algorithm.** `assign_screen` takes only
    `mac` and `screen_ref` while `apply_device_patch` (`write.rs:249`) already
    accepts `dither`, `panel`, `refresh`, `colors`, `params`, `name`. Widen it and
-   rename `assign_screen` → `configure_device`.
+   rename `assign_screen` → `configure_device`. **Felt directly today** — every
+   kernel change needed ssh and a restart.
 6. **Panels have no write path at all** — no `/panels` route in `admin_router()`,
    REST or MCP, in any mode. The whole calibration workflow requires ssh.
 7. **`colors_actual` serves two masters** — an honest preview and the ditherer's
-   ink choice. Possibly two fields.
-8. **`sierra-lite` deserves one re-test** with a sane `max_error`; it was written
-   off while the panel config carried a pre-0.18.0 `error_clamp: 0.11`.
+   ink choice. §1 and §2 make this urgent: they are not the same number, and a
+   solid-patch measurement cannot serve the second. **Split them.**
+8. **`sierra-lite` deserves one re-test** with a sane `max_error` and the
+   `sierra-light` block cleaned up.
 
 Still open from TRMNL X: the palette rejects duplicate colours, and
 `map_grey_indices` derives the level from an entry's **index** rather than its
 hex, so "declare only the usable inks" does not work.
 
-## 9. After this
-
-1. **Restore the g18 device to `examples/gphoto`** — it is on
-   `local/calibration/color`.
-2. **§2.1 is shippable on its own.** Atkinson being 10× less accurate than
-   Floyd–Steinberg is a finding about byonk's defaults, independent of the
-   quantiser.
-3. **Cheap wins**, in rough order of value: defect 3 (panel tuning inert), 5
-   (`configure_device` over MCP), 4 (`noise_scale`).
-4. **Open the PR.** This branch carries three fixes from an earlier session, this
-   initiative, and the TRMNL X ghosting fixes that were never PR'd (`0fb5c47` is
-   a data-loss fix). Consider splitting.
-
-## 10. Exact state — repo and deployed
-
-**Repo.** HEAD `0888e59` on `feat/panel-clean-recovery`. Ten commits since
-`main` @ `5c67c62`. This session added five:
-
-| commit | task |
-|---|---|
-| `a31edf1` | Task 1 — the in-gamut census gate, red on purpose |
-| `88d0f61` | Task 2 — the wedge fan (two fix rounds; see §4.1–4.3) |
-| `6335754` | Task 3 — `find_nearest_biased` (one fix round) |
-| `3c57db8` | Task 4 — wired into the dither loop, shipped off |
-| `0888e59` | Task 5 — the `lambda_sweep` diagnostic |
-
-All five were reviewed clean. Uncommitted work: §6.
-
-**On `root@10.46.18.3`**, add-on `43664941_byonk` **0.19.0** (does NOT have any
-of this branch), config `/addon_configs/43664941_byonk/config.yaml`:
-
-| what | value | note |
-|---|---|---|
-| device `44:1B:F6:83:93:38` `dither` | `atkinson-hybrid` | set by the owner — see §2.1 |
-| device `44:1B:F6:83:93:38` `screen` | `local/calibration/color` | **was `examples/gphoto`** — restore when done |
-| `panels.reterminal_e1004.colors_actual` | `#000000,#DCDCDC,#B52200,#E1CE00,#2C6CBC,#1E5645` | backups `config.yaml.pre-measured-2026-08-22`, `config.yaml.pre-stretch-2026-08-22` |
-| `panels.reterminal_e1004.dither.sierra-light` | `error_clamp: 0.11, noise_scale: 5` | once this branch is deployed the key is ignored and announced at startup. Delete it. |
-
-**Deploying this branch changes behaviour on that box**, and both changes are
-wanted: the stale `error_clamp` stops being live, and the device's
-`atkinson-hybrid` now beats any screen naming its own algorithm.
-
-**Changed on the box previously:** `dither = "atkinson"` was deleted from
-`/addon_configs/43664941_byonk/screens/calibration/color/script.lua` (was line
-165). **That edit is no longer needed** — `a20f2ee` makes the device win
-regardless. No backup was made; the repo original is
-`screens/builtin/calibration/color/script.lua` (166 lines) and the deployed fork
-differs only in `refresh_rate` 3600 → 180 and `refresh: 180` in `meta.yaml`.
-
-**Screens created over MCP** (not in the repo): `local/calibration/inkfield` and
-`local/calibration/color`.
-
-**Measurement kit** at `~/scratch/panel-evidence/e1004-2026-08-21/`: `measure.sh`,
-`prep.sh`, `scout.py`, `run.py`, `gridfit.py`, `warp.py`, `deveil.py`,
-`patches.py`, `synth.py`/`validate.py`, `FINDINGS.md`, venv at
-`./venv/bin/python`, and `greyprobe/` — the Rust probe behind the earlier
-neutral-ramp numbers. `cargo run --release`; change `PALETTE` for another panel.
-
-## 11. Environment
+## 8. Environment
 
 - **Verify with the four commands directly. `make check` has reported exit 0
   while tests failed.**
@@ -369,57 +353,46 @@ neutral-ramp numbers. `cargo run --release`; change `PALETTE` for another panel.
   cd docs && mdbook build
   ```
 - **`git` needs `--no-pager`** in this harness, or `diff --stat`/`log` can return
-  nothing at all and look like a clean tree. That nearly cost a wrong conclusion.
-- **Subagents must run long commands in the foreground.** A subagent that ends
-  its turn waiting on a background job is never resumed, and the work stalls
-  silently. Two did this session.
-- **Always build the review package before dispatching a reviewer**
-  (`scripts/review-package PLAN BASE HEAD`). A reviewer with no diff file crawls
-  the repo and stalls — one died at the 600s watchdog for exactly this.
-- **g18 HA**: `root@10.46.18.3`, ssh authorised by the owner *for that box* — but
-  **§3's build-and-deploy has not been authorised. Ask.** The auto-mode
-  classifier blocks some remote mutations; a targeted single-purpose `sed -i`
-  went through where `cp && sed -i && restart` did not. If blocked, hand the
-  owner a one-line `!` command.
+  nothing at all and look like a clean tree.
+- **The auto-mode classifier blocks some remote mutations inconsistently.** A
+  single-purpose `sed -i` over ssh went through on one file and was refused on
+  the next, identical one. If blocked, hand the owner a one-line `!` command.
 - byonk **does not hot-reload config — restart the add-on**, and a restart clears
-  the in-memory device registry. Screens are re-read per render.
-- MCP server `byonk-g18` talks to it directly. `render_screen` accepts `dither`,
-  `panel` and `colors_actual`, so algorithms and calibrations can be compared
-  without touching config. **Pass explicit `width`/`height`** —
-  `image_max_width` resamples. It cannot vary `mixture_bias`, which is internal.
+  the in-memory render cache, so `/api/image/<hash>.png` 404s until the device
+  polls again. Screens *are* re-read per render.
+- **`/api/image/<hash>.png` needs no token** and serves the exact PNG the panel
+  received. Best way to capture renders without spending context on images. Get
+  the hash from the add-on log; **filter by `width=1200`** or you will grab the
+  TRMNL Classic's 800×480 image by mistake.
+- MCP server `byonk-g18` talks to the box directly. `render_screen` accepts
+  `dither`, `panel` and `colors_actual`. **Pass explicit `width`/`height`** —
+  `image_max_width` resamples, which destroys the dither pattern.
+- **`ha addons` is deprecated** in favour of `ha apps`; still works, warns.
+- The box has **`jq` but no `python3`**. The Mac has **PIL but no numpy**.
+- No `timeout` on this Mac and foreground `sleep` is blocked; use
+  `curl --retry N --retry-delay S --retry-all-errors --retry-connrefused`, or
+  loop with `sleep` inside a remote `ssh` command.
 - Devices: `44:1B:F6:83:93:38` reTerminal E1004 (1200×1600, 6-colour) and
   `94:A9:90:8C:6D:18` TRMNL Classic.
-- No `timeout` on this Mac and foreground `sleep` is blocked; use
-  `curl --retry N --retry-delay S --retry-all-errors --retry-connrefused`.
-- **`ha addons` is deprecated** in favour of `ha apps`; still works, warns.
-- Python has **PIL 12.1.0 but no numpy**. Pure-Python pixel loops are fine at
-  these image sizes.
 
-## 12. Carried forward — still true, still unmerged
+## 9. Carried forward — still true, still unmerged
 
 ### Photographic calibration of the E1004
 
 Full write-up: `~/scratch/panel-evidence/e1004-2026-08-21/FINDINGS.md`.
+**Read it together with §1 and §2**, which change how to interpret it: its green
+is not usable for the ditherer, and a solid-patch method cannot produce a number
+that predicts dithered output.
 
-- **A photograph can calibrate this panel to about 2% of white**, provided every
-  frame comes from the same camera module at low ISO.
-- **This panel's green is about half as colourful as `default-config.yaml`
-  claims** — chroma 0.0655 measured against 0.158. The owner independently called
-  it *"dull and darkish but still clearly green"*. This finding stands and is
-  worth committing on its own.
-- **Veiling glare is the biggest error source.** A glossy panel mirrors the room
-  and the reflection *adds* to the ink; the Latin square cancels gains, not
-  offsets. `deveil.py` fits gain+veil per row but cannot identify the ink offset,
-  which is why the raw measured palette was too flat and was then
-  affine-stretched so black→0 and white→1.
+- **Veiling glare is the biggest error source**, and the ink offset it introduces
+  is not identifiable from the Latin square. This is the unsolved problem.
 - **Never mix camera modules in a frame set.** One telephoto frame at ISO 500
   among ISO 64 main-camera frames was a blue-channel outlier by up to 9.2% of
-  white, invisible in the picture. Check
-  `exiftool -s -UniqueCameraModel -ISO -FocalLength`.
-- Geometry mattered less than expected — the homography moved the answer ~1%.
+  white. Check `exiftool -s -UniqueCameraModel -ISO -FocalLength`. (Today's A and
+  B came from *different* modules; that is tolerable only because effective
+  coverage is normalised within each frame against its own references.)
 - **Position independence was never proved** — every frame used `offset: 0`.
-- Raw workflow: `dcraw -4 -T -o 1 -A <x> <y> <w> <h>`. **iCloud share links
-  deliver JPEG** — export the original from Photos.
+- **iCloud share links deliver JPEG** — export the original from Photos.
 
 ### TRMNL X
 

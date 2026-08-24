@@ -516,9 +516,18 @@ async function render() {
             queryParams.set('dither', elements.ditherSelect.value);
         }
 
-        // Dither tunables
+        // Dither tunables. Send one only when it differs from the default for
+        // the SELECTED ALGORITHM — the fields are populated from those defaults
+        // (see applyDitherDefaults), so comparing against a single fixed number
+        // makes every render carry an override the user never asked for, and
+        // pins the server's own default to whatever the sentinel happened to be.
+        const tuneDefaults = DITHER_DEFAULTS[elements.ditherSelect.value]
+            || DITHER_DEFAULTS['atkinson'];
+        const differs = (value, dflt) =>
+            value !== '' && parseFloat(value) !== parseFloat(dflt);
+
         const maxError = elements.maxError.value;
-        if (maxError !== '' && maxError !== '0.08') {
+        if (differs(maxError, tuneDefaults.maxError)) {
             queryParams.set('max_error', maxError);
         }
         const chromaClamp = elements.chromaClamp.value;
@@ -526,7 +535,7 @@ async function render() {
             queryParams.set('chroma_clamp', chromaClamp);
         }
         const noiseScale = elements.noiseScale.value;
-        if (noiseScale !== '' && noiseScale !== '5') {
+        if (differs(noiseScale, tuneDefaults.noiseScale)) {
             queryParams.set('noise_scale', noiseScale);
         }
         const strength = elements.strength.value;
@@ -678,6 +687,22 @@ function loadSavedState() {
             }
             if (data.maxError) {
                 elements.maxError.value = data.maxError;
+            } else if (data.errorClamp) {
+                // Deliberately NOT migrated to maxError. In 0.18.0 this knob
+                // stopped capping the pixel value and started capping the
+                // accumulated error, moving its useful range from ~0.1 to ~1.0
+                // while keeping its name — which is the whole reason it was
+                // renamed. A saved value cannot be dated, so carrying it across
+                // would risk reviving a number chosen for the old meaning, the
+                // exact failure the rename exists to prevent. The server
+                // discards `error_clamp` for the same reason; the dev UI
+                // matches it, but says so rather than dropping it in silence.
+                console.warn(
+                    `byonk dev: ignoring saved error_clamp=${data.errorClamp}. ` +
+                    `It was renamed to max_error in 0.18.0 and changed meaning ` +
+                    `(useful range ~0.1 -> ~1.0), so the old value is not carried ` +
+                    `over. Set max_error yourself if you still want an override.`
+                );
             }
             if (typeof data.chromaClamp === 'string') {
                 elements.chromaClamp.value = data.chromaClamp;

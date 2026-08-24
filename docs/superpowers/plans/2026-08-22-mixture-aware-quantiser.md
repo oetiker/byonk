@@ -1,6 +1,28 @@
 # Mixture-Aware Quantiser Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> # ⛔ WITHDRAWN — DO NOT IMPLEMENT THIS PLAN
+>
+> This was built in full, measured, and **removed again** in `36356ca`. Kept only
+> as a record of what was tried. Nothing below describes code that exists.
+>
+> **The defect it targets was never a quantiser defect.** "A flat mid grey
+> renders as 87% green ink" was the ditherer correctly following a wrong
+> `colors_actual` green. Told green is nearly neutral (`#1E5645`, chroma 0.066)
+> it picks green for every dark neutral; told green is a real colour
+> (`#00994D`, chroma 0.158) it reserves green for green things. Restoring the
+> checked-in value fixed the panel on one line.
+>
+> Re-tested honestly under Floyd–Steinberg, the wedge fan was harmless at
+> `mixture_bias <= 0.25` and useless — the green bias it targets is already
+> `+0.0012` with the feature off — and at 0.5 it posterised. ~950 lines with no
+> consumer.
+>
+> See `2026-08-22-mixture-aware-quantiser-design.md` for the design, and the
+> handover for the verdict.
+
+> **For agentic workers:** the plan below is DEAD. Do not execute it. The
+> original instruction to implement it task-by-task is retained only so the
+> record is unedited.
 
 **Goal:** Stop `eink-dither` rendering muted colours and neutral greys as a field of one chromatic ink, by discounting each palette entry's distance in proportion to its share of the pixel's exact mixture.
 

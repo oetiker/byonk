@@ -1,5 +1,17 @@
 # Mixture-aware quantiser — design
 
+> **⛔ SUPERSEDED — this describes code that was built and then removed**
+> (`36356ca`). Kept because the reasoning is worth having on record, and because
+> the way it failed is instructive: the design is sound and the premise underneath
+> it was false.
+>
+> §1 below states the defect as "byonk renders muted colours as a field of one
+> chromatic ink". True as observed, but **not caused by the quantiser**. It was
+> the ditherer faithfully following a `colors_actual` green that had been measured
+> too dull. A one-line palette correction fixed the panel; this machinery did not.
+>
+> Read §1 as a symptom report, not as a diagnosis.
+
 **Date:** 2026-08-22 · **Branch:** `feat/panel-clean-recovery` · **Crate:** `eink-dither`
 
 ## 1. The defect

@@ -421,6 +421,39 @@ async fn recovery_shortens_the_sleep_before_the_next_wipe() {
     );
 }
 
+/// A session filed under the device's *config key* has to reach the device.
+///
+/// `/api/admin/devices/{key}/recover` sits beside `PATCH /devices/{key}`, where
+/// `{key}` is the config key — and a device may be configured by registration
+/// code rather than by MAC. The device itself only ever polls with its MAC, so
+/// if the poll looks under the MAC alone the session is never found and
+/// recovery silently never runs.
+#[tokio::test]
+async fn recovery_started_under_the_config_key_still_reaches_the_device() {
+    use byonk::models::ApiKey;
+
+    let api_key = "recovery-session-keyed-by-registration-code";
+    let code = ApiKey::new(api_key).registration_code();
+    let config_key = format!("{}-{}", &code[..5], &code[5..]);
+
+    // Configured by registration code, not by MAC.
+    let app = app_with_configured_device(&config_key);
+    app.recovery
+        .start(&byonk::models::DeviceId::new(&config_key), 3)
+        .await;
+
+    let headers = fixtures::display_headers(macs::HELLO_DEVICE, api_key);
+    let poll: serde_json::Value = app
+        .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
+        .await
+        .json();
+
+    assert_eq!(
+        poll["filename"], "screen_wiper.png",
+        "a run started under the device's config key must reach it"
+    );
+}
+
 /// The override is scoped to the run. Once the last wipe has been handed out
 /// the session is gone, so the panel goes back to the screen's own cadence.
 #[tokio::test]

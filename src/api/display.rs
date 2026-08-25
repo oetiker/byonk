@@ -1172,7 +1172,24 @@ pub async fn handle_display<R: DeviceRegistry>(
     // cycles with panel power held, ~190 s -- instead of showing the image. The image
     // URL still rides along, because the firmware handles the response
     // normally before it inspects the filename.
-    let recovery_device_id = crate::models::DeviceId::new(device_id_str);
+    // Filed under whichever identifier the admin caller used. The route is
+    // `/api/admin/devices/{key}/recover`, the same `{key}` as `PATCH
+    // /devices/{key}` — the *config* key, which may be a registration code
+    // rather than a MAC. The device polls with its MAC alone, so looking only
+    // there would lose a run started under the code, with no error anywhere.
+    let recovery_device_id = {
+        let mac = crate::models::DeviceId::new(device_id_str);
+        let mut candidates = vec![mac.clone()];
+        if let Some(key) = device_entry_key.as_deref() {
+            if key != device_id_str {
+                candidates.push(crate::models::DeviceId::new(key));
+            }
+        }
+        // The MAC is canonical: it is what `/api/admin/devices` reports as the
+        // key for any device that has checked in, so it stays the identifier a
+        // new session is filed under.
+        recovery.resolve_key(&candidates).await.unwrap_or(mac)
+    };
     let wipe = recovery.on_poll(&recovery_device_id).await;
     if let Some(ref session) = wipe {
         tracing::info!(

@@ -118,6 +118,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported an error; the settings were simply gone, and the only symptom was
   the panel looking wrong again some time later. If a device of yours has lost
   such a setting, add it back to `config.yaml` — it will stay now.
+- **Panel recovery now works for a device configured by registration code.**
+  If your `config.yaml` lists a device under its registration code rather than
+  its MAC address, starting a recovery run for it did nothing at all: the run
+  was filed under the code, and the device asks for work under its MAC. No
+  error appeared anywhere — the panel simply went on showing content. Runs are
+  now found under either identifier.
 - **Two devices that show the same screen no longer get each other's image.**
   Byonk caches a rendered image under a short id and serves it as
   `/api/image/<id>.png`. That id was computed from the drawing alone, so two

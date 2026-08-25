@@ -120,6 +120,25 @@ impl RecoveryRegistry {
         self.sessions.read().await.get(device_id).cloned()
     }
 
+    /// The identifier this device's session is filed under, if it has one.
+    ///
+    /// A device polls with its MAC and nothing else, but a session can have
+    /// been started under its *config* key: `/api/admin/devices/{key}/recover`
+    /// takes the same key as `PATCH /devices/{key}`, and a device may be
+    /// configured by registration code rather than by MAC. Checking every
+    /// identifier the device answers to keeps the admin API and the poll path
+    /// on one session, instead of the run silently never starting.
+    ///
+    /// Candidates are tried in order, so callers put the identifier they
+    /// consider canonical first.
+    pub async fn resolve_key(&self, candidates: &[DeviceId]) -> Option<DeviceId> {
+        let sessions = self.sessions.read().await;
+        candidates
+            .iter()
+            .find(|id| sessions.contains_key(*id))
+            .map(|id| (*id).clone())
+    }
+
     /// Every session currently running.
     pub async fn list(&self) -> Vec<(DeviceId, RecoverySession)> {
         self.sessions

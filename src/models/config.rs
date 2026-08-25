@@ -1,5 +1,5 @@
 use crate::assets::AssetLoader;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Reserved device key whose `screen` is shown by every not-yet-configured
@@ -11,7 +11,7 @@ pub const RESERVED_DEFAULT_KEY: &str = "DEFAULT";
 ///
 /// Frame-level, not per adaptation group: groups change only which pixels are
 /// measured together to derive the compression factor, not the curve's shape.
-#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq)]
 pub struct GamutTuningValues {
     /// Where compression begins, as a fraction of the reachable chroma limit.
     pub knee: Option<f32>,

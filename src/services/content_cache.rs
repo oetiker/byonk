@@ -1,3 +1,4 @@
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -5,12 +6,16 @@ use std::sync::RwLock;
 /// Default maximum number of entries in the cache
 const DEFAULT_MAX_ENTRIES: usize = 100;
 
-/// Cached rendered SVG ready for PNG conversion
+/// Cached rendered SVG ready for PNG conversion.
+///
+/// Built through [`CachedContent::builder`]. There is no public constructor
+/// because `content_hash` has to cover every render input, and those arrive
+/// through the builder — see [`CachedContentBuilder::build`].
 #[derive(Clone)]
 pub struct CachedContent {
     /// Pre-rendered SVG content (template already applied)
     pub rendered_svg: String,
-    /// Hash of the SVG content (used as filename for change detection)
+    /// Hash of every render input (used as filename for change detection)
     pub content_hash: String,
     /// Screen name (for logging)
     pub screen_name: String,
@@ -47,16 +52,16 @@ pub struct CachedContent {
 }
 
 impl CachedContent {
-    /// Create a new cached content entry from rendered SVG
-    pub fn new(rendered_svg: String, screen_name: String, width: u32, height: u32) -> Self {
-        let content_hash = compute_svg_hash(&rendered_svg);
-        Self {
+    /// Start building a cache entry from rendered SVG.
+    pub fn builder(
+        rendered_svg: String,
+        screen_name: String,
+        width: u32,
+        height: u32,
+    ) -> CachedContentBuilder {
+        CachedContentBuilder {
             rendered_svg,
-            content_hash,
             screen_name,
-            generated_at: chrono::Utc::now(),
-            font_hinting: None,
-            min_png_bytes: None,
             width,
             height,
             colors: None,
@@ -67,9 +72,42 @@ impl CachedContent {
             chroma_clamp: None,
             strength: None,
             gamut: Default::default(),
+            font_hinting: None,
+            min_png_bytes: None,
         }
     }
+}
 
+/// Collects every input a render depends on, and seals them into a
+/// [`CachedContent`] whose `content_hash` covers all of them.
+///
+/// A separate type rather than a `finish()` on `CachedContent` so the compiler
+/// enforces the order: the hash cannot be read before the last `with_*` call,
+/// because `CachedContent` does not exist until [`build`](Self::build) runs.
+///
+/// Every field here is a render input, and the hash is taken over the whole
+/// struct, so a field added later joins the key without anyone having to
+/// remember this. `screen_name` is the one exception — it only reaches the logs.
+#[derive(Debug, Serialize)]
+pub struct CachedContentBuilder {
+    rendered_svg: String,
+    #[serde(skip)]
+    screen_name: String,
+    width: u32,
+    height: u32,
+    colors: Option<Vec<(u8, u8, u8)>>,
+    colors_actual: Option<Vec<(u8, u8, u8)>>,
+    dither: Option<String>,
+    max_error: Option<f32>,
+    noise_scale: Option<f32>,
+    chroma_clamp: Option<f32>,
+    strength: Option<f32>,
+    gamut: crate::models::GamutTuningValues,
+    font_hinting: Option<crate::rendering::font_config::FontHintingDirective>,
+    min_png_bytes: Option<u32>,
+}
+
+impl CachedContentBuilder {
     /// Set the display color palette
     pub fn with_colors(mut self, colors: Option<Vec<(u8, u8, u8)>>) -> Self {
         self.colors = colors;
@@ -112,12 +150,47 @@ impl CachedContent {
         self.gamut = tuning.gamut.clone();
         self
     }
+
+    /// Seal the inputs into a cache entry, computing its content hash.
+    pub fn build(self) -> CachedContent {
+        let content_hash = compute_content_hash(&self);
+        CachedContent {
+            rendered_svg: self.rendered_svg,
+            content_hash,
+            screen_name: self.screen_name,
+            generated_at: chrono::Utc::now(),
+            width: self.width,
+            height: self.height,
+            colors: self.colors,
+            colors_actual: self.colors_actual,
+            dither: self.dither,
+            max_error: self.max_error,
+            noise_scale: self.noise_scale,
+            chroma_clamp: self.chroma_clamp,
+            strength: self.strength,
+            gamut: self.gamut,
+            font_hinting: self.font_hinting,
+            min_png_bytes: self.min_png_bytes,
+        }
+    }
 }
 
-/// Compute a short hash of the SVG content for use as filename
-fn compute_svg_hash(svg: &str) -> String {
+/// Hash every render input into the short id used as the PNG filename.
+///
+/// Devices fetch `/api/image/{hash}.png`, which has no device to ask about
+/// render settings, so anything that changes the served bytes has to be in
+/// here. Hashing the serialised builder wholesale is what keeps that true as
+/// fields are added.
+fn compute_content_hash(inputs: &CachedContentBuilder) -> String {
+    // serde_json refuses NaN and infinity, which a tuning knob could in
+    // principle carry in from YAML. Debug renders those fine and covers the
+    // same fields, so the fallback keeps the key complete rather than panicking
+    // in the render path.
+    let canonical =
+        serde_json::to_vec(inputs).unwrap_or_else(|_| format!("{inputs:?}").into_bytes());
+
     let mut hasher = Sha256::new();
-    hasher.update(svg.as_bytes());
+    hasher.update(&canonical);
     let result = hasher.finalize();
     // Use first 8 bytes (16 hex chars) for a reasonably short but unique filename
     hex::encode(&result[..8])
@@ -226,12 +299,13 @@ mod tests {
 
     #[test]
     fn test_cached_content_new() {
-        let content = CachedContent::new(
+        let content = CachedContent::builder(
             "<svg></svg>".to_string(),
             "test_screen".to_string(),
             800,
             480,
-        );
+        )
+        .build();
 
         assert_eq!(content.rendered_svg, "<svg></svg>");
         assert_eq!(content.screen_name, "test_screen");
@@ -241,14 +315,25 @@ mod tests {
     }
 
     #[test]
-    fn test_cached_content_hash_consistency() {
+    fn hash_ignores_screen_name() {
         let svg = "<svg><text>Hello</text></svg>".to_string();
 
-        let content1 = CachedContent::new(svg.clone(), "screen1".to_string(), 800, 480);
-        let content2 = CachedContent::new(svg.clone(), "screen2".to_string(), 1872, 1404);
+        let content1 = CachedContent::builder(svg.clone(), "screen1".to_string(), 800, 480).build();
+        let content2 = CachedContent::builder(svg, "screen2".to_string(), 800, 480).build();
 
-        // Same SVG content should produce same hash regardless of screen name or dimensions
+        // The screen name only reaches the logs; it changes nothing a device
+        // is served, so it must not split the cache entry.
         assert_eq!(content1.content_hash, content2.content_hash);
+    }
+
+    #[test]
+    fn hash_distinguishes_different_dimensions() {
+        let svg = "<svg><text>Hello</text></svg>".to_string();
+
+        let small = CachedContent::builder(svg.clone(), "screen".to_string(), 800, 480).build();
+        let large = CachedContent::builder(svg, "screen".to_string(), 1872, 1404).build();
+
+        assert_ne!(small.content_hash, large.content_hash);
     }
 
     #[test]
@@ -259,7 +344,7 @@ mod tests {
         // can't flag. This test exists to catch a regression there: without
         // it, `self.gamut = tuning.gamut.clone();` could be deleted and the
         // full suite would still pass.
-        let content = CachedContent::new(
+        let content = CachedContent::builder(
             "<svg></svg>".to_string(),
             "test_screen".to_string(),
             800,
@@ -275,7 +360,8 @@ mod tests {
                 knee: Some(0.3),
                 ..Default::default()
             },
-        });
+        })
+        .build();
 
         assert_eq!(content.max_error, Some(0.1));
         assert_eq!(content.noise_scale, Some(5.0));
@@ -287,33 +373,158 @@ mod tests {
     #[test]
     fn test_cached_content_hash_differs_for_different_content() {
         let content1 =
-            CachedContent::new("<svg>A</svg>".to_string(), "screen".to_string(), 800, 480);
+            CachedContent::builder("<svg>A</svg>".to_string(), "screen".to_string(), 800, 480)
+                .build();
         let content2 =
-            CachedContent::new("<svg>B</svg>".to_string(), "screen".to_string(), 800, 480);
+            CachedContent::builder("<svg>B</svg>".to_string(), "screen".to_string(), 800, 480)
+                .build();
 
         assert_ne!(content1.content_hash, content2.content_hash);
     }
 
     #[test]
-    fn test_compute_svg_hash_deterministic() {
-        let svg = "<svg><rect/></svg>";
-        let hash1 = compute_svg_hash(svg);
-        let hash2 = compute_svg_hash(svg);
+    fn hash_distinguishes_different_min_png_bytes() {
+        // Two devices can render byte-identical SVG and still need different
+        // PNGs. `/api/image/{hash}.png` is addressed by the content hash alone,
+        // so if the hash ignores a render knob the two devices share one cache
+        // entry and the last writer decides what both of them get.
+        let svg = "<svg><text>Hello</text></svg>".to_string();
 
-        assert_eq!(hash1, hash2);
+        let padded = CachedContent::builder(svg.clone(), "screen".to_string(), 800, 480)
+            .with_min_png_bytes(Some(102_400))
+            .build();
+        let unpadded = CachedContent::builder(svg, "screen".to_string(), 800, 480)
+            .with_min_png_bytes(None)
+            .build();
+
+        assert_ne!(padded.content_hash, unpadded.content_hash);
     }
 
     #[test]
-    fn test_compute_svg_hash_length() {
-        let hash = compute_svg_hash("<svg></svg>");
+    fn hash_distinguishes_every_render_knob() {
+        use crate::models::{DitherTuningValues, GamutTuningValues};
+        use crate::rendering::font_config::FontHintingDirective;
+
+        let svg = "<svg><text>Hello</text></svg>".to_string();
+        let base = || CachedContent::builder(svg.clone(), "screen".to_string(), 800, 480);
+        let tuning = |t: DitherTuningValues| base().with_tuning(&t).build().content_hash;
+        let no_tuning = DitherTuningValues::default;
+
+        // One entry per knob that changes the bytes a device is served. All of
+        // them must land on distinct hashes, or two devices sharing an SVG
+        // share a cache entry and the last render wins for both.
+        let hashes = vec![
+            ("baseline", base().build().content_hash),
+            (
+                "colors",
+                base()
+                    .with_colors(Some(vec![(0, 0, 0)]))
+                    .build()
+                    .content_hash,
+            ),
+            (
+                "colors_actual",
+                base()
+                    .with_colors_actual(Some(vec![(1, 1, 1)]))
+                    .build()
+                    .content_hash,
+            ),
+            (
+                "dither",
+                base()
+                    .with_dither(Some("floyd-steinberg".to_string()))
+                    .build()
+                    .content_hash,
+            ),
+            (
+                "font_hinting",
+                base()
+                    .with_font_hinting(Some(FontHintingDirective {
+                        default: Some(None),
+                        ..Default::default()
+                    }))
+                    .build()
+                    .content_hash,
+            ),
+            (
+                "min_png_bytes",
+                base()
+                    .with_min_png_bytes(Some(102_400))
+                    .build()
+                    .content_hash,
+            ),
+            (
+                "max_error",
+                tuning(DitherTuningValues {
+                    max_error: Some(0.5),
+                    ..no_tuning()
+                }),
+            ),
+            (
+                "noise_scale",
+                tuning(DitherTuningValues {
+                    noise_scale: Some(2.5),
+                    ..no_tuning()
+                }),
+            ),
+            (
+                "chroma_clamp",
+                tuning(DitherTuningValues {
+                    chroma_clamp: Some(2.0),
+                    ..no_tuning()
+                }),
+            ),
+            (
+                "strength",
+                tuning(DitherTuningValues {
+                    strength: Some(0.8),
+                    ..no_tuning()
+                }),
+            ),
+            (
+                "gamut",
+                tuning(DitherTuningValues {
+                    gamut: GamutTuningValues {
+                        knee: Some(0.3),
+                        ..Default::default()
+                    },
+                    ..no_tuning()
+                }),
+            ),
+        ];
+
+        for (i, (name_a, hash_a)) in hashes.iter().enumerate() {
+            for (name_b, hash_b) in hashes.iter().skip(i + 1) {
+                assert_ne!(
+                    hash_a, hash_b,
+                    "{name_a} and {name_b} collide in the content hash"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_content_hash_deterministic() {
+        let hash1 =
+            CachedContent::builder("<svg><rect/></svg>".into(), "s".into(), 800, 480).build();
+        let hash2 =
+            CachedContent::builder("<svg><rect/></svg>".into(), "s".into(), 800, 480).build();
+
+        assert_eq!(hash1.content_hash, hash2.content_hash);
+    }
+
+    #[test]
+    fn test_content_hash_length() {
+        let content = CachedContent::builder("<svg></svg>".into(), "s".into(), 800, 480).build();
         // 8 bytes = 16 hex characters
-        assert_eq!(hash.len(), 16);
+        assert_eq!(content.content_hash.len(), 16);
     }
 
     #[test]
-    fn test_compute_svg_hash_is_hex() {
-        let hash = compute_svg_hash("<svg>test</svg>");
-        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    fn test_content_hash_is_hex() {
+        let content =
+            CachedContent::builder("<svg>test</svg>".into(), "s".into(), 800, 480).build();
+        assert!(content.content_hash.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]
@@ -333,7 +544,8 @@ mod tests {
     fn test_content_cache_store_and_get() {
         let cache = ContentCache::new();
         let content =
-            CachedContent::new("<svg>hello</svg>".to_string(), "test".to_string(), 800, 480);
+            CachedContent::builder("<svg>hello</svg>".to_string(), "test".to_string(), 800, 480)
+                .build();
         let hash = content.content_hash.clone();
 
         cache.store(content);
@@ -356,12 +568,13 @@ mod tests {
     #[test]
     fn test_content_cache_remove() {
         let cache = ContentCache::new();
-        let content = CachedContent::new(
+        let content = CachedContent::builder(
             "<svg>test</svg>".to_string(),
             "screen".to_string(),
             800,
             480,
-        );
+        )
+        .build();
         let hash = content.content_hash.clone();
 
         cache.store(content);
@@ -377,18 +590,17 @@ mod tests {
 
         // Store first content
         let content1 =
-            CachedContent::new("<svg>v1</svg>".to_string(), "screen".to_string(), 800, 480);
+            CachedContent::builder("<svg>v1</svg>".to_string(), "screen".to_string(), 800, 480)
+                .build();
         let hash1 = content1.content_hash.clone();
         cache.store(content1);
 
-        // Store different content with same hash (simulating update - though this shouldn't happen)
-        // Actually, same SVG would have same hash, so let's test that storing same content works
-        let content2 = CachedContent::new(
-            "<svg>v1</svg>".to_string(),
-            "updated".to_string(),
-            1872,
-            1404,
-        );
+        // Re-rendering the same screen produces the same hash, so the second
+        // store replaces the first entry rather than adding one. Only
+        // `screen_name` differs here — a field outside the key.
+        let content2 =
+            CachedContent::builder("<svg>v1</svg>".to_string(), "updated".to_string(), 800, 480)
+                .build();
         cache.store(content2);
 
         let retrieved = cache.get(&hash1).unwrap();
@@ -401,15 +613,18 @@ mod tests {
         let cache = ContentCache::new();
 
         let content1 =
-            CachedContent::new("<svg>A</svg>".to_string(), "screen_a".to_string(), 800, 480);
+            CachedContent::builder("<svg>A</svg>".to_string(), "screen_a".to_string(), 800, 480)
+                .build();
         let content2 =
-            CachedContent::new("<svg>B</svg>".to_string(), "screen_b".to_string(), 800, 480);
-        let content3 = CachedContent::new(
+            CachedContent::builder("<svg>B</svg>".to_string(), "screen_b".to_string(), 800, 480)
+                .build();
+        let content3 = CachedContent::builder(
             "<svg>C</svg>".to_string(),
             "screen_c".to_string(),
             1872,
             1404,
-        );
+        )
+        .build();
 
         let hash1 = content1.content_hash.clone();
         let hash2 = content2.content_hash.clone();
@@ -432,12 +647,13 @@ mod tests {
 
     #[test]
     fn test_cached_content_clone() {
-        let content = CachedContent::new(
+        let content = CachedContent::builder(
             "<svg>test</svg>".to_string(),
             "screen".to_string(),
             800,
             480,
-        );
+        )
+        .build();
         let cloned = content.clone();
 
         assert_eq!(cloned.rendered_svg, content.rendered_svg);
@@ -460,12 +676,13 @@ mod tests {
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
 
-        let content = CachedContent::new(
+        let content = CachedContent::builder(
             "<svg>test</svg>".to_string(),
             "screen".to_string(),
             800,
             480,
-        );
+        )
+        .build();
         cache.store(content);
 
         assert!(!cache.is_empty());
@@ -479,17 +696,20 @@ mod tests {
 
         // Add 3 entries with small delays to ensure different timestamps
         let content1 =
-            CachedContent::new("<svg>1</svg>".to_string(), "screen1".to_string(), 800, 480);
+            CachedContent::builder("<svg>1</svg>".to_string(), "screen1".to_string(), 800, 480)
+                .build();
         let hash1 = content1.content_hash.clone();
         cache.store(content1);
 
         let content2 =
-            CachedContent::new("<svg>2</svg>".to_string(), "screen2".to_string(), 800, 480);
+            CachedContent::builder("<svg>2</svg>".to_string(), "screen2".to_string(), 800, 480)
+                .build();
         let hash2 = content2.content_hash.clone();
         cache.store(content2);
 
         let content3 =
-            CachedContent::new("<svg>3</svg>".to_string(), "screen3".to_string(), 800, 480);
+            CachedContent::builder("<svg>3</svg>".to_string(), "screen3".to_string(), 800, 480)
+                .build();
         let hash3 = content3.content_hash.clone();
         cache.store(content3);
 
@@ -497,7 +717,8 @@ mod tests {
 
         // Adding a 4th entry should evict the oldest (content1)
         let content4 =
-            CachedContent::new("<svg>4</svg>".to_string(), "screen4".to_string(), 800, 480);
+            CachedContent::builder("<svg>4</svg>".to_string(), "screen4".to_string(), 800, 480)
+                .build();
         let hash4 = content4.content_hash.clone();
         cache.store(content4);
 
@@ -518,12 +739,13 @@ mod tests {
 
         // Add 5 entries rapidly
         for i in 0..5 {
-            let content = CachedContent::new(
+            let content = CachedContent::builder(
                 format!("<svg>{}</svg>", i),
                 format!("screen{}", i),
                 800,
                 480,
-            );
+            )
+            .build();
             cache.store(content);
         }
 

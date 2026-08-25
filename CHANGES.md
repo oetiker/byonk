@@ -118,6 +118,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported an error; the settings were simply gone, and the only symptom was
   the panel looking wrong again some time later. If a device of yours has lost
   such a setting, add it back to `config.yaml` — it will stay now.
+- **Two devices that show the same screen no longer get each other's image.**
+  Byonk caches a rendered image under a short id and serves it as
+  `/api/image/<id>.png`. That id was computed from the drawing alone, so two
+  devices whose screen produced identical drawing — same model, same screen,
+  same data — shared one cache entry even when their render settings differed.
+  Whichever device rendered last decided what both of them received, so a
+  device could silently get another device's `colors`, `colors_actual`,
+  `dither`, `max_error`, `noise_scale`, `chroma_clamp`, `strength`, `gamut`,
+  `font_hinting` or `min_png_bytes` — or an image at the wrong size. The id now
+  covers every one of those. Nothing reported an error while this happened.
+  After upgrading, every device fetches its image once more, because all the
+  ids change; there is no other effect.
 - `temperature_profile: c` is now refused with a warning instead of being sent
   to the device. TRMNL's documentation lists `c`, but device firmware up to
   1.8.14 never implemented it and silently reads it as `default` — which turns

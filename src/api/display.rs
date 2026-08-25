@@ -646,8 +646,9 @@ pub async fn handle_display<R: DeviceRegistry>(
                 )
             };
 
-            let cached = CachedContent::new(registration_svg, screen_name, width, height)
-                .with_colors(Some(palette));
+            let cached = CachedContent::builder(registration_svg, screen_name, width, height)
+                .with_colors(Some(palette))
+                .build();
             let hash = cached.content_hash.clone();
             content_cache.store(cached);
 
@@ -1053,7 +1054,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                         match pipeline.render_svg_from_script(&result, Some(&ctx)) {
                             Ok(svg) => {
                                 // Cache the pre-rendered SVG (keyed by content hash)
-                                let cached = CachedContent::new(
+                                let cached = CachedContent::builder(
                                     svg,
                                     result.screen_name.clone(),
                                     width,
@@ -1064,7 +1065,8 @@ pub async fn handle_display<R: DeviceRegistry>(
                                 .with_dither(params.dither)
                                 .with_font_hinting(result.font_hinting.clone())
                                 .with_min_png_bytes(dc_min_png_bytes)
-                                .with_tuning(&tuning);
+                                .with_tuning(&tuning)
+                                .build();
                                 let hash = cached.content_hash.clone();
                                 cache.store(cached);
                                 (result.refresh_rate, false, Some(hash), None)
@@ -1078,13 +1080,14 @@ pub async fn handle_display<R: DeviceRegistry>(
                                     panel_colors_for_chain.as_deref(),
                                     &fallback,
                                 );
-                                let cached = CachedContent::new(
+                                let cached = CachedContent::builder(
                                     error_svg,
                                     "_error".to_string(),
                                     width,
                                     height,
                                 )
-                                .with_colors(Some(fallback_palette));
+                                .with_colors(Some(fallback_palette))
+                                .build();
                                 let hash = cached.content_hash.clone();
                                 cache.store(cached);
                                 (60, false, Some(hash), Some(error_msg))
@@ -1105,8 +1108,9 @@ pub async fn handle_display<R: DeviceRegistry>(
                     );
                     let error_msg = e.to_string();
                     let error_svg = pipeline.render_error_svg(&error_msg);
-                    let cached = CachedContent::new(error_svg, "_error".to_string(), width, height)
-                        .with_colors(Some(fallback_palette));
+                    let cached = CachedContent::builder(error_svg, "_error".to_string(), width, height)
+                        .with_colors(Some(fallback_palette))
+                        .build();
                     let hash = cached.content_hash.clone();
                     cache.store(cached);
                     (60, false, Some(hash), Some(error_msg))

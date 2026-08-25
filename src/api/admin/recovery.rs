@@ -15,6 +15,7 @@ use crate::error::ApiError;
 use crate::models::DeviceId;
 use crate::server::AppState;
 use crate::services::recovery::{RecoverySession, DEFAULT_WIPES};
+use crate::services::DeviceRegistry;
 
 use super::require_admin;
 
@@ -58,6 +59,56 @@ impl From<Option<RecoverySession>> for RecoveryStatus {
     }
 }
 
+/// Every name the device addressed by `key` answers to, canonical first.
+///
+/// A device has two: the MAC that `/api/admin/devices` reports once it has
+/// checked in, and the `config.yaml` key it is listed under, which may be a
+/// registration code. Only the registry can connect the two spellings, so a
+/// device that has never checked in is addressed by the given key alone — no
+/// loss, since it has no MAC to be found by yet.
+async fn device_names(state: &AppState, key: &str) -> Vec<DeviceId> {
+    let given = DeviceId::new(key);
+    let normalized = key.to_uppercase().replace('-', "");
+    let Ok(devices) = state.registry.list_all().await else {
+        return vec![given];
+    };
+    let Some(device) = devices.into_iter().find(|d| {
+        d.device_id.to_string().eq_ignore_ascii_case(key)
+            || d.api_key.registration_code() == normalized
+    }) else {
+        return vec![given];
+    };
+
+    // The MAC leads, so a run with no session yet is filed under the name the
+    // device list reports rather than whichever name the caller happened to use.
+    let code = device.api_key.registration_code();
+    let mut names = vec![DeviceId::new(device.device_id.to_string())];
+    if code.len() == 10 {
+        names.push(DeviceId::new(format!("{}-{}", &code[..5], &code[5..])));
+    }
+    names.push(DeviceId::new(code));
+    if !names.contains(&given) {
+        names.push(given);
+    }
+    names
+}
+
+/// The `DeviceId` a recovery session for `key` lives under.
+///
+/// This route takes the same `{key}` as `PATCH /devices/{key}`, so either of a
+/// device's names can arrive here, and `/api/display` already looks under both.
+/// Without the same resolution the two ends disagree: a run started under one
+/// name reports inactive under the other, and cancelling it silently does
+/// nothing while the panel goes on wiping.
+async fn recovery_id(state: &AppState, key: &str) -> DeviceId {
+    let names = device_names(state, key).await;
+    state
+        .recovery
+        .resolve_key(&names)
+        .await
+        .unwrap_or_else(|| names[0].clone())
+}
+
 /// Start a recovery session for a device.
 ///
 /// The device is not contacted here. It picks the work up on its next poll,
@@ -71,7 +122,9 @@ pub async fn start_recovery(
 ) -> Result<Json<RecoveryStatus>, ApiError> {
     require_admin(&state, &headers)?;
     let wipes = body.and_then(|Json(b)| b.wipes).unwrap_or(DEFAULT_WIPES);
-    let device_id = DeviceId::new(&key);
+    // Resolved so that restarting under the device's other name replaces the
+    // run in progress, rather than filing a second one it cannot see.
+    let device_id = recovery_id(&state, &key).await;
     let session = state.recovery.start(&device_id, wipes).await;
     tracing::info!(
         device = %key,
@@ -89,7 +142,7 @@ pub async fn cancel_recovery(
     headers: HeaderMap,
 ) -> Result<Json<RecoveryStatus>, ApiError> {
     require_admin(&state, &headers)?;
-    let device_id = DeviceId::new(&key);
+    let device_id = recovery_id(&state, &key).await;
     if state.recovery.cancel(&device_id).await {
         tracing::info!(device = %key, "Panel recovery session cancelled");
     }
@@ -103,7 +156,7 @@ pub async fn get_recovery(
     headers: HeaderMap,
 ) -> Result<Json<RecoveryStatus>, ApiError> {
     require_admin(&state, &headers)?;
-    let session = state.recovery.get(&DeviceId::new(&key)).await;
+    let session = state.recovery.get(&recovery_id(&state, &key).await).await;
     Ok(Json(session.into()))
 }
 

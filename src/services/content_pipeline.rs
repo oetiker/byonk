@@ -359,6 +359,11 @@ impl ContentPipeline {
         let refresh_rate = refresh.rate;
         if let Some(ignored) = refresh.ignored_device_override {
             tracing::warn!(
+                // Without this, an operator running several devices off one
+                // screen cannot tell which of them has the inert `refresh`.
+                // `ignored_device_override` is `Some` only when the override
+                // came from a device, so `device_ctx` is always present here.
+                device = device_ctx.map(|c| c.mac.as_str()).unwrap_or("unknown"),
                 screen = %screen_name,
                 "device sets refresh {ignored}s, but screen returned refresh_rate \
                  {refresh_rate}s — the screen wins, because only it knows when its \

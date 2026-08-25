@@ -134,6 +134,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   indent is the only thing separating a traceback's frames from the message
   above them, and it was being stripped, so the frames ran together with the
   error text. Wrapped frames now stay indented too.
+- **The "screen wins over the device's `refresh`" warning now names the
+  device.** With several devices sharing one screen, the message said which
+  screen but not which device had the setting that does nothing.
 - **Two devices that show the same screen no longer get each other's image.**
   Byonk caches a rendered image under a short id and serves it as
   `/api/image/<id>.png`. That id was computed from the drawing alone, so two

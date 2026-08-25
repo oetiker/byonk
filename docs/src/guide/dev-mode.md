@@ -166,7 +166,7 @@ what a real screen gets, not a tuning surface.
 1. **Assign the `byonk-builtin/calibration/color` screen** to your device in `config.yaml`
 2. **Select your device** in dev mode — this loads its screen, panel, and dither settings
 3. **Choose a dither algorithm** that works well for your content type
-4. **Adjust tuning parameters** (error_clamp, noise_scale, chroma_clamp, strength) until the preview looks good
+4. **Adjust tuning parameters** (max_error, noise_scale, chroma_clamp, strength) until the preview looks good
 5. **Calibrate measured colors** by clicking actual-color swatches and adjusting HSL to match the solid patches on the physical display
 6. **Verify on device** — changes sync automatically; wait for the next device refresh
 7. **Commit to config** — copy the values to `config.yaml` and switch back to your normal screen:
@@ -183,11 +183,11 @@ devices:
     screen: examples/gphoto
     panel: my_panel
     dither: floyd-steinberg
-    error_clamp: 1.0    # from dev mode tuning
+    max_error: 1.0    # from dev mode tuning
     noise_scale: 0.5    # from dev mode tuning
 ```
 
-Tuning values can also be set per-script in the Lua return table — see [Lua API](../api/lua-api.md#error_clamp-noise_scale-chroma_clamp-strength).
+Tuning values can also be set per-script in the Lua return table — see [Lua API](../api/lua-api.md#max_error-noise_scale-chroma_clamp-strength).
 
 ## Configuration
 

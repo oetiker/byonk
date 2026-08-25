@@ -14,7 +14,7 @@ use eink_dither::{
 #[derive(Debug, Default)]
 pub struct DitherTuning {
     pub serpentine: Option<bool>,
-    pub error_clamp: Option<f32>,
+    pub max_error: Option<f32>,
     pub chroma_clamp: Option<f32>,
     pub noise_scale: Option<f32>,
     pub strength: Option<f32>,
@@ -238,8 +238,8 @@ impl SvgRenderer {
             if let Some(s) = t.serpentine {
                 ditherer = ditherer.serpentine(s);
             }
-            if let Some(ec) = t.error_clamp {
-                ditherer = ditherer.error_clamp(ec);
+            if let Some(ec) = t.max_error {
+                ditherer = ditherer.max_error(ec);
             }
             if let Some(cc) = t.chroma_clamp {
                 ditherer = ditherer.chroma_clamp(cc);
@@ -613,7 +613,9 @@ impl SvgRenderer {
 
         Ok(pixmap
             .data()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|px| {
                 // Premultiplied RGBA over an opaque black fill: the green
                 // channel alone separates white from black cleanly.
@@ -710,7 +712,9 @@ fn to_fontdb_style(style: usvg::FontStyle) -> usvg::fontdb::Style {
 /// Convert RGBA pixel data to eink-dither Srgb, alpha-compositing against white.
 fn rgba_to_eink_srgb(rgba_data: &[u8]) -> Vec<EinkSrgb> {
     rgba_data
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|pixel| {
             let (r, g, b, a) = (pixel[0], pixel[1], pixel[2], pixel[3]);
             if a == 255 {
@@ -2455,8 +2459,10 @@ mod tests {
         // on the buffers: these are 800x480 RGBA, and a failed `assert_eq!`
         // would print megabytes of them.
         let differing = |a: &[u8], b: &[u8]| {
-            a.chunks_exact(4)
-                .zip(b.chunks_exact(4))
+            a.as_chunks::<4>()
+                .0
+                .iter()
+                .zip(b.as_chunks::<4>().0.iter())
                 .filter(|(x, y)| x != y)
                 .count()
         };

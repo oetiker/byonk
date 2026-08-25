@@ -32,7 +32,7 @@ pub struct ScriptResult {
     /// Optional dither mode from script ("photo" or "graphics")
     pub dither: Option<String>,
     /// Optional error clamp override from script
-    pub error_clamp: Option<f32>,
+    pub max_error: Option<f32>,
     /// Optional blue noise jitter scale override from script
     pub noise_scale: Option<f32>,
     /// Optional chroma clamp override from script
@@ -542,7 +542,7 @@ pub enum ScriptError {
     /// The script's `font_hinting` directive could not be understood.
     ///
     /// Deliberately an error rather than a silent default: the neighbouring
-    /// `error_clamp`/`noise_scale` parsers use `.ok()`, which swallows a
+    /// `max_error`/`noise_scale` parsers use `.ok()`, which swallows a
     /// malformed value, and a mistyped hinting target would then render as
     /// something the author never asked for with nothing said about it.
     #[error("font_hinting: {0}")]
@@ -552,7 +552,7 @@ pub enum ScriptError {
 /// Parses the optional `font_hinting` directive off a script's return table.
 ///
 /// Every failure is an error naming the offending value. That is a deliberate
-/// break from the neighbouring `error_clamp` / `noise_scale` parsers, which use
+/// break from the neighbouring `max_error` / `noise_scale` parsers, which use
 /// `.ok()` and silently drop a malformed value: a mistyped hinting target would
 /// otherwise render as something the author never asked for, with nothing said.
 ///
@@ -1075,7 +1075,19 @@ impl LuaRuntime {
         let dither = result.get::<String>("dither").ok();
 
         // Parse optional dither tuning parameters from script return
-        let error_clamp = result.get::<f32>("error_clamp").ok();
+        let max_error = result.get::<f32>("max_error").ok();
+        // `error_clamp` was removed in 0.18.0: it bounded the resulting pixel
+        // value, `max_error` bounds the accumulated error, and the useful
+        // range moved from ~0.1 to ~1.0. A stale value still renders — flat —
+        // so it is reported and discarded rather than reinterpreted.
+        if let Ok(stale) = result.get::<f32>("error_clamp") {
+            tracing::warn!(
+                "script returned `error_clamp = {stale}`, which was removed in 0.18.0 and \
+                 is IGNORED. It bounded the resulting pixel value; `max_error` bounds the \
+                 accumulated error, so the useful range moved from around 0.1 to around \
+                 1.0. Remove it, or return `max_error` if you have retuned it."
+            );
+        }
         let noise_scale = result.get::<f32>("noise_scale").ok();
         let chroma_clamp = result.get::<f32>("chroma_clamp").ok();
         let strength = result.get::<f32>("strength").ok();
@@ -1126,7 +1138,7 @@ impl LuaRuntime {
             colors,
             colors_actual,
             dither,
-            error_clamp,
+            max_error,
             noise_scale,
             chroma_clamp,
             strength,
@@ -1309,8 +1321,8 @@ impl LuaRuntime {
             if let Some(ref algo) = ctx.dither_algorithm {
                 dither_table.set("algorithm", algo.as_str())?;
             }
-            if let Some(ec) = ctx.dither_error_clamp {
-                dither_table.set("error_clamp", ec)?;
+            if let Some(ec) = ctx.dither_max_error {
+                dither_table.set("max_error", ec)?;
             }
             if let Some(ns) = ctx.dither_noise_scale {
                 dither_table.set("noise_scale", ns)?;

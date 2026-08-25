@@ -168,7 +168,7 @@ pub struct RenderOpts {
     pub height: Option<u32>,
     pub panel: Option<String>,
     pub dither: Option<String>,
-    pub error_clamp: Option<f32>,
+    pub max_error: Option<f32>,
     pub chroma_clamp: Option<f32>,
     pub noise_scale: Option<f32>,
     /// Optional gamut mapping overrides for dithering
@@ -209,7 +209,7 @@ impl Default for RenderOpts {
             height: None,
             panel: None,
             dither: None,
-            error_clamp: None,
+            max_error: None,
             chroma_clamp: None,
             noise_scale: None,
             gamut: Default::default(),
@@ -1149,7 +1149,7 @@ impl ScreenStore {
                 .as_deref()
                 .map(crate::api::display::colors_to_hex_strings),
             dither_algorithm: Some(pre_script_algo.to_string()),
-            dither_error_clamp: pre_panel_tuning.error_clamp,
+            dither_max_error: pre_panel_tuning.max_error,
             dither_noise_scale: pre_panel_tuning.noise_scale,
             dither_chroma_clamp: pre_panel_tuning.chroma_clamp,
             dither_strength: pre_panel_tuning.strength,
@@ -1237,14 +1237,16 @@ impl ScreenStore {
             .unwrap_or_default();
 
         let opts_tuning = DitherTuningValues {
-            error_clamp: opts.error_clamp,
+            deprecated_error_clamp: None,
+            max_error: opts.max_error,
             noise_scale: opts.noise_scale,
             chroma_clamp: opts.chroma_clamp,
             strength: None,
             gamut: opts.gamut.clone(),
         };
         let script_tuning = DitherTuningValues {
-            error_clamp: script_result.script_error_clamp,
+            deprecated_error_clamp: None,
+            max_error: script_result.script_max_error,
             noise_scale: script_result.script_noise_scale,
             chroma_clamp: script_result.script_chroma_clamp,
             strength: script_result.script_strength,
@@ -1257,29 +1259,28 @@ impl ScreenStore {
             &panel_tuning,
         );
 
-        let mut measured_warning: Option<String> = None;
+        let mut render_warnings: Vec<String> = Vec::new();
         let render_params = crate::api::display::resolve_render_params(
             script_result.script_colors.as_deref(),
             script_result.script_colors_actual.as_deref(),
             effective_script_dither,
             device_colors,
             // `resolve_render_params` resolves dither as
-            // `script_dither.or(device_config_dither)`, and an explicit
+            // `device_config_dither.or(script_dither)`, and an explicit
             // override already blanked `effective_script_dither` above — so
             // the override rides in this slot when present, and the device's
-            // configured dither takes it otherwise. That ordering is what
-            // keeps override > script > device-config intact with only two
-            // slots to put three layers in.
+            // configured dither takes it otherwise. Both layers that outrank
+            // the script share this one slot, in their own priority order.
             dither_override.or(device_dither),
             panel_colors.as_deref(),
             &query_palette,
             &pre_script_measured_candidates,
             &tuning,
-            &mut measured_warning,
+            &mut render_warnings,
         );
         // The authoring path's warning channel is the script log, which
         // render_screen returns to the agent — not the server's log stream.
-        if let Some(w) = measured_warning {
+        for w in render_warnings {
             log.push(format!("[warn] {w}"));
         }
 
@@ -2888,7 +2889,11 @@ mod tests {
             .palette
             .as_ref()
             .expect("expected an indexed PNG with a PLTE chunk (use_actual should be true)");
-        plte.chunks_exact(3).map(|c| (c[0], c[1], c[2])).collect()
+        plte.as_chunks::<3>()
+            .0
+            .iter()
+            .map(|c| (c[0], c[1], c[2]))
+            .collect()
     }
 
     #[test]

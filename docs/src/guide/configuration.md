@@ -59,10 +59,126 @@ Each device entry maps a MAC address to a screen:
 | `colors` | No | Override display palette (comma-separated hex RGB, e.g. `"#000000,#FFFFFF,#FF0000"`) |
 | `dither` | No | Dithering algorithm (see [Dither Algorithms](#dither-algorithms) below) |
 | `panel` | No | Panel profile name (references `panels` section) |
-| `error_clamp` | No | Caps how much accumulated dithering error one pixel may carry (e.g. `1.0`, the default). Lower values suppress error diffusion; very low values make saturated areas render flat. |
+| `max_error` | No | Caps how much accumulated dithering error one pixel may carry (e.g. `1.0`, the default). Lower values suppress error diffusion; very low values make saturated areas render flat. |
 | `noise_scale` | No | Blue noise jitter scale (e.g. `0.6`). Controls noise modulation strength. |
 | `chroma_clamp` | No | Chroma clamp for dithering. Limits chromatic error propagation. |
 | `strength` | No | Error diffusion strength (0.0–2.0, default 1.0). Lower = less dithering texture. |
+| `temperature_profile` | No | Refresh profile sent to the device: `default` (the default), `a` or `b`. See [Ghosting](#ghosting) below. |
+| `maximum_compatibility` | No | Ask the device to force a full refresh on every update. No effect on a TRMNL X. See [Ghosting](#ghosting). |
+| `min_png_bytes` | No | Pad the served image up to this many bytes. Only useful on a TRMNL X; see [Ghosting](#ghosting). |
+
+### Ghosting
+
+A faint image staying visible under the current one has **two different
+causes**, and only one of them is a settings problem. Tell them apart first:
+
+- **Refresh residue** — the ghost is the screen shown a moment ago, and it
+  changes as the content changes. The panel is refreshing too gently. The
+  settings below help.
+- **Burn-in** — the ghost is an image the panel held for days or weeks, and it
+  stays put no matter what is drawn over it. **No setting fixes this.** See
+  [Burn-in](#burn-in) below.
+
+Both look the same at a glance, and both show up in mid-greys while staying
+invisible in solid black and solid white — those two are reached by any
+refresh, while the intermediate levels are the ones left half-set.
+
+#### `temperature_profile`
+
+```yaml
+devices:
+  "1C:DB:D4:66:5B:50":
+    screen: examples/hello
+    temperature_profile: a
+```
+
+What this does depends on which panel is listening:
+
+- **TRMNL OG, Gen2 and the DIY kits** pick their refresh waveform from look-up
+  tables indexed by temperature, because cold particles need longer, stronger
+  drive pulses. A non-`default` profile selects a different waveform, making
+  the device drive harder and flash more than the room temperature calls for.
+- **TRMNL X** has no such table. Its firmware uses the value as a yes/no
+  switch: any non-`default` profile makes the panel run its long clearing
+  sweep before *every* update instead of every eighth. `a` and `b` are
+  therefore identical on an X — expect much heavier flashing, and a longer
+  update.
+
+Notes:
+
+- `default` is the value that ghosts. It stays the default so that upgrading
+  changes nothing for devices that are fine.
+- Try `a` first, then `b`.
+- `c` is **not accepted**, even though it appears in TRMNL's own documentation.
+  Device firmware up to and including 1.8.14 never implemented it and silently
+  treats it as `default` — which turns the extra clearing back off. Byonk
+  refuses it and logs a warning rather than letting that happen unseen.
+- On a TRMNL X this needs device firmware **1.8.4 or newer**.
+
+#### `maximum_compatibility`
+
+```yaml
+devices:
+  "94:A9:90:8C:6D:18":
+    maximum_compatibility: true
+```
+
+Asks the device to disable fast refresh and use a full-waveform refresh on
+every update. Updates flash visibly and take longer, and the firmware drops
+2-bit support.
+
+**This does nothing on a TRMNL X.** That model has no partial-refresh path to
+switch off — it already does a full update every time — and its firmware
+ignores the flag. Leave it unset there and use `temperature_profile` instead.
+
+Unset is not the same as `false`: unset omits the field entirely and leaves the
+device on its own default, whereas `false` would actively ask for fast refresh.
+
+#### `min_png_bytes`
+
+```yaml
+devices:
+  "1C:DB:D4:66:5B:50":
+    min_png_bytes: 102401
+```
+
+A TRMNL X chooses how carefully it renders greys from the **size in bytes** of
+the image it downloaded. Above 102 400 bytes it uses a 38-pass grey table;
+below it, a 9-pass one. Byonk's images are usually far smaller than that, so an
+X never reaches the better table on its own.
+
+Setting `min_png_bytes` pads the served image with a comment block that
+decoders ignore, so the picture is unchanged to the pixel and only the byte
+count grows. Use `102401` to just clear the threshold. Each update then takes
+noticeably longer.
+
+Values above 750 000 bytes are capped, and a warning says so. That is the
+largest image a TRMNL X accepts — asking for more would produce an image the
+device refuses, leaving the screen blank.
+
+Pointless on any other model: their firmware refuses images above 90 000 bytes,
+so the larger table cannot be reached at all.
+
+### Burn-in
+
+An e-ink panel that shows the same image for days or weeks keeps a trace of it.
+Pigment particles that sit in one position gradually stick to the capsule wall,
+and charge builds up in the material around the held pattern. The result is a
+bias in the panel itself rather than leftover ink from the last refresh, so
+driving the next refresh harder does not remove it — the settings above will
+not help, however far you push them.
+
+Two ways to tell it apart from ordinary refresh residue: the ghost is an
+**old** image rather than the previous one, and it survives even when the panel
+visibly flashes black and white several times before drawing.
+
+It usually fades, slowly, if the panel is made to swing fully between black and
+white many times — hours of cycling, not one refresh. Deep cases never clear
+completely. A warm room helps, because the particles move more freely.
+
+The way to avoid it is to keep the picture moving. A screen whose pixels are
+nearly identical for weeks is what causes this, so prefer content that changes,
+and avoid leaving a device on one static screen indefinitely.
 
 ### MAC Address Format
 
@@ -365,20 +481,38 @@ panels:
     colors: "#000000,#FFFFFF,#FF0000,#FFFF00"
     colors_actual: "#303030,#D0D0C8,#C04040,#D0D020"
     dither:
-      error_clamp: 1.0         # flat default for all algorithms
+      max_error: 1.0         # flat default for all algorithms
       noise_scale: 5.0
       floyd-steinberg:          # per-algorithm override
-        error_clamp: 0.8
+        max_error: 0.8
         noise_scale: 4.0
       atkinson:
-        error_clamp: 1.2
+        max_error: 1.2
 ```
 
 The `dither` section supports:
-- **Flat keys** (`error_clamp`, `noise_scale`, `chroma_clamp`, `strength`): default values for all algorithms
+- **Flat keys** (`max_error`, `noise_scale`, `chroma_clamp`, `strength`): default values for all algorithms
 - **Algorithm sub-sections**: per-algorithm overrides that take priority over flat defaults
 
 Resolution within a panel: per-algorithm value > flat default > None.
+
+> **`error_clamp` was renamed to `max_error` and is now ignored.**
+>
+> Up to 0.17.x the knob was called `error_clamp` and it capped the resulting
+> *pixel value*. Since 0.18.0 it caps the *accumulated error*, which moved the
+> useful range from around `0.1` to around `1.0`. A pre-0.18.0 value still
+> parses under the new meaning and still renders — flat, with saturated areas
+> collapsing to a single ink.
+>
+> Because the name could not keep its old meaning, it changed with it.
+> `error_clamp` is read, reported at startup with the exact path to edit, and
+> then discarded. Delete the key to take the default, or set `max_error` if
+> you have retuned it. The warning looks like:
+>
+> ```text
+> WARN panels.reterminal_e1004.dither.sierra-lite.error_clamp: 0.11 —
+>      `error_clamp` was removed in 0.18.0 and is IGNORED. ...
+> ```
 
 Algorithm names accept aliases (e.g. `jjn` for `jarvis-judice-ninke`).
 
@@ -388,9 +522,36 @@ The overall tuning priority chain is:
 |----------|--------|
 | 1 (highest) | Dev UI overrides |
 | 2 | Lua script return values |
-| 3 | Device config (`error_clamp`, `noise_scale`, `chroma_clamp`, `strength`) |
+| 3 | Device config (`max_error`, `noise_scale`, `chroma_clamp`, `strength`) |
 | 4 | Panel dither defaults |
 | 5 (lowest) | Built-in per-algorithm defaults |
+
+That chain is for the tuning *values*. Choosing the **algorithm** puts the
+device above the screen instead:
+
+| Priority | Source |
+|----------|--------|
+| 1 (highest) | Dev UI override |
+| 2 | Device config `dither` |
+| 3 | Screen's Lua `dither` |
+| 4 (lowest) | `atkinson` |
+
+The algorithm suits the panel rather than the content, and an operator who
+sets it on the device cannot see a screen replacing it. A screen's `dither`
+still applies on any device that does not name one; when both do and they
+differ, Byonk logs which value was dropped.
+
+The **refresh interval** goes the other way, because only the script knows
+when its own content next changes:
+
+| Priority | Source |
+|----------|--------|
+| 1 (highest) | Screen's Lua `refresh_rate` (when greater than 0) |
+| 2 | Device config `refresh` |
+| 3 (lowest) | The screen's `meta.yaml` `refresh`, or 900 seconds |
+
+Byonk logs when a device's `refresh` is displaced by a screen, so an operator
+can see why their setting is inert.
 
 ### Panel Assignment
 

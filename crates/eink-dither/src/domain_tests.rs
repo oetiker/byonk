@@ -668,47 +668,71 @@ mod domain_tests {
         // min_chromatic_pct: minimum % of output pixels that must be chromatic
         //   (palette indices > 1). For achromatic inputs this is 0.0.
         //   For chromatic inputs this catches the "looks grey" failure mode.
+        // max_single_chromatic_pct: maximum % of output pixels allowed to use
+        //   any ONE chromatic entry. This catches the opposite failure — a
+        //   near-neutral rendered as a field of a single ink rather than as a
+        //   cancelling intermixture. 100.0 means unconstrained, which is right
+        //   for saturated inputs that legitimately are one ink. The bound is on
+        //   the largest single ink, not on the chromatic total, because
+        //   chromatic ink on a neutral is legitimate: black and white have the
+        //   maximum per-dot luminance contrast, so a black/white checkerboard is
+        //   the grainiest possible neutral. This palette reaches 98.8%
+        //   chromatic on a mid grey with no single ink above 36% — a cancelling
+        //   intermixture that reads as grey, which a total-chromatic gate could
+        //   not tell apart from a single-ink field.
         //
         // Photo colors sampled from real camera shots — these are the muted
         // tones that pop-art if damping doesn't work correctly.
         // Thresholds set ~30% above measured values to catch regressions.
-        let test_colors: &[(&str, Srgb, f32, f32)] = &[
-            //                                           max_de  min_chr%
+        let test_colors: &[(&str, Srgb, f32, f32, f32)] = &[
+            //                                           max_de  min_chr%  max_1ink%
             // Achromatic — no chromatic pixels expected
-            ("mid grey", Srgb::from_u8(128, 128, 128), 0.06, 0.0),
-            ("dark grey", Srgb::from_u8(64, 64, 64), 0.10, 0.0),
-            ("light grey", Srgb::from_u8(192, 192, 192), 0.08, 0.0),
+            ("mid grey", Srgb::from_u8(128, 128, 128), 0.06, 0.0, 50.0),
+            ("dark grey", Srgb::from_u8(64, 64, 64), 0.10, 0.0, 50.0),
+            ("light grey", Srgb::from_u8(192, 192, 192), 0.08, 0.0, 50.0),
             // Exact palette entries — 100% chromatic
-            ("pure red", Srgb::from_u8(255, 0, 0), 0.01, 95.0),
-            ("pure green", Srgb::from_u8(0, 255, 0), 0.01, 95.0),
-            ("pure blue", Srgb::from_u8(0, 0, 255), 0.01, 95.0),
+            ("pure red", Srgb::from_u8(255, 0, 0), 0.01, 95.0, 100.0),
+            ("pure green", Srgb::from_u8(0, 255, 0), 0.01, 95.0, 100.0),
+            ("pure blue", Srgb::from_u8(0, 0, 255), 0.01, 95.0, 100.0),
             // Secondary / mixed saturated colors — should use chromatic entries.
             // Cyan and magenta require combining two palette primaries, so with
-            // error_clamp=0.3 (Photo default) the chromatic fraction is lower
+            // max_error=0.3 (Photo default) the chromatic fraction is lower
             // than with clamp=0.5 because oscillation amplitude is limited.
-            ("cyan", Srgb::from_u8(0, 255, 255), 0.30, 0.0),
-            ("magenta", Srgb::from_u8(255, 0, 255), 0.40, 5.0),
-            ("orange", Srgb::from_u8(255, 165, 0), 0.04, 50.0),
+            ("cyan", Srgb::from_u8(0, 255, 255), 0.30, 0.0, 100.0),
+            ("magenta", Srgb::from_u8(255, 0, 255), 0.40, 5.0, 100.0),
+            ("orange", Srgb::from_u8(255, 165, 0), 0.04, 50.0, 100.0),
             // Real photo colors — sampled from outdoor portrait (overcast sky,
             // skin tones, muted clothing). These are the colors that cause
             // pop-art blowout if chromatic damping isn't working.
             // OKLab chroma for all of these is 0.01-0.06 — well below the
             // 0.12 damping threshold, so they should dither mostly to B&W.
-            ("overcast sky", Srgb::from_u8(175, 198, 230), 0.10, 0.0),
-            ("sky left", Srgb::from_u8(168, 192, 227), 0.10, 0.0),
-            ("skin light", Srgb::from_u8(163, 171, 197), 0.10, 0.0),
-            ("skin cheek", Srgb::from_u8(147, 144, 163), 0.08, 0.0),
-            ("skin dark", Srgb::from_u8(105, 76, 86), 0.08, 0.0),
-            ("skin warm", Srgb::from_u8(137, 102, 102), 0.08, 0.0),
-            ("dark hair", Srgb::from_u8(107, 99, 107), 0.07, 0.0),
-            ("muted scarf", Srgb::from_u8(140, 108, 104), 0.08, 0.0),
-            ("dark clothing", Srgb::from_u8(150, 124, 133), 0.08, 0.0),
-            ("blue shirt", Srgb::from_u8(127, 112, 121), 0.06, 0.0),
-            ("glasses", Srgb::from_u8(161, 161, 172), 0.06, 0.0),
+            (
+                "overcast sky",
+                Srgb::from_u8(175, 198, 230),
+                0.10,
+                0.0,
+                50.0,
+            ),
+            ("sky left", Srgb::from_u8(168, 192, 227), 0.10, 0.0, 50.0),
+            ("skin light", Srgb::from_u8(163, 171, 197), 0.10, 0.0, 50.0),
+            ("skin cheek", Srgb::from_u8(147, 144, 163), 0.08, 0.0, 50.0),
+            ("skin dark", Srgb::from_u8(105, 76, 86), 0.08, 0.0, 50.0),
+            ("skin warm", Srgb::from_u8(137, 102, 102), 0.08, 0.0, 50.0),
+            ("dark hair", Srgb::from_u8(107, 99, 107), 0.07, 0.0, 50.0),
+            ("muted scarf", Srgb::from_u8(140, 108, 104), 0.08, 0.0, 50.0),
+            (
+                "dark clothing",
+                Srgb::from_u8(150, 124, 133),
+                0.08,
+                0.0,
+                50.0,
+            ),
+            ("blue shirt", Srgb::from_u8(127, 112, 121), 0.06, 0.0, 50.0),
+            ("glasses", Srgb::from_u8(161, 161, 172), 0.06, 0.0, 50.0),
         ];
 
         let mut failures = Vec::new();
-        for &(name, color, max_delta, min_chromatic_pct) in test_colors {
+        for &(name, color, max_delta, min_chromatic_pct, max_single_chromatic_pct) in test_colors {
             let r = dither_perceptual_accuracy(color, &palette);
             let chromatic_pct = r.chromatic_fraction * 100.0;
             if r.delta_e > max_delta {
@@ -731,6 +755,22 @@ mod domain_tests {
                      input chroma={:.4}, output chroma={:.4}",
                     (r.input_lab.a * r.input_lab.a + r.input_lab.b * r.input_lab.b).sqrt(),
                     r.output_chroma,
+                ));
+            }
+            let total: u32 = r.palette_counts.iter().sum();
+            let (idx, count) = r.palette_counts[2..]
+                .iter()
+                .enumerate()
+                .max_by_key(|&(_, c)| *c)
+                .map(|(i, c)| (i + 2, *c))
+                .expect("palette has chromatic entries");
+            let single_pct = 100.0 * count as f32 / total as f32;
+            if single_pct > max_single_chromatic_pct {
+                failures.push(format!(
+                    "  {name}: palette entry {idx} covers {single_pct:.1}% of the patch \
+                     (max {max_single_chromatic_pct:.0}%) — rendered as a field of one ink \
+                     instead of a cancelling intermixture. DeltaE={:.4}",
+                    r.delta_e,
                 ));
             }
         }
@@ -1623,7 +1663,7 @@ mod domain_tests {
         let lin = LinearRgb::from(mid);
         let image = vec![lin; 16];
 
-        let options = DitherOptions::new().error_clamp(0.08).noise_scale(0.0);
+        let options = DitherOptions::new().max_error(0.08).noise_scale(0.0);
 
         let result1 =
             dither_with_kernel_noise(&image, 4, 4, &photo_palette, &ATKINSON, &options, None);
@@ -1707,7 +1747,7 @@ mod domain_tests {
     ///   to an official palette colour is otherwise forced to that entry
     ///   with its error discarded, which pins the pure primaries (0°, 60°,
     ///   120°, 240°) to a single flat colour no matter what else changes.
-    /// - `no-exact+clamp` — additionally widens `error_clamp`. A saturated
+    /// - `no-exact+clamp` — additionally widens `max_error`. A saturated
     ///   hue sits at a channel extreme, so the default 0.08 of headroom
     ///   lets almost no error accumulate and the same entry wins forever.
     ///
@@ -1737,7 +1777,7 @@ mod domain_tests {
 
         const PATCH: usize = 8;
 
-        // (label, error_clamp override)
+        // (label, max_error override)
         let configs: [(&str, Option<f32>); 2] = [("default", None), ("clamp 2.0", Some(2.0))];
 
         eprintln!(
@@ -1761,7 +1801,7 @@ mod domain_tests {
             for (ci, &(_, clamp)) in configs.iter().enumerate() {
                 let mut d = EinkDitherer::new(palette.clone()).algorithm(DitherAlgorithm::Atkinson);
                 if let Some(c) = clamp {
-                    d = d.error_clamp(c);
+                    d = d.max_error(c);
                 }
                 let out = d.dither(&pixels, PATCH, PATCH);
 
@@ -1820,12 +1860,12 @@ mod domain_tests {
         eprintln!("(* = patch is a single flat colour, i.e. no dithering happened at all)");
     }
 
-    /// Isolates the `error_clamp` variable behind the flat-patch collapse
+    /// Isolates the `max_error` variable behind the flat-patch collapse
     /// seen in `test_hue_gamut_sweep_patch_average`.
     ///
     /// `clamp_channel` clamps the *pixel value plus accumulated error* into
-    /// `[-error_clamp, 1 + error_clamp]`. A fully saturated hue already sits
-    /// at a channel extreme (magenta is b=1.0), so at error_clamp=0.08 there
+    /// `[-max_error, 1 + max_error]`. A fully saturated hue already sits
+    /// at a channel extreme (magenta is b=1.0), so at max_error=0.08 there
     /// is only 0.08 of headroom for error to accumulate in that channel: the
     /// same entry wins every pixel and the patch comes out flat.
     ///
@@ -1863,7 +1903,7 @@ mod domain_tests {
         const PATCH: usize = 8;
 
         for &hue_deg in &[120.0f32, 270.0, 300.0, 180.0] {
-            eprintln!("\n=== hue {hue_deg}\u{00b0} vs error_clamp ===");
+            eprintln!("\n=== hue {hue_deg}\u{00b0} vs max_error ===");
             for &ec in &[0.08f32, 0.2, 0.5, 1.0, 2.0] {
                 let (r, g, b) = hsl_to_rgb(hue_deg / 360.0, 1.0, 0.5);
                 let src = Srgb::new(r, g, b);
@@ -1871,7 +1911,7 @@ mod domain_tests {
 
                 let out = EinkDitherer::new(palette.clone())
                     .algorithm(DitherAlgorithm::Atkinson)
-                    .error_clamp(ec)
+                    .max_error(ec)
                     .dither(&pixels, PATCH, PATCH);
 
                 let mut sum = [0.0f32; 3];
@@ -2130,7 +2170,7 @@ mod domain_tests {
         let palette = Palette::new(&official, Some(&actual)).unwrap();
         const PATCH: usize = 16;
 
-        // (label, algorithm, error_clamp override)
+        // (label, algorithm, max_error override)
         let configs: [(&str, DitherAlgorithm, Option<f32>); 4] = [
             ("atkinson", DitherAlgorithm::Atkinson, None),
             ("atkinson+clamp2", DitherAlgorithm::Atkinson, Some(2.0)),
@@ -2159,7 +2199,7 @@ mod domain_tests {
                 for (ci, &(_, algo, clamp)) in configs.iter().enumerate() {
                     let mut d = EinkDitherer::new(palette.clone()).algorithm(algo);
                     if let Some(c) = clamp {
-                        d = d.error_clamp(c);
+                        d = d.max_error(c);
                     }
                     let out = d.dither(&pixels, PATCH, PATCH);
                     let mut acc = [0.0f32; 3];
@@ -2760,13 +2800,13 @@ mod domain_tests {
         );
     }
 
-    /// Sweep `error_clamp` under the new "bound the error" semantics to pick
+    /// Sweep `max_error` under the new "bound the error" semantics to pick
     /// per-algorithm defaults, scoring against the palette's physical bound.
     ///
     /// Run: `cargo test -p eink-dither clamp_sweep -- --nocapture --ignored`
     #[test]
     #[ignore] // diagnostic -- run manually
-    fn test_error_clamp_sweep_against_bound() {
+    fn test_max_error_sweep_against_bound() {
         let official = [
             Srgb::from_u8(0, 0, 0),
             Srgb::from_u8(255, 255, 255),
@@ -2820,7 +2860,7 @@ mod domain_tests {
                     let pixels = vec![*src; PATCH * PATCH];
                     let out = EinkDitherer::new(palette.clone())
                         .algorithm(algo)
-                        .error_clamp(ec)
+                        .max_error(ec)
                         .dither(&pixels, PATCH, PATCH);
                     let mut acc = [0.0f32; 3];
                     for &idx in out.indices() {
@@ -2839,14 +2879,14 @@ mod domain_tests {
         }
     }
 
-    /// Sweep error_clamp against BOTH metrics at once: muted-colour accuracy
+    /// Sweep max_error against BOTH metrics at once: muted-colour accuracy
     /// (which wants a tight bound) and the saturated-patch gamut gap (which
     /// wants a loose one). The default has to satisfy both.
     ///
     /// Run: `cargo test -p eink-dither clamp_tradeoff -- --nocapture --ignored`
     #[test]
     #[ignore] // diagnostic -- run manually
-    fn test_error_clamp_tradeoff() {
+    fn test_max_error_tradeoff() {
         let pal6 = Palette::new(
             &[
                 Srgb::from_u8(0, 0, 0),
@@ -2902,7 +2942,7 @@ mod domain_tests {
                 let out = EinkDitherer::new(pal6.clone())
                     .saturation(1.0)
                     .contrast(1.0)
-                    .error_clamp(ec)
+                    .max_error(ec)
                     .dither(&image, 128, 128);
                 let mut acc = [0.0f32; 3];
                 for &idx in out.indices() {
@@ -2926,7 +2966,7 @@ mod domain_tests {
                 for hue_deg in (0..360).step_by(30) {
                     let (r, g, b) = hsl_to_rgb(hue_deg as f32 / 360.0, 1.0, l);
                     let src = Srgb::new(r, g, b);
-                    let out = EinkDitherer::new(measured.clone()).error_clamp(ec).dither(
+                    let out = EinkDitherer::new(measured.clone()).max_error(ec).dither(
                         &vec![src; 16 * 16],
                         16,
                         16,
@@ -3270,8 +3310,10 @@ mod domain_tests {
         /// The panel's own appearance of a render: measured inks, whatever
         /// colour model the matching ran under.
         fn appearance(img: &DitheredImage) -> Vec<Oklab> {
-            img.to_rgb_actual()
-                .chunks_exact(3)
+            let rgb = img.to_rgb_actual();
+            rgb.as_chunks::<3>()
+                .0
+                .iter()
                 .map(|c| Oklab::from(LinearRgb::from(Srgb::from_u8(c[0], c[1], c[2]))))
                 .collect()
         }
@@ -3295,8 +3337,10 @@ mod domain_tests {
         /// The same appearance, kept in linear light so blocks of it can be
         /// averaged before the perceptual distance is taken.
         fn appearance_linear(img: &DitheredImage) -> Vec<LinearRgb> {
-            img.to_rgb_actual()
-                .chunks_exact(3)
+            let rgb = img.to_rgb_actual();
+            rgb.as_chunks::<3>()
+                .0
+                .iter()
                 .map(|c| LinearRgb::from(Srgb::from_u8(c[0], c[1], c[2])))
                 .collect()
         }

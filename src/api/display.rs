@@ -15,6 +15,12 @@ use crate::models::{
     DisplaySpec, DitherTuningValues,
 };
 use crate::server::DevOverrides;
+
+/// Filename that makes TRMNL firmware run a full-panel wipe instead of
+/// displaying the image. Recognised in `bl.cpp` right after the display
+/// response is handled; it runs `display_wipe()` and then re-polls. Not a real
+/// file — byonk never serves anything under this name.
+const SCREEN_WIPER_FILENAME: &str = "screen_wiper.png";
 use crate::services::{
     CachedContent, ContentCache, ContentPipeline, DeviceContext, DeviceRegistry, RenderService,
 };
@@ -82,7 +88,7 @@ pub struct RenderParams {
     /// length rule), not just a caller's own pre-script layer.
     pub measured_source: &'static str,
     pub dither: Option<String>,
-    pub error_clamp: Option<f32>,
+    pub max_error: Option<f32>,
     pub noise_scale: Option<f32>,
     pub chroma_clamp: Option<f32>,
     pub strength: Option<f32>,
@@ -163,7 +169,7 @@ pub fn resolve_effective_tuning(
     device_config_tuning: &DitherTuningValues,
     panel_tuning: &DitherTuningValues,
 ) -> DitherTuningValues {
-    if override_tuning.error_clamp.is_some()
+    if override_tuning.max_error.is_some()
         || override_tuning.noise_scale.is_some()
         || override_tuning.chroma_clamp.is_some()
         || override_tuning.strength.is_some()
@@ -184,13 +190,13 @@ pub fn resolve_dither_tuning(
 ) -> (crate::rendering::svg_to_png::DitherTuning, bool) {
     let tuning = crate::rendering::svg_to_png::DitherTuning {
         serpentine: None,
-        error_clamp: render_params.error_clamp,
+        max_error: render_params.max_error,
         chroma_clamp: render_params.chroma_clamp,
         noise_scale: render_params.noise_scale,
         strength: render_params.strength,
         gamut: Some(render_params.gamut.resolve()),
     };
-    let has_tuning = tuning.error_clamp.is_some()
+    let has_tuning = tuning.max_error.is_some()
         || tuning.chroma_clamp.is_some()
         || tuning.noise_scale.is_some()
         || tuning.strength.is_some()
@@ -310,11 +316,56 @@ pub fn resolve_measured_colors(
 
 /// Resolve all rendering parameters after script execution.
 ///
+/// Resolve the e-ink waveform temperature profile sent to the device.
+///
+/// The panel selects its refresh waveform from look-up tables indexed by
+/// temperature, because colder particles need longer, stronger drive pulses.
+/// A non-`default` profile makes the firmware drive harder and flash more than
+/// the measured ambient calls for, which is TRMNL's documented remedy for
+/// ghosting: partial refreshes reach the black and white rails but leave
+/// mid-greys carrying residue of the previous frame.
+///
+/// `default` stays the fallback even though it is the value that ghosts, so
+/// that upgrading changes nothing for devices that are fine.
+///
+/// An unrecognised value is refused rather than forwarded. This string is
+/// consumed by device firmware over the wire, so a typo that reaches it fails
+/// silently on the glass — the one place nobody is watching a log.
+///
+/// `c` is refused for exactly that reason, even though TRMNL's documentation
+/// lists it: firmware 1.8.14 still has `else if (tp == "c") u32TP = 3;`
+/// commented out in `parse_response_api_display.cpp`, so a device that receives
+/// `c` reads it as `default` — the opposite of what the operator asked for.
+fn resolve_temperature_profile(configured: Option<&str>) -> String {
+    const VALID: [&str; 3] = ["default", "a", "b"];
+    let Some(raw) = configured else {
+        return "default".to_string();
+    };
+    let normalized = raw.trim().to_ascii_lowercase();
+    if VALID.contains(&normalized.as_str()) {
+        normalized
+    } else {
+        tracing::warn!(
+            configured = raw,
+            "unknown temperature_profile, sending 'default' instead (valid: default, a, b)"
+        );
+        "default".to_string()
+    }
+}
+
 /// Palette:  script_colors > device_config_colors > panel_colors > fallback
 /// Measured: script_colors_actual > pre_script_measured_candidates (in the
 ///           order the caller supplies them, e.g. dev override >
 ///           panel.colors_actual > Measured-Colors header)
-/// Dither: script_dither > device_config_dither > None
+/// Dither: device_config_dither > script_dither > None
+///
+/// The device outranks the screen because the algorithm is a property of the
+/// panel, not of the content, and the operator who set it on the device
+/// cannot see a screen replacing it. When both are set and they normalise to
+/// different algorithms, the screen's value is dropped and a message naming
+/// both is pushed to `warnings`. Callers that need a third layer above both
+/// (a dev-UI override) pass it in the `device_config_dither` slot and blank
+/// `script_dither`; see `services::screen_store`.
 ///
 /// `pre_script_measured_candidates` is the caller's own pre-script chain —
 /// each entry already parsed and labelled by the caller, in precedence
@@ -324,7 +375,7 @@ pub fn resolve_measured_colors(
 /// and applies the length rule uniformly across the whole thing, so a
 /// mismatch at ANY position — including inside the caller's own chain —
 /// falls through to the next, not just a mismatch at the very front. A
-/// mismatch never fails the render: it's recorded into `warning_sink` and
+/// mismatch never fails the render: it's recorded into `warnings` and
 /// the resolver falls through (see [`resolve_measured_colors`]). The caller
 /// decides where that warning goes — `tracing::warn!` on device paths, the
 /// script log on authoring paths.
@@ -339,7 +390,7 @@ pub fn resolve_render_params(
     fallback_palette: &[(u8, u8, u8)],
     pre_script_measured_candidates: &[MeasuredCandidate],
     tuning: &DitherTuningValues,
-    warning_sink: &mut Option<String>,
+    warnings: &mut Vec<String>,
 ) -> RenderParams {
     let palette = if let Some(sc) = script_colors {
         parse_colors_header(&sc.join(","))
@@ -356,10 +407,22 @@ pub fn resolve_render_params(
     // disagree about which algorithm was asked for. The renderer matches
     // canonical names only and silently falls back to Atkinson otherwise, so
     // an un-normalized alias reaching it is a silent wrong-algorithm render.
-    let dither = script_dither
-        .map(|s| s.to_string())
-        .or_else(|| device_config_dither.map(|s| s.to_string()))
-        .map(|s| crate::models::normalize_algorithm_name(&s));
+    let normalize = crate::models::normalize_algorithm_name;
+    let device_algo = device_config_dither.map(normalize);
+    let script_algo = script_dither.map(normalize);
+    if let (Some(device_algo), Some(script_algo)) = (&device_algo, &script_algo) {
+        // Compare AFTER normalisation: `sierra-light` and `sierra-lite` are
+        // one algorithm, and reporting them as a conflict would train the
+        // operator to ignore the warning.
+        if device_algo != script_algo {
+            warnings.push(format!(
+                "screen asked for dither `{script_algo}` but the device is configured for \
+                 `{device_algo}`; the device wins. Remove `dither` from the screen, or \
+                 change the device, to stop this."
+            ));
+        }
+    }
+    let dither = device_algo.or(script_algo);
 
     let script_measured = script_colors_actual.map(parse_measured_color_list);
     let mut candidates: Vec<MeasuredCandidate> =
@@ -367,14 +430,14 @@ pub fn resolve_render_params(
     candidates.push((SRC_SCRIPT, script_measured));
     candidates.extend_from_slice(pre_script_measured_candidates);
     let measured = resolve_measured_colors(palette.len(), &candidates);
-    *warning_sink = measured.warning;
+    warnings.extend(measured.warning);
 
     RenderParams {
         palette,
         measured_colors: measured.colors,
         measured_source: measured.source,
         dither,
-        error_clamp: tuning.error_clamp,
+        max_error: tuning.max_error,
         noise_scale: tuning.noise_scale,
         chroma_clamp: tuning.chroma_clamp,
         strength: tuning.strength,
@@ -416,6 +479,7 @@ pub async fn handle_display<R: DeviceRegistry>(
     State(content_pipeline): State<Arc<ContentPipeline>>,
     State(content_cache): State<Arc<ContentCache>>,
     State(dev_overrides): State<DevOverrides>,
+    State(recovery): State<Arc<crate::services::RecoveryRegistry>>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     // Extract required headers
@@ -582,8 +646,9 @@ pub async fn handle_display<R: DeviceRegistry>(
                 )
             };
 
-            let cached = CachedContent::new(registration_svg, screen_name, width, height)
-                .with_colors(Some(palette));
+            let cached = CachedContent::builder(registration_svg, screen_name, width, height)
+                .with_colors(Some(palette))
+                .build();
             let hash = cached.content_hash.clone();
             content_cache.store(cached);
 
@@ -629,8 +694,12 @@ pub async fn handle_display<R: DeviceRegistry>(
                 firmware_url: None,
                 refresh_rate,
                 reset_firmware: false,
+                // Unconditional: this device has no config yet -- it is being
+                // shown the registration code. That screen is high-contrast
+                // text, the content ghosting hurts least.
                 temperature_profile: Some("default".to_string()),
                 special_function: None,
+                maximum_compatibility: None,
             })
             .into_response());
         }
@@ -817,7 +886,8 @@ pub async fn handle_display<R: DeviceRegistry>(
         None
     };
     let dc_tuning = DitherTuningValues {
-        error_clamp: device_config.and_then(|dc| dc.error_clamp),
+        deprecated_error_clamp: None,
+        max_error: device_config.and_then(|dc| dc.max_error),
         noise_scale: device_config.and_then(|dc| dc.noise_scale),
         chroma_clamp: device_config.and_then(|dc| dc.chroma_clamp),
         strength: device_config.and_then(|dc| dc.strength),
@@ -854,12 +924,13 @@ pub async fn handle_display<R: DeviceRegistry>(
         firmware_version: Some(device.firmware_version.clone()),
         width: Some(width),
         height: Some(height),
-        registration_code: Some(registration_code),
+        // Cloned: the recovery lookup further down needs the code too.
+        registration_code: Some(registration_code.clone()),
         board: board_header.clone(),
         colors: Some(ctx_color_hex),
         colors_actual: measured_colors.as_deref().map(colors_to_hex_strings),
         dither_algorithm: Some(pre_script_algo.to_string()),
-        dither_error_clamp: pre_script_tuning.error_clamp,
+        dither_max_error: pre_script_tuning.max_error,
         dither_noise_scale: pre_script_tuning.noise_scale,
         dither_chroma_clamp: pre_script_tuning.chroma_clamp,
         dither_strength: pre_script_tuning.strength,
@@ -878,6 +949,7 @@ pub async fn handle_display<R: DeviceRegistry>(
     let header_colors_for_chain = header_colors_str.map(|s| s.to_string());
     let dc_colors = device_config_colors;
     let dc_dither = device_config_dither;
+    let dc_min_png_bytes = device_config.and_then(|dc| dc.min_png_bytes);
     let dev_dither = dev_dither_override;
     let dev_tuning = dev_tuning_override;
     let dc_tuning_for_closure = dc_tuning;
@@ -913,14 +985,15 @@ pub async fn handle_display<R: DeviceRegistry>(
                         (result.script_dither.as_deref(), dc_dither.as_deref())
                     };
 
-                    // Determine final algorithm for panel tuning resolution
+                    // Determine final algorithm for panel tuning resolution.
+                    // Same precedence as `resolve_render_params` — dev
+                    // override > device config > script. If these two ever
+                    // disagree, per-algorithm tuning is looked up for one
+                    // algorithm while another is rendered.
                     let final_algo_str = if dev_dither.is_some() {
                         dev_dither.as_deref()
                     } else {
-                        result
-                            .script_dither
-                            .as_deref()
-                            .or(dc_dither.as_deref())
+                        dc_dither.as_deref().or(result.script_dither.as_deref())
                     };
                     let final_algo_normalized =
                         final_algo_str.map(normalize_algorithm_name);
@@ -934,7 +1007,8 @@ pub async fn handle_display<R: DeviceRegistry>(
                         .unwrap_or_default();
 
                     let script_tuning = DitherTuningValues {
-                        error_clamp: result.script_error_clamp,
+                        deprecated_error_clamp: None,
+                        max_error: result.script_max_error,
                         noise_scale: result.script_noise_scale,
                         chroma_clamp: result.script_chroma_clamp,
                         strength: result.script_strength,
@@ -948,7 +1022,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                         resolve_tuning(&script_tuning, &dc_tuning_for_closure, &panel_final_tuning)
                     };
 
-                    let mut measured_warning: Option<String> = None;
+                    let mut render_warnings: Vec<String> = Vec::new();
                     let params = resolve_render_params(
                         result.script_colors.as_deref(),
                         result.script_colors_actual.as_deref(),
@@ -959,9 +1033,9 @@ pub async fn handle_display<R: DeviceRegistry>(
                         &fallback,
                         &pre_script_measured_candidates,
                         &tuning,
-                        &mut measured_warning,
+                        &mut render_warnings,
                     );
-                    if let Some(w) = &measured_warning {
+                    for w in &render_warnings {
                         tracing::warn!(device = %mac, "{w}");
                     }
 
@@ -981,7 +1055,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                         match pipeline.render_svg_from_script(&result, Some(&ctx)) {
                             Ok(svg) => {
                                 // Cache the pre-rendered SVG (keyed by content hash)
-                                let cached = CachedContent::new(
+                                let cached = CachedContent::builder(
                                     svg,
                                     result.screen_name.clone(),
                                     width,
@@ -991,7 +1065,9 @@ pub async fn handle_display<R: DeviceRegistry>(
                                 .with_colors_actual(params.measured_colors)
                                 .with_dither(params.dither)
                                 .with_font_hinting(result.font_hinting.clone())
-                                .with_tuning(&tuning);
+                                .with_min_png_bytes(dc_min_png_bytes)
+                                .with_tuning(&tuning)
+                                .build();
                                 let hash = cached.content_hash.clone();
                                 cache.store(cached);
                                 (result.refresh_rate, false, Some(hash), None)
@@ -1005,13 +1081,14 @@ pub async fn handle_display<R: DeviceRegistry>(
                                     panel_colors_for_chain.as_deref(),
                                     &fallback,
                                 );
-                                let cached = CachedContent::new(
+                                let cached = CachedContent::builder(
                                     error_svg,
                                     "_error".to_string(),
                                     width,
                                     height,
                                 )
-                                .with_colors(Some(fallback_palette));
+                                .with_colors(Some(fallback_palette))
+                                .build();
                                 let hash = cached.content_hash.clone();
                                 cache.store(cached);
                                 (60, false, Some(hash), Some(error_msg))
@@ -1032,8 +1109,9 @@ pub async fn handle_display<R: DeviceRegistry>(
                     );
                     let error_msg = e.to_string();
                     let error_svg = pipeline.render_error_svg(&error_msg);
-                    let cached = CachedContent::new(error_svg, "_error".to_string(), width, height)
-                        .with_colors(Some(fallback_palette));
+                    let cached = CachedContent::builder(error_svg, "_error".to_string(), width, height)
+                        .with_colors(Some(fallback_palette))
+                        .build();
                     let hash = cached.content_hash.clone();
                     cache.store(cached);
                     (60, false, Some(hash), Some(error_msg))
@@ -1074,19 +1152,101 @@ pub async fn handle_display<R: DeviceRegistry>(
         None
     };
 
+    // Resolved and logged rather than inlined into the struct below: this value
+    // is consumed by device firmware and has no visible effect on the server,
+    // so when a panel keeps ghosting there is otherwise no way to tell "byonk
+    // never sent a profile" apart from "the firmware ignored the one we sent".
+    // That ambiguity cost a full debugging cycle.
+    let temperature_profile =
+        resolve_temperature_profile(device_config.and_then(|dc| dc.temperature_profile.as_deref()));
+    let maximum_compatibility = device_config.and_then(|dc| dc.maximum_compatibility);
+    tracing::info!(
+        device = %device_id_str,
+        temperature_profile = %temperature_profile,
+        maximum_compatibility = ?maximum_compatibility,
+        "Resolved display refresh settings for device"
+    );
+
+    // A panel-recovery session replaces this poll's content with a wipe
+    // instruction. `screen_wiper.png` is TRMNL's own trigger: the firmware
+    // recognises the filename and runs display_wipe() -- ~200 black/white
+    // cycles with panel power held, ~190 s -- instead of showing the image. The image
+    // URL still rides along, because the firmware handles the response
+    // normally before it inspects the filename.
+    // Filed under whichever identifier the admin caller used. The route is
+    // `/api/admin/devices/{key}/recover`, the same `{key}` as `PATCH
+    // /devices/{key}` — the *config* key, which may be a registration code
+    // rather than a MAC. The device polls with its MAC alone, so looking only
+    // there would lose a run started under the code, with no error anywhere.
+    let recovery_device_id = {
+        let mac = crate::models::DeviceId::new(device_id_str);
+        // The MAC is canonical: it is what `/api/admin/devices` reports as the
+        // key for any device that has checked in, so it leads and stays the
+        // identifier a new session is filed under. After it come the config
+        // key, then every written form of the device's registration code —
+        // a run started before the device first checked in could not have been
+        // resolved to a MAC, so it sits under whichever form was typed.
+        let mut candidates = vec![mac.clone()];
+        if let Some(key) = device_entry_key.as_deref() {
+            if key != device_id_str {
+                candidates.push(crate::models::DeviceId::new(key));
+            }
+        }
+        for id in crate::services::recovery::spellings_of(&registration_code) {
+            if !candidates.contains(&id) {
+                candidates.push(id);
+            }
+        }
+        recovery.resolve_key(&candidates).await.unwrap_or(mac)
+    };
+    let wipe = recovery.on_poll(&recovery_device_id).await;
+    if let Some(ref session) = wipe {
+        tracing::info!(
+            device = %device_id_str,
+            done = session.done,
+            total = session.total,
+            remaining = session.remaining(),
+            "Panel recovery: serving a wipe instead of content"
+        );
+    }
+
+    // A run sets its own poll cadence, overriding the screen's `refresh`.
+    //
+    // The decisive poll is the firmware's follow-up after a wipe: it is served
+    // content, so without this it sleeps for however long the *content* takes
+    // to go stale before the next wipe. A calibration screen's `refresh: 3600`
+    // turned a 10-wipe run into a 10-hour one.
+    //
+    // Note this asks the registry again rather than reusing `wipe`. They differ
+    // exactly where it matters: the follow-up poll returns `None` while the run
+    // is still going. `on_poll` also drops the session as the final wipe goes
+    // out, so the follow-up poll after that one correctly gets the screen's own
+    // rate back.
+    let recovery_active = wipe.is_some() || recovery.get(&recovery_device_id).await.is_some();
+    let refresh_rate = if recovery_active {
+        crate::services::RECOVERY_REFRESH_RATE_SECS
+    } else {
+        refresh_rate
+    };
+
     // Return JSON response
     // Note: firmware expects status=0 for success (not 200!)
     // The filename is a hash of the SVG content, so TRMNL can detect changes
     Ok(Json(DisplayJsonResponse {
         status: 0,
         image_url,
-        filename: content_hash.unwrap_or_else(|| "unchanged".to_string()),
+        filename: if wipe.is_some() {
+            SCREEN_WIPER_FILENAME.to_string()
+        } else {
+            content_hash.unwrap_or_else(|| "unchanged".to_string())
+        },
         update_firmware: false,
         firmware_url: None,
         refresh_rate,
         reset_firmware: false,
-        temperature_profile: Some("default".to_string()),
+        temperature_profile: Some(temperature_profile),
         special_function: None,
+        maximum_compatibility,
     })
     .into_response())
 }
@@ -1152,13 +1312,13 @@ pub async fn handle_image<R: DeviceRegistry>(
     // Build DitherTuning from cached tuning values (set by script or device config)
     let tuning = crate::rendering::svg_to_png::DitherTuning {
         serpentine: None,
-        error_clamp: cached.error_clamp,
+        max_error: cached.max_error,
         chroma_clamp: cached.chroma_clamp,
         noise_scale: cached.noise_scale,
         strength: cached.strength,
         gamut: Some(cached.gamut.resolve()),
     };
-    let has_tuning = tuning.error_clamp.is_some()
+    let has_tuning = tuning.max_error.is_some()
         || tuning.chroma_clamp.is_some()
         || tuning.noise_scale.is_some()
         || tuning.strength.is_some()
@@ -1178,6 +1338,25 @@ pub async fn handle_image<R: DeviceRegistry>(
         // authoring paths (`ScreenStore::render`, `byonk render`).
         &mut None,
     )?;
+
+    let png_bytes = match cached.min_png_bytes {
+        Some(min) => {
+            let rendered = png_bytes.len();
+            let padded = crate::rendering::png_pad::pad_png_to_min_size(png_bytes, min as usize);
+            if padded.len() != rendered {
+                // Logged because the whole point is a size the *firmware* reads;
+                // if this line is missing, the device never saw the padding.
+                tracing::info!(
+                    rendered_bytes = rendered,
+                    padded_bytes = padded.len(),
+                    min_png_bytes = min,
+                    "Padded PNG to reach the device's minimum image size"
+                );
+            }
+            padded
+        }
+        None => png_bytes,
+    };
 
     tracing::info!(size_bytes = png_bytes.len(), "Image rendered and served");
 
@@ -1218,11 +1397,103 @@ pub struct DisplayJsonResponse {
     /// Special function to execute ('identify', 'sleep', etc.)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub special_function: Option<String>,
+
+    /// Force full-waveform refreshes on the device, disabling fast refresh.
+    ///
+    /// Omitted from the JSON when unset so the device keeps its own default —
+    /// sending `false` would actively assert "use fast refresh", which is not
+    /// the same as having no opinion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maximum_compatibility: Option<bool>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn temperature_profile_defaults_when_unset() {
+        assert_eq!(resolve_temperature_profile(None), "default");
+    }
+
+    #[test]
+    fn temperature_profile_passes_through_valid_values() {
+        for v in ["default", "a", "b"] {
+            assert_eq!(resolve_temperature_profile(Some(v)), v);
+        }
+    }
+
+    #[test]
+    fn temperature_profile_normalizes_case_and_whitespace() {
+        // YAML makes " A " and "A" easy to write by accident, and firmware
+        // compares the string it receives.
+        assert_eq!(resolve_temperature_profile(Some(" A ")), "a");
+        assert_eq!(resolve_temperature_profile(Some("B")), "b");
+    }
+
+    #[test]
+    fn maximum_compatibility_is_omitted_from_json_when_unset() {
+        // Absent must mean "no opinion", not "use fast refresh": serializing
+        // `false` would actively override a device default we never chose.
+        let r = DisplayJsonResponse {
+            status: 0,
+            image_url: None,
+            filename: "x".into(),
+            update_firmware: false,
+            firmware_url: None,
+            refresh_rate: 60,
+            reset_firmware: false,
+            temperature_profile: Some("default".into()),
+            special_function: None,
+            maximum_compatibility: None,
+        };
+        let j = serde_json::to_string(&r).expect("serializes");
+        assert!(
+            !j.contains("maximum_compatibility"),
+            "unset must be omitted entirely, got {j}"
+        );
+    }
+
+    #[test]
+    fn maximum_compatibility_is_sent_when_set() {
+        let r = DisplayJsonResponse {
+            status: 0,
+            image_url: None,
+            filename: "x".into(),
+            update_firmware: false,
+            firmware_url: None,
+            refresh_rate: 60,
+            reset_firmware: false,
+            temperature_profile: Some("a".into()),
+            special_function: None,
+            maximum_compatibility: Some(true),
+        };
+        let j = serde_json::to_string(&r).expect("serializes");
+        assert!(
+            j.contains("\"maximum_compatibility\":true"),
+            "must reach the firmware verbatim, got {j}"
+        );
+    }
+
+    /// Firmware 1.8.14 never implemented `c` — it parses to `default`, which
+    /// silently *disables* the extra clearing the operator asked for. Refusing
+    /// it server-side turns a silent wrong-on-glass into a log line.
+    #[test]
+    fn temperature_profile_refuses_c_because_firmware_ignores_it() {
+        assert_eq!(resolve_temperature_profile(Some("c")), "default");
+    }
+
+    #[test]
+    fn temperature_profile_refuses_unknown_values() {
+        // Must not reach firmware: a bad profile fails on the glass, silently.
+        for v in ["", "d", "1", "profile-a", "true"] {
+            assert_eq!(
+                resolve_temperature_profile(Some(v)),
+                "default",
+                "unknown profile {v:?} must fall back rather than be forwarded"
+            );
+        }
+    }
 
     /// Pins the three settled cases of the `use_actual` rule (see
     /// `resolve_use_actual`'s doc comment): no explicit flag defaults to
@@ -1433,6 +1704,105 @@ mod tests {
         DitherTuningValues::default()
     }
 
+    /// The device's configured algorithm outranks the screen's.
+    ///
+    /// If this breaks, it means: a screen can silently retune the hardware.
+    /// The dither algorithm is a property of the panel, and the operator who
+    /// set it on the device cannot see that a screen is quietly replacing it.
+    /// Cost of the old order, measured once: a device set to
+    /// `atkinson-hybrid` went on rendering `atkinson` with no indication
+    /// anywhere.
+    #[test]
+    fn resolve_render_params_device_dither_beats_script_dither() {
+        let mut warnings = Vec::new();
+        let params = resolve_render_params(
+            None,
+            None,
+            Some("atkinson"),
+            None,
+            Some("atkinson-hybrid"),
+            None,
+            &[(0, 0, 0), (255, 255, 255)],
+            &[],
+            &default_tuning(),
+            &mut warnings,
+        );
+        assert_eq!(params.dither.as_deref(), Some("atkinson-hybrid"));
+    }
+
+    /// A screen still chooses when the device has no opinion.
+    #[test]
+    fn resolve_render_params_script_dither_applies_when_device_has_none() {
+        let mut warnings = Vec::new();
+        let params = resolve_render_params(
+            None,
+            None,
+            Some("sierra-lite"),
+            None,
+            None,
+            None,
+            &[(0, 0, 0), (255, 255, 255)],
+            &[],
+            &default_tuning(),
+            &mut warnings,
+        );
+        assert_eq!(params.dither.as_deref(), Some("sierra-lite"));
+        assert!(
+            warnings.is_empty(),
+            "nothing was overridden, so nothing to report: {warnings:?}"
+        );
+    }
+
+    /// Losing a setting must never be silent — the warning names both sides.
+    #[test]
+    fn resolve_render_params_warns_when_script_and_device_dither_disagree() {
+        let mut warnings = Vec::new();
+        resolve_render_params(
+            None,
+            None,
+            Some("atkinson"),
+            None,
+            Some("atkinson-hybrid"),
+            None,
+            &[(0, 0, 0), (255, 255, 255)],
+            &[],
+            &default_tuning(),
+            &mut warnings,
+        );
+        assert_eq!(warnings.len(), 1, "got: {warnings:?}");
+        assert!(
+            warnings[0].contains("atkinson-hybrid") && warnings[0].contains("atkinson"),
+            "the warning must name the value that won AND the one that lost: {warnings:?}"
+        );
+    }
+
+    /// Two spellings of one algorithm are not a disagreement.
+    ///
+    /// `sierra-light` is the accepted misspelling of `sierra-lite`. Comparing
+    /// before normalisation would report a conflict that does not exist and
+    /// train the operator to ignore the warning.
+    #[test]
+    fn resolve_render_params_does_not_warn_when_dither_names_are_aliases() {
+        let mut warnings = Vec::new();
+        let params = resolve_render_params(
+            None,
+            None,
+            Some("sierra-light"),
+            None,
+            Some("sierra-lite"),
+            None,
+            &[(0, 0, 0), (255, 255, 255)],
+            &[],
+            &default_tuning(),
+            &mut warnings,
+        );
+        assert_eq!(params.dither.as_deref(), Some("sierra-lite"));
+        assert!(
+            warnings.is_empty(),
+            "aliases of the same algorithm are not a conflict: {warnings:?}"
+        );
+    }
+
     #[test]
     fn resolve_render_params_prefers_script_colors_actual_over_pre_script_chain() {
         // Distinct, non-guessable RGB triples per source so a wrong-source
@@ -1442,7 +1812,7 @@ mod tests {
             SRC_PANEL_ACTUAL,
             Some(vec![(0x99, 0x99, 0x99), (0x88, 0x88, 0x88)]),
         )];
-        let mut warning = None;
+        let mut warnings: Vec<String> = Vec::new();
         let params = resolve_render_params(
             None,
             Some(&script_actual),
@@ -1453,7 +1823,7 @@ mod tests {
             &[(0, 0, 0), (255, 255, 255)],
             &pre_script,
             &default_tuning(),
-            &mut warning,
+            &mut warnings,
         );
         assert_eq!(
             params.measured_colors.unwrap(),
@@ -1465,7 +1835,7 @@ mod tests {
             "measured_source must name the script as the winning layer, not \
              whatever the caller's own pre-script chain resolved to"
         );
-        assert!(warning.is_none());
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     #[test]
@@ -1488,7 +1858,7 @@ mod tests {
                 Some(vec![(0x44, 0x44, 0x44), (0x55, 0x55, 0x55)]),
             ), // never reached
         ];
-        let mut warning = None;
+        let mut warnings: Vec<String> = Vec::new();
         let params = resolve_render_params(
             None,
             None,
@@ -1499,14 +1869,16 @@ mod tests {
             &[(0, 0, 0), (255, 255, 255)],
             &pre_script,
             &default_tuning(),
-            &mut warning,
+            &mut warnings,
         );
         assert_eq!(
             params.measured_colors.unwrap(),
             vec![(0xAA, 0xBB, 0xCC), (0xDD, 0xEE, 0xFF)],
             "must resolve to panel.colors_actual, the second entry in the supplied order"
         );
-        let w = warning.expect("the skipped dev_override mismatch must be reported");
+        let w = warnings
+            .first()
+            .expect("the skipped dev_override mismatch must be reported");
         assert!(
             w.contains(SRC_DEV_OVERRIDE),
             "warning must name the skipped source: {w}"
@@ -1524,7 +1896,7 @@ mod tests {
             SRC_PANEL_ACTUAL,
             Some(vec![(0x10, 0x20, 0x30), (0x40, 0x50, 0x60)]),
         )];
-        let mut warning = None;
+        let mut warnings: Vec<String> = Vec::new();
         let params = resolve_render_params(
             None,
             Some(&script_actual),
@@ -1535,19 +1907,21 @@ mod tests {
             &[(0, 0, 0), (255, 255, 255)],
             &pre_script,
             &default_tuning(),
-            &mut warning,
+            &mut warnings,
         );
         assert_eq!(
             params.measured_colors.unwrap(),
             vec![(0x10, 0x20, 0x30), (0x40, 0x50, 0x60)]
         );
-        let w = warning.expect("the script mismatch must be reported");
+        let w = warnings
+            .first()
+            .expect("the script mismatch must be reported");
         assert!(w.contains(SRC_SCRIPT), "warning must name script: {w}");
     }
 
     #[test]
     fn resolve_render_params_no_candidates_resolve_to_none_without_failing() {
-        let mut warning = None;
+        let mut warnings: Vec<String> = Vec::new();
         let params = resolve_render_params(
             None,
             None,
@@ -1558,10 +1932,10 @@ mod tests {
             &[(0, 0, 0), (255, 255, 255)],
             &[],
             &default_tuning(),
-            &mut warning,
+            &mut warnings,
         );
         assert!(params.measured_colors.is_none());
-        assert!(warning.is_none());
+        assert!(warnings.is_empty(), "{warnings:?}");
         // A render must still produce a palette even with no measured colors.
         assert_eq!(params.palette, vec![(0, 0, 0), (255, 255, 255)]);
     }
@@ -1569,6 +1943,7 @@ mod tests {
     #[test]
     fn gamut_follows_the_script_over_device_over_panel_priority() {
         let script = DitherTuningValues {
+            deprecated_error_clamp: None,
             gamut: crate::models::GamutTuningValues {
                 knee: Some(0.4),
                 ..Default::default()
@@ -1576,6 +1951,7 @@ mod tests {
             ..Default::default()
         };
         let device = DitherTuningValues {
+            deprecated_error_clamp: None,
             gamut: crate::models::GamutTuningValues {
                 knee: Some(0.7),
                 amount: Some(0.5),
@@ -1584,6 +1960,7 @@ mod tests {
             ..Default::default()
         };
         let panel = DitherTuningValues {
+            deprecated_error_clamp: None,
             gamut: crate::models::GamutTuningValues {
                 knee: Some(0.9),
                 amount: Some(1.0),
@@ -1607,6 +1984,7 @@ mod tests {
         // `resolve_effective_tuning` short-circuits when any override field is
         // set. A gamut-only override must not be silently ignored.
         let over = DitherTuningValues {
+            deprecated_error_clamp: None,
             gamut: crate::models::GamutTuningValues {
                 amount: Some(0.0),
                 ..Default::default()
@@ -1614,13 +1992,14 @@ mod tests {
             ..Default::default()
         };
         let other = DitherTuningValues {
-            error_clamp: Some(0.5),
+            deprecated_error_clamp: None,
+            max_error: Some(0.5),
             ..Default::default()
         };
         let resolved = resolve_effective_tuning(&over, &other, &other, &other);
         assert_eq!(resolved.gamut.amount, Some(0.0));
         assert_eq!(
-            resolved.error_clamp, None,
+            resolved.max_error, None,
             "an explicit override replaces the whole struct"
         );
     }
@@ -1632,7 +2011,7 @@ mod tests {
             measured_colors: None,
             measured_source: SRC_NONE,
             dither: None,
-            error_clamp: None,
+            max_error: None,
             noise_scale: None,
             chroma_clamp: None,
             strength: None,

@@ -396,7 +396,7 @@ impl Palette {
 
     /// Returns true if the palette is pure greyscale (R==G==B for all official entries).
     ///
-    /// Grey palettes benefit from higher error_clamp values to properly express
+    /// Grey palettes benefit from higher max_error values to properly express
     /// tone levels through error diffusion.
     pub fn is_greyscale(&self) -> bool {
         self.official_srgb.iter().all(|c| {

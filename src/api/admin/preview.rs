@@ -138,7 +138,8 @@ pub async fn device_preview(
             colors: device_config.colors.clone(),
             dither: device_config.dither.clone(),
             tuning: DitherTuningValues {
-                error_clamp: device_config.error_clamp,
+                deprecated_error_clamp: None,
+                max_error: device_config.max_error,
                 noise_scale: device_config.noise_scale,
                 chroma_clamp: device_config.chroma_clamp,
                 strength: device_config.strength,
@@ -264,7 +265,7 @@ fn fingerprint(device_config: &DeviceConfig, model: &str, opts: &RenderOpts) -> 
     hasher.update(
         format!(
             "{:?}/{:?}/{:?}/{:?}/{:?}",
-            device_config.error_clamp,
+            device_config.max_error,
             device_config.noise_scale,
             device_config.chroma_clamp,
             device_config.strength,

@@ -9,9 +9,164 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- **Panel recovery for burnt-in screens.** If a TRMNL X keeps showing a faint
+  image of something it displayed a long time ago, you can now ask it to clear
+  the panel. Start a run with
+  `POST /api/admin/devices/{device}/recover` (optional body `{"wipes": 20}`),
+  check on it with `GET`, and stop it early with `DELETE`. Each wipe is a few
+  minutes of the device flashing its panel black and white; content reappears
+  between wipes and normal operation resumes by itself when the run finishes.
+  While a run is in progress the device checks back every few seconds, so the
+  wipes follow one another closely even when the screen it is showing has a
+  long `refresh` interval.
+  Runs are not saved: restarting Byonk, rebooting the device, or simply
+  unplugging it all end the run safely. Needs device firmware 1.8.14 or newer —
+  on older firmware the device ignores the request and keeps showing content.
+
+- **Ghosting fix for devices that need a stronger refresh.** If a faint image of
+  the previous screen stays visible under the current one, set
+  `temperature_profile: a` on the device in `config.yaml` — Byonk then tells the
+  device to drive its panel harder and flash more, which clears the residue. Try
+  `a` first, then `b`. The tell-tale sign is ghosting that shows in mid-greys but
+  is invisible in solid black and solid white areas. Unset behaves exactly as
+  before, so nothing changes for devices that are fine. On a TRMNL X this needs
+  device firmware 1.8.4 or newer. See the configuration guide's *Ghosting*
+  section.
+- **`maximum_compatibility` device setting**, asking the device to use a full
+  refresh on every update. Note it has no effect on a TRMNL X — that model
+  always does a full update and its firmware ignores the setting.
+- **`min_png_bytes` device setting.** A TRMNL X picks how carefully it renders
+  greys from the size in bytes of the image it downloads, and Byonk's images are
+  normally too small to reach its better setting. Setting `min_png_bytes: 102401`
+  pads the image with data that decoders ignore, so the picture is unchanged and
+  only the size grows. Updates take longer in exchange. Useful on a TRMNL X only.
+
 ### Changed
 
+- **`error_clamp` is now called `max_error`, and the old name is ignored.** In
+  0.18.0 the knob stopped capping the resulting pixel value and started capping
+  the accumulated dithering error, which moved its useful range from around
+  `0.1` to around `1.0`. The old name kept working, so a value tuned before
+  0.18.0 went on being applied under a meaning it was never chosen for — and
+  rendered flat, with saturated areas collapsing to a single ink.
+
+  A setting that changes what it means should change its name with it, so it
+  has. `max_error` is the setting; `error_clamp` is read at startup, reported
+  with the exact path to edit, and then discarded. It applies wherever the old
+  name was accepted: `config.yaml` panel and device blocks, a screen's Lua
+  return table, the render API and the dev UI.
+
+  If you never set it, nothing changes. If you did, Byonk tells you where:
+
+  ```text
+  WARN panels.reterminal_e1004.dither.sierra-lite.error_clamp: 0.11 —
+       `error_clamp` was removed in 0.18.0 and is IGNORED. ...
+  ```
+
+  Delete the line to take the default, or set `max_error` if you have retuned
+  it under the new meaning. Lua scripts read the resolved value as
+  `device.dither.max_error`.
+
+- **The dev UI's tuning defaults now match the renderer.** Switching dither
+  algorithm filled the tuning boxes from a table that had not been updated
+  since before 0.18.0: every algorithm got a pre-0.18.0 error cap, and the
+  noise scales disagreed with the renderer's own — Atkinson offered `0` where
+  the renderer uses `8.0`, and four algorithms could not even reach their
+  default because the noise box stopped at `8.0`. The preview therefore showed
+  something the device would not produce. The boxes now start at the values
+  the renderer actually uses.
+
+- **A device's dither algorithm now wins over a screen's, instead of losing to
+  it silently.** Setting `dither` on a device in `config.yaml` had no effect on
+  any screen that named its own — the screen won, and nothing said so. A device
+  set to `atkinson-hybrid` went on rendering `atkinson`, which took a session
+  to notice. The algorithm suits the panel rather than the content, and the
+  operator who set it on the device is the one who cannot see it being
+  replaced, so the device decides. A screen's `dither` still applies on any
+  device that does not name one, and when the two disagree Byonk logs which
+  value was dropped.
+
+- **A screen's `refresh_rate` still wins over a device's `refresh`, but no
+  longer in silence.** This one keeps its precedence: only the script knows
+  when its own content next changes, so a screen that asks to be run again in
+  three minutes gets three minutes. What was missing was any sign that the
+  device's setting had been passed over — Byonk now logs it, naming both
+  intervals.
+
+- The configuration guide's *Ghosting* section now explains what
+  `temperature_profile` actually does on each model — on a TRMNL X it controls
+  how hard the panel is cleared rather than which waveform is used, so `a` and
+  `b` behave identically there — and adds a *Burn-in* section for the case no
+  setting can fix: a panel that has shown the same picture for weeks keeps a
+  trace of it, and needs hours of cycling rather than a stronger refresh.
+
 ### Fixed
+
+- **The error screen now wraps long messages.** The whole message was drawn as
+  a single centred line of text, which ran off both edges of the panel and
+  showed only its middle. Lua errors were worst affected: they arrive as a
+  message plus a multi-line stack traceback, and every line break was collapsed
+  into one unreadable run. Messages are now wrapped and left-aligned, and a
+  message too long for the box ends with an ellipsis so a clipped error cannot
+  be mistaken for a complete one.
+- **Assigning a screen to a device no longer deletes the device's other
+  settings.** Changing a device's screen — from the admin API, the web UI or an
+  MCP client — rewrote the device's whole entry in `config.yaml` and silently
+  dropped every setting it did not know how to write: `temperature_profile`,
+  `maximum_compatibility`, `min_png_bytes` and the dither tuning values
+  `error_clamp`, `noise_scale`, `chroma_clamp`, `strength` and `gamut`. Nothing
+  reported an error; the settings were simply gone, and the only symptom was
+  the panel looking wrong again some time later. If a device of yours has lost
+  such a setting, add it back to `config.yaml` — it will stay now.
+- **A device configured by registration code is no longer listed twice.** If
+  your `config.yaml` lists a device under its registration code rather than its
+  MAC address, the admin device list — and so the web UI and Home Assistant —
+  showed it as two devices: the real one, and a phantom that had never been
+  seen, with the registration code sitting in its MAC field. Editing the
+  phantom row changed settings the device does not read.
+- **Panel recovery can be checked and cancelled under either of a device's
+  names.** A run started with the device's `config.yaml` key reported "not
+  running" when asked about under its MAC address, and cancelling it that way
+  silently did nothing while the panel went on wiping — the web UI and Home
+  Assistant use the MAC. Both names now reach the same run, and a registration
+  code works written either way, `ABCDE-FGHJK` or `ABCDEFGHJK`.
+- **Panel recovery now works for a device configured by registration code.**
+  If your `config.yaml` lists a device under its registration code rather than
+  its MAC address, starting a recovery run for it did nothing at all: the run
+  was filed under the code, and the device asks for work under its MAC. No
+  error appeared anywhere — the panel simply went on showing content. Runs are
+  now found under either identifier.
+- **`min_png_bytes` is capped at the size a device will accept** (750 000
+  bytes). A value above that produced an image the device refuses, so a screen
+  went blank instead of looking better; a mistyped value could also ask the
+  server for a very large amount of memory on every single render. Byonk now
+  caps the value and says so in the log, and an image already so large that
+  padding it would cross the limit is served as it is. Nothing changes for a
+  sensible setting such as `102401`.
+- **Lua stack tracebacks keep their indentation on the error screen.** The
+  indent is the only thing separating a traceback's frames from the message
+  above them, and it was being stripped, so the frames ran together with the
+  error text. Wrapped frames now stay indented too.
+- **The "screen wins over the device's `refresh`" warning now names the
+  device.** With several devices sharing one screen, the message said which
+  screen but not which device had the setting that does nothing.
+- **Two devices that show the same screen no longer get each other's image.**
+  Byonk caches a rendered image under a short id and serves it as
+  `/api/image/<id>.png`. That id was computed from the drawing alone, so two
+  devices whose screen produced identical drawing — same model, same screen,
+  same data — shared one cache entry even when their render settings differed.
+  Whichever device rendered last decided what both of them received, so a
+  device could silently get another device's `colors`, `colors_actual`,
+  `dither`, `max_error`, `noise_scale`, `chroma_clamp`, `strength`, `gamut`,
+  `font_hinting` or `min_png_bytes` — or an image at the wrong size. The id now
+  covers every one of those. Nothing reported an error while this happened.
+  After upgrading, every device fetches its image once more, because all the
+  ids change; there is no other effect.
+- `temperature_profile: c` is now refused with a warning instead of being sent
+  to the device. TRMNL's documentation lists `c`, but device firmware up to
+  1.8.14 never implemented it and silently reads it as `default` — which turns
+  off the very anti-ghosting behaviour the setting was meant to enable. Use `a`
+  or `b`.
 
 ## 0.19.0 - 2026-08-20
 

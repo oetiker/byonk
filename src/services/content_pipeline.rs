@@ -8,19 +8,44 @@ use crate::services::screen_repo_loader::{join_rel, ResolvedScreen, ScreenRepoSo
 use crate::services::screen_repo_manager::ScreenRepoManager;
 use crate::services::{FontFaceInfo, LuaRuntime, RenderService, TemplateService};
 
+/// The chosen refresh interval, and what choosing it cost.
+pub(crate) struct ResolvedRefresh {
+    /// Effective refresh interval in seconds.
+    pub rate: u32,
+    /// The device's `refresh`, set to a usable value but not used because the
+    /// script named its own interval. `None` when nothing was displaced.
+    ///
+    /// The script keeps the last word — only it knows when its content next
+    /// changes — but the operator who configured the device must be able to
+    /// see that their setting is inert, so the caller logs this with the
+    /// device and screen it belongs to.
+    pub ignored_device_override: Option<u32>,
+}
+
 /// Resolve the effective refresh rate.
 /// Precedence: Lua-returned (>0) > per-device override (>0) > screen default.
 pub(crate) fn resolve_refresh_rate(
     lua_refresh: u32,
     device_override: Option<u32>,
     screen_default: u32,
-) -> u32 {
+) -> ResolvedRefresh {
+    // `0` means "unset" at every layer of this chain.
+    let device_override = device_override.filter(|&r| r > 0);
     if lua_refresh > 0 {
-        lua_refresh
-    } else if let Some(r) = device_override.filter(|&r| r > 0) {
-        r
+        ResolvedRefresh {
+            rate: lua_refresh,
+            ignored_device_override: device_override,
+        }
+    } else if let Some(r) = device_override {
+        ResolvedRefresh {
+            rate: r,
+            ignored_device_override: None,
+        }
     } else {
-        screen_default
+        ResolvedRefresh {
+            rate: screen_default,
+            ignored_device_override: None,
+        }
     }
 }
 
@@ -47,7 +72,7 @@ pub struct ScriptResult {
     /// Optional dither mode from Lua script ("photo" or "graphics")
     pub script_dither: Option<String>,
     /// Optional error clamp override from Lua script
-    pub script_error_clamp: Option<f32>,
+    pub script_max_error: Option<f32>,
     /// Optional blue noise jitter scale override from Lua script
     pub script_noise_scale: Option<f32>,
     /// Optional chroma clamp override from Lua script
@@ -95,7 +120,7 @@ pub struct DeviceContext {
     /// Pre-script resolved dither algorithm name
     pub dither_algorithm: Option<String>,
     /// Pre-script resolved error clamp
-    pub dither_error_clamp: Option<f32>,
+    pub dither_max_error: Option<f32>,
     /// Pre-script resolved noise scale
     pub dither_noise_scale: Option<f32>,
     /// Pre-script resolved chroma clamp
@@ -329,8 +354,23 @@ impl ContentPipeline {
         // Use script's refresh rate, device override, or the screen meta default.
         let screen_default = resolved.meta.refresh.unwrap_or(900);
         let device_override = device_ctx.and_then(|c| c.refresh_override);
-        let refresh_rate =
+        let refresh =
             resolve_refresh_rate(lua_result.refresh_rate, device_override, screen_default);
+        let refresh_rate = refresh.rate;
+        if let Some(ignored) = refresh.ignored_device_override {
+            tracing::warn!(
+                // Without this, an operator running several devices off one
+                // screen cannot tell which of them has the inert `refresh`.
+                // `ignored_device_override` is `Some` only when the override
+                // came from a device, so `device_ctx` is always present here.
+                device = device_ctx.map(|c| c.mac.as_str()).unwrap_or("unknown"),
+                screen = %screen_name,
+                "device sets refresh {ignored}s, but screen returned refresh_rate \
+                 {refresh_rate}s — the screen wins, because only it knows when its \
+                 content next changes. Remove `refresh_rate` from the screen to use \
+                 the device's interval."
+            );
+        }
 
         tracing::debug!(
             screen = %screen_name,
@@ -350,7 +390,7 @@ impl ContentPipeline {
             script_colors: lua_result.colors,
             script_colors_actual: lua_result.colors_actual,
             script_dither: lua_result.dither,
-            script_error_clamp: lua_result.error_clamp,
+            script_max_error: lua_result.max_error,
             script_noise_scale: lua_result.noise_scale,
             script_chroma_clamp: lua_result.chroma_clamp,
             script_strength: lua_result.strength,
@@ -772,18 +812,61 @@ mod refresh_tests {
 
     #[test]
     fn lua_wins_over_override_and_default() {
-        assert_eq!(resolve_refresh_rate(120, Some(600), 900), 120);
+        assert_eq!(resolve_refresh_rate(120, Some(600), 900).rate, 120);
     }
 
     #[test]
     fn override_wins_over_default_when_lua_zero() {
-        assert_eq!(resolve_refresh_rate(0, Some(600), 900), 600);
+        assert_eq!(resolve_refresh_rate(0, Some(600), 900).rate, 600);
     }
 
     #[test]
     fn zero_override_is_ignored() {
-        assert_eq!(resolve_refresh_rate(0, Some(0), 900), 900);
-        assert_eq!(resolve_refresh_rate(0, None, 900), 900);
+        assert_eq!(resolve_refresh_rate(0, Some(0), 900).rate, 900);
+        assert_eq!(resolve_refresh_rate(0, None, 900).rate, 900);
+    }
+
+    /// A script keeps the last word on how often it wants to be run — only it
+    /// knows when its content next changes. But the operator who set
+    /// `refresh` on the device must be told it is not being used.
+    ///
+    /// If this breaks, it means: a device-level refresh interval is
+    /// discarded with nothing in the log, and the operator has no way to see
+    /// why the device keeps checking back on the screen's schedule.
+    #[test]
+    fn a_displaced_device_override_is_reported() {
+        let r = resolve_refresh_rate(120, Some(600), 900);
+        assert_eq!(r.rate, 120, "the script still wins");
+        assert_eq!(
+            r.ignored_device_override,
+            Some(600),
+            "the displaced device value must come back so the caller can name it"
+        );
+    }
+
+    #[test]
+    fn nothing_is_reported_when_the_device_override_is_used() {
+        assert_eq!(
+            resolve_refresh_rate(0, Some(600), 900).ignored_device_override,
+            None
+        );
+    }
+
+    /// `0` means "unset" everywhere else in this chain, so it is not a value
+    /// the script displaced and must not be reported as one.
+    #[test]
+    fn a_zero_device_override_is_not_a_displaced_value() {
+        let r = resolve_refresh_rate(120, Some(0), 900);
+        assert_eq!(r.rate, 120);
+        assert_eq!(r.ignored_device_override, None);
+    }
+
+    #[test]
+    fn no_device_override_reports_nothing() {
+        assert_eq!(
+            resolve_refresh_rate(120, None, 900).ignored_device_override,
+            None
+        );
     }
 }
 

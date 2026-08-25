@@ -28,6 +28,9 @@ resvg = "0.48.1"
 usvg = "0.48.1"
 tiny-skia = "0.12"
 png = "0.17"
+# PNG chunk CRCs for src/rendering/png_pad.rs. Already in the tree via png/flate2;
+# named directly so the padding code does not reach through another crate.
+crc32fast = "1"
 fontdb = "0.24"
 # Bitmap strike introspection. Replaces the `bitmap_strikes` field byonk's
 # fontdb fork carried; see src/rendering/font_strikes.rs. Pinned to the version

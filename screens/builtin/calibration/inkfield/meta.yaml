@@ -1,0 +1,34 @@
+title: Ink Field
+description: >
+  Every palette ink, repeated all over the panel in a Latin square, so one
+  photograph measures the panel instead of measuring the lighting. Each ink
+  appears exactly as often in every row and every column, so a lighting
+  gradient cancels out when the cells for one ink are averaged. Because black
+  and white appear near every position too, each cell can be normalised
+  against its own local black and white — dark-frame and flat-field
+  correction from a single hand-held shot. Photograph it square-on and
+  measure; the exposure and the evenness of the light barely matter.
+byonk: "0.19"
+refresh: 3600
+params:
+  tiles:
+    type: int
+    label: "Latin squares per axis"
+    description: >
+      How many times the square is repeated across the panel. 0 picks a value
+      that lands the cells near 120 px, which suits a 16-ink panel at one
+      square and a 4-ink panel at four.
+    default: 0
+    min: 0
+    max: 8
+    mode: box
+  offset:
+    type: int
+    label: "Ink rotation"
+    description: >
+      Rotates which ink lands in which cell. Shoot a second photo with a
+      different value to check the result does not depend on position.
+    default: 0
+    min: 0
+    max: 15
+    mode: box

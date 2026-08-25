@@ -71,7 +71,7 @@ pub struct RenderQuery {
     /// Measured/actual colors override from dev UI color tuning
     pub colors_actual: Option<String>,
     /// Error clamp override
-    pub error_clamp: Option<f32>,
+    pub max_error: Option<f32>,
     /// Chroma clamp override
     pub chroma_clamp: Option<f32>,
     /// Blue noise jitter scale override
@@ -344,7 +344,7 @@ pub async fn handle_render(
         device_config_colors,
         device_config_panel,
         device_config_dither,
-        dc_error_clamp,
+        dc_max_error,
         dc_noise_scale,
         dc_chroma_clamp,
         dc_strength,
@@ -366,7 +366,7 @@ pub async fn handle_render(
                     dc.colors.clone(),
                     dc.panel.clone(),
                     dc.dither.clone(),
-                    dc.error_clamp,
+                    dc.max_error,
                     dc.noise_scale,
                     dc.chroma_clamp,
                     dc.strength,
@@ -460,7 +460,8 @@ pub async fn handle_render(
         .map(|pdc| pdc.resolve_for_algorithm(Some(pre_script_algo)))
         .unwrap_or_default();
     let pre_dc_tuning = crate::models::DitherTuningValues {
-        error_clamp: dc_error_clamp,
+        deprecated_error_clamp: None,
+        max_error: dc_max_error,
         noise_scale: dc_noise_scale,
         chroma_clamp: dc_chroma_clamp,
         strength: dc_strength,
@@ -512,7 +513,7 @@ pub async fn handle_render(
             .as_deref()
             .map(crate::api::display::colors_to_hex_strings),
         dither_algorithm: Some(pre_script_algo.to_string()),
-        dither_error_clamp: pre_script_tuning.error_clamp,
+        dither_max_error: pre_script_tuning.max_error,
         dither_noise_scale: pre_script_tuning.noise_scale,
         dither_chroma_clamp: pre_script_tuning.chroma_clamp,
         dither_strength: pre_script_tuning.strength,
@@ -561,7 +562,7 @@ pub async fn handle_render(
             script_result.script_colors,
             script_result.script_colors_actual,
             script_result.script_dither,
-            script_result.script_error_clamp,
+            script_result.script_max_error,
             script_result.script_noise_scale,
             script_result.script_chroma_clamp,
             script_result.script_strength,
@@ -576,7 +577,7 @@ pub async fn handle_render(
         script_colors,
         script_colors_actual,
         script_dither,
-        script_error_clamp,
+        script_max_error,
         script_noise_scale,
         script_chroma_clamp,
         script_strength,
@@ -652,7 +653,7 @@ pub async fn handle_render(
         }
 
         // Tuning — sync when the dev UI sends tuning params
-        let has_query_tuning = query.error_clamp.is_some()
+        let has_query_tuning = query.max_error.is_some()
             || query.noise_scale.is_some()
             || query.chroma_clamp.is_some()
             || query.strength.is_some();
@@ -661,7 +662,8 @@ pub async fn handle_render(
             tuning_map.insert(
                 device_key.clone(),
                 crate::models::DitherTuningValues {
-                    error_clamp: query.error_clamp,
+                    deprecated_error_clamp: None,
+                    max_error: query.max_error,
                     noise_scale: query.noise_scale,
                     chroma_clamp: query.chroma_clamp,
                     strength: query.strength,
@@ -686,7 +688,8 @@ pub async fn handle_render(
         .unwrap_or_default();
 
     let dc_tuning = crate::models::DitherTuningValues {
-        error_clamp: dc_error_clamp,
+        deprecated_error_clamp: None,
+        max_error: dc_max_error,
         noise_scale: dc_noise_scale,
         chroma_clamp: dc_chroma_clamp,
         strength: dc_strength,
@@ -699,14 +702,16 @@ pub async fn handle_render(
     // carries gamut knobs. Adding that would be new query-string surface,
     // not threading (see Task 12's amendment F).
     let query_tuning = crate::models::DitherTuningValues {
-        error_clamp: query.error_clamp,
+        deprecated_error_clamp: None,
+        max_error: query.max_error,
         noise_scale: query.noise_scale,
         chroma_clamp: query.chroma_clamp,
         strength: query.strength,
         gamut: Default::default(),
     };
     let script_tuning = crate::models::DitherTuningValues {
-        error_clamp: script_error_clamp,
+        deprecated_error_clamp: None,
+        max_error: script_max_error,
         noise_scale: script_noise_scale,
         chroma_clamp: script_chroma_clamp,
         strength: script_strength,
@@ -719,7 +724,7 @@ pub async fn handle_render(
         &panel_tuning,
     );
 
-    let mut measured_warning: Option<String> = None;
+    let mut render_warnings: Vec<String> = Vec::new();
     let render_params = crate::api::display::resolve_render_params(
         script_colors.as_deref(),
         script_colors_actual.as_deref(),
@@ -730,9 +735,9 @@ pub async fn handle_render(
         &query_palette,
         &pre_script_measured_candidates,
         &tuning,
-        &mut measured_warning,
+        &mut render_warnings,
     );
-    if let Some(w) = &measured_warning {
+    for w in &render_warnings {
         tracing::warn!(screen = ?query.screen, mac = ?query.mac, "{w}");
     }
 

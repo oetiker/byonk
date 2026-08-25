@@ -6,10 +6,11 @@
 //! pure so the adaptive default can be tested exhaustively without a render
 //! in the loop.
 
+use serde::Serialize;
 use std::collections::BTreeMap;
 
 /// The hinting engine to use, mirroring `usvg::FontHintingEngine`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum HintingEngine {
     /// The TrueType or PostScript interpreter, i.e. the hints embedded in the
     /// font itself.
@@ -24,7 +25,7 @@ pub enum HintingEngine {
 
 /// The basic mode for [`HintingTarget::Smooth`], mirroring
 /// `usvg::FontHintingSmoothMode`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum HintingMode {
     /// The standard smooth hinting mode.
     Normal,
@@ -39,7 +40,7 @@ pub enum HintingMode {
 
 /// The rasterization the hinted outline is being prepared for, mirroring
 /// `usvg::FontHintingTarget`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum HintingTarget {
     /// A strong hinting style intended for aliased, monochrome
     /// rasterization.
@@ -77,7 +78,7 @@ pub enum HintingTarget {
 
 /// Font hinting configuration for one render, mirroring
 /// `usvg::FontHintingOptions`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct HintingSpec {
     /// The hinting engine to use.
     pub engine: HintingEngine,
@@ -133,7 +134,7 @@ impl HintingSpec {
 }
 
 /// A per-font-variant override.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct FontVariant {
     /// The font family or file this variant applies to.
     pub font: String,
@@ -220,7 +221,7 @@ impl FontConfig {
 /// do — means `font_hinting = { variants = ... }` silently discards the
 /// adaptive mono hinting a black-and-white panel depends on, for an author who
 /// only meant to add a variant.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize)]
 pub struct FontHintingDirective {
     /// The document default the script asked for.
     ///

@@ -128,7 +128,7 @@ The `device.dither` sub-table contains the pre-script resolved dither tuning val
 ```lua
 -- Read current tuning
 local algo = device.dither.algorithm       -- "floyd-steinberg" (resolved algorithm)
-local ec = device.dither.error_clamp       -- 1.0 (from panel/device config)
+local ec = device.dither.max_error       -- 1.0 (from panel/device config)
 local ns = device.dither.noise_scale       -- 4.0
 local cc = device.dither.chroma_clamp      -- nil (not set)
 local st = device.dither.strength          -- 1.0 (default)
@@ -137,7 +137,7 @@ local st = device.dither.strength          -- 1.0 (default)
 return {
   data = { ... },
   refresh_rate = 300,
-  error_clamp = (device.dither.error_clamp or 1.0) * 0.5,
+  max_error = (device.dither.max_error or 1.0) * 0.5,
   -- noise_scale not returned -> keeps panel/device value
 }
 ```
@@ -145,7 +145,7 @@ return {
 | Field | Type | Description |
 |-------|------|-------------|
 | `algorithm` | string or nil | Pre-script resolved dither algorithm |
-| `error_clamp` | number or nil | Error diffusion clamp (from device config / panel) |
+| `max_error` | number or nil | Error diffusion clamp (from device config / panel) |
 | `noise_scale` | number or nil | Blue noise jitter scale |
 | `chroma_clamp` | number or nil | Chromatic error clamp |
 | `strength` | number or nil | Error diffusion strength (0.0–2.0, default 1.0) |
@@ -1242,7 +1242,7 @@ return {
   colors = { "#000000", "#FFFFFF", "#FF0000" },  -- Optional: override display palette
   colors_actual = { "#0A0A0A", "#E8E6E0", "#A83A30" },  -- Optional: override measured colours
   dither = "atkinson",      -- Optional: dither algorithm
-  error_clamp = 1.0,        -- Optional: cap on accumulated diffusion error
+  max_error = 1.0,        -- Optional: cap on accumulated diffusion error
   noise_scale = 0.6,        -- Optional: blue noise jitter scale
   chroma_clamp = 2.0,       -- Optional: chromatic error clamp
   strength = 0.8,           -- Optional: error diffusion strength (default 1.0)
@@ -1277,7 +1277,14 @@ In templates, access this data with the `data.` prefix:
 - **300-900**: Regular updates (weather, calendar)
 - **3600+**: Static or slow-changing content
 
-If `refresh_rate` is 0 or omitted, the screen's `default_refresh` from config is used.
+If `refresh_rate` is 0 or omitted, the device's `refresh` is used, and failing
+that the screen's `default_refresh` from config.
+
+**The screen outranks the device here** — the opposite of `dither`. Only the
+script knows when its own content next changes, so a screen that returns
+`refresh_rate` keeps that interval even on a device configured with `refresh`.
+Byonk logs when a device's `refresh` is displaced this way, so an operator can
+see why their setting is inert.
 
 ### colors
 
@@ -1355,9 +1362,15 @@ Controls the dithering algorithm used when converting SVG to e-ink PNG. Availabl
 The dither mode follows a priority chain:
 
 1. **Dev UI override** (strongest) — set in dev mode
-2. **Script `dither`** — returned in the script result table
-3. **Device config `dither`** — set per-device in `config.yaml`
+2. **Device config `dither`** — set per-device in `config.yaml`
+3. **Script `dither`** — returned in the script result table
 4. **Default** — `"atkinson"`
+
+**The device outranks the screen here.** The algorithm suits the panel, not
+the content, and the operator who set it on the device cannot see a screen
+replacing it. A screen's `dither` still applies on any device that does not
+name one. When both name one and they differ, the device's is used and Byonk
+logs which value was dropped.
 
 ```lua
 -- Use Floyd-Steinberg dithering for a screen that displays images
@@ -1413,11 +1426,11 @@ still drawn 1-bit and its stems can drop out. The fix is
 `text-rendering="optimizeLegibility"` on those elements — byonk warns when a
 screen sets this up.
 
-### error_clamp, noise_scale, chroma_clamp, strength
+### max_error, noise_scale, chroma_clamp, strength
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `error_clamp` | number or nil | Caps the accumulated diffusion error a pixel may carry (default 1.0) |
+| `max_error` | number or nil | Caps the accumulated diffusion error a pixel may carry (default 1.0) |
 | `noise_scale` | number or nil | Blue noise jitter scale (e.g. 0.6) |
 | `chroma_clamp` | number or nil | Limits chromatic error propagation (e.g. 2.0) |
 | `strength` | number or nil | Error diffusion strength multiplier (0.0 = no diffusion, 1.0 = standard, default) |
@@ -1434,7 +1447,7 @@ return {
   data = { ... },
   refresh_rate = 3600,
   dither = "floyd-steinberg",
-  error_clamp = 1.0,
+  max_error = 1.0,
   noise_scale = 0.5,
   strength = 0.8
 }

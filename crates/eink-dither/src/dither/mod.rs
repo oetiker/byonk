@@ -30,7 +30,7 @@ pub use options::DitherOptions;
 /// Dither algorithm selection for builder API.
 ///
 /// Each variant maps to a specific error diffusion kernel with tuned defaults
-/// for error_clamp and noise_scale.
+/// for max_error and noise_scale.
 ///
 /// # Example
 ///
@@ -115,9 +115,9 @@ impl DitherAlgorithm {
         }
     }
 
-    /// Get the per-algorithm default (error_clamp, noise_scale) for chromatic palettes.
+    /// Get the per-algorithm default (max_error, noise_scale) for chromatic palettes.
     ///
-    /// `error_clamp` bounds the accumulated diffusion error per channel (see
+    /// `max_error` bounds the accumulated diffusion error per channel (see
     /// [`apply_error`]). It is deliberately uniform across algorithms: the
     /// old per-algorithm values (0.03-0.12) were tuned when the clamp bounded
     /// the resulting VALUE rather than the error, where the useful range
@@ -395,9 +395,9 @@ pub(crate) fn dither_with_kernel_noise(
                 ]
             } else {
                 let pixel = LinearRgb::new(
-                    apply_error(image[idx].r, accumulated[0], options.error_clamp),
-                    apply_error(image[idx].g, accumulated[1], options.error_clamp),
-                    apply_error(image[idx].b, accumulated[2], options.error_clamp),
+                    apply_error(image[idx].r, accumulated[0], options.max_error),
+                    apply_error(image[idx].g, accumulated[1], options.max_error),
+                    apply_error(image[idx].b, accumulated[2], options.max_error),
                 );
 
                 // Chroma of original pixel (for chromatic damping)
@@ -611,7 +611,7 @@ mod tests {
 
     #[test]
     fn test_algorithm_defaults() {
-        // error_clamp is uniform across algorithms; only noise_scale varies.
+        // max_error is uniform across algorithms; only noise_scale varies.
         for algo in [
             DitherAlgorithm::Atkinson,
             DitherAlgorithm::AtkinsonHybrid,
@@ -626,7 +626,7 @@ mod tests {
             let (ec, _) = algo.defaults();
             assert!(
                 (ec - 1.0).abs() < f32::EPSILON,
-                "{algo:?} should use the uniform error_clamp default"
+                "{algo:?} should use the uniform max_error default"
             );
         }
 
@@ -691,7 +691,7 @@ mod tests {
         let image = grey_4x4();
         let kernel = DitherAlgorithm::FloydSteinberg.kernel();
 
-        let default_opts = DitherOptions::new().error_clamp(0.12).noise_scale(0.0);
+        let default_opts = DitherOptions::new().max_error(0.12).noise_scale(0.0);
         let strength_1_opts = default_opts.clone().strength(1.0);
 
         let result_default =
@@ -711,7 +711,7 @@ mod tests {
         let image = grey_4x4();
         let kernel = DitherAlgorithm::FloydSteinberg.kernel();
         let opts = DitherOptions::new()
-            .error_clamp(0.12)
+            .max_error(0.12)
             .noise_scale(0.0)
             .strength(0.0);
 
@@ -733,11 +733,11 @@ mod tests {
         let kernel = DitherAlgorithm::FloydSteinberg.kernel();
 
         let opts_1 = DitherOptions::new()
-            .error_clamp(0.12)
+            .max_error(0.12)
             .noise_scale(0.0)
             .strength(1.0);
         let opts_half = DitherOptions::new()
-            .error_clamp(0.12)
+            .max_error(0.12)
             .noise_scale(0.0)
             .strength(0.5);
 

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
+  <!-- Deliberately bare: no title, no labels, no grid lines. Every mark would
+       be a region of the panel that cannot be measured, and text renders with
+       antialiasing, which puts tones on the panel that are not palette inks.
+       The cells are the whole instrument. Which ink sits where is decided in
+       script.lua and is recoverable from the photo itself, since the darkest
+       cells are ink 0. -->
+
+  <!-- Mid-grey ground. Never visible: the cells tile the panel edge to edge
+       and share integer pixel edges. It exists so a rounding change shows up
+       as a visible seam rather than as a silent gap of white. -->
+  <rect width="{{ data.width }}" height="{{ data.height }}" fill="#808080"/>
+
+  <!-- shape-rendering="crispEdges" turns off antialiasing on the cell borders.
+       Without it every cell is fringed with tones that are not palette entries,
+       and those fringes are exactly what a measurement of the cell's edge would
+       pick up. -->
+  {% for cell in data.cells %}
+  <rect x="{{ cell.x }}" y="{{ cell.y }}" width="{{ cell.width }}" height="{{ cell.height }}" fill="{{ cell.color }}" shape-rendering="crispEdges"/>
+  {% endfor %}
+</svg>

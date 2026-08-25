@@ -2,6 +2,7 @@
 
 pub mod preview;
 pub mod read;
+pub mod recovery;
 pub mod write;
 
 use axum::{
@@ -50,6 +51,12 @@ pub fn admin_router() -> Router<AppState> {
             patch(write::patch_device).delete(write::delete_device),
         )
         .route("/devices/{key}/preview", get(preview::device_preview))
+        .route(
+            "/devices/{key}/recover",
+            get(recovery::get_recovery)
+                .post(recovery::start_recovery)
+                .delete(recovery::cancel_recovery),
+        )
         .route("/pending", get(read::pending))
         .route("/config", get(read::get_config))
         .route("/screens", get(read::screens))

@@ -565,6 +565,22 @@ impl TemplateService {
 
     /// Render an error screen
     pub fn render_error(&self, error: &str) -> String {
+        // Left-aligned, not centred: this is technical text read line by line,
+        // and ragged-left wrapping of a Lua traceback is unreadable.
+        let lines = wrap_error_text(error, ERROR_WRAP_COLS, ERROR_MAX_LINES);
+        let tspans = lines
+            .iter()
+            .enumerate()
+            .map(|(i, line)| {
+                let dy = if i == 0 { 0 } else { ERROR_LINE_HEIGHT };
+                format!(
+                    r#"    <tspan x="{ERROR_TEXT_X}" dy="{dy}">{}</tspan>"#,
+                    html_escape(line)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
         format!(
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
   <rect width="800" height="480" fill="white"/>
@@ -573,19 +589,150 @@ impl TemplateService {
     Error
   </text>
   <rect x="40" y="100" width="720" height="300" fill="rgb(255,240,240)" stroke="rgb(200,100,100)" stroke-width="2" rx="10"/>
-  <text x="400" y="200" text-anchor="middle" fill="black" font-family="monospace" font-size="14">
-    {}
+  <text x="{ERROR_TEXT_X}" y="130" fill="black" font-family="monospace" font-size="14">
+{tspans}
   </text>
-  <text x="400" y="240" text-anchor="middle" fill="rgb(100,100,100)" font-family="sans-serif" font-size="12">
+  <text x="400" y="425" text-anchor="middle" fill="rgb(100,100,100)" font-family="sans-serif" font-size="12">
     Check server logs for details
   </text>
-  <text x="400" y="450" text-anchor="middle" fill="rgb(150,150,150)" font-family="sans-serif" font-size="12">
+  <text x="400" y="455" text-anchor="middle" fill="rgb(150,150,150)" font-family="sans-serif" font-size="12">
     Will retry in 60 seconds
   </text>
-</svg>"#,
-            html_escape(error)
+</svg>"#
         )
     }
+}
+
+/// Left edge of the message text. The box starts at x=40; this is one
+/// comfortable padding step inside it.
+const ERROR_TEXT_X: u32 = 60;
+
+/// Baseline step between message lines, for 14px monospace.
+const ERROR_LINE_HEIGHT: u32 = 18;
+
+/// Characters that fit on one line.
+///
+/// The box is 720 wide, less 20px padding on each side, and the message is set
+/// in 14px monospace whose advance is close to 0.6em: 680 / (14 * 0.6) ~= 80.
+const ERROR_WRAP_COLS: usize = 80;
+
+/// Lines that fit between the box top (y=100) and the footer text (y=425),
+/// starting from the first baseline at y=130.
+const ERROR_MAX_LINES: usize = 15;
+
+/// Break an error message into display lines.
+///
+/// Wraps on the raw text and leaves escaping to the caller: `html_escape` turns
+/// one character into up to six, so measuring an escaped string would wrap far
+/// too early.
+///
+/// Existing newlines are honoured before any wrapping, because the messages
+/// that most need this are Lua errors, which arrive as a message plus a
+/// multi-line `stack traceback:`. Collapsing those into one run is what made
+/// the old screen unreadable.
+///
+/// Over-long words are hard-broken rather than allowed to overflow: error text
+/// is full of unbreakable tokens — paths, URLs, hashes — and a token that
+/// cannot fit must still be shown rather than run off the panel.
+fn wrap_error_text(text: &str, cols: usize, max_lines: usize) -> Vec<String> {
+    let cols = cols.max(1);
+    let mut out: Vec<String> = Vec::new();
+
+    for paragraph in text.replace('\r', "").split('\n') {
+        let paragraph = paragraph.trim_end();
+        if paragraph.is_empty() {
+            out.push(String::new());
+            continue;
+        }
+
+        // A Lua traceback separates its frames from the message by leading
+        // whitespace and nothing else, so the indent is content rather than
+        // spacing. Tabs become two spaces: SVG has no tab stops, and usvg
+        // draws a literal tab as a single blank — too little to read as one.
+        let body = paragraph.trim_start();
+        let indent: String = paragraph[..paragraph.len() - body.len()]
+            .chars()
+            .flat_map(|c| if c == '\t' { "  " } else { " " }.chars())
+            .collect();
+        // Continuation lines carry the same indent, so a wrapped frame still
+        // reads as one frame. If the indent would leave no usable width the
+        // text wins — an unreadable line is worse than a lost indent.
+        let (indent, avail) = if indent.chars().count() + 1 >= cols {
+            (String::new(), cols)
+        } else {
+            let avail = cols - indent.chars().count();
+            (indent, avail)
+        };
+
+        for wrapped in wrap_paragraph(body, avail) {
+            out.push(format!("{indent}{wrapped}"));
+        }
+    }
+
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    if out.len() > max_lines {
+        out.truncate(max_lines);
+        // Say that something was dropped rather than ending mid-sentence and
+        // letting the reader believe they have the whole error.
+        if let Some(last) = out.last_mut() {
+            let keep = cols.saturating_sub(1);
+            if last.chars().count() > keep {
+                let split_at = last
+                    .char_indices()
+                    .nth(keep)
+                    .map(|(i, _)| i)
+                    .unwrap_or(last.len());
+                last.truncate(split_at);
+            }
+            last.push('\u{2026}');
+        }
+    }
+    out
+}
+
+/// Fit a paragraph's words into lines of at most `cols` characters, chopping
+/// any single word that can never fit on a line of its own.
+fn wrap_paragraph(paragraph: &str, cols: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in paragraph.split_whitespace() {
+        let mut word = word;
+        // A word longer than a line can never be placed by fitting; chop it.
+        while word.chars().count() > cols {
+            if !line.is_empty() {
+                out.push(std::mem::take(&mut line));
+            }
+            let split_at = word
+                .char_indices()
+                .nth(cols)
+                .map(|(i, _)| i)
+                .unwrap_or(word.len());
+            let (head, tail) = word.split_at(split_at);
+            out.push(head.to_string());
+            word = tail;
+        }
+        if word.is_empty() {
+            continue;
+        }
+        let need = if line.is_empty() {
+            word.chars().count()
+        } else {
+            line.chars().count() + 1 + word.chars().count()
+        };
+        if need > cols {
+            out.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        out.push(line);
+    }
+    out
 }
 
 /// Simple HTML escape for error messages
@@ -600,6 +747,113 @@ fn html_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A long single-line message must be broken up rather than run off both
+    /// edges of the panel — the old screen put everything in one centred
+    /// <text>, which SVG never wraps.
+    #[test]
+    fn wrap_breaks_a_long_line_into_several() {
+        let msg = "word ".repeat(60);
+        let lines = wrap_error_text(&msg, 20, 15);
+        assert!(lines.len() > 1, "expected wrapping, got {lines:?}");
+        for line in &lines {
+            assert!(line.chars().count() <= 20, "line too wide: {line:?}");
+        }
+    }
+
+    /// Lua errors arrive as a message plus a multi-line `stack traceback:`.
+    /// Collapsing those newlines is what made the screen unreadable.
+    #[test]
+    fn wrap_honours_existing_newlines() {
+        let lines = wrap_error_text("first\nsecond\nthird", 80, 15);
+        assert_eq!(lines, vec!["first", "second", "third"]);
+    }
+
+    /// A Lua traceback marks its frames by leading whitespace and nothing
+    /// else. `split_whitespace` used to eat it, flattening the frames into the
+    /// message they belong to.
+    #[test]
+    fn wrap_keeps_the_indentation_of_traceback_frames() {
+        let msg =
+            "boom\nstack traceback:\n\t[C]: in function 'index'\n\tscript.lua:12: in main chunk";
+        let lines = wrap_error_text(msg, 80, 15);
+
+        assert_eq!(lines[0], "boom");
+        assert_eq!(lines[1], "stack traceback:");
+        assert!(
+            lines[2].starts_with(' '),
+            "frame lost its indent: {:?}",
+            lines[2]
+        );
+        assert_eq!(lines[2].trim_start(), "[C]: in function 'index'");
+    }
+
+    /// An indented line that has to wrap keeps its indent on the continuation,
+    /// or the wrapped half reads as a frame of its own.
+    #[test]
+    fn wrap_indents_the_continuation_of_a_wrapped_frame() {
+        let msg = format!("\t{}", "word ".repeat(20));
+        let lines = wrap_error_text(&msg, 20, 15);
+
+        assert!(lines.len() > 1, "expected wrapping, got {lines:?}");
+        for line in &lines {
+            assert!(line.starts_with("  "), "lost the indent: {line:?}");
+            assert!(line.chars().count() <= 20, "line too wide: {line:?}");
+        }
+    }
+
+    /// Error text is full of unbreakable tokens — paths, URLs, hashes. One
+    /// that cannot fit must still be shown, not allowed to overflow.
+    #[test]
+    fn wrap_hard_breaks_an_overlong_token() {
+        let lines = wrap_error_text("/a/very/long/path/that/never/breaks", 10, 15);
+        assert!(lines.len() > 1);
+        for line in &lines {
+            assert!(line.chars().count() <= 10, "token overflowed: {line:?}");
+        }
+        assert_eq!(
+            lines.concat(),
+            "/a/very/long/path/that/never/breaks",
+            "hard-breaking must not lose or duplicate characters"
+        );
+    }
+
+    /// Truncation must be visible: ending mid-sentence would let the reader
+    /// believe they are seeing the whole error.
+    #[test]
+    fn wrap_marks_truncation_with_an_ellipsis() {
+        let msg = (1..=40)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let lines = wrap_error_text(&msg, 80, 5);
+        assert_eq!(lines.len(), 5);
+        assert!(
+            lines.last().unwrap().ends_with('\u{2026}'),
+            "expected an ellipsis, got {:?}",
+            lines.last()
+        );
+    }
+
+    #[test]
+    fn wrap_handles_empty_input() {
+        assert_eq!(wrap_error_text("", 80, 15), vec![String::new()]);
+    }
+
+    /// Wrapping happens before escaping: `html_escape` turns one character
+    /// into up to six, so measuring escaped text would wrap far too early.
+    #[test]
+    fn error_svg_escapes_and_wraps_together() {
+        let loader = std::sync::Arc::new(crate::assets::AssetLoader::new(None, None, None));
+        let svc = TemplateService::new(loader).expect("template service");
+        let svg = svc.render_error(&format!("<bad> & \"worse\" {}", "x".repeat(200)));
+        assert!(svg.contains("&lt;bad&gt;"), "must still escape markup");
+        assert!(!svg.contains("<bad>"), "raw markup must not reach the SVG");
+        assert!(
+            svg.matches("<tspan").count() > 1,
+            "a 200-char token must produce several lines"
+        );
+    }
 
     #[test]
     fn test_html_escape_basic() {

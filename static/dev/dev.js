@@ -1,18 +1,22 @@
 // Byonk Dev Mode JavaScript
 
-// Per-algorithm default values for noise_scale and error_clamp.
+// Per-algorithm default values for noise_scale and max_error.
 // When the user switches dither algorithm, these defaults are applied unless
 // the user has saved per-algorithm overrides in localStorage.
+//
+// These MIRROR `DitherAlgorithm::defaults()` in crates/eink-dither. Keep them
+// in step: a value here that the engine does not agree with makes the dev
+// preview lie about what the device will show.
 const DITHER_DEFAULTS = {
-    'atkinson':            { noiseScale: '0',   errorClamp: '0.08' },
-    'atkinson-hybrid':     { noiseScale: '0',   errorClamp: '0.08' },
-    'floyd-steinberg':     { noiseScale: '4.0', errorClamp: '0.12' },
-    'jarvis-judice-ninke': { noiseScale: '6.0', errorClamp: '0.03' },
-    'sierra':              { noiseScale: '5.5', errorClamp: '0.10' },
-    'sierra-two-row':      { noiseScale: '7.0', errorClamp: '0.10' },
-    'sierra-lite':         { noiseScale: '2.5', errorClamp: '0.11' },
-    'stucki':              { noiseScale: '6.0', errorClamp: '0.03' },
-    'burkes':              { noiseScale: '7.0', errorClamp: '0.10' },
+    'atkinson':            { noiseScale: '8.0',  maxError: '1.0' },
+    'atkinson-hybrid':     { noiseScale: '8.0',  maxError: '1.0' },
+    'floyd-steinberg':     { noiseScale: '8.0',  maxError: '1.0' },
+    'jarvis-judice-ninke': { noiseScale: '16.0', maxError: '1.0' },
+    'sierra':              { noiseScale: '16.0', maxError: '1.0' },
+    'sierra-two-row':      { noiseScale: '16.0', maxError: '1.0' },
+    'sierra-lite':         { noiseScale: '2.5',  maxError: '1.0' },
+    'stucki':              { noiseScale: '16.0', maxError: '1.0' },
+    'burkes':              { noiseScale: '16.0', maxError: '1.0' },
 };
 
 const state = {
@@ -32,7 +36,7 @@ const state = {
     // Map of deviceKey → colors_actual string.  Persisted in localStorage.
     colorOverrides: {},
     // Per-algorithm dither tuning overrides.
-    // Map of algorithm name → { noiseScale, errorClamp }.
+    // Map of algorithm name → { noiseScale, maxError }.
     ditherTuningOverrides: {},
 };
 
@@ -58,7 +62,7 @@ const elements = {
     useActual: document.getElementById('use-actual'),
     useActualLabel: document.getElementById('use-actual-label'),
     preserveExact: document.getElementById('preserve-exact'),
-    errorClamp: document.getElementById('error-clamp'),
+    maxError: document.getElementById('max-error'),
     chromaClamp: document.getElementById('chroma-clamp'),
     noiseScale: document.getElementById('noise-scale'),
     strength: document.getElementById('strength'),
@@ -292,7 +296,7 @@ function setupEventListeners() {
     });
 
     // Dither tunables
-    elements.errorClamp.addEventListener('change', () => {
+    elements.maxError.addEventListener('change', () => {
         saveDitherTuningOverride();
         saveState();
         render();
@@ -328,15 +332,15 @@ function applyDitherDefaults() {
     const override = state.ditherTuningOverrides[algo];
     const defaults = DITHER_DEFAULTS[algo] || DITHER_DEFAULTS['atkinson'];
     elements.noiseScale.value = override?.noiseScale ?? defaults.noiseScale;
-    elements.errorClamp.value = override?.errorClamp ?? defaults.errorClamp;
+    elements.maxError.value = override?.maxError ?? defaults.maxError;
 }
 
-// Save current noise_scale and error_clamp as per-algorithm override
+// Save current noise_scale and max_error as per-algorithm override
 function saveDitherTuningOverride() {
     const algo = elements.ditherSelect.value;
     state.ditherTuningOverrides[algo] = {
         noiseScale: elements.noiseScale.value,
-        errorClamp: elements.errorClamp.value,
+        maxError: elements.maxError.value,
     };
 }
 
@@ -512,17 +516,26 @@ async function render() {
             queryParams.set('dither', elements.ditherSelect.value);
         }
 
-        // Dither tunables
-        const errorClamp = elements.errorClamp.value;
-        if (errorClamp !== '' && errorClamp !== '0.08') {
-            queryParams.set('error_clamp', errorClamp);
+        // Dither tunables. Send one only when it differs from the default for
+        // the SELECTED ALGORITHM — the fields are populated from those defaults
+        // (see applyDitherDefaults), so comparing against a single fixed number
+        // makes every render carry an override the user never asked for, and
+        // pins the server's own default to whatever the sentinel happened to be.
+        const tuneDefaults = DITHER_DEFAULTS[elements.ditherSelect.value]
+            || DITHER_DEFAULTS['atkinson'];
+        const differs = (value, dflt) =>
+            value !== '' && parseFloat(value) !== parseFloat(dflt);
+
+        const maxError = elements.maxError.value;
+        if (differs(maxError, tuneDefaults.maxError)) {
+            queryParams.set('max_error', maxError);
         }
         const chromaClamp = elements.chromaClamp.value;
         if (chromaClamp !== '') {
             queryParams.set('chroma_clamp', chromaClamp);
         }
         const noiseScale = elements.noiseScale.value;
-        if (noiseScale !== '' && noiseScale !== '5') {
+        if (differs(noiseScale, tuneDefaults.noiseScale)) {
             queryParams.set('noise_scale', noiseScale);
         }
         const strength = elements.strength.value;
@@ -621,7 +634,7 @@ function saveState() {
         useActual: elements.useActual.checked,
         preserveExact: elements.preserveExact.checked,
         dither: elements.ditherSelect.value,
-        errorClamp: elements.errorClamp.value,
+        maxError: elements.maxError.value,
         chromaClamp: elements.chromaClamp.value,
         noiseScale: elements.noiseScale.value,
         strength: elements.strength.value,
@@ -672,8 +685,24 @@ function loadSavedState() {
             if (data.dither) {
                 elements.ditherSelect.value = data.dither;
             }
-            if (data.errorClamp) {
-                elements.errorClamp.value = data.errorClamp;
+            if (data.maxError) {
+                elements.maxError.value = data.maxError;
+            } else if (data.errorClamp) {
+                // Deliberately NOT migrated to maxError. In 0.18.0 this knob
+                // stopped capping the pixel value and started capping the
+                // accumulated error, moving its useful range from ~0.1 to ~1.0
+                // while keeping its name — which is the whole reason it was
+                // renamed. A saved value cannot be dated, so carrying it across
+                // would risk reviving a number chosen for the old meaning, the
+                // exact failure the rename exists to prevent. The server
+                // discards `error_clamp` for the same reason; the dev UI
+                // matches it, but says so rather than dropping it in silence.
+                console.warn(
+                    `byonk dev: ignoring saved error_clamp=${data.errorClamp}. ` +
+                    `It was renamed to max_error in 0.18.0 and changed meaning ` +
+                    `(useful range ~0.1 -> ~1.0), so the old value is not carried ` +
+                    `over. Set max_error yourself if you still want an override.`
+                );
             }
             if (typeof data.chromaClamp === 'string') {
                 elements.chromaClamp.value = data.chromaClamp;

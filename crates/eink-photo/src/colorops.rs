@@ -9,7 +9,7 @@ pub fn apply_saturation(pixels: &mut [f32], amount: f32) {
         return;
     }
     let k = 1.0 + amount / 100.0;
-    for px in pixels.chunks_exact_mut(3) {
+    for px in pixels.as_chunks_mut::<3>().0 {
         let l = luminance(px[0], px[1], px[2]);
         for c in px.iter_mut() {
             *c = (l + (*c - l) * k).clamp(0.0, 1.0);
@@ -28,7 +28,7 @@ pub fn apply_vibrance(pixels: &mut [f32], amount: f32) {
         return;
     }
     let base = amount / 100.0;
-    for px in pixels.chunks_exact_mut(3) {
+    for px in pixels.as_chunks_mut::<3>().0 {
         let l = luminance(px[0], px[1], px[2]);
         // Current saturation as a 0..1 distance from grey.
         let current =
@@ -42,7 +42,7 @@ pub fn apply_vibrance(pixels: &mut [f32], amount: f32) {
 
 /// Flatten to Rec. 709 luminance.
 pub fn apply_grayscale(pixels: &mut [f32]) {
-    for px in pixels.chunks_exact_mut(3) {
+    for px in pixels.as_chunks_mut::<3>().0 {
         let l = luminance(px[0], px[1], px[2]);
         px[0] = l;
         px[1] = l;

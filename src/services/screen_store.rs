@@ -2889,7 +2889,11 @@ mod tests {
             .palette
             .as_ref()
             .expect("expected an indexed PNG with a PLTE chunk (use_actual should be true)");
-        plte.chunks_exact(3).map(|c| (c[0], c[1], c[2])).collect()
+        plte.as_chunks::<3>()
+            .0
+            .iter()
+            .map(|c| (c[0], c[1], c[2]))
+            .collect()
     }
 
     #[test]

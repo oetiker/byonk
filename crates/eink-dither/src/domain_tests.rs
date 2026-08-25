@@ -3310,8 +3310,10 @@ mod domain_tests {
         /// The panel's own appearance of a render: measured inks, whatever
         /// colour model the matching ran under.
         fn appearance(img: &DitheredImage) -> Vec<Oklab> {
-            img.to_rgb_actual()
-                .chunks_exact(3)
+            let rgb = img.to_rgb_actual();
+            rgb.as_chunks::<3>()
+                .0
+                .iter()
                 .map(|c| Oklab::from(LinearRgb::from(Srgb::from_u8(c[0], c[1], c[2]))))
                 .collect()
         }
@@ -3335,8 +3337,10 @@ mod domain_tests {
         /// The same appearance, kept in linear light so blocks of it can be
         /// averaged before the perceptual distance is taken.
         fn appearance_linear(img: &DitheredImage) -> Vec<LinearRgb> {
-            img.to_rgb_actual()
-                .chunks_exact(3)
+            let rgb = img.to_rgb_actual();
+            rgb.as_chunks::<3>()
+                .0
+                .iter()
                 .map(|c| LinearRgb::from(Srgb::from_u8(c[0], c[1], c[2])))
                 .collect()
         }

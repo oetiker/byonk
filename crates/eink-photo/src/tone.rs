@@ -32,7 +32,7 @@ pub fn apply_white_balance(pixels: &mut [f32], temperature: f32, tint: f32) {
     let g = tint / 100.0 * 0.30;
     let gains = [1.0 + t, 1.0 + g, 1.0 - t];
 
-    for px in pixels.chunks_exact_mut(3) {
+    for px in pixels.as_chunks_mut::<3>().0 {
         for (c, gain) in px.iter_mut().zip(gains.iter()) {
             *c = linear_to_srgb(srgb_to_linear(*c) * gain);
         }
@@ -46,7 +46,9 @@ pub fn apply_white_balance(pixels: &mut [f32], temperature: f32, tint: f32) {
 /// no-op on exactly the images that need it most.
 pub fn measure_endpoints(pixels: &[f32]) -> (f32, f32) {
     let mut lums: Vec<f32> = pixels
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|px| crate::color::luminance(px[0], px[1], px[2]))
         .collect();
     if lums.is_empty() {
@@ -91,7 +93,7 @@ pub fn apply_highlights_shadows(pixels: &mut [f32], highlights: f32, shadows: f3
     let h = highlights / 100.0 * 0.35;
     let s = shadows / 100.0 * 0.35;
 
-    for px in pixels.chunks_exact_mut(3) {
+    for px in pixels.as_chunks_mut::<3>().0 {
         let t = crate::color::luminance(px[0], px[1], px[2]).clamp(0.0, 1.0);
         let shadow_mask = (1.0 - t) * (1.0 - t);
         let highlight_mask = t * t;
@@ -290,7 +292,7 @@ mod tests {
         // pleasing any single sample looks.
         let mut p = ramp(64);
         apply_contrast(&mut p, 80.0);
-        for w in p.chunks_exact(3).collect::<Vec<_>>().windows(2) {
+        for w in p.as_chunks::<3>().0.windows(2) {
             assert!(
                 w[1][0] >= w[0][0] - 1e-6,
                 "ordering inverted: {} then {}",

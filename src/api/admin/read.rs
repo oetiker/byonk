@@ -171,11 +171,25 @@ pub async fn list_devices(
     }
 
     // 2) Configured devices that have NOT been seen yet (telemetry = None).
-    let seen_macs: std::collections::HashSet<String> =
-        seen.iter().map(|d| d.device_id.to_string()).collect();
+    //
+    // `resolve_device_key` rather than a set of MACs: a device may be
+    // configured under its registration code, and matching config keys against
+    // MACs alone then fails to notice that pass 1 already listed it. The extra
+    // row is not a cosmetic duplicate — it carries the registration code in its
+    // `mac` field and an empty `registration_code`, so it reads as a separate
+    // device that has never checked in, and admin actions taken from it address
+    // an identifier the device is not known by.
+    let covered: std::collections::HashSet<String> = seen
+        .iter()
+        .filter_map(|d| {
+            config.resolve_device_key(
+                &d.device_id.to_string(),
+                Some(&d.api_key.registration_code()),
+            )
+        })
+        .collect();
     for (key, dc) in &config.devices {
-        // Skip if this config entry corresponds to a seen device (by MAC key).
-        if seen_macs.contains(key) {
+        if covered.contains(key) {
             continue;
         }
         out.push(AdminDevice {

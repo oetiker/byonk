@@ -107,3 +107,55 @@ async fn test_custom_model_header_is_stored_verbatim() {
         .expect("device row present");
     assert_eq!(row["model"], "reterminal_e1002");
 }
+
+/// A device may be configured under its registration code instead of its MAC.
+/// It is still one device and must be listed once.
+///
+/// The seen-devices pass reports `key: mac`; the configured-devices pass then
+/// has to recognise that the same device is already covered. Comparing config
+/// keys against MACs alone misses it, and the extra row is not harmless: its
+/// `key` is the registration code, and admin actions taken from it address a
+/// different identifier than the one the device is known by.
+#[tokio::test]
+async fn a_device_configured_by_registration_code_is_listed_once() {
+    use byonk::assets::AssetLoader;
+    use byonk::models::{ApiKey, AppConfig, Device, DeviceId};
+    use byonk::services::DeviceRegistry;
+
+    let api_key = "listed-once-under-its-registration-code";
+    let code = ApiKey::new(api_key).registration_code();
+    let config_key = format!("{}-{}", &code[..5], &code[5..]);
+    let mac = "AA:BB:CC:DD:EE:01";
+
+    let loader = AssetLoader::new(None, None, None);
+    let mut config = AppConfig::load_from_assets(&loader).expect("load embedded config");
+    config.admin.token = Some("secret".to_string());
+    let device_config = config
+        .devices
+        .get("DEFAULT")
+        .expect("embedded config has a reserved DEFAULT device")
+        .clone();
+    config.devices.insert(config_key.clone(), device_config);
+
+    let app = TestApp::from_config(config);
+
+    let mut device = Device::new(DeviceId::new(mac), "og".to_string(), "1.7.1".to_string());
+    device.api_key = ApiKey::new(api_key);
+    app.registry.upsert(device).await.expect("upsert device");
+
+    let listed: Vec<serde_json::Value> = app
+        .get_with_headers("/api/admin/devices", &[("Authorization", "Bearer secret")])
+        .await
+        .json();
+
+    let rows: Vec<&serde_json::Value> = listed
+        .iter()
+        .filter(|d| d["key"] == mac || d["key"] == config_key.as_str())
+        .collect();
+
+    assert_eq!(rows.len(), 1, "one device, one row; got {rows:#?}");
+    assert_eq!(
+        rows[0]["key"], mac,
+        "the MAC is the key the admin API reports for a device that has checked in"
+    );
+}

@@ -118,6 +118,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported an error; the settings were simply gone, and the only symptom was
   the panel looking wrong again some time later. If a device of yours has lost
   such a setting, add it back to `config.yaml` — it will stay now.
+- **A device configured by registration code is no longer listed twice.** If
+  your `config.yaml` lists a device under its registration code rather than its
+  MAC address, the admin device list — and so the web UI and Home Assistant —
+  showed it as two devices: the real one, and a phantom that had never been
+  seen, with the registration code sitting in its MAC field. Editing the
+  phantom row changed settings the device does not read.
 - **Panel recovery now works for a device configured by registration code.**
   If your `config.yaml` lists a device under its registration code rather than
   its MAC address, starting a recovery run for it did nothing at all: the run

@@ -644,41 +644,28 @@ fn wrap_error_text(text: &str, cols: usize, max_lines: usize) -> Vec<String> {
             out.push(String::new());
             continue;
         }
-        let mut line = String::new();
-        for word in paragraph.split_whitespace() {
-            let mut word = word;
-            // A word longer than a line can never be placed by fitting; chop it.
-            while word.chars().count() > cols {
-                if !line.is_empty() {
-                    out.push(std::mem::take(&mut line));
-                }
-                let split_at = word
-                    .char_indices()
-                    .nth(cols)
-                    .map(|(i, _)| i)
-                    .unwrap_or(word.len());
-                let (head, tail) = word.split_at(split_at);
-                out.push(head.to_string());
-                word = tail;
-            }
-            if word.is_empty() {
-                continue;
-            }
-            let need = if line.is_empty() {
-                word.chars().count()
-            } else {
-                line.chars().count() + 1 + word.chars().count()
-            };
-            if need > cols {
-                out.push(std::mem::take(&mut line));
-            }
-            if !line.is_empty() {
-                line.push(' ');
-            }
-            line.push_str(word);
-        }
-        if !line.is_empty() {
-            out.push(line);
+
+        // A Lua traceback separates its frames from the message by leading
+        // whitespace and nothing else, so the indent is content rather than
+        // spacing. Tabs become two spaces: SVG has no tab stops, and usvg
+        // draws a literal tab as a single blank — too little to read as one.
+        let body = paragraph.trim_start();
+        let indent: String = paragraph[..paragraph.len() - body.len()]
+            .chars()
+            .flat_map(|c| if c == '\t' { "  " } else { " " }.chars())
+            .collect();
+        // Continuation lines carry the same indent, so a wrapped frame still
+        // reads as one frame. If the indent would leave no usable width the
+        // text wins — an unreadable line is worse than a lost indent.
+        let (indent, avail) = if indent.chars().count() + 1 >= cols {
+            (String::new(), cols)
+        } else {
+            let avail = cols - indent.chars().count();
+            (indent, avail)
+        };
+
+        for wrapped in wrap_paragraph(body, avail) {
+            out.push(format!("{indent}{wrapped}"));
         }
     }
 
@@ -701,6 +688,49 @@ fn wrap_error_text(text: &str, cols: usize, max_lines: usize) -> Vec<String> {
             }
             last.push('\u{2026}');
         }
+    }
+    out
+}
+
+/// Fit a paragraph's words into lines of at most `cols` characters, chopping
+/// any single word that can never fit on a line of its own.
+fn wrap_paragraph(paragraph: &str, cols: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in paragraph.split_whitespace() {
+        let mut word = word;
+        // A word longer than a line can never be placed by fitting; chop it.
+        while word.chars().count() > cols {
+            if !line.is_empty() {
+                out.push(std::mem::take(&mut line));
+            }
+            let split_at = word
+                .char_indices()
+                .nth(cols)
+                .map(|(i, _)| i)
+                .unwrap_or(word.len());
+            let (head, tail) = word.split_at(split_at);
+            out.push(head.to_string());
+            word = tail;
+        }
+        if word.is_empty() {
+            continue;
+        }
+        let need = if line.is_empty() {
+            word.chars().count()
+        } else {
+            line.chars().count() + 1 + word.chars().count()
+        };
+        if need > cols {
+            out.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        out.push(line);
     }
     out
 }
@@ -737,6 +767,39 @@ mod tests {
     fn wrap_honours_existing_newlines() {
         let lines = wrap_error_text("first\nsecond\nthird", 80, 15);
         assert_eq!(lines, vec!["first", "second", "third"]);
+    }
+
+    /// A Lua traceback marks its frames by leading whitespace and nothing
+    /// else. `split_whitespace` used to eat it, flattening the frames into the
+    /// message they belong to.
+    #[test]
+    fn wrap_keeps_the_indentation_of_traceback_frames() {
+        let msg =
+            "boom\nstack traceback:\n\t[C]: in function 'index'\n\tscript.lua:12: in main chunk";
+        let lines = wrap_error_text(msg, 80, 15);
+
+        assert_eq!(lines[0], "boom");
+        assert_eq!(lines[1], "stack traceback:");
+        assert!(
+            lines[2].starts_with(' '),
+            "frame lost its indent: {:?}",
+            lines[2]
+        );
+        assert_eq!(lines[2].trim_start(), "[C]: in function 'index'");
+    }
+
+    /// An indented line that has to wrap keeps its indent on the continuation,
+    /// or the wrapped half reads as a frame of its own.
+    #[test]
+    fn wrap_indents_the_continuation_of_a_wrapped_frame() {
+        let msg = format!("\t{}", "word ".repeat(20));
+        let lines = wrap_error_text(&msg, 20, 15);
+
+        assert!(lines.len() > 1, "expected wrapping, got {lines:?}");
+        for line in &lines {
+            assert!(line.starts_with("  "), "lost the indent: {line:?}");
+            assert!(line.chars().count() <= 20, "line too wide: {line:?}");
+        }
     }
 
     /// Error text is full of unbreakable tokens — paths, URLs, hashes. One

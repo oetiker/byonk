@@ -130,6 +130,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server for a very large amount of memory on every single render. Byonk now
   caps the value and says so in the log. Nothing changes for a sensible
   setting such as `102401`.
+- **Lua stack tracebacks keep their indentation on the error screen.** The
+  indent is the only thing separating a traceback's frames from the message
+  above them, and it was being stripped, so the frames ran together with the
+  error text. Wrapped frames now stay indented too.
 - **Two devices that show the same screen no longer get each other's image.**
   Byonk caches a rendered image under a short id and serves it as
   `/api/image/<id>.png`. That id was computed from the drawing alone, so two

@@ -24,6 +24,15 @@
 //! Sizing is safe by a wide margin: the X accepts up to `MAX_IMAGE_SIZE`
 //! 750 000 bytes (`include/config.h`), against a 102 400-byte threshold.
 
+/// Hard ceiling on the padded size, from the device's own `MAX_IMAGE_SIZE`
+/// (`include/config.h`). An image past this is refused outright, so padding
+/// beyond it turns a working screen into a blank one.
+///
+/// `min_png_bytes` reaches here as an unvalidated `u32` from `config.yaml`, so
+/// this is also what stops a mistyped value asking for a multi-gigabyte
+/// allocation on every single render.
+pub const MAX_PNG_BYTES: usize = 750_000;
+
 /// The 8-byte PNG file signature.
 const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
 
@@ -45,6 +54,17 @@ const CHUNK_OVERHEAD: usize = 12 + KEYWORD.len() + 1;
 ///
 /// The decoded image is bit-for-bit identical either way.
 pub fn pad_png_to_min_size(png: Vec<u8>, min_bytes: usize) -> Vec<u8> {
+    let min_bytes = if min_bytes > MAX_PNG_BYTES {
+        tracing::warn!(
+            requested = min_bytes,
+            capped_to = MAX_PNG_BYTES,
+            "min_png_bytes is above the device's maximum image size; capping. \
+             Lower it in config.yaml — a device refuses an image this large."
+        );
+        MAX_PNG_BYTES
+    } else {
+        min_bytes
+    };
     if png.len() >= min_bytes {
         return png;
     }
@@ -137,6 +157,20 @@ mod tests {
         assert!(
             padded.len() > 102_400,
             "must clear the firmware threshold, got {}",
+            padded.len()
+        );
+    }
+
+    #[test]
+    fn padding_is_capped_at_the_firmware_maximum() {
+        // `min_png_bytes` is an unvalidated `u32` straight out of `config.yaml`.
+        // A mistyped value asks for an allocation of that size on every render,
+        // and anything past MAX_PNG_BYTES is worse than useless: the device
+        // refuses the image outright.
+        let padded = pad_png_to_min_size(sample_png(), 2_000_000);
+        assert!(
+            padded.len() <= MAX_PNG_BYTES,
+            "padding must stop at the device's limit, got {}",
             padded.len()
         );
     }

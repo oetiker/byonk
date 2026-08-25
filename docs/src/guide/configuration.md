@@ -152,6 +152,10 @@ decoders ignore, so the picture is unchanged to the pixel and only the byte
 count grows. Use `102401` to just clear the threshold. Each update then takes
 noticeably longer.
 
+Values above 750 000 bytes are capped, and a warning says so. That is the
+largest image a TRMNL X accepts — asking for more would produce an image the
+device refuses, leaving the screen blank.
+
 Pointless on any other model: their firmware refuses images above 90 000 bytes,
 so the larger table cannot be reached at all.
 

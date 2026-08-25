@@ -124,6 +124,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was filed under the code, and the device asks for work under its MAC. No
   error appeared anywhere — the panel simply went on showing content. Runs are
   now found under either identifier.
+- **`min_png_bytes` is capped at the size a device will accept** (750 000
+  bytes). A value above that produced an image the device refuses, so a screen
+  went blank instead of looking better; a mistyped value could also ask the
+  server for a very large amount of memory on every single render. Byonk now
+  caps the value and says so in the log. Nothing changes for a sensible
+  setting such as `102401`.
 - **Two devices that show the same screen no longer get each other's image.**
   Byonk caches a rendered image under a short id and serves it as
   `/api/image/<id>.png`. That id was computed from the drawing alone, so two

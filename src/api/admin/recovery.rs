@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::ApiError;
 use crate::models::DeviceId;
 use crate::server::AppState;
-use crate::services::recovery::{RecoverySession, DEFAULT_WIPES};
+use crate::services::recovery::{spellings_of, RecoverySession, DEFAULT_WIPES};
 use crate::services::DeviceRegistry;
 
 use super::require_admin;
@@ -67,28 +67,31 @@ impl From<Option<RecoverySession>> for RecoveryStatus {
 /// device that has never checked in is addressed by the given key alone — no
 /// loss, since it has no MAC to be found by yet.
 async fn device_names(state: &AppState, key: &str) -> Vec<DeviceId> {
-    let given = DeviceId::new(key);
     let normalized = key.to_uppercase().replace('-', "");
-    let Ok(devices) = state.registry.list_all().await else {
-        return vec![given];
+    let resolved = match state.registry.list_all().await {
+        Ok(devices) => devices.into_iter().find(|d| {
+            d.device_id.to_string().eq_ignore_ascii_case(key)
+                || d.api_key.registration_code() == normalized
+        }),
+        Err(_) => None,
     };
-    let Some(device) = devices.into_iter().find(|d| {
-        d.device_id.to_string().eq_ignore_ascii_case(key)
-            || d.api_key.registration_code() == normalized
-    }) else {
-        return vec![given];
+
+    // Unknown device: the key is all there is. Still worth spelling out, since
+    // a code typed one way must find a session filed the other way.
+    let Some(device) = resolved else {
+        return spellings_of(key);
     };
 
     // The MAC leads, so a run with no session yet is filed under the name the
     // device list reports rather than whichever name the caller happened to use.
-    let code = device.api_key.registration_code();
     let mut names = vec![DeviceId::new(device.device_id.to_string())];
-    if code.len() == 10 {
-        names.push(DeviceId::new(format!("{}-{}", &code[..5], &code[5..])));
-    }
-    names.push(DeviceId::new(code));
-    if !names.contains(&given) {
-        names.push(given);
+    for id in spellings_of(&device.api_key.registration_code())
+        .into_iter()
+        .chain(spellings_of(key))
+    {
+        if !names.contains(&id) {
+            names.push(id);
+        }
     }
     names
 }

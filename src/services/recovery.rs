@@ -44,6 +44,39 @@ pub const DEFAULT_WIPES: u32 = 20;
 /// this is a cadence the device already runs at during normal setup.
 pub const RECOVERY_REFRESH_RATE_SECS: u32 = 5;
 
+/// Every written form of `key` that could name the same device.
+///
+/// A [`DeviceId`] is an opaque string, so both ends of a run — the admin API
+/// that files a session and the poll that looks for it — have to spell the
+/// device the same way. A MAC has one spelling, because the device reports it.
+/// A registration code has two, raw `ABCDEFGHJK` and hyphenated
+/// `ABCDE-FGHJK`, and an operator may type either in any case. Before the
+/// device has ever checked in nothing connects that code to a MAC, so the
+/// spelling they chose is all there is to go on.
+///
+/// The canonical hyphenated form leads, so a new session filed from this list
+/// gets one predictable name. A key that is not a registration code — a MAC,
+/// most of all — comes back as itself and nothing else.
+pub fn spellings_of(key: &str) -> Vec<DeviceId> {
+    let mut out = Vec::new();
+    let normalized = key.to_uppercase().replace('-', "");
+    // Codes are ten characters drawn from an uppercase alphabet, so anything
+    // else is some other kind of key and must not be re-spelled.
+    if normalized.len() == 10 && normalized.bytes().all(|b| b.is_ascii_uppercase()) {
+        out.push(DeviceId::new(format!(
+            "{}-{}",
+            &normalized[..5],
+            &normalized[5..]
+        )));
+        out.push(DeviceId::new(normalized));
+    }
+    let given = DeviceId::new(key);
+    if !out.contains(&given) {
+        out.push(given);
+    }
+    out
+}
+
 /// A recovery run in progress for one device.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoverySession {
@@ -189,6 +222,43 @@ impl RecoveryRegistry {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn spellings_of_a_code_cover_both_written_forms_canonical_first() {
+        let ids = spellings_of("abcde-fghjk");
+        let as_str: Vec<String> = ids.iter().map(|d| d.to_string()).collect();
+
+        assert_eq!(
+            as_str,
+            vec!["ABCDE-FGHJK", "ABCDEFGHJK", "abcde-fghjk"],
+            "hyphenated uppercase leads, so a new session gets one predictable name"
+        );
+    }
+
+    #[test]
+    fn spellings_of_a_mac_are_just_the_mac() {
+        // The guard that keeps this true is what stops a MAC — or any other
+        // key — being re-spelled into candidates that name nothing.
+        // "1234567890" is the one that matters: ten characters, so only the
+        // uppercase-alphabet half of the guard rejects it. Without that half it
+        // would be re-spelled as "12345-67890", a key naming nothing.
+        for key in [
+            "AA:BB:CC:DD:EE:FF",
+            "aabbccddeeff",
+            "1234567890",
+            "DEFAULT",
+            "SHORT",
+        ] {
+            assert_eq!(
+                spellings_of(key)
+                    .iter()
+                    .map(|d| d.to_string())
+                    .collect::<Vec<_>>(),
+                vec![key.to_string()],
+                "{key} is not a registration code and must not be re-spelled"
+            );
+        }
+    }
     use super::*;
 
     fn dev() -> DeviceId {

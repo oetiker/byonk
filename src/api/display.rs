@@ -924,7 +924,8 @@ pub async fn handle_display<R: DeviceRegistry>(
         firmware_version: Some(device.firmware_version.clone()),
         width: Some(width),
         height: Some(height),
-        registration_code: Some(registration_code),
+        // Cloned: the recovery lookup further down needs the code too.
+        registration_code: Some(registration_code.clone()),
         board: board_header.clone(),
         colors: Some(ctx_color_hex),
         colors_actual: measured_colors.as_deref().map(colors_to_hex_strings),
@@ -1179,15 +1180,23 @@ pub async fn handle_display<R: DeviceRegistry>(
     // there would lose a run started under the code, with no error anywhere.
     let recovery_device_id = {
         let mac = crate::models::DeviceId::new(device_id_str);
+        // The MAC is canonical: it is what `/api/admin/devices` reports as the
+        // key for any device that has checked in, so it leads and stays the
+        // identifier a new session is filed under. After it come the config
+        // key, then every written form of the device's registration code —
+        // a run started before the device first checked in could not have been
+        // resolved to a MAC, so it sits under whichever form was typed.
         let mut candidates = vec![mac.clone()];
         if let Some(key) = device_entry_key.as_deref() {
             if key != device_id_str {
                 candidates.push(crate::models::DeviceId::new(key));
             }
         }
-        // The MAC is canonical: it is what `/api/admin/devices` reports as the
-        // key for any device that has checked in, so it stays the identifier a
-        // new session is filed under.
+        for id in crate::services::recovery::spellings_of(&registration_code) {
+            if !candidates.contains(&id) {
+                candidates.push(id);
+            }
+        }
         recovery.resolve_key(&candidates).await.unwrap_or(mac)
     };
     let wipe = recovery.on_poll(&recovery_device_id).await;

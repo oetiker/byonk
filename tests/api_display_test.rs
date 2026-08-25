@@ -454,6 +454,39 @@ async fn recovery_started_under_the_config_key_still_reaches_the_device() {
     );
 }
 
+/// The same run, spelled the other way.
+///
+/// A registration code has two written forms — raw `ABCDEFGHJK` and hyphenated
+/// `ABCDE-FGHJK` — and both address the same device. An operator who starts a
+/// run before the device has ever checked in leaves the session under whichever
+/// form they typed, because nothing yet connects that code to a MAC. The poll
+/// has to find it either way.
+#[tokio::test]
+async fn recovery_started_under_the_unhyphenated_code_still_reaches_the_device() {
+    use byonk::models::ApiKey;
+
+    let api_key = "recovery-session-keyed-by-the-raw-code";
+    let code = ApiKey::new(api_key).registration_code();
+    let config_key = format!("{}-{}", &code[..5], &code[5..]);
+
+    // Configured hyphenated, but the run was started under the raw spelling.
+    let app = app_with_configured_device(&config_key);
+    app.recovery
+        .start(&byonk::models::DeviceId::new(&code), 3)
+        .await;
+
+    let headers = fixtures::display_headers(macs::HELLO_DEVICE, api_key);
+    let poll: serde_json::Value = app
+        .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
+        .await
+        .json();
+
+    assert_eq!(
+        poll["filename"], "screen_wiper.png",
+        "hyphenation must not decide whether a run reaches its device"
+    );
+}
+
 /// The override is scoped to the run. Once the last wipe has been handed out
 /// the session is gone, so the panel goes back to the screen's own cadence.
 #[tokio::test]

@@ -128,7 +128,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   names.** A run started with the device's `config.yaml` key reported "not
   running" when asked about under its MAC address, and cancelling it that way
   silently did nothing while the panel went on wiping — the web UI and Home
-  Assistant use the MAC. Both names now reach the same run.
+  Assistant use the MAC. Both names now reach the same run, and a registration
+  code works written either way, `ABCDE-FGHJK` or `ABCDEFGHJK`.
 - **Panel recovery now works for a device configured by registration code.**
   If your `config.yaml` lists a device under its registration code rather than
   its MAC address, starting a recovery run for it did nothing at all: the run

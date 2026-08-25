@@ -89,3 +89,45 @@ async fn a_run_started_under_the_config_key_is_cancelled_by_the_mac() {
         "cancelling under either name must end the run, not silently do nothing"
     );
 }
+
+/// Before a device has ever checked in there is no MAC to resolve to, so the
+/// session is filed under the code the operator typed. Asking about it with the
+/// other written form of the same code must still find it.
+#[tokio::test]
+async fn a_run_for_an_unseen_device_is_found_under_either_spelling_of_its_code() {
+    use byonk::assets::AssetLoader;
+    use byonk::models::{ApiKey, AppConfig};
+
+    let code = ApiKey::new(API_KEY).registration_code();
+    let hyphenated = format!("{}-{}", &code[..5], &code[5..]);
+
+    let loader = AssetLoader::new(None, None, None);
+    let mut config = AppConfig::load_from_assets(&loader).expect("load embedded config");
+    config.admin.token = Some("secret".to_string());
+    let device_config = config
+        .devices
+        .get("DEFAULT")
+        .expect("embedded config has a reserved DEFAULT device")
+        .clone();
+    config.devices.insert(hyphenated.clone(), device_config);
+
+    // Deliberately no registry entry: the device has never checked in.
+    let app = TestApp::from_config(config);
+
+    app.post_json(
+        &format!("/api/admin/devices/{code}/recover"),
+        &[AUTH],
+        r#"{"wipes": 3}"#,
+    )
+    .await;
+
+    let status: serde_json::Value = app
+        .get_with_headers(&format!("/api/admin/devices/{hyphenated}/recover"), &[AUTH])
+        .await
+        .json();
+
+    assert_eq!(
+        status["active"], true,
+        "hyphenation must not hide a run that is in progress"
+    );
+}

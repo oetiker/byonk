@@ -139,8 +139,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bytes). A value above that produced an image the device refuses, so a screen
   went blank instead of looking better; a mistyped value could also ask the
   server for a very large amount of memory on every single render. Byonk now
-  caps the value and says so in the log. Nothing changes for a sensible
-  setting such as `102401`.
+  caps the value and says so in the log, and an image already so large that
+  padding it would cross the limit is served as it is. Nothing changes for a
+  sensible setting such as `102401`.
 - **Lua stack tracebacks keep their indentation on the error screen.** The
   indent is the only thing separating a traceback's frames from the message
   above them, and it was being stripped, so the frames ran together with the

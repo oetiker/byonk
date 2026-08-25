@@ -68,6 +68,20 @@ pub fn pad_png_to_min_size(png: Vec<u8>, min_bytes: usize) -> Vec<u8> {
     if png.len() >= min_bytes {
         return png;
     }
+    // The smallest chunk this can add is CHUNK_OVERHEAD plus one filler byte,
+    // so an input within that of the ceiling cannot be padded without crossing
+    // it — the one outcome the cap exists to prevent. Serve it unpadded: an
+    // image the device accepts beats one it refuses, and at this size it is
+    // already far past every grey-table threshold, so there is nothing left to
+    // buy.
+    if png.len() + CHUNK_OVERHEAD + 1 > MAX_PNG_BYTES {
+        tracing::debug!(
+            len = png.len(),
+            max = MAX_PNG_BYTES,
+            "image is too close to the device's maximum size to pad; serving unpadded"
+        );
+        return png;
+    }
     let Some(iend) = find_iend(&png) else {
         tracing::warn!(
             len = png.len(),
@@ -173,6 +187,28 @@ mod tests {
             "padding must stop at the device's limit, got {}",
             padded.len()
         );
+    }
+
+    #[test]
+    fn an_image_already_at_the_cap_is_left_alone() {
+        // Padding costs CHUNK_OVERHEAD plus at least one filler byte, so an
+        // input within that of the ceiling cannot be padded without going over
+        // it — which is the one outcome the cap exists to prevent.
+        //
+        // Padding is exact when the shortfall clears the overhead, so this
+        // builds an input of precisely MAX_PNG_BYTES - 5.
+        let near_cap = pad_png_to_min_size(sample_png(), MAX_PNG_BYTES - 5);
+        assert_eq!(near_cap.len(), MAX_PNG_BYTES - 5, "test setup");
+
+        // Compared by length, not by bytes: a failed `assert_eq!` on these
+        // would print one and a half megabytes of filler.
+        let out = pad_png_to_min_size(near_cap.clone(), MAX_PNG_BYTES);
+        assert_eq!(
+            out.len(),
+            near_cap.len(),
+            "an image that cannot be padded within the cap must be served as it is"
+        );
+        assert!(out.len() <= MAX_PNG_BYTES);
     }
 
     #[test]

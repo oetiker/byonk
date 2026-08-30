@@ -464,7 +464,10 @@ pub async fn apply_device_add(
         return Err(ApiError::Conflict(format!("device `{key}` already exists")));
     }
 
-    if body.clear.as_ref().is_some_and(|c| !c.is_empty()) {
+    // Any presence, not just a non-empty list: a caller that sends `clear` to
+    // a create has misunderstood what it is doing, and accepting the empty
+    // case would leave the endpoint with two contracts to explain.
+    if body.clear.is_some() {
         return Err(ApiError::BadRequest(
             "`clear` is not valid when creating a device — it has no settings yet".into(),
         ));

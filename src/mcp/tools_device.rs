@@ -201,12 +201,26 @@ impl ByonkMcp {
             },
         };
         match result {
-            Ok(value) => ok_json(ConfigureDeviceOutput {
-                key: value["key"].as_str().unwrap_or(&a.mac).to_string(),
-                screen: value["screen"].as_str().unwrap_or_default().to_string(),
-                created,
-                cleared: a.clear.clone().unwrap_or_default(),
-            }),
+            Ok(value) => {
+                // Both write paths always report the screen, so this is
+                // unreachable — but defaulting it would answer "" to the one
+                // question the caller asked, and "no screen" is a claim an
+                // agent would act on. `key` can fall back to the mac because
+                // that is a true answer; there is no true answer here.
+                let Some(screen) = value["screen"].as_str() else {
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(
+                        "the device was written, but byonk's own result carried no screen — \
+                         this is a bug; check the device with get_config."
+                            .to_string(),
+                    )]));
+                };
+                ok_json(ConfigureDeviceOutput {
+                    key: value["key"].as_str().unwrap_or(&a.mac).to_string(),
+                    screen: screen.to_string(),
+                    created,
+                    cleared: a.clear.clone().unwrap_or_default(),
+                })
+            }
             // Tool-level, not protocol-level: "unknown screen `local/x`" and
             // "device not found" are exactly the messages the agent needs to
             // read and act on.

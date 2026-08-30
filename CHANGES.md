@@ -73,6 +73,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   { "mac": "44:1B:F6:83:93:38", "clear": ["noise_scale"] }
   ```
 
+  That is the MCP call. Over REST the device is named by the URL, so the body
+  is just `{ "clear": ["noise_scale"] }`.
+
   Anything except `screen` can be cleared — a device must always have a screen.
 
 - **Bad device settings are refused instead of silently doing something else.**

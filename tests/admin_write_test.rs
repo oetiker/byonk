@@ -762,7 +762,11 @@ async fn test_clear_is_rejected_when_creating_a_device() {
     let dir = tempfile::tempdir().unwrap();
     let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
 
-    let body = format!(r#"{{"key":"{MAC}","screen":"{COLOR}","clear":["panel"]}}"#);
-    let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
-    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    // Empty too: a create has nothing to clear, so mentioning `clear` at all
+    // means the caller thinks it is doing something it is not.
+    for clear in ["[\"panel\"]", "[]"] {
+        let body = format!(r#"{{"key":"{MAC}","screen":"{COLOR}","clear":{clear}}}"#);
+        let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST, "accepted {clear}");
+    }
 }

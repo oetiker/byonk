@@ -410,6 +410,35 @@ Create a new device mapping in `config.yaml`.
 Required fields: `key`, `screen`. `screen` must be a qualified `handle/path` reference (as
 listed by `GET /api/admin/screens`). All other fields are optional.
 
+The full set of writable settings is:
+
+| Field | Meaning |
+|-------|---------|
+| `screen` | Qualified `handle/path` screen reference |
+| `panel` | Panel profile name, as configured under `panels` |
+| `dither` | Dither algorithm — `GET /api/admin/screens` lists the accepted names |
+| `colors` | Palette override, comma-separated `#rrggbb`, at least two |
+| `params` | Parameters for the screen's Lua script |
+| `refresh` | Refresh interval in seconds; `0` means "use the screen's own default" |
+| `name` | Friendly name |
+| `max_error` | Cap on accumulated dithering error |
+| `noise_scale` | Blue-noise jitter scale |
+| `chroma_clamp` | Chroma clamp for dithering |
+| `strength` | Dither strength — `0.0` diffuses nothing, `1.0` is standard |
+| `temperature_profile` | `default`, `a` or `b`; passed to the device |
+| `maximum_compatibility` | Ask the firmware to force a full-waveform refresh every update |
+| `min_png_bytes` | Pad the served PNG to at least this many bytes |
+
+`panel`, `dither`, `colors` and `temperature_profile` are validated against what
+this server actually understands, and an unknown value is a `400`. This matters
+for `dither` in particular: an unrecognised algorithm name is not an error
+anywhere further down the pipeline — the renderer falls back to `atkinson` — so
+without the check a typo would be invisible until you looked at the panel.
+
+The device's `gamut` block and the deprecated `error_clamp` key are not writable
+here, but an existing entry keeps them: a write preserves every key it does not
+manage itself.
+
 **Responses**:
 
 | Status | Meaning |
@@ -425,13 +454,15 @@ listed by `GET /api/admin/screens`). All other fields are optional.
 Update an existing device mapping. The `:key` in the URL must match an existing entry in the
 `devices:` config section.
 
-The top-level fields (`screen`, `panel`, `dither`, `colors`) merge individually: omitted
-ones keep their current values.
+It accepts the same settings as `POST` (see the table above), minus `key`. All of
+them merge individually: an omitted field keeps its current value.
 
-**`params` is a full replacement:** when the `params` key is present in the request body, it
-replaces the device's entire param map. To change a single param, send the complete set of
-params including any unchanged ones. Omit the `params` key entirely to leave existing params
-untouched.
+**`params` merges key by key**, so changing one param does not drop the others.
+The exception is a request that also changes `screen`: the params then belong to
+a different script, so whatever the request carries replaces the map wholesale.
+Sending no params with a screen change carries the *previous* params across
+unchanged — they are validated against the new screen's schema, not reset to its
+defaults.
 
 **Request body** (all fields optional):
 
@@ -439,9 +470,24 @@ untouched.
 {
   "screen": "examples/swiss-departure-board",
   "dither": "floyd-steinberg",
-  "params": { "station": "Bern, Bahnhof", "limit": 5 }
+  "params": { "limit": 5 }
 }
 ```
+
+#### Removing a setting
+
+An omitted field means "leave alone", so `PATCH` on its own can change a setting
+but never take it back. List the settings to remove in `clear`:
+
+```json
+{ "clear": ["noise_scale", "min_png_bytes"] }
+```
+
+A device setting overrides the panel's, so clearing one lets the panel's value
+apply again. Every writable field except `screen` can be cleared — a device must
+always have a screen, so change it instead. Setting and clearing the same field
+in one request is a `400`, as is clearing a name that is not a setting. `clear`
+is only valid on `PATCH`; on `POST` there is nothing to clear and it is refused.
 
 **Responses**:
 

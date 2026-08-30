@@ -9,7 +9,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use crate::error::ApiError;
-use crate::models::config::RESERVED_DEFAULT_KEY;
+use crate::models::config::{normalize_algorithm_name, DITHER_ALGORITHMS, RESERVED_DEFAULT_KEY};
 use crate::models::param_schema::validate_params;
 use crate::server::{reload_config, AppState};
 use crate::services::config_writer;
@@ -28,6 +28,30 @@ pub struct DeviceWrite {
     pub params: Option<HashMap<String, serde_yaml::Value>>,
     pub refresh: Option<u32>,
     pub name: Option<String>,
+
+    // Dither tuning overrides. A device value wins over the panel's — the
+    // render path resolves `dc_tuning.or(&panel_tuning)` — so removing one
+    // hands the knob back to the panel block. That is what `clear` is for.
+    pub max_error: Option<f32>,
+    pub noise_scale: Option<f32>,
+    pub chroma_clamp: Option<f32>,
+    pub strength: Option<f32>,
+
+    // Panel behaviour, passed through to the device in `/api/display`.
+    pub temperature_profile: Option<String>,
+    pub maximum_compatibility: Option<bool>,
+    pub min_png_bytes: Option<u32>,
+
+    /// Settings to remove from the device entry, by name.
+    ///
+    /// A patch reads an absent field as "leave alone", which is what makes
+    /// partial updates safe but also means a setting could be changed and
+    /// never taken back. Naming it here deletes it, so the panel default (or
+    /// the firmware's) applies again.
+    ///
+    /// Ignored on add: a device being created has nothing to clear, so a
+    /// `clear` there is a mistake and is rejected rather than dropped.
+    pub clear: Option<Vec<String>>,
 }
 
 /// Guard: writes require a file-backed config.
@@ -83,14 +107,221 @@ fn validate_screen_and_params(
     Ok(())
 }
 
+/// Validate the device settings a caller actually provided.
+///
+/// Only the provided fields, never the merged result: a device whose
+/// `config.yaml` entry was hand-edited into an invalid state must still accept
+/// an unrelated patch, otherwise the API that exists to fix such a device is
+/// the one thing that cannot.
+///
+/// This matters most for `dither`. An unrecognised algorithm name does not
+/// fail anywhere downstream — `svg_to_png`'s match ends in `_ =>
+/// DitherAlgorithm::Atkinson` — so before this check a typo silently rendered
+/// Atkinson, and the only symptom was on the glass.
+fn validate_device_settings(state: &AppState, w: &DeviceWrite) -> Result<(), ApiError> {
+    if let Some(dither) = &w.dither {
+        let canonical = normalize_algorithm_name(dither);
+        if !DITHER_ALGORITHMS.contains(&canonical.as_str()) {
+            return Err(ApiError::BadRequest(format!(
+                "unknown dither algorithm `{dither}`; known: {}",
+                DITHER_ALGORITHMS.join(", ")
+            )));
+        }
+    }
+
+    if let Some(panel) = &w.panel {
+        let config = state.config.load();
+        if !config.panels.contains_key(panel) {
+            let mut known: Vec<&str> = config.panels.keys().map(|k| k.as_str()).collect();
+            known.sort_unstable();
+            return Err(ApiError::BadRequest(format!(
+                "unknown panel `{panel}`; configured: {}",
+                known.join(", ")
+            )));
+        }
+    }
+
+    if let Some(colors) = &w.colors {
+        validate_colors(colors)?;
+    }
+
+    // `c` is rejected on purpose: firmware 1.8.14 still has its mapping
+    // commented out, so a device reads `c` back as `default` and quietly turns
+    // the extra clearing off again. Accepting it would store a setting that
+    // does nothing.
+    if let Some(profile) = &w.temperature_profile {
+        if !matches!(profile.as_str(), "default" | "a" | "b") {
+            return Err(ApiError::BadRequest(format!(
+                "unknown temperature_profile `{profile}`; known: default, a, b"
+            )));
+        }
+    }
+
+    // Ranges are deliberately left open — these knobs exist to be swept, and a
+    // plausible-looking bound would block the experiment that finds the real
+    // one. Only values YAML can hold but arithmetic cannot are refused.
+    for (key, value) in [
+        ("max_error", w.max_error),
+        ("noise_scale", w.noise_scale),
+        ("chroma_clamp", w.chroma_clamp),
+        ("strength", w.strength),
+    ] {
+        if let Some(v) = value {
+            if !v.is_finite() || v < 0.0 {
+                return Err(ApiError::BadRequest(format!(
+                    "`{key}` must be a finite, non-negative number, got {v}"
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// A `colors` override must be a comma-separated list of `#rrggbb` entries.
+///
+/// Strict where the render path is forgiving: `parse_colors_header` builds the
+/// palette with `filter_map`, so it drops the entries it cannot read and
+/// carries on with a shorter palette. That is the right behaviour for a header
+/// arriving from a device and the wrong one for a value being written to disk.
+fn validate_colors(colors: &str) -> Result<(), ApiError> {
+    let entries: Vec<&str> = colors.split(',').map(str::trim).collect();
+    for entry in &entries {
+        let hex = entry.strip_prefix('#').unwrap_or(entry);
+        let valid = hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit());
+        if !valid {
+            return Err(ApiError::BadRequest(format!(
+                "`colors` entry `{entry}` is not a #rrggbb color"
+            )));
+        }
+    }
+    if entries.len() < 2 {
+        return Err(ApiError::BadRequest(
+            "`colors` needs at least two colors to dither between".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Resolve the `clear` list into the set of keys to drop, rejecting names that
+/// are not settings and names the same call also sets.
+///
+/// Setting and clearing one field in a single call has no sensible reading, so
+/// it is refused rather than resolved by precedence — a caller that does it is
+/// confused about what it wants, and either outcome would surprise it.
+fn resolve_clear(w: &DeviceWrite) -> Result<Vec<String>, ApiError> {
+    let Some(requested) = &w.clear else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for name in requested {
+        if !CLEARABLE_DEVICE_KEYS.contains(&name.as_str()) {
+            let hint = if name == "screen" {
+                " (a device must always have a screen; assign a different one instead)"
+            } else {
+                ""
+            };
+            return Err(ApiError::BadRequest(format!(
+                "cannot clear `{name}`{hint}; clearable: {}",
+                CLEARABLE_DEVICE_KEYS.join(", ")
+            )));
+        }
+        let also_set = match name.as_str() {
+            "panel" => w.panel.is_some(),
+            "dither" => w.dither.is_some(),
+            "colors" => w.colors.is_some(),
+            "refresh" => w.refresh.is_some(),
+            "name" => w.name.is_some(),
+            "params" => w.params.is_some(),
+            "max_error" => w.max_error.is_some(),
+            "noise_scale" => w.noise_scale.is_some(),
+            "chroma_clamp" => w.chroma_clamp.is_some(),
+            "strength" => w.strength.is_some(),
+            "temperature_profile" => w.temperature_profile.is_some(),
+            "maximum_compatibility" => w.maximum_compatibility.is_some(),
+            "min_png_bytes" => w.min_png_bytes.is_some(),
+            _ => false,
+        };
+        if also_set {
+            return Err(ApiError::BadRequest(format!(
+                "`{name}` is both set and cleared in the same request"
+            )));
+        }
+        out.push(name.clone());
+    }
+    Ok(out)
+}
+
+/// Drop the named settings from an already-merged write.
+///
+/// Applied after the merge, so a cleared field is not carried over from the
+/// existing entry; `device_block` then omits it, and `unmanaged_device_keys`
+/// cannot put it back because every clearable key is managed.
+fn apply_clear(merged: &mut DeviceWrite, clear: &[String]) {
+    for name in clear {
+        match name.as_str() {
+            "panel" => merged.panel = None,
+            "dither" => merged.dither = None,
+            "colors" => merged.colors = None,
+            "refresh" => merged.refresh = None,
+            "name" => merged.name = None,
+            "params" => merged.params = None,
+            "max_error" => merged.max_error = None,
+            "noise_scale" => merged.noise_scale = None,
+            "chroma_clamp" => merged.chroma_clamp = None,
+            "strength" => merged.strength = None,
+            "temperature_profile" => merged.temperature_profile = None,
+            "maximum_compatibility" => merged.maximum_compatibility = None,
+            "min_png_bytes" => merged.min_png_bytes = None,
+            // Unreachable: `resolve_clear` rejects anything else.
+            _ => {}
+        }
+    }
+}
+
 /// Build the YAML mapping for a device block from the provided fields.
 /// The device keys `device_block` writes for itself. Anything else found in an
 /// existing entry is carried across verbatim by [`unmanaged_device_keys`].
 ///
 /// Kept as a list rather than derived from `DeviceWrite`'s fields because the
 /// mapping is not one-to-one: `key` is the entry name, not a key inside it.
-const MANAGED_DEVICE_KEYS: [&str; 7] = [
-    "screen", "panel", "dither", "colors", "refresh", "name", "params",
+const MANAGED_DEVICE_KEYS: [&str; 14] = [
+    "screen",
+    "panel",
+    "dither",
+    "colors",
+    "refresh",
+    "name",
+    "params",
+    "max_error",
+    "noise_scale",
+    "chroma_clamp",
+    "strength",
+    "temperature_profile",
+    "maximum_compatibility",
+    "min_png_bytes",
+];
+
+/// The settings `clear` accepts: every managed key except `screen`, which a
+/// device must always have. `error_clamp` is deliberately absent — it is not
+/// managed, so it is preserved verbatim and keeps reporting its deprecation.
+///
+/// A test asserts this stays exactly `MANAGED_DEVICE_KEYS` minus `screen`, so
+/// a field added to one list cannot go missing from the other.
+const CLEARABLE_DEVICE_KEYS: [&str; 13] = [
+    "panel",
+    "dither",
+    "colors",
+    "refresh",
+    "name",
+    "params",
+    "max_error",
+    "noise_scale",
+    "chroma_clamp",
+    "strength",
+    "temperature_profile",
+    "maximum_compatibility",
+    "min_png_bytes",
 ];
 
 /// Every key of an existing device entry that this writer does not model.
@@ -123,6 +354,21 @@ fn unmanaged_device_keys(yaml: &str, key: &str) -> serde_yaml::Mapping {
     out
 }
 
+/// Write an `f32` tuning value as the decimal the caller actually sent.
+///
+/// `serde_yaml::Value::from(f32)` widens to `f64` first, and the `f64` nearest
+/// the `f32` nearest `0.9` is `0.8999999761581421` — which is what lands in
+/// `config.yaml`. It reads back as the same `f32`, so nothing renders
+/// differently, but the file becomes unreadable and every rewrite churns the
+/// diff. `f32::to_string` gives the shortest decimal that round-trips, so
+/// parsing that as `f64` keeps `0.9` looking like `0.9`.
+fn yaml_f32(v: f32) -> serde_yaml::Value {
+    v.to_string()
+        .parse::<f64>()
+        .map(serde_yaml::Value::from)
+        .unwrap_or_else(|_| serde_yaml::Value::from(v))
+}
+
 fn device_block(w: &DeviceWrite, screen: &str) -> serde_yaml::Mapping {
     let mut m = serde_yaml::Mapping::new();
     m.insert("screen".into(), screen.into());
@@ -144,6 +390,25 @@ fn device_block(w: &DeviceWrite, screen: &str) -> serde_yaml::Mapping {
         if !n.is_empty() {
             m.insert("name".into(), n.as_str().into());
         }
+    }
+    for (key, value) in [
+        ("max_error", w.max_error),
+        ("noise_scale", w.noise_scale),
+        ("chroma_clamp", w.chroma_clamp),
+        ("strength", w.strength),
+    ] {
+        if let Some(v) = value {
+            m.insert(key.into(), yaml_f32(v));
+        }
+    }
+    if let Some(t) = &w.temperature_profile {
+        m.insert("temperature_profile".into(), t.as_str().into());
+    }
+    if let Some(c) = w.maximum_compatibility {
+        m.insert("maximum_compatibility".into(), serde_yaml::Value::from(c));
+    }
+    if let Some(b) = w.min_png_bytes {
+        m.insert("min_png_bytes".into(), serde_yaml::Value::from(b));
     }
     if let Some(params) = &w.params {
         let mut pm = serde_yaml::Mapping::new();
@@ -178,10 +443,10 @@ fn persist(state: &AppState, path: &std::path::Path, new_yaml: String) -> Result
 
 /// Apply a device *add*: reject a duplicate key, validate the screen and
 /// params, and persist. Shared by `POST /api/admin/devices` and the MCP
-/// `assign_screen` tool's create-on-first-assignment fallback (a device that
+/// `configure_device` tool's create-on-first-configuration fallback (a device that
 /// has only been *seen* by the registry — i.e. it shows up in `list_devices`
 /// — has no `config.devices` entry yet, so `apply_device_patch` 404s on it;
-/// `assign_screen` falls back to this to create the mapping).
+/// `configure_device` falls back to this to create the mapping).
 pub async fn apply_device_add(
     state: &AppState,
     key: &str,
@@ -199,8 +464,15 @@ pub async fn apply_device_add(
         return Err(ApiError::Conflict(format!("device `{key}` already exists")));
     }
 
+    if body.clear.as_ref().is_some_and(|c| !c.is_empty()) {
+        return Err(ApiError::BadRequest(
+            "`clear` is not valid when creating a device — it has no settings yet".into(),
+        ));
+    }
+
     let empty = HashMap::new();
     validate_screen_and_params(state, &screen, body.params.as_ref().unwrap_or(&empty))?;
+    validate_device_settings(state, &body)?;
 
     let block = device_block(&body, &screen);
     let yaml = state
@@ -234,7 +506,7 @@ pub async fn add_device(
 
 /// Apply a device patch: merge with the existing entry, validate the screen
 /// and params, and persist. Shared by `PATCH /api/admin/devices/{key}` and
-/// the MCP `assign_screen` tool so both enforce identical rules — screen
+/// the MCP `configure_device` tool so both enforce identical rules — screen
 /// existence, param schema, the config write lock, and rollback on a failed
 /// reload.
 ///
@@ -250,6 +522,8 @@ pub async fn apply_device_patch(
     body: DeviceWrite,
 ) -> Result<serde_json::Value, ApiError> {
     let path = require_file_config(state)?;
+    validate_device_settings(state, &body)?;
+    let clear = resolve_clear(&body)?;
     let _guard = state.write_lock.lock().await;
 
     // Must already exist.
@@ -284,7 +558,11 @@ pub async fn apply_device_patch(
             .unwrap_or_else(|| existing.params.clone())
     };
 
-    let merged = DeviceWrite {
+    // Every managed key needs a line here. A key listed in
+    // `MANAGED_DEVICE_KEYS` but missing from this merge is *deleted* by any
+    // patch that omits it — `unmanaged_device_keys` no longer protects it —
+    // and the loss is silent until it shows up on the glass.
+    let mut merged = DeviceWrite {
         key: Some(key.to_string()),
         screen: Some(screen.clone()),
         panel: body.panel.clone().or(existing.panel.clone()),
@@ -293,7 +571,21 @@ pub async fn apply_device_patch(
         params: Some(params),
         refresh: body.refresh.or(existing.refresh),
         name: body.name.clone().or(existing.name.clone()),
+        max_error: body.max_error.or(existing.max_error),
+        noise_scale: body.noise_scale.or(existing.noise_scale),
+        chroma_clamp: body.chroma_clamp.or(existing.chroma_clamp),
+        strength: body.strength.or(existing.strength),
+        temperature_profile: body
+            .temperature_profile
+            .clone()
+            .or(existing.temperature_profile.clone()),
+        maximum_compatibility: body
+            .maximum_compatibility
+            .or(existing.maximum_compatibility),
+        min_png_bytes: body.min_png_bytes.or(existing.min_png_bytes),
+        clear: None,
     };
+    apply_clear(&mut merged, &clear);
 
     let empty = HashMap::new();
     validate_screen_and_params(state, &screen, merged.params.as_ref().unwrap_or(&empty))?;
@@ -660,6 +952,9 @@ devices:
     maximum_compatibility: true
     min_png_bytes: 102401
     max_error: 0.8
+    error_clamp: 0.2
+    gamut:
+      knee: 0.7
     params:
       station: Olten
 ";
@@ -668,24 +963,47 @@ devices:
     /// settings: `upsert_device` replaces the whole block, so assigning a
     /// screen silently deleted every key `DeviceWrite` does not carry. It
     /// failed on the glass, not in a log.
+    ///
+    /// `temperature_profile`, `min_png_bytes` and the dither knobs used to be
+    /// guarded here. They are managed fields now, kept by the patch merge
+    /// instead — `test_patch_preserves_every_tuning_knob` in
+    /// `tests/admin_write_test.rs` is what proves they still survive, end to
+    /// end. What is left for this door are the keys the writer models nowhere:
+    /// `gamut`, and the deprecated `error_clamp` whose whole job is to stay on
+    /// disk and keep reporting itself.
     #[test]
     fn unmanaged_device_keys_are_preserved() {
         let kept = unmanaged_device_keys(DEVICE_YAML, "1C:DB:D4:66:5B:50");
-        for key in [
-            "temperature_profile",
-            "maximum_compatibility",
-            "min_png_bytes",
-            "max_error",
-        ] {
+        for key in ["error_clamp", "gamut"] {
             assert!(
                 kept.contains_key(serde_yaml::Value::from(key)),
                 "{key} must survive a device patch, kept: {kept:?}"
             );
         }
         assert_eq!(
-            kept.get(serde_yaml::Value::from("temperature_profile")),
-            Some(&serde_yaml::Value::from("a")),
+            kept.get(serde_yaml::Value::from("error_clamp")),
+            Some(&serde_yaml::Value::from(0.2)),
             "value must carry across unchanged, not just the key"
+        );
+    }
+
+    /// `clear` and the managed-key list are two halves of one contract: a key
+    /// the writer sets must also be a key the caller can unset, or a setting
+    /// becomes a one-way door. `screen` is the sole exception, because a
+    /// device without one has nothing to show.
+    #[test]
+    fn every_managed_key_except_screen_is_clearable() {
+        let mut expected: Vec<&str> = MANAGED_DEVICE_KEYS
+            .iter()
+            .copied()
+            .filter(|k| *k != "screen")
+            .collect();
+        let mut actual: Vec<&str> = CLEARABLE_DEVICE_KEYS.to_vec();
+        expected.sort_unstable();
+        actual.sort_unstable();
+        assert_eq!(
+            expected, actual,
+            "CLEARABLE_DEVICE_KEYS must be MANAGED_DEVICE_KEYS minus `screen`"
         );
     }
 

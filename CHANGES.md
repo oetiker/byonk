@@ -43,6 +43,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The MCP tool `assign_screen` is now `configure_device`, and it can set
+  everything about a device, not just its screen.** Assigning a screen was the
+  only thing an assistant could do; every other per-device setting — which
+  panel profile to use, which dither algorithm, the dither tuning, the
+  anti-ghosting flags — could only be changed by editing `config.yaml` by hand
+  and restarting.
+
+  `configure_device` covers the same settings as
+  `PATCH /api/admin/devices/{key}`: `screen_ref`, `panel`, `dither`, `colors`,
+  `params`, `refresh`, `name`, `max_error`, `noise_scale`, `chroma_clamp`,
+  `strength`, `temperature_profile`, `maximum_compatibility` and
+  `min_png_bytes`. Everything except `mac` is optional and an omitted field is
+  left alone, so one call changes one setting. `screen_ref` is needed only the
+  first time a device is configured.
+
+  If you drive Byonk through MCP, rename any `assign_screen` call to
+  `configure_device`; the `mac` and `screen_ref` arguments are unchanged.
+
+- **A setting can now be removed, not just changed.** Because leaving a field
+  out means "keep it as it is", there was no way to undo a per-device setting
+  once it existed — and a device setting overrides its panel's, so a value tried
+  once kept overriding it forever. Both `configure_device` and
+  `PATCH /api/admin/devices/{key}` now take a `clear` list naming the settings
+  to remove, after which the panel's value (or the firmware default) applies
+  again:
+
+  ```json
+  { "mac": "44:1B:F6:83:93:38", "clear": ["noise_scale"] }
+  ```
+
+  Anything except `screen` can be cleared — a device must always have a screen.
+
+- **Bad device settings are refused instead of silently doing something else.**
+  Writing a device's `panel`, `dither`, `colors` or `temperature_profile`
+  through the admin API or MCP now checks the value first and fails with a
+  message listing what is accepted.
+
+  This was worst for `dither`: an unrecognised algorithm name was not an error
+  anywhere, it just rendered `atkinson`. A misspelling such as
+  `floyd_steinburg` was accepted, saved, and then quietly gave you a different
+  algorithm than the one you asked for — visible only on the panel itself.
+
 - **`error_clamp` is now called `max_error`, and the old name is ignored.** In
   0.18.0 the knob stopped capping the resulting pixel value and started capping
   the accumulated dithering error, which moved its useful range from around

@@ -185,11 +185,37 @@ The diagnostics also include `measured_source`, naming which layer actually supp
 measured colours for that render: `script`, `render_opts` (the `colors_actual` argument
 above), `panel.colors_actual`, or `none`.
 
-### Assign
+### Configure a device
 
 | Tool | What it does |
 |------|----------------|
-| `assign_screen` | Assign a device to a screen (use `list_devices` first to find its MAC). |
+| `configure_device` | Set which screen a device shows and how that screen is rendered for it (use `list_devices` first to find its MAC). |
+
+Every field except `mac` is optional, and an omitted field is left as it was, so
+one call can change a single setting without disturbing the others. `screen_ref`
+is only required the first time a device is configured.
+
+Besides `screen_ref` the tool covers the device's `panel`, `dither` algorithm,
+`colors` palette, script `params`, `refresh` interval and `name`, the dither
+tuning knobs `max_error`, `noise_scale`, `chroma_clamp` and `strength`, and the
+panel-behaviour flags `temperature_profile`, `maximum_compatibility` and
+`min_png_bytes`. It is the same set `PATCH /api/admin/devices/{key}` accepts.
+
+To take a setting back rather than change it, name it in `clear`:
+
+```json
+{ "mac": "44:1B:F6:83:93:38", "clear": ["noise_scale"] }
+```
+
+A device setting overrides the panel's, so removing it lets the panel's own
+value apply again. Setting and clearing the same field in one call is refused.
+
+Names are checked before anything is written: an unknown dither algorithm, an
+unconfigured panel, a malformed `colors` list or a `temperature_profile` other
+than `default`/`a`/`b` all fail with a message listing what is accepted. This
+matters most for `dither` — an unrecognised algorithm name is not an error
+further down the pipeline, it just renders Atkinson, so a typo used to be
+invisible until you looked at the panel.
 
 ## Resources
 
@@ -219,12 +245,12 @@ general-purpose Lua.
 4. `render_screen` and read its `log` and `error.line` fields — Lua errors and
    template errors both surface there, pointing at what to fix.
 5. Repeat steps 3–4 until it renders clean.
-6. `assign_screen` to put it on a real device.
+6. `configure_device` to put it on a real device.
 
 ## Security note
 
 The admin token this endpoint uses grants full screen-authoring rights — creating,
-editing and deleting screens — and device-assignment rights, not just read access.
+editing and deleting screens — and device-configuration rights, not just read access.
 Treat it like any other credential.
 
 `/mcp` also accepts requests for any `Host` header, unlike the loopback-only default

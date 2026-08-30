@@ -201,6 +201,23 @@ impl<'de> Deserialize<'de> for PanelDitherConfig {
     }
 }
 
+/// Canonical dither algorithm names byonk understands.
+///
+/// The single source of truth for "is this a real algorithm". Every entry must
+/// be a fixed point of [`normalize_algorithm_name`] — a test below asserts it,
+/// so an alias can never be listed here as if it were canonical.
+pub const DITHER_ALGORITHMS: &[&str] = &[
+    "floyd-steinberg",
+    "atkinson",
+    "atkinson-hybrid",
+    "jarvis-judice-ninke",
+    "sierra",
+    "sierra-two-row",
+    "sierra-lite",
+    "stucki",
+    "burkes",
+];
+
 /// Normalize dither algorithm name to its canonical form.
 ///
 /// Accepts common aliases and returns the canonical hyphenated name
@@ -748,6 +765,22 @@ registration:
         assert!(config.is_device_registered("00:00:00:00:00:00", Some("XYZABCDEFG")));
         // Should not find unknown
         assert!(!config.is_device_registered("00:00:00:00:00:00", Some("UNKNOWNCODE")));
+    }
+
+    /// `DITHER_ALGORITHMS` is the list the admin API advertises and the device
+    /// write path validates against. Every entry must be canonical — i.e. a
+    /// fixed point of `normalize_algorithm_name`. Listing an alias here would
+    /// let a caller store a name that the renderer then fails to match, and
+    /// `svg_to_png`'s `_ =>` arm would silently render Atkinson instead.
+    #[test]
+    fn test_every_advertised_algorithm_is_canonical() {
+        for name in DITHER_ALGORITHMS {
+            assert_eq!(
+                &normalize_algorithm_name(name),
+                name,
+                "`{name}` is advertised but is not its own canonical form"
+            );
+        }
     }
 
     /// `sierra-light` is a misspelling that reached shipped config and the

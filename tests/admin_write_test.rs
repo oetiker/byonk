@@ -608,9 +608,11 @@ async fn test_patch_rejects_an_unknown_dither_algorithm() {
     let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
     seed_fully_configured(&app).await;
 
-    // Underscored spelling of a real kernel. Before validation this wrote
-    // fine and rendered Atkinson, because `svg_to_png`'s match falls through
-    // to it — a wrong kernel with no error anywhere.
+    // `steinburg`, not `steinberg` — a misspelling, deliberately not one of
+    // the accepted aliases (`test_patch_accepts_a_dither_alias` next door
+    // covers those, and an underscored `floyd_steinberg` must still pass).
+    // Before validation this wrote fine and then rendered Atkinson, because
+    // `svg_to_png`'s match falls through to it — a wrong kernel, no error.
     let resp = app
         .patch_json(
             &format!("/api/admin/devices/{MAC}"),

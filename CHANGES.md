@@ -50,13 +50,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   anti-ghosting flags — could only be changed by editing `config.yaml` by hand
   and restarting.
 
-  `configure_device` covers the same settings as
-  `PATCH /api/admin/devices/{key}`: `screen_ref`, `panel`, `dither`, `colors`,
-  `params`, `refresh`, `name`, `max_error`, `noise_scale`, `chroma_clamp`,
-  `strength`, `temperature_profile`, `maximum_compatibility` and
-  `min_png_bytes`. Everything except `mac` is optional and an omitted field is
-  left alone, so one call changes one setting. `screen_ref` is needed only the
-  first time a device is configured.
+  `configure_device` reaches the same settings as
+  `PATCH /api/admin/devices/{key}`: the screen, plus `panel`, `dither`,
+  `colors`, `params`, `refresh`, `name`, `max_error`, `noise_scale`,
+  `chroma_clamp`, `strength`, `temperature_profile`, `maximum_compatibility`
+  and `min_png_bytes`.
+
+  The two interfaces name the device and its screen differently. Over MCP you
+  pass `mac` and `screen_ref`; over REST the device is in the URL and the field
+  is `screen`. Everything else is spelled the same on both.
+
+  Every setting is optional and an omitted one is left alone, so one call
+  changes one setting. The screen is needed only the first time a device is
+  configured.
 
   If you drive Byonk through MCP, rename any `assign_screen` call to
   `configure_device`; the `mac` and `screen_ref` arguments are unchanged.

@@ -199,7 +199,10 @@ Besides `screen_ref` the tool covers the device's `panel`, `dither` algorithm,
 `colors` palette, script `params`, `refresh` interval and `name`, the dither
 tuning knobs `max_error`, `noise_scale`, `chroma_clamp` and `strength`, and the
 panel-behaviour flags `temperature_profile`, `maximum_compatibility` and
-`min_png_bytes`. It is the same set `PATCH /api/admin/devices/{key}` accepts.
+`min_png_bytes`. It reaches the same settings as
+`PATCH /api/admin/devices/{key}`, which spells two of them differently: there
+the device is named by the URL rather than by `mac`, and its screen field is
+`screen` rather than `screen_ref`.
 
 To take a setting back rather than change it, name it in `clear`:
 

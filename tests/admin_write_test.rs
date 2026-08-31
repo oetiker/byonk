@@ -535,3 +535,240 @@ async fn test_add_device_on_embedded_config_returns_409_even_with_no_key() {
     let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
     assert_eq!(resp.status, StatusCode::CONFLICT);
 }
+
+// ---------------------------------------------------------------------------
+// Device settings: validation, preservation, and clearing.
+// ---------------------------------------------------------------------------
+
+const MAC: &str = "CC:DD:EE:FF:00:22";
+
+/// Create a device carrying every managed setting at once.
+async fn seed_fully_configured(app: &TestApp) {
+    let body = format!(
+        r##"{{"key":"{MAC}","screen":"{COLOR}","panel":"reterminal_e1004",
+            "dither":"floyd-steinberg","colors":"#000000,#FFFFFF",
+            "refresh":900,"name":"Bench panel","max_error":0.9,
+            "noise_scale":2.5,"chroma_clamp":0.3,"strength":0.8,
+            "temperature_profile":"a","maximum_compatibility":true,
+            "min_png_bytes":102401}}"##
+    );
+    let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
+    assert_eq!(resp.status, StatusCode::OK, "seed device: {}", resp.text());
+}
+
+/// The trap this branch introduced and must not fall into: adding a key to
+/// `MANAGED_DEVICE_KEYS` takes it out of `unmanaged_device_keys`' protection,
+/// so a key listed there but forgotten in the patch merge is *deleted* by any
+/// patch that omits it. Silently, and only visible on the glass hours later.
+///
+/// Patch one unrelated field and demand every other setting is still on disk.
+#[tokio::test]
+async fn test_patch_preserves_every_tuning_knob() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
+    seed_fully_configured(&app).await;
+
+    let resp = app
+        .patch_json(
+            &format!("/api/admin/devices/{MAC}"),
+            &[AUTH],
+            r#"{"name":"Renamed"}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    let block = on_disk
+        .split(MAC)
+        .nth(1)
+        .expect("device block present after patch");
+    for expected in [
+        "panel: reterminal_e1004",
+        "dither: floyd-steinberg",
+        "refresh: 900",
+        "max_error: 0.9",
+        "noise_scale: 2.5",
+        "chroma_clamp: 0.3",
+        "strength: 0.8",
+        "temperature_profile: a",
+        "maximum_compatibility: true",
+        "min_png_bytes: 102401",
+    ] {
+        assert!(
+            block.contains(expected),
+            "`{expected}` was dropped by a patch that never mentioned it\n{block}"
+        );
+    }
+    assert!(block.contains("Renamed"), "the patched field did change");
+}
+
+#[tokio::test]
+async fn test_patch_rejects_an_unknown_dither_algorithm() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
+    seed_fully_configured(&app).await;
+
+    // `steinburg`, not `steinberg` — a misspelling, deliberately not one of
+    // the accepted aliases (`test_patch_accepts_a_dither_alias` next door
+    // covers those, and an underscored `floyd_steinberg` must still pass).
+    // Before validation this wrote fine and then rendered Atkinson, because
+    // `svg_to_png`'s match falls through to it — a wrong kernel, no error.
+    let resp = app
+        .patch_json(
+            &format!("/api/admin/devices/{MAC}"),
+            &[AUTH],
+            r#"{"dither":"floyd-steinburg"}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    assert!(
+        resp.text().contains("floyd-steinberg"),
+        "the error should list the real names: {}",
+        resp.text()
+    );
+}
+
+/// `floyd_steinberg` is an accepted alias, not a typo — validation normalises
+/// before it judges, so it must go through.
+#[tokio::test]
+async fn test_patch_accepts_a_dither_alias() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
+    seed_fully_configured(&app).await;
+
+    let resp = app
+        .patch_json(
+            &format!("/api/admin/devices/{MAC}"),
+            &[AUTH],
+            r#"{"dither":"sierra_light"}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert!(on_disk.contains("sierra_light"), "alias stored as written");
+}
+
+#[tokio::test]
+async fn test_patch_rejects_an_unknown_panel() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
+    seed_fully_configured(&app).await;
+
+    let resp = app
+        .patch_json(
+            &format!("/api/admin/devices/{MAC}"),
+            &[AUTH],
+            r#"{"panel":"reterminal_e1005"}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    assert!(resp.text().contains("reterminal_e1004"), "{}", resp.text());
+}
+
+#[tokio::test]
+async fn test_patch_rejects_malformed_colors() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
+    seed_fully_configured(&app).await;
+
+    for bad in [
+        r##"{"colors":"#00000,#FFFFFF"}"##,  // five digits
+        r##"{"colors":"#GGGGGG,#FFFFFF"}"##, // not hex
+        r##"{"colors":"#FFFFFF"}"##,         // nothing to dither between
+    ] {
+        let resp = app
+            .patch_json(&format!("/api/admin/devices/{MAC}"), &[AUTH], bad)
+            .await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST, "accepted {bad}");
+    }
+}
+
+/// `c` parses in byonk but is still commented out in firmware 1.8.14, which
+/// reads it back as `default` — storing it would record a setting that does
+/// nothing.
+#[tokio::test]
+async fn test_patch_rejects_temperature_profile_c() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
+    seed_fully_configured(&app).await;
+
+    let resp = app
+        .patch_json(
+            &format!("/api/admin/devices/{MAC}"),
+            &[AUTH],
+            r#"{"temperature_profile":"c"}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_clear_removes_a_setting_and_leaves_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
+    seed_fully_configured(&app).await;
+
+    let resp = app
+        .patch_json(
+            &format!("/api/admin/devices/{MAC}"),
+            &[AUTH],
+            r#"{"clear":["noise_scale","min_png_bytes"]}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    let block = on_disk.split(MAC).nth(1).expect("device block");
+    assert!(!block.contains("noise_scale"), "cleared:\n{block}");
+    assert!(!block.contains("min_png_bytes"), "cleared:\n{block}");
+    assert!(block.contains("max_error: 0.9"), "untouched:\n{block}");
+    assert!(block.contains("strength: 0.8"), "untouched:\n{block}");
+}
+
+#[tokio::test]
+async fn test_clear_rejects_screen_and_unknown_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
+    seed_fully_configured(&app).await;
+
+    for bad in [r#"{"clear":["screen"]}"#, r#"{"clear":["nonsense"]}"#] {
+        let resp = app
+            .patch_json(&format!("/api/admin/devices/{MAC}"), &[AUTH], bad)
+            .await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST, "accepted {bad}");
+    }
+}
+
+/// Setting and clearing the same field has no sensible reading, so it is
+/// refused rather than resolved by precedence — either outcome would surprise
+/// the caller that asked for both.
+#[tokio::test]
+async fn test_clear_rejects_a_field_the_same_call_sets() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
+    seed_fully_configured(&app).await;
+
+    let resp = app
+        .patch_json(
+            &format!("/api/admin/devices/{MAC}"),
+            &[AUTH],
+            r#"{"noise_scale":1.5,"clear":["noise_scale"]}"#,
+        )
+        .await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    assert!(resp.text().contains("noise_scale"), "{}", resp.text());
+}
+
+#[tokio::test]
+async fn test_clear_is_rejected_when_creating_a_device() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
+
+    // Empty too: a create has nothing to clear, so mentioning `clear` at all
+    // means the caller thinks it is doing something it is not.
+    for clear in ["[\"panel\"]", "[]"] {
+        let body = format!(r#"{{"key":"{MAC}","screen":"{COLOR}","clear":{clear}}}"#);
+        let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
+        assert_eq!(resp.status, StatusCode::BAD_REQUEST, "accepted {clear}");
+    }
+}

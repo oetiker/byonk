@@ -490,7 +490,7 @@ async fn test_tools_list_reports_exactly_the_14_authoring_tools() {
         "render_screen",
         "validate_screen",
         // device
-        "assign_screen",
+        "configure_device",
     ]
     .into_iter()
     .map(String::from)
@@ -1010,7 +1010,7 @@ async fn test_validate_of_a_healthy_builtin_passes() {
 }
 
 #[tokio::test]
-async fn test_assign_screen_updates_the_device_mapping() {
+async fn test_configure_device_updates_the_device_mapping() {
     let tmp = tempfile::tempdir().unwrap();
     // A file-backed config is required — device writes persist to disk.
     let (app, _config_path) = TestApp::new_admin_with_file("secret", tmp.path());
@@ -1022,7 +1022,7 @@ async fn test_assign_screen_updates_the_device_mapping() {
 
     let result = client
         .call_tool(
-            "assign_screen",
+            "configure_device",
             serde_json::json!({ "mac": mac, "screen_ref": "byonk-builtin/default" }),
         )
         .await;
@@ -1047,7 +1047,7 @@ async fn test_assign_screen_updates_the_device_mapping() {
 }
 
 #[tokio::test]
-async fn test_assign_screen_rejects_an_unknown_screen() {
+async fn test_configure_device_rejects_an_unknown_screen() {
     let tmp = tempfile::tempdir().unwrap();
     let (app, _config_path) = TestApp::new_admin_with_file("secret", tmp.path());
     let mac = "11:22:33:44:55:66";
@@ -1058,7 +1058,7 @@ async fn test_assign_screen_rejects_an_unknown_screen() {
 
     let result = client
         .call_tool(
-            "assign_screen",
+            "configure_device",
             serde_json::json!({ "mac": mac, "screen_ref": "local/does-not-exist" }),
         )
         .await;
@@ -1067,7 +1067,7 @@ async fn test_assign_screen_rejects_an_unknown_screen() {
 }
 
 #[tokio::test]
-async fn test_assign_screen_reassigns_an_already_configured_device() {
+async fn test_configure_device_reassigns_an_already_configured_device() {
     // Exercises the update-in-place path (apply_device_patch succeeding
     // directly), not the seen-but-unconfigured create fallback: assign twice,
     // to two different screens, and confirm the second call updates the
@@ -1082,14 +1082,14 @@ async fn test_assign_screen_reassigns_an_already_configured_device() {
 
     client
         .call_tool(
-            "assign_screen",
+            "configure_device",
             serde_json::json!({ "mac": mac, "screen_ref": "byonk-builtin/default" }),
         )
         .await;
 
     let result = client
         .call_tool(
-            "assign_screen",
+            "configure_device",
             serde_json::json!({ "mac": mac, "screen_ref": "byonk-builtin/calibration/color" }),
         )
         .await;
@@ -1116,7 +1116,7 @@ async fn test_assign_screen_reassigns_an_already_configured_device() {
 }
 
 #[tokio::test]
-async fn test_assign_screen_rejects_a_mac_the_registry_has_never_seen() {
+async fn test_configure_device_rejects_a_mac_the_registry_has_never_seen() {
     // An arbitrary/typo'd mac must not silently create a phantom device —
     // there is no MCP tool to delete one. Only a mac the registry actually
     // reports (i.e. one that has polled /api/setup) may be auto-created.
@@ -1129,7 +1129,7 @@ async fn test_assign_screen_rejects_a_mac_the_registry_has_never_seen() {
 
     let result = client
         .call_tool(
-            "assign_screen",
+            "configure_device",
             serde_json::json!({ "mac": mac, "screen_ref": "byonk-builtin/default" }),
         )
         .await;
@@ -1147,9 +1147,9 @@ async fn test_assign_screen_rejects_a_mac_the_registry_has_never_seen() {
 }
 
 #[tokio::test]
-async fn test_assign_screen_patches_a_device_configured_by_registration_code() {
+async fn test_configure_device_patches_a_device_configured_by_registration_code() {
     // A device may be configured in config.yaml under its registration code
-    // rather than its MAC (the documented HA onboarding path). assign_screen
+    // rather than its MAC (the documented HA onboarding path). configure_device
     // is only ever given the MAC (as list_devices reports it), so it must
     // resolve that back to the code-keyed entry and patch it in place —
     // not miss and create a second, MAC-keyed entry that shadows it.
@@ -1160,7 +1160,7 @@ async fn test_assign_screen_patches_a_device_configured_by_registration_code() {
     let code = byonk::models::ApiKey::new(api_key).registration_code();
 
     // Pre-create the device's config entry under the registration code, with
-    // an existing name that must survive the assign_screen call untouched.
+    // an existing name that must survive the configure_device call untouched.
     let auth = ("Authorization", "Bearer secret");
     let create = app
         .post_json(
@@ -1176,7 +1176,7 @@ async fn test_assign_screen_patches_a_device_configured_by_registration_code() {
 
     let result = client
         .call_tool(
-            "assign_screen",
+            "configure_device",
             serde_json::json!({ "mac": mac, "screen_ref": "byonk-builtin/calibration/color" }),
         )
         .await;
@@ -1202,10 +1202,10 @@ async fn test_assign_screen_patches_a_device_configured_by_registration_code() {
 }
 
 #[tokio::test]
-async fn test_assign_screen_patches_a_device_configured_under_a_differently_cased_mac() {
+async fn test_configure_device_patches_a_device_configured_under_a_differently_cased_mac() {
     // config.yaml may key a device under an upper-cased MAC while the device
     // itself (and list_devices) report it lower-case — get_device_config
-    // deliberately retries uppercased. assign_screen must patch that same
+    // deliberately retries uppercased. configure_device must patch that same
     // entry, not create a new lower-case-keyed one that shadows it.
     let tmp = tempfile::tempdir().unwrap();
     let (app, config_path) = TestApp::new_admin_with_file("secret", tmp.path());
@@ -1232,7 +1232,7 @@ async fn test_assign_screen_patches_a_device_configured_under_a_differently_case
 
     let result = client
         .call_tool(
-            "assign_screen",
+            "configure_device",
             serde_json::json!({ "mac": mac_lower, "screen_ref": "byonk-builtin/calibration/color" }),
         )
         .await;
@@ -1257,7 +1257,7 @@ async fn test_assign_screen_patches_a_device_configured_under_a_differently_case
 }
 
 #[tokio::test]
-async fn test_assign_screen_reassignment_preserves_existing_params() {
+async fn test_configure_device_reassignment_preserves_existing_params() {
     // The tool description says a screen reassignment carries the device's
     // existing params over unchanged rather than resetting them to the new
     // screen's defaults. Pin that down so a future refactor can't silently
@@ -1273,12 +1273,12 @@ async fn test_assign_screen_reassignment_preserves_existing_params() {
     // First assignment creates the mapping.
     client
         .call_tool(
-            "assign_screen",
+            "configure_device",
             serde_json::json!({ "mac": mac, "screen_ref": "byonk-builtin/default" }),
         )
         .await;
 
-    // Set a custom param out-of-band (assign_screen itself takes no params).
+    // Set a custom param out-of-band (configure_device itself takes no params).
     let auth = ("Authorization", "Bearer secret");
     let resp = app
         .patch_json(
@@ -1292,7 +1292,7 @@ async fn test_assign_screen_reassignment_preserves_existing_params() {
     // Reassign to a different screen with no params in the call.
     let result = client
         .call_tool(
-            "assign_screen",
+            "configure_device",
             serde_json::json!({ "mac": mac, "screen_ref": "byonk-builtin/calibration/color" }),
         )
         .await;
@@ -1599,5 +1599,147 @@ panels:
         log.contains("render_opts") && log.contains("has 2 usable"),
         "the discarded render option must be explained in the log, naming \
          the layer and the count: {log}"
+    );
+}
+
+/// The point of widening this tool: a dither sweep is one call, not an ssh
+/// session and a hand edit of `config.yaml`.
+#[tokio::test]
+async fn test_configure_device_sets_the_dither_tuning_knobs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (app, config_path) = TestApp::new_admin_with_file("secret", tmp.path());
+    let mac = "11:22:33:44:55:66";
+    app.register_device(mac).await;
+
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    client
+        .call_tool(
+            "configure_device",
+            serde_json::json!({ "mac": mac, "screen_ref": "byonk-builtin/default" }),
+        )
+        .await;
+
+    let result = client
+        .call_tool(
+            "configure_device",
+            serde_json::json!({
+                "mac": mac,
+                "panel": "reterminal_e1004",
+                "dither": "sierra-lite",
+                "max_error": 1.0,
+                "noise_scale": 2.5,
+                "min_png_bytes": 102401,
+            }),
+        )
+        .await;
+    assert_ne!(result["isError"], true, "{result}");
+    // An update, not a create — the device already had a mapping.
+    assert_eq!(structured(&result)["created"], false);
+
+    let on_disk = std::fs::read_to_string(&config_path).unwrap();
+    let block = on_disk.split(mac).nth(1).expect("device block");
+    for expected in [
+        "panel: reterminal_e1004",
+        "dither: sierra-lite",
+        "max_error: 1.0",
+        "noise_scale: 2.5",
+        "min_png_bytes: 102401",
+    ] {
+        assert!(block.contains(expected), "missing `{expected}`:\n{block}");
+    }
+    // The screen was never mentioned in the second call and must be intact.
+    assert!(block.contains("byonk-builtin/default"), "{block}");
+}
+
+/// Without `clear`, a knob set once can only ever be changed to another
+/// number — never handed back to the panel's own value.
+#[tokio::test]
+async fn test_configure_device_clears_a_setting() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (app, config_path) = TestApp::new_admin_with_file("secret", tmp.path());
+    let mac = "11:22:33:44:55:66";
+    app.register_device(mac).await;
+
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    client
+        .call_tool(
+            "configure_device",
+            serde_json::json!({
+                "mac": mac,
+                "screen_ref": "byonk-builtin/default",
+                "noise_scale": 2.5,
+            }),
+        )
+        .await;
+
+    let result = client
+        .call_tool(
+            "configure_device",
+            serde_json::json!({ "mac": mac, "clear": ["noise_scale"] }),
+        )
+        .await;
+    assert_ne!(result["isError"], true, "{result}");
+    assert_eq!(structured(&result)["cleared"][0], "noise_scale");
+
+    let on_disk = std::fs::read_to_string(&config_path).unwrap();
+    let block = on_disk.split(mac).nth(1).expect("device block");
+    assert!(!block.contains("noise_scale"), "still present:\n{block}");
+}
+
+/// A typo'd kernel used to be stored happily and then rendered as Atkinson,
+/// with the only symptom on the glass. The tool must refuse it.
+#[tokio::test]
+async fn test_configure_device_rejects_an_unknown_dither() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (app, _config_path) = TestApp::new_admin_with_file("secret", tmp.path());
+    let mac = "11:22:33:44:55:66";
+    app.register_device(mac).await;
+
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    client
+        .call_tool(
+            "configure_device",
+            serde_json::json!({ "mac": mac, "screen_ref": "byonk-builtin/default" }),
+        )
+        .await;
+
+    let result = client
+        .call_tool(
+            "configure_device",
+            serde_json::json!({ "mac": mac, "dither": "floyd-steinburg" }),
+        )
+        .await;
+    assert_eq!(result["isError"], true, "{result}");
+}
+
+/// A device that has connected but was never configured has nothing to
+/// update. Say that, rather than letting the create path report a bare
+/// "`screen` is required" for a call that never asked to create anything.
+#[tokio::test]
+async fn test_configure_device_needs_a_screen_to_create() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (app, _config_path) = TestApp::new_admin_with_file("secret", tmp.path());
+    let mac = "11:22:33:44:55:66";
+    app.register_device(mac).await;
+
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let result = client
+        .call_tool(
+            "configure_device",
+            serde_json::json!({ "mac": mac, "dither": "sierra-lite" }),
+        )
+        .await;
+    assert_eq!(result["isError"], true, "{result}");
+    assert!(
+        result.to_string().contains("screen_ref"),
+        "the error must name the field that would fix it: {result}"
     );
 }

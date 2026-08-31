@@ -126,7 +126,8 @@ your client at `/mcp` with the admin token as a bearer credential — see
 - `validate_screen` and `render_screen` check your work; `render_screen`
   returns the actual dithered PNG plus the script's `log`, `data` and `error`,
   which is the fastest way to debug a script.
-- `assign_screen` points a device at the result.
+- `configure_device` points a device at the result, and sets how it is
+  rendered there — panel, dither algorithm and tuning, refresh interval.
 
 `list_screens` and `list_screen_repos` report which handles are writable —
 only those can be edited in place, so fork a builtin first.

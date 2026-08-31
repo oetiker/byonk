@@ -158,7 +158,7 @@ impl ByonkMcp {
 
     #[tool(
         description = "Rename a screen within its repo. Devices still pointing at the old \
-                          reference will stop resolving — reassign them with assign_screen."
+                          reference will stop resolving — reassign them with configure_device."
     )]
     pub async fn rename_screen(
         &self,

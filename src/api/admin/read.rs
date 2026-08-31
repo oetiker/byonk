@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::error::ApiError;
 use crate::models::compat::{compat_warning, engine_version};
-use crate::models::config::{AppConfig, RESERVED_DEFAULT_KEY};
+use crate::models::config::{AppConfig, DITHER_ALGORITHMS, RESERVED_DEFAULT_KEY};
 use crate::models::param_schema::ParamField;
 use crate::server::AppState;
 use crate::services::git_fetch::PinKind;
@@ -275,19 +275,6 @@ pub struct ScreenRepoInfo {
     /// The last fetch error, if any.
     pub error: Option<String>,
 }
-
-/// Canonical dither algorithm names byonk understands.
-const DITHER_ALGORITHMS: &[&str] = &[
-    "floyd-steinberg",
-    "atkinson",
-    "atkinson-hybrid",
-    "jarvis-judice-ninke",
-    "sierra",
-    "sierra-two-row",
-    "sierra-lite",
-    "stucki",
-    "burkes",
-];
 
 pub async fn screens(
     State(state): State<AppState>,

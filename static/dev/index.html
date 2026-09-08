@@ -80,7 +80,93 @@
       </div><div id="bezel-label" class="bezel-label">BYONK</div></div>
     </div>
     <div id="console" class="console"><pre id="console-output"></pre></div>
-    <div id="drawer" class="drawer" hidden><!-- Task 9 moves the configuration panel here --></div>
+    <!-- Simulate drawer: the old single-column page's configuration panel.
+         Its Screen select is gone -- the screens column owns that choice --
+         and the Device select that used to live inside it stands on its own.
+         Visibility is the native `hidden` attribute throughout (dev.css has
+         no generic `.hidden` rule; `[hidden]` is enforced at the top of it). -->
+    <div id="drawer" class="drawer" hidden>
+      <h2>Simulate</h2>
+
+      <div class="form-group">
+        <label for="device-select">Device</label>
+        <select id="device-select">
+          <option value="">None (edited screen only)</option>
+        </select>
+      </div>
+
+      <div id="device-info" class="device-info" hidden>
+        A device is selected: the preview renders <em>that device's</em> own
+        configured screen, not the one open in the editor, and the tuning
+        below is synced to the real device.
+      </div>
+
+      <div class="form-group">
+        <label for="panel-select">Panel Profile</label>
+        <select id="panel-select">
+          <option value="">None (use default colors)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <div id="color-swatches" class="color-swatches"></div>
+      </div>
+
+      <div class="form-group render-options">
+        <label>Render Options</label>
+        <label class="checkbox-label" id="use-actual-label" hidden>
+          <input type="checkbox" id="use-actual" checked>
+          Show actual panel colors
+          <span class="option-hint">dev preview only</span>
+        </label>
+        <div class="dither-row">
+          <!-- Filled from /dev/api/screens; the server owns both the algorithm
+               list and each algorithm's tuning defaults. -->
+          <label for="dither-select">Dither</label>
+          <select id="dither-select"></select>
+        </div>
+        <div class="dither-row">
+          <label for="max-error">Max error</label>
+          <input type="number" id="max-error" value="1.0" min="0" max="2.0" step="0.05">
+        </div>
+        <div class="dither-row">
+          <label for="chroma-clamp">Chroma clamp</label>
+          <input type="number" id="chroma-clamp" placeholder="&infin;" min="0.05" max="1.0" step="0.05">
+        </div>
+        <div class="dither-row">
+          <label for="noise-scale">Noise scale</label>
+          <input type="number" id="noise-scale" value="8.0" min="0" max="16.0" step="0.5">
+        </div>
+        <div class="dither-row">
+          <label for="strength">Strength</label>
+          <input type="number" id="strength" value="1.0" min="0" max="2.0" step="0.05">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="battery-input">Battery (V)</label>
+          <input type="number" id="battery-input" value="4.2" min="3.0" max="4.2" step="0.1">
+        </div>
+        <div class="form-group">
+          <label for="rssi-input">WiFi (dBm)</label>
+          <input type="number" id="rssi-input" value="-50" min="-100" max="0">
+        </div>
+      </div>
+
+      <div class="form-group time-group">
+        <label for="time-input">Current Time <span id="time-mode" class="time-mode live">live</span></label>
+        <div class="time-row">
+          <input type="datetime-local" id="time-input">
+          <button type="button" id="time-reset" class="time-reset" title="Reset to live time" hidden>&times;</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="params-input">Custom Parameters (JSON)</label>
+        <textarea id="params-input" placeholder='{"key": "value"}'>{}</textarea>
+      </div>
+    </div>
   </section>
 </main>
 

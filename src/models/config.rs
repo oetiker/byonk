@@ -242,6 +242,32 @@ pub fn normalize_algorithm_name(name: &str) -> String {
     }
 }
 
+/// Map an algorithm name to the `eink-dither` variant that implements it.
+///
+/// Aliases are accepted — the name is normalized first — and an unrecognised
+/// name falls back to the default variant, the same way the renderer treats a
+/// name it does not know.
+///
+/// This exists so the dev UI can publish each algorithm's *tuning defaults*
+/// (`DitherAlgorithm::defaults()`) instead of carrying its own copy of the
+/// numbers, which is what the old dev page did and what let the preview
+/// disagree with the engine.
+pub fn dither_algorithm_for_name(name: &str) -> eink_dither::DitherAlgorithm {
+    use eink_dither::DitherAlgorithm as A;
+    match normalize_algorithm_name(name).as_str() {
+        "atkinson" => A::Atkinson,
+        "atkinson-hybrid" => A::AtkinsonHybrid,
+        "floyd-steinberg" => A::FloydSteinberg,
+        "jarvis-judice-ninke" => A::JarvisJudiceNinke,
+        "sierra" => A::Sierra,
+        "sierra-two-row" => A::SierraTwoRow,
+        "sierra-lite" => A::SierraLite,
+        "stucki" => A::Stucki,
+        "burkes" => A::Burkes,
+        _ => A::default(),
+    }
+}
+
 /// Reference to a named screen screen repo.
 ///
 /// `repo == None` means the embedded byonk-builtin screen repo.
@@ -786,6 +812,24 @@ registration:
                 "`{name}` is advertised but is not its own canonical form"
             );
         }
+    }
+
+    /// Every advertised algorithm must map to a variant of its own. A missing
+    /// arm in `dither_algorithm_for_name` falls through to the Atkinson
+    /// default, which would publish Atkinson's tuning defaults under another
+    /// algorithm's name — exactly the preview-lies-about-the-engine failure
+    /// that serving the defaults from the engine is meant to end.
+    #[test]
+    fn test_every_advertised_algorithm_maps_to_a_distinct_variant() {
+        let mut seen: Vec<(&str, eink_dither::DitherAlgorithm)> = Vec::new();
+        for name in DITHER_ALGORITHMS {
+            let algo = dither_algorithm_for_name(name);
+            if let Some((other, _)) = seen.iter().find(|(_, a)| *a == algo) {
+                panic!("`{name}` and `{other}` both map to {algo:?}");
+            }
+            seen.push((name, algo));
+        }
+        assert_eq!(seen.len(), DITHER_ALGORITHMS.len());
     }
 
     /// `sierra-light` is a misspelling that reached shipped config and the

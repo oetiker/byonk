@@ -267,6 +267,62 @@ async fn read_file_response_carries_no_cache() {
     assert_eq!(f.headers["cache-control"].to_str().unwrap(), "no-cache");
 }
 
+/// The dev UI builds its dither select and its tuning defaults from
+/// `/dev/api/screens`. Before this the page carried its own copy of both,
+/// and a copy that drifted made the preview render with values the engine
+/// never used. Assert the list is complete and that the defaults arrive as
+/// numbers, not as the strings the old hard-coded table held.
+#[tokio::test]
+async fn screens_lists_every_dither_algorithm_with_numeric_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(dir.path());
+
+    let body = app
+        .get_with_headers("/dev/api/screens", &[AUTH])
+        .await
+        .json::<serde_json::Value>();
+
+    let algos = body["dither_algorithms"].as_array().expect("array");
+    let names: Vec<&str> = algos.iter().map(|a| a["name"].as_str().unwrap()).collect();
+    assert_eq!(names.len(), 9, "got {names:?}");
+    for expected in [
+        "floyd-steinberg",
+        "atkinson",
+        "atkinson-hybrid",
+        "jarvis-judice-ninke",
+        "sierra",
+        "sierra-two-row",
+        "sierra-lite",
+        "stucki",
+        "burkes",
+    ] {
+        assert!(
+            names.contains(&expected),
+            "{expected} missing from {names:?}"
+        );
+    }
+
+    let fs = algos
+        .iter()
+        .find(|a| a["name"] == "floyd-steinberg")
+        .expect("floyd-steinberg entry");
+    assert_eq!(
+        fs["defaults"]["noise_scale"].as_f64(),
+        Some(8.0),
+        "floyd-steinberg noise_scale must be the engine's own default"
+    );
+    assert_eq!(fs["defaults"]["max_error"].as_f64(), Some(1.0));
+
+    // Sierra Lite is the one algorithm whose noise scale differs from
+    // Floyd-Steinberg's, so it proves the value is per-algorithm rather than
+    // one constant repeated across the list.
+    let sl = algos
+        .iter()
+        .find(|a| a["name"] == "sierra-lite")
+        .expect("sierra-lite entry");
+    assert_eq!(sl["defaults"]["noise_scale"].as_f64(), Some(2.5));
+}
+
 #[tokio::test]
 async fn routes_are_gated() {
     let dir = tempfile::tempdir().unwrap();

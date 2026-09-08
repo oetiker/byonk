@@ -122,12 +122,35 @@ pub struct PanelInfo {
     pub colors_actual: Option<String>,
 }
 
+/// The tuning values an algorithm renders with when nothing overrides them.
+///
+/// Taken straight from `DitherAlgorithm::defaults()`, so the dev UI's number
+/// fields start on the values the engine would have used anyway and a render
+/// only carries an override the user actually made.
+#[derive(Debug, Serialize)]
+pub struct DitherDefaults {
+    pub max_error: f32,
+    pub noise_scale: f32,
+}
+
+/// One entry of the dither algorithm list the dev UI builds its select from.
+#[derive(Debug, Serialize)]
+pub struct DitherAlgorithmInfo {
+    /// Canonical name, as accepted by `?dither=` and by config.yaml.
+    pub name: String,
+    pub defaults: DitherDefaults,
+}
+
 /// Response from /dev/screens
 #[derive(Debug, Serialize)]
 pub struct ScreensResponse {
     pub screens: Vec<ScreenInfo>,
     pub devices: Vec<DeviceInfo>,
     pub panels: Vec<PanelInfo>,
+    /// Every algorithm byonk understands, with its tuning defaults. The dev
+    /// UI used to hard-code both; a copy that drifted made the preview lie
+    /// about what the device would show.
+    pub dither_algorithms: Vec<DitherAlgorithmInfo>,
 }
 
 /// Response from /dev/render when there's an error
@@ -225,10 +248,28 @@ pub async fn handle_screens(State(state): State<AppState>) -> Json<ScreensRespon
         })
         .collect();
 
+    // The engine owns both the list and the numbers; this endpoint only
+    // relays them.
+    let dither_algorithms: Vec<DitherAlgorithmInfo> = crate::models::config::DITHER_ALGORITHMS
+        .iter()
+        .map(|name| {
+            let (max_error, noise_scale) =
+                crate::models::config::dither_algorithm_for_name(name).defaults();
+            DitherAlgorithmInfo {
+                name: (*name).to_string(),
+                defaults: DitherDefaults {
+                    max_error,
+                    noise_scale,
+                },
+            }
+        })
+        .collect();
+
     Json(ScreensResponse {
         screens,
         devices,
         panels,
+        dither_algorithms,
     })
 }
 

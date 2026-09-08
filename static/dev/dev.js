@@ -76,6 +76,12 @@ const state = {
   files: [],           // [{name, size, text}]
   open: new Map(),     // name -> {host, editor, etag, dirty, saved}
   active: null,        // file name
+
+  // --- simulate drawer ---
+  timeLocked: false,   // false = the time field follows the clock
+  colorPopup: { visible: false, colorIndex: -1, originalHex: "" },
+  colorOverrides: {},        // device key -> colors_actual string
+  ditherTuningOverrides: {}, // algorithm -> {noiseScale, maxError}
 };
 window.byonkDev = { state, api, render: null };
 
@@ -290,14 +296,27 @@ function moveLens(e) {
 
 // --- device frame -----------------------------------------------------
 //
-// `updateDeviceFrame` is kept for Task 9: once the drawer exists, changing
-// its panel select should update the frame class ahead of the network
-// round-trip. Until then nothing calls it — `#panel-select` doesn't exist
-// yet, so `getEffectiveDimensions` degrades to the defaults below. The
-// authoritative update (used by this task) is `updateDisplaySizeFromImage`,
-// driven by the actual rendered PNG's dimensions once it loads.
+// Two functions, two jobs, and they must not be confused:
+//
+// `getEffectiveDimensions` reads the selected panel profile. It is what the
+// page ASKS for — the width/height in the render query, and the frame class
+// `updateDeviceFrame` applies the moment the panel select changes, ahead of
+// the network round-trip.
+//
+// `updateDisplaySizeFromImage` reads the PNG that came back. It is the truth
+// about what is on screen — the server may render at a size the request did
+// not ask for — so the displayed size and the pop-out broadcast come from it
+// and never from the panel select.
 
-const DEFAULTS = { width: "800", height: "480" };
+const DEFAULTS = {
+  width: "800",
+  height: "480",
+  // Mirrors `DEFAULT_COLORS` in src/api/display.rs: the palette the server
+  // falls back to for the `og` model when no panel is selected. Only the
+  // swatch strip uses it — the render query omits `colors` entirely and lets
+  // the server apply the same fallback.
+  colors: "#000000,#555555,#AAAAAA,#FFFFFF",
+};
 
 function getEffectiveDimensions() {
   const panelSelect = document.getElementById("panel-select");
@@ -306,6 +325,13 @@ function getEffectiveDimensions() {
     return { width: opt.dataset.width, height: opt.dataset.height };
   }
   return { width: DEFAULTS.width, height: DEFAULTS.height };
+}
+
+function getEffectiveColors() {
+  const panelSelect = document.getElementById("panel-select");
+  const opt = panelSelect && panelSelect.selectedOptions[0];
+  if (opt && opt.value && opt.dataset.colors) return opt.dataset.colors;
+  return DEFAULTS.colors;
 }
 
 function updateDeviceFrame() {
@@ -325,6 +351,22 @@ function updateDisplaySizeFromImage() {
   const hiRes = img.naturalWidth > 1000 || img.naturalHeight > 1000;
   frame.classList.toggle("x", hiRes);
   frame.classList.toggle("og", !hiRes);
+}
+
+// The preview image has decoded, so its real size is finally known. Both the
+// size readout and the pop-out broadcast hang off this event: at the point
+// `render()` finishes, `img.naturalWidth` still belongs to the PREVIOUS
+// image, so a message posted there would carry the wrong dimensions on every
+// render but the first.
+function onPreviewImageLoad() {
+  updateDisplaySizeFromImage();
+  const img = document.getElementById("display-image");
+  if (!previewChannel || !img.naturalWidth || !img.naturalHeight) return;
+  previewChannel.postMessage({
+    url: img.src,
+    width: img.naturalWidth,
+    height: img.naturalHeight,
+  });
 }
 
 // --- screens list -------------------------------------------------------
@@ -864,17 +906,701 @@ document.getElementById("save-btn").addEventListener("click", () => {
   saveAllDirty();
 });
 
+// --- simulate drawer ------------------------------------------------------
+//
+// The old single-column page's configuration panel, moved into a drawer that
+// slides over the preview column. The Screen select it used to carry is gone
+// — the screens column owns that — and the Device select that lived inside it
+// stands on its own.
+//
+// Visibility is the native `hidden` attribute throughout: dev.css has no
+// generic `.hidden` rule (only `.lens.hidden`, `.color-popup.hidden` and the
+// loading overlay), so the class the old page toggled would do nothing here.
+
+const sim = {
+  root: document.getElementById("drawer"),
+  toggle: document.getElementById("simulate-toggle"),
+  device: document.getElementById("device-select"),
+  deviceInfo: document.getElementById("device-info"),
+  panel: document.getElementById("panel-select"),
+  swatches: document.getElementById("color-swatches"),
+  useActual: document.getElementById("use-actual"),
+  useActualLabel: document.getElementById("use-actual-label"),
+  dither: document.getElementById("dither-select"),
+  maxError: document.getElementById("max-error"),
+  chromaClamp: document.getElementById("chroma-clamp"),
+  noiseScale: document.getElementById("noise-scale"),
+  strength: document.getElementById("strength"),
+  battery: document.getElementById("battery-input"),
+  rssi: document.getElementById("rssi-input"),
+  time: document.getElementById("time-input"),
+  timeMode: document.getElementById("time-mode"),
+  timeReset: document.getElementById("time-reset"),
+  params: document.getElementById("params-input"),
+};
+
+const popup = {
+  root: document.getElementById("color-popup"),
+  close: document.getElementById("color-popup-close"),
+  original: document.getElementById("popup-original-color"),
+  live: document.getElementById("popup-live-color"),
+  hue: document.getElementById("popup-hue"),
+  sat: document.getElementById("popup-sat"),
+  lit: document.getElementById("popup-lit"),
+  hueVal: document.getElementById("popup-hue-val"),
+  satVal: document.getElementById("popup-sat-val"),
+  litVal: document.getElementById("popup-lit-val"),
+  hex: document.getElementById("popup-hex-input"),
+  reset: document.getElementById("popup-reset-btn"),
+};
+
+function setDrawerOpen(open) {
+  if (open) {
+    sim.root.hidden = false;
+    // Flush layout between un-hiding and the class change: without a start
+    // value in the same frame the browser has nothing to slide from.
+    void sim.root.offsetWidth;
+    sim.root.classList.add("open");
+  } else {
+    sim.root.classList.remove("open");
+    // Stay in the layout until the slide-out has run; `hidden` immediately
+    // would cut it short. A timer rather than `transitionend`, which never
+    // arrives when the transition is suppressed.
+    setTimeout(() => {
+      if (!sim.root.classList.contains("open")) sim.root.hidden = true;
+    }, 250);
+  }
+  sim.toggle.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+// A select whose value matches no option goes blank. Device configs name
+// panels and algorithms that a later edit of config.yaml can remove, so an
+// unknown value leaves the current choice standing instead.
+function selectIfPresent(select, value) {
+  if (!value) return false;
+  if (![...select.options].some((o) => o.value === value)) return false;
+  select.value = value;
+  return true;
+}
+
+function splitColors(s) {
+  return s ? s.split(",").map((c) => c.trim()).filter((c) => c) : [];
+}
+
+// --- drawer: time ---------------------------------------------------------
+
+function formatDatetimeLocal(d) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function tickTime() {
+  if (!state.timeLocked) sim.time.value = formatDatetimeLocal(new Date());
+}
+
+function setTimeLocked(locked) {
+  state.timeLocked = locked;
+  sim.timeMode.textContent = locked ? "frozen" : "live";
+  sim.timeMode.className = "time-mode " + (locked ? "frozen" : "live");
+  sim.timeReset.hidden = !locked;
+  if (!locked) tickTime();
+}
+
+// --- drawer: option lists -------------------------------------------------
+//
+// All three come from `/dev/api/screens` and are built once: devices, panels
+// and algorithms all live in config.yaml, which this page cannot change.
+
+function populateDeviceSelect() {
+  const devices = [...((state.screens && state.screens.devices) || [])].sort((a, b) =>
+    a.id.localeCompare(b.id));
+  for (const d of devices) {
+    const o = document.createElement("option");
+    o.value = d.id;
+    o.textContent = `${d.id} → ${d.screen}`;
+    if (d.panel) o.dataset.panel = d.panel;
+    if (d.dither) o.dataset.dither = d.dither;
+    sim.device.appendChild(o);
+  }
+}
+
+function populatePanelSelect() {
+  for (const p of (state.screens && state.screens.panels) || []) {
+    const o = document.createElement("option");
+    o.value = p.id;
+    o.textContent = p.name;
+    o.dataset.colors = p.colors;
+    if (p.colors_actual) o.dataset.colorsActual = p.colors_actual;
+    if (p.width) o.dataset.width = p.width;
+    if (p.height) o.dataset.height = p.height;
+    sim.panel.appendChild(o);
+  }
+}
+
+function populateDitherSelect() {
+  const list = (state.screens && state.screens.dither_algorithms) || [];
+  sim.dither.innerHTML = "";
+  for (const a of list) {
+    const o = document.createElement("option");
+    // The canonical name verbatim: it is exactly what goes in config.yaml
+    // and in `?dither=`, so a prettified label would hide the one string
+    // that matters when the setting is copied out of here.
+    o.value = a.name;
+    o.textContent = a.name;
+    sim.dither.appendChild(o);
+  }
+  // The engine's own fallback, so an untouched drawer asks for what the
+  // server would have rendered anyway.
+  selectIfPresent(sim.dither, "atkinson");
+}
+
+// --- drawer: dither tuning ------------------------------------------------
+//
+// The defaults come from the server (`DitherAlgorithm::defaults()`), not from
+// a table in this file: the copy the old page carried could disagree with the
+// engine, and then the preview lied about what the device would show.
+
+function ditherDefaults(algo) {
+  const list = (state.screens && state.screens.dither_algorithms) || [];
+  const hit = list.find((a) => a.name === algo);
+  return hit ? hit.defaults : null;
+}
+
+function applyDitherDefaults() {
+  const algo = sim.dither.value;
+  const override = state.ditherTuningOverrides[algo] || {};
+  const d = ditherDefaults(algo) || {};
+  if (override.noiseScale !== undefined) sim.noiseScale.value = override.noiseScale;
+  else if (d.noise_scale !== undefined) sim.noiseScale.value = d.noise_scale;
+  if (override.maxError !== undefined) sim.maxError.value = override.maxError;
+  else if (d.max_error !== undefined) sim.maxError.value = d.max_error;
+}
+
+function saveDitherTuningOverride() {
+  state.ditherTuningOverrides[sim.dither.value] = {
+    noiseScale: sim.noiseScale.value,
+    maxError: sim.maxError.value,
+  };
+}
+
+// --- drawer: colour swatches ----------------------------------------------
+
+function updateColorSwatches() {
+  const colors = splitColors(getEffectiveColors());
+  const opt = sim.panel.selectedOptions[0];
+  const actual = splitColors(opt && opt.dataset.colorsActual);
+
+  if (!colors.length) { sim.swatches.innerHTML = ""; return; }
+
+  let html = '<div class="swatch-label-row"><span class="swatch-label">Official</span></div>' +
+    '<div class="swatch-row">';
+  colors.forEach((c, i) => {
+    const title = `Official: ${c}` + (actual[i] ? `\nActual: ${actual[i]}` : "");
+    html += `<span class="swatch" style="background:${escapeHtml(c)}" title="${escapeHtml(title)}"></span>`;
+  });
+  html += "</div>";
+
+  if (actual.length) {
+    html += '<div class="swatch-label-row"><span class="swatch-label">Actual</span>' +
+      '<button type="button" class="copy-colors-btn">Copy color config</button></div>' +
+      '<div class="swatch-row actual">';
+    actual.forEach((c, i) => {
+      html += `<span class="swatch" data-index="${i}" style="background:${escapeHtml(c)}" ` +
+        `title="${escapeHtml(`Actual: ${c} (click to adjust)`)}"></span>`;
+    });
+    html += "</div>";
+  }
+  sim.swatches.innerHTML = html;
+
+  // Listeners rather than the old inline `onclick=`, which needed the
+  // handlers to be globals; this file puts exactly one object on `window`.
+  const copyBtn = sim.swatches.querySelector(".copy-colors-btn");
+  if (copyBtn) copyBtn.addEventListener("click", copyActualColors);
+  sim.swatches.querySelectorAll(".swatch-row.actual .swatch").forEach((el) => {
+    el.addEventListener("click", () => openColorPopup(el, Number(el.dataset.index)));
+  });
+}
+
+// The checkbox only means something for a panel that has measured colours.
+function updateUseActualVisibility() {
+  const opt = sim.panel.selectedOptions[0];
+  sim.useActualLabel.hidden = !(opt && opt.dataset.colorsActual);
+}
+
+// Restored overrides have to reach the server too, so the production
+// `/api/display` handler renders the real device with the colours the drawer
+// is showing.
+function applyRestoredColorOverrides() {
+  const deviceKey = sim.device.value;
+  if (!deviceKey) return;
+  const override = state.colorOverrides[deviceKey];
+  if (!override) return;
+
+  const opt = sim.panel.selectedOptions[0];
+  if (opt && opt.value) opt.dataset.colorsActual = override;
+
+  fetch("./api/panel-colors", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ device: deviceKey, colors_actual: override }),
+  }).catch((e) => consoleError("Failed to restore panel colors: " + e.message));
+}
+
+// --- drawer: persistence --------------------------------------------------
+
+const SIM_STATE_KEY = "byonk-dev-state";
+
+function saveState() {
+  safeSet(SIM_STATE_KEY, JSON.stringify({
+    device: sim.device.value,
+    panel: sim.panel.value,
+    battery: sim.battery.value,
+    rssi: sim.rssi.value,
+    timeLocked: state.timeLocked,
+    time: state.timeLocked ? sim.time.value : "",
+    params: sim.params.value,
+    useActual: sim.useActual.checked,
+    dither: sim.dither.value,
+    maxError: sim.maxError.value,
+    chromaClamp: sim.chromaClamp.value,
+    noiseScale: sim.noiseScale.value,
+    strength: sim.strength.value,
+    colorOverrides: state.colorOverrides,
+    ditherTuningOverrides: state.ditherTuningOverrides,
+  }));
+}
+
+function loadSavedState() {
+  const raw = safeGet(SIM_STATE_KEY);
+  if (!raw) return;
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (e) {
+    return; // a half-written or foreign value: start from the defaults
+  }
+  if (!data || typeof data !== "object") return;
+
+  selectIfPresent(sim.device, data.device);
+  selectIfPresent(sim.panel, data.panel);
+  if (data.battery) sim.battery.value = data.battery;
+  if (data.rssi) sim.rssi.value = data.rssi;
+  if (data.timeLocked && data.time) {
+    sim.time.value = data.time;
+    setTimeLocked(true);
+  }
+  if (data.params) sim.params.value = data.params;
+  if (typeof data.useActual === "boolean") sim.useActual.checked = data.useActual;
+  selectIfPresent(sim.dither, data.dither);
+  if (data.maxError) {
+    sim.maxError.value = data.maxError;
+  } else if (data.errorClamp) {
+    // Deliberately NOT migrated to maxError. In 0.18.0 this knob stopped
+    // capping the pixel value and started capping the accumulated error,
+    // moving its useful range from ~0.1 to ~1.0 while keeping its name —
+    // which is the whole reason it was renamed. A saved value cannot be
+    // dated, so carrying it across would risk reviving a number chosen for
+    // the old meaning, the exact failure the rename exists to prevent. The
+    // server discards `error_clamp` for the same reason; the dev UI matches
+    // it, but says so rather than dropping it in silence.
+    console.warn(
+      `byonk dev: ignoring saved error_clamp=${data.errorClamp}. ` +
+      `It was renamed to max_error in 0.18.0 and changed meaning ` +
+      `(useful range ~0.1 -> ~1.0), so the old value is not carried ` +
+      `over. Set max_error yourself if you still want an override.`
+    );
+  }
+  if (typeof data.chromaClamp === "string") sim.chromaClamp.value = data.chromaClamp;
+  if (data.noiseScale) sim.noiseScale.value = data.noiseScale;
+  if (data.strength) sim.strength.value = data.strength;
+  if (data.colorOverrides && typeof data.colorOverrides === "object") {
+    state.colorOverrides = data.colorOverrides;
+  }
+  if (data.ditherTuningOverrides && typeof data.ditherTuningOverrides === "object") {
+    state.ditherTuningOverrides = data.ditherTuningOverrides;
+  }
+
+  sim.deviceInfo.hidden = !sim.device.value;
+  applyRestoredColorOverrides();
+}
+
+// --- drawer: colour conversion --------------------------------------------
+
+function hexToRgb(hex) {
+  hex = hex.replace("#", "");
+  return {
+    r: parseInt(hex.substring(0, 2), 16),
+    g: parseInt(hex.substring(2, 4), 16),
+    b: parseInt(hex.substring(4, 6), 16),
+  };
+}
+
+function rgbToHex(r, g, b) {
+  return "#" + [r, g, b]
+    .map((v) => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, "0"))
+    .join("").toUpperCase();
+}
+
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h, s;
+  const l = (max + min) / 2;
+  if (max === min) {
+    h = s = 0;
+  } else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
+      case g: h = ((b - r) / d + 2) / 6; break;
+      default: h = ((r - g) / d + 4) / 6; break;
+    }
+  }
+  return { h: Math.round(h * 360), s: Math.round(s * 100), l: Math.round(l * 100) };
+}
+
+function hslToRgb(h, s, l) {
+  h /= 360; s /= 100; l /= 100;
+  let r, g, b;
+  if (s === 0) {
+    r = g = b = l;
+  } else {
+    const hue2rgb = (p, q, t) => {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1 / 3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1 / 3);
+  }
+  return { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255) };
+}
+
+function hexToHsl(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  return rgbToHsl(r, g, b);
+}
+
+function hslToHex(h, s, l) {
+  const { r, g, b } = hslToRgb(h, s, l);
+  return rgbToHex(r, g, b);
+}
+
+// --- drawer: colour popup -------------------------------------------------
+
+function openColorPopup(swatchEl, index) {
+  const panelOption = sim.panel.selectedOptions[0];
+  const actual = splitColors(panelOption && panelOption.dataset.colorsActual);
+  const hex = actual[index];
+  if (!hex) return;
+
+  state.colorPopup.visible = true;
+  state.colorPopup.colorIndex = index;
+  state.colorPopup.originalHex = hex;
+
+  const rect = swatchEl.getBoundingClientRect();
+  const popupWidth = 280;
+  let left = rect.left;
+  let top = rect.bottom + 8;
+  if (left + popupWidth > window.innerWidth - 16) left = window.innerWidth - popupWidth - 16;
+  if (top + 340 > window.innerHeight) top = rect.top - 340;
+  popup.root.style.left = `${left}px`;
+  popup.root.style.top = `${top}px`;
+
+  popup.original.style.background = hex;
+  popup.live.style.background = hex;
+
+  const hsl = hexToHsl(hex);
+  popup.hue.value = hsl.h;
+  popup.sat.value = hsl.s;
+  popup.lit.value = hsl.l;
+  popup.hueVal.textContent = hsl.h;
+  popup.satVal.textContent = hsl.s + "%";
+  popup.litVal.textContent = hsl.l + "%";
+  popup.hex.value = hex;
+
+  popup.root.classList.remove("hidden");
+}
+
+function closeColorPopup() {
+  state.colorPopup.visible = false;
+  popup.root.classList.add("hidden");
+}
+
+function updateColorFromSliders() {
+  const h = parseInt(popup.hue.value);
+  const s = parseInt(popup.sat.value);
+  const l = parseInt(popup.lit.value);
+  popup.hueVal.textContent = h;
+  popup.satVal.textContent = s + "%";
+  popup.litVal.textContent = l + "%";
+
+  const hex = hslToHex(h, s, l);
+  popup.hex.value = hex;
+  popup.live.style.background = hex;
+  applyColorChange(hex);
+}
+
+function updateColorFromHex() {
+  let hex = popup.hex.value.trim();
+  if (!hex.startsWith("#")) hex = "#" + hex;
+  if (!/^#[0-9A-Fa-f]{6}$/.test(hex)) return;
+
+  hex = hex.toUpperCase();
+  const hsl = hexToHsl(hex);
+  popup.hue.value = hsl.h;
+  popup.sat.value = hsl.s;
+  popup.lit.value = hsl.l;
+  popup.hueVal.textContent = hsl.h;
+  popup.satVal.textContent = hsl.s + "%";
+  popup.litVal.textContent = hsl.l + "%";
+  popup.live.style.background = hex;
+  applyColorChange(hex);
+}
+
+let applyDebounceTimer = null;
+
+function applyColorChange(newHex) {
+  const panelOption = sim.panel.selectedOptions[0];
+  if (!panelOption || !panelOption.dataset.colorsActual) return;
+
+  const actual = splitColors(panelOption.dataset.colorsActual);
+  actual[state.colorPopup.colorIndex] = newHex;
+  panelOption.dataset.colorsActual = actual.join(",");
+  updateColorSwatches();
+
+  const deviceKey = sim.device.value;
+  if (deviceKey) {
+    state.colorOverrides[deviceKey] = actual.join(",");
+    saveState();
+  }
+
+  clearTimeout(applyDebounceTimer);
+  applyDebounceTimer = setTimeout(async () => {
+    if (deviceKey) {
+      try {
+        await fetch("./api/panel-colors", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ device: deviceKey, colors_actual: actual.join(",") }),
+        });
+      } catch (e) {
+        consoleError("Failed to update panel colors: " + e.message);
+      }
+    }
+    render();
+  }, 300);
+}
+
+function copyActualColors() {
+  const panelOption = sim.panel.selectedOptions[0];
+  if (!panelOption || !panelOption.dataset.colorsActual) return;
+  copyToClipboard(panelOption.dataset.colorsActual).then(() => {
+    const btn = sim.swatches.querySelector(".copy-colors-btn");
+    if (!btn) return;
+    btn.textContent = "Copied!";
+    btn.classList.add("copied");
+    setTimeout(() => {
+      btn.textContent = "Copy color config";
+      btn.classList.remove("copied");
+    }, 1500);
+  });
+}
+
+// `navigator.clipboard` needs a secure context (HTTPS or localhost) and the
+// dev server usually runs plain HTTP, so fall back to execCommand.
+function copyToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text);
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand("copy");
+  document.body.removeChild(ta);
+  return Promise.resolve();
+}
+
+function setupColorPopup() {
+  popup.close.addEventListener("click", closeColorPopup);
+  popup.hue.addEventListener("input", updateColorFromSliders);
+  popup.sat.addEventListener("input", updateColorFromSliders);
+  popup.lit.addEventListener("input", updateColorFromSliders);
+  popup.hex.addEventListener("input", updateColorFromHex);
+  popup.reset.addEventListener("click", () => {
+    popup.hex.value = state.colorPopup.originalHex;
+    updateColorFromHex();
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!state.colorPopup.visible) return;
+    if (popup.root.contains(e.target)) return;
+    // Not on a swatch either — that click re-opens the popup.
+    if (e.target.classList.contains("swatch") && e.target.closest(".swatch-row.actual")) return;
+    closeColorPopup();
+  });
+}
+
+// --- drawer: the render query it contributes ------------------------------
+
+// Everything the drawer adds to `/dev/api/render`; `render()` supplies
+// `screen`. An empty field is left out so the server applies its own default
+// instead of being pinned to whatever placeholder the markup carries.
+//
+// Throws when the parameters box does not hold JSON. `render()` catches it
+// and puts the message in the console, which is better than rendering with
+// parameters the user did not write.
+function drawerParams() {
+  const p = {};
+  const put = (k, v) => {
+    if (v !== undefined && v !== null && v !== "") p[k] = String(v);
+  };
+
+  // With a device selected the SERVER resolves the screen from its config,
+  // so the `screen` render() sends is ignored — that is what the banner in
+  // the drawer warns about.
+  put("mac", sim.device.value);
+
+  const dims = getEffectiveDimensions();
+  put("width", dims.width);
+  put("height", dims.height);
+  put("battery_voltage", sim.battery.value);
+  put("rssi", sim.rssi.value);
+
+  // Only while frozen. A live clock needs no override, and sending one would
+  // pin every render to the second the field last ticked.
+  if (state.timeLocked && sim.time.value) {
+    put("timestamp", Math.floor(new Date(sim.time.value).getTime() / 1000));
+  }
+
+  try {
+    put("params", JSON.stringify(JSON.parse(sim.params.value || "{}")));
+  } catch (e) {
+    throw new Error("Invalid JSON in parameters: " + e.message);
+  }
+
+  if (sim.panel.value) {
+    put("panel", sim.panel.value);
+    put("use_actual", sim.useActual.checked ? "true" : "false");
+    // Tuned colours travel with the request, so the preview does not depend
+    // on the server's override map having been written first.
+    const opt = sim.panel.selectedOptions[0];
+    put("colors_actual", opt && opt.dataset.colorsActual);
+  }
+
+  put("dither", sim.dither.value);
+
+  // Send a tunable only when it differs from the default FOR THE SELECTED
+  // ALGORITHM. The fields are populated from those defaults, so comparing
+  // against one fixed number would make every render carry an override the
+  // user never asked for, and would pin the server's own default to whatever
+  // the sentinel happened to be. With no defaults known (the screens fetch
+  // failed) every non-empty field is sent — the user's value is the only
+  // thing left to trust.
+  const d = ditherDefaults(sim.dither.value);
+  const differs = (v, dflt) =>
+    v !== "" && (dflt === undefined || dflt === null || parseFloat(v) !== parseFloat(dflt));
+  if (differs(sim.maxError.value, d && d.max_error)) put("max_error", sim.maxError.value);
+  if (differs(sim.noiseScale.value, d && d.noise_scale)) put("noise_scale", sim.noiseScale.value);
+
+  // These two have no per-algorithm default: the engine leaves chroma clamp
+  // off and strength at 1.0 whatever the kernel.
+  put("chroma_clamp", sim.chromaClamp.value);
+  if (sim.strength.value !== "" && parseFloat(sim.strength.value) !== 1) {
+    put("strength", sim.strength.value);
+  }
+
+  return p;
+}
+
+// --- drawer: wiring -------------------------------------------------------
+
+function setupDrawer() {
+  const changed = () => { saveState(); render(); };
+
+  sim.toggle.addEventListener("click", () => setDrawerOpen(sim.root.hidden));
+
+  sim.device.addEventListener("change", () => {
+    const opt = sim.device.selectedOptions[0];
+    sim.deviceInfo.hidden = !sim.device.value;
+    if (sim.device.value) {
+      selectIfPresent(sim.panel, opt.dataset.panel);
+      selectIfPresent(sim.dither, opt.dataset.dither);
+      const override = state.colorOverrides[sim.device.value];
+      const panelOpt = sim.panel.selectedOptions[0];
+      if (override && panelOpt && panelOpt.value) panelOpt.dataset.colorsActual = override;
+    }
+    updateColorSwatches();
+    updateUseActualVisibility();
+    updateDeviceFrame();
+    changed();
+  });
+
+  sim.panel.addEventListener("change", () => {
+    // Before the round-trip: the frame reclasses at once, and the size
+    // readout is corrected by the image that comes back.
+    updateDeviceFrame();
+    updateColorSwatches();
+    updateUseActualVisibility();
+    changed();
+  });
+
+  sim.dither.addEventListener("change", () => { applyDitherDefaults(); changed(); });
+
+  // Only these two have per-algorithm defaults worth remembering per
+  // algorithm, so only they record an override.
+  for (const el of [sim.maxError, sim.noiseScale]) {
+    el.addEventListener("change", () => { saveDitherTuningOverride(); changed(); });
+  }
+  for (const el of [sim.useActual, sim.chromaClamp, sim.strength, sim.battery, sim.rssi]) {
+    el.addEventListener("change", changed);
+  }
+
+  sim.time.addEventListener("change", () => { setTimeLocked(true); changed(); });
+  sim.timeReset.addEventListener("click", () => { setTimeLocked(false); changed(); });
+
+  let paramsTimer = null;
+  sim.params.addEventListener("input", () => {
+    clearTimeout(paramsTimer);
+    paramsTimer = setTimeout(changed, 500);
+  });
+}
+
+// Runs after `loadScreens()` — every option list is built from its response —
+// and before the first `render()`, which reads these controls.
+function initDrawer() {
+  sim.toggle.setAttribute("aria-expanded", "false");
+  populateDeviceSelect();
+  populatePanelSelect();
+  populateDitherSelect();
+  // Defaults first, saved values second: a stored tuning must win, but a
+  // page with nothing stored still starts on the engine's numbers rather
+  // than on the placeholders in the markup.
+  applyDitherDefaults();
+  loadSavedState();
+  setupDrawer();
+  setupColorPopup();
+  updateDeviceFrame();
+  updateColorSwatches();
+  updateUseActualVisibility();
+  tickTime();
+  setInterval(tickTime, 1000);
+}
+
 // --- render ---------------------------------------------------------------
 
 let previewChannel = null;
 try { previewChannel = new BroadcastChannel("byonk-preview"); } catch (e) { previewChannel = null; }
-
-// Filled in by Task 9 with the drawer's simulate parameters (device/panel,
-// dither tuning, battery, RSSI, time, custom params). Until then every
-// render uses server-side defaults for everything but the selected screen.
-function drawerParams() {
-  return {};
-}
 
 async function render() {
   if (!state.ref) return;
@@ -899,10 +1625,8 @@ async function render() {
     document.getElementById("render-time").textContent = `Rendered in ${elapsed}ms`;
     consoleLog(`Rendered in ${elapsed}ms`);
 
-    if (previewChannel) {
-      const dims = getEffectiveDimensions();
-      previewChannel.postMessage({ url: objUrl, width: dims.width, height: dims.height });
-    }
+    // The pop-out is told by `onPreviewImageLoad`, not from here: the image
+    // has not decoded yet, so its dimensions are still the previous render's.
   } catch (e) {
     consoleError(e.message);
   } finally {
@@ -963,6 +1687,11 @@ function connectSSE() {
 // --- init ---------------------------------------------------------------
 
 async function init() {
+  // Before anything can render: `render()` is fired off without being
+  // awaited, so a listener registered after the first one is a race with the
+  // image it is supposed to measure.
+  document.getElementById("display-image").addEventListener("load", onPreviewImageLoad);
+
   try {
     const who = await api.whoami();
     document.getElementById("whoami").textContent = who.user || "";
@@ -972,13 +1701,12 @@ async function init() {
   }
 
   await loadScreens();
+  initDrawer();
 
   const saved = safeGet("byonkDevRef");
   if (saved && (state.screens.screens || []).some((s) => s.name === saved)) {
     await selectScreen(saved);
   }
-
-  document.getElementById("display-image").addEventListener("load", updateDisplaySizeFromImage);
 
   connectSSE();
   setupLens();

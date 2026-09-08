@@ -93,6 +93,10 @@
     --shadow-lens: 0 4px 20px rgba(22, 33, 62, 0.3);
     --overlay-scrim: rgba(236, 239, 245, 0.72);
     --swatch-border: rgba(22, 33, 62, 0.25);
+    /* A tint of the accent, used as the fill behind an accent-bordered
+       notice. It sits under --text-muted, so it stays a wash rather than
+       becoming a second background colour. */
+    --accent-wash: rgba(213, 25, 56, 0.08);
 }
 
 /* The system default: dark unless the user explicitly picked Light. The
@@ -136,6 +140,7 @@
         --shadow-lens: 0 4px 20px rgba(0, 0, 0, 0.5);
         --overlay-scrim: rgba(0, 0, 0, 0.7);
         --swatch-border: rgba(255, 255, 255, 0.2);
+        --accent-wash: rgba(233, 69, 96, 0.12);
     }
 }
 
@@ -174,6 +179,7 @@
     --shadow-lens: 0 4px 20px rgba(0, 0, 0, 0.5);
     --overlay-scrim: rgba(0, 0, 0, 0.7);
     --swatch-border: rgba(255, 255, 255, 0.2);
+    --accent-wash: rgba(233, 69, 96, 0.12);
 }
 
 /* Native widgets (scrollbars, the select popup, form controls we do not
@@ -551,6 +557,225 @@ select:focus, input:focus, textarea:focus {
 
 .drawer.open {
     transform: translateX(0);
+}
+
+/* --- Simulate drawer contents -------------------------------------------
+ *
+ * The old single-column page's configuration panel. Its structure is carried
+ * over; every colour it hard-coded is a token here, so the drawer follows the
+ * scheme like the rest of the page.
+ */
+
+.drawer h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.form-group {
+    margin-bottom: 1rem;
+}
+
+/* `:not(.checkbox-label)` is load-bearing, not tidiness: a bare
+   `.form-group label` outranks `.checkbox-label` on specificity, so it would
+   turn the checkbox rows into blocks and drop their flex alignment. */
+.form-group > label:not(.checkbox-label) {
+    display: block;
+    font-size: 0.875rem;
+    margin-bottom: 0.375rem;
+    color: var(--text-muted);
+}
+
+.form-row {
+    display: flex;
+    gap: 1rem;
+}
+
+.form-row .form-group {
+    flex: 1;
+}
+
+/* The base control rules near the top of this file size controls to their
+   content; in a fixed-width drawer they fill the column instead. */
+.drawer select,
+.drawer textarea,
+.drawer input[type="number"],
+.drawer input[type="datetime-local"] {
+    width: 100%;
+    font-size: 0.875rem;
+}
+
+.drawer textarea {
+    min-height: 80px;
+    font-family: 'Monaco', 'Menlo', monospace;
+    font-size: 0.75rem;
+    resize: vertical;
+}
+
+.device-info {
+    background: var(--accent-wash);
+    border-left: 3px solid var(--accent-color);
+    padding: 0.5rem 0.75rem;
+    border-radius: 0 0.25rem 0.25rem 0;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: 1rem;
+}
+
+.render-options {
+    border-top: 1px solid var(--border-color);
+    padding-top: 1rem;
+}
+
+.render-options > label:first-child {
+    margin-bottom: 0.5rem;
+}
+
+.render-options .checkbox-label {
+    margin-bottom: 0.375rem;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.option-hint {
+    font-size: 0.625rem;
+    color: var(--text-muted);
+    opacity: 0.7;
+    margin-left: 0.25rem;
+}
+
+.dither-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.375rem;
+}
+
+.dither-row label {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    margin-bottom: 0;
+}
+
+.dither-row select,
+.dither-row input {
+    flex: 1;
+    min-width: 0;
+}
+
+.time-row {
+    display: flex;
+    gap: 0.375rem;
+    align-items: center;
+}
+
+.time-row input {
+    flex: 1;
+    min-width: 0;
+}
+
+.time-mode {
+    font-size: 0.625rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.7;
+}
+
+.time-mode.live {
+    color: var(--success-color);
+}
+
+.time-mode.frozen {
+    color: var(--accent-color);
+}
+
+.time-reset {
+    background: none;
+    color: var(--text-muted);
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0.25rem 0.5rem;
+}
+
+.time-reset:hover {
+    color: var(--text-color);
+    border-color: var(--text-muted);
+}
+
+/* --- Colour swatches (drawer) --- */
+
+.color-swatches {
+    margin-top: 0.375rem;
+}
+
+.swatch-label-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 2px;
+}
+
+.swatch-label {
+    font-size: 0.625rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.swatch-row {
+    display: flex;
+    gap: 2px;
+    margin-bottom: 4px;
+}
+
+.swatch {
+    flex: 1;
+    height: 28px;
+    min-width: 0;
+    border-radius: 2px;
+    border: 1px solid var(--swatch-border);
+    cursor: help;
+}
+
+.swatch-row.actual .swatch {
+    cursor: pointer;
+    transition: transform 0.1s, box-shadow 0.1s;
+}
+
+.swatch-row.actual .swatch:hover {
+    transform: scaleY(1.15);
+    box-shadow: 0 0 6px var(--accent-color);
+    z-index: 1;
+}
+
+.copy-colors-btn {
+    background: none;
+    color: var(--text-muted);
+    font-size: 0.625rem;
+    padding: 1px 6px;
+    border-radius: 3px;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.copy-colors-btn:hover {
+    color: var(--text-color);
+    border-color: var(--text-muted);
+}
+
+.copy-colors-btn.copied {
+    color: var(--success-color);
+    border-color: var(--success-color);
 }
 
 /* --- Login page --- */

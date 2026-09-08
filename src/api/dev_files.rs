@@ -181,6 +181,7 @@ async fn read_file(
         [
             (header::ETAG, f.etag),
             (header::CONTENT_TYPE, "text/plain; charset=utf-8".into()),
+            (header::CACHE_CONTROL, "no-cache".into()),
         ],
         f.bytes,
     )
@@ -262,7 +263,7 @@ async fn delete_file(
     State(s): State<AppState>,
     Query(q): Query<FileQuery>,
 ) -> Result<StatusCode, ApiError> {
-    if CORE_FILES.contains(&q.name.as_str()) {
+    if CORE_FILES.iter().any(|f| q.name.eq_ignore_ascii_case(f)) {
         return Err(ApiError::Unprocessable(format!(
             "{} cannot be deleted",
             q.name

@@ -212,6 +212,61 @@ async fn read_only_repo_write_is_409_and_binary_read_is_415() {
     assert_eq!(r.status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
 }
 
+/// R2 (site A): `DELETE /dev/api/file` must refuse a mixed-case match
+/// against the defining-files list too, not just an exact one. On a
+/// case-insensitive filesystem (macOS APFS, Windows) `Script.lua` and
+/// `script.lua` name the same real file, so a request for `Script.lua`
+/// must be rejected exactly like `script.lua` is (422) — and the real
+/// file must still be there afterwards, not merely the status code.
+#[tokio::test]
+async fn delete_core_file_is_rejected_case_insensitively_and_file_survives() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(dir.path());
+
+    let r = app
+        .post_json(
+            "/dev/api/screen",
+            &[AUTH],
+            r#"{"handle":"local","name":"clock","starter":"minimal"}"#,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+
+    let script_path = dir.path().join("local/clock/script.lua");
+    assert!(script_path.exists(), "fixture must have created script.lua");
+
+    let d = app
+        .delete("/dev/api/file?ref=local/clock&name=Script.lua", &[AUTH])
+        .await;
+    assert_eq!(d.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        script_path.exists(),
+        "script.lua must survive a case-mismatched delete request for Script.lua"
+    );
+}
+
+/// R3: `GET /dev/api/file` must send `Cache-Control: no-cache` alongside
+/// its `ETag` so the browser always revalidates instead of serving a
+/// heuristically-cached, possibly stale, body-and-etag pair (RFC 9111
+/// §4.2.2) after an external edit.
+#[tokio::test]
+async fn read_file_response_carries_no_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(dir.path());
+    app.post_json(
+        "/dev/api/screen",
+        &[AUTH],
+        r#"{"handle":"local","name":"clock","starter":"minimal"}"#,
+    )
+    .await;
+
+    let f = app
+        .get_with_headers("/dev/api/file?ref=local/clock&name=script.lua", &[AUTH])
+        .await;
+    assert_eq!(f.status, StatusCode::OK);
+    assert_eq!(f.headers["cache-control"].to_str().unwrap(), "no-cache");
+}
+
 #[tokio::test]
 async fn routes_are_gated() {
     let dir = tempfile::tempdir().unwrap();

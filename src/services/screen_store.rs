@@ -933,7 +933,10 @@ impl ScreenStore {
         let base = self.resolve_writable_root(handle, screen_path)?;
 
         const DEFINING: [&str; 3] = ["meta.yaml", "script.lua", "screen.svg"];
-        if DEFINING.contains(&rel.to_string_lossy().as_ref()) {
+        if DEFINING
+            .iter()
+            .any(|d| rel.to_string_lossy().eq_ignore_ascii_case(d))
+        {
             return Err(StoreError::Io(format!(
                 "'{file}' defines the screen and cannot be deleted; use delete_screen to remove '{screen_ref}'"
             )));
@@ -973,6 +976,7 @@ impl ScreenStore {
             return Some(
                 mlua::Lua::new()
                     .load(text)
+                    .set_name(name)
                     .into_function()
                     .map(|_| ())
                     .map_err(|e| e.to_string()),
@@ -1817,6 +1821,30 @@ mod tests {
         assert!(store.read_file("local/b", "meta.yaml").is_err());
     }
 
+    /// R2 (site B): the `DEFINING`-files guard in `delete_file` must reject
+    /// a mixed-case match too, not just an exact one — on a case-insensitive
+    /// filesystem (macOS APFS, Windows) a request naming `Script.lua`
+    /// resolves to the same real file as `script.lua`, so accepting it here
+    /// would delete a file that defines the screen.
+    #[test]
+    fn delete_file_rejects_defining_file_regardless_of_case() {
+        let (store, repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "defended", StarterKind::Minimal)
+            .unwrap();
+        let script_path = repo_root.join("defended/script.lua");
+        assert!(script_path.exists());
+
+        let err = store
+            .delete_file("local/defended", "Script.lua")
+            .unwrap_err();
+        assert!(matches!(err, StoreError::Io(_)));
+        assert!(
+            script_path.exists(),
+            "script.lua must survive a case-mismatched delete request"
+        );
+    }
+
     #[test]
     fn rename_rejects_existing_destination() {
         let (store, _repo_root) = test_store_with_local();
@@ -2168,6 +2196,38 @@ mod tests {
         let rep = store.validate("local/bad");
         assert!(!rep.ok);
         assert!(rep.issues.iter().any(|i| i.location.contains("script.lua")));
+    }
+
+    /// R1: a Lua syntax error's chunk name must be the file's basename
+    /// (`script.lua`), not mlua's default of the Rust source location of
+    /// the `Lua::load` call (`screen_store.rs:NNN:NN`) — the latter leaks
+    /// byonk's own source path into an error about the user's own typo.
+    #[test]
+    fn lua_syntax_error_chunk_name_is_basename_not_rust_source_location() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "badlua", StarterKind::Minimal)
+            .unwrap();
+        store
+            .write_file("local/badlua", "script.lua", b"end", None)
+            .unwrap(); // syntax error
+        let rep = store.validate("local/badlua");
+        assert!(!rep.ok);
+        let issue = rep
+            .issues
+            .iter()
+            .find(|i| i.location.contains("script.lua"))
+            .expect("lua syntax error should be reported");
+        assert!(
+            issue.message.contains("[string \"script.lua\"]"),
+            "message should carry the basename chunk name, got: {}",
+            issue.message
+        );
+        assert!(
+            !issue.message.contains("screen_store.rs"),
+            "message must not leak byonk's own source path, got: {}",
+            issue.message
+        );
     }
 
     #[test]

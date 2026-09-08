@@ -23,8 +23,6 @@ struct Cli {
 enum Commands {
     /// Start the HTTP server
     Serve,
-    /// Start the HTTP server with dev mode (live reload, device simulator)
-    Dev,
     /// Render a screen directly to a PNG file
     Render {
         /// Device MAC address (determines which screen to render)
@@ -165,7 +163,6 @@ async fn main() -> anyhow::Result<()> {
             list,
         }) => run_init_command(screens, fonts, config, all, force, list),
         Some(Commands::Serve) => run_server().await,
-        Some(Commands::Dev) => run_dev_server().await,
         None => {
             run_status_command();
             Ok(())
@@ -790,8 +787,7 @@ fn run_status_command() {
 
     // Commands section
     println!("\nCommands:");
-    println!("  byonk serve    Start the HTTP server");
-    println!("  byonk dev      Start server with dev mode (live reload)");
+    println!("  byonk serve    Start the HTTP server (dev UI at /dev, behind login)");
     println!("  byonk render   Render a screen to PNG file");
     println!("  byonk init     Extract embedded assets");
     println!("\nRun 'byonk --help' for more details.");
@@ -800,14 +796,12 @@ fn run_status_command() {
 /// Seed configured-but-empty asset directories, then run the one-time
 /// `byonk-builtin` -> `local` migration for pre-existing installs.
 ///
-/// Shared by `run_server` and `run_dev_server` so the two can't drift: a
-/// `byonk dev` run reads and writes the very same `SCREENS_DIR` and
-/// `config.yaml` a `byonk serve` run does, so skipping the migration in one
-/// of them leaves an unmigrated tree behind for the other (and, now that
-/// `byonk-builtin` no longer enumerates the `SCREENS_DIR` overlay, an
-/// unmigrated `byonk-builtin/<user-screen>` ref simply stops resolving).
+/// Called once by `run_server` on startup (the dev UI is now mounted inside
+/// the same server, under `/dev` — there is no separate `byonk dev` process
+/// any more to keep this in step with). Kept as its own function because the
+/// two steps must run in this order and both are best-effort: neither may
+/// prevent the server from starting.
 ///
-/// Both steps are best-effort: neither may prevent the server from starting.
 /// Order matters — the migration reads the `byonk-screens.yaml` manifest that
 /// seeding may have just written, and both must complete before app state is
 /// built from the config they may have rewritten.
@@ -898,6 +892,10 @@ async fn run_server() -> anyhow::Result<()> {
     // admin writes to read-only (the add-on Options form is the sole editor).
     state.addon_mode = matches!(addon, byonk::addon_options::ReadResult::Parsed(_));
 
+    if state.file_watcher.is_active() {
+        tracing::info!("File watcher active for live reload");
+    }
+
     // In add-on mode byonk owns its Home Assistant integration: write it into
     // the HA config dir and announce ourselves. Spawned so a slow or wedged
     // Supervisor can never delay the listener.
@@ -955,121 +953,37 @@ async fn run_server() -> anyhow::Result<()> {
         // Static file serving (production only)
         .nest_service("/static", ServeDir::new("./static"));
 
-    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    tracing::info!(addr = %bind_addr, "Byonk server listening");
-
-    axum::serve(listener, app).await?;
-
-    Ok(())
-}
-
-/// Run the HTTP server with dev mode (file watching, live reload)
-async fn run_dev_server() -> anyhow::Result<()> {
-    use axum::{
-        routing::{delete, get, post},
-        Router,
-    };
-    use byonk::api::dev::{
-        handle_delete_panel_colors, handle_dev_css, handle_dev_js, handle_dev_page, handle_events,
-        handle_render, handle_resolve_mac, handle_screens, handle_set_panel_colors, DevState,
-    };
-    use byonk::assets::AssetLoader;
-    use byonk::services::FileWatcher;
-
-    // Initialize tracing
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "byonk=debug,tower_http=debug".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
-    // Create asset loader with optional external paths from env vars
-    let screens_dir = std::env::var("SCREENS_DIR").ok().map(PathBuf::from);
-    let fonts_dir = std::env::var("FONTS_DIR").ok().map(PathBuf::from);
-    let config_file = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
-    let examples_dir_env = std::env::var("EXAMPLES_DIR").ok().map(PathBuf::from);
-    let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
-
-    let asset_loader = Arc::new(
-        AssetLoader::new(screens_dir.clone(), fonts_dir.clone(), config_file.clone())
-            .with_examples_dir_override(examples_dir_env.clone()),
-    );
-
-    // Log asset sources
-    tracing::info!(
-        screens = ?screens_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
-        fonts = ?fonts_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
-        config = ?config_file.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
-        examples = ?asset_loader.examples_dir().map(|p| p.display().to_string()).unwrap_or_else(|| "none".to_string()),
-        "Asset sources configured"
-    );
-
-    // Seed empty configured directories, then migrate a pre-existing install —
-    // exactly as `run_server` does, so `byonk dev` and `byonk serve` leave the
-    // same SCREENS_DIR/config.yaml state behind.
-    seed_and_migrate(&asset_loader);
-
-    // Create file watcher for screens directory
-    let file_watcher = Arc::new(FileWatcher::new(screens_dir.clone()));
-    if file_watcher.is_active() {
-        tracing::info!("File watcher active for live reload");
-    } else {
-        tracing::warn!("File watcher not active - set SCREENS_DIR to enable live reload");
+    // Home Assistant Supervisor ingress listener: a second bind, on a
+    // separate address, that tags every request with `ViaIngress` so
+    // `require_dev`'s `admit()` can trust the Supervisor's own peer address
+    // instead of requiring a login. Only opened when the add-on sets
+    // `BYONK_INGRESS_ADDR`; standalone/Docker runs never bind it.
+    if let Ok(ingress_addr) = std::env::var("BYONK_INGRESS_ADDR") {
+        let ingress_app = app
+            .clone()
+            .layer(axum::Extension(byonk::api::dev_auth::ViaIngress));
+        let l = tokio::net::TcpListener::bind(&ingress_addr).await?;
+        tracing::info!(addr = %ingress_addr, "Byonk ingress listener");
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(
+                l,
+                ingress_app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            {
+                tracing::error!(error = %e, "ingress listener stopped");
+            }
+        });
     }
 
-    // Create shared dev overrides (shared between dev UI and production handlers)
-    let dev_overrides = server::DevOverrides::default();
-
-    // Create application state with shared overrides
-    let config = Arc::new(AppConfig::load_from_assets(&asset_loader)?);
-    let state = server::create_app_state_with_overrides(
-        asset_loader.clone(),
-        config.clone(),
-        dev_overrides.clone(),
-    )?;
-
-    // Create dev state sharing the same overrides
-    let dev_state = DevState {
-        config,
-        content_pipeline: state.content_pipeline.clone(),
-        content_cache: state.content_cache.clone(),
-        renderer: state.renderer.clone(),
-        file_watcher,
-        asset_loader,
-        screen_repo_manager: state.screen_repo_manager.clone(),
-        dev_overrides,
-    };
-
-    // Build dev routes as a nested router with DevState
-    let dev_router = Router::new()
-        .route("/", get(handle_dev_page))
-        .route("/dev.css", get(handle_dev_css))
-        .route("/dev.js", get(handle_dev_js))
-        .route("/screens", get(handle_screens))
-        .route("/events", get(handle_events))
-        .route("/render", get(handle_render))
-        .route("/resolve-mac", get(handle_resolve_mac))
-        .route("/panel-colors", post(handle_set_panel_colors))
-        .route("/panel-colors/{panel}", delete(handle_delete_panel_colors))
-        .with_state(dev_state);
-
-    // Build router: start with shared API routes, add dev routes
-    let app = server::build_router(state)
-        // OpenAPI documentation
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        // Static file serving
-        .nest_service("/static", ServeDir::new("./static"))
-        // Dev mode routes (nested with their own state)
-        .nest("/dev", dev_router);
-
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    tracing::info!(addr = %bind_addr, "Byonk dev server listening");
-    tracing::info!("Dev mode UI available at http://{}/dev", bind_addr);
-
-    axum::serve(listener, app).await?;
-
+    tracing::info!(addr = %bind_addr, "Byonk server listening");
+    tracing::info!("Dev UI at http://{}/dev/", bind_addr);
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -1078,15 +992,15 @@ mod tests {
     use super::*;
     use byonk::assets::AssetLoader;
 
-    /// Minor 5: `byonk dev` and `byonk serve` must leave the same on-disk
-    /// state behind. They do so by both calling `seed_and_migrate` and
-    /// nothing else — this asserts that helper really does both halves
-    /// (seed, then migrate), so "did `dev` migrate?" reduces to "does `dev`
-    /// call the helper?", which is checkable by reading two lines.
+    /// `seed_and_migrate` must actually do both halves (seed, then migrate)
+    /// on the real `SCREENS_DIR`/`config.yaml` a `byonk serve` run uses —
+    /// historically a `byonk dev` run had its own copy of this logic and
+    /// could drift from `byonk serve`'s; now there is only one server mode
+    /// and one call site, but the migration behavior itself still needs
+    /// coverage.
     ///
     /// Non-vacuous: drop the `migrate_builtin_overlay_to_local` call from
-    /// `seed_and_migrate` (which is what `run_dev_server` effectively did
-    /// before this change) and the manifest/ref assertions fail.
+    /// `seed_and_migrate` and the manifest/ref assertions fail.
     #[test]
     fn seed_and_migrate_both_seeds_and_migrates() {
         let tmp = tempfile::tempdir().unwrap();

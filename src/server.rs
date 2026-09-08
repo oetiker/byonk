@@ -94,6 +94,9 @@ pub struct AppState {
     /// Rendered device previews for `/api/admin/devices/{key}/preview`.
     /// Keeps a Home Assistant camera's frame pulls from re-rendering.
     pub preview_cache: Arc<PreviewCache>,
+    /// Live-reload source for `/dev/api/events`. Inactive (never fires) when
+    /// there is no external `SCREENS_DIR`.
+    pub file_watcher: Arc<crate::services::FileWatcher>,
 }
 
 /// Create application state from an asset loader.
@@ -218,6 +221,10 @@ pub fn create_app_state_with_overrides(
         content_pipeline.clone(),
     ));
 
+    let file_watcher = Arc::new(crate::services::FileWatcher::new(
+        asset_loader.screens_dir().map(|p| p.to_path_buf()),
+    ));
+
     Ok(AppState {
         config: shared_config,
         asset_loader,
@@ -234,6 +241,7 @@ pub fn create_app_state_with_overrides(
         screen_store,
         preview_cache: Arc::new(PreviewCache::new()),
         recovery: Arc::new(crate::services::RecoveryRegistry::new()),
+        file_watcher,
     })
 }
 
@@ -275,6 +283,24 @@ pub fn build_router(state: AppState) -> Router {
 
     // MCP endpoint — gated by the same admin token as /api/admin/*.
     let router = crate::mcp::mount(router, &state);
+
+    // `/dev` — the dev UI, login-protected. axum's `Router::nest("/dev", …)`
+    // routes `/dev` itself but never `/dev/`: the inner router's `/` route
+    // maps only onto the bare nest prefix, and nothing gets registered at
+    // the trailing-slash form (see `path_for_nested_route` in axum's
+    // `path_router.rs`). So `/dev/` is registered explicitly here, alongside
+    // the nest, wearing the exact same `require_dev` protection as the
+    // nested page route. `/dev` (bare) still resolves via the nest and its
+    // own `require_dev`-driven trailing-slash redirect to `./dev/`.
+    let dev_slash_route = Router::new()
+        .route("/dev/", get(crate::api::dev::handle_dev_page))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::api::dev_auth::require_dev,
+        ));
+    let router = router
+        .nest("/dev", crate::api::dev::dev_router(&state))
+        .merge(dev_slash_route);
 
     router
         // Add state and tracing with request IDs

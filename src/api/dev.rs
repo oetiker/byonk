@@ -1,6 +1,7 @@
 //! Dev mode API endpoints.
 //!
-//! These endpoints are only available when running `byonk dev`.
+//! These are mounted under `/dev` by `byonk serve`, behind the `require_dev`
+//! login gate (see `crate::api::dev_auth`).
 
 use axum::{
     body::Bytes,
@@ -10,33 +11,18 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         Html, IntoResponse, Json, Response,
     },
+    Router,
 };
 use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::sync::Arc;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
-use crate::assets::AssetLoader;
-use crate::models::{AppConfig, DisplaySpec};
-use crate::server::DevOverrides;
-use crate::services::screen_repo_manager::ScreenRepoManager;
-use crate::services::{ContentCache, ContentPipeline, DeviceContext, FileWatcher, RenderService};
-
-/// Dev mode application state
-#[derive(Clone)]
-pub struct DevState {
-    pub config: Arc<AppConfig>,
-    pub content_pipeline: Arc<ContentPipeline>,
-    pub content_cache: Arc<ContentCache>,
-    pub renderer: Arc<RenderService>,
-    pub file_watcher: Arc<FileWatcher>,
-    pub asset_loader: Arc<AssetLoader>,
-    pub screen_repo_manager: Arc<ScreenRepoManager>,
-    pub dev_overrides: DevOverrides,
-}
+use crate::models::DisplaySpec;
+use crate::server::AppState;
+use crate::services::DeviceContext;
 
 /// Query parameters for /dev/render
 #[derive(Debug, Deserialize)]
@@ -172,12 +158,27 @@ pub async fn handle_dev_js() -> impl IntoResponse {
     )
 }
 
+/// Serve the editor bundle (built by `static/dev/editor`, see Task 7).
+pub async fn handle_editor_bundle() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/javascript")],
+        include_str!("../../static/dev/editor.bundle.js"),
+    )
+}
+
+/// Serve the preview iframe page the editor bundle drives (see Task 7).
+pub async fn handle_preview_page() -> Html<&'static str> {
+    Html(include_str!("../../static/dev/preview.html"))
+}
+
 /// List available screens by discovering them from the filesystem.
 ///
 /// Screens are discovered by scanning for `.lua` files with matching `.svg` templates.
 /// Config-defined screens are included first, then any filesystem screens not in config
 /// are auto-discovered. This allows new screens to appear without restarting the server.
-pub async fn handle_screens(State(state): State<DevState>) -> Json<ScreensResponse> {
+pub async fn handle_screens(State(state): State<AppState>) -> Json<ScreensResponse> {
+    let config = state.config.load();
+
     // Every screen comes from the screen repo loader (the source of truth). The
     // `name` is the qualified `handle/path` ref the dev UI feeds back into
     // `?screen=<ref>`; script/template are informational only.
@@ -199,8 +200,7 @@ pub async fn handle_screens(State(state): State<DevState>) -> Json<ScreensRespon
     screens.sort_by(|a, b| a.name.cmp(&b.name));
 
     // Collect configured devices
-    let devices: Vec<DeviceInfo> = state
-        .config
+    let devices: Vec<DeviceInfo> = config
         .devices
         .iter()
         .map(|(id, dev)| DeviceInfo {
@@ -212,8 +212,7 @@ pub async fn handle_screens(State(state): State<DevState>) -> Json<ScreensRespon
         .collect();
 
     // Collect panel profiles
-    let panels: Vec<PanelInfo> = state
-        .config
+    let panels: Vec<PanelInfo> = config
         .panels
         .iter()
         .map(|(id, panel)| PanelInfo {
@@ -235,7 +234,7 @@ pub async fn handle_screens(State(state): State<DevState>) -> Json<ScreensRespon
 
 /// SSE endpoint for file change events
 pub async fn handle_events(
-    State(state): State<DevState>,
+    State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = state.file_watcher.subscribe();
 
@@ -264,14 +263,15 @@ pub async fn handle_events(
 
 /// Resolve MAC address to screen and params
 pub async fn handle_resolve_mac(
-    State(state): State<DevState>,
+    State(state): State<AppState>,
     Query(query): Query<ResolveMacQuery>,
 ) -> Response {
+    let config = state.config.load();
+
     // Try MAC lookup first, then registration code lookup
-    let device_config = state
-        .config
+    let device_config = config
         .get_device_config(&query.mac)
-        .or_else(|| state.config.get_device_config_for_code(&query.mac));
+        .or_else(|| config.get_device_config_for_code(&query.mac));
 
     match device_config {
         Some(device_config) => {
@@ -306,7 +306,7 @@ pub struct PanelColorsRequest {
 /// Set color overrides for a device (dev mode color tuning).
 /// Keyed by device config key so each device's tuning is independent.
 pub async fn handle_set_panel_colors(
-    State(state): State<DevState>,
+    State(state): State<AppState>,
     Json(body): Json<PanelColorsRequest>,
 ) -> StatusCode {
     state
@@ -320,7 +320,7 @@ pub async fn handle_set_panel_colors(
 
 /// Remove color overrides for a device, reverting to config.yaml values
 pub async fn handle_delete_panel_colors(
-    State(state): State<DevState>,
+    State(state): State<AppState>,
     axum::extract::Path(device): axum::extract::Path<String>,
 ) -> StatusCode {
     state
@@ -334,9 +334,11 @@ pub async fn handle_delete_panel_colors(
 
 /// Render a screen and return PNG
 pub async fn handle_render(
-    State(state): State<DevState>,
+    State(state): State<AppState>,
     Query(query): Query<RenderQuery>,
 ) -> Response {
+    let config = state.config.load();
+
     // Resolve screen ref: MAC takes precedence, then explicit screen
     let (
         screen_ref,
@@ -351,10 +353,9 @@ pub async fn handle_render(
         dc_gamut,
     ) = if let Some(ref mac) = query.mac {
         // Try MAC lookup first, then registration code lookup
-        match state
-            .config
+        match config
             .get_device_config(mac)
-            .or_else(|| state.config.get_device_config_for_code(mac))
+            .or_else(|| config.get_device_config_for_code(mac))
         {
             Some(dc) => {
                 // The device's `screen` is a `handle/path` screen repo ref.
@@ -436,7 +437,7 @@ pub async fn handle_render(
         .panel
         .as_deref()
         .or(device_config_panel.as_deref())
-        .and_then(|name| state.config.get_panel(name));
+        .and_then(|name| config.get_panel(name));
     let panel_colors: Option<String> = panel.as_ref().map(|p| p.colors.clone());
 
     // Apply priority chain: device_config_colors > panel_colors > query/model default
@@ -797,4 +798,38 @@ pub async fn handle_render(
         )
             .into_response(),
     }
+}
+
+/// Everything under `/dev`. Protected routes get `require_dev` as a route
+/// layer; `/login`, `/logout` and the stylesheet stay open (the stylesheet
+/// so the login page itself can be styled).
+///
+/// This registers the nest root (`/`, i.e. bare `/dev`) but — per axum's own
+/// `nest` semantics — nothing at `/dev/`; `server::build_router` registers
+/// that explicitly, outside this nest, wearing the same `require_dev` layer.
+pub fn dev_router(state: &AppState) -> Router<AppState> {
+    use axum::routing::{delete, get, post};
+    let api = Router::new()
+        .route("/screens", get(handle_screens))
+        .route("/events", get(handle_events))
+        .route("/render", get(handle_render))
+        .route("/resolve-mac", get(handle_resolve_mac))
+        .route("/panel-colors", post(handle_set_panel_colors))
+        .route("/panel-colors/{panel}", delete(handle_delete_panel_colors))
+        .route("/whoami", get(crate::api::dev_auth::whoami))
+        .merge(crate::api::dev_files::files_router());
+    let protected = Router::new()
+        .route("/", get(handle_dev_page))
+        .route("/dev.js", get(handle_dev_js))
+        .route("/editor.bundle.js", get(handle_editor_bundle))
+        .route("/preview.html", get(handle_preview_page))
+        .nest("/api", api)
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::api::dev_auth::require_dev,
+        ));
+    Router::new()
+        .merge(protected)
+        .route("/dev.css", get(handle_dev_css))
+        .merge(crate::api::dev_auth::dev_auth_router())
 }

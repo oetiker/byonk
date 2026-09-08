@@ -116,6 +116,39 @@ async fn remote_user_header_on_public_listener_is_ignored() {
 }
 
 #[tokio::test]
+async fn bare_dev_redirects_to_trailing_slash_relatively() {
+    let app = TestApp::new_with_dev_login(None, "u", "p");
+    let r = app.get("/dev").await;
+    assert_eq!(r.status, StatusCode::TEMPORARY_REDIRECT);
+    // Asserted as a literal, relative string: an origin-absolute regression
+    // (`/dev/`) would break Home Assistant Ingress, which strips the
+    // ingress prefix before byonk ever sees the request (see require_dev's
+    // doc comment).
+    assert_eq!(r.headers["location"], "./dev/");
+}
+
+#[tokio::test]
+async fn bare_dev_with_no_credentials_is_404_not_a_redirect() {
+    // Pins finding 3: the redirect must not fire when the dev UI would
+    // otherwise be invisible (404) — a bare `/dev` answering 307 while
+    // `/dev/` answers 404 would let a probe infer the /dev tree exists on
+    // a server where it's supposed to be undetectable.
+    let app = TestApp::new();
+    assert_eq!(app.get("/dev").await.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn deeper_paths_are_not_redirected() {
+    // Only the nest root (`/dev`) gets the trailing-slash treatment.
+    // `/dev/api/whoami` must keep its normal 401/200 behaviour, not a
+    // redirect — and once Task 4 mounts static assets, the same must hold
+    // for e.g. `/dev/dev.js`.
+    let app = TestApp::new_with_dev_login(None, "u", "p");
+    let r = app.get("/dev/api/whoami").await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn logout_clears_cookie() {
     let app = TestApp::new_with_dev_login(None, "u", "p");
     let r = app.post_form("/dev/logout", "").await;

@@ -182,7 +182,7 @@ fn admit(state: &AppState, request: &Request) -> Result<DevPrincipal, StatusCode
         let peer = request
             .extensions()
             .get::<ConnectInfo<std::net::SocketAddr>>()
-            .map(|c| c.0.ip());
+            .map(|c| c.0.ip().to_canonical());
         if peer != Some(SUPERVISOR_ADDR) {
             return Err(StatusCode::FORBIDDEN);
         }
@@ -210,26 +210,59 @@ fn admit(state: &AppState, request: &Request) -> Result<DevPrincipal, StatusCode
 
 /// Gate for everything under `/dev` except `/login` and `/logout`.
 ///
-/// Before any admission check, normalizes the trailing slash on the nest
-/// root: axum's `nest` rewrites `request.uri()` to the path stripped of the
-/// mount prefix, so a handler inside the nest can't distinguish `/dev` from
-/// `/dev/` — both arrive as `/`. `OriginalUri` still carries the
-/// pre-strip path, and using it (rather than a fixed prefix) keeps the
-/// redirect correct under Home Assistant Ingress, where the browser's real
-/// path is `/api/hassio_ingress/<token>/dev`.
+/// Also normalizes the trailing slash at the nest root: axum's `nest`
+/// rewrites `request.uri()` to the path stripped of the mount prefix, so
+/// inside the nest both `/dev` and `/dev/` arrive as path `/` — a handler
+/// can never tell them apart from `request.uri()` alone. `OriginalUri`
+/// still carries the pre-strip path, so a bare `/dev` (nest-stripped path
+/// `/`, original path not ending in `/`) is detected and redirected here.
+/// The check is scoped to the nest root (`request.uri().path() == "/"`)
+/// rather than "doesn't end in `/`" generally — Task 4 serves static
+/// assets like `/dev/dev.js` through this same layer, and none of those
+/// end in `/` either; redirecting them would 404 the dev UI's own scripts.
+///
+/// The redirect only fires when the dev UI is visible at all: admitted, or
+/// unauthenticated with credentials configured (which is what the
+/// unauthenticated-page branch below would otherwise send to `login`
+/// anyway). It never fires over a `Forbidden` (the ingress peer check must
+/// win), and never fires when no credentials are configured — otherwise a
+/// bare `GET /dev` would 307 while `GET /dev/` 404s, letting a probe infer
+/// the `/dev` tree exists on a server where it's supposed to be invisible.
+///
+/// The target is relative and derived from the original path's last
+/// segment (`./dev/`), not path-absolute (`/dev/`): under Home Assistant
+/// Ingress the Supervisor strips the ingress prefix before byonk ever sees
+/// the request, so `OriginalUri` here is still just `/dev` even though the
+/// browser's real address is `/api/hassio_ingress/<token>/dev`. A
+/// path-absolute target would send the browser to the HA frontend's own
+/// `/dev/`, outside the ingress iframe entirely; `./dev/` resolves
+/// correctly against both the public listener and Ingress. It's a
+/// temporary (307) redirect, not permanent (308), because whether it fires
+/// at all depends on live config (dev credentials being set) that can
+/// change without a restart — a cached 308 would keep redirecting stale.
 pub async fn require_dev(
     State(state): State<AppState>,
     mut request: Request,
     next: Next,
 ) -> Response {
-    if let Some(original) = request.extensions().get::<OriginalUri>() {
-        let path = original.0.path();
-        if !path.ends_with('/') && !path.contains("/api/") {
-            return Redirect::permanent(&format!("{path}/")).into_response();
+    let outcome = admit(&state, &request);
+    let visible = match &outcome {
+        Ok(_) => true,
+        Err(StatusCode::UNAUTHORIZED) => state.dev_auth.credentials.is_some(),
+        Err(_) => false,
+    };
+
+    if visible && request.uri().path() == "/" {
+        if let Some(original) = request.extensions().get::<OriginalUri>() {
+            let path = original.0.path();
+            if !path.ends_with('/') {
+                let last = path.rsplit('/').next().unwrap_or("");
+                return Redirect::temporary(&format!("./{last}/")).into_response();
+            }
         }
     }
 
-    match admit(&state, &request) {
+    match outcome {
         Ok(principal) => {
             request.extensions_mut().insert(principal);
             next.run(request).await

@@ -1,52 +1,240 @@
 # Dev Mode
 
-Byonk includes a development mode that provides a web-based device simulator with live reload capabilities, making it easier to develop and test screens.
+Dev mode is Byonk's built-in screen editor: a three-column web page where you
+pick a screen, edit its files with syntax checking as you type, and watch the
+rendered result next to them. It also carries the display calibration tools —
+dither algorithm, tuning knobs and measured panel colours — and syncs what you
+tune there to the physical device.
 
-## Starting Dev Mode
-
-```bash
-# Start with dev mode enabled
-byonk dev
-
-# With external screens directory for live reload
-SCREENS_DIR=./screens byonk dev
-```
-
-Once started, open your browser to `http://localhost:3000/dev` to access the device simulator.
+It is part of the normal server. There is no separate command to start: `byonk
+serve` mounts it, behind a login, at `/dev/`.
 
 ![Dev Mode Screenshot](images/dev-mode-screenshot.png)
 
-## Features
+## Opening the editor
 
-### Device Simulator
+### Set a username and password
 
-The simulator displays your rendered screens in a visual frame resembling a TRMNL device. You can:
+The editor is invisible until you give it credentials. With none configured,
+`/dev/` answers `404 Not Found` — the page, the login form and the API alike —
+so a server that was never meant to be edited over the web does not advertise
+an editor at all.
 
-- **Select a screen** from the dropdown (populated from config.yaml and auto-discovered screens)
-- **Select a device** to auto-load its configured screen, parameters, panel, and dither settings
-- **Simulate device context**: battery voltage, WiFi RSSI, and time override
-- **View the rendered PNG** exactly as it would appear on the device
-- **Pixel inspector**: hover over the image to see a magnified view
+Set both halves, in any one of these places:
 
-### Live Reload
+| Where | Keys |
+|-------|------|
+| Environment | `BYONK_DEV_USERNAME`, `BYONK_DEV_PASSWORD` |
+| `config.yaml` | `admin.dev_username`, `admin.dev_password` |
+| Home Assistant app | the **Dev UI username** / **Dev UI password** options |
 
-When `SCREENS_DIR` is set to an external directory, the dev mode watches for changes to `.lua` and `.svg` files. When you save a file:
+```yaml
+admin:
+  dev_username: tobi
+  dev_password: a-long-random-string
+```
 
-1. The file watcher detects the change
-2. An event is sent to connected browsers via Server-Sent Events (SSE)
-3. The screen automatically re-renders with the latest code
+The environment wins over `config.yaml`, exactly as `BYONK_ADMIN_TOKEN` does.
+Both halves are required and a blank value counts as unset, so setting only a
+username leaves the login disabled.
 
-### Custom Parameters
+### Log in
 
-The dev UI includes a JSON editor for passing custom parameters to your Lua scripts. These are available in your script via the `params` table.
+Open `http://<host>:3000/dev/` in a browser and the login form appears. A bare
+`http://<host>:3000/dev` is redirected to the same place.
 
-### Error Display
+A successful login sets a `byonk_dev` session cookie — `HttpOnly`, scoped to
+`/dev`, good for 30 days. The key that signs it is generated fresh each time
+the server starts, so restarting Byonk logs everyone out. A wrong username or
+password is answered after a one-second delay, and the message never says
+which of the two was wrong.
 
-Errors are displayed in a console below the device preview, including Lua syntax/runtime errors, template errors, and render failures.
+The **Logout** button in the toolbar appears only for a cookie session; the
+two routes below are not sessions to end.
 
-## Display Calibration
+### The admin token also works
 
-Dev mode provides tools for calibrating dithering to match your physical display. Changes made in the dev UI are synced live to the actual device — what you tune is what the device shows.
+Any request carrying the admin token as a bearer credential is admitted
+without a login:
+
+```
+Authorization: Bearer <your admin token>
+```
+
+That is what lets a script or an MCP client reach `/dev/api/*` directly. See
+[Admin API](../api/admin-api.md) for where the token comes from.
+
+### From the Home Assistant sidebar
+
+The Home Assistant app publishes the editor as an Ingress panel: a **Byonk**
+entry in the sidebar opens it directly, with no second login. Home Assistant
+has already authenticated you, and the app trusts that route only for requests
+arriving from the Supervisor itself.
+
+Inside Home Assistant you therefore need no dev username or password at all.
+Set them only if you also want to reach the editor from outside Home
+Assistant, on `http://<host>:3000/dev/`.
+
+## The three columns
+
+**Left — screens.** Every screen the server can resolve, grouped by screen
+repo handle. Repos you cannot write to are dimmed and their screens italic;
+selecting one still lets you read every file and copy it, just not save over
+it.
+
+**Middle — files.** One tab per file in the selected screen, with
+`meta.yaml`, `script.lua` and `screen.svg` first and everything else after
+them alphabetically. Below the tabs sits the problems bar, where syntax errors
+appear as you type.
+
+**Right — preview.** The screen rendered through the same pipeline the device
+uses, in a frame the size of the selected panel, with the render time and a
+console beneath it. Hover the image for a magnified pixel view.
+
+## Which repos you can edit
+
+Writability is a property of where a screen repo's files live, not of its
+name. `local` (your `SCREENS_DIR`), `examples`, and any repo registered with
+`path:` are backed by directories Byonk manages and are editable in place. The
+embedded `byonk-builtin` screens and any repo fetched from git with `repo:`
+are read-only — a fetch can replace a git checkout wholesale, so edits there
+would not survive. The full picture is in
+[Screen Authoring](authoring.md#what-makes-a-repo-writable).
+
+In the Home Assistant app only `local` and `examples` are writable: the app's
+Screen repos option accepts `repo:` rows only.
+
+## Editing and saving
+
+Type in any file. Its tab shows a dirty marker, and so does the screen name in
+the toolbar, until the bytes reach disk.
+
+- **Cmd/Ctrl-S** saves the file you are in.
+- The toolbar's **Save** button saves *every* file you have changed, not just
+  the one on screen.
+
+Saving into a read-only repo is refused with a message rather than silently
+dropped.
+
+### Conflict detection
+
+Every save carries the etag the file had when you opened it. If the file
+changed underneath you — another browser tab, an editor on the server, a git
+fetch — the write is refused and a banner offers two ways out:
+
+- **Reload** throws your edits away and takes the version on disk.
+- **Overwrite** re-reads the file only to take its current etag, then writes
+  your buffer over it.
+
+The same banner appears when the file watcher reports a change to a file you
+have unsaved edits in — Byonk never silently replaces a buffer you are still
+working on.
+
+### New, Copy, Rename, Delete
+
+| Button | What it needs | What it does |
+|--------|---------------|--------------|
+| **New** | a writable repo to put it in | Scaffolds `meta.yaml`, `script.lua` and `screen.svg` from a minimal starter. The generated `meta.yaml` pins the running engine's `byonk:` compatibility requirement. |
+| **Copy** | any selected screen | Forks it — every file in its folder — into a writable repo you choose. This works from `byonk-builtin` and from git-fetched repos, which is the supported way to customize a screen you cannot edit. |
+| **Rename** | a writable repo | Moves the screen within its own repo. You are asked to confirm first if you have unsaved edits, because the rename would leave them unsavable. |
+| **Delete** | a writable repo | Removes the screen. |
+
+The **+** next to the file tabs adds a file to the current screen. Creating a
+file that already exists is reported rather than silently opening the existing
+one. `meta.yaml`, `script.lua` and `screen.svg` cannot be deleted, and no
+single file may exceed 5 MB.
+
+## Syntax checking
+
+400 ms after you stop typing, the unsaved buffer is checked on the server and
+any error is marked in the editor and listed in the problems bar. It is the
+text in front of you that gets checked, not the copy on disk.
+
+What the check catches, by file:
+
+| File | Check |
+|------|-------|
+| `meta.yaml` | Parses against the screen metadata schema. |
+| `*.lua` | Compiles the chunk. Syntax errors only — the script is **not** executed. |
+| `*.svg` | Compiles as a Tera template and resolves its `{% extends %}` / `{% include %}` chain, so a missing or misspelled include is caught. |
+| anything else | No check; the file is reported as fine. |
+
+After a successful save the whole screen is validated and the bar reports
+`✔ all files valid` when nothing is left.
+
+**What only a render catches.** Because the Lua is compiled but never run, the
+check says nothing about what the script *does*: a failing HTTP request,
+indexing a nil, an API that changed shape, a template that compiles but
+positions text off the panel. Those show up in the preview and its console.
+Keep an eye on both.
+
+## Preview and pop-out
+
+The preview re-renders whenever you save, whenever the file watcher reports a
+change, and whenever you move a control in the Simulate drawer. Render time is
+shown above the image and logged in the console below it.
+
+**Pop out** opens the preview in its own window with **Fit** and **100%** zoom
+— useful on a second monitor, or for looking at a 1872×1404 TRMNL X render at
+its real size. The pop-out renders nothing itself: the editor window hands it
+each finished image, so it follows the editor live and goes quiet when the
+editor window closes. It follows the editor's colour scheme too.
+
+## Colour scheme
+
+The toolbar's **System / Light / Dark** control sets the editor's colour
+scheme. It defaults to System — following your operating system's setting —
+and your choice is remembered in the browser and applied to the pop-out
+window as well.
+
+## Live reload
+
+Set `SCREENS_DIR` and Byonk watches it for changes. The editor holds a
+Server-Sent Events connection to `/dev/api/events`, and the **File Watch**
+badge in the toolbar shows whether it is up; a dropped connection retries by
+itself every three seconds.
+
+When a watched file changes, an open buffer showing that file is reloaded from
+disk — unless you have unsaved edits in it, in which case you get the conflict
+banner instead — and the preview re-renders. This is what makes an external
+editor work alongside the built-in one.
+
+Without `SCREENS_DIR` there is nothing on disk to watch, and Byonk says so at
+startup.
+
+## Simulate drawer
+
+The **Simulate** button opens a drawer with everything about the device
+context the preview is rendered under. Nothing here changes a file; it changes
+what the renderer is told.
+
+| Control | What it sets |
+|---------|--------------|
+| **Device** | Renders *that device's* own configured screen, params, panel and dither settings — not the screen open in the editor — and syncs your tuning to the real device (below). |
+| **Panel profile** | Which panel's size and palette to render for, with its official and measured colour swatches. |
+| **Show actual panel colors** | Whether the preview shows the panel's measured colours or the official palette. |
+| **Dither** and its four tuning fields | The algorithm and its `max_error`, `chroma_clamp`, `noise_scale` and `strength`. |
+| **Battery (V)**, **WiFi (dBm)** | What the script sees as the device's battery voltage and signal strength. |
+| **Current Time** | Freezes the clock the script renders against, so a time-dependent screen can be checked at any hour. The `×` returns it to live time. |
+| **Custom Parameters (JSON)** | The `params` table your Lua script receives. |
+
+The dither dropdown and each algorithm's default tuning values are served by
+the engine itself rather than listed in the page, so the preview cannot
+disagree with what the renderer would do.
+
+### Live device sync
+
+When you pick a device entry and then change the dither algorithm, the tuning
+values or the measured colours, those overrides are handed to the production
+`/api/display` handler for that device. The physical device picks them up on
+its next refresh — what you tune is what the device shows. The overrides live
+in memory only and are gone when the server restarts, so commit anything you
+want to keep to `config.yaml`.
+
+## Display calibration
+
+Dev mode provides tools for calibrating dithering to match your physical
+display.
 
 ### Dither Algorithm Selection
 
@@ -61,21 +249,18 @@ The dither dropdown lets you try all 9 algorithms on your content:
 
 ### Dither Tuning Controls
 
-The Render Options panel exposes three tuning parameters:
+The drawer exposes these tuning parameters:
 
 | Control | Effect |
 |---------|--------|
-| **Error clamp** | Caps how much accumulated error one pixel may carry into its neighbours. The default is 1.0 — full scale in a channel. Lowering it suppresses diffusion, which quietens oscillation but makes saturated areas render flat. |
+| **Max error** | Caps how much accumulated error one pixel may carry into its neighbours. The default is 1.0 — full scale in a channel. Lowering it suppresses diffusion, which quietens oscillation but makes saturated areas render flat. |
 | **Noise scale** | Controls blue noise jitter strength. Higher values break "worm" artifacts more aggressively. |
 | **Chroma clamp** | Limits chromatic error propagation. Prevents color bleeding on chromatic palettes. |
+| **Strength** | Error diffusion strength (0.0–2.0, default 1.0). Lower means less dithering texture. |
 
 ### Color Calibration
 
 Click any actual-color swatch to open the HSL adjustment popup. Adjust hue, saturation, and lightness with live preview to match what your panel really displays. The adjusted `colors_actual` string can be copied to `config.yaml`.
-
-### Live Device Sync
-
-When you select a device entry and adjust dither algorithm, tuning parameters, or measured colors, changes are synced to the production `/api/display` handler. The physical device picks up the new settings on its next refresh.
 
 ### Calibrator Screen
 
@@ -164,7 +349,7 @@ what a real screen gets, not a tuning surface.
 ### Calibration Workflow
 
 1. **Assign the `byonk-builtin/calibration/color` screen** to your device in `config.yaml`
-2. **Select your device** in dev mode — this loads its screen, panel, and dither settings
+2. **Select your device** in the Simulate drawer — this loads its screen, panel, and dither settings
 3. **Choose a dither algorithm** that works well for your content type
 4. **Adjust tuning parameters** (max_error, noise_scale, chroma_clamp, strength) until the preview looks good
 5. **Calibrate measured colors** by clicking actual-color swatches and adjusting HSL to match the solid patches on the physical display
@@ -191,43 +376,73 @@ Tuning values can also be set per-script in the Lua return table — see [Lua AP
 
 ## Configuration
 
-Dev mode uses the same environment variables as the normal server:
+Dev mode is part of `byonk serve` and reads the same environment as the rest of
+the server:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `BIND_ADDR` | Server bind address | `0.0.0.0:3000` |
-| `SCREENS_DIR` | External screens directory (enables live reload) | (embedded) |
+| `SCREENS_DIR` | Your writable `local` screen repo — also what the file watcher watches | (embedded) |
 | `FONTS_DIR` | External fonts directory | (embedded) |
 | `CONFIG_FILE` | External config file | (embedded) |
+| `BYONK_DEV_USERNAME` | Dev UI login name | (unset — editor is 404) |
+| `BYONK_DEV_PASSWORD` | Dev UI password | (unset — editor is 404) |
 
-## Example Workflow
+See [Environment Variables](installation.md#environment-variables) for the
+full list.
+
+## Example workflow
 
 1. Extract embedded assets to work with:
    ```bash
    byonk init --all
    ```
 
-2. Start dev mode with external screens:
+2. Start the server with an external screens directory and a dev login:
    ```bash
-   SCREENS_DIR=./screens CONFIG_FILE=./config.yaml byonk dev
+   SCREENS_DIR=./screens CONFIG_FILE=./config.yaml \
+   BYONK_DEV_USERNAME=me BYONK_DEV_PASSWORD=secret \
+   byonk serve
    ```
 
-3. Open `http://localhost:3000/dev` in your browser
+3. Open `http://localhost:3000/dev/` and log in
 
-4. Select the screen you want to work on
+4. Pick a screen in the left column — or **Copy** one of the examples into
+   `local` and work on that
 
-5. Edit your Lua script or SVG template — changes appear automatically
+5. Edit `script.lua` and `screen.svg`; problems appear as you type, and the
+   preview updates on save
 
-6. Use the calibration tools to tune dithering for your panel
+6. Open **Simulate** to try another panel, freeze the clock, or pass custom
+   params
 
-7. Check the console below the preview if something goes wrong
+7. Use the calibration tools to tune dithering for your panel
 
-## Differences from Production
+## The `/dev/api` endpoints
 
-Dev mode includes a few differences from the production `byonk serve` command:
+The page is a client of a small JSON API. Everything under `/dev/api` is
+behind the same login as the page, and answers `401` with a JSON body rather
+than a redirect when you are not admitted.
 
-- Additional `/dev/*` routes for the simulator UI
-- File watching enabled (when using external SCREENS_DIR)
-- No content caching — always renders fresh content
-- More verbose logging by default
-- Tuning and color overrides are session-only (reset on server restart)
+| Method and path | Purpose |
+|-----------------|---------|
+| `GET /dev/api/screens` | Screens, configured devices, panel profiles, and the dither algorithm list with per-algorithm defaults |
+| `GET /dev/api/repos` | Screen repo handles and whether each is writable |
+| `GET /dev/api/files?ref=` | The files of one screen, with size and whether each is text |
+| `GET /dev/api/file?ref=&name=` | One file's text, with its etag |
+| `PUT /dev/api/file?ref=&name=` | Write one file. `If-Match` is **required**: an etag to update, or `*` to create (`412` if it already exists). A missing header is `428` |
+| `DELETE /dev/api/file?ref=&name=` | Delete one file (not the core three) |
+| `POST /dev/api/screen` | Create a screen from a starter |
+| `DELETE /dev/api/screen?ref=` | Delete a screen |
+| `POST /dev/api/screen/copy` | Fork a screen into a writable repo |
+| `POST /dev/api/screen/rename` | Rename a screen within its repo |
+| `POST /dev/api/screen/validate` | Validate a screen as it is on disk |
+| `POST /dev/api/screen/check` | Check one file's unsaved text |
+| `GET /dev/api/render` | Render a screen to PNG under simulated device context |
+| `GET /dev/api/events` | Server-Sent Events stream for live reload |
+| `GET /dev/api/resolve-mac` | Resolve a MAC or registration code to that device's screen and params |
+| `POST /dev/api/panel-colors`, `DELETE /dev/api/panel-colors/{panel}` | Set and clear the measured-colour override synced to the device |
+| `GET /dev/api/whoami` | Who the server thinks you are, and whether you can log out |
+
+For scripted or LLM-driven authoring, prefer the [MCP interface](mcp.md),
+which covers the same screen-store operations with a stable tool contract.

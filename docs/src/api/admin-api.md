@@ -39,6 +39,17 @@ Authorization: Bearer mysecrettoken
 
 The comparison is constant-time to avoid timing side-channels.
 
+The same token also admits a request to the [screen editor](../guide/dev-mode.md)
+under `/dev/`, so a script that already holds it needs no separate dev login.
+The editor's own username and password are two more keys in this section:
+
+```yaml
+admin:
+  token: mysecrettoken
+  dev_username: tobi
+  dev_password: a-long-random-string
+```
+
 ---
 
 ## Endpoints

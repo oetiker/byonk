@@ -7,7 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Breaking
+
+- **`byonk dev` is gone. The dev UI is part of `byonk serve` now, and it needs
+  a login.** Dev mode used to be a second way to start the server: `byonk dev`
+  brought up the device simulator alongside everything else, and anyone who
+  could reach the port could use it. That made it awkward to leave running on
+  the machine that actually serves your devices, which is exactly the machine
+  whose screens you want to edit.
+
+  The dev UI is now a permanent part of the normal server, at `/dev/`, behind
+  a username and a password. Set both to enable it:
+
+  ```
+  BYONK_DEV_USERNAME=me
+  BYONK_DEV_PASSWORD=a-long-random-string
+  ```
+
+  or, in `config.yaml`, `admin.dev_username` and `admin.dev_password`; or, in
+  the Home Assistant app, the **Dev UI username** and **Dev UI password**
+  options. The environment wins over `config.yaml`, both halves are required,
+  and a blank value counts as unset. Your admin token is accepted as a bearer
+  credential too, which is what lets a script reach the API without a login.
+
+  Set neither and `/dev/` answers `404 Not Found` — the page, the login form
+  and the API alike — so a server that was never meant to be edited over the
+  web does not advertise an editor.
+
+  **If you run `byonk dev`, run `byonk serve` instead.** In Docker, drop the
+  `dev` argument: `serve` is what the image runs by default, so
+  `docker run … ghcr.io/oetiker/byonk:latest dev` becomes
+  `docker run … ghcr.io/oetiker/byonk:latest`. A container still passing `dev`
+  will fail to start, because the subcommand no longer exists.
+
+  **If you called the dev endpoints directly**, they moved under `/dev/api/`:
+  `/dev/render` is now `/dev/api/render`, and so on for `screens`, `events`,
+  `resolve-mac` and `panel-colors`.
+
 ### New
+
+- **A screen editor in the browser.** The dev UI is no longer just a preview:
+  it is a three-column editor. The screens you can reach are listed on the
+  left, the selected screen's files open as tabs in the middle, and the
+  rendered result sits on the right and updates as you work.
+
+  You can create a screen from a starter, copy any screen — including the
+  built-in ones and anything fetched from git — into a repo you can write to,
+  rename it, and delete it. Every file in a screen is editable, not just the
+  core three, and you can add new ones.
+
+  Your Lua and SVG are checked while you type: `meta.yaml` against its schema,
+  `script.lua` compiled, `screen.svg` compiled as a template with its
+  `{% extends %}` and `{% include %}` chain resolved, so a misspelled include
+  is caught before you save. Errors appear under the editor with their line
+  numbers. The script is compiled but never run, so what a script *does* —
+  a failing request, an API that changed shape — still shows up only in the
+  preview.
+
+  Saving checks that the file has not changed underneath you. If it has —
+  another browser tab, an editor on the server, a git fetch — the save is
+  refused and you are offered a choice between reloading and overwriting,
+  rather than one of the two edits vanishing.
+
+  Editing in place needs a writable screen repo: `local`, `examples`, or one
+  registered with `path:`. The built-in screens and any repo fetched from git
+  stay read-only, so the way to customize one is **Copy** — the same
+  fork-to-edit that previously meant copying directories in a shell.
+
+- **A pop-out preview window.** The preview opens in a window of its own, with
+  **Fit** and **100%** zoom, and follows the editor as you work — useful on a
+  second monitor, and the only comfortable way to look at a 1872×1404 TRMNL X
+  render at its real size.
+
+- **Light and dark colour schemes for the dev UI.** A **System / Light / Dark**
+  control in the toolbar, defaulting to System so it follows your operating
+  system. Your choice is remembered and applies to the pop-out window too.
+
+- **A Byonk entry in the Home Assistant sidebar**, opening the screen editor
+  with no second login — Home Assistant has already authenticated you. It is
+  shown to administrators only. The two Dev UI options are needed only if you
+  also want to reach the editor from outside Home Assistant.
 
 - **Panel recovery for burnt-in screens.** If a TRMNL X keeps showing a faint
   image of something it displayed a long time ago, you can now ask it to clear
@@ -126,6 +205,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default because the noise box stopped at `8.0`. The preview therefore showed
   something the device would not produce. The boxes now start at the values
   the renderer actually uses.
+
+  The dev UI no longer keeps its own copy of those numbers at all: the list of
+  dither algorithms and each one's defaults are served by the renderer itself,
+  so the two cannot drift apart again.
 
 - **A device's dither algorithm now wins over a screen's, instead of losing to
   it silently.** Setting `dither` on a device in `config.yaml` had no effect on

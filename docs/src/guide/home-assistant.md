@@ -172,6 +172,8 @@ has no palette to map.
 | `auth_mode` | `api_key` | Device authentication mode (`api_key` or `ed25519`). |
 | `screen_repo_refresh_interval` | `0` | Seconds between automatic screen repo refreshes (`0` = disabled — refresh only via the **Update screen repos** button, see [Entities](#entities) above). |
 | `screen_repos` | *(empty)* | The screen repo registry: a repeatable list of `handle` / `repo` / `pin` (branch, tag, or commit SHA) / `token` (optional, for private repos) rows — add one row per remote screen repo. |
+| `dev_username` | *(blank)* | Only needed to open the [screen editor](#screen-editor) from outside Home Assistant. The sidebar entry works without it. |
+| `dev_password` | *(blank)* | Password for the above. Leave both blank to keep the external route disabled. |
 
 **This Configuration tab is the source of truth for Byonk's server-global
 configuration** — `auth_mode`, `screen_repo_refresh_interval`, and the screen repo
@@ -209,6 +211,23 @@ seeded where. Edits to `config.yaml` are applied without a restart.
 > `devices.DEFAULT` entry that controls what an un-onboarded or unassigned
 > device displays — set live from the **Byonk Default** device's Screen select
 > (see [Entities](#entities) above), no restart needed.
+
+## Screen editor
+
+The **Byonk** entry in the Home Assistant sidebar opens Byonk's built-in
+screen editor. No extra login is needed — Home Assistant has already
+authenticated you — and the entry is shown to administrators only.
+
+The editor lists your screens, edits their Lua and SVG with syntax checking as
+you type, saves with conflict detection, and previews the rendered result. Here
+the writable repos are `screens/` (the `local` handle) and `examples/`; the
+built-in screens and anything fetched from git are read-only, so fork one with
+**Copy** to customize it. See [Dev Mode](dev-mode.md) for the full tour.
+
+To reach the editor from outside Home Assistant as well, set **Dev UI
+username** and **Dev UI password** in [Settings](#settings) and open
+`http://<host>:3000/dev/`. Leaving either blank keeps that external route
+disabled; the sidebar entry works either way.
 
 ## Screen repo cache persistence
 

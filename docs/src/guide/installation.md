@@ -162,6 +162,8 @@ your-own-screens layers relate to each other.
 | `SCREENS_DIR` | *(embedded)* | Your own writable screen repo (auto-registers as the `local` handle) |
 | `FONTS_DIR` | *(embedded)* | Directory containing font files |
 | `EXAMPLES_DIR` | `<SCREENS_DIR>/../examples` | Where the shipped worked-example screens are seeded (auto-registers as the `examples` handle). Only takes effect once — an existing, non-empty directory is left alone. |
+| `BYONK_DEV_USERNAME` | *(unset)* | Login name for the [screen editor](dev-mode.md) at `/dev/`. Both this and the password must be set, or `/dev/` stays a `404`. |
+| `BYONK_DEV_PASSWORD` | *(unset)* | Password for the above. |
 
 When path variables are not set, Byonk uses embedded assets (no filesystem access).
 

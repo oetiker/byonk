@@ -1329,8 +1329,10 @@ return {
 Must have the same number of entries as the resolved palette (`colors`, above). If it does not,
 the render still succeeds: the value is ignored, the next source in the chain is used instead, and
 a warning is written to the script log. On the authoring path this is visible in the MCP
-`render_screen` tool's `log` field; on `/dev/render` the warning goes only to the server's
-`tracing` output — the dev UI receives raw PNG bytes and has no log surface to show it on.
+`render_screen` tool's `log` field; on `/dev/api/render` the warning goes only to the server's
+`tracing` output. The dev UI does have a console and a problems bar, but neither shows this:
+`/dev/api/render` answers with the PNG and nothing else — it does not carry the script log — so
+the warning never reaches the page.
 
 A script that returns `colors_actual` wins over every other source, including the dev
 colour-tuning popup. The winning source isn't rendered anywhere in the dev UI, but it is visible

@@ -38,3 +38,6 @@ tools/ha-vm/ssh/
 # source tree — never commit them.
 screens/byonk-screens.yaml
 /examples/
+
+# Superpowers SDD working files (specs, plans, per-task briefs and ledger)
+.superpowers/

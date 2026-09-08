@@ -43,6 +43,9 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Check dev editor bundle is not stale
+        run: make editor-check
+
   test:
     name: Test
     runs-on: ubuntu-latest

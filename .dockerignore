@@ -38,3 +38,14 @@ Thumbs.db
 # Development files
 *.md
 !README.md
+
+# ...but docs/src is EMBEDDED INTO THE BINARY at compile time
+# (`#[derive(RustEmbed)] #[folder = "docs/src/"]`, src/assets.rs) and is 20
+# markdown files to 11 images. The blanket rule above would leave the folder
+# present but markdown-free, which compiles perfectly happily and ships a
+# binary whose built-in documentation is empty. Silent, so keep the negation.
+!docs/src/**/*.md
+
+# The committed editor.bundle.js is what the build uses; its 17 MB of
+# node_modules only bloats the build context.
+static/dev/editor/node_modules/

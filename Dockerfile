@@ -5,8 +5,11 @@ RUN apk add --no-cache musl-dev curl
 
 WORKDIR /app
 
-# Copy manifests first for better caching
+# Copy manifests first for better caching. The workspace members are
+# path dependencies, so the workspace cannot resolve without them and the
+# dependency-cache build below would do nothing at all.
 COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
 
 # Create dummy src to cache dependencies
 RUN mkdir src && echo "fn main() {}" > src/main.rs
@@ -15,6 +18,18 @@ RUN rm -rf src
 
 # Copy actual source code
 COPY src ./src
+
+# Everything the crate reads at COMPILE time. `src/api/dev.rs` and
+# `dev_auth.rs` pull the dev UI in with `include_str!`; `src/assets.rs`
+# embeds the rest with `#[derive(RustEmbed)]`. A missing directory here is a
+# compile error, not a missing file at runtime — and `fonts` and `screens`
+# are needed in BOTH stages for that reason.
+COPY static ./static
+COPY screens ./screens
+COPY fonts ./fonts
+COPY docs/src ./docs/src
+COPY byonk-base ./byonk-base
+COPY default-config.yaml ./
 
 # Build the release binary (statically linked)
 RUN cargo build --release

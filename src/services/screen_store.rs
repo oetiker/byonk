@@ -86,11 +86,15 @@ pub enum Severity {
 
 /// One `validate` finding: `location` is the screen-relative file the issue
 /// was found in (e.g. `"script.lua"`), `message` is human-readable detail
-/// (e.g. the mlua/tera/serde_yaml error text).
+/// (e.g. the mlua/tera/serde_yaml error text). `line` is a best-effort
+/// 1-based line number parsed out of `message` by `error_line`; `None` when
+/// the message has no line to report (a missing file, a schema error, or a
+/// message shape `error_line` doesn't recognize).
 #[derive(Debug, Clone)]
 pub struct Issue {
     pub severity: Severity,
     pub location: String,
+    pub line: Option<u32>,
     pub message: String,
 }
 
@@ -100,6 +104,15 @@ pub struct Issue {
 pub struct ValidationReport {
     pub ok: bool,
     pub issues: Vec<Issue>,
+}
+
+/// One entry in `ScreenStore::list_files`'s report: a file's name (relative
+/// to the screen directory), its size, and whether it's text.
+pub struct FileEntry {
+    pub name: String,
+    /// `None` when the file is over `MAX_FILE_BYTES` and was not read.
+    pub size: Option<u64>,
+    pub text: bool,
 }
 
 /// A real device, for a render made on its behalf: its registry identity
@@ -265,23 +278,32 @@ pub struct RenderResult {
     pub svg: Option<String>,
 }
 
-/// Best-effort line-number extraction from an mlua error message shape like
-/// `runtime error: [string "..."]:12: attempt to index a nil value` or
-/// `syntax error: [string "..."]:1: unexpected symbol near <eof>` (both as
-/// wrapped by `ContentError`'s `Display`, e.g. `"Script error: Lua error:
-/// runtime error: [string \"...\"]:12: ..."`). Looks for the first `]:`
-/// marker and reads the digits immediately after it; returns `None` when
-/// the message doesn't have that shape (a non-Lua render failure, or a
-/// Lua message mlua didn't attach a location to).
-fn parse_lua_error_line(message: &str) -> Option<u32> {
-    let idx = message.find("]:")?;
-    let rest = &message[idx + 2..];
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() {
-        None
-    } else {
-        digits.parse().ok()
+/// Best-effort line number from a validator/render-error message. Recognizes
+/// two shapes:
+///
+/// * Lua (mlua), e.g. `runtime error: [string "..."]:12: attempt to index a
+///   nil value` or `syntax error: [string "..."]:1: unexpected symbol near
+///   <eof>` (both as wrapped by `ContentError`'s `Display`, e.g. `"Script
+///   error: Lua error: runtime error: [string \"...\"]:12: ..."`) — looks
+///   for the first `]:` marker and reads the digits immediately after it.
+/// * Tera (pest), e.g. `Failed to parse 'screen.svg'\n --> 3:5\n  |` — looks
+///   for the first ` --> ` marker and reads the digits immediately after it.
+///
+/// Returns `None` when the message has neither shape (a missing file, a
+/// schema error, a non-Lua/Tera render failure, or a Lua message mlua didn't
+/// attach a location to).
+pub fn error_line(message: &str) -> Option<u32> {
+    fn digits_at(message: &str, marker: &str) -> Option<u32> {
+        let idx = message.find(marker)?;
+        let rest = &message[idx + marker.len()..];
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if digits.is_empty() {
+            None
+        } else {
+            digits.parse().ok()
+        }
     }
+    digits_at(message, "]:").or_else(|| digits_at(message, "--> "))
 }
 
 /// Which starter template `create_screen` scaffolds. One variant today;
@@ -920,6 +942,138 @@ impl ScreenStore {
         Ok(())
     }
 
+    /// Run the validator that applies to `file` over `text`. `None` means
+    /// "no check for this kind of file" (an asset like a `.png`, or
+    /// anything else that isn't `meta.yaml`/`*.lua`/`*.svg`). Shared by
+    /// `validate` and `check_text` so the two cannot drift: this function
+    /// (not either caller) is the single source of what "valid" means for a
+    /// screen file.
+    fn check_one(
+        &self,
+        source: &Arc<dyn ScreenRepoSource>,
+        screen_path: &str,
+        file: &str,
+        text: &str,
+    ) -> Option<Result<(), String>> {
+        let name = file.rsplit('/').next().unwrap_or(file);
+        if name == "meta.yaml" {
+            return Some(ScreenMeta::from_yaml(text).map(|_| ()));
+        }
+        if name.ends_with(".lua") {
+            return Some(
+                mlua::Lua::new()
+                    .load(text)
+                    .into_function()
+                    .map(|_| ())
+                    .map_err(|e| e.to_string()),
+            );
+        }
+        if name.ends_with(".svg") {
+            return Some(
+                self.pipeline
+                    .template_service()
+                    .validate_template(text, source, screen_path)
+                    .map_err(|e| e.to_string()),
+            );
+        }
+        None
+    }
+
+    /// Validate `text` as a draft for `file` without it being written to
+    /// disk first — what the editor's "check as you type" needs, since the
+    /// unsaved buffer a user is editing doesn't exist as a file yet. Runs
+    /// the exact same check as `validate` (via `check_one`), just against
+    /// caller-supplied text instead of the on-disk copy; a file kind
+    /// `check_one` has no check for (e.g. a `.png`) always reports `ok`.
+    pub fn check_text(&self, screen_ref: &str, file: &str, text: &str) -> ValidationReport {
+        let bad = |message: String| ValidationReport {
+            ok: false,
+            issues: vec![Issue {
+                severity: Severity::Error,
+                location: file.to_string(),
+                line: None,
+                message,
+            }],
+        };
+        let (handle, screen_path) = match Self::split_ref(screen_ref) {
+            Ok(v) => v,
+            Err(_) => return bad("invalid screen reference".into()),
+        };
+        if safe_rel(file).is_err() {
+            return bad("invalid file name".into());
+        }
+        let loader = self.manager.loader();
+        let Some(source) = loader.source_for(handle) else {
+            return bad(format!("unknown screen repo '{handle}'"));
+        };
+        match self.check_one(&source, screen_path, file, text) {
+            Some(Err(message)) => ValidationReport {
+                ok: false,
+                issues: vec![Issue {
+                    severity: Severity::Error,
+                    location: file.to_string(),
+                    line: error_line(&message),
+                    message,
+                }],
+            },
+            _ => ValidationReport {
+                ok: true,
+                issues: vec![],
+            },
+        }
+    }
+
+    /// List a screen's files (screen-relative names, e.g. `"script.lua"`),
+    /// each annotated with its size and whether it decodes as UTF-8 text.
+    /// The core triple (`meta.yaml`, `script.lua`, `screen.svg`) sorts
+    /// first, in that order; everything else follows alphabetically.
+    /// `NotFound` when the screen resolves to no files at all (unknown
+    /// handle, or an empty/nonexistent screen directory).
+    pub fn list_files(&self, screen_ref: &str) -> Result<Vec<FileEntry>, StoreError> {
+        let (handle, screen_path) = Self::split_ref(screen_ref)?;
+        let loader = self.manager.loader();
+        let source = loader.source_for(handle).ok_or(StoreError::NotFound)?;
+        let prefix = format!("{screen_path}/");
+        let names: Vec<String> = source
+            .screen_files(screen_path)
+            .into_iter()
+            .filter_map(|f| f.strip_prefix(&prefix).map(str::to_string))
+            .collect();
+        if names.is_empty() {
+            return Err(StoreError::NotFound);
+        }
+        let core = ["meta.yaml", "script.lua", "screen.svg"];
+        let mut out: Vec<FileEntry> = names
+            .into_iter()
+            .map(|name| {
+                let (size, text) =
+                    match source.read_limited(&format!("{prefix}{name}"), MAX_FILE_BYTES) {
+                        ReadOutcome::Found(b) => {
+                            (Some(b.len() as u64), std::str::from_utf8(&b).is_ok())
+                        }
+                        ReadOutcome::TooLarge => (None, false),
+                        ReadOutcome::Missing => (Some(0), false),
+                    };
+                FileEntry { name, size, text }
+            })
+            .collect();
+        out.sort_by_key(|f| {
+            let rank = core.iter().position(|c| *c == f.name).unwrap_or(core.len());
+            (rank, f.name.clone())
+        });
+        Ok(out)
+    }
+
+    /// Test hook: re-read the repo directories after a change made directly
+    /// on disk (bypassing `write_file` et al., which already call
+    /// `self.manager.rebuild_loader()` themselves after touching disk).
+    /// Production code never needs this — it exists solely so tests that
+    /// plant a file with `std::fs::write` can make the loader notice it
+    /// without duplicating `ScreenRepoManager`'s wiring in every test.
+    pub fn rebuild(&self) {
+        self.manager.rebuild_loader();
+    }
+
     /// Statically validate one screen: parse `meta.yaml` against its schema,
     /// compile `script.lua` without executing it, and check `screen.svg`
     /// compiles as a Tera template with its `{% extends %}` chain resolving
@@ -938,6 +1092,7 @@ impl ScreenStore {
                     issues: vec![Issue {
                         severity: Severity::Error,
                         location: screen_ref.to_string(),
+                        line: None,
                         message: "invalid screen reference".to_string(),
                     }],
                 }
@@ -950,6 +1105,7 @@ impl ScreenStore {
                 issues: vec![Issue {
                     severity: Severity::Error,
                     location: screen_ref.to_string(),
+                    line: None,
                     message: format!("unknown screen repo '{handle}'"),
                 }],
             };
@@ -957,14 +1113,16 @@ impl ScreenStore {
 
         let mut issues = Vec::new();
 
-        // Read one of the screen's files and run `validator` over it, pushing
-        // an Error `Issue` located at `name` either way: the validator's
-        // message if it rejects the contents, or "file not found" if the file
-        // isn't there at all. Every per-file check below is this same
-        // read -> check -> missing-file shape; keeping it in one place is
-        // what stops the three (soon more) copies from drifting apart on how
-        // a missing file is reported.
-        let mut check_file = |name: &str, validator: &dyn Fn(&str) -> Result<(), String>| {
+        // Read one of the screen's files and run `check_one` over it,
+        // pushing an Error `Issue` located at `name` either way:
+        // `check_one`'s message if it rejects the contents, or "file not
+        // found" if the file isn't there at all. Every per-file check below
+        // is this same read -> check -> missing-file shape; keeping it in
+        // one place is what stops the three (soon more) copies from
+        // drifting apart on how a missing file is reported. `check_one`
+        // itself is shared with `check_text`, so the two cannot drift on
+        // what "valid" means either.
+        let mut check_file = |name: &str| {
             let rel = format!("{screen_path}/{name}");
             let message = match source.read_limited(&rel, MAX_FILE_BYTES) {
                 ReadOutcome::Missing => "file not found".to_string(),
@@ -976,41 +1134,25 @@ impl ScreenStore {
                     // Previously this surfaced as "file not found", because
                     // `read_string` collapsed a UTF-8 failure into `None`.
                     Err(_) => "file is not valid UTF-8".to_string(),
-                    Ok(text) => match validator(&text) {
-                        Ok(()) => return,
-                        Err(message) => message,
+                    Ok(text) => match self.check_one(&source, screen_path, name, &text) {
+                        None | Some(Ok(())) => return,
+                        Some(Err(message)) => message,
                     },
                 },
             };
             issues.push(Issue {
                 severity: Severity::Error,
                 location: name.to_string(),
+                line: error_line(&message),
                 message,
             });
         };
 
-        // meta.yaml — schema check only.
-        check_file("meta.yaml", &|text| ScreenMeta::from_yaml(text).map(|_| ()));
-
-        // script.lua — compile without executing.
-        check_file("script.lua", &|text| {
-            mlua::Lua::new()
-                .load(text)
-                .into_function()
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        });
-
-        // screen.svg — Tera compile + extends-chain resolution, mirroring
-        // the registration phase real rendering runs (see
-        // `TemplateService::validate_template`'s doc comment for what this
-        // does and doesn't catch).
-        check_file("screen.svg", &|text| {
-            self.pipeline
-                .template_service()
-                .validate_template(text, &source, screen_path)
-                .map_err(|e| e.to_string())
-        });
+        // meta.yaml, script.lua, screen.svg — same three checks as before,
+        // now dispatched through `check_one` by filename.
+        check_file("meta.yaml");
+        check_file("script.lua");
+        check_file("screen.svg");
 
         let ok = !issues.iter().any(|i| matches!(i.severity, Severity::Error));
         ValidationReport { ok, issues }
@@ -1184,7 +1326,7 @@ impl ScreenStore {
                 return RenderResult {
                     log,
                     error: Some(RenderError {
-                        line: parse_lua_error_line(&message),
+                        line: error_line(&message),
                         message,
                     }),
                     ..empty()
@@ -2859,20 +3001,20 @@ mod tests {
     }
 
     #[test]
-    fn parse_lua_error_line_extracts_runtime_error_line() {
+    fn error_line_extracts_runtime_error_line() {
         let msg = "Script error: Lua error: runtime error: [string \"...\"]:12: attempt to index a nil value (local 'y')\nstack traceback:\n\t[C]: in metamethod 'index'";
-        assert_eq!(parse_lua_error_line(msg), Some(12));
+        assert_eq!(error_line(msg), Some(12));
     }
 
     #[test]
-    fn parse_lua_error_line_extracts_syntax_error_line() {
+    fn error_line_extracts_syntax_error_line() {
         let msg = "Script error: Lua error: syntax error: [string \"...\"]:1: unexpected symbol near <eof>";
-        assert_eq!(parse_lua_error_line(msg), Some(1));
+        assert_eq!(error_line(msg), Some(1));
     }
 
     #[test]
-    fn parse_lua_error_line_none_when_unparseable() {
-        assert_eq!(parse_lua_error_line("Screen 'x/y' not found"), None);
+    fn error_line_none_when_unparseable() {
+        assert_eq!(error_line("Screen 'x/y' not found"), None);
     }
 
     /// Decode a PNG's `PLTE` chunk back into RGB triples. `render_png_from_svg`

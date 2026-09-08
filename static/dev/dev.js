@@ -280,6 +280,28 @@ function hasDirtyBuffers() {
   return [...state.open.values()].some((e) => e.dirty);
 }
 
+// The single place that answers "are there unsaved changes?" in the UI. The
+// Save button must be enabled exactly when clicking it would write
+// something — it saves *every* dirty buffer, not just the active one — and
+// the `#current-ref` dot and the beforeunload guard use the same predicate.
+function syncDirtyIndicators() {
+  const anyDirty = hasDirtyBuffers();
+  document.getElementById("save-btn").disabled = !state.writable || !anyDirty;
+  window.onbeforeunload = anyDirty ? () => true : null;
+  document.getElementById("current-ref").classList.toggle("dirty", anyDirty);
+}
+
+// Destroys every open editor and its buffer. Only called where the user has
+// already agreed to lose the edits: a screen switch or a rename confirmed
+// through `confirmDiscard`, or a screen deletion.
+function discardBuffers() {
+  for (const e of state.open.values()) e.editor.destroy();
+  state.open.clear();
+  document.getElementById("editor-host").innerHTML = "";
+  state.active = null;
+  syncDirtyIndicators();
+}
+
 function confirmDiscard(onConfirm) {
   const p = document.getElementById("problems");
   p.innerHTML = '<span class="err">Unsaved changes.</span> ';
@@ -300,11 +322,8 @@ async function selectScreen(ref) {
 }
 
 async function doSelectScreen(ref) {
-  for (const e of state.open.values()) e.editor.destroy();
-  state.open.clear();
-  document.getElementById("editor-host").innerHTML = "";
-  state.active = null;
-  window.onbeforeunload = null;
+  discardBuffers();
+  clearFailure();
 
   state.ref = ref;
   const repo = state.repos.find((r) => ref.startsWith(r.handle + "/"));
@@ -313,16 +332,16 @@ async function doSelectScreen(ref) {
   try {
     state.files = await api.files(ref);
   } catch (e) {
-    consoleError("Failed to load files: " + e.message);
+    // Not the console: the `render()` at the end of this function clears it.
+    showFailure("Failed to load files: " + e.message);
     state.files = [];
   }
 
   document.getElementById("current-ref").textContent = ref;
-  document.getElementById("current-ref").classList.remove("dirty");
   document.getElementById("copy-btn").disabled = false;
   document.getElementById("rename-btn").disabled = !state.writable;
   document.getElementById("delete-btn").disabled = !state.writable;
-  document.getElementById("save-btn").disabled = true;
+  syncDirtyIndicators();
   localStorage.setItem("byonkDevRef", ref);
 
   renderScreenList();
@@ -351,7 +370,8 @@ async function openFile(name) {
     try {
       ({ text, etag } = await api.readFile(state.ref, name));
     } catch (e) {
-      consoleError(`Failed to open ${name}: ` + e.message);
+      // Not the console: `doSelectScreen`'s `render()` clears it right after.
+      showFailure(`Failed to open ${name}: ` + e.message);
       return;
     }
     const host = document.createElement("div");
@@ -389,8 +409,7 @@ function closeTab(name) {
     } else {
       renderTabs();
     }
-    document.getElementById("save-btn").disabled = !state.writable || !hasDirtyBuffers();
-    window.onbeforeunload = hasDirtyBuffers() ? () => true : null;
+    syncDirtyIndicators();
   };
   if (e.dirty) {
     confirmDiscard(doClose);
@@ -442,10 +461,7 @@ function markDirty(name, dirty) {
   if (!e || e.dirty === dirty) return;
   e.dirty = dirty;
   renderTabs();
-  const anyDirty = hasDirtyBuffers();
-  document.getElementById("save-btn").disabled = !state.writable || !anyDirty;
-  window.onbeforeunload = anyDirty ? () => true : null;
-  document.getElementById("current-ref").classList.toggle("dirty", anyDirty);
+  syncDirtyIndicators();
 }
 
 let checkTimer = null;
@@ -464,43 +480,124 @@ function scheduleCheck(name) {
   }, 400);
 }
 
-async function saveFile(name) {
+// --- failures that must survive the next repaint -------------------------
+//
+// A failed write (read-only repo, a 409 race, a 5xx, a dropped connection)
+// has to stay in front of the user until they do something about it. Neither
+// existing region can hold it: `#console` is emptied by `consoleClear()` at
+// the top of every `render()`, and `render()` runs on every SSE `file-change`
+// and `refresh`; `#problems` is overwritten 400 ms after the next keystroke
+// by `scheduleCheck`'s `showProblems`, and also carries the conflict banner
+// and the discard prompt. So failures get a fourth, single-purpose region
+// that only the user's dismiss button or the next successful write clears.
+
+function showFailure(msg) {
+  // Unhide before filling: the bar is a live region, and an assistive
+  // technology only announces text that changes while the region is visible.
+  document.getElementById("failure-bar").hidden = false;
+  document.getElementById("failure-text").textContent = msg;
+  consoleError(msg); // keep the timestamped trail in the console as well
+}
+
+function clearFailure() {
+  document.getElementById("failure-bar").hidden = true;
+  document.getElementById("failure-text").textContent = "";
+}
+
+document.getElementById("failure-dismiss").addEventListener("click", clearFailure);
+
+// --- saving ---------------------------------------------------------------
+
+// Writes one buffer. Returns true only when the bytes really reached disk;
+// every false return has already put a message on screen (the failure bar,
+// or the conflict banner for a 412).
+async function writeBuffer(name) {
   const e = state.open.get(name);
-  if (!e || !state.writable) return;
+  if (!e) return false;
+  if (!state.writable) {
+    // Reachable via the editor's Cmd/Ctrl-S, which fires even in a read-only
+    // buffer. Silence here would be one more invisible write failure.
+    showFailure(`${state.ref} is read-only — ${name} was not saved.`);
+    return false;
+  }
   const text = e.editor.getValue();
   let r;
   try {
     r = await api.writeFile(state.ref, name, text, e.etag);
   } catch (err) {
-    consoleError("Save failed: " + err.message);
-    return;
+    showFailure(`Saving ${name} failed: ` + err.message);
+    return false;
   }
-  if (r.conflict) { showConflict(name); return; }
+  if (r.conflict) { showConflict(name); return false; }
   e.etag = r.etag; e.saved = text; markDirty(name, false);
+  clearFailure();
+  return true;
+}
+
+// Runs after a write actually succeeded — never before, so "✔ all files
+// valid" can never appear over a buffer that failed to save.
+async function afterWrite() {
   try {
     const report = await api.validate(state.ref);
     showProblems(report.issues, report.ok);
   } catch (err) {
-    consoleError("Validate failed: " + err.message);
+    showFailure("Validate failed: " + err.message);
   }
   render();
+}
+
+// Single-file save: the editor's Cmd/Ctrl-S and the conflict banner's
+// Overwrite, both of which name the file they act on.
+async function saveFile(name) {
+  if (await writeBuffer(name)) await afterWrite();
+}
+
+// The toolbar's Save button. It is enabled whenever *any* buffer is dirty,
+// so it has to save all of them: saving only `state.active` re-wrote an
+// unchanged file, bumped its etag and painted "all files valid" while the
+// dirty buffer stayed on the floor.
+async function saveAllDirty() {
+  const names = [...state.open].filter(([, e]) => e.dirty).map(([n]) => n);
+  if (!names.length) return;
+  for (const name of names) {
+    // Stop at the first refusal: its banner or failure bar needs the user's
+    // decision before the remaining buffers follow it to disk.
+    if (!(await writeBuffer(name))) return;
+  }
+  await afterWrite();
 }
 
 function showConflict(name) {
   const p = document.getElementById("problems");
   p.innerHTML = `<span class="err">${escapeHtml(name)} changed on disk.</span> `;
   const reload = Object.assign(document.createElement("button"), { textContent: "Reload" });
+  // Both handlers are async and both can fail — a dropped connection, or the
+  // 401 path, which throws after starting the redirect. Without the catch
+  // the click was an unhandled rejection and the user saw nothing happen.
+  // The buffer can also be gone by now: the tab is still closable while the
+  // banner is up.
   reload.onclick = async () => {
-    const f = await api.readFile(state.ref, name);
     const e = state.open.get(name);
-    e.editor.setValue(f.text); e.etag = f.etag; e.saved = f.text;
-    markDirty(name, false); showProblems([]);
+    if (!e) { showProblems([]); return; }
+    try {
+      const f = await api.readFile(state.ref, name);
+      e.editor.setValue(f.text); e.etag = f.etag; e.saved = f.text;
+      markDirty(name, false); showProblems([]);
+    } catch (err) {
+      showFailure(`Reloading ${name} failed: ` + err.message);
+    }
   };
   const over = Object.assign(document.createElement("button"), { textContent: "Overwrite" });
   over.onclick = async () => {
-    const f = await api.readFile(state.ref, name);
-    state.open.get(name).etag = f.etag;
-    saveFile(name);
+    const e = state.open.get(name);
+    if (!e) { showProblems([]); return; }
+    try {
+      const f = await api.readFile(state.ref, name);
+      e.etag = f.etag;
+      await saveFile(name);
+    } catch (err) {
+      showFailure(`Overwriting ${name} failed: ` + err.message);
+    }
   };
   p.append(reload, " ", over);
 }
@@ -529,6 +626,11 @@ function showInline(mode, opts = {}) {
   inlineRepo.hidden = !showRepo;
   const showName = mode !== "delete";
   inlineName.hidden = !showName;
+  // `hidden` does not exempt a control from constraint validation: leaving
+  // `required` set on the hidden, empty name input made the Delete form
+  // unsubmittable (the browser refuses, then cannot focus the field to say
+  // why). The flag has to track visibility.
+  inlineName.required = showName;
 
   if (showRepo) {
     inlineRepo.innerHTML = state.repos
@@ -548,11 +650,27 @@ function hideInline() {
 
 document.getElementById("inline-cancel").addEventListener("click", hideInline);
 
-inlineForm.addEventListener("submit", async (e) => {
+inlineForm.addEventListener("submit", (e) => {
   e.preventDefault();
   const mode = inlineMode;
   const repoHandle = inlineRepo.value;
   const name = inlineName.value.trim();
+  // A rename moves the screen directory out from under every open buffer:
+  // the moment the server returns, the ref those buffers were read from no
+  // longer exists, so an unsaved edit becomes unsavable (every later PUT
+  // 404s) and copy-paste is the only way out. Ask *before* the rename, while
+  // the old ref is still there to save into. `selectScreen`'s own check
+  // fires too late — after the rename has already happened.
+  if (mode === "rename" && hasDirtyBuffers()) {
+    confirmDiscard(() => runInline(mode, repoHandle, name));
+    return;
+  }
+  runInline(mode, repoHandle, name);
+});
+
+// Split out of the submit listener so the rename path can also reach it from
+// the discard prompt's callback. Handles its own errors; never rejects.
+async function runInline(mode, repoHandle, name) {
   try {
     if (mode === "new") {
       const r = await api.create(repoHandle, name);
@@ -567,38 +685,51 @@ inlineForm.addEventListener("submit", async (e) => {
     } else if (mode === "rename") {
       const r = await api.rename(state.ref, name);
       hideInline();
+      // Only now that the rename has actually happened do the old ref's
+      // buffers become unsavable — if `api.rename` had thrown, they would
+      // still belong to a live ref and must survive. `doSelectScreen`, not
+      // `selectScreen`: the buffers are gone so there is nothing left to
+      // confirm, and it must not no-op if `r.ref` came back unchanged.
+      discardBuffers();
       await loadScreens();
-      await selectScreen(r.ref);
+      await doSelectScreen(r.ref);
     } else if (mode === "delete") {
       await api.deleteScreen(state.ref);
       hideInline();
-      for (const en of state.open.values()) en.editor.destroy();
-      state.open.clear();
-      document.getElementById("editor-host").innerHTML = "";
       state.ref = null;
-      state.active = null;
-      window.onbeforeunload = null;
+      state.writable = false;
+      // The file list belongs to the screen that just stopped existing.
+      // Leaving it behind made `renderTabs()` redraw the dead screen's tabs,
+      // and clicking one issued `./api/file?ref=null&…`.
+      state.files = [];
+      discardBuffers();
       document.getElementById("current-ref").textContent = "no screen";
-      document.getElementById("current-ref").classList.remove("dirty");
       document.getElementById("copy-btn").disabled = true;
       document.getElementById("rename-btn").disabled = true;
       document.getElementById("delete-btn").disabled = true;
-      document.getElementById("save-btn").disabled = true;
       localStorage.removeItem("byonkDevRef");
       renderTabs();
       showProblems([]);
       await loadScreens();
     } else if (mode === "newfile") {
-      await api.writeFile(state.ref, name, "", "*");
+      // `If-Match: *` means "create, and fail with 412 if it already
+      // exists" (src/api/dev_files.rs), so a name collision comes back as a
+      // conflict rather than a throw — without this it silently opened the
+      // existing file as if it had just been created.
+      const w = await api.writeFile(state.ref, name, "", "*");
+      if (w.conflict) { showFailure(`${name} already exists.`); return; }
       hideInline();
+      clearFailure();
       state.files = await api.files(state.ref);
       renderTabs();
       await openFile(name);
     }
   } catch (err) {
-    showProblems([{ location: name || "", message: err.message }]);
+    // These are all write-path failures; `showProblems` would lose them to
+    // the next keystroke's check.
+    showFailure(`${mode}${name ? " " + name : ""} failed: ` + err.message);
   }
-});
+}
 
 document.getElementById("new-btn").addEventListener("click", () => showInline("new", { title: "New screen" }));
 
@@ -625,7 +756,7 @@ function showNewFileForm() {
 }
 
 document.getElementById("save-btn").addEventListener("click", () => {
-  if (state.active) saveFile(state.active);
+  saveAllDirty();
 });
 
 // --- render ---------------------------------------------------------------
@@ -713,7 +844,8 @@ function connectSSE() {
           entry.saved = f.text;
           markDirty(name, false);
         } catch (e) {
-          consoleError(`Failed to reload ${name}: ` + e.message);
+          // Not the console: the `render()` below clears it immediately.
+          showFailure(`Failed to reload ${name}: ` + e.message);
         }
       }
     }

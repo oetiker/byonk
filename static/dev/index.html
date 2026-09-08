@@ -37,6 +37,14 @@
   <section class="editor">
     <div id="tabs" class="tabs"></div>
     <div id="editor-host"></div>
+    <!-- Sticky failure bar. `#problems` below is repainted by the next
+         keystroke's check and `#console` is cleared by every render, so a
+         failure the user must act on gets its own region, dismissed only by
+         the user or by the next successful write. -->
+    <div id="failure-bar" class="failure-bar" role="alert" hidden>
+      <span id="failure-text"></span>
+      <button type="button" id="failure-dismiss" class="failure-dismiss" aria-label="Dismiss">&times;</button>
+    </div>
     <div id="problems" class="problems"></div>
   </section>
   <section class="preview">

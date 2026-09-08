@@ -79,6 +79,41 @@ const state = {
 };
 window.byonkDev = { state, api, render: null };
 
+// --- localStorage, guarded ------------------------------------------------
+//
+// Touching localStorage is not safe on this page. With "block all site data"
+// set (and in Safari's stricter modes) the ACCESSOR ITSELF throws -- note
+// that Chrome's and Firefox's private windows do not: they hand out ephemeral
+// storage, so this is not reproducible by opening an incognito window.
+//
+// An unguarded throw here is not a degraded feature, it aborts whatever was
+// half-done around it: `doSelectScreen` would have thrown after setting
+// `state.ref` but before painting the tabs, the editor and the preview,
+// leaving no way to reach the editor at all, and `init` would have thrown
+// before `connectSSE()` and `setupLens()`.
+//
+// Losing the value is fine. Every caller must work without it.
+
+function safeGet(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch (e) {
+    return null;
+  }
+}
+
+function safeSet(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch (e) { /* the value just will not survive this page */ }
+}
+
+function safeRemove(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch (e) { /* nothing was stored, or it cannot be reached */ }
+}
+
 // --- colour scheme --------------------------------------------------------
 //
 // Three states, not a toggle: "system" (the default), "light" and "dark". A
@@ -96,21 +131,18 @@ window.byonkDev = { state, api, render: null };
 const THEME_KEY = "byonk-dev-theme";
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
-// Every localStorage access here is guarded: a private window or blocked
-// site data makes the accessor itself throw, and the page must still render.
+// Anything that is not exactly "light" or "dark" -- including a missing or
+// unreadable value -- means System, so the page renders correctly whether
+// storage is empty or unreachable.
 function readThemeChoice() {
-  try {
-    const v = localStorage.getItem(THEME_KEY);
-    if (v === "light" || v === "dark") return v;
-  } catch (e) { /* fall through to the default */ }
-  return "system";
+  const v = safeGet(THEME_KEY);
+  return v === "light" || v === "dark" ? v : "system";
 }
 
+// A choice that cannot be persisted still applies for this page's lifetime.
 function storeThemeChoice(choice) {
-  try {
-    if (choice === "system") localStorage.removeItem(THEME_KEY);
-    else localStorage.setItem(THEME_KEY, choice);
-  } catch (e) { /* the choice still applies for this page's lifetime */ }
+  if (choice === "system") safeRemove(THEME_KEY);
+  else safeSet(THEME_KEY, choice);
 }
 
 let themeChoice = readThemeChoice();
@@ -412,7 +444,7 @@ async function doSelectScreen(ref) {
   document.getElementById("rename-btn").disabled = !state.writable;
   document.getElementById("delete-btn").disabled = !state.writable;
   syncDirtyIndicators();
-  localStorage.setItem("byonkDevRef", ref);
+  safeSet("byonkDevRef", ref);
 
   renderScreenList();
   renderTabs();
@@ -780,7 +812,7 @@ async function runInline(mode, repoHandle, name) {
       document.getElementById("copy-btn").disabled = true;
       document.getElementById("rename-btn").disabled = true;
       document.getElementById("delete-btn").disabled = true;
-      localStorage.removeItem("byonkDevRef");
+      safeRemove("byonkDevRef");
       renderTabs();
       showProblems([]);
       await loadScreens();
@@ -941,7 +973,7 @@ async function init() {
 
   await loadScreens();
 
-  const saved = localStorage.getItem("byonkDevRef");
+  const saved = safeGet("byonkDevRef");
   if (saved && (state.screens.screens || []).some((s) => s.name === saved)) {
     await selectScreen(saved);
   }

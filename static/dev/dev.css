@@ -43,7 +43,10 @@
 
     /* The product accent. `--accent-color` is the line/dot/focus colour and
        must stay legible AS TEXT on --panel-bg; `--accent-bg` is the same red
-       used as a filled background and must carry --on-accent at 4.5:1. */
+       used as a filled background, and it must carry --on-accent at 4.5:1.
+       The two hold the SAME red here and DIFFERENT reds in the dark scheme
+       (#e94560 is too light to carry white), so all three are restated
+       explicitly in both dark blocks -- never inherited from here. */
     --accent-color: #d51938;
     --accent-bg: #d51938;
     --on-accent: #ffffff;
@@ -107,7 +110,12 @@
         --text-color: #eee;
         --text-muted: #97a3bd;
 
+        /* One red in a dark view: the filled accent is the same #e94560 as
+           the lines and dots. White on it is only 3.83:1, so the text laid
+           on it is the near-black the status badges already use (4.94:1). */
         --accent-color: #e94560;
+        --accent-bg: #e94560;
+        --on-accent: #08111f;
 
         --success-color: #4ade80;
         --error-color: #f87171;
@@ -144,6 +152,8 @@
     --text-muted: #97a3bd;
 
     --accent-color: #e94560;
+    --accent-bg: #e94560;
+    --on-accent: #08111f;
 
     --success-color: #4ade80;
     --error-color: #f87171;

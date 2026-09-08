@@ -79,9 +79,12 @@ scripts and SVG templates with syntax checking as you type, save with
 conflict detection (so two open tabs can't silently overwrite each other's
 changes), and see a live preview of the rendered screen.
 
-Editing only works in **writable** screen repos — `local` and any repo you
-mark writable. The built-in and remote screen repos are read-only: you can
-browse and copy their screens, but not edit them in place.
+Editing only works in the **writable** screen repos: `local` (your own
+config folder) and `examples`, both seeded and made writable automatically —
+no configuration needed. The built-in `byonk-builtin` screens and any repo
+added through the screen repo registry above (fetched from git) are
+read-only: you can browse and copy their screens, but not edit them in
+place.
 
 ### Opening the editor from outside Home Assistant
 

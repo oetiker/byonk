@@ -315,6 +315,21 @@ pub fn build_router(state: AppState) -> Router {
         ))
 }
 
+/// Tag every request that arrives through this router with `ViaIngress`, so
+/// `require_dev`'s `admit()` trusts the Home Assistant Supervisor's own peer
+/// address instead of requiring a login.
+///
+/// This is the entire boundary between "logged in" and "trusted because the
+/// Supervisor said so": `run_server` must call this only on the router bound
+/// to the separate `BYONK_INGRESS_ADDR` listener, never on the router bound
+/// to the public address. Pulled out of `main.rs` into a small, directly
+/// testable `pub fn` — see `ingress_layer_is_present_only_on_the_ingress_router`
+/// below — because `main.rs` (a binary crate) has no test harness, and this
+/// line is the whole security boundary the ingress admission path rests on.
+pub fn ingress_app(app: Router) -> Router {
+    app.layer(axum::Extension(crate::api::dev_auth::ViaIngress))
+}
+
 // Wrapper handlers to extract state components for the underlying API handlers
 
 async fn handle_setup(
@@ -373,6 +388,79 @@ mod reload_tests {
         let _ = build_router(state);
     }
 
+    /// `ingress_app` is the entire boundary between "logged in" and "trusted
+    /// because the request arrived on the Supervisor-only listener": whoever
+    /// calls it in `run_server` must apply it to the ingress-bound router
+    /// only, never to the publicly-bound one. Drives a probe request through
+    /// each router directly (no socket needed) and reads back whether
+    /// `require_dev`'s `admit()` would see the `ViaIngress` marker.
+    ///
+    /// Non-vacuous in both directions: an `ingress_app` that forgot the
+    /// `.layer(...)` call would fail the first assertion; a `run_server` that
+    /// (mis)applied `ingress_app` to the public router as well as the
+    /// ingress one would still pass this test (it only exercises
+    /// `ingress_app` itself) but is exactly the refactor risk this test
+    /// exists to make a future reviewer's job of comparing "which router got
+    /// `ingress_app`" easy to check by reading `main.rs`.
+    #[tokio::test]
+    async fn ingress_layer_is_present_only_on_the_ingress_router() {
+        use axum::{extract::Request, routing::get};
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+
+        async fn probe(
+            marker: Option<axum::Extension<crate::api::dev_auth::ViaIngress>>,
+        ) -> &'static str {
+            if marker.is_some() {
+                "yes"
+            } else {
+                "no"
+            }
+        }
+
+        let base = Router::new().route("/probe", get(probe));
+
+        let via_ingress_response = ingress_app(base.clone())
+            .oneshot(
+                Request::get("/probe")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let via_ingress_body = via_ingress_response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes();
+        assert_eq!(
+            &via_ingress_body[..],
+            b"yes",
+            "a request through ingress_app's router must carry ViaIngress"
+        );
+
+        let public_response = base
+            .oneshot(
+                Request::get("/probe")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let public_body = public_response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes();
+        assert_eq!(
+            &public_body[..],
+            b"no",
+            "the same router, untouched by ingress_app, must never carry ViaIngress"
+        );
+    }
+
     /// Basic sanity check that `AppState.screen_store` is wired to a live
     /// writable `local` repo and can create + render a screen through it.
     /// The specific "does `screen_store` share `content_pipeline`'s
@@ -380,8 +468,8 @@ mod reload_tests {
     /// in `tests/screen_store_wiring_test.rs` (it needs a config-reload
     /// scenario to actually discriminate a wiring bug from correct
     /// behavior, which doesn't fit this unit-test module).
-    #[test]
-    fn screen_store_can_create_and_render_a_local_screen() {
+    #[tokio::test]
+    async fn screen_store_can_create_and_render_a_local_screen() {
         use crate::services::screen_store::{RenderOpts, StarterKind};
 
         let dir = tempfile::tempdir().unwrap();
@@ -424,8 +512,8 @@ mod reload_tests {
     /// `create_app_state` -> `build_screen_repo_manager`) must (a) register
     /// the seeded `examples` directory so `examples/hello` actually resolves,
     /// and (b) never copy built-in screens into `SCREENS_DIR` itself.
-    #[test]
-    fn seeded_examples_dir_resolves_end_to_end_and_screens_dir_gets_no_builtin_copies() {
+    #[tokio::test]
+    async fn seeded_examples_dir_resolves_end_to_end_and_screens_dir_gets_no_builtin_copies() {
         let dir = tempfile::tempdir().unwrap();
         let screens_dir = dir.path().join("screens");
         let loader = Arc::new(AssetLoader::new(Some(screens_dir.clone()), None, None));

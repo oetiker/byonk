@@ -894,6 +894,8 @@ async fn run_server() -> anyhow::Result<()> {
 
     if state.file_watcher.is_active() {
         tracing::info!("File watcher active for live reload");
+    } else {
+        tracing::warn!("File watcher not active - set SCREENS_DIR to enable live reload");
     }
 
     // In add-on mode byonk owns its Home Assistant integration: write it into
@@ -959,9 +961,7 @@ async fn run_server() -> anyhow::Result<()> {
     // instead of requiring a login. Only opened when the add-on sets
     // `BYONK_INGRESS_ADDR`; standalone/Docker runs never bind it.
     if let Ok(ingress_addr) = std::env::var("BYONK_INGRESS_ADDR") {
-        let ingress_app = app
-            .clone()
-            .layer(axum::Extension(byonk::api::dev_auth::ViaIngress));
+        let ingress_app = server::ingress_app(app.clone());
         let l = tokio::net::TcpListener::bind(&ingress_addr).await?;
         tracing::info!(addr = %ingress_addr, "Byonk ingress listener");
         tokio::spawn(async move {

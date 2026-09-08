@@ -33,24 +33,7 @@ impl FileWatcher {
         let (sender, _) = broadcast::channel(16);
 
         let (watcher, active) = if let Some(path) = watch_path {
-            if !path.exists() {
-                tracing::debug!(path = %path.display(), "Watch path does not exist");
-                (None, false)
-            } else if tokio::runtime::Handle::try_current().is_err() {
-                // `start_watcher` spawns its debounce task onto the current
-                // Tokio runtime. Production always constructs `AppState`
-                // (and so this watcher) from inside `#[tokio::main]`, but a
-                // synchronous `#[test]` that builds `AppState` directly
-                // (e.g. `server::reload_tests`) has no runtime to spawn
-                // onto — `tokio::spawn` would panic there. Treat that case
-                // as inactive rather than panicking; it never happens in the
-                // real server.
-                tracing::debug!(
-                    path = %path.display(),
-                    "No Tokio runtime available, file watcher disabled"
-                );
-                (None, false)
-            } else {
+            if path.exists() {
                 match Self::start_watcher(&path, sender.clone()) {
                     Ok(watcher) => {
                         tracing::info!(path = %path.display(), "File watcher started");
@@ -61,6 +44,9 @@ impl FileWatcher {
                         (None, false)
                     }
                 }
+            } else {
+                tracing::debug!(path = %path.display(), "Watch path does not exist");
+                (None, false)
             }
         } else {
             tracing::debug!("No watch path configured, file watching disabled");

@@ -125,12 +125,16 @@ impl From<ValidationReport> for ReportOut {
 }
 
 async fn repos(State(s): State<AppState>) -> Result<Json<Vec<RepoOut>>, ApiError> {
-    let store = s.screen_store.clone();
     let loader = s.screen_repo_manager.loader();
+    // Enumerate the registry, not the screens inside it: a repo that holds no
+    // screens yet is still somewhere the user can create one. `local` on a
+    // fresh install is exactly that case, and it is registered from
+    // `screens_dir` rather than from `screen_repos`, so the config map below
+    // does not cover it either.
     let mut handles: Vec<String> = s.config.load().screen_repos.keys().cloned().collect();
-    for e in blocking(move || store.list_screens()).await? {
-        if !handles.contains(&e.handle) {
-            handles.push(e.handle);
+    for h in loader.handles() {
+        if !handles.contains(&h) {
+            handles.push(h);
         }
     }
     let mut out: Vec<RepoOut> = handles

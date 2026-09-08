@@ -332,3 +332,35 @@ async fn routes_are_gated() {
         StatusCode::UNAUTHORIZED
     );
 }
+
+/// A writable screen repo that exists but holds no screens must still be
+/// listed. On a fresh install `local` is exactly that, and if it is missing
+/// from `/dev/api/repos` the New and Copy dialogs offer no way to put a
+/// screen into the user's own repo — the first screen can only land in
+/// `examples`.
+#[tokio::test]
+async fn empty_writable_repo_is_still_listed() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = TestApp::new_dev_with_empty_local(dir.path(), "secret");
+
+    let repos = app
+        .get_with_headers("/dev/api/repos", &[AUTH])
+        .await
+        .json::<serde_json::Value>();
+
+    let local = repos
+        .as_array()
+        .expect("repos is an array")
+        .iter()
+        .find(|x| x["handle"] == "local");
+
+    assert!(
+        local.is_some(),
+        "the empty but registered `local` repo is missing from {repos}"
+    );
+    assert_eq!(
+        local.unwrap()["writable"],
+        true,
+        "`local` must be listed as writable so New/Copy can target it"
+    );
+}

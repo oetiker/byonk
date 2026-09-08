@@ -237,6 +237,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Your own screen repo now appears in the editor before it holds any
+  screens.** The dev editor listed a repo only if it already contained a
+  screen, so on a fresh install `local` — the repo your own screens belong in —
+  was missing from the **New** and **Copy** dialogs entirely. The only place
+  you could put a first screen was `examples`. Repos are now listed because
+  they exist, not because something is already in them.
 - **The error screen now wraps long messages.** The whole message was drawn as
   a single centred line of text, which ran off both edges of the panel and
   showed only its middle. Lua errors were worst affected: they arrive as a

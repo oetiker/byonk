@@ -333,6 +333,41 @@ impl TestApp {
         }
     }
 
+    /// A dev-authenticated app whose writable `local` repo is registered but
+    /// **empty** — the state of a fresh install before the first screen is
+    /// created. Mirrors production wiring: `local` comes from `screens_dir`
+    /// via `build_disk_sources`, NOT from a `screen_repos` config entry, so
+    /// this is the one repo whose visibility cannot rely on the config map.
+    pub fn new_dev_with_empty_local(dir: &std::path::Path, token: &str) -> Self {
+        let screens_dir = dir.join("screens");
+        std::fs::create_dir_all(&screens_dir).expect("create screens dir");
+
+        let config_path = dir.join("config.yaml");
+        std::fs::write(
+            &config_path,
+            format!("admin:\n  token: {token}\ndevices:\n  DEFAULT:\n    screen: byonk-builtin/default\n"),
+        )
+        .expect("write config.yaml");
+
+        let asset_loader = Arc::new(AssetLoader::new(Some(screens_dir), None, Some(config_path)));
+        // Writes `byonk-screens.yaml` into `screens_dir`, which is what makes
+        // the `local` handle register at all. It stays screen-less.
+        asset_loader
+            .seed_if_configured()
+            .expect("seed local manifest");
+        let config = AppConfig::load_from_assets(&asset_loader).expect("load config");
+        let state = create_app_state_with_config(asset_loader, config).expect("create state");
+        let registry = state.registry.clone();
+        let content_cache = state.content_cache.clone();
+        let recovery = state.recovery.clone();
+        Self {
+            router: build_router(state),
+            registry,
+            content_cache,
+            recovery,
+        }
+    }
+
     /// Copy `gphoto` and `swiss-departure-board` from the embedded `examples`
     /// set (Task 10) into `dir/examples`, plus a `byonk-screens.yaml`
     /// manifest, so `dir/examples` auto-registers as the writable `examples`

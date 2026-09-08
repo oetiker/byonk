@@ -1,172 +1,91 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Byonk Dev Mode</title>
-    <link rel="stylesheet" href="/dev/dev.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Byonk Dev</title>
+<link rel="stylesheet" href="dev.css">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>Byonk Dev Mode</h1>
-            <div class="status">
-                <span id="watch-status" class="status-badge disconnected">File Watch: Connecting...</span>
-            </div>
-        </header>
-
-        <main>
-            <div class="panel config-panel">
-                <h2>Configuration</h2>
-
-                <div class="form-group">
-                    <label for="screen-select">Screen</label>
-                    <select id="screen-select">
-                        <option value="">Loading...</option>
-                    </select>
-                </div>
-
-                <div id="device-info" class="device-info hidden">
-                    Device entry selected — render settings sync with the actual device screen.
-                </div>
-
-                <div class="form-group">
-                    <label for="panel-select">Panel Profile</label>
-                    <select id="panel-select">
-                        <option value="">None (use default colors)</option>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <div id="color-swatches" class="color-swatches"></div>
-                </div>
-
-                <div class="form-group render-options">
-                    <label>Render Options</label>
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="preserve-exact" checked>
-                        Preserve exact matches
-                        <span class="option-hint">affects dev preview and actual device screen</span>
-                    </label>
-                    <label class="checkbox-label" id="use-actual-label" style="display:none">
-                        <input type="checkbox" id="use-actual" checked>
-                        Show actual panel colors
-                        <span class="option-hint">dev preview only</span>
-                    </label>
-                    <div class="dither-row">
-                        <label for="dither-select">Dither</label>
-                        <select id="dither-select">
-                            <option value="atkinson" selected>Atkinson</option>
-                            <option value="atkinson-hybrid">Atkinson Hybrid</option>
-                            <option value="floyd-steinberg">Floyd-Steinberg</option>
-                            <option value="jarvis-judice-ninke">Jarvis-Judice-Ninke</option>
-                            <option value="sierra">Sierra</option>
-                            <option value="sierra-two-row">Sierra Two-Row</option>
-                            <option value="sierra-lite">Sierra Lite</option>
-                            <option value="stucki">Stucki</option>
-                            <option value="burkes">Burkes</option>
-                        </select>
-                    </div>
-                    <div class="dither-row">
-                        <label for="max-error">Max error</label>
-                        <input type="number" id="max-error" value="1.0" min="0" max="2.0" step="0.05">
-                    </div>
-                    <div class="dither-row">
-                        <label for="chroma-clamp">Chroma clamp</label>
-                        <input type="number" id="chroma-clamp" placeholder="&infin;" min="0.05" max="1.0" step="0.05">
-                    </div>
-                    <div class="dither-row">
-                        <label for="noise-scale">Noise scale</label>
-                        <input type="number" id="noise-scale" value="8.0" min="0" max="16.0" step="0.5">
-                    </div>
-                    <div class="dither-row">
-                        <label for="strength">Strength</label>
-                        <input type="number" id="strength" value="1.0" min="0" max="2.0" step="0.05">
-                    </div>
-                </div>
-
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="battery-input">Battery (V)</label>
-                        <input type="number" id="battery-input" value="4.2" min="3.0" max="4.2" step="0.1">
-                    </div>
-                    <div class="form-group">
-                        <label for="rssi-input">WiFi (dBm)</label>
-                        <input type="number" id="rssi-input" value="-50" min="-100" max="0">
-                    </div>
-                </div>
-
-                <div class="form-group time-group">
-                    <label for="time-input">Current Time <span id="time-mode" class="time-mode">live</span></label>
-                    <div class="time-row">
-                        <input type="datetime-local" id="time-input">
-                        <button id="time-reset" class="time-reset hidden" title="Reset to live time">&times;</button>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label for="params-input">Custom Parameters (JSON)</label>
-                    <textarea id="params-input" placeholder='{"key": "value"}'>{}</textarea>
-                </div>
-            </div>
-
-            <div class="panel display-panel">
-                <h2>Device Preview</h2>
-                <div id="device-frame" class="device-frame og">
-                    <div class="device-bezel">
-                        <div class="screen-well">
-                            <img id="display-image" alt="Screen preview">
-                            <div id="loading-overlay" class="loading-overlay hidden">
-                                <div class="spinner"></div>
-                            </div>
-                        </div>
-                        <div id="bezel-label" class="bezel-label">BYONK</div>
-                    </div>
-                </div>
-                <div class="display-info">
-                    <span id="display-size">800 x 480</span>
-                    <span id="render-time"></span>
-                </div>
-                <div id="console" class="console">
-                    <pre id="console-output"></pre>
-                </div>
-            </div>
-        </main>
-
-        <footer>
-            <p>Byonk Dev Mode - Edit your Lua scripts and SVG templates, see changes instantly</p>
-        </footer>
+<header class="topbar">
+  <strong>Byonk</strong>
+  <span id="current-ref" class="pill">no screen</span>
+  <span class="spacer"></span>
+  <span id="watch-status" class="status-badge disconnected">File Watch: Connecting...</span>
+  <button id="simulate-toggle" class="ghost">Simulate</button>
+  <button id="save-btn" class="primary" disabled>Save</button>
+  <span id="whoami" class="muted"></span>
+  <form id="logout-form" method="post" action="logout" hidden><button class="ghost">Logout</button></form>
+</header>
+<main class="columns">
+  <aside class="screens">
+    <div class="toolbar">
+      <button id="new-btn">New</button>
+      <button id="copy-btn" disabled>Copy</button>
+      <button id="rename-btn" disabled>Rename</button>
+      <button id="delete-btn" disabled>Delete</button>
     </div>
-
-    <div id="color-popup" class="color-popup hidden">
-        <div class="color-popup-header">
-            <span>Adjust Color</span>
-            <button class="color-popup-close" id="color-popup-close">&times;</button>
-        </div>
-        <div class="color-popup-preview">
-            <div class="preview-box" id="popup-original-color"></div>
-            <span class="preview-arrow">&rarr;</span>
-            <div class="preview-box" id="popup-live-color"></div>
-        </div>
-        <div class="color-popup-slider">
-            <label>Hue <span id="popup-hue-val">0</span></label>
-            <input type="range" id="popup-hue" min="0" max="360" value="0">
-        </div>
-        <div class="color-popup-slider">
-            <label>Saturation <span id="popup-sat-val">0%</span></label>
-            <input type="range" id="popup-sat" min="0" max="100" value="0">
-        </div>
-        <div class="color-popup-slider">
-            <label>Lightness <span id="popup-lit-val">0%</span></label>
-            <input type="range" id="popup-lit" min="0" max="100" value="0">
-        </div>
-        <div class="color-popup-hex">
-            <label>Hex</label>
-            <input type="text" id="popup-hex-input" maxlength="7" placeholder="#000000">
-        </div>
-        <button class="color-popup-reset" id="popup-reset-btn">Reset to original</button>
+    <form id="inline-form" class="inline-form" hidden>
+      <span id="inline-title"></span>
+      <select id="inline-repo"></select>
+      <input id="inline-name" placeholder="name" required>
+      <button type="submit">OK</button>
+      <button type="button" id="inline-cancel">Cancel</button>
+    </form>
+    <div id="screen-list"></div>
+  </aside>
+  <section class="editor">
+    <div id="tabs" class="tabs"></div>
+    <div id="editor-host"></div>
+    <div id="problems" class="problems"></div>
+  </section>
+  <section class="preview">
+    <div class="preview-head">
+      <span id="display-size">800 x 480</span>
+      <span id="render-time"></span>
+      <button id="popout-btn" class="ghost">Pop out</button>
     </div>
+    <div id="device-frame" class="device-frame og">
+      <div class="device-bezel"><div class="screen-well">
+        <img id="display-image" alt="Screen preview">
+        <div id="loading-overlay" class="loading-overlay hidden"><div class="spinner"></div></div>
+      </div><div id="bezel-label" class="bezel-label">BYONK</div></div>
+    </div>
+    <div id="console" class="console"><pre id="console-output"></pre></div>
+    <div id="drawer" class="drawer" hidden><!-- Task 9 moves the configuration panel here --></div>
+  </section>
+</main>
 
-    <script src="/dev/dev.js"></script>
+<div id="color-popup" class="color-popup hidden">
+    <div class="color-popup-header">
+        <span>Adjust Color</span>
+        <button class="color-popup-close" id="color-popup-close">&times;</button>
+    </div>
+    <div class="color-popup-preview">
+        <div class="preview-box" id="popup-original-color"></div>
+        <span class="preview-arrow">&rarr;</span>
+        <div class="preview-box" id="popup-live-color"></div>
+    </div>
+    <div class="color-popup-slider">
+        <label>Hue <span id="popup-hue-val">0</span></label>
+        <input type="range" id="popup-hue" min="0" max="360" value="0">
+    </div>
+    <div class="color-popup-slider">
+        <label>Saturation <span id="popup-sat-val">0%</span></label>
+        <input type="range" id="popup-sat" min="0" max="100" value="0">
+    </div>
+    <div class="color-popup-slider">
+        <label>Lightness <span id="popup-lit-val">0%</span></label>
+        <input type="range" id="popup-lit" min="0" max="100" value="0">
+    </div>
+    <div class="color-popup-hex">
+        <label>Hex</label>
+        <input type="text" id="popup-hex-input" maxlength="7" placeholder="#000000">
+    </div>
+    <button class="color-popup-reset" id="popup-reset-btn">Reset to original</button>
+</div>
+
+<script src="editor.bundle.js"></script>
+<script src="dev.js"></script>
 </body>
 </html>

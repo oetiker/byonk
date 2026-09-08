@@ -3,7 +3,7 @@
 
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 
-.PHONY: all build release debug run clean docs docs-dev check fmt lint test ha-setup ha-check fonts fonts-setup fonts-check help
+.PHONY: all build release debug run clean docs docs-dev check fmt lint test ha-setup ha-check fonts fonts-setup fonts-check editor editor-check help
 
 # Default target
 all: release
@@ -108,7 +108,7 @@ docs-samples: release
 # =============================================================================
 
 # Check everything before commit
-check: fmt lint test
+check: fmt lint test editor-check
 	@echo "All checks passed!"
 
 # =============================================================================
@@ -129,6 +129,26 @@ fonts-check: ## run the importer's own tests
 
 fonts: fonts-check ## rebuild the 26 X11 TTFs from their pinned BDF sources
 	.venv-fonts/bin/python fonts/x11-importer.py
+
+# =============================================================================
+# CodeMirror 6 Dev Editor Bundle
+# =============================================================================
+#
+# static/dev/editor.bundle.js is a committed, built artifact embedded into
+# the binary via include_str! (src/api/dev.rs) -- there is no npm install
+# step at build or runtime. `editor-check` guards against it going stale by
+# comparing a source hash stamped into its first line against a fresh hash
+# of static/dev/editor's sources; `make check` runs it so a stale bundle
+# fails CI the same way `fonts-check` would catch a stale font.
+
+editor: ## rebuild static/dev/editor.bundle.js from static/dev/editor/src
+	cd static/dev/editor && pnpm install --frozen-lockfile && pnpm run build
+
+editor-check: ## fail if the committed editor bundle no longer matches its sources
+	@want=$$(sh static/dev/editor/hash.sh); \
+	have=$$(head -1 static/dev/editor.bundle.js 2>/dev/null | sed -n 's/^.*sha256: //p'); \
+	if [ -z "$$have" ]; then echo "static/dev/editor.bundle.js is missing or unstamped: run make editor"; exit 1; fi; \
+	if [ "$$want" != "$$have" ]; then echo "static/dev/editor.bundle.js is stale: run make editor"; exit 1; fi
 
 # =============================================================================
 # Home Assistant Integration
@@ -175,6 +195,10 @@ help:
 	@echo "  make fonts-setup  Create .venv-fonts (run once)"
 	@echo "  make fonts-check  Run the font importer's tests"
 	@echo "  make fonts        Rebuild the 26 X11 TTFs from pinned BDF sources"
+	@echo ""
+	@echo "Dev editor bundle:"
+	@echo "  make editor       Rebuild static/dev/editor.bundle.js (needs pnpm)"
+	@echo "  make editor-check Fail if the committed bundle is stale"
 	@echo ""
 	@echo "Home Assistant VM:"
 	@echo "  make ha-vm        Boot the Home Assistant OS test VM (headless)"

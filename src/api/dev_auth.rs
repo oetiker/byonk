@@ -29,6 +29,21 @@ fn non_blank(v: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+pub const COOKIE_NAME: &str = "byonk_dev";
+pub const SESSION_MAX_AGE_SECS: i64 = 30 * 24 * 3600;
+
+fn mac_hex(key: &[u8; 32], issued: i64) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("hmac accepts any key length");
+    mac.update(issued.to_string().as_bytes());
+    mac.finalize()
+        .into_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 impl DevAuth {
     /// No form login. Ingress and bearer paths still work.
     pub fn disabled() -> Self {
@@ -60,6 +75,27 @@ impl DevAuth {
             _ => Self::disabled(),
         }
     }
+
+    /// `<issued_unix>.<hex hmac>`; `now` is injected for tests.
+    pub fn issue_cookie_value(&self, now: i64) -> String {
+        format!("{now}.{}", mac_hex(&self.session_key, now))
+    }
+
+    pub fn verify_cookie_value(&self, value: &str, now: i64) -> bool {
+        let Some((issued, mac)) = value.split_once('.') else {
+            return false;
+        };
+        let Ok(issued) = issued.parse::<i64>() else {
+            return false;
+        };
+        if now - issued > SESSION_MAX_AGE_SECS || issued > now + 60 {
+            return false;
+        }
+        crate::api::admin::constant_time_eq(
+            mac.as_bytes(),
+            mac_hex(&self.session_key, issued).as_bytes(),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -86,5 +122,43 @@ mod tests {
             DevAuth::disabled().session_key,
             DevAuth::disabled().session_key
         );
+    }
+
+    #[test]
+    fn cookie_round_trips() {
+        let a = DevAuth::with_credentials("u", "p");
+        let v = a.issue_cookie_value(1_000);
+        assert!(a.verify_cookie_value(&v, 1_000 + 60));
+    }
+
+    #[test]
+    fn cookie_from_another_key_is_rejected() {
+        let a = DevAuth::with_credentials("u", "p");
+        let b = DevAuth::with_credentials("u", "p");
+        assert!(!b.verify_cookie_value(&a.issue_cookie_value(1_000), 1_060));
+    }
+
+    #[test]
+    fn tampered_timestamp_is_rejected() {
+        let a = DevAuth::with_credentials("u", "p");
+        let v = a.issue_cookie_value(1_000);
+        let (_, mac) = v.split_once('.').unwrap();
+        assert!(!a.verify_cookie_value(&format!("2000.{mac}"), 2_060));
+    }
+
+    #[test]
+    fn expired_cookie_is_rejected() {
+        let a = DevAuth::with_credentials("u", "p");
+        let v = a.issue_cookie_value(1_000);
+        assert!(!a.verify_cookie_value(&v, 1_000 + SESSION_MAX_AGE_SECS + 1));
+        assert!(a.verify_cookie_value(&v, 1_000 + SESSION_MAX_AGE_SECS - 1));
+    }
+
+    #[test]
+    fn garbage_is_rejected() {
+        let a = DevAuth::with_credentials("u", "p");
+        assert!(!a.verify_cookie_value("", 0));
+        assert!(!a.verify_cookie_value("abc", 0));
+        assert!(!a.verify_cookie_value("12.zz", 0));
     }
 }

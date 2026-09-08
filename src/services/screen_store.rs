@@ -538,6 +538,16 @@ impl ScreenStore {
     /// Write one file within a screen, enforcing optimistic concurrency via
     /// `if_match` (the etag the caller last read; `None` skips the check —
     /// last-write-wins, or "create"). Returns the new etag on success.
+    ///
+    /// Ordering contract callers rely on: `resolve_writable_root` (the
+    /// read-only check, yielding `StoreError::ReadOnly`) MUST run before the
+    /// etag comparison below (`StoreError::Conflict`). The `/dev/api` PUT
+    /// handler's `If-Match: *` support depends on this order to tell a
+    /// read-only repo (409) apart from an existing file in a writable one
+    /// (412) — it probes existence itself but always routes the actual
+    /// write back through this method so its read-only check fires first.
+    /// Reordering these two checks would not fail any test in this module;
+    /// it would silently misreport a read-only repo as 412 instead of 409.
     pub fn write_file(
         &self,
         screen_ref: &str,

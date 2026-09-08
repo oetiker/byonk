@@ -95,6 +95,17 @@ async fn create_list_read_write_delete_round_trip() {
         )
         .await;
     assert_eq!(missing.status, StatusCode::PRECONDITION_REQUIRED);
+    assert_eq!(
+        missing.headers["content-type"].to_str().unwrap(),
+        "application/json"
+    );
+    let missing_body: serde_json::Value = missing.json();
+    assert_eq!(missing_body["status"], 428);
+    assert!(missing_body["error"]
+        .as_str()
+        .unwrap()
+        .to_lowercase()
+        .contains("if-match"));
 
     let created = app
         .put_text(

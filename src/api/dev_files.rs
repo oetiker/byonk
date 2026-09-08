@@ -189,7 +189,9 @@ async fn read_file(
 
 /// Write one file. `If-Match` is required (missing -> 428, distinguishing
 /// "you forgot the header" from "your header did not match" — an addition
-/// over the spec, not present in RFC 9110). `If-Match: *` deliberately means
+/// over the spec, not present in RFC 9110). A present-but-non-ASCII header
+/// value is a different failure (400 bad request), not a missing header —
+/// the two are not conflated. `If-Match: *` deliberately means
 /// "create; fail with 412 if it already exists" — the opposite of RFC 9110's
 /// meaning for that header on other methods — per the binding design spec
 /// (`docs/superpowers/specs/2026-09-07-dev-mode-editor-design.md:198`).
@@ -212,16 +214,20 @@ async fn write_file(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    let Some(if_match) = headers
-        .get(header::IF_MATCH)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string)
-    else {
-        return Ok((
-            StatusCode::PRECONDITION_REQUIRED,
-            "If-Match header required",
-        )
-            .into_response());
+    let if_match = match headers.get(header::IF_MATCH) {
+        None => {
+            return Err(ApiError::PreconditionRequired(
+                "If-Match header required".into(),
+            ))
+        }
+        Some(v) => match v.to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                return Err(ApiError::BadRequest(
+                    "If-Match header is not valid ASCII".into(),
+                ))
+            }
+        },
     };
     let store = s.screen_store.clone();
     let etag = blocking(move || {

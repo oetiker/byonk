@@ -38,6 +38,9 @@ pub enum ApiError {
     #[error("Precondition failed: {0}")]
     PreconditionFailed(String),
 
+    #[error("Precondition required: {0}")]
+    PreconditionRequired(String),
+
     #[error("Unprocessable: {0}")]
     Unprocessable(String),
 
@@ -91,6 +94,7 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
             ApiError::PreconditionFailed(m) => (StatusCode::PRECONDITION_FAILED, m.clone()),
+            ApiError::PreconditionRequired(m) => (StatusCode::PRECONDITION_REQUIRED, m.clone()),
             ApiError::Unprocessable(m) => (StatusCode::UNPROCESSABLE_ENTITY, m.clone()),
             ApiError::PayloadTooLarge => (StatusCode::PAYLOAD_TOO_LARGE, self.to_string()),
             ApiError::UnsupportedMedia(m) => (StatusCode::UNSUPPORTED_MEDIA_TYPE, m.clone()),
@@ -125,6 +129,13 @@ mod tests {
     fn test_api_error_conflict_status() {
         let resp = ApiError::Conflict("dup".into()).into_response();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn test_api_error_precondition_required_status() {
+        let resp =
+            ApiError::PreconditionRequired("If-Match header required".into()).into_response();
+        assert_eq!(resp.status(), StatusCode::PRECONDITION_REQUIRED);
     }
 
     #[test]
@@ -237,6 +248,11 @@ mod tests {
         // PreconditionFailed -> PRECONDITION_FAILED
         let response = ApiError::PreconditionFailed("stale".to_string()).into_response();
         assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+
+        // PreconditionRequired -> PRECONDITION_REQUIRED
+        let response =
+            ApiError::PreconditionRequired("If-Match header required".to_string()).into_response();
+        assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
 
         // Unprocessable -> UNPROCESSABLE_ENTITY
         let response = ApiError::Unprocessable("bad shape".to_string()).into_response();

@@ -16,9 +16,10 @@ serve` mounts it, behind a login, at `/dev/`.
 ### Set a username and password
 
 The editor is invisible until you give it credentials. With none configured,
-`/dev/` answers `404 Not Found` — the page, the login form and the API alike —
-so a server that was never meant to be edited over the web does not advertise
-an editor at all.
+the editor page and its login form both answer `404 Not Found`, so a server
+that was never meant to be edited over the web does not offer a login to guess
+at. (The JSON API under `/dev/api/` answers `401` rather than `404` in that
+case.)
 
 Set both halves, in any one of these places:
 
@@ -79,8 +80,8 @@ Assistant, on `http://<host>:3000/dev/`.
 
 **Left — screens.** Every screen the server can resolve, grouped by screen
 repo handle. Repos you cannot write to are dimmed and their screens italic;
-selecting one still lets you read every file and copy it, just not save over
-it.
+you can still open one and read every file, and **Copy** it into a repo you
+can write to — but its files open read-only.
 
 **Middle — files.** One tab per file in the selected screen, with
 `meta.yaml`, `script.lua` and `screen.svg` first and everything else after
@@ -106,15 +107,18 @@ Screen repos option accepts `repo:` rows only.
 
 ## Editing and saving
 
-Type in any file. Its tab shows a dirty marker, and so does the screen name in
-the toolbar, until the bytes reach disk.
+Type in any file of a screen that lives in a writable repo. Its tab shows a
+dirty marker, and so does the screen name in the toolbar, until the bytes
+reach disk.
 
 - **Cmd/Ctrl-S** saves the file you are in.
 - The toolbar's **Save** button saves *every* file you have changed, not just
   the one on screen.
 
-Saving into a read-only repo is refused with a message rather than silently
-dropped.
+In a read-only repo the files open read-only: you cannot type in them at all.
+Cmd/Ctrl-S still fires there, and is answered with a message naming the repo
+rather than failing in silence. To change such a screen, **Copy** it into a
+writable repo and edit the copy.
 
 ### Conflict detection
 

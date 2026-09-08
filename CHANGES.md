@@ -30,9 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a blank value counts as unset. Your admin token is accepted as a bearer
   credential too, which is what lets a script reach the API without a login.
 
-  Set neither and `/dev/` answers `404 Not Found` — the page, the login form
-  and the API alike — so a server that was never meant to be edited over the
-  web does not advertise an editor.
+  Set neither and the editor page and its login form both answer `404 Not
+  Found`, so a server that was never meant to be edited over the web does not
+  offer a login to guess at. (Its JSON API under `/dev/api/` answers `401`
+  instead.)
 
   **If you run `byonk dev`, run `byonk serve` instead.** In Docker, drop the
   `dev` argument: `serve` is what the image runs by default, so

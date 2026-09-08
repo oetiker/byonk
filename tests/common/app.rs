@@ -135,6 +135,16 @@ impl TestApp {
             .await
     }
 
+    /// Make a PUT request with a `text/plain` body.
+    pub async fn put_text(&self, path: &str, headers: &[(&str, &str)], body: &str) -> TestResponse {
+        let mut builder = Request::put(path).header("Content-Type", "text/plain");
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        self.request(builder.body(Body::from(body.to_string())).unwrap())
+            .await
+    }
+
     /// Send a request to the router
     async fn request(&self, request: Request<Body>) -> TestResponse {
         let response = self

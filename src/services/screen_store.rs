@@ -1064,16 +1064,6 @@ impl ScreenStore {
         Ok(out)
     }
 
-    /// Test hook: re-read the repo directories after a change made directly
-    /// on disk (bypassing `write_file` et al., which already call
-    /// `self.manager.rebuild_loader()` themselves after touching disk).
-    /// Production code never needs this — it exists solely so tests that
-    /// plant a file with `std::fs::write` can make the loader notice it
-    /// without duplicating `ScreenRepoManager`'s wiring in every test.
-    pub fn rebuild(&self) {
-        self.manager.rebuild_loader();
-    }
-
     /// Statically validate one screen: parse `meta.yaml` against its schema,
     /// compile `script.lua` without executing it, and check `screen.svg`
     /// compiles as a Tera template with its `{% extends %}` chain resolving

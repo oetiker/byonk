@@ -78,7 +78,6 @@ fn list_files_marks_text_and_binary() {
         [0x89, b'P', b'N', b'G', 0xff, 0xfe],
     )
     .unwrap();
-    store.rebuild(); // see Step 3: expose rebuild() for tests
     let files = store.list_files("local/clock").unwrap();
     let names: Vec<_> = files.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(

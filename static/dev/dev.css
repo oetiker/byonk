@@ -778,6 +778,80 @@ select:focus, input:focus, textarea:focus {
     border-color: var(--success-color);
 }
 
+/* --- Pop-out preview page (preview.html) ---
+ *
+ * A second window mirroring the editor's render, so it can live on another
+ * monitor. It shares this stylesheet — and therefore the same colour tokens
+ * — with index.html and login.html; it has no palette of its own.
+ */
+
+.preview-body {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.preview-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.375rem 0.75rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    background: var(--panel-bg);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.preview-bar label {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.preview-size {
+    margin-right: auto;
+    font-family: 'Monaco', 'Menlo', monospace;
+}
+
+.preview-stage {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 0.5rem;
+    background: var(--bg-color);
+}
+
+/* An e-ink render is mostly white paper, so it needs an edge of its own to
+   read as an object on a light ground. A ring rather than a border: it must
+   not change the layout the 100% mode measures. */
+.preview-stage img {
+    display: block;
+    background: var(--device-screen-bg);
+    box-shadow: 0 0 0 1px var(--border-color);
+}
+
+/* Fit: the image can never exceed the stage, so it is safe to centre it. */
+.preview-stage.fit {
+    display: grid;
+    place-items: center;
+}
+
+.preview-stage.fit img {
+    max-width: 100%;
+    max-height: 100%;
+}
+
+/* 100%: the image usually overflows, and every centring mechanism (flex or
+   grid centring, auto margins, text-align) pushes the overflow past the
+   scroll container's start edge, where it cannot be scrolled back into view.
+   So it anchors top-left, the way an image viewer at 1:1 does. On a HiDPI
+   screen the browser still upscales by the device pixel ratio; `pixelated`
+   keeps the dither pattern crisp through that. */
+.preview-stage.full img {
+    image-rendering: pixelated;
+}
+
 /* --- Login page --- */
 
 .login-body {

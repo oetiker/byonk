@@ -213,86 +213,9 @@ function consoleError(msg) {
   out.parentElement.scrollTop = out.parentElement.scrollHeight;
 }
 
-// --- lens (1:1 pixel viewing over the device preview) -----------------
-
-let lensCanvas = null;
-let lensCtx = null;
-let fullResImage = null;
-let lensElement = null;
-
-function setupLens() {
-  lensElement = document.createElement("div");
-  lensElement.id = "lens";
-  lensElement.className = "lens hidden";
-  document.body.appendChild(lensElement);
-
-  lensCanvas = document.createElement("canvas");
-  lensCanvas.width = 200;
-  lensCanvas.height = 200;
-  lensElement.appendChild(lensCanvas);
-  lensCtx = lensCanvas.getContext("2d");
-
-  fullResImage = new Image();
-
-  const img = document.getElementById("display-image");
-  img.addEventListener("mouseenter", showLens);
-  img.addEventListener("mouseleave", hideLens);
-  img.addEventListener("mousemove", moveLens);
-}
-
-function updateLensImage(url) {
-  if (fullResImage) {
-    fullResImage.src = url;
-  }
-}
-
-function showLens(e) {
-  if (!fullResImage.complete || !fullResImage.naturalWidth) return;
-  lensElement.classList.remove("hidden");
-  moveLens(e);
-}
-
-function hideLens() {
-  lensElement.classList.add("hidden");
-}
-
-function moveLens(e) {
-  if (!fullResImage.complete || !fullResImage.naturalWidth) return;
-
-  const img = document.getElementById("display-image");
-  const rect = img.getBoundingClientRect();
-  const lensSize = 200;
-  const lensRadius = lensSize / 2;
-  const magnification = 2;
-  const sourceSize = lensSize / magnification;
-
-  const lensX = e.clientX + 20;
-  const lensY = e.clientY - lensSize - 10;
-  lensElement.style.left = `${lensX}px`;
-  lensElement.style.top = `${lensY}px`;
-
-  const imgX = e.clientX - rect.left;
-  const imgY = e.clientY - rect.top;
-
-  const scaleX = fullResImage.naturalWidth / rect.width;
-  const scaleY = fullResImage.naturalHeight / rect.height;
-
-  const srcW = sourceSize * scaleX;
-  const srcH = sourceSize * scaleY;
-  const srcX = (imgX * scaleX) - (srcW / 2);
-  const srcY = (imgY * scaleY) - (srcH / 2);
-
-  lensCtx.clearRect(0, 0, lensSize, lensSize);
-  lensCtx.save();
-  lensCtx.beginPath();
-  lensCtx.arc(lensRadius, lensRadius, lensRadius - 2, 0, Math.PI * 2);
-  lensCtx.clip();
-  lensCtx.fillStyle = "#fff";
-  lensCtx.fillRect(0, 0, lensSize, lensSize);
-  lensCtx.imageSmoothingEnabled = false;
-  lensCtx.drawImage(fullResImage, srcX, srcY, srcW, srcH, 0, 0, lensSize, lensSize);
-  lensCtx.restore();
-}
+// The 1:1 pixel lens (`setupLens`, `updateLensImage`) lives in lens.js, which
+// index.html loads before this file: the pop-out preview window needs the
+// same magnifier and must not carry a second copy of it.
 
 // --- device frame -----------------------------------------------------
 //
@@ -360,6 +283,24 @@ function updateDisplaySizeFromImage() {
 // render but the first.
 function onPreviewImageLoad() {
   updateDisplaySizeFromImage();
+  broadcastPreview();
+}
+
+// The only message the pop-out ever receives. Both the `load` event above and
+// a newly-opened pop-out's `hello` come through here.
+//
+// It reads the LIVE <img> every time and never a remembered copy of an
+// earlier message. The URL is a blob this page owns, and `render()` revokes
+// the previous blob in the same breath as it assigns the next one, so a
+// remembered URL can already be dead — most plainly when a render lands but
+// its PNG never decodes: `load` does not fire, the element moves on, and the
+// remembered URL names a blob that was revoked. `img.src` is by construction
+// the one blob this page still holds, and `naturalWidth`/`naturalHeight`
+// belong to that same image, so the pop-out can always fetch what it is told
+// about. Before the first image has decoded there is nothing to say and the
+// message is skipped; the `load` that follows reaches every listener, the
+// new pop-out included.
+function broadcastPreview() {
   const img = document.getElementById("display-image");
   if (!previewChannel || !img.naturalWidth || !img.naturalHeight) return;
   previewChannel.postMessage({
@@ -1601,6 +1542,27 @@ function initDrawer() {
 
 let previewChannel = null;
 try { previewChannel = new BroadcastChannel("byonk-preview"); } catch (e) { previewChannel = null; }
+
+if (previewChannel) {
+  // A pop-out that has just opened says hello, because renders are driven
+  // from this window and it would otherwise stay blank until the next one.
+  // `broadcastPreview` answers from the live <img> — see the note there.
+  // A `hello` posted by a second pop-out is also delivered to the first one,
+  // which ignores it: only messages carrying a `url` mean anything there.
+  previewChannel.onmessage = (ev) => {
+    if (ev.data && ev.data.hello) broadcastPreview();
+  };
+}
+
+// A named window, so a second click raises the pop-out that is already open
+// instead of scattering copies across the desktop. The URL is relative: this
+// page is served from `<prefix>/dev/`, and an origin-absolute
+// `/dev/preview.html` would leave the Home Assistant Ingress iframe.
+document.getElementById("popout-btn").addEventListener("click", () => {
+  const w = window.open("preview.html", "byonk-preview", "width=900,height=700");
+  if (w) w.focus();
+  else showFailure("The pop-out preview window was blocked by the browser.");
+});
 
 async function render() {
   if (!state.ref) return;

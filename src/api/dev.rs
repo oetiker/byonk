@@ -181,6 +181,15 @@ pub async fn handle_dev_js() -> impl IntoResponse {
     )
 }
 
+/// Serve the 1:1 pixel lens, shared by the editor page and the pop-out
+/// preview window.
+pub async fn handle_lens_js() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/javascript")],
+        include_str!("../../static/dev/lens.js"),
+    )
+}
+
 /// Serve the editor bundle (built by `static/dev/editor`, see Task 7).
 pub async fn handle_editor_bundle() -> impl IntoResponse {
     (
@@ -189,7 +198,8 @@ pub async fn handle_editor_bundle() -> impl IntoResponse {
     )
 }
 
-/// Serve the preview iframe page the editor bundle drives (see Task 7).
+/// Serve the pop-out preview window: a second window that mirrors the render
+/// the editor page is showing, over a BroadcastChannel.
 pub async fn handle_preview_page() -> Html<&'static str> {
     Html(include_str!("../../static/dev/preview.html"))
 }
@@ -862,7 +872,11 @@ pub fn dev_router(state: &AppState) -> Router<AppState> {
     let protected = Router::new()
         .route("/", get(handle_dev_page))
         .route("/dev.js", get(handle_dev_js))
+        .route("/lens.js", get(handle_lens_js))
         .route("/editor.bundle.js", get(handle_editor_bundle))
+        // Flat, not nested: `require_dev` redirects an unauthenticated visitor
+        // to the relative string "login", which is only correct one level
+        // below `/dev/`.
         .route("/preview.html", get(handle_preview_page))
         .nest("/api", api)
         .route_layer(axum::middleware::from_fn_with_state(

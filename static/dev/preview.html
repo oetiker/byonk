@@ -1,1 +1,99 @@
-<!DOCTYPE html><title>Byonk Preview</title>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Byonk Preview</title>
+<link rel="stylesheet" href="dev.css">
+<!-- Same before-first-paint scheme applier as index.html and login.html. This
+     is a separate document opened by window.open(), so it needs its own copy;
+     dev.js is not loaded here at all. -->
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem("byonk-dev-theme");
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  } catch (e) { /* private window or blocked site data: keep the default */ }
+})();
+</script>
+</head>
+<body class="preview-body">
+<div class="preview-bar">
+  <span id="preview-size" class="preview-size">waiting for the editor</span>
+  <label><input type="radio" name="zoom" value="fit" checked> Fit</label>
+  <label><input type="radio" name="zoom" value="full"> 100%</label>
+</div>
+<div id="preview-stage" class="preview-stage fit">
+  <img id="display-image" alt="Screen preview">
+</div>
+<!-- Before the page script, which calls setupLens()/updateLensImage(). -->
+<script src="lens.js"></script>
+<script>
+// The pop-out preview window: a mirror of the editor's rendered screen, meant
+// to sit on a second monitor. It renders nothing itself — the editor window
+// broadcasts the blob URL of the image it is showing over a BroadcastChannel
+// and this page points its <img> at it. The blob belongs to the editor
+// window, so closing that window ends the mirror; that is the intended
+// lifetime, not a bug to work around here.
+"use strict";
+(function () {
+  const img = document.getElementById("display-image");
+  const sizeEl = document.getElementById("preview-size");
+  const stage = document.getElementById("preview-stage");
+
+  // The colour scheme is chosen in the editor window and stored in
+  // localStorage, which raises a `storage` event in every OTHER document of
+  // the origin. Without this a pop-out left open on a second monitor would
+  // keep the scheme it opened with while the editor changed.
+  // `e.key === null` means the whole store was cleared.
+  window.addEventListener("storage", (e) => {
+    if (e.key !== null && e.key !== "byonk-dev-theme") return;
+    let t = null;
+    try { t = localStorage.getItem("byonk-dev-theme"); } catch (err) { t = null; }
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    else document.documentElement.removeAttribute("data-theme");
+  });
+
+  // Fit scales the render down to the window; 100% shows it at its own pixel
+  // size and lets the stage scroll.
+  document.querySelectorAll("input[name=zoom]").forEach((r) => {
+    r.addEventListener("change", () => { stage.className = "preview-stage " + r.value; });
+  });
+
+  setupLens();
+
+  // Guarded exactly like dev.js's: the constructor is missing in a few
+  // browsers, and an unguarded throw here would take the zoom controls with
+  // it and leave a window that does nothing without saying why.
+  let channel = null;
+  try { channel = new BroadcastChannel("byonk-preview"); } catch (e) { channel = null; }
+  if (!channel) {
+    sizeEl.textContent = "this browser cannot mirror the editor";
+    return;
+  }
+
+  channel.onmessage = (ev) => {
+    // A `hello` from a second pop-out reaches this one too: only a message
+    // carrying a url is from the editor.
+    if (!ev.data || !ev.data.url) return;
+    img.src = ev.data.url;
+    updateLensImage(ev.data.url);
+    sizeEl.textContent = `${ev.data.width} x ${ev.data.height}`;
+  };
+
+  // The editor only broadcasts when an image finishes decoding, so a pop-out
+  // opened between two renders would sit blank until the next one. Asking for
+  // what is on screen right now costs one message.
+  channel.postMessage({ hello: true });
+
+  // The blob is the editor window's, and it revokes the previous one as it
+  // assigns the next. A render finishing in the sliver between the broadcast
+  // and this window fetching the URL leaves a blank frame; say so rather than
+  // showing an unexplained empty stage. The next render repaints it.
+  img.addEventListener("error", () => {
+    sizeEl.textContent = "image expired — render again in the editor";
+  });
+})();
+</script>
+</body>
+</html>

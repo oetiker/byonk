@@ -377,6 +377,62 @@ impl TestApp {
         self.request(builder.body(Body::empty()).unwrap()).await
     }
 
+    /// Like `new_admin` but with dev credentials set (config-embedded, no
+    /// on-disk file needed). Pass `token` to also enable the admin bearer
+    /// token alongside the dev login.
+    pub fn new_with_dev_login(token: Option<&str>, user: &str, pass: &str) -> Self {
+        let asset_loader = Arc::new(AssetLoader::new(None, None, None));
+        let mut config = AppConfig::load_from_assets(&asset_loader).expect("load config");
+        if let Some(t) = token {
+            config.admin.token = Some(t.to_string());
+        }
+        config.admin.dev_username = Some(user.to_string());
+        config.admin.dev_password = Some(pass.to_string());
+        let state = create_app_state_with_config(asset_loader, config).expect("create state");
+        let registry = state.registry.clone();
+        let content_cache = state.content_cache.clone();
+        let recovery = state.recovery.clone();
+        let router = build_router(state);
+        Self {
+            router,
+            registry,
+            content_cache,
+            recovery,
+        }
+    }
+
+    /// Send a request that pretends to come from `peer` on the ingress
+    /// listener (i.e. carries the `ViaIngress` marker and a `ConnectInfo`
+    /// the way the real ingress listener's `Router::into_make_service_with_connect_info`
+    /// would attach it).
+    pub async fn get_via_ingress(
+        &self,
+        path: &str,
+        peer: &str,
+        headers: &[(&str, &str)],
+    ) -> TestResponse {
+        use axum::extract::ConnectInfo;
+        let mut builder = Request::get(path);
+        for (n, v) in headers {
+            builder = builder.header(*n, *v);
+        }
+        let mut req = builder.body(Body::empty()).unwrap();
+        req.extensions_mut()
+            .insert(byonk::api::dev_auth::ViaIngress);
+        req.extensions_mut()
+            .insert(ConnectInfo(peer.parse::<std::net::SocketAddr>().unwrap()));
+        self.request(req).await
+    }
+
+    /// Make a POST request with a `application/x-www-form-urlencoded` body.
+    pub async fn post_form(&self, path: &str, body: &str) -> TestResponse {
+        let req = Request::post(path)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        self.request(req).await
+    }
+
     /// Register a device and return the api_key
     pub async fn register_device(&self, mac: &str) -> String {
         let headers = [("ID", mac), ("FW-Version", "1.0.0"), ("Model", "og")];

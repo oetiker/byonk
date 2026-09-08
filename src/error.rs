@@ -34,6 +34,18 @@ pub enum ApiError {
 
     #[error("Conflict: {0}")]
     Conflict(String),
+
+    #[error("Precondition failed: {0}")]
+    PreconditionFailed(String),
+
+    #[error("Unprocessable: {0}")]
+    Unprocessable(String),
+
+    #[error("Payload too large")]
+    PayloadTooLarge,
+
+    #[error("Unsupported media type: {0}")]
+    UnsupportedMedia(String),
 }
 
 impl From<crate::services::content_pipeline::ContentError> for ApiError {
@@ -78,6 +90,10 @@ impl IntoResponse for ApiError {
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, self.to_string()),
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
+            ApiError::PreconditionFailed(m) => (StatusCode::PRECONDITION_FAILED, m.clone()),
+            ApiError::Unprocessable(m) => (StatusCode::UNPROCESSABLE_ENTITY, m.clone()),
+            ApiError::PayloadTooLarge => (StatusCode::PAYLOAD_TOO_LARGE, self.to_string()),
+            ApiError::UnsupportedMedia(m) => (StatusCode::UNSUPPORTED_MEDIA_TYPE, m.clone()),
         };
 
         let body = Json(json!({
@@ -217,5 +233,21 @@ mod tests {
         // Render -> INTERNAL_SERVER_ERROR
         let response = ApiError::Render(RenderError::PixmapAllocation).into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // PreconditionFailed -> PRECONDITION_FAILED
+        let response = ApiError::PreconditionFailed("stale".to_string()).into_response();
+        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+
+        // Unprocessable -> UNPROCESSABLE_ENTITY
+        let response = ApiError::Unprocessable("bad shape".to_string()).into_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        // PayloadTooLarge -> PAYLOAD_TOO_LARGE
+        let response = ApiError::PayloadTooLarge.into_response();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        // UnsupportedMedia -> UNSUPPORTED_MEDIA_TYPE
+        let response = ApiError::UnsupportedMedia("text/plain".to_string()).into_response();
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
     }
 }

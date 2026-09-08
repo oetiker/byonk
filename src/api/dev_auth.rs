@@ -88,7 +88,7 @@ impl DevAuth {
         let Ok(issued) = issued.parse::<i64>() else {
             return false;
         };
-        if now - issued > SESSION_MAX_AGE_SECS || issued > now + 60 {
+        if now.saturating_sub(issued) > SESSION_MAX_AGE_SECS || issued > now.saturating_add(60) {
             return false;
         }
         crate::api::admin::constant_time_eq(
@@ -160,5 +160,12 @@ mod tests {
         assert!(!a.verify_cookie_value("", 0));
         assert!(!a.verify_cookie_value("abc", 0));
         assert!(!a.verify_cookie_value("12.zz", 0));
+    }
+
+    #[test]
+    fn adversarial_timestamp_is_rejected_not_panicking() {
+        let a = DevAuth::with_credentials("u", "p");
+        assert!(!a.verify_cookie_value(&format!("{}.deadbeef", i64::MIN), 0));
+        assert!(!a.verify_cookie_value(&format!("{}.deadbeef", i64::MAX), 0));
     }
 }

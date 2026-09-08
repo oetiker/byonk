@@ -50,6 +50,10 @@ This Configuration tab is the source of truth for Byonk's server-global settings
   private repos). The handles `local`, `examples` and `byonk-builtin` are
   reserved (Byonk registers those itself); a row using one is ignored with a
   warning in the log.
+- **Dev UI username** / **Dev UI password** — only needed to open the screen
+  editor from outside Home Assistant, see *Screen editor* below. Leave both
+  blank to disable that external route; the Byonk sidebar entry keeps working
+  either way.
 
 These settings are read-only over the admin API — the integration deliberately
 does not edit them, so this tab stays the single editor.
@@ -63,6 +67,29 @@ first start. Edits to `config.yaml` are picked up without a restart.
 
 Per-device screen mappings are best managed through the Byonk integration; manual
 edits to the `devices:` section of `config.yaml` also work.
+
+## Screen editor
+
+The **Byonk** entry in the Home Assistant sidebar opens the screen editor.
+No extra login is needed — Home Assistant already knows who you are, and
+opens the editor for you.
+
+The editor lets you browse the screens in your screen repos, edit their Lua
+scripts and SVG templates with syntax checking as you type, save with
+conflict detection (so two open tabs can't silently overwrite each other's
+changes), and see a live preview of the rendered screen.
+
+Editing only works in **writable** screen repos — `local` and any repo you
+mark writable. The built-in and remote screen repos are read-only: you can
+browse and copy their screens, but not edit them in place.
+
+### Opening the editor from outside Home Assistant
+
+The sidebar entry is normally all you need. If you want to reach the editor
+directly, without going through Home Assistant, set **Dev UI username** and
+**Dev UI password** above and open `http://<host>:3000/dev/`. Leave either
+one blank and this external route stays disabled — the sidebar entry is
+unaffected either way.
 
 ## Full documentation
 

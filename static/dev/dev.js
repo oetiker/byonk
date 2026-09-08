@@ -79,6 +79,76 @@ const state = {
 };
 window.byonkDev = { state, api, render: null };
 
+// --- colour scheme --------------------------------------------------------
+//
+// Three states, not a toggle: "system" (the default), "light" and "dark". A
+// two-state switch cannot express "follow the system again", so a user who
+// touched it could never get back to the default.
+//
+// "system" is the ABSENCE of `data-theme` on <html>, never the string
+// "system" -- dev.css's dark block is
+// `@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) }`,
+// which only sees an attribute that is missing or "light"/"dark".
+//
+// The same preference is applied before first paint by a small inline script
+// in the <head> of index.html and login.html; this code owns it afterwards.
+
+const THEME_KEY = "byonk-dev-theme";
+const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+// Every localStorage access here is guarded: a private window or blocked
+// site data makes the accessor itself throw, and the page must still render.
+function readThemeChoice() {
+  try {
+    const v = localStorage.getItem(THEME_KEY);
+    if (v === "light" || v === "dark") return v;
+  } catch (e) { /* fall through to the default */ }
+  return "system";
+}
+
+function storeThemeChoice(choice) {
+  try {
+    if (choice === "system") localStorage.removeItem(THEME_KEY);
+    else localStorage.setItem(THEME_KEY, choice);
+  } catch (e) { /* the choice still applies for this page's lifetime */ }
+}
+
+let themeChoice = readThemeChoice();
+
+// What the page is actually painting right now: "light" or "dark". The
+// CodeMirror themes need the resolved value, not the choice.
+function currentScheme() {
+  if (themeChoice === "light" || themeChoice === "dark") return themeChoice;
+  return darkQuery.matches ? "dark" : "light";
+}
+
+function applyTheme() {
+  const root = document.documentElement;
+  if (themeChoice === "system") root.removeAttribute("data-theme");
+  else root.setAttribute("data-theme", themeChoice);
+  // Every open buffer, not just the active one: the others are only hidden,
+  // and a stale theme would show the moment their tab is clicked.
+  const scheme = currentScheme();
+  for (const e of state.open.values()) e.editor.setTheme(scheme);
+}
+
+const themeSelect = document.getElementById("theme-select");
+themeSelect.value = themeChoice;
+themeSelect.addEventListener("change", () => {
+  themeChoice = themeSelect.value;
+  storeThemeChoice(themeChoice);
+  applyTheme();
+});
+
+// The system preference can change while the page is open (a scheduled
+// switch at dusk, or the OS setting being flipped). The CSS follows it on its
+// own; the editors have to be told.
+darkQuery.addEventListener("change", () => {
+  if (themeChoice === "system") applyTheme();
+});
+
+applyTheme();
+
 // --- console ---------------------------------------------------------------
 
 function consoleClear() {
@@ -380,6 +450,9 @@ async function openFile(name) {
     entry = { host, etag, dirty: false, saved: text, editor: null };
     entry.editor = byonkEditor.create(host, {
       language: languageFor(name), doc: text, readOnly: !state.writable,
+      // A buffer opened after the user switched schemes must start in the
+      // current one; `setTheme` only reaches buffers that already exist.
+      theme: currentScheme(),
       onChange: () => { markDirty(name, entry.editor.getValue() !== entry.saved); scheduleCheck(name); },
       onSave: () => saveFile(name),
     });

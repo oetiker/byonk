@@ -5,6 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Byonk Login</title>
 <link rel="stylesheet" href="dev.css">
+<!-- Same before-first-paint scheme applier as index.html. This is the first
+     page a user sees, and it is a separate document, so it needs its own
+     copy; there is no dev.js here at all. -->
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem("byonk-dev-theme");
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  } catch (e) { /* private window or blocked site data: keep the default */ }
+})();
+</script>
 </head>
 <body class="login-body">
 <form class="login-card" method="post" action="login">

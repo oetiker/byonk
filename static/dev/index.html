@@ -5,6 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Byonk Dev</title>
 <link rel="stylesheet" href="dev.css">
+<!-- Applies the stored colour-scheme choice before first paint. Without it a
+     stored "Dark" on a light-system machine paints the light scheme for one
+     frame. Must stay self-contained: it runs long before dev.js loads.
+     login.html carries its own copy -- it is a separate document. -->
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem("byonk-dev-theme");
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  } catch (e) { /* private window or blocked site data: keep the default */ }
+})();
+</script>
 </head>
 <body>
 <header class="topbar">
@@ -14,6 +26,14 @@
   <span id="watch-status" class="status-badge disconnected">File Watch: Connecting...</span>
   <button id="simulate-toggle" class="ghost">Simulate</button>
   <button id="save-btn" class="primary" disabled>Save</button>
+  <!-- Three-way, not a toggle: a two-state switch cannot express "follow the
+       system again", so a user who touched it could never get back to the
+       default. dev.js keeps this in sync with `data-theme` on <html>. -->
+  <select id="theme-select" class="theme-select" aria-label="Colour scheme">
+    <option value="system">System</option>
+    <option value="light">Light</option>
+    <option value="dark">Dark</option>
+  </select>
   <span id="whoami" class="muted"></span>
   <form id="logout-form" method="post" action="logout" hidden><button class="ghost">Logout</button></form>
 </header>

@@ -74,3 +74,14 @@ async fn blank_option_clears_preexisting_config_token() {
         .await;
     assert_eq!(resp.status, StatusCode::NOT_FOUND);
 }
+
+#[test]
+fn dev_env_wins_over_config() {
+    std::env::set_var("BYONK_DEV_USERNAME", "envu");
+    std::env::set_var("BYONK_DEV_PASSWORD", "envp");
+    let auth = byonk::api::dev_auth::DevAuth::resolve(Some("cfgu"), Some("cfgp"));
+    std::env::remove_var("BYONK_DEV_USERNAME");
+    std::env::remove_var("BYONK_DEV_PASSWORD");
+    let c = auth.credentials.unwrap();
+    assert_eq!((c.username.as_str(), c.password.as_str()), ("envu", "envp"));
+}

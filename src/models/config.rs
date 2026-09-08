@@ -443,6 +443,11 @@ pub struct AdminConfig {
     /// unset), the admin API is disabled (returns 404).
     #[serde(default)]
     pub token: Option<String>,
+    /// Dev UI form login. Both required; set by env or add-on options.
+    #[serde(default)]
+    pub dev_username: Option<String>,
+    #[serde(default)]
+    pub dev_password: Option<String>,
 }
 
 /// Device registration settings

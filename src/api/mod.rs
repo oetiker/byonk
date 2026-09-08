@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod dev;
+pub mod dev_auth;
 pub mod display;
 mod headers;
 pub mod log;

@@ -71,6 +71,8 @@ pub struct AppState {
     pub config: SharedConfig,
     pub asset_loader: Arc<AssetLoader>,
     pub admin_token: Option<String>,
+    /// Dev UI auth (credentials + session key). See `api::dev_auth`.
+    pub dev_auth: Arc<crate::api::dev_auth::DevAuth>,
     /// Serializes admin config writes so concurrent requests can't interleave file patches.
     pub write_lock: Arc<tokio::sync::Mutex<()>>,
     pub registry: Arc<InMemoryRegistry>,
@@ -184,6 +186,11 @@ pub fn create_app_state_with_overrides(
         .filter(|s| !s.is_empty())
         .or_else(|| config.admin.token.clone());
 
+    let dev_auth = Arc::new(crate::api::dev_auth::DevAuth::resolve(
+        config.admin.dev_username.as_deref(),
+        config.admin.dev_password.as_deref(),
+    ));
+
     let shared_config: SharedConfig = Arc::new(ArcSwap::from(config.clone()));
 
     let screen_repo_manager =
@@ -215,6 +222,7 @@ pub fn create_app_state_with_overrides(
         config: shared_config,
         asset_loader,
         admin_token,
+        dev_auth,
         write_lock: Arc::new(tokio::sync::Mutex::new(())),
         registry,
         renderer,

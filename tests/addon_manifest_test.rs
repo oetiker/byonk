@@ -132,7 +132,21 @@ fn addon_config_declares_ingress_and_dev_login() {
     let cfg = load_yaml("homeassistant/byonk/config.yaml");
     assert_eq!(cfg["ingress"], true);
     assert_eq!(cfg["ingress_port"], 8099);
-    assert_eq!(cfg["ingress_entry"], "/dev/");
+    // No leading slash. The Supervisor builds the iframe URL by joining its
+    // own base onto this value, so a leading slash yields
+    // `/api/hassio_ingress/<token>//dev/` -- a doubled slash that byonk's
+    // router 404s, leaving an empty panel in the sidebar. Measured on HAOS
+    // with Supervisor/HA 2026.7.2: `/dev/` gave the 404, `dev/` gave 200 and
+    // the working editor. This assertion is the accountability hook for that
+    // defect; do not "tidy" the slash back on.
+    assert_eq!(cfg["ingress_entry"], "dev/");
+    assert!(
+        !cfg["ingress_entry"]
+            .as_str()
+            .expect("ingress_entry is a string")
+            .starts_with('/'),
+        "ingress_entry must not start with '/' -- the Supervisor adds the separator"
+    );
     assert_eq!(cfg["panel_admin"], true);
     assert_eq!(cfg["environment"]["BYONK_INGRESS_ADDR"], "0.0.0.0:8099");
     assert_eq!(cfg["schema"]["dev_username"], "str?");

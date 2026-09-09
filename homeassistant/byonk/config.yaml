@@ -10,7 +10,7 @@ arch:
 init: true
 ingress: true
 ingress_port: 8099
-ingress_entry: /dev/
+ingress_entry: dev/
 panel_icon: mdi:pencil-ruler
 panel_title: Byonk
 panel_admin: true

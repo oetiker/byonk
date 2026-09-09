@@ -12,12 +12,17 @@ all: release
 # Software Build
 # =============================================================================
 
-# Build release binary (runs fmt and clippy first)
-release: fmt lint webui
+# Build release binary (runs fmt, clippy and the dev UI first)
+#
+# webui before lint: `lint` compiles the crate (cargo clippy), and cargo
+# builds now fail via build.rs when webui/dist doesn't exist yet. GNU Make
+# runs a rule's prerequisites left to right in serial mode, so their order
+# here is load-bearing, not cosmetic.
+release: fmt webui lint
 	cargo build --release
 
-# Build debug binary (runs fmt and clippy first)
-debug: fmt lint webui
+# Build debug binary (runs fmt, clippy and the dev UI first)
+debug: fmt webui lint
 	cargo build
 
 # Alias for debug build
@@ -108,7 +113,10 @@ docs-samples: release
 # =============================================================================
 
 # Check everything before commit
-check: fmt lint test editor-check webui
+#
+# webui before lint and test: both compile the crate, and cargo builds now
+# fail via build.rs when webui/dist doesn't exist yet (see `debug` above).
+check: fmt webui lint test editor-check
 	@echo "All checks passed!"
 
 # =============================================================================

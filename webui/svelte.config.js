@@ -1,5 +1,4 @@
-/** @type {import('svelte').Config} */
-export default {
-  // SvelteKit would go here, but this is a standalone Vite+Svelte project.
-  // The config exists primarily to prevent the plugin from using SSR defaults.
-};
+// This file is empty but present to silence the [vite-plugin-svelte] informational
+// message: "no Svelte config found". The actual Svelte build configuration (client
+// vs SSR) is controlled by vitest.config.js resolve.conditions, not this file.
+export default {};

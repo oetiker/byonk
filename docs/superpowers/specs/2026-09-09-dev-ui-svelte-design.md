@@ -51,14 +51,23 @@ and maintainability, and hand-written DOM code serves none of them.
 
 ## Sequencing
 
-This work begins on a **new branch, after `feat/dev-editor` merges**. The
-vanilla-JS UI ships first and stays on `main` as a working, reviewed,
-documented reference the rewrite can be compared against.
+This work continues on **`feat/dev-editor` itself**, and the branch opens a
+single PR once the rewrite is done. The owner decided this on 2026-09-09,
+reversing the earlier plan of a second branch after a first merge.
 
-Rationale: replacing the UI before it ever shipped would discard 26 reviewed
-commits and grow the branch past the point where a single review is useful.
-Shipping first also means the behaviour checklist in §8 can be verified
-against something that runs.
+Consequences the plan must honour:
+
+- **One final whole-branch review, at the end**, covering the vanilla-JS work
+  and the rewrite together. Reviewing the vanilla UI first would spend effort
+  on files this work deletes.
+- **The vanilla-JS UI is still the reference for §8**, but as a *previous
+  commit* rather than as `main`. It runs on this branch today, so every
+  behaviour in the checklist can be exercised before it is replaced — do that
+  while it is still there, not from the diff afterwards.
+- **The intermediate commits stay honest.** The branch passes through a state
+  where the old UI is gone and the new one is incomplete; that is expected,
+  but each commit must still build, because the dev UI is a compile-time
+  dependency (§4).
 
 ## 1 · Layout
 
@@ -189,14 +198,20 @@ plain HTML, CSS and JS and stay served the way they are today. They are small
 enough that hand-writing them is cheaper than the coupling that would come
 from building them with the app.
 
-### A prerequisite fix
+### The prerequisite fix — done
 
-`Dockerfile` currently copies only `src` before `cargo build --release`, but
+`Dockerfile` copied only `src` before `cargo build --release`, while
 `src/api/dev.rs` and `src/api/dev_auth.rs` pull seven files in through
-`include_str!("../../static/dev/…")`. That build fails today. Releases are
-unaffected — `release-publisher.yml` uses `Dockerfile.release`, which copies a
-binary CI built on a host that has `static/`. The one-line fix belongs on the
-current branch, before this work starts.
+`include_str!("../../static/dev/…")`. Fixed in `f4feba8`.
+
+Two corrections to what this section originally claimed, both worth carrying:
+the break was **not** one line — `crates/` was missing too, so the in-repo
+`Dockerfile` had been broken since `eink-dither` was extracted, not by this
+branch. Releases were indeed unaffected: `release-publisher.yml` uses
+`Dockerfile.release`, which copies a binary CI built on a host that has
+`static/`. Whatever this work adds to the build context inherits the same
+exposure — a missing directory is a compile error, but an *empty* one is not
+(§4).
 
 ## 5 · Serving
 

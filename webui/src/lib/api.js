@@ -83,7 +83,10 @@ async function post(url, body) {
     body: JSON.stringify(body),
   });
   if (!res.ok) throw await fail(res);
-  return res.status === 204 ? null : res.json().catch(() => null);
+  // Current endpoints (create, copy, rename, check via dev_files.rs:286,303,313,346)
+  // all return 200 with JSON. The 204 branch is kept as a guard for potential
+  // future endpoints that may return no content.
+  return res.status === 204 ? null : res.json();
 }
 
 export const createScreen = (handle, name, starter = "minimal") =>

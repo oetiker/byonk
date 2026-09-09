@@ -7,6 +7,9 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 // with.
 export default defineConfig({
   plugins: [svelte()],
+  resolve: {
+    conditions: ["browser", "node", "import"],
+  },
   test: {
     environment: "jsdom",
     setupFiles: ["./test/setup.js"],

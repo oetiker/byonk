@@ -71,47 +71,77 @@ Consequences the plan must honour:
 
 ## 1 · Layout
 
-Settled by mockup review on 2026-09-08.
+Settled by mockup review on 2026-09-08. **Amended 2026-09-09 by the owner:
+each panel gets its own icon and can be shown or hidden individually.**
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│ BYONK   local/departures                     [Simulate] [Save]│  top bar
-├──┬──────────────┬───────────────────────┬─┬─────────────────┬─┤
-│  │ (flyout)     │ meta.yaml script.lua  │ │ 1200×1600       │ │
-│ic│ LOCAL        ├───────────────────────┤ ├─────────────────┤ │
-│on│  departures  │  1  -- departures     │▓│                 │ │
-│  │  weather     │  2  local res = ...   │▓│    ┌────────┐   │ │
-│ra│ EXAMPLES     │  3  return { ... }    │▓│    │ device │   │ │
-│il│  hello       │                       │▓│    └────────┘   │ │
-│  │  mandelbrot  │                       │ │                 │ │
-│  │              ├───────────────────────┤ ├═════════════════┤ │
-│  │              │ ✓ valid  lua 3:22     │ │ Panel  [______] │ │
-│  │              │      watch: connected │ │ Dither [______] │ │
-└──┴──────────────┴───────────────────────┴─┴─────────────────┴─┘
-      ▲                                     ▲         ▲
-   flyout, over the editor        vertical splitter   horizontal splitter
+┌─────────────────────────────────────────────────────────────┐
+│ BYONK   local/departures                                 [Save] │  top bar
+├──┬────────────┬──────────────────────┬─┬──────────────────┬─┤
+│▣ │ LOCAL      │ meta.yaml  script.lua  │ │ 1200×1600        │ │
+│  │  departures├──────────────────────┤ ├──────────────────┤ │
+│▣ │  weather   │  1  -- departures      │▓│                  │ │
+│  │ EXAMPLES   │  2  local res = ...    │▓│   ┌────────┐     │ │
+│▣ │  hello     │  3  return { ... }     │▓│   │ device │     │ │
+│  │  mandelbrot│                        │▓│   └────────┘     │ │
+│▣ │            ├──────────────────────┤ ├══════════════════┤ │
+│  │            │ ✓ valid  lua 3:22      │ │ Panel  [_______] │ │
+│  │            │      watch: connected  │ │ Dither [_______] │ │
+└──┴────────────┴──────────────────────┴─┴──────────────────┴─┘
+   ▲       ▲              ▲             ▲         ▲
+  rail    files           edit      splitter    preview / simulate
 ```
 
-- **Icon rail**, always visible. Holds navigation only. The screen list is a
-  **flyout** over the editor, not a permanent column.
-- **Editor** in the middle: file tabs, CodeMirror, a status bar carrying
-  validity, cursor position and file-watch state.
-- **Vertical splitter** between editor and preview, draggable, position
-  persisted.
-- **Right pane**, one column: the device on top, its simulate controls
-  underneath, always visible — never overlapping the render they change.
-- **Horizontal splitter** inside the right pane, between device and controls.
-  This is what makes upright panels work: an E1004 is 1200 × 1600, and a
-  fixed control block under it would squeeze the device to a stamp. Drag the
-  controls shut and the device takes the whole column; drag them open when
-  tuning. The controls scroll inside whatever height they are given.
+**Four panels, four icons.** The icon rail is always visible and holds one
+toggle per panel, in layout order:
+
+| Icon | Panel | What it holds |
+|---|---|---|
+| files | **Files** | the screen list, grouped by repo |
+| edit | **Editor** | file tabs, CodeMirror, status bar |
+| preview | **Preview** | the rendered device |
+| simulation | **Simulate** | panel, dither and parameter controls |
+
+Rules that make the toggles predictable:
+
+- **Every combination is legal, including none.** Hiding all four leaves the
+  rail and the top bar, which is a usable state (pick a screen from the files
+  panel again). Do not add a "you must keep one open" rule — it turns a
+  toggle into an argument.
+- **A hidden panel gives its width or height to its neighbours**, and gets it
+  back at the size it had when it reopens. Sizes and open/closed states
+  persist together, in the same store as the splitter positions.
+- **A splitter exists only while both of its neighbours are open.** Hiding the
+  preview retires the vertical splitter rather than leaving a handle that
+  drags nothing.
+- **The toggle state is the only thing the icon carries.** No badges, no
+  counts — the status bar already reports validity and watch state.
+- **Each icon shows its panel's state** (pressed = open) and is reachable by
+  keyboard, with `aria-pressed` and a label naming the panel.
+
+The right pane keeps its stacked shape: Preview above, Simulate below,
+separated by the horizontal splitter. That is what makes upright panels work
+— an E1004 is 1200 × 1600, and a fixed control block under it would squeeze
+the device to a stamp. Now there are two ways to reclaim that height: drag
+the controls shut, or hide the Simulate panel outright. The controls still
+scroll inside whatever height they are given, and still never overlap the
+render they change.
 
 One splitter component serves both axes. That is deliberate: two gestures,
 one concept.
 
+**This supersedes the flyout.** The 2026-09-08 review settled the screen list
+as a flyout *over* the editor, so that a permanent column could not cost the
+code its width. A per-panel toggle solves the same problem better: the list
+costs width only while it is open, and it now behaves exactly like the other
+three instead of being the one panel that overlays rather than docks. The
+Files panel therefore docks as a column. ⚠️ Owner: this is the one earlier
+ruling the amendment overturns — say so if you want the overlay kept.
+
 ### Rejected alternatives
 
-- **Permanent screen-list column** — costs width the code and preview need.
+- **Permanent screen-list column** — costs width the code and preview
+  need. Still rejected: the Files panel is toggleable, not permanent.
 - **Preview-first with a code dock** — says byonk is for designing screens,
   not writing Lua. It is for both, and the Lua is where the time goes.
 - **Simulate as a flyout** — you cannot watch a render change while the thing
@@ -241,11 +271,18 @@ so emitted asset paths do not become root-absolute.
 
 Reusable:
 
-- `SplitPane` — one component, both axes, persists its position per axis.
+- `SplitPane` — one component, both axes, persists its position per axis, and
+  collapses to nothing when either neighbour is hidden (§1).
 
 Shell:
 
-- `AppShell` · `IconRail` · `ScreenList` (flyout) · `StatusBar` · `ThemeSwitch`
+- `AppShell` · `IconRail` · `FilesPane` · `StatusBar` · `ThemeSwitch`
+
+`IconRail` holds the four panel toggles and owns no panel content itself. The
+four work areas below are the four toggleable panels of §1, so each mounts and
+unmounts as its icon is pressed — mind that unmounting `EditorPane` must not
+lose an unsaved buffer, which is why editor state lives in a rune module and
+not in the component.
 
 Work areas:
 
@@ -256,7 +293,9 @@ Work areas:
 - `ConflictBanner` — the on-disk-changed banner with Reload and Overwrite
 
 State lives in four rune modules — `screens`, `editor`, `simulate`, `layout` —
-so no component owns state another component needs. Each answers: what does it
+so no component owns state another component needs. `layout` carries the four
+panels' open/closed states alongside the splitter positions, and persists them
+together. Each answers: what does it
 hold, who writes it, who reads it.
 
 ## 7 · Testing

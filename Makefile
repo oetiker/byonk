@@ -3,7 +3,7 @@
 
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 
-.PHONY: all build release debug run clean docs docs-dev check fmt lint test ha-setup ha-check fonts fonts-setup fonts-check editor editor-check help
+.PHONY: all build release debug run clean docs docs-dev check fmt lint test ha-setup ha-check fonts fonts-setup fonts-check editor editor-check webui webui-test help
 
 # Default target
 all: release
@@ -13,11 +13,11 @@ all: release
 # =============================================================================
 
 # Build release binary (runs fmt and clippy first)
-release: fmt lint
+release: fmt lint webui
 	cargo build --release
 
 # Build debug binary (runs fmt and clippy first)
-debug: fmt lint
+debug: fmt lint webui
 	cargo build
 
 # Alias for debug build
@@ -108,7 +108,7 @@ docs-samples: release
 # =============================================================================
 
 # Check everything before commit
-check: fmt lint test editor-check
+check: fmt lint test editor-check webui
 	@echo "All checks passed!"
 
 # =============================================================================
@@ -129,6 +129,23 @@ fonts-check: ## run the importer's own tests
 
 fonts: fonts-check ## rebuild the 26 X11 TTFs from their pinned BDF sources
 	.venv-fonts/bin/python fonts/x11-importer.py
+
+# =============================================================================
+# Svelte Dev UI (webui/)
+# =============================================================================
+#
+# webui/dist/{index.html,app.js,app.css} is embedded into the binary via
+# include_str! (src/api/dev.rs) -- a COMPILE-time dependency, so it must
+# exist before cargo runs. build.rs checks for it and fails the build with
+# a plain message if it doesn't; it never runs pnpm itself. `debug`,
+# `release` and `check` all depend on `webui` so every build path produces
+# it first.
+
+webui: ## build the /dev editor UI into webui/dist (needs pnpm)
+	cd webui && pnpm install --frozen-lockfile && pnpm run build
+
+webui-test: ## run the UI's component tests
+	cd webui && pnpm run test
 
 # =============================================================================
 # CodeMirror 6 Dev Editor Bundle
@@ -170,8 +187,8 @@ help:
 	@echo "Byonk Makefile"
 	@echo ""
 	@echo "Software:"
-	@echo "  make build        Build debug binary (runs fmt + clippy)"
-	@echo "  make release      Build release binary (runs fmt + clippy)"
+	@echo "  make build        Build debug binary (runs fmt + clippy + webui)"
+	@echo "  make release      Build release binary (runs fmt + clippy + webui)"
 	@echo "  make run          Run server in debug mode"
 	@echo "  make run-release  Run server in release mode"
 	@echo "  make watch        Run with auto-reload (needs cargo-watch)"
@@ -199,6 +216,10 @@ help:
 	@echo "Dev editor bundle:"
 	@echo "  make editor       Rebuild static/dev/editor.bundle.js (needs pnpm)"
 	@echo "  make editor-check Fail if the committed bundle is stale"
+	@echo ""
+	@echo "Dev UI (webui/):"
+	@echo "  make webui        Build the /dev editor UI into webui/dist (needs pnpm)"
+	@echo "  make webui-test   Run the UI's component tests"
 	@echo ""
 	@echo "Home Assistant VM:"
 	@echo "  make ha-vm        Boot the Home Assistant OS test VM (headless)"

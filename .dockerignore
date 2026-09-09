@@ -49,3 +49,12 @@ Thumbs.db
 # The committed editor.bundle.js is what the build uses; its 17 MB of
 # node_modules only bloats the build context.
 static/dev/editor/node_modules/
+
+# The webui Node stage does its own `pnpm install` and `pnpm build` inside
+# the image (COPY webui ./webui); a developer's local node_modules
+# would otherwise bloat the build context, and a locally-built dist/ here
+# would be masked by -- and could be mistaken for -- the in-container build.
+# The Rust stage takes dist from the webui stage (COPY --from=webui), never
+# from the context.
+webui/node_modules/
+webui/dist/

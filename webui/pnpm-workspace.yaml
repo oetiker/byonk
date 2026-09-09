@@ -1,3 +1,0 @@
-minimumReleaseAgeExclude:
-  - '@lucide/svelte@1.43.0'
-  - bits-ui@2.19.1

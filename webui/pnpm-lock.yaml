@@ -39,11 +39,11 @@ importers:
         specifier: ^1.2.3
         version: 1.2.3
       '@lucide/svelte':
-        specifier: 1.43.0
-        version: 1.43.0(svelte@5.57.0)
+        specifier: 1.42.0
+        version: 1.42.0(svelte@5.57.0)
       bits-ui:
-        specifier: 2.19.1
-        version: 2.19.1(@internationalized/date@3.12.4)(svelte@5.57.0)
+        specifier: 2.19.0
+        version: 2.19.0(@internationalized/date@3.12.4)(svelte@5.57.0)
       clsx:
         specifier: 2.1.1
         version: 2.1.1
@@ -229,8 +229,8 @@ packages:
   '@lezer/yaml@1.0.4':
     resolution: {integrity: sha512-2lrrHqxalACEbxIbsjhqGpSW8kWpUKuY6RHgnSAFZa6qK62wvnPxA8hGOwOoDbwHcOFs5M4o27mjGu+P7TvBmw==}
 
-  '@lucide/svelte@1.43.0':
-    resolution: {integrity: sha512-IfxS4hVxojnafzFKkQGzndoM6yUODmGc07I0h6R/1SlwDoZwd/5gl90zHz+fTaBVLZo7uE5sPDySFGiK4iMQKw==}
+  '@lucide/svelte@1.42.0':
+    resolution: {integrity: sha512-9vOi3EdzJht5aD7F5OraoxrK2GyyL1Y+kVXEtIg4+IAdKmDBrwYK2d/x7akC89uA+cvkfjcw+IuzH0vfd/TuzA==}
     peerDependencies:
       svelte: ^5
 
@@ -542,8 +542,8 @@ packages:
   bidi-js@1.1.0:
     resolution: {integrity: sha512-fX1Onk0tdVPC7obPWB5EbJ1z7NVhLq4m2xZLq2YXBkxzMXIGRpNMU88n0EPgWseKl12J7zXs7qrDxPK4sRs2fg==}
 
-  bits-ui@2.19.1:
-    resolution: {integrity: sha512-NPgXkZQRU1upJB+c3lnWTxdY8vS6cLuXcS8dNtsH4DAjqpJLav8H6Fh3zUQFe8VT5NcH/domm0WWWTO3UqHK7w==}
+  bits-ui@2.19.0:
+    resolution: {integrity: sha512-dHDm5Jw2NZJgLRvHAwPeuR4BnZij+AqTIq33OqVfo+qiMXontoC/yIvGT5TZaviv7OuBdJ2QUy2JPQ2yKBvF6w==}
     engines: {node: '>=20'}
     peerDependencies:
       '@internationalized/date': ^3.8.1
@@ -1315,7 +1315,7 @@ snapshots:
       '@lezer/highlight': 1.2.3
       '@lezer/lr': 1.4.10
 
-  '@lucide/svelte@1.43.0(svelte@5.57.0)':
+  '@lucide/svelte@1.42.0(svelte@5.57.0)':
     dependencies:
       svelte: 5.57.0
 
@@ -1535,7 +1535,7 @@ snapshots:
     dependencies:
       require-from-string: 2.0.2
 
-  bits-ui@2.19.1(@internationalized/date@3.12.4)(svelte@5.57.0):
+  bits-ui@2.19.0(@internationalized/date@3.12.4)(svelte@5.57.0):
     dependencies:
       '@floating-ui/core': 1.8.0
       '@floating-ui/dom': 1.8.0

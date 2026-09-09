@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+/* The density scale of spec §2, decided once here rather than per component.
+   Dense and cramped are neighbours; this is the guard. */
+@theme {
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --text-xs: 0.6875rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --spacing: 0.25rem;
+}
+
+/* Light is the default; dark keeps byonk's navy identity (settled, do not
+   relitigate). `.dark` is set on <html> by the theme store in Task 11 for an
+   explicit choice, and by the prefers-color-scheme block for "system". */
+:root {
+  --bg-color: #ffffff;
+  --panel-bg: #f6f7f9;
+  --border-color: #d8dce3;
+  --text-color: #1a1d23;
+  --text-muted: #5a6472;
+  --accent-color: #1e5aa8;
+  --selection-bg: #cfe0f7;
+  --match-bg: #e3ecfa;
+  --danger-color: #b3261e;
+  --ok-color: #1a7f45;
+}
+
+.dark {
+  --bg-color: #0f1622;
+  --panel-bg: #172030;
+  --border-color: #27354a;
+  --text-color: #dbe3ef;
+  --text-muted: #8896aa;
+  --accent-color: #5b9bf5;
+  --selection-bg: #24405f;
+  --match-bg: #1d324a;
+  --danger-color: #f2837c;
+  --ok-color: #56c98a;
+}
+
+html, body, #app { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg-color);
+  color: var(--text-color);
+}

@@ -218,6 +218,11 @@ The **Byonk** entry in the Home Assistant sidebar opens Byonk's built-in
 screen editor. No extra login is needed — Home Assistant has already
 authenticated you — and the entry is shown to administrators only.
 
+If the entry is missing, open Byonk's page under **Settings** and turn on
+**Show in sidebar**. Home Assistant keeps that switch off for a newly
+installed app regardless of what the app requests, so it is a one-time step
+rather than a sign that something is wrong.
+
 The editor lists your screens, edits their Lua and SVG with syntax checking as
 you type, saves with conflict detection, and previews the rendered result. Here
 the writable repos are `screens/` (the `local` handle) and `examples/`; the

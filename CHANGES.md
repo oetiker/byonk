@@ -89,6 +89,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shown to administrators only. The two Dev UI options are needed only if you
   also want to reach the editor from outside Home Assistant.
 
+  Turn it on once, under **Show in sidebar** on Byonk's own page in
+  **Settings**: Home Assistant keeps that switch off for a newly installed
+  app, no matter what the app asks for.
+
 - **Panel recovery for burnt-in screens.** If a TRMNL X keeps showing a faint
   image of something it displayed a long time ago, you can now ask it to clear
   the panel. Start a run with

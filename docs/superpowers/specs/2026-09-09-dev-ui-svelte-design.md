@@ -347,12 +347,18 @@ is a checklist for the implementation plan, not prose.
 
 ## 9 · Risks
 
-- **The pop-out under Ingress is unproven.** It opens as a top-level document
-  at the HA ingress URL, outside HA's iframe, and whether HA's
-  `ingress_session` cookie authorises that is not knowable from the code and
-  not reachable without a Supervisor. This is inherited from the current
-  branch and settled on the HA VM, not here. If it fails, the pop-out button
-  is dead for sidebar users while working perfectly in every local test.
+- ~~**The pop-out under Ingress is unproven.**~~ **Settled 2026-09-09 on the
+  HA VM: it works.** It opens as a top-level document at the HA ingress URL,
+  outside HA's iframe, HA serves it, and it live-follows a drawer change
+  (800x480 -> 1872x1404, new blob, the pop-out's own size label updated). The
+  SPA must keep the property rather than re-prove it: the pop-out URL is
+  built relative to the app's own document, never from an origin.
+
+  Two neighbouring facts the same session established, both binding on this
+  work: the add-on manifest's `ingress_entry` must carry **no leading slash**
+  (a leading one yields `<base>//dev/`, which 404s -- fixed in `7f95e93` and
+  pinned by `tests/addon_manifest_test.rs`), and the ingress listener answers
+  **403** to any peer that is not the Supervisor at 172.30.32.2.
 - **Bundle size grows.** Three hand-written files become a framework, and it
   is embedded in the binary. Worth measuring against the current total and
   stating a budget in the plan.

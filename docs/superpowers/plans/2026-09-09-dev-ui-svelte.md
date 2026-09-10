@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-09-dev-ui-svelte-design.md` — read it before Task 1 and keep it open. It is the binding authority; this plan argues from it. Its §8 is the regression checklist and its §1 is the layout contract.
 
+**Second spec, binding for Tasks 9a–9g only:** `docs/superpowers/specs/2026-09-10-dev-ui-color-tuning-design.md` — the colour-tuning amendment, added 2026-09-10 after Task 9 was complete. It restores the colour tuning the rewrite had silently dropped, as a fifth panel with a durable write path, and it amends §1 and §6 of the spec above. Tasks 9a–9g are lettered rather than numbered so that Tasks 10–14 and their pre-generated briefs keep their numbers.
+
 ---
 
 ## Global Constraints
@@ -26,7 +28,7 @@ Every task's requirements implicitly include this section.
   make webui                     # replaces `make editor-check` from Task 12 on
   ```
 - **Every URL the browser sees must be relative.** Under Home Assistant Ingress the Supervisor strips the path prefix before byonk sees the request, so the server cannot know it. This binds `fetch` targets, the `EventSource` URL, `window.open`, asset references and redirects. Vite is configured `base: ""` for exactly this reason. A URL starting with `/` is a defect, not a style choice.
-- **No server changes.** Dev auth, routes, the file API, the render endpoint and Ingress handling stay as they are. Task 12 changes *which files* three handlers embed and deletes three routes; it changes no behaviour. If any other task seems to need a server change, the design drifted — stop and say so.
+- **No server changes, except in Tasks 9a–9d.** The colour-tuning amendment adds server work, and it is confined to those four tasks: the config reload, the panel-colour override, tuning sessions and the durable config write. Everywhere else the rule stands unchanged — dev auth, the file API, the render endpoint and Ingress handling stay as they are. Task 12 changes *which files* three handlers embed and deletes three routes; it changes no behaviour. If any task other than 9a–9d seems to need a server change, the design drifted — stop and say so.
 - **`tests/dev_auth_test.rs` must stay byte-identical to commit `5d6323c`.** It is the accountability hook for the `/dev` vs `/dev/` routing defect.
 - **Do not add a nested page route under `/dev`.** `require_dev` redirects to the relative string `"login"`, which hard-codes depth 1. `tests/dev_static_test.rs:33-34` pins this.
 - **The dev UI is a COMPILE-time dependency, not a runtime one.** `src/api/dev.rs` and `src/api/dev_auth.rs` pull it in with `include_str!`. A missing file is a compile error. A missing *directory* is a compile error too — but an **empty** directory is not, which is how a build can silently ship an empty UI. Any change to what a build context copies inherits this trap.
@@ -82,6 +84,16 @@ All paths are **relative to the app document** (`/dev/`), so they are written wi
 | `api/screen/check` | POST | `{ref, file, text}` → `{ok, issues:[{severity, location, message, line}]}` |
 | `api/render?…` | GET | PNG; params below |
 | `api/events` | GET | SSE; the `file-change` event drives the conflict banner |
+| `api/panel-colors/{panel}` | PUT | `{colors_actual}` — temporary override, keyed by **panel**; 404 for an unknown panel (Task 9b) |
+| `api/panel-colors/{panel}` | DELETE | clears the temporary override (Task 9b) |
+| `api/panel-colors/{panel}/save` | POST | `{colors_actual}` — writes `config.yaml`, reloads, clears the override (Task 9d) |
+| `api/tuning-session/{device}` | PUT | start or refresh a tuning session; idempotent (Task 9c) |
+| `api/tuning-session/{device}` | DELETE | end it (Task 9c) |
+
+⚠️ **The last five do not exist yet — Tasks 9b–9d build them.** Every other row
+describes the server as it already is. The two rows they replace,
+`POST api/panel-colors` with a `{device, colors_actual}` body and
+`DELETE api/panel-colors/{panel}` keyed by device, are deleted by Task 9b.
 
 **`If-Match` semantics, which are byonk's own and not RFC 9110's:**
 
@@ -119,11 +131,16 @@ webui/
         screens.svelte.js repo list, screen list, selection
         editor.svelte.js  open files, buffers, dirty, etags, diagnostics
         simulate.svelte.js device/panel/dither/params and the render URL
+        tune.svelte.js    colour working copy, override, save   (Task 9f)
+      utils/
+        color.js          hex <-> HSL, ported from dev.js       (Task 9g)
       components/
         AppShell.svelte      the grid; mounts panels per layout state
-        IconRail.svelte      the four panel toggles
+        IconRail.svelte      the panel toggles (five, from Task 9e)
         FilesPane.svelte     repo-grouped screen list + New/Copy/Rename/Delete
         EditorPane.svelte    file tabs + CodeMirror + dirty/error markers
+        TunePane.svelte      panel/device pickers, editable swatches,
+                             HSL + hex, push / save / discard  (Tasks 9e, 9g)
         PreviewPane.svelte   device frame, zoom, pop-out button
         SimulateControls.svelte
         StatusBar.svelte     validity, cursor position, watch state
@@ -2417,6 +2434,2089 @@ git commit -m "feat(webui): preview pane with the proven pop-out protocol"
 
 ---
 
+### Task 9a: `reload_config` re-applies the add-on options overlay
+
+> Tasks 9a–9g were added by the **2026-09-10 colour-tuning amendment**. Their
+> binding spec is `docs/superpowers/specs/2026-09-10-dev-ui-color-tuning-design.md`.
+> Read it alongside the parent spec. 9a–9d are the only server work in this
+> plan; 9e–9g are Svelte.
+
+**Files:**
+- Modify: `src/server.rs` (`reload_config`, around line 249), `src/main.rs` (around line 889)
+- Test: `tests/addon_reload_test.rs` (create)
+
+**Interfaces:**
+- Consumes: `crate::addon_options::{options_path, read_options, apply_to_config}` — all already public.
+- Produces: `pub fn load_config_with_addon_overlay(loader: &AssetLoader) -> anyhow::Result<AppConfig>` in `src/server.rs`. Task 9d relies on `reload_config` applying the overlay; nothing else calls the new function directly except `main.rs`.
+
+**Why this is here.** `apply_to_config` folds `/data/options.json` onto the
+parsed config and runs **once, at startup** (`src/main.rs:889`).
+`reload_config` (`src/server.rs:249`) reparses `config.yaml` and swaps it in
+without re-applying it. So under the Home Assistant add-on, any config write
+resets `screen_repos`, `auth_mode` and `screen_repo_refresh_interval` to the
+file's values and discards what the Options form set, until the next restart.
+
+This is pre-existing — admin device writes already do it, and the HA
+integration writes devices. It is fixed **before** Task 9d because 9d adds a
+`Save to config` button inside the dev UI that HA users reach from the sidebar.
+Spec §6.
+
+`state.admin_token` is unaffected either way: it is resolved once into an
+`AppState` field (`src/server.rs:187`) and is not re-read per request. Do not
+"fix" that too.
+
+- [ ] **Step 1: Write the failing test**
+
+`tests/addon_reload_test.rs`:
+
+```rust
+//! `reload_config` must re-apply the Home Assistant add-on options overlay.
+//!
+//! Before this fix it reparsed `config.yaml` and swapped it in bare, so any
+//! config write silently discarded what the add-on Options form had set.
+
+mod common;
+
+use common::TestApp;
+
+/// `BYONK_OPTIONS_FILE` is process-wide. Cargo runs the tests in a binary on
+/// parallel threads, so serialise every test that sets it — the same idiom
+/// `tests/addon_options_test.rs` already uses for the dev-credential vars.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[tokio::test]
+async fn a_config_write_re_applies_the_addon_overlay() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+
+    // options.json carries a value that config.yaml does NOT.
+    let options = dir.path().join("options.json");
+    std::fs::write(
+        &options,
+        r#"{"admin_token":"secret","auth_mode":"ed25519","screen_repos":[]}"#,
+    )
+    .unwrap();
+    std::env::set_var("BYONK_OPTIONS_FILE", &options);
+
+    // The app starts WITHOUT the overlay (TestApp does not apply it), so the
+    // live config here says `api_key` — whatever config.yaml says.
+    let (app, config_path) = TestApp::new_admin_with_file("secret", dir.path());
+
+    // Any admin write goes through `persist` -> `reload_config`.
+    let r = app
+        .post_json(
+            "/api/admin/devices",
+            &[("Authorization", "Bearer secret")],
+            r#"{"key":"AA:BB:CC:DD:EE:FF","screen":"byonk-builtin/default"}"#,
+        )
+        .await;
+    assert!(
+        r.status().is_success(),
+        "device write failed: {} {}",
+        r.status(),
+        r.text()
+    );
+
+    // After the reload the overlay must be back on.
+    let cfg = app
+        .get_with_headers("/api/admin/config", &[("Authorization", "Bearer secret")])
+        .await;
+    let body: serde_json::Value = cfg.json();
+    assert_eq!(
+        body["auth_mode"], "ed25519",
+        "reload_config dropped the add-on overlay; body was {body}"
+    );
+
+    // The file itself is untouched by the overlay — it is an in-memory fold.
+    let on_disk = std::fs::read_to_string(&config_path).unwrap();
+    assert!(
+        !on_disk.contains("ed25519"),
+        "the overlay must never be written back to config.yaml"
+    );
+
+    std::env::remove_var("BYONK_OPTIONS_FILE");
+}
+```
+
+**Verify two shapes before you run it**, as this plan's global constraints
+require: that `TestApp::new_admin_with_file` writes a `config.yaml` whose
+`auth_mode` is absent or `api_key`, and that `GET /api/admin/config` returns
+`auth_mode` at the top level. If either differs, adjust the assertion to the
+real shape and say so in your report — do not adjust the *behaviour* being
+asserted.
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `cargo test --test addon_reload_test -- --nocapture`
+Expected: FAIL on the `auth_mode` assertion, reporting `"api_key"`.
+
+- [ ] **Step 3: Share one config-loading path between startup and reload**
+
+In `src/server.rs`, add the function and use it in `reload_config`:
+
+```rust
+/// Load `config.yaml` and fold the Home Assistant add-on options over it.
+///
+/// Startup and reload must produce the same config from the same inputs, so
+/// both go through here. `read_options` returns `Missing` when there is no
+/// options file — the normal non-add-on case — and `apply_to_config` is then
+/// a no-op, so this is safe to call unconditionally.
+pub fn load_config_with_addon_overlay(loader: &AssetLoader) -> anyhow::Result<AppConfig> {
+    let mut config = AppConfig::load_from_assets(loader)?;
+    let opts = crate::addon_options::read_options(&crate::addon_options::options_path());
+    crate::addon_options::apply_to_config(&opts, &mut config);
+    Ok(config)
+}
+```
+
+and in `reload_config`, replace the first line:
+
+```rust
+pub fn reload_config(state: &AppState) -> anyhow::Result<()> {
+    let fresh = load_config_with_addon_overlay(&state.asset_loader)?;
+    state.config.store(Arc::new(fresh));
+    state.screen_repo_manager.rebuild_loader();
+    state.preview_cache.clear();
+    Ok(())
+}
+```
+
+Use the `AssetLoader` type name and import path the file already uses; do not
+add a new import if one is in scope.
+
+- [ ] **Step 4: Use the same path at startup**
+
+In `src/main.rs`, replace the two lines around 888-889:
+
+```rust
+    let mut config = byonk::models::AppConfig::load_from_assets(&asset_loader)?;
+    byonk::addon_options::apply_to_config(&addon, &mut config);
+```
+
+with:
+
+```rust
+    // Same loader as `reload_config`, so a reload can never produce a
+    // different config from the same files (see `load_config_with_addon_overlay`).
+    let config = byonk::server::load_config_with_addon_overlay(&asset_loader)?;
+```
+
+`addon` is still needed on the next line for `state.addon_mode`; leave that
+read of it alone. If dropping `mut` makes the compiler complain about a later
+mutation, keep `mut` rather than restructuring.
+
+- [ ] **Step 5: Run the test to verify it passes**
+
+Run: `cargo test --test addon_reload_test -- --nocapture`
+Expected: PASS.
+
+- [ ] **Step 6: Run the full verification**
+
+```
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+Expected: all clean. `tests/addon_options_test.rs` must still pass unchanged —
+if it does not, the overlay semantics moved and that is a defect, not a test to
+update.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/server.rs src/main.rs tests/addon_reload_test.rs
+git diff --cached --name-only     # must list exactly those three
+git commit -m "fix(config): re-apply the add-on options overlay on reload
+
+reload_config reparsed config.yaml and swapped it in without folding
+/data/options.json over it, so any config write discarded what the HA
+add-on Options form had set until the next restart. Startup and reload
+now share one loader, so they cannot disagree."
+```
+
+---
+
+### Task 9b: Re-key the colour override from device to panel
+
+**Files:**
+- Modify: `src/server.rs` (`DevOverrides`, around line 37), `src/api/display.rs` (panel resolution around 788-806, override lookup at 813), `src/api/dev.rs` (`PanelColorsRequest` at 352, handlers 351-383, routes 868-869)
+- Modify: `tests/common/app.rs` (add a `put_json` helper)
+- Test: `tests/dev_panel_colors_test.rs` (create)
+
+**Interfaces:**
+- Consumes: nothing from 9a.
+- Produces:
+  - `DevOverrides.panel_colors: Arc<RwLock<HashMap<String /* panel config key */, String>>>` — same field, new key meaning.
+  - `pub fn resolve_panel<'a>(config: &'a AppConfig, device_config_panel: Option<&str>, board_header: Option<&str>, model_str: &str) -> (Option<&'a PanelConfig>, Option<String> /* key */, Option<String> /* source label */)` in `src/api/display.rs`.
+  - Routes `PUT /dev/api/panel-colors/{panel}` and `DELETE /dev/api/panel-colors/{panel}`, body `{"colors_actual": "..."}` on the PUT.
+  - `TestApp::put_json(path, headers, body)`.
+
+**Why.** Tuning is a property of a panel profile, not of one device: two devices
+sharing a panel share its measured colours. The route already spells the path
+parameter `panel` while the handler binds it to `device` — this makes the code
+agree with the URL. Spec §4. The project's standing guidance permits byonk API
+changes, and nothing outside the dev UI calls this endpoint.
+
+The override keeps its place in the measured-colours precedence chain —
+`SRC_DEV_OVERRIDE` stays ahead of `panel.colors_actual` and the
+`Measured-Colors` header. **Only the key changes.**
+
+- [ ] **Step 1: Add the `put_json` test helper**
+
+In `tests/common/app.rs`, beside `patch_json`:
+
+```rust
+    pub async fn put_json(&self, path: &str, headers: &[(&str, &str)], body: &str) -> TestResponse {
+        let mut builder = Request::put(path).header("Content-Type", "application/json");
+        for (n, v) in headers {
+            builder = builder.header(*n, *v);
+        }
+        self.request(builder.body(Body::from(body.to_string())).unwrap())
+            .await
+    }
+```
+
+- [ ] **Step 2: Write the failing test**
+
+`tests/dev_panel_colors_test.rs`:
+
+```rust
+//! The dev colour override is keyed by PANEL, so every device using that
+//! panel profile sees it — which is the point: a calibration belongs to the
+//! hardware, not to one unit of it.
+
+mod common;
+
+use common::TestApp;
+
+const AUTH: (&str, &str) = ("Authorization", "Bearer secret");
+
+/// Two devices, one panel profile. `e1004` carries a `match:` so the
+/// Board-header route is exercised too.
+fn app(dir: &std::path::Path) -> (TestApp, std::path::PathBuf) {
+    let yaml = "\
+admin:
+  token: secret
+panels:
+  e1004:
+    name: reTerminal E1004
+    match: e1004
+    colors: '#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00'
+    colors_actual: '#101010,#E8E8E8,#B03030,#D0C040,#3040A0,#00994D'
+devices:
+  kitchen:
+    screen: byonk-builtin/default
+    panel: e1004
+  hallway:
+    screen: byonk-builtin/default
+    panel: e1004
+  office:
+    screen: byonk-builtin/default
+";
+    TestApp::new_with_config_yaml(yaml, dir)
+}
+
+#[tokio::test]
+async fn put_and_delete_an_override_by_panel_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _cfg) = app(dir.path());
+
+    let r = app
+        .put_json(
+            "/dev/api/panel-colors/e1004",
+            &[AUTH],
+            r#"{"colors_actual":"#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00994D"}"#,
+        )
+        .await;
+    assert!(r.status().is_success(), "PUT failed: {}", r.status());
+
+    let r = app.delete("/dev/api/panel-colors/e1004", &[AUTH]).await;
+    assert!(r.status().is_success(), "DELETE failed: {}", r.status());
+}
+
+#[tokio::test]
+async fn an_unknown_panel_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _cfg) = app(dir.path());
+
+    let r = app
+        .put_json(
+            "/dev/api/panel-colors/nosuchpanel",
+            &[AUTH],
+            r#"{"colors_actual":"#000000,#FFFFFF"}"#,
+        )
+        .await;
+    assert_eq!(
+        r.status(),
+        axum::http::StatusCode::NOT_FOUND,
+        "an override for a panel that does not exist can never be read back, \
+         so it must be refused rather than stored where nothing will find it"
+    );
+}
+```
+
+And a unit test for the resolver, in `src/api/display.rs`'s test module:
+
+```rust
+    #[test]
+    fn resolve_panel_reports_the_config_key_in_every_branch() {
+        // `AppConfig` derives `Deserialize`, so YAML is the shortest honest
+        // way to build one — and it exercises the same parse the server uses.
+        let config: AppConfig = serde_yaml::from_str(
+            "\
+panels:
+  e1004:
+    name: reTerminal E1004
+    match: e1004
+    colors: '#000000,#FFFFFF'
+",
+        )
+        .expect("fixture config parses");
+
+        // (a) the device names the panel
+        let (p, key, src) = resolve_panel(&config, Some("e1004"), None, "");
+        assert!(p.is_some());
+        assert_eq!(key.as_deref(), Some("e1004"));
+        assert_eq!(src.as_deref(), Some("device_config:e1004"));
+
+        // (b) the Board header matches
+        let (p, key, src) = resolve_panel(&config, None, Some("e1004"), "");
+        assert!(p.is_some());
+        assert_eq!(key.as_deref(), Some("e1004"));
+        assert_eq!(src.as_deref(), Some("board_header:e1004"));
+
+        // (c) the Model header matches
+        let (p, key, src) = resolve_panel(&config, None, None, "e1004");
+        assert!(p.is_some());
+        assert_eq!(key.as_deref(), Some("e1004"));
+        assert_eq!(src.as_deref(), Some("model_header:e1004"));
+
+        // (d) nothing matches
+        let (p, key, src) = resolve_panel(&config, None, None, "unknown");
+        assert!(p.is_none());
+        assert_eq!(key, None);
+        assert_eq!(src, None);
+    }
+```
+
+- [ ] **Step 3: Run both to verify they fail**
+
+Run: `cargo test --test dev_panel_colors_test` and
+`cargo test --lib display::tests::resolve_panel_reports_the_config_key_in_every_branch`
+Expected: FAIL — the route does not exist, and `resolve_panel` is not defined.
+
+- [ ] **Step 4: Extract `resolve_panel`**
+
+`src/api/display.rs:788-806` currently inlines the three branches and builds
+only a source label. Lift it out verbatim, adding the key as a third return
+value. Do not change which branch wins or what the labels say:
+
+```rust
+/// Resolve a device's panel profile, returning the profile, its **config key**
+/// and a human-readable source label.
+///
+/// The key is what dev colour overrides are keyed by (`DevOverrides::panel_colors`),
+/// so it must be the `config.panels` map key and not the profile's display name.
+pub fn resolve_panel<'a>(
+    config: &'a AppConfig,
+    device_config_panel: Option<&str>,
+    board_header: Option<&str>,
+    model_str: &str,
+) -> (Option<&'a PanelConfig>, Option<String>, Option<String>) {
+    if let Some(panel_name) = device_config_panel {
+        return match config.get_panel(panel_name) {
+            Some(p) => (
+                Some(p),
+                Some(panel_name.to_string()),
+                Some(format!("device_config:{panel_name}")),
+            ),
+            None => (None, None, None),
+        };
+    }
+    if let Some((name, p)) = board_header.and_then(|b| config.find_panel_for_board(b)) {
+        return (
+            Some(p),
+            Some(name.to_string()),
+            Some(format!("board_header:{name}")),
+        );
+    }
+    // Some devices (e.g. reTerminal E1004) report their panel identity in the
+    // `Model` header rather than `Board`; fall back to matching against it.
+    if let Some((name, p)) = config.find_panel_for_board(model_str) {
+        return (
+            Some(p),
+            Some(name.to_string()),
+            Some(format!("model_header:{name}")),
+        );
+    }
+    (None, None, None)
+}
+```
+
+Check the real return type of `find_panel_for_board` before you write `name.to_string()`
+— if it already hands back an owned `String`, drop the conversion.
+
+Replace the inlined block at the call site with:
+
+```rust
+    let (panel, panel_key, panel_source) = resolve_panel(
+        &config,
+        device_config_panel.as_deref(),
+        board_header.as_deref(),
+        model_str,
+    );
+```
+
+- [ ] **Step 5: Key the override lookup by panel**
+
+At `src/api/display.rs:809-815`, replace the device-keyed lookup and correct
+the comment above it, which currently states the opposite rule:
+
+```rust
+    // Resolve measured colors: dev override > panel.colors_actual >
+    // Measured-Colors header > None. Dev overrides are keyed by PANEL config
+    // key, because a calibration belongs to the panel profile: every device
+    // using that profile shares it. (2026-09-10 colour-tuning amendment.)
+    let measured_colors_header = headers.get_str("Measured-Colors").map(|s| s.to_string());
+    let override_colors = if let Some(ref key) = panel_key {
+        dev_overrides.panel_colors.read().await.get(key).cloned()
+    } else {
+        None
+    };
+```
+
+Update `DevOverrides`'s doc comment in `src/server.rs:32-41` too: `panel_colors`
+is now keyed by panel config key while `dither` and `tuning` stay keyed by
+device config key. The current comment says "Both maps are keyed by device
+config key" and it is now wrong in two ways — it says *both* of three, and it
+is no longer true of `panel_colors`.
+
+- [ ] **Step 6: Replace the two handlers and their routes**
+
+In `src/api/dev.rs`, replace `PanelColorsRequest`, `handle_set_panel_colors`
+and `handle_delete_panel_colors`:
+
+```rust
+/// Request body for `PUT /dev/api/panel-colors/{panel}`.
+#[derive(Debug, Deserialize)]
+pub struct PanelColorsRequest {
+    pub colors_actual: String,
+}
+
+/// Set a temporary colour override for a panel profile (dev colour tuning).
+///
+/// Keyed by panel, not device: a calibration belongs to the panel profile, so
+/// every device using it picks the override up on its next poll. In memory
+/// only — `POST .../save` (below) is what makes a calibration durable.
+pub async fn handle_set_panel_colors(
+    State(state): State<AppState>,
+    axum::extract::Path(panel): axum::extract::Path<String>,
+    Json(body): Json<PanelColorsRequest>,
+) -> Result<StatusCode, ApiError> {
+    require_known_panel(&state, &panel)?;
+    state
+        .dev_overrides
+        .panel_colors
+        .write()
+        .await
+        .insert(panel, body.colors_actual);
+    Ok(StatusCode::OK)
+}
+
+/// Remove a panel's temporary colour override, reverting to `config.yaml`.
+pub async fn handle_delete_panel_colors(
+    State(state): State<AppState>,
+    axum::extract::Path(panel): axum::extract::Path<String>,
+) -> StatusCode {
+    state.dev_overrides.panel_colors.write().await.remove(&panel);
+    StatusCode::OK
+}
+
+/// Guard: an override for a panel that does not exist could never be read
+/// back, because the lookup is by resolved panel key. Refuse it rather than
+/// storing it where nothing will find it.
+fn require_known_panel(state: &AppState, panel: &str) -> Result<(), ApiError> {
+    if state.config.load().get_panel(panel).is_some() {
+        Ok(())
+    } else {
+        Err(ApiError::NotFound)
+    }
+}
+```
+
+Use whatever `ApiError` import and `NotFound` spelling `src/api/dev.rs` already
+uses for its other 404s; do not introduce a second error idiom in the file.
+
+Routes at `src/api/dev.rs:868-869` become:
+
+```rust
+        .route(
+            "/panel-colors/{panel}",
+            put(handle_set_panel_colors).delete(handle_delete_panel_colors),
+        )
+```
+
+Add `put` to the `axum::routing` import and drop `post` only if nothing else in
+the file still uses it.
+
+- [ ] **Step 7: Run the tests to verify they pass**
+
+Run: `cargo test --test dev_panel_colors_test` then `cargo test --workspace`
+Expected: PASS. If any existing test posted to `/dev/api/panel-colors` with a
+`device` field, it is asserting the old contract and must be updated to the new
+one — say so in your report rather than reverting the change.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/server.rs src/api/display.rs src/api/dev.rs \
+        tests/common/app.rs tests/dev_panel_colors_test.rs
+git diff --cached --name-only
+git commit -m "feat(dev): key the colour override by panel, not by device
+
+A calibration belongs to a panel profile: two devices sharing a panel
+share its measured colours. The route already spelled the path parameter
+\`panel\` while the handler bound it to \`device\` — the code now agrees
+with the URL. Panel resolution moves into resolve_panel(), which returns
+the config key the override map needs."
+```
+
+---
+
+### Task 9c: Tuning sessions hold one device at a 60-second refresh
+
+**Files:**
+- Modify: `src/server.rs` (`DevOverrides`), `src/api/display.rs` (refresh-rate answer), `src/api/dev.rs` (two handlers, one route)
+- Test: `tests/dev_tuning_session_test.rs` (create)
+
+**Interfaces:**
+- Consumes: `require_known_panel` is *not* used here — sessions are keyed by device.
+- Produces:
+  - `DevOverrides.tuning_sessions: Arc<RwLock<HashMap<String /* device config key */, std::time::Instant>>>`
+  - `pub const TUNING_REFRESH_SECS: u32 = 60;` and `pub const TUNING_SESSION_TTL: Duration = Duration::from_secs(30 * 60);` in `src/server.rs`
+  - `pub async fn tuning_session_active(overrides: &DevOverrides, device_key: &str) -> bool` in `src/server.rs` — lazily drops a stale entry and reports whether a fresh one remains.
+  - Routes `PUT /dev/api/tuning-session/{device}` and `DELETE /dev/api/tuning-session/{device}`.
+
+**Why.** byonk cannot make a device fetch. The device polls and byonk answers
+with a `refresh_rate` resolved by `resolve_refresh_rate`
+(`src/services/content_pipeline.rs:27`) as script > device override > screen
+default. Left alone, a calibration loop runs at whatever cadence the screen
+chose, which is minutes. Sixty seconds — not less — because a six-colour panel
+needs most of a minute to repaint and you want time to look at the result
+before it goes again. Spec §3.
+
+**This deliberately overrides a rule the pipeline states on purpose:** that the
+screen wins "because only it knows when its content next changes". During a
+tuning session that is false — the thing changing the content is a person with
+a slider. So the override is narrow (one device, bounded time) and it is
+**logged at `info` with its reason**, so a surprising cadence is explainable
+from the log alone.
+
+**Expiry is lazy on purpose.** There is no background task, so there is nothing
+to schedule, leak or shut down. A closed lid or a crashed tab must not leave a
+battery-powered device repainting every minute until byonk restarts — that is
+what the TTL is for, and it is not optional.
+
+- [ ] **Step 1: Write the failing test**
+
+`tests/dev_tuning_session_test.rs`:
+
+```rust
+//! A tuning session holds one device at a 60-second refresh so that a colour
+//! calibration iterates in a minute rather than in the screen's own cadence.
+
+mod common;
+
+use common::TestApp;
+
+const AUTH: (&str, &str) = ("Authorization", "Bearer secret");
+
+#[tokio::test]
+async fn a_session_shortens_that_device_s_refresh_and_ending_it_restores_the_rate() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _cfg) = common_app(dir.path());
+
+    let mac = "AA:BB:CC:DD:EE:01";
+    let api_key = app.register_device(mac).await;
+
+    let baseline = refresh_rate_of(&app, mac, &api_key).await;
+    assert_ne!(
+        baseline, 60,
+        "the fixture screen must not already answer 60s, or this test proves nothing"
+    );
+
+    let r = app.put_json("/dev/api/tuning-session/kitchen", &[AUTH], "").await;
+    assert!(r.status().is_success(), "PUT session failed: {}", r.status());
+
+    assert_eq!(
+        refresh_rate_of(&app, mac, &api_key).await,
+        60,
+        "a live tuning session must shorten the refresh rate"
+    );
+
+    let r = app.delete("/dev/api/tuning-session/kitchen", &[AUTH]).await;
+    assert!(r.status().is_success());
+
+    assert_eq!(
+        refresh_rate_of(&app, mac, &api_key).await,
+        baseline,
+        "ending the session must hand the rate straight back"
+    );
+}
+
+#[tokio::test]
+async fn another_device_is_unaffected() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _cfg) = common_app(dir.path());
+
+    let other = "AA:BB:CC:DD:EE:02";
+    let other_key = app.register_device(other).await;
+    let baseline = refresh_rate_of(&app, other, &other_key).await;
+
+    app.put_json("/dev/api/tuning-session/kitchen", &[AUTH], "").await;
+
+    assert_eq!(
+        refresh_rate_of(&app, other, &other_key).await,
+        baseline,
+        "a session on one device must not touch another"
+    );
+}
+```
+
+with these two helpers in the same file:
+
+```rust
+/// Two devices, keyed by the MACs the tests register.
+fn common_app(dir: &std::path::Path) -> (TestApp, std::path::PathBuf) {
+    let yaml = "\
+admin:
+  token: secret
+devices:
+  kitchen:
+    screen: byonk-builtin/default
+    refresh: 900
+  hallway:
+    screen: byonk-builtin/default
+    refresh: 900
+";
+    TestApp::new_with_config_yaml(yaml, dir)
+}
+
+async fn refresh_rate_of(app: &TestApp, mac: &str, api_key: &str) -> u32 {
+    let headers = common::fixtures::display_headers(mac, api_key);
+    let r = app
+        .get_with_headers("/api/display", &common::fixtures::as_str_pairs(&headers))
+        .await;
+    let body: serde_json::Value = r.json();
+    body["refresh_rate"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("no refresh_rate in {body}")) as u32
+}
+```
+
+**Two things to check against the repo before running this**, per the plan's
+global constraints: that a registered MAC maps to the device key `kitchen`
+(`tests/api_display_test.rs` shows how registration and the device key relate —
+if a registered device does not land on the config key, map the MAC explicitly
+in the fixture), and that `refresh: 900` actually reaches the response rather
+than being overridden by the builtin screen's own `refresh_rate`. The
+`assert_ne!(baseline, 60)` guard exists to catch exactly that: if it trips, the
+fixture is wrong, not the feature.
+
+**The TTL needs its own test and cannot be written against wall-clock time.**
+Write it as a unit test in `src/server.rs`'s test module, inserting a stale
+`Instant` directly:
+
+```rust
+    #[tokio::test]
+    async fn a_stale_tuning_session_expires_and_is_dropped() {
+        let overrides = DevOverrides::default();
+        let stale = std::time::Instant::now() - (TUNING_SESSION_TTL + Duration::from_secs(1));
+        overrides
+            .tuning_sessions
+            .write()
+            .await
+            .insert("kitchen".to_string(), stale);
+
+        assert!(!tuning_session_active(&overrides, "kitchen").await);
+        assert!(
+            overrides.tuning_sessions.read().await.is_empty(),
+            "a stale entry must be removed, not merely ignored — otherwise the \
+             map grows for the life of the process"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fresh_tuning_session_is_active_and_kept() {
+        let overrides = DevOverrides::default();
+        overrides
+            .tuning_sessions
+            .write()
+            .await
+            .insert("kitchen".to_string(), std::time::Instant::now());
+
+        assert!(tuning_session_active(&overrides, "kitchen").await);
+        assert!(!overrides.tuning_sessions.read().await.is_empty());
+    }
+```
+
+`Instant::now() - duration` panics on some platforms if it would underflow;
+use `checked_sub` and `unwrap_or(Instant::now())` if the compiler or a CI
+target objects.
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `cargo test --test dev_tuning_session_test` and `cargo test --lib server::`
+Expected: FAIL — no route, and `tuning_sessions` / `tuning_session_active` do
+not exist.
+
+- [ ] **Step 3: Add the state and the predicate**
+
+In `src/server.rs`:
+
+```rust
+/// Refresh rate answered to a device with a live tuning session, in seconds.
+///
+/// Sixty, not less: a six-colour panel needs most of a minute to repaint, and
+/// the person calibrating it needs time to look at the result before it goes
+/// again.
+pub const TUNING_REFRESH_SECS: u32 = 60;
+
+/// How long a tuning session survives without being touched.
+///
+/// The backstop for a closed lid or a crashed tab. A battery-powered device
+/// must not be left repainting every minute until byonk restarts.
+pub const TUNING_SESSION_TTL: Duration = Duration::from_secs(30 * 60);
+```
+
+on `DevOverrides`:
+
+```rust
+    /// device_config_key → when the dev UI last touched this tuning session.
+    ///
+    /// Present and fresh ⇒ `/api/display` answers `TUNING_REFRESH_SECS` for
+    /// that device. Expiry is lazy (see `tuning_session_active`), so there is
+    /// no background task to schedule, leak or shut down.
+    pub tuning_sessions: Arc<RwLock<HashMap<String, Instant>>>,
+```
+
+and the predicate:
+
+```rust
+/// Is a tuning session live for `device_key`? Drops the entry if it has expired.
+pub async fn tuning_session_active(overrides: &DevOverrides, device_key: &str) -> bool {
+    let mut sessions = overrides.tuning_sessions.write().await;
+    match sessions.get(device_key) {
+        Some(touched) if touched.elapsed() < TUNING_SESSION_TTL => true,
+        Some(_) => {
+            sessions.remove(device_key);
+            false
+        }
+        None => false,
+    }
+}
+```
+
+Import `std::time::{Duration, Instant}` at the top of the file if they are not
+already in scope.
+
+- [ ] **Step 4: Answer the shortened rate**
+
+In `src/api/display.rs`, after `refresh_rate` has been resolved and before it
+is put on the response — the existing `let refresh_rate = if recovery_active
+{ ... }` around line 1226 is the right neighbourhood, and a tuning session must
+lose to recovery, not win over it:
+
+```rust
+    // A live tuning session shortens this device's cadence so a colour
+    // calibration iterates in a minute. This deliberately overrides
+    // `resolve_refresh_rate`'s rule that the screen owns its own cadence:
+    // during a calibration the thing changing the content is a person with a
+    // slider. Narrow (one device), bounded (TUNING_SESSION_TTL) and logged.
+    let refresh_rate = match device_entry_key.as_deref() {
+        Some(key) if tuning_session_active(&dev_overrides, key).await => {
+            tracing::info!(
+                device = key,
+                refresh_rate = TUNING_REFRESH_SECS,
+                "tuning session active — shortening refresh rate"
+            );
+            TUNING_REFRESH_SECS
+        }
+        _ => refresh_rate,
+    };
+```
+
+Confirm the real name of the device-key binding at that point in the function
+before you use `device_entry_key` — the earlier resolution block binds it, but
+check the name is still in scope there.
+
+- [ ] **Step 5: Add the two handlers and the route**
+
+In `src/api/dev.rs`:
+
+```rust
+/// Start or refresh a tuning session for a device.
+///
+/// Idempotent: a repeat PUT is how the dev UI keeps the session alive while a
+/// calibration is in progress.
+pub async fn handle_start_tuning_session(
+    State(state): State<AppState>,
+    axum::extract::Path(device): axum::extract::Path<String>,
+) -> StatusCode {
+    state
+        .dev_overrides
+        .tuning_sessions
+        .write()
+        .await
+        .insert(device, std::time::Instant::now());
+    StatusCode::OK
+}
+
+/// End a tuning session, handing the device its normal refresh rate back.
+pub async fn handle_end_tuning_session(
+    State(state): State<AppState>,
+    axum::extract::Path(device): axum::extract::Path<String>,
+) -> StatusCode {
+    state
+        .dev_overrides
+        .tuning_sessions
+        .write()
+        .await
+        .remove(&device);
+    StatusCode::OK
+}
+```
+
+route:
+
+```rust
+        .route(
+            "/tuning-session/{device}",
+            put(handle_start_tuning_session).delete(handle_end_tuning_session),
+        )
+```
+
+The session is **not** validated against `config.devices`. A device may be
+registered and not yet mapped, and a session on a key nothing resolves to is
+inert rather than wrong — unlike a colour override, which would be silently
+unreadable.
+
+- [ ] **Step 6: Refresh the session on every override push**
+
+In `handle_set_panel_colors` (Task 9b), the override PUT must also count as
+activity — otherwise a long, attentive calibration expires mid-session. But
+that handler is keyed by panel and knows no device. So do **not** wire it
+there: the client re-PUTs the session instead (Task 9f, `tune.push()`). Add
+this comment above `handle_set_panel_colors` so the next reader does not
+"fix" the apparent omission:
+
+```rust
+/// Note: this does NOT refresh a tuning session. The override is keyed by
+/// panel and a session by device, and one panel may have several. The client
+/// re-PUTs its own session alongside each push (spec §3).
+```
+
+- [ ] **Step 7: Run the tests to verify they pass**
+
+Run: `cargo test --test dev_tuning_session_test` then `cargo test --workspace`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/server.rs src/api/display.rs src/api/dev.rs tests/dev_tuning_session_test.rs
+git diff --cached --name-only
+git commit -m "feat(dev): tuning sessions hold one device at a 60s refresh
+
+byonk cannot push, so a colour calibration iterates at whatever cadence
+the screen chose — minutes. A session shortens one device to 60s, which
+is about what a six-colour panel needs to repaint. Bounded by an explicit
+end and a 30-minute idle TTL, expired lazily on read, and logged with its
+reason: it overrides a rule content_pipeline states on purpose."
+```
+
+---
+
+### Task 9d: `Save to config` — the durable write
+
+**Files:**
+- Create: `src/api/config_persist.rs` (the shared `persist` helper)
+- Modify: `src/api/mod.rs` (declare the module), `src/api/admin/write.rs` (delete the private `persist`, import the shared one), `src/api/dev.rs` (the save handler and its route)
+- Test: `tests/dev_panel_colors_save_test.rs` (create)
+
+**Interfaces:**
+- Consumes: `require_known_panel` (Task 9b); `reload_config` with the overlay fix (Task 9a).
+- Produces:
+  - `pub fn persist(state: &AppState, path: &Path, new_yaml: String) -> Result<(), ApiError>` in `src/api/config_persist.rs` — moved verbatim from `src/api/admin/write.rs:423`.
+  - Route `POST /dev/api/panel-colors/{panel}/save`, body `{"colors_actual": "..."}`.
+
+**Why.** A calibration must survive a restart and become the real
+configuration, not a dev-session experiment copied out by hand.
+`config_writer::set_scalar` (`src/services/config_writer.rs:64`) is exactly the
+right tool: comment-preserving, replaces the key in place when it exists, adds
+it to the parent mapping when it does not — the common case, since
+`colors_actual` is optional. Spec §5.
+
+**It is not blocked in add-on mode.** `require_writable_global`
+(`src/api/admin/write.rs:70`) makes global config read-only under the add-on
+because the Options form is its sole editor. That argument does not reach
+`panels`: the Options schema (`homeassistant/byonk/config.yaml:42`) carries no
+panel key at all. **Do not add that guard here** — the dev UI reached from the
+Home Assistant sidebar is the main way this will be used.
+
+- [ ] **Step 1: Write the failing test**
+
+`tests/dev_panel_colors_save_test.rs`:
+
+```rust
+//! `Save to config` writes a panel's measured colours into config.yaml
+//! durably, preserving every comment around them.
+
+mod common;
+
+use common::TestApp;
+
+const AUTH: (&str, &str) = ("Authorization", "Bearer secret");
+const TUNED: &str = "#101010,#E8E8E8,#B03030,#D0C040,#3040A0,#00994D";
+
+fn commented_config() -> &'static str {
+    "\
+# byonk configuration — hand-written, with comments that must survive.
+admin:
+  token: secret
+
+panels:
+  # The reTerminal E1004. Its greens are hand-tuned; see docs.
+  e1004:
+    name: reTerminal E1004
+    colors: '#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00'
+  og:
+    name: TRMNL OG
+    colors: '#000000,#FFFFFF'
+    colors_actual: '#1A1A1A,#D8D8D8'   # measured 2026-01-01
+
+devices:
+  kitchen:
+    screen: byonk-builtin/default
+    panel: e1004
+"
+}
+
+#[tokio::test]
+async fn saving_adds_colors_actual_and_keeps_every_comment() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, config_path) = TestApp::new_with_config_yaml(commented_config(), dir.path());
+
+    let r = app
+        .post_json(
+            "/dev/api/panel-colors/e1004/save",
+            &[AUTH],
+            &format!(r#"{{"colors_actual":"{TUNED}"}}"#),
+        )
+        .await;
+    assert!(r.status().is_success(), "save failed: {} {}", r.status(), r.text());
+
+    let yaml = std::fs::read_to_string(&config_path).unwrap();
+    assert!(yaml.contains(TUNED), "the tuned colours are not in the file:\n{yaml}");
+    assert!(
+        yaml.contains("hand-tuned; see docs"),
+        "a comment was lost:\n{yaml}"
+    );
+    assert!(
+        yaml.contains("# measured 2026-01-01"),
+        "an inline comment on a sibling panel was lost:\n{yaml}"
+    );
+    assert!(
+        yaml.contains("# byonk configuration"),
+        "the header comment was lost:\n{yaml}"
+    );
+}
+
+#[tokio::test]
+async fn saving_replaces_an_existing_colors_actual_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, config_path) = TestApp::new_with_config_yaml(commented_config(), dir.path());
+
+    let r = app
+        .post_json(
+            "/dev/api/panel-colors/og/save",
+            &[AUTH],
+            r#"{"colors_actual":"#0A0A0A,#F0F0F0"}"#,
+        )
+        .await;
+    assert!(r.status().is_success());
+
+    let yaml = std::fs::read_to_string(&config_path).unwrap();
+    assert!(yaml.contains("#0A0A0A,#F0F0F0"));
+    assert!(!yaml.contains("#1A1A1A,#D8D8D8"), "the old value is still there:\n{yaml}");
+}
+
+#[tokio::test]
+async fn saving_clears_the_temporary_override() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _cfg) = TestApp::new_with_config_yaml(commented_config(), dir.path());
+
+    app.put_json(
+        "/dev/api/panel-colors/e1004",
+        &[AUTH],
+        &format!(r#"{{"colors_actual":"{TUNED}"}}"#),
+    )
+    .await;
+    let r = app
+        .post_json(
+            "/dev/api/panel-colors/e1004/save",
+            &[AUTH],
+            &format!(r#"{{"colors_actual":"{TUNED}"}}"#),
+        )
+        .await;
+    assert!(r.status().is_success());
+
+    // The override and the config now say the same thing, so the override is
+    // dead weight — and a live override that nobody can see is the trap this
+    // whole design is built to avoid. Deleting it again must still succeed.
+    let r = app.delete("/dev/api/panel-colors/e1004", &[AUTH]).await;
+    assert!(r.status().is_success());
+}
+
+#[tokio::test]
+async fn saving_an_unknown_panel_is_a_404() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _cfg) = TestApp::new_with_config_yaml(commented_config(), dir.path());
+
+    let r = app
+        .post_json(
+            "/dev/api/panel-colors/nosuchpanel/save",
+            &[AUTH],
+            r#"{"colors_actual":"#000000,#FFFFFF"}"#,
+        )
+        .await;
+    assert_eq!(r.status(), axum::http::StatusCode::NOT_FOUND);
+}
+```
+
+`saving_clears_the_temporary_override` is weak as written — a DELETE succeeds
+whether or not the key was there. **Strengthen it** by asserting the effect
+instead: after the save, `GET /dev/api/screens` (or whichever dev endpoint
+serves `PanelInfo`) must report the panel's `colors_actual` as the tuned value.
+Find that endpoint and assert on it; if no dev endpoint exposes `PanelInfo`,
+say so in your report and leave the weak version with a comment naming the gap.
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `cargo test --test dev_panel_colors_save_test`
+Expected: FAIL — the route does not exist.
+
+- [ ] **Step 3: Move `persist` into a shared module**
+
+Create `src/api/config_persist.rs` containing the body of
+`src/api/admin/write.rs:423-441` **verbatim** — the atomic temp-file write, the
+rename, the reload and the roll-back on a failed reparse. Change nothing about
+its behaviour; this is a move, not a rewrite:
+
+```rust
+//! Atomically replace `config.yaml` and swap the result into the live config.
+//!
+//! Shared by the admin write handlers and by the dev UI's colour-tuning save.
+//! Kept in one place because the roll-back is the interesting part: a patch
+//! that produces YAML byonk cannot reparse must leave the file as it was.
+
+use crate::error::ApiError;
+use crate::server::{reload_config, AppState};
+
+pub fn persist(state: &AppState, path: &std::path::Path, new_yaml: String) -> Result<(), ApiError> {
+    // ... moved verbatim from api/admin/write.rs
+}
+```
+
+Declare it in `src/api/mod.rs` (`pub mod config_persist;`), delete the private
+copy from `write.rs`, and import the shared one there. `cargo test --workspace`
+must stay green with no other edit — if an admin test breaks, the move was not
+verbatim.
+
+- [ ] **Step 4: Write the save handler**
+
+In `src/api/dev.rs`:
+
+```rust
+/// Write a panel's tuned measured colours into `config.yaml`, durably.
+///
+/// This is stage 2 of colour tuning: stage 1 is the in-memory override above,
+/// which lets a calibration reach real hardware without becoming the
+/// configuration. Saving makes it the configuration and drops the override,
+/// because an override that merely restates the config is invisible weight.
+///
+/// Deliberately NOT guarded by `require_writable_global`: `panels` is absent
+/// from the Home Assistant add-on Options schema, so nothing else owns it, and
+/// the sidebar dev UI is the main way this is used. See spec §5.
+pub async fn handle_save_panel_colors(
+    State(state): State<AppState>,
+    axum::extract::Path(panel): axum::extract::Path<String>,
+    Json(body): Json<PanelColorsRequest>,
+) -> Result<StatusCode, ApiError> {
+    require_known_panel(&state, &panel)?;
+    let path = require_file_config(&state)?;
+    let _guard = state.write_lock.lock().await;
+
+    let yaml = std::fs::read_to_string(&path)
+        .map_err(|e| ApiError::Internal(format!("read config: {e}")))?;
+    let new_yaml = crate::services::config_writer::set_scalar(
+        &yaml,
+        &["panels", &panel, "colors_actual"],
+        serde_yaml::Value::from(body.colors_actual.as_str()),
+    )
+    .map_err(|e| ApiError::Internal(format!("patch config: {e}")))?;
+
+    crate::api::config_persist::persist(&state, &path, new_yaml)?;
+
+    // The config now carries the value, so the override would only restate it.
+    state.dev_overrides.panel_colors.write().await.remove(&panel);
+    Ok(StatusCode::OK)
+}
+```
+
+`require_file_config` is private to `src/api/admin/write.rs`. Move it into
+`config_persist.rs` beside `persist` and re-import it in `write.rs` — it is the
+same guard for the same reason (an embedded, read-only config cannot be
+written) and both callers need it.
+
+Route:
+
+```rust
+        .route("/panel-colors/{panel}/save", post(handle_save_panel_colors))
+```
+
+Register it **before** or after `/panel-colors/{panel}` as axum's matcher
+requires; run the tests to confirm the two do not shadow each other.
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `cargo test --test dev_panel_colors_save_test` then `cargo test --workspace`
+Expected: PASS.
+
+- [ ] **Step 6: Full verification**
+
+```
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/api/config_persist.rs src/api/mod.rs src/api/admin/write.rs \
+        src/api/dev.rs tests/dev_panel_colors_save_test.rs
+git diff --cached --name-only
+git commit -m "feat(dev): save tuned panel colours to config.yaml
+
+Stage 2 of colour tuning: the in-memory override lets a calibration
+reach real hardware without becoming the configuration; this makes it
+the configuration. set_scalar keeps every comment, and persist() — now
+shared with the admin writers rather than private to them — rolls the
+file back if the result will not reparse.
+
+Not guarded by require_writable_global: panels are absent from the HA
+add-on Options schema, so nothing else owns them."
+```
+
+---
+
+### Task 9e: The fifth panel — layout, icon rail, shell
+
+**Files:**
+- Create: `webui/src/lib/components/TunePane.svelte` (placeholder; Task 9g fills it)
+- Modify: `webui/src/lib/state/layout.svelte.js`, `webui/src/lib/components/IconRail.svelte`, `webui/src/lib/components/AppShell.svelte`
+- Test: `webui/test/layout.test.js`, `webui/test/iconrail.test.js`, `webui/test/appshell.test.js` (all exist — extend them)
+
+**Interfaces:**
+- Consumes: `layout` (Task 4), `AppShell`/`IconRail` (Task 5).
+- Produces: `"tune"` as a member of `PANELS`; `TunePane.svelte` mounting in the shell.
+
+**Why this task exists separately, and why it is BEFORE Task 10.** Task 10
+modifies `AppShell.svelte` too. Landing the layout change first means
+`AppShell`, `IconRail` and `layout` are each touched once by this amendment
+rather than twice.
+
+Spec §2. **Every rule in the parent spec's §1 holds unchanged** — every
+combination of five is legal including none, a hidden panel gives its width to
+its neighbours and gets it back, a splitter exists only while both neighbours
+are open, the icon carries only the toggle state. Do not add a rule.
+
+`Tune` docks **between the editor and the preview**, taking width from the
+right-hand pane. That is deliberate: the parent spec's §1 argues at length that
+height is the scarce dimension, because an upright E1004 is 1200×1600 and a
+control block under it squeezes the device to a stamp. A column takes the other
+axis. It sits next to the preview because that is what the eye compares — the
+swatch being dragged against the render it produces.
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `webui/test/layout.test.js`:
+
+```js
+it("carries tune as a fifth panel, closed by default", () => {
+  expect(PANELS).toEqual(["files", "editor", "tune", "preview", "simulate"]);
+  layout.reset();
+  expect(layout.isOpen("tune")).toBe(false);
+  expect(layout.isOpen("files")).toBe(true);
+});
+
+it("persists and restores tune alongside the other four", () => {
+  layout.reset();
+  layout.toggle("tune");
+  expect(layout.isOpen("tune")).toBe(true);
+
+  const other = new (Object.getPrototypeOf(layout).constructor)();
+  other.load();
+  expect(other.isOpen("tune")).toBe(true);
+});
+```
+
+If `Layout` is not exported, export the class so the second test can build a
+second instance, or reload the module — do not weaken the test to only check
+`localStorage` contents, because that asserts the serialisation and not the
+round trip.
+
+Add to `webui/test/iconrail.test.js`:
+
+```js
+it("shows one toggle per panel, including tune", () => {
+  render(IconRail);
+  expect(screen.getAllByRole("button")).toHaveLength(5);
+  expect(screen.getByLabelText("Tune")).toBeTruthy();
+});
+
+it("toggles tune", async () => {
+  layout.reset();
+  render(IconRail);
+  const btn = screen.getByLabelText("Tune");
+  expect(btn.getAttribute("aria-pressed")).toBe("false");
+  await fireEvent.click(btn);
+  expect(btn.getAttribute("aria-pressed")).toBe("true");
+});
+```
+
+Add to `webui/test/appshell.test.js`:
+
+```js
+it("mounts TunePane only while the tune panel is open", async () => {
+  layout.reset();
+  render(AppShell);
+  expect(screen.queryByTestId("tune-pane")).toBeNull();
+
+  layout.toggle("tune");
+  await tick();
+  expect(screen.getByTestId("tune-pane")).toBeTruthy();
+});
+
+it("keeps the horizontal splitter alive when only tune is open on the right", async () => {
+  layout.reset();
+  for (const p of ["preview", "simulate"]) if (layout.isOpen(p)) layout.toggle(p);
+  layout.toggle("tune");
+  await tick();
+  // The splitter separates the editor from everything to its right; tune
+  // being the only thing there is still something there.
+  expect(screen.getByRole("separator", { name: /vertical|horizontal|resize/i })).toBeTruthy();
+});
+```
+
+Match the existing files' import lists, `render` helper and the accessible name
+`SplitPane` actually gives its handle — read `SplitPane.svelte` and
+`splitpane.test.js` first rather than guessing the role or name.
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `cd webui && pnpm vitest run test/layout.test.js test/iconrail.test.js test/appshell.test.js`
+Expected: FAIL — `PANELS` has four members and `TunePane` does not exist.
+
+- [ ] **Step 3: Add `tune` to the layout store**
+
+In `webui/src/lib/state/layout.svelte.js`:
+
+```js
+export const PANELS = ["files", "editor", "tune", "preview", "simulate"];
+```
+
+and in `DEFAULTS`:
+
+```js
+const DEFAULTS = {
+  panels: { files: true, editor: true, tune: false, preview: true, simulate: true },
+  sizes: { x: 420, y: 260 },
+};
+```
+
+`tune` defaults **closed**: the other four are how you write a screen, while
+tuning is an occasional calibration and should not occupy width until it is
+asked for.
+
+Nothing else in the file changes. `load()` already iterates `PANELS`, and the
+persisted record is keyed by name, so reordering the array does not invalidate
+a stored layout. Leave `STORAGE_KEY` at `"byonk.layout.v1"` — a reader of an
+old record simply finds no `tune` key and takes the default.
+
+- [ ] **Step 4: Add the icon**
+
+In `webui/src/lib/components/IconRail.svelte`, import `Palette` from
+`@lucide/svelte` and add one entry to each map:
+
+```js
+  import { Files, Code, Palette, Monitor, SlidersHorizontal } from "@lucide/svelte";
+
+  const ICONS = {
+    files: Files,
+    editor: Code,
+    tune: Palette,
+    preview: Monitor,
+    simulate: SlidersHorizontal,
+  };
+  const LABELS = {
+    files: "Files",
+    editor: "Editor",
+    tune: "Tune",
+    preview: "Preview",
+    simulate: "Simulate",
+  };
+```
+
+The markup is already generic over `PANELS` and needs no change. `Palette`
+exists in the pinned `@lucide/svelte` 1.42.0 — **do not move that pin.** If it
+does not, pick another icon from the pinned version and say which; never bump
+the dependency.
+
+- [ ] **Step 5: Create the placeholder pane**
+
+`webui/src/lib/components/TunePane.svelte`:
+
+```svelte
+<!--
+  Panel colour tuning. Task 9g fills this in; Task 9e only proves it docks.
+-->
+<div data-testid="tune-pane" class="flex h-full flex-col gap-3 p-2 text-xs">
+  <h2 class="font-medium">Tune</h2>
+</div>
+```
+
+- [ ] **Step 6: Dock it in the shell**
+
+In `webui/src/lib/components/AppShell.svelte`, import `TunePane`, widen the
+horizontal splitter's `open` test, and wrap the right-hand pane:
+
+```svelte
+    <SplitPane
+      axis="x"
+      bind:size={xSize}
+      open={layout.isOpen("preview") || layout.isOpen("simulate") || layout.isOpen("tune")}
+    >
+      {#snippet a()}
+        {#if layout.isOpen("editor")}
+          <EditorPane />
+        {/if}
+      {/snippet}
+
+      {#snippet b()}
+        <div class="flex min-h-0 min-w-0 flex-1">
+          {#if layout.isOpen("tune")}
+            <div
+              class="w-64 shrink-0 overflow-auto border-r border-[var(--border-color)]"
+            >
+              <TunePane />
+            </div>
+          {/if}
+
+          <SplitPane
+            axis="y"
+            bind:size={ySize}
+            open={layout.isOpen("preview") && layout.isOpen("simulate")}
+          >
+            {#snippet a()}
+              {#if layout.isOpen("preview")}<PreviewPane />{/if}
+            {/snippet}
+            {#snippet b()}
+              {#if layout.isOpen("simulate")}<SimulateControls />{/if}
+            {/snippet}
+          </SplitPane>
+        </div>
+      {/snippet}
+    </SplitPane>
+```
+
+The vertical splitter's `open` test is unchanged: it separates preview from
+simulate, and tune is neither.
+
+- [ ] **Step 7: Run the tests to verify they pass**
+
+Run: `cd webui && pnpm vitest run`
+Expected: PASS, whole suite. A failure in `splitpane.test.js` or
+`appshell.test.js` that you did not write means the wrapper `div` changed the
+flex geometry — fix the geometry, not the test.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add webui/src/lib/state/layout.svelte.js \
+        webui/src/lib/components/IconRail.svelte \
+        webui/src/lib/components/AppShell.svelte \
+        webui/src/lib/components/TunePane.svelte \
+        webui/test/layout.test.js webui/test/iconrail.test.js webui/test/appshell.test.js
+git diff --cached --name-only
+git commit -m "feat(webui): dock a fifth Tune panel between editor and preview
+
+It takes width from the right-hand pane, never height: an upright E1004
+is 1200x1600 and a control block under it squeezes the device to a stamp.
+Next to the preview because that is what the eye compares. Closed by
+default — tuning is an occasional calibration, not part of writing a
+screen. Every layout rule from spec 2's section 1 holds unchanged."
+```
+
+---
+
+### Task 9f: The `tune` store, and the preview's live working copy
+
+**Files:**
+- Create: `webui/src/lib/state/tune.svelte.js`
+- Modify: `webui/src/lib/api.js`, `webui/src/lib/state/simulate.svelte.js`
+- Test: `webui/test/tune.test.js` (create), `webui/test/simulate.test.js` (extend)
+
+**Interfaces:**
+- Consumes: `screens.meta` (Task 6), `simulate` (Task 8).
+- Produces:
+  - `api.setPanelOverride(panel, colors_actual)`, `api.clearPanelOverride(panel)`, `api.savePanelColors(panel, colors_actual)`, `api.startTuningSession(device)`, `api.endTuningSession(device)`
+  - `simulate.colors_actual_override` — `null` or `{panel, colors}`
+  - the `tune` store: `tune.panel`, `tune.device`, `tune.colors` (array), `tune.selected` (index), `tune.baseline` (array), `tune.pushed` (boolean), `tune.error`, and the methods `selectPanel(id)`, `selectDevice(key)`, `setColor(i, hex)`, `push()`, `save()`, `discard()`, `reset()`
+- **Task 10 must render `tune.error` and show `tune.pushed` in `StatusBar`.** See the amendment to Task 10, Step 5.
+
+**Why the field lives on `simulate`.** `simulate.url()` already puts
+`colors_actual` on the render query whenever a panel is chosen
+(`webui/src/lib/state/simulate.svelte.js:203-209`), and the server honours it.
+So the preview follows a slider **with no server call at all** — which is the
+whole reason stages 1 and 2 can be separate.
+
+The field is parked on `simulate` and not on `tune` because `tune` must read
+`simulate` to default its panel selector, and the reverse import would close a
+cycle between two rune modules that both evaluate at page load. One direction
+only. This follows the precedent already set for `simulate.error` (Ruling 43):
+the field lives on the store the render path reads, not on the store that
+conceptually owns it.
+
+**Do not** mutate `colors_actual` on the object inside `screens.meta.panels` —
+which is what the old UI did to its `<option>` dataset. That edits shared
+metadata other components read as the configured truth, so a tuning session in
+progress would make the Simulate panel's swatches lie about what is in
+`config.yaml`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`webui/test/tune.test.js`:
+
+```js
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { tune } from "../src/lib/state/tune.svelte.js";
+import { simulate } from "../src/lib/state/simulate.svelte.js";
+import * as api from "../src/lib/api.js";
+
+const PANEL = { id: "e1004", name: "E1004", colors_actual: "#101010,#E8E8E8,#00FF00" };
+
+beforeEach(() => {
+  vi.restoreAllMocks();
+  tune.reset();
+  simulate.reset();
+});
+
+describe("tune store", () => {
+  it("loads a panel's configured colors as the working copy and the baseline", () => {
+    tune.selectPanel(PANEL.id, PANEL);
+    expect(tune.colors).toEqual(["#101010", "#E8E8E8", "#00FF00"]);
+    expect(tune.baseline).toEqual(["#101010", "#E8E8E8", "#00FF00"]);
+    expect(tune.dirty).toBe(false);
+  });
+
+  it("drives the render query without any fetch", () => {
+    const spy = vi.spyOn(globalThis, "fetch");
+    tune.selectPanel(PANEL.id, PANEL);
+    tune.setColor(2, "#00994D");
+
+    expect(simulate.colors_actual_override).toEqual({
+      panel: "e1004",
+      colors: "#101010,#E8E8E8,#00994D",
+    });
+    expect(tune.dirty).toBe(true);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("starts a tuning session when a device is selected and ends it on deselect", async () => {
+    const start = vi.spyOn(api, "startTuningSession").mockResolvedValue();
+    const end = vi.spyOn(api, "endTuningSession").mockResolvedValue();
+
+    await tune.selectDevice("kitchen");
+    expect(start).toHaveBeenCalledWith("kitchen");
+
+    await tune.selectDevice("");
+    expect(end).toHaveBeenCalledWith("kitchen");
+  });
+
+  it("push sends the override AND re-touches the session", async () => {
+    const put = vi.spyOn(api, "setPanelOverride").mockResolvedValue();
+    const start = vi.spyOn(api, "startTuningSession").mockResolvedValue();
+    tune.selectPanel(PANEL.id, PANEL);
+    await tune.selectDevice("kitchen");
+    start.mockClear();
+    tune.setColor(2, "#00994D");
+
+    await tune.push();
+
+    expect(put).toHaveBeenCalledWith("e1004", "#101010,#E8E8E8,#00994D");
+    expect(start).toHaveBeenCalledWith("kitchen");
+    expect(tune.pushed).toBe(true);
+  });
+
+  it("discard clears the override, ends the session and reverts the working copy", async () => {
+    vi.spyOn(api, "setPanelOverride").mockResolvedValue();
+    vi.spyOn(api, "startTuningSession").mockResolvedValue();
+    const del = vi.spyOn(api, "clearPanelOverride").mockResolvedValue();
+    const end = vi.spyOn(api, "endTuningSession").mockResolvedValue();
+
+    tune.selectPanel(PANEL.id, PANEL);
+    await tune.selectDevice("kitchen");
+    tune.setColor(2, "#00994D");
+    await tune.push();
+
+    await tune.discard();
+
+    expect(del).toHaveBeenCalledWith("e1004");
+    expect(end).toHaveBeenCalledWith("kitchen");
+    expect(tune.colors).toEqual(tune.baseline);
+    expect(tune.pushed).toBe(false);
+    expect(simulate.colors_actual_override).toBeNull();
+  });
+
+  it("save writes, refreshes metadata, and stops reading as dirty", async () => {
+    const save = vi.spyOn(api, "savePanelColors").mockResolvedValue();
+    vi.spyOn(api, "endTuningSession").mockResolvedValue();
+    tune.selectPanel(PANEL.id, PANEL);
+    tune.setColor(2, "#00994D");
+
+    await tune.save();
+
+    expect(save).toHaveBeenCalledWith("e1004", "#101010,#E8E8E8,#00994D");
+    expect(tune.baseline).toEqual(["#101010", "#E8E8E8", "#00994D"]);
+    expect(tune.dirty).toBe(false);
+    expect(tune.pushed).toBe(false);
+  });
+
+  it("records a failure instead of letting it reject unhandled", async () => {
+    vi.spyOn(api, "setPanelOverride").mockRejectedValue(new Error("boom"));
+    tune.selectPanel(PANEL.id, PANEL);
+
+    await expect(tune.push()).resolves.toBeUndefined();
+    expect(tune.error).toMatchObject({ op: "push" });
+    expect(tune.pushed).toBe(false);
+  });
+});
+```
+
+Add to `webui/test/simulate.test.js`:
+
+```js
+it("prefers a matching colors_actual_override in the render query", () => {
+  simulate.panel = "e1004";
+  simulate.use_actual = true;
+  simulate.colors_actual_override = { panel: "e1004", colors: "#111111,#EEEEEE" };
+  expect(simulate.url("local/a")).toContain(encodeURIComponent("#111111,#EEEEEE"));
+});
+
+it("ignores an override that names a different panel", () => {
+  simulate.panel = "e1004";
+  simulate.use_actual = true;
+  simulate.colors_actual_override = { panel: "og", colors: "#111111,#EEEEEE" };
+  const url = simulate.url("local/a");
+  expect(url).not.toContain(encodeURIComponent("#111111,#EEEEEE"));
+});
+
+it("falls back to the configured colors once the override is cleared", () => {
+  simulate.panel = "e1004";
+  simulate.use_actual = true;
+  simulate.colors_actual_override = { panel: "e1004", colors: "#111111,#EEEEEE" };
+  simulate.colors_actual_override = null;
+  const url = simulate.url("local/a");
+  expect(url).not.toContain(encodeURIComponent("#111111,#EEEEEE"));
+});
+```
+
+The simulate tests need `screens.meta.panels` to contain an `e1004` entry with
+a `colors_actual`, exactly as `simulate.test.js`'s existing panel tests set it
+up — reuse that fixture, do not build a second one.
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `cd webui && pnpm vitest run test/tune.test.js test/simulate.test.js`
+Expected: FAIL — the module and the field do not exist.
+
+- [ ] **Step 3: Add the five API calls**
+
+In `webui/src/lib/api.js`, beside the existing helpers. **Every path is
+relative** — under Ingress the prefix is unknowable:
+
+```js
+export const setPanelOverride = (panel, colors_actual) =>
+  put(`api/panel-colors/${encodeURIComponent(panel)}`, { colors_actual });
+export const clearPanelOverride = (panel) =>
+  del(`api/panel-colors/${encodeURIComponent(panel)}`);
+export const savePanelColors = (panel, colors_actual) =>
+  post(`api/panel-colors/${encodeURIComponent(panel)}/save`, { colors_actual });
+export const startTuningSession = (device) =>
+  put(`api/tuning-session/${encodeURIComponent(device)}`);
+export const endTuningSession = (device) =>
+  del(`api/tuning-session/${encodeURIComponent(device)}`);
+```
+
+`post` exists. `put` and `del` may not — read the file first and add whichever
+is missing in the same shape as `post`, raising the same error types on a
+non-OK status so the store's error handling is uniform.
+
+- [ ] **Step 4: Add the field to `simulate`**
+
+In `webui/src/lib/state/simulate.svelte.js`, add the field beside the other
+`$state` declarations:
+
+```js
+  /**
+   * A live colour-tuning working copy, or `null`.
+   *
+   * `{panel, colors}` — the panel it belongs to, and the comma-separated
+   * `colors_actual` string. Written by the `tune` store, read only by `url()`
+   * below. It lives here rather than on `tune` because `tune` imports this
+   * module for its default panel, and the reverse import would close a cycle
+   * between two rune modules that both evaluate at page load. Same reasoning
+   * as `error` (Ruling 43).
+   */
+  colors_actual_override = $state(null);
+```
+
+Add `colors_actual_override: null` to `DEFAULTS` and to `reset()`, so a reset
+cannot leave a stale working copy steering the render.
+
+In `url()`, replace the `colors_actual` line:
+
+```js
+      const p = this.#selectedPanel();
+      // A live tuning working copy wins, but only for the panel it belongs to
+      // — otherwise switching panels mid-calibration would render the new
+      // panel with the old panel's colours.
+      const ov = this.colors_actual_override;
+      if (ov && ov.panel === this.panel) {
+        query.colors_actual = ov.colors;
+      } else if (p && p.colors_actual) {
+        query.colors_actual = p.colors_actual;
+      }
+```
+
+Leave rule (c) — that `colors_actual` travels only when a panel is chosen —
+exactly as it is. This code is already inside `if (this.panel)`.
+
+- [ ] **Step 5: Write the `tune` store**
+
+`webui/src/lib/state/tune.svelte.js`:
+
+```js
+// Panel colour tuning: a working copy, a temporary override, and a durable save.
+//
+// Two stages, because e-ink is reflective: a calibration is only valid under
+// the light the panel hangs in, so it must be able to reach real hardware
+// (stage 1, `push`) before it becomes the configuration (stage 2, `save`).
+//
+// State lives here and not in `TunePane` so that closing the panel — which
+// unmounts the component and clears the server-side override — does not throw
+// away a half-finished calibration.
+
+import * as api from "../api.js";
+import { simulate } from "./simulate.svelte.js";
+import { screens } from "./screens.svelte.js";
+
+const split = (s) => (s ? s.split(",").map((c) => c.trim()).filter(Boolean) : []);
+
+class Tune {
+  panel = $state("");
+  device = $state("");
+  colors = $state([]);
+  baseline = $state([]);
+  selected = $state(0);
+  pushed = $state(false);
+  /** `null` or `{op: "push" | "save" | "discard" | "session", message}`. */
+  error = $state(null);
+
+  get dirty() {
+    return this.colors.join(",") !== this.baseline.join(",");
+  }
+
+  /** The comma-separated wire form of the working copy. */
+  get wire() {
+    return this.colors.join(",");
+  }
+
+  selectPanel(id, panelInfo = null) {
+    const info = panelInfo ?? (screens.meta.panels ?? []).find((p) => p.id === id) ?? null;
+    this.panel = id;
+    // Fall back to the official colours when a panel has never been measured:
+    // tuning from the nominal palette is the normal first calibration.
+    const from = split(info?.colors_actual) .length
+      ? split(info.colors_actual)
+      : split(info?.colors);
+    this.colors = [...from];
+    this.baseline = [...from];
+    this.selected = 0;
+    this.pushed = false;
+    this.#mirror();
+  }
+
+  async selectDevice(key) {
+    const previous = this.device;
+    if (previous && previous !== key) await this.#endSession(previous);
+    this.device = key;
+    if (!key) return;
+    try {
+      await api.startTuningSession(key);
+    } catch (e) {
+      this.error = { op: "session", message: e.message };
+    }
+  }
+
+  setColor(i, hex) {
+    if (i < 0 || i >= this.colors.length) return;
+    const next = [...this.colors];
+    next[i] = hex;
+    this.colors = next;
+    this.#mirror();
+  }
+
+  async push() {
+    try {
+      await api.setPanelOverride(this.panel, this.wire);
+      this.pushed = true;
+      this.error = null;
+      // The override is keyed by panel and the session by device, so the
+      // server cannot refresh the session from the push. The client does it.
+      if (this.device) await api.startTuningSession(this.device);
+    } catch (e) {
+      this.pushed = false;
+      this.error = { op: "push", message: e.message };
+    }
+  }
+
+  async save() {
+    try {
+      await api.savePanelColors(this.panel, this.wire);
+      this.baseline = [...this.colors];
+      this.pushed = false;
+      this.error = null;
+      // The panel list the client holds now understates the truth.
+      await screens.loadMeta();
+      await this.#endSession(this.device);
+      this.device = "";
+    } catch (e) {
+      this.error = { op: "save", message: e.message };
+    }
+  }
+
+  async discard() {
+    try {
+      await api.clearPanelOverride(this.panel);
+      this.error = null;
+    } catch (e) {
+      this.error = { op: "discard", message: e.message };
+    }
+    this.colors = [...this.baseline];
+    this.pushed = false;
+    this.#mirror();
+    await this.#endSession(this.device);
+    this.device = "";
+  }
+
+  /**
+   * Give up the server-side state without touching the working copy.
+   *
+   * Called when the Tune panel closes. An override that nobody is watching is
+   * a trap: it silently changes what every device using that panel renders,
+   * with nothing on screen to say so.
+   */
+  async release() {
+    if (this.pushed) {
+      try {
+        await api.clearPanelOverride(this.panel);
+      } catch {
+        // Best effort. A failure here leaves an override live, which the
+        // status bar still reports; it must not throw out of an unmount.
+      }
+      this.pushed = false;
+    }
+    await this.#endSession(this.device);
+    this.device = "";
+    simulate.colors_actual_override = null;
+  }
+
+  reset() {
+    this.panel = "";
+    this.device = "";
+    this.colors = [];
+    this.baseline = [];
+    this.selected = 0;
+    this.pushed = false;
+    this.error = null;
+    simulate.colors_actual_override = null;
+  }
+
+  async #endSession(key) {
+    if (!key) return;
+    try {
+      await api.endTuningSession(key);
+    } catch (e) {
+      this.error = { op: "session", message: e.message };
+    }
+  }
+
+  #mirror() {
+    simulate.colors_actual_override = this.colors.length
+      ? { panel: this.panel, colors: this.wire }
+      : null;
+  }
+}
+
+export const tune = new Tune();
+```
+
+Check `screens`'s real metadata-reload method name before you write
+`screens.loadMeta()` — Task 6 named it, and this plan may have it wrong.
+
+- [ ] **Step 6: Run the tests to verify they pass**
+
+Run: `cd webui && pnpm vitest run`
+Expected: PASS, whole suite.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add webui/src/lib/state/tune.svelte.js webui/src/lib/api.js \
+        webui/src/lib/state/simulate.svelte.js \
+        webui/test/tune.test.js webui/test/simulate.test.js
+git diff --cached --name-only
+git commit -m "feat(webui): tune store, and a live working copy for the preview
+
+The preview follows a slider with no server call: simulate.url() already
+sends colors_actual, so the working copy just feeds it. The field is
+parked on simulate because tune imports simulate for its default panel
+and the reverse would close a module cycle — the same reasoning as
+simulate.error."
+```
+
+---
+
+### Task 9g: `TunePane`
+
+**Files:**
+- Modify: `webui/src/lib/components/TunePane.svelte` (replace the Task 9e placeholder)
+- Create: `webui/src/lib/utils/color.js`
+- Test: `webui/test/tunepane.test.js` (create)
+
+**Interfaces:**
+- Consumes: `tune` (Task 9f), `screens.meta` (Task 6), `simulate` (Task 8).
+- Produces: nothing later tasks read. `Task 10` reads `tune.error` and `tune.pushed` from the store, not from this component.
+
+Spec §8.
+
+- [ ] **Step 1: Write the failing test**
+
+`webui/test/tunepane.test.js`:
+
+```js
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/svelte";
+import { tick } from "svelte";
+import TunePane from "../src/lib/components/TunePane.svelte";
+import { tune } from "../src/lib/state/tune.svelte.js";
+import { screens } from "../src/lib/state/screens.svelte.js";
+import { simulate } from "../src/lib/state/simulate.svelte.js";
+import * as api from "../src/lib/api.js";
+
+beforeEach(() => {
+  vi.restoreAllMocks();
+  tune.reset();
+  simulate.reset();
+  screens.meta.panels = [
+    { id: "e1004", name: "E1004", colors: "#000000,#FFFFFF,#00FF00",
+      colors_actual: "#101010,#E8E8E8,#00994D" },
+    { id: "og", name: "OG", colors: "#000000,#FFFFFF" },
+  ];
+  screens.meta.devices = [
+    { id: "kitchen", screen: "local/a", panel: "e1004" },
+    { id: "attic", screen: "local/a", panel: null },
+  ];
+});
+
+describe("TunePane", () => {
+  it("shows one swatch per colour once a panel is chosen", async () => {
+    render(TunePane);
+    await fireEvent.change(screen.getByLabelText("Panel"), { target: { value: "e1004" } });
+    expect(screen.getAllByRole("radio")).toHaveLength(3);
+  });
+
+  it("selecting a device sets the panel and starts a session", async () => {
+    const start = vi.spyOn(api, "startTuningSession").mockResolvedValue();
+    render(TunePane);
+    await fireEvent.change(screen.getByLabelText("Device"), { target: { value: "kitchen" } });
+    await tick();
+    expect(start).toHaveBeenCalledWith("kitchen");
+    expect(tune.panel).toBe("e1004");
+  });
+
+  it("says so when a device's panel is not known from config", async () => {
+    vi.spyOn(api, "startTuningSession").mockResolvedValue();
+    render(TunePane);
+    await fireEvent.change(screen.getByLabelText("Device"), { target: { value: "attic" } });
+    await tick();
+    expect(screen.getByText(/pick the panel/i)).toBeTruthy();
+  });
+
+  it("a slider drag changes the selected swatch and the working copy", async () => {
+    render(TunePane);
+    await fireEvent.change(screen.getByLabelText("Panel"), { target: { value: "e1004" } });
+    await fireEvent.click(screen.getAllByRole("radio")[2]);
+    await fireEvent.input(screen.getByLabelText("Lightness"), { target: { value: "20" } });
+    await tick();
+    expect(tune.colors[2]).not.toBe("#00994D");
+    expect(tune.dirty).toBe(true);
+  });
+
+  it("a hex entry that is not a colour changes nothing", async () => {
+    render(TunePane);
+    await fireEvent.change(screen.getByLabelText("Panel"), { target: { value: "e1004" } });
+    await fireEvent.click(screen.getAllByRole("radio")[0]);
+    await fireEvent.input(screen.getByLabelText("Hex"), { target: { value: "nope" } });
+    await tick();
+    expect(tune.colors[0]).toBe("#101010");
+  });
+
+  it("Push, Save and Discard call the store", async () => {
+    const push = vi.spyOn(tune, "push").mockResolvedValue();
+    const save = vi.spyOn(tune, "save").mockResolvedValue();
+    const discard = vi.spyOn(tune, "discard").mockResolvedValue();
+    render(TunePane);
+    await fireEvent.change(screen.getByLabelText("Panel"), { target: { value: "e1004" } });
+
+    await fireEvent.click(screen.getByRole("button", { name: /push to panel/i }));
+    await fireEvent.click(screen.getByRole("button", { name: /save to config/i }));
+    await fireEvent.click(screen.getByRole("button", { name: /discard/i }));
+
+    expect(push).toHaveBeenCalled();
+    expect(save).toHaveBeenCalled();
+    expect(discard).toHaveBeenCalled();
+  });
+
+  it("releases the server-side override when it unmounts", async () => {
+    const release = vi.spyOn(tune, "release").mockResolvedValue();
+    const { unmount } = render(TunePane);
+    unmount();
+    expect(release).toHaveBeenCalled();
+  });
+
+  it("round-trips a colour through hex and HSL without drift", () => {
+    // Guards the ported maths: the old UI's sliders write HSL and the hex box
+    // writes hex, so a value that changes when it merely passes through both
+    // makes every swatch creep as the user works.
+    for (const hex of ["#000000", "#FFFFFF", "#00994D", "#B03030", "#3040A0"]) {
+      expect(hslToHex(...Object.values(hexToHsl(hex))).toUpperCase()).toBe(hex.toUpperCase());
+    }
+  });
+});
+```
+
+Import `hexToHsl` / `hslToHex` from the new `color.js` in that last test.
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `cd webui && pnpm vitest run test/tunepane.test.js`
+Expected: FAIL — the placeholder has no controls.
+
+- [ ] **Step 3: Port the colour maths**
+
+`webui/src/lib/utils/color.js` — port `hexToHsl` and `hslToHex` from
+`static/dev/dev.js:1227-1237` **verbatim in behaviour**, as ES module exports
+with JSDoc. That file is deleted by Task 12, so this is the surviving copy.
+
+The round-trip test above will fail if the port rounds differently from the
+original. If it does, fix the port, not the test: a colour that drifts each
+time it passes through both directions makes every swatch creep as the user
+works.
+
+- [ ] **Step 4: Write `TunePane`**
+
+Replace `webui/src/lib/components/TunePane.svelte`. It holds, top to bottom:
+
+- a **Panel** `<select>` over `screens.meta.panels`, defaulting to
+  `simulate.panel`, calling `tune.selectPanel(id)`;
+- a **Device** `<select>` over `screens.meta.devices`, calling
+  `tune.selectDevice(key)`; when the chosen device's `panel` is non-null it
+  also calls `tune.selectPanel` with it, and when it is null it shows
+  "This device's panel is not set in config — pick the panel above.";
+- the **swatch row** for `tune.colors`, as a `radiogroup` so exactly one is
+  selected and it is reachable by keyboard;
+- **Hue / Saturation / Lightness** `<input type="range">` and a **Hex**
+  `<input type="text">`, all driving `tune.setColor(tune.selected, …)`. An
+  entry that does not match `/^#?[0-9A-Fa-f]{6}$/` changes nothing;
+- an **original / live** pair — `tune.baseline[tune.selected]` beside
+  `tune.colors[tune.selected]` — so the change reads as a difference and not
+  only as an absolute;
+- **`[Push to panel]`**, **`[Save to config]`**, **`[Discard]`**.
+  `Push` is disabled while `!tune.panel`; `Save` while `!tune.dirty`;
+  `Discard` while `!tune.pushed && !tune.dirty`.
+
+Use the existing `ui/` primitives (`Label`, `Input`, `Button`) and the plain
+`<select>` idiom `SimulateControls.svelte` already uses — do not vendor a new
+shadcn component, and add no dependency.
+
+`Push` is a **button, never automatic.** The old popup pushed on a 300 ms
+debounce (`dev.js:1311-1340`). That is wrong now, because a push has a physical
+side effect: it drives a battery-powered device into a 60-second refresh cycle.
+Dragging a slider must not do that.
+
+Release on unmount:
+
+```svelte
+  import { onDestroy } from "svelte";
+  // Closing the panel gives up the server-side override and the session. The
+  // working copy survives, because it lives in the store.
+  onDestroy(() => { tune.release(); });
+```
+
+- [ ] **Step 5: Run the whole suite**
+
+Run: `cd webui && pnpm vitest run`
+Expected: PASS.
+
+- [ ] **Step 6: Full verification**
+
+```
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+(cd docs && mdbook build)
+make webui
+```
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add webui/src/lib/components/TunePane.svelte webui/src/lib/utils/color.js \
+        webui/test/tunepane.test.js
+git diff --cached --name-only
+git commit -m "feat(webui): TunePane — swatches, HSL and hex, push and save
+
+Push is a button and not a debounce: it drives a battery-powered device
+into a 60s refresh, so dragging a slider must not trigger it. Closing the
+panel releases the server-side override, because an override nobody is
+watching silently changes what every device on that panel renders."
+```
+
+---
 ### Task 10: Conflict handling, `ConflictBanner`, `StatusBar`
 
 **Files:**
@@ -2636,6 +4736,22 @@ behaviour.
 Validity, cursor position and watch state, in monospace, at the foot of the
 editor (spec §1). It reads `editor.active.issues`, the CodeMirror cursor
 position, and whether the `EventSource` is open.
+
+**Amended 2026-09-10 — it must also report colour tuning.** `StatusBar` shows,
+beside the other indicators:
+
+- **that a colour override is live, and for which panel**, from `tune.pushed`
+  and `tune.panel`. This is not decoration. An override silently changes what
+  every real device using that panel renders, and the Tune panel it was set
+  from may be closed. An override nobody can see is the trap the whole
+  two-stage design exists to avoid (colour-tuning spec §1, §8).
+- **`tune.error`** — `{op, message}`, set by a failed push, save, discard or
+  session call (Task 9f). Task 9f captures it and nothing renders it until
+  here, so a failure would otherwise look like success.
+
+Add the two cases to `webui/test/conflict.test.js` or a sibling file: an
+override live with the Tune panel unmounted still shows in the status bar, and
+a `tune.error` is displayed rather than swallowed.
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
@@ -3000,9 +5116,32 @@ docs, not a cosmetic issue.
 - [ ] **Step 2: Update the dev-mode guide**
 
 `docs/src/guide/dev-mode.md` describes the editor's layout. Rewrite the layout
-section for the four toggleable panels: what each icon shows and hides, that
+section for the **five** toggleable panels: what each icon shows and hides, that
 every combination is allowed, that hidden panels return at the size they had,
 and that splitter positions persist. Screenshots, if it has any, are now wrong.
+
+**Amended 2026-09-10 — colour tuning needs its own section**, because it is the
+one panel whose behaviour a user cannot guess from looking at it. Write it as
+the two-stage loop it is, and say plainly:
+
+- tuning is **per panel profile**, so every device using that profile shares it;
+- **Push to panel** sets a temporary override that real devices pick up on
+  their next poll, and is **lost on restart**;
+- while a device is selected in Tune, **that device refreshes every 60 seconds**
+  so a calibration iterates quickly — and that this costs battery, ends when
+  you save, discard, deselect or close the panel, and expires by itself after
+  30 minutes;
+- **Save to config** writes `colors_actual` into `config.yaml` under that panel,
+  keeping the file's comments, and is what makes a calibration permanent;
+- the browser preview alone cannot confirm a calibration, because e-ink is
+  reflective and the panel shows the light in the room it hangs in.
+
+Also fix the two known docs falsehoods if they are still present, since this
+task is already in the neighbourhood: `homeassistant/byonk/DOCS.md:64-65` and
+`docs/src/guide/home-assistant.md:204` both claim `config.yaml` edits are picked
+up without a restart. They are not — `reload_config` runs only from a write
+handler. Say so in your report if you fix them, since they are outside this
+plan's stated scope.
 
 - [ ] **Step 3: Add the changelog entry**
 
@@ -3056,6 +5195,33 @@ make webui
 
 All must exit 0. Fix anything that fails **in its own commit**. Do not run
 `make check` in place of these — it has reported exit 0 while tests failed.
+
+- [ ] **Step 1b: The colour-tuning checks (added 2026-09-10)**
+
+These are server-side and run with the five commands above; they exist because
+three of the amendment's behaviours are invisible to a unit test.
+
+```bash
+cargo test --test dev_panel_colors_test \
+           --test dev_panel_colors_save_test \
+           --test dev_tuning_session_test \
+           --test addon_reload_test
+```
+
+Then confirm by hand, in the sandbox of Step 2:
+
+- **the two-stage split holds** — drag a slider and watch the preview change
+  while `config.yaml` on disk does not; then press Save and watch the file gain
+  a `colors_actual` line **with every surrounding comment intact**;
+- **an override really is temporary** — push one, restart byonk, and confirm the
+  panel renders from `config.yaml` again;
+- **closing the Tune panel releases the override**, and the status bar stops
+  reporting one;
+- **the working copy survives that close** — reopen Tune and the colours you had
+  are still there;
+- **a session ends** — select a device, confirm `/api/display` answers
+  `refresh_rate: 60`, then close the panel and confirm it answers the normal
+  rate again. `curl` the endpoint directly; do not infer it from the UI.
 
 - [ ] **Step 2: Browser walk-through in a scratch sandbox**
 
@@ -3154,6 +5320,32 @@ PR body: the summary, the breaking change, the test list, screenshots, and
 
 ## Self-review
 
+**Colour-tuning amendment coverage (2026-09-10).** Spec
+`2026-09-10-dev-ui-color-tuning-design.md`: §1 two stages → Tasks 9b, 9d, 9f,
+9g. §2 layout → Task 9e. §3 tuning session → Task 9c. §4 re-key → Task 9b.
+§5 durable write → Task 9d. §6 add-on reload fix → Task 9a. §7 HTTP surface →
+Tasks 9b, 9c, 9d, and the API table above. §8 `TunePane` and the `tune` store →
+Tasks 9f, 9g, plus Task 10 Step 5 for the two things `StatusBar` must render.
+§9 must-not-regress → the Global Constraints plus Task 14 Step 1b. §10 testing →
+each task's own tests. §11 risks → no task; they are judgement calls for the
+final review.
+
+**Amendment gaps, stated rather than hidden.**
+
+- **`resolve_panel`'s extraction is the riskiest edit in Tasks 9a–9d.** It moves
+  live code out of a long function in `src/api/display.rs`. Diff it against the
+  original before and after; a branch that changes precedence changes what real
+  devices render.
+- **Task 9c's fixture may not produce a non-60 baseline.** Its `assert_ne!`
+  guard is there to trip loudly rather than let the test pass vacuously.
+- **`TunePane` is untested against a real pointer.** Its sliders are driven by
+  `fireEvent.input` in jsdom, like every other control in this plan. Task 14's
+  browser list is where a real drag is exercised.
+- **The 60-second refresh is not exercised against real hardware by any task.**
+  Task 14 Step 1b confirms the number byonk answers; whether a physical panel
+  actually keeps up with it is a question only the maintainer's own device can
+  settle.
+
 **Spec coverage.** §1 layout → Tasks 4, 5. §2 visual language → Tasks 1 (scale), 11 (theme). §3 toolchain → Task 1. §4 build and embedding → Tasks 1, 2, 12. §5 serving → Task 12. §6 component structure → Tasks 4-11. §7 testing → every task's tests; the five named cases are Tasks 4 (splitter persistence), 7 (dirty vs error, tab lifecycle), 9 (aspect ratio), 10 (conflict, both paths). §8 regressions 1-9 → Task 14 Step 2, with 6 also unit-tested in Task 6 and by hand in Task 7, and 8 unit-tested in Task 6. §9 risks → bundle budget in Task 12, three build paths in Task 2, density scale in Task 1; the pop-out risk is closed and re-proved in Task 14 Step 3.
 
 **Known gaps, stated rather than hidden.**
@@ -3162,4 +5354,4 @@ PR body: the summary, the breaking change, the test list, screenshots, and
 - **`StatusBar` has no test.** It displays state three other stores already test.
 - **shadcn-svelte's CLI output is unknown until it runs.** Task 5 Step 1 says to verify the alias and adapt the imports. Every later import path in this plan assumes `src/lib/...` and `src/ui/...`.
 - **`AppShell`'s nested snippets are the plan's least certain markup.** Task 5 Step 5 flags it.
-- **The `file-change` payload shape is assumed to be `{ref, name}`.** Task 10 Step 4 says to check it against `handle_events`.
+- ~~**The `file-change` payload shape is assumed to be `{ref, name}`.**~~ **Checked, and the assumption is wrong:** the payload is a JSON array of bare basenames (`src/api/dev.rs:294-303`), so a subscriber that destructures `{ref, name}` off it gets `undefined` and matches nothing. Match by basename, as `dev.js:1622-1631` does. Task 10 must carry this; its own tests cannot catch it, because they call `onFileChange` directly.

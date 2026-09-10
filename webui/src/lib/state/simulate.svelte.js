@@ -38,6 +38,16 @@ import { screens } from "./screens.svelte.js";
  * `colors` and `model` are deliberately absent from the field set: the old
  * UI's render query omits `colors` too and lets the server apply its own
  * fallback (dev.js:237-241).
+ *
+ * Fix round 1 (Rulings 32-34) corrected three things found in review:
+ *   - Ruling 32: `panel` is matched by `id` only (see `#selectedPanel()`),
+ *     not `id` OR `name` -- the wire value is always the config id.
+ *   - Ruling 33: selecting a device populates `panel`/`dither` from that
+ *     device's own config, same caution as the old UI's
+ *     `selectIfPresent()` (only when the value is actually present in the
+ *     list) -- see `SimulateControls.svelte`'s `onDeviceChange()`.
+ *   - Ruling 34: `strength` is guarded against `null` explicitly (see
+ *     `isBlank()`), not left to `qs()` to drop downstream.
  */
 
 const DEFAULT_SIZE = { width: 800, height: 480 };
@@ -58,9 +68,20 @@ const DEFAULTS = {
   params: "{}",
 };
 
+/**
+ * True for a field left untouched: "" (the default text-field value) or
+ * `null` -- what a Svelte `bind:value` on a cleared `<input type="number">`
+ * yields, never a string (verified directly: typing produces a `number`,
+ * clearing produces `null`). `undefined` is covered defensively for the
+ * same reason.
+ */
+function isBlank(v) {
+  return v === "" || v === undefined || v === null;
+}
+
 /** `v` differs from `dflt` for the "send only on override" fields (f). */
 function differsFromDefault(v, dflt) {
-  if (v === "" || v === undefined || v === null) return false;
+  if (isBlank(v)) return false;
   if (dflt === undefined || dflt === null) return true;
   return parseFloat(v) !== parseFloat(dflt);
 }
@@ -116,14 +137,20 @@ class Simulate {
 
   /**
    * The panel profile the `panel` field currently names, matched against
-   * `screens.meta.panels` by either `id` (the real config key, and what a
-   * populated select's option value holds) or `name` -- so a caller that
-   * only knows the profile's display name still resolves it. `null` when
-   * nothing matches (including when nothing is chosen).
+   * `screens.meta.panels` by `id` only -- the wire value (`RenderQuery.
+   * panel`), confirmed from both ends: the old UI's select uses `p.id` as
+   * its option value (dev.js:971), and the server resolves it via
+   * `Config::get_panel`, a lookup by config id (src/models/
+   * config.rs:667-668), not by the human-readable `name` field. `id` and
+   * `name` are genuinely distinct in a real config (e.g. `config.yaml`'s
+   * `trmnl_x` / `"TRMNL X (16-grey)"`), so matching on `name` as well
+   * (Ruling 32) could silently resolve the wrong panel if a display name
+   * ever collided with another panel's id. `null` when nothing matches
+   * (including when nothing is chosen).
    */
   #selectedPanel() {
     const list = screens.meta.panels ?? [];
-    return list.find((p) => p.id === this.panel || p.name === this.panel) ?? null;
+    return list.find((p) => p.id === this.panel) ?? null;
   }
 
   /** Width/height from the chosen panel profile, else the 800x480 default. */
@@ -180,8 +207,11 @@ class Simulate {
     }
 
     // No per-algorithm default: the engine leaves strength at 1.0 whatever
-    // the kernel, so only a departure from that is sent.
-    if (this.strength !== "" && parseFloat(this.strength) !== 1) {
+    // the kernel, so only a departure from that is sent. Guard against
+    // `null` explicitly (Ruling 34) rather than relying on `qs()` to drop
+    // it downstream -- `parseFloat(null)` is `NaN`, which is `!== 1` and
+    // would otherwise send a bogus `strength=null`.
+    if (!isBlank(this.strength) && parseFloat(this.strength) !== 1) {
       query.strength = this.strength;
     }
 

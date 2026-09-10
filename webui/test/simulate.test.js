@@ -1,11 +1,16 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { simulate } from "../src/lib/state/simulate.svelte.js";
 import { screens } from "../src/lib/state/screens.svelte.js";
+import * as api from "../src/lib/api.js";
+
+const realRenderUrl = api.renderUrl;
 
 beforeEach(() => {
   simulate.reset();
   screens.meta = { devices: [], panels: [], dither_algorithms: [] };
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("simulate store", () => {
   it("builds a relative render URL and omits unset controls", () => {
@@ -19,10 +24,14 @@ describe("simulate store", () => {
   });
 
   it("takes width and height from the chosen panel profile", () => {
+    // Fixture corrected per Controller Ruling 32: the field a panel is
+    // matched on is `id` (the wire value), not `name` -- the brief's
+    // original fixture put an id-shaped string in the `name` field, which
+    // tested the wrong contract. Same panel data, right field.
     screens.meta = {
       devices: [],
       dither_algorithms: [],
-      panels: [{ name: "trmnl_x", width: 1872, height: 1404 }],
+      panels: [{ id: "trmnl_x", width: 1872, height: 1404 }],
     };
     simulate.panel = "trmnl_x";
     expect(simulate.size).toEqual({ width: 1872, height: 1404 });
@@ -151,5 +160,45 @@ describe("simulate store", () => {
     const u = simulate.url("local/hello");
     expect(u).toContain("max_error=2");
     expect(u).toContain("noise_scale=3");
+  });
+
+  // --- Fix round 1: Controller Rulings 32 and 34 ---------------------------
+
+  it("Ruling 32: matches a panel by id only, never by a name that collides with another panel's id", () => {
+    screens.meta = {
+      devices: [],
+      dither_algorithms: [],
+      panels: [
+        // A display name that collides with a DIFFERENT panel's id, and
+        // sorted first -- an `id`-OR-`name` match would hit this one
+        // before ever reaching the panel whose id actually is "trmnl_x".
+        { id: "og", name: "trmnl_x", width: 1, height: 1 },
+        { id: "trmnl_x", name: "decoy", width: 1872, height: 1404 },
+      ],
+    };
+    simulate.panel = "trmnl_x";
+    // Must resolve the panel whose ID is "trmnl_x", not the one whose NAME
+    // happens to read "trmnl_x".
+    expect(simulate.size).toEqual({ width: 1872, height: 1404 });
+  });
+
+  it("Ruling 34: guards `strength` against null (what a cleared number input yields), not just against empty string", () => {
+    simulate.strength = null;
+    const u = simulate.url("local/hello");
+    expect(u).not.toContain("strength=");
+  });
+
+  it("Ruling 34: never even puts a `strength` key on the query object when it is null -- not relying on qs() to filter it out downstream", () => {
+    // `qs()` drops `null` values regardless of this guard, which is exactly
+    // the "accidental correctness" the guard closes: a plain
+    // `expect(url).not.toContain("strength=")` passes whether or not the
+    // guard exists, because qs() silently absorbs the mistake. Spy on
+    // `api.renderUrl` (pass-through) to see the object `url()` actually
+    // built, before qs() ever touches it.
+    const spy = vi.spyOn(api, "renderUrl").mockImplementation((p) => realRenderUrl(p));
+    simulate.strength = null;
+    simulate.url("local/hello");
+    const query = spy.mock.calls[0][0];
+    expect(Object.hasOwn(query, "strength")).toBe(false);
   });
 });

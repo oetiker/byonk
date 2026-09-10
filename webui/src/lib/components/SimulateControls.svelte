@@ -25,10 +25,10 @@
       : [];
   }
 
-  const selectedPanel = $derived(
-    screens.meta.panels?.find((p) => p.id === simulate.panel || p.name === simulate.panel) ??
-      null,
-  );
+  // Matched by `id` only -- see the identical note on the store's
+  // `#selectedPanel()` (Ruling 32): the wire value is always the config
+  // id, and `name` can collide with a different panel's id.
+  const selectedPanel = $derived(screens.meta.panels?.find((p) => p.id === simulate.panel) ?? null);
 
   // The old UI shows the actual (measured) colors only while "Show actual
   // panel colors" is checked and the chosen panel has any -- otherwise the
@@ -53,6 +53,28 @@
       simulate.dither = "atkinson";
     }
   });
+
+  // Ruling 33: choosing a device previews *that device's own configured
+  // screen* (the server ignores `screen` once `mac` is set -- see the
+  // banner below), so its own panel/dither must come along, or the
+  // preview silently renders at whatever panel/dither happened to be
+  // selected before. Mirrors the old UI's `selectIfPresent()`
+  // (dev.js:920-925, wired at dev.js:1474-1479): assign only when the
+  // device actually names one, and only when that value is still present
+  // in the current list -- a stale/unknown reference is left alone rather
+  // than clobbering the field with something not selectable in its own
+  // `<select>`.
+  function onDeviceChange() {
+    if (!simulate.mac) return;
+    const dev = screens.meta.devices?.find((d) => d.id === simulate.mac);
+    if (!dev) return;
+    if (dev.panel && screens.meta.panels?.some((p) => p.id === dev.panel)) {
+      simulate.panel = dev.panel;
+    }
+    if (dev.dither && screens.meta.dither_algorithms?.some((a) => a.name === dev.dither)) {
+      simulate.dither = dev.dither;
+    }
+  }
 
   function onDitherChange() {
     // Defaults first: a fresh algorithm selection starts on the engine's
@@ -95,7 +117,12 @@
 <div class="flex flex-col gap-3 overflow-auto min-h-0 p-3 text-sm">
   <div class="flex flex-col gap-1.5">
     <Label for="sim-device">Device</Label>
-    <select id="sim-device" class={selectClass} bind:value={simulate.mac}>
+    <select
+      id="sim-device"
+      class={selectClass}
+      bind:value={simulate.mac}
+      onchange={onDeviceChange}
+    >
       <option value="">None (edited screen only)</option>
       {#each screens.meta.devices ?? [] as d (d.id)}
         <option value={d.id}>{d.id} &rarr; {d.screen}</option>

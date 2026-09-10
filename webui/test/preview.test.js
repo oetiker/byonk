@@ -88,6 +88,60 @@ describe("PreviewPane", () => {
     expect(img.className).toContain("object-contain");
   });
 
+  // --- Controller Ruling 42: device frame + zoom are named spec ---------
+  // --- deliverables (design doc:290), not just prose in the brief -------
+
+  it("frames a >1000px panel with the \"x\" bezel class", () => {
+    // Ported from the old UI's `updateDeviceFrame()` (static/dev/dev.js:262):
+    // hi-res panels get the "x" bezel, everything else gets "og".
+    screens.meta = {
+      devices: [],
+      dither_algorithms: [],
+      panels: [{ id: "trmnl_x", width: 1872, height: 1404 }],
+    };
+    simulate.panel = "trmnl_x";
+    const { container } = render(PreviewPane);
+    const frame = container.querySelector(".device-frame");
+    expect(frame.classList.contains("x")).toBe(true);
+    expect(frame.classList.contains("og")).toBe(false);
+  });
+
+  it("frames the 800x480 default with the \"og\" bezel class", () => {
+    const { container } = render(PreviewPane);
+    const frame = container.querySelector(".device-frame");
+    expect(frame.classList.contains("og")).toBe(true);
+    expect(frame.classList.contains("x")).toBe(false);
+  });
+
+  it("shows the 1:1 pixel lens on hover, but only once a render has landed", async () => {
+    // Mirrors `lens.js`'s own guard against magnifying nothing -- keyed off
+    // `blobUrl` rather than `img.naturalWidth`/`.complete` (what `lens.js`
+    // checks), because jsdom never populates either for a `blob:` URL
+    // (confirmed directly: both stay 0/false indefinitely no matter how
+    // long you wait -- see the report). `blobUrl` is this component's own
+    // "a render actually completed" signal, and the only readiness check a
+    // test here can drive.
+    const { container } = render(PreviewPane);
+    const img = screen.getByRole("img", { name: /screen preview/i });
+
+    // No render has happened yet: hovering shows nothing.
+    await fireEvent.mouseEnter(img);
+    expect(container.querySelector(".lens")).toBeNull();
+
+    const blob = new Blob(["fake-png-bytes"], { type: "image/png" });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, blob: async () => blob });
+    screens.selected = "local/a";
+    await waitFor(() => expect(img.src).toMatch(/^blob:/));
+
+    // Now that a render has landed, hovering shows the lens...
+    await fireEvent.mouseEnter(img);
+    expect(container.querySelector(".lens")).not.toBeNull();
+
+    // ...and it goes away again on mouseleave.
+    await fireEvent.mouseLeave(img);
+    expect(container.querySelector(".lens")).toBeNull();
+  });
+
   // --- Controller Ruling 41: renderNow() must catch, not swallow --------
 
   it("captures an invalid-JSON render failure on simulate.error", async () => {

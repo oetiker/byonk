@@ -74,6 +74,12 @@ Consequences the plan must honour:
 Settled by mockup review on 2026-09-08. **Amended 2026-09-09 by the owner:
 each panel gets its own icon and can be shown or hidden individually.**
 
+⚠️ **Amended again 2026-09-10: there are FIVE panels, not four.** Color tuning
+returns as a `Tune` panel docked between the editor and the preview. Every
+rule stated below holds unchanged — see
+`2026-09-10-dev-ui-color-tuning-design.md` §2 for the layout and §1 for why
+tuning needs its own panel.
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ BYONK   local/departures                                 [Save] │  top bar
@@ -278,8 +284,8 @@ Shell:
 
 - `AppShell` · `IconRail` · `FilesPane` · `StatusBar` · `ThemeSwitch`
 
-`IconRail` holds the four panel toggles and owns no panel content itself. The
-four work areas below are the four toggleable panels of §1, so each mounts and
+`IconRail` holds the panel toggles and owns no panel content itself. The work
+areas below are the toggleable panels of §1, so each mounts and
 unmounts as its icon is pressed — mind that unmounting `EditorPane` must not
 lose an unsaved buffer, which is why editor state lives in a rune module and
 not in the component.
@@ -290,12 +296,14 @@ Work areas:
 - `PreviewPane` — device frame, zoom, aspect-ratio handling, pop-out button
 - `SimulateControls` — device, panel profile, palette swatches, dither and
   its parameters, battery, wifi, time, custom params
+- `TunePane` — panel and device selectors, editable swatches, HSL/hex controls,
+  push/save/discard (added by the 2026-09-10 amendment)
 - `ConflictBanner` — the on-disk-changed banner with Reload and Overwrite
 
-State lives in four rune modules — `screens`, `editor`, `simulate`, `layout` —
-so no component owns state another component needs. `layout` carries the four
-panels' open/closed states alongside the splitter positions, and persists them
-together. Each answers: what does it
+State lives in rune modules — `screens`, `editor`, `simulate`, `layout` and
+(from the 2026-09-10 amendment) `tune` — so no component owns state another
+component needs. `layout` carries every panel's open/closed state alongside the
+splitter positions, and persists them together. Each answers: what does it
 hold, who writes it, who reads it.
 
 ## 7 · Testing

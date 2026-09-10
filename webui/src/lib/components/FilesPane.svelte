@@ -5,38 +5,70 @@
 
   const canEdit = $derived(screens.writable(screens.selected));
 
-  async function newScreen() {
-    const handle = screens.repos.find((r) => r.writable)?.handle;
-    const name = prompt("New screen name");
-    if (!handle || !name) return;
-    const { ref } = await api.createScreen(handle, name);
-    await screens.refresh();
-    screens.select(ref);
+  function firstWritableHandle() {
+    return screens.repos.find((r) => r.writable)?.handle;
   }
 
-  async function copyScreen() {
-    const to = screens.repos.find((r) => r.writable)?.handle;
-    const name = prompt("Copy to name");
-    if (!to || !name || !screens.selected) return;
-    const { ref } = await api.copyScreen(screens.selected, to, name);
-    await screens.refresh();
-    screens.select(ref);
+  /**
+   * Every handler below calls the API, which can reject -- a 409 conflict,
+   * a dropped connection, a 401 after session expiry. Left uncaught, that
+   * is an unhandled promise rejection with no user-visible feedback: the
+   * dialog just closes and nothing happens. `run()` is the one place that
+   * catches, so no handler can leak a rejection past its onclick, and it
+   * records enough on `screens.error` for something else to act on --
+   * rendering that is Task 10's job (StatusBar), not this component's.
+   * A fresh operation clears the previous error so a stale failure can't
+   * linger after a later success.
+   */
+  async function run(op, fn) {
+    screens.error = null;
+    try {
+      await fn();
+    } catch (err) {
+      screens.error = { op, message: err?.message ?? String(err) };
+    }
   }
 
-  async function renameScreen() {
-    const name = prompt("Rename to");
-    if (!name || !screens.selected) return;
-    const { ref } = await api.renameScreen(screens.selected, name);
-    await screens.refresh();
-    screens.select(ref);
+  function newScreen() {
+    return run("create", async () => {
+      const handle = firstWritableHandle();
+      const name = prompt("New screen name");
+      if (!handle || !name) return;
+      const { ref } = await api.createScreen(handle, name);
+      await screens.refresh();
+      screens.select(ref);
+    });
   }
 
-  async function deleteScreen() {
-    if (!screens.selected) return;
-    if (!confirm(`Delete ${screens.selected}?`)) return;
-    await api.deleteScreen(screens.selected);
-    screens.select(null);
-    await screens.refresh();
+  function copyScreen() {
+    return run("copy", async () => {
+      const to = firstWritableHandle();
+      const name = prompt("Copy to name");
+      if (!to || !name || !screens.selected) return;
+      const { ref } = await api.copyScreen(screens.selected, to, name);
+      await screens.refresh();
+      screens.select(ref);
+    });
+  }
+
+  function renameScreen() {
+    return run("rename", async () => {
+      const name = prompt("Rename to");
+      if (!name || !screens.selected) return;
+      const { ref } = await api.renameScreen(screens.selected, name);
+      await screens.refresh();
+      screens.select(ref);
+    });
+  }
+
+  function deleteScreen() {
+    return run("delete", async () => {
+      if (!screens.selected) return;
+      if (!confirm(`Delete ${screens.selected}?`)) return;
+      await api.deleteScreen(screens.selected);
+      screens.select(null);
+      await screens.refresh();
+    });
   }
 </script>
 

@@ -14,6 +14,18 @@ class Screens {
   selected = $state(null);
   meta = $state({ devices: [], panels: [], dither_algorithms: [] });
 
+  /**
+   * The last failed screen operation, or null. Shape: `{ op, message }`,
+   * where `op` names which action failed ("create" | "copy" | "rename" |
+   * "delete") and `message` is whatever the thrown error carries --
+   * `api.js`'s typed errors (ConflictError, PreconditionRequiredError) and
+   * plain fetch failures all expose `.message`, so nothing new is invented
+   * here. Capturing lives in `FilesPane` (it owns the try/catch around each
+   * `api.*` call); this field only makes the result observable elsewhere.
+   * Rendering it is Task 10's job (StatusBar).
+   */
+  error = $state(null);
+
   grouped = $derived(
     this.repos.map((r) => ({
       handle: r.handle,

@@ -45,16 +45,26 @@
   // debounce window (e.g. mid-drag reload) loses that last write, same as
   // any other unsaved-changes-on-unmount gap; acceptable here since
   // AppShell is the application root and is never unmounted in normal use.
+  //
+  // Skip the write entirely when the bound value already matches what
+  // `layout` holds (true at mount, since xSize/ySize above were just read
+  // from it) -- otherwise every page load re-persists the exact value it
+  // just loaded, 200ms later, for no visible effect. `layout.size(axis)`
+  // is itself reactive ($state under the hood), so once the scheduled
+  // write below does fire and updates it, this effect re-runs, finds the
+  // two values equal again, and quiesces without scheduling a next one.
   const PERSIST_DEBOUNCE_MS = 200;
 
   $effect(() => {
     const value = xSize;
+    if (value === layout.size("x")) return;
     const id = setTimeout(() => layout.setSize("x", value), PERSIST_DEBOUNCE_MS);
     return () => clearTimeout(id);
   });
 
   $effect(() => {
     const value = ySize;
+    if (value === layout.size("y")) return;
     const id = setTimeout(() => layout.setSize("y", value), PERSIST_DEBOUNCE_MS);
     return () => clearTimeout(id);
   });

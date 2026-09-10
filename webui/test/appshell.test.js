@@ -15,6 +15,11 @@ import { layout, STORAGE_KEY } from "../src/lib/state/layout.svelte.js";
 //   2. the persisted write (layout.setSize -> save -> localStorage) must be
 //      debounced, not fired synchronously on every bound-size change
 //      (Ruling 12).
+//   3. review fix round 1, finding 2: mounting with no interaction at all
+//      must not schedule a write either -- xSize/ySize start out equal to
+//      what `layout` already holds (they were just read from it), so
+//      persisting them again 200ms later would re-save the exact value
+//      just loaded, for no visible effect, on every single page load.
 
 function findVerticalSeparator() {
   // The outer (axis="x") SplitPane's separator is aria-orientation=
@@ -83,5 +88,20 @@ describe("AppShell", () => {
     const xCalls = setSizeSpy.mock.calls.filter(([axis]) => axis === "x");
     expect(xCalls).toEqual([["x", 360]]);
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY)).sizes.x).toBe(360);
+  });
+
+  it("does not persist on mount when nothing has changed since load", async () => {
+    // Review fix round 1, finding 2. No drag, no keypress -- just mount and
+    // let the debounce window fully elapse for both axes.
+    vi.useFakeTimers();
+    const setSizeSpy = vi.spyOn(layout, "setSize");
+
+    render(AppShell);
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(setSizeSpy).not.toHaveBeenCalled();
+    // save() is layout's own localStorage.setItem; confirm no write at the
+    // storage level too, not just that our spy on setSize saw nothing.
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
 });

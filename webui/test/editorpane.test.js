@@ -96,4 +96,26 @@ describe("EditorPane", () => {
 
     expect(queryByLabelText("unsaved changes")).not.toBeNull();
   });
+
+  it("re-runs setDoc when replaceFromDisk swaps the ALREADY-active tab's buffer (Ruling 28, fix round 1)", async () => {
+    // Task-7 fix round 1, Important finding: resolveReload() (Task 10) calls
+    // replaceFromDisk(c.ref, c.name) on what is typically the currently-open
+    // tab -- ref/name/readOnly don't change, so without a dedicated signal
+    // (the tab's `revision` counter) the tab-swap effect would never re-run
+    // and CodeMirror would keep showing the stale buffer while the store's
+    // text/etag/dirty were already correct underneath.
+    vi.spyOn(api, "readFile").mockResolvedValue({ text: "mine", etag: '"1"' });
+    await editor.open("local/a", "script.lua");
+
+    render(EditorPane);
+    flushSync();
+    const callsAfterMount = cmMock.setDoc.mock.calls.length;
+
+    vi.spyOn(api, "readFile").mockResolvedValue({ text: "theirs", etag: '"2"' });
+    await editor.replaceFromDisk("local/a", "script.lua");
+    flushSync();
+
+    expect(cmMock.setDoc.mock.calls.length).toBeGreaterThan(callsAfterMount);
+    expect(cmMock.setDoc).toHaveBeenLastCalledWith("theirs", "lua", false);
+  });
 });

@@ -19,6 +19,15 @@ function makeTab(ref, name, text, etag, readOnly) {
     etag,
     issues: [],
     readOnly,
+    // Bumped ONLY by replaceFromDisk -- see EditorPane.svelte's tab-swap
+    // effect. Ordinary typing never touches it, so it does not reopen the
+    // Ruling-22 hole (setDoc re-running on every keystroke); an external
+    // buffer swap on the ALREADY-active tab does bump it, which is the
+    // signal that effect needs but ref/name/readOnly alone can't give it
+    // (Ruling 28 / task-7 fix round 1: resolveReload() on a save conflict
+    // calls replaceFromDisk on the active tab, and nothing else about that
+    // tab's identity changes).
+    revision: 0,
     // Derived, not stored -- two sources of truth for "differs from disk"
     // is one too many. A plain getter, not a prototype helper: Svelte's
     // $state deep-proxies plain objects pushed into a $state array, and
@@ -93,6 +102,7 @@ class Editor {
     t.text = text;
     t.saved = text;
     t.etag = etag;
+    t.revision += 1;
   }
 }
 

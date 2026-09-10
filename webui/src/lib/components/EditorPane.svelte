@@ -29,16 +29,24 @@
   });
 
   // Swapping tabs replaces the document rather than rebuilding the view.
-  // This must key on tab IDENTITY (ref/name/readOnly), not on `t.text`: text
-  // is read inside `untrack` on purpose. If it were a tracked read, every
-  // keystroke (onChange -> editor.setText -> t.text) would re-run this
-  // effect and call setDoc again, resetting the document -- and the caret
-  // with it -- under the user's fingers.
+  // This must key on tab IDENTITY (ref/name/readOnly) plus `revision`, not on
+  // `t.text`: text is read inside `untrack` on purpose. If it were a tracked
+  // read, every keystroke (onChange -> editor.setText -> t.text) would
+  // re-run this effect and call setDoc again, resetting the document -- and
+  // the caret with it -- under the user's fingers.
+  //
+  // `revision` is what catches replaceFromDisk() swapping the buffer of the
+  // ALREADY-active tab (e.g. resolveReload() on a save conflict, Task 10) --
+  // ref/name/readOnly are untouched by that call, so without a dedicated
+  // signal this effect would never re-run and CodeMirror would keep showing
+  // the stale text while the store's text/etag/dirty were already correct
+  // underneath (task-7 fix round 1, Ruling 28).
   $effect(() => {
     const t = editor.active;
     if (!cm || !t) return;
     const name = t.name;
     const readOnly = t.readOnly;
+    t.revision; // read only to establish the tracked dependency, see above
     untrack(() => cm.setDoc(t.text, languageOf(name), readOnly));
   });
 

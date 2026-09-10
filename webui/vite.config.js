@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import tailwindcss from "@tailwindcss/vite";
@@ -13,6 +14,19 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   base: "",
   plugins: [svelte(), tailwindcss()],
+  resolve: {
+    // This is a bare Vite project, not SvelteKit -- there is no built-in
+    // `$lib` alias. Existing code (Tasks 1-4) imports by relative path and
+    // keeps doing so; this alias exists only so shadcn-svelte's vendored
+    // components (Task 5 Step 1) can use the `$lib/...` imports its CLI
+    // writes. Kept in sync with jsconfig.json's `paths` (for editor/IDE
+    // resolution) and with the identical alias in vitest.config.js (Vite's
+    // dev/build server and Vitest's test runner are separate config files
+    // here and do not share this block).
+    alias: {
+      $lib: fileURLToPath(new URL("./src/lib", import.meta.url)),
+    },
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true,

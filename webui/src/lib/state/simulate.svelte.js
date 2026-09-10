@@ -87,6 +87,21 @@ function differsFromDefault(v, dflt) {
 }
 
 class Simulate {
+  /**
+   * The last failed render, or null. Shape: `{ op, message }`, matching
+   * `screens.error` (screens.svelte.js) -- `op` is always "render" (there is
+   * only one kind of render here); `message` is either `url()`'s own thrown
+   * message (invalid params JSON, rule (e) above) or the server's
+   * `RenderErrorResponse.error`/`.details` (src/api/dev.rs:157-161).
+   * Captured by `PreviewPane`'s `renderNow()`, which is the one place that
+   * calls `fetch`/`url()` and can see either failure; rendering it is Task
+   * 10's job (Controller Ruling 41), the same split `screens.error` uses
+   * with `FilesPane`. Not touched by `reset()`: a render failure isn't a
+   * drawer field, and `renderNow()` clears it itself at the start of the
+   * next attempt.
+   */
+  error = $state(null);
+
   mac = $state(DEFAULTS.mac);
   panel = $state(DEFAULTS.panel);
   use_actual = $state(DEFAULTS.use_actual);

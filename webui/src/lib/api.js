@@ -105,6 +105,52 @@ export async function deleteScreen(ref) {
   if (!res.ok) throw await fail(res);
 }
 
+/**
+ * PUT/DELETE counterparts to `post()`, in the same shape: throw `fail()`'s
+ * error on a non-OK status so the caller's error handling is uniform across
+ * verbs.
+ *
+ * Unlike `post()`'s endpoints, the colour-tuning routes below answer with a
+ * bare `StatusCode` and no body (`handle_set_panel_colors` et al.,
+ * `src/api/dev.rs`), so -- unlike `post()`, which can assume a 200 always
+ * carries JSON -- an empty 200 body must not be handed to `res.json()`,
+ * which throws on empty input.
+ */
+async function put(url, body) {
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) throw await fail(res);
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+async function del(url) {
+  const res = await fetch(url, { method: "DELETE" });
+  if (!res.ok) throw await fail(res);
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+/**
+ * Colour tuning (`docs/superpowers/specs/2026-09-10-dev-ui-color-tuning-design.md`
+ * §7). Note the asymmetry: the override and the save are keyed by **panel**
+ * (a calibration belongs to the panel profile, shared by every device using
+ * it); the tuning session is keyed by **device** (only a device can be
+ * standing in front of, and polls). Mixing the two keys is the defect Task
+ * 9b's fix round eliminated -- keep it apart here too.
+ */
+export const setPanelOverride = (panel, colors_actual) =>
+  put(`api/panel-colors/${encodeURIComponent(panel)}`, { colors_actual });
+export const clearPanelOverride = (panel) => del(`api/panel-colors/${encodeURIComponent(panel)}`);
+export const savePanelColors = (panel, colors_actual) =>
+  post(`api/panel-colors/${encodeURIComponent(panel)}/save`, { colors_actual });
+export const startTuningSession = (device) =>
+  put(`api/tuning-session/${encodeURIComponent(device)}`);
+export const endTuningSession = (device) => del(`api/tuning-session/${encodeURIComponent(device)}`);
+
 /** Params are RenderQuery in src/api/dev.rs:29. Blanks are omitted, not sent. */
 export const renderUrl = (params) => `api/render?${qs(params)}`;
 export const eventsUrl = () => "api/events";

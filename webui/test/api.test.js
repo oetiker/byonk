@@ -86,6 +86,31 @@ describe("api", () => {
         responseBody: '{"ok":true,"issues":[]}',
       },
       {
+        name: "setPanelOverride",
+        call: () => api.setPanelOverride("e1004", "#101010,#E8E8E8"),
+        expectedUrl: "api/panel-colors/e1004",
+      },
+      {
+        name: "clearPanelOverride",
+        call: () => api.clearPanelOverride("e1004"),
+        expectedUrl: "api/panel-colors/e1004",
+      },
+      {
+        name: "savePanelColors",
+        call: () => api.savePanelColors("e1004", "#101010,#E8E8E8"),
+        expectedUrl: "api/panel-colors/e1004/save",
+      },
+      {
+        name: "startTuningSession",
+        call: () => api.startTuningSession("kitchen"),
+        expectedUrl: "api/tuning-session/kitchen",
+      },
+      {
+        name: "endTuningSession",
+        call: () => api.endTuningSession("kitchen"),
+        expectedUrl: "api/tuning-session/kitchen",
+      },
+      {
         name: "renderUrl",
         call: () => api.renderUrl({ screen: "local/hello" }),
         expectedUrl: "api/render?screen=local%2Fhello",

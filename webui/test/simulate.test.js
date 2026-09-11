@@ -201,4 +201,51 @@ describe("simulate store", () => {
     const query = spy.mock.calls[0][0];
     expect(Object.hasOwn(query, "strength")).toBe(false);
   });
+
+  // --- colors_actual_override: the tune store's working copy --------------
+
+  it("prefers a matching colors_actual_override in the render query", () => {
+    screens.meta = {
+      devices: [],
+      dither_algorithms: [],
+      panels: [{ id: "e1004", name: "E1004", width: 800, height: 480, colors: "#000,#FFF", colors_actual: "#101010,#E8E8E8" }],
+    };
+    simulate.panel = "e1004";
+    simulate.use_actual = true;
+    simulate.colors_actual_override = { panel: "e1004", colors: "#111111,#EEEEEE" };
+    const u = simulate.url("local/a");
+    expect(u).toContain(encodeURIComponent("#111111,#EEEEEE"));
+    // And the configured value it overrode must not also be present.
+    expect(u).not.toContain(encodeURIComponent("#101010,#E8E8E8"));
+  });
+
+  it("ignores an override that names a different panel", () => {
+    screens.meta = {
+      devices: [],
+      dither_algorithms: [],
+      panels: [{ id: "e1004", name: "E1004", width: 800, height: 480, colors: "#000,#FFF", colors_actual: "#101010,#E8E8E8" }],
+    };
+    simulate.panel = "e1004";
+    simulate.use_actual = true;
+    simulate.colors_actual_override = { panel: "og", colors: "#111111,#EEEEEE" };
+    const u = simulate.url("local/a");
+    expect(u).not.toContain(encodeURIComponent("#111111,#EEEEEE"));
+    // The panel actually selected still gets its own configured colours.
+    expect(u).toContain(encodeURIComponent("#101010,#E8E8E8"));
+  });
+
+  it("falls back to the configured colors once the override is cleared", () => {
+    screens.meta = {
+      devices: [],
+      dither_algorithms: [],
+      panels: [{ id: "e1004", name: "E1004", width: 800, height: 480, colors: "#000,#FFF", colors_actual: "#101010,#E8E8E8" }],
+    };
+    simulate.panel = "e1004";
+    simulate.use_actual = true;
+    simulate.colors_actual_override = { panel: "e1004", colors: "#111111,#EEEEEE" };
+    simulate.colors_actual_override = null;
+    const u = simulate.url("local/a");
+    expect(u).not.toContain(encodeURIComponent("#111111,#EEEEEE"));
+    expect(u).toContain(encodeURIComponent("#101010,#E8E8E8"));
+  });
 });

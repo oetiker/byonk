@@ -66,6 +66,7 @@ const DEFAULTS = {
   timestamp: "",
   timeLocked: false,
   params: "{}",
+  colors_actual_override: null,
 };
 
 /**
@@ -116,6 +117,18 @@ class Simulate {
   timeLocked = $state(DEFAULTS.timeLocked);
   params = $state(DEFAULTS.params);
 
+  /**
+   * A live colour-tuning working copy, or `null`.
+   *
+   * `{panel, colors}` -- the panel it belongs to, and the comma-separated
+   * `colors_actual` string. Written by the `tune` store, read only by `url()`
+   * below. It lives here rather than on `tune` because `tune` imports this
+   * module for its default panel, and the reverse import would close a cycle
+   * between two rune modules that both evaluate at page load. Same reasoning
+   * as `error` (Ruling 43).
+   */
+  colors_actual_override = $state(DEFAULTS.colors_actual_override);
+
   reset() {
     this.mac = DEFAULTS.mac;
     this.panel = DEFAULTS.panel;
@@ -130,6 +143,7 @@ class Simulate {
     this.timestamp = DEFAULTS.timestamp;
     this.timeLocked = DEFAULTS.timeLocked;
     this.params = DEFAULTS.params;
+    this.colors_actual_override = DEFAULTS.colors_actual_override;
   }
 
   /** A snapshot of every field, keyed by its `RenderQuery` wire name. */
@@ -206,7 +220,15 @@ class Simulate {
       query.panel = this.panel;
       query.use_actual = this.use_actual ? "true" : "false";
       const p = this.#selectedPanel();
-      if (p && p.colors_actual) query.colors_actual = p.colors_actual;
+      // A live tuning working copy wins, but only for the panel it belongs
+      // to -- otherwise switching panels mid-calibration would render the
+      // new panel with the old panel's colours.
+      const ov = this.colors_actual_override;
+      if (ov && ov.panel === this.panel) {
+        query.colors_actual = ov.colors;
+      } else if (p && p.colors_actual) {
+        query.colors_actual = p.colors_actual;
+      }
     }
 
     // (f) A tunable travels only when it differs from the SELECTED

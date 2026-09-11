@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
+import { tick } from "svelte";
 import AppShell from "../src/lib/components/AppShell.svelte";
 import { layout, STORAGE_KEY } from "../src/lib/state/layout.svelte.js";
 
@@ -103,5 +104,30 @@ describe("AppShell", () => {
     // save() is layout's own localStorage.setItem; confirm no write at the
     // storage level too, not just that our spy on setSize saw nothing.
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it("mounts TunePane only while the tune panel is open", async () => {
+    layout.reset();
+    render(AppShell);
+    expect(screen.queryByTestId("tune-pane")).toBeNull();
+
+    layout.toggle("tune");
+    await tick();
+    expect(screen.getByTestId("tune-pane")).toBeTruthy();
+  });
+
+  it("keeps the horizontal splitter alive when only tune is open on the right", async () => {
+    layout.reset();
+    for (const p of ["preview", "simulate"]) if (layout.isOpen(p)) layout.toggle(p);
+    layout.toggle("tune");
+    // The brief's code block for this test never calls render(AppShell),
+    // which means screen has nothing mounted and the assertion below would
+    // fail unconditionally -- true even with a correct implementation. Add
+    // the render call, consistent with every other test in this file.
+    render(AppShell);
+    await tick();
+    // The splitter separates the editor from everything to its right; tune
+    // being the only thing there is still something there.
+    expect(screen.getByRole("separator", { name: /vertical|horizontal|resize/i })).toBeTruthy();
   });
 });

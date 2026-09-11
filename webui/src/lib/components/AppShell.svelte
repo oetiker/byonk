@@ -6,6 +6,7 @@
   // Placeholders until Tasks 6-10 fill them in.
   import FilesPane from "./FilesPane.svelte";
   import EditorPane from "./EditorPane.svelte";
+  import TunePane from "./TunePane.svelte";
   import PreviewPane from "./PreviewPane.svelte";
   import SimulateControls from "./SimulateControls.svelte";
 
@@ -83,7 +84,7 @@
     <SplitPane
       axis="x"
       bind:size={xSize}
-      open={layout.isOpen("preview") || layout.isOpen("simulate")}
+      open={layout.isOpen("preview") || layout.isOpen("simulate") || layout.isOpen("tune")}
     >
       {#snippet a()}
         {#if layout.isOpen("editor")}
@@ -92,18 +93,28 @@
       {/snippet}
 
       {#snippet b()}
-        <SplitPane
-          axis="y"
-          bind:size={ySize}
-          open={layout.isOpen("preview") && layout.isOpen("simulate")}
-        >
-          {#snippet a()}
-            {#if layout.isOpen("preview")}<PreviewPane />{/if}
-          {/snippet}
-          {#snippet b()}
-            {#if layout.isOpen("simulate")}<SimulateControls />{/if}
-          {/snippet}
-        </SplitPane>
+        <div class="flex min-h-0 min-w-0 flex-1">
+          {#if layout.isOpen("tune")}
+            <div
+              class="w-64 shrink-0 overflow-auto border-r border-[var(--border-color)]"
+            >
+              <TunePane />
+            </div>
+          {/if}
+
+          <SplitPane
+            axis="y"
+            bind:size={ySize}
+            open={layout.isOpen("preview") && layout.isOpen("simulate")}
+          >
+            {#snippet a()}
+              {#if layout.isOpen("preview")}<PreviewPane />{/if}
+            {/snippet}
+            {#snippet b()}
+              {#if layout.isOpen("simulate")}<SimulateControls />{/if}
+            {/snippet}
+          </SplitPane>
+        </div>
       {/snippet}
     </SplitPane>
   </div>

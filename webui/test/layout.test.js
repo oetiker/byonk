@@ -7,13 +7,17 @@ beforeEach(() => {
 });
 
 describe("layout store", () => {
-  it("starts with all four panels open", () => {
-    expect(PANELS).toEqual(["files", "editor", "preview", "simulate"]);
-    for (const p of PANELS) expect(layout.isOpen(p)).toBe(true);
+  it("starts with the default four panels open, tune closed", () => {
+    for (const p of PANELS) {
+      expect(layout.isOpen(p)).toBe(p !== "tune");
+    }
   });
 
   it("allows every combination, including none open", () => {
-    for (const p of PANELS) layout.toggle(p);
+    // `tune` defaults closed, unlike the other four, so a single toggle
+    // per panel does not land every panel on the same state -- close
+    // whichever are open instead of assuming a uniform starting point.
+    for (const p of PANELS) if (layout.isOpen(p)) layout.toggle(p);
     // Spec §1: "Do not add a 'you must keep one open' rule -- it turns a
     // toggle into an argument."
     for (const p of PANELS) expect(layout.isOpen(p)).toBe(false);
@@ -42,6 +46,23 @@ describe("layout store", () => {
   it("survives corrupt stored state rather than throwing", () => {
     localStorage.setItem(STORAGE_KEY, "{not json");
     expect(() => layout.load()).not.toThrow();
-    for (const p of PANELS) expect(layout.isOpen(p)).toBe(true);
+    for (const p of PANELS) expect(layout.isOpen(p)).toBe(p !== "tune");
+  });
+
+  it("carries tune as a fifth panel, closed by default", () => {
+    expect(PANELS).toEqual(["files", "editor", "tune", "preview", "simulate"]);
+    layout.reset();
+    expect(layout.isOpen("tune")).toBe(false);
+    expect(layout.isOpen("files")).toBe(true);
+  });
+
+  it("persists and restores tune alongside the other four", () => {
+    layout.reset();
+    layout.toggle("tune");
+    expect(layout.isOpen("tune")).toBe(true);
+
+    const other = new (Object.getPrototypeOf(layout).constructor)();
+    other.load();
+    expect(other.isOpen("tune")).toBe(true);
   });
 });

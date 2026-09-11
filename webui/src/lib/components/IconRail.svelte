@@ -1,16 +1,18 @@
 <script>
-  import { Files, Code, Monitor, SlidersHorizontal } from "@lucide/svelte";
+  import { Files, Code, Palette, Monitor, SlidersHorizontal } from "@lucide/svelte";
   import { layout, PANELS } from "../state/layout.svelte.js";
 
   const ICONS = {
     files: Files,
     editor: Code,
+    tune: Palette,
     preview: Monitor,
     simulate: SlidersHorizontal,
   };
   const LABELS = {
     files: "Files",
     editor: "Editor",
+    tune: "Tune",
     preview: "Preview",
     simulate: "Simulate",
   };

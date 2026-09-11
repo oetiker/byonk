@@ -47,4 +47,19 @@ describe("IconRail", () => {
     const rail = screen.getByRole("toolbar", { name: /panels/i });
     expect(rail.textContent.replace(/\s/g, "")).toBe("");
   });
+
+  it("shows one toggle per panel, including tune", () => {
+    render(IconRail);
+    expect(screen.getAllByRole("button")).toHaveLength(5);
+    expect(screen.getByLabelText("Tune")).toBeTruthy();
+  });
+
+  it("toggles tune", async () => {
+    layout.reset();
+    render(IconRail);
+    const btn = screen.getByLabelText("Tune");
+    expect(btn.getAttribute("aria-pressed")).toBe("false");
+    await fireEvent.click(btn);
+    expect(btn.getAttribute("aria-pressed")).toBe("true");
+  });
 });

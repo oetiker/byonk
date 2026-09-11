@@ -1,10 +1,11 @@
 # Dev Mode
 
-Dev mode is Byonk's built-in screen editor: a three-column web page where you
-pick a screen, edit its files with syntax checking as you type, and watch the
-rendered result next to them. It also carries the display calibration tools —
-dither algorithm, tuning knobs and measured panel colours — and syncs what you
-tune there to the physical device.
+Dev mode is Byonk's built-in screen editor: a web page with five toggleable
+panels — Files, Editor, Tune, Preview and Simulate — behind an icon rail on
+the left, where you pick a screen, edit its files, calibrate a panel's
+measured colours against real hardware, and watch the rendered result next to
+them. It also carries the display calibration tools — dither algorithm and
+tuning knobs — and syncs what you tune there to the physical device.
 
 It is part of the normal server. There is no separate command to start: `byonk
 serve` mounts it, behind a login, at `/dev/`.
@@ -50,8 +51,10 @@ the server starts, so restarting Byonk logs everyone out. A wrong username or
 password is answered after a one-second delay, and the message never says
 which of the two was wrong.
 
-The **Logout** button in the toolbar appears only for a cookie session; the
-two routes below are not sessions to end.
+The editor currently has no Logout control of its own — ending a cookie
+session means clearing the `byonk_dev` cookie yourself, or waiting out its
+30-day expiry. `POST /dev/logout` clears it server-side if you want to script
+that. The two routes below are not sessions to end.
 
 ### The admin token also works
 
@@ -76,21 +79,37 @@ Inside Home Assistant you therefore need no dev username or password at all.
 Set them only if you also want to reach the editor from outside Home
 Assistant, on `http://<host>:3000/dev/`.
 
-## The three columns
+## The five panels
 
-**Left — screens.** Every screen the server can resolve, grouped by screen
-repo handle. Repos you cannot write to are dimmed and their screens italic;
-you can still open one and read every file, and **Copy** it into a repo you
-can write to — but its files open read-only.
+An icon rail on the left carries one toggle button per panel: **Files**,
+**Editor**, **Tune**, **Preview** and **Simulate**. Click an icon to show or
+hide that panel — every combination is allowed, including all five hidden at
+once. A panel you hide comes back at the size it had, and the splitters
+between open panels keep their position, both remembered between visits (the
+theme control described in [Colour scheme](#colour-scheme) lives at the foot
+of the same rail).
 
-**Middle — files.** One tab per file in the selected screen, with
-`meta.yaml`, `script.lua` and `screen.svg` first and everything else after
-them alphabetically. Below the tabs sits the problems bar, where syntax errors
-appear as you type.
+**Files.** Every screen the server can resolve, grouped by screen repo
+handle. A repo you cannot write to is labelled "read-only" next to its
+handle; you can still open any of its screens and read every file, and
+**Copy** one into a repo you can write to — but its files open read-only.
 
-**Right — preview.** The screen rendered through the same pipeline the device
-uses, in a frame the size of the selected panel, with the render time and a
-console beneath it. Hover the image for a magnified pixel view.
+**Editor.** One tab per file in the selected screen, with `meta.yaml`,
+`script.lua` and `screen.svg` first and everything else after them
+alphabetically. **Save** and Cmd/Ctrl-S write the file you are in; see
+[Editing and saving](#editing-and-saving).
+
+**Tune.** Calibrates a panel profile's measured colours against a real
+device. It docks between Editor and Preview; see [Tune: colour
+calibration](#tune-colour-calibration) below.
+
+**Preview.** The screen rendered through the same pipeline the device uses,
+in a frame the size of the selected panel, with the render time and a console
+beneath it. Hover the image for a magnified pixel view.
+
+**Simulate.** The device context the preview renders under — see [Simulate
+panel](#simulate-panel) below. It docks under Preview, not over it, so you
+can watch a render change while you change what drives it.
 
 ## Which repos you can edit
 
@@ -108,12 +127,12 @@ Screen repos option accepts `repo:` rows only.
 ## Editing and saving
 
 Type in any file of a screen that lives in a writable repo. Its tab shows a
-dirty marker, and so does the screen name in the toolbar, until the bytes
-reach disk.
+dirty marker until the bytes reach disk.
 
 - **Cmd/Ctrl-S** saves the file you are in.
-- The toolbar's **Save** button saves *every* file you have changed, not just
-  the one on screen.
+- The **Save** button next to the tabs does the same thing: it saves the
+  active file, not every file you have changed. Switch to a tab and save it
+  to save it.
 
 In a read-only repo the files open read-only: you cannot type in them at all.
 Cmd/Ctrl-S still fires there, and is answered with a message naming the repo
@@ -150,32 +169,28 @@ single file may exceed 5 MB.
 
 ## Syntax checking
 
-400 ms after you stop typing, the unsaved buffer is checked on the server and
-any error is marked in the editor and listed in the problems bar. It is the
-text in front of you that gets checked, not the copy on disk.
+Byonk can check a screen's files without rendering them: `meta.yaml` against
+the screen metadata schema, `script.lua` compiled — syntax only, never
+executed — and `screen.svg` compiled as a Tera template with its
+`{% extends %}` / `{% include %}` chain resolved, so a missing or misspelled
+include is caught. This is exposed as `POST /dev/api/screen/check` (one
+unsaved file's text) and `POST /dev/api/screen/validate` (a screen as it is
+on disk) for scripted or MCP-driven authoring.
 
-What the check catches, by file:
+The editor itself does not call these as you type; save, and **Preview**
+re-renders through the full pipeline, which catches everything a check would
+and more.
 
-| File | Check |
-|------|-------|
-| `meta.yaml` | Parses against the screen metadata schema. |
-| `*.lua` | Compiles the chunk. Syntax errors only — the script is **not** executed. |
-| `*.svg` | Compiles as a Tera template and resolves its `{% extends %}` / `{% include %}` chain, so a missing or misspelled include is caught. |
-| anything else | No check; the file is reported as fine. |
-
-After a successful save the whole screen is validated and the bar reports
-`✔ all files valid` when nothing is left.
-
-**What only a render catches.** Because the Lua is compiled but never run, the
-check says nothing about what the script *does*: a failing HTTP request,
-indexing a nil, an API that changed shape, a template that compiles but
-positions text off the panel. Those show up in the preview and its console.
-Keep an eye on both.
+**What only a render catches.** Because a render actually executes the Lua,
+it also catches what a syntax check cannot: a failing HTTP request, indexing
+a nil, an API that changed shape, a template that compiles but positions text
+off the panel. Those show up in the preview and its console — keep an eye on
+both.
 
 ## Preview and pop-out
 
 The preview re-renders whenever you save, whenever the file watcher reports a
-change, and whenever you move a control in the Simulate drawer. Render time is
+change, and whenever you move a control in the Simulate panel. Render time is
 shown above the image and logged in the console below it.
 
 **Pop out** opens the preview in its own window with **Fit** and **100%** zoom
@@ -186,17 +201,18 @@ editor window closes. It follows the editor's colour scheme too.
 
 ## Colour scheme
 
-The toolbar's **System / Light / Dark** control sets the editor's colour
-scheme. It defaults to System — following your operating system's setting —
-and your choice is remembered in the browser and applied to the pop-out
-window as well.
+A **System / Light / Dark** control at the foot of the icon rail sets the
+editor's colour scheme. It defaults to System — following your operating
+system's setting — and your choice is remembered in the browser and applied
+to the pop-out window as well.
 
 ## Live reload
 
 Set `SCREENS_DIR` and Byonk watches it for changes. The editor holds a
-Server-Sent Events connection to `/dev/api/events`, and the **File Watch**
-badge in the toolbar shows whether it is up; a dropped connection retries by
-itself every three seconds.
+Server-Sent Events connection to `/dev/api/events` regardless of which panels
+are open, and the Editor panel's status bar reports `watch: connected` or
+`watch: disconnected` at its foot — visible while the Editor panel is open. A
+dropped connection retries by itself every three seconds.
 
 When a watched file changes, an open buffer showing that file is reloaded from
 disk — unless you have unsaved edits in it, in which case you get the conflict
@@ -206,15 +222,15 @@ editor work alongside the built-in one.
 Without `SCREENS_DIR` there is nothing on disk to watch, and Byonk says so at
 startup.
 
-## Simulate drawer
+## Simulate panel
 
-The **Simulate** button opens a drawer with everything about the device
-context the preview is rendered under. Nothing here changes a file; it changes
-what the renderer is told.
+The **Simulate** icon toggles a panel, docked under Preview, with everything
+about the device context the preview is rendered under. Nothing here changes
+a file; it changes what the renderer is told.
 
 | Control | What it sets |
 |---------|--------------|
-| **Device** | Renders *that device's* own configured screen, params, panel and dither settings — not the screen open in the editor — and syncs your tuning to the real device (below). |
+| **Device** | Renders *that device's* own configured screen, params, panel and dither settings — not the screen open in the editor — and syncs your dither choices to the real device (below). |
 | **Panel profile** | Which panel's size and palette to render for, with its official and measured colour swatches. |
 | **Show actual panel colors** | Whether the preview shows the panel's measured colours or the official palette. |
 | **Dither** and its four tuning fields | The algorithm and its `max_error`, `chroma_clamp`, `noise_scale` and `strength`. |
@@ -228,12 +244,18 @@ disagree with what the renderer would do.
 
 ### Live device sync
 
-When you pick a device entry and then change the dither algorithm, the tuning
-values or the measured colours, those overrides are handed to the production
-`/api/display` handler for that device. The physical device picks them up on
-its next refresh — what you tune is what the device shows. The overrides live
-in memory only and are gone when the server restarts, so commit anything you
+When you pick a device entry and then change the dither algorithm or its
+tuning values, those overrides are handed to the production `/api/display`
+handler for that device: the physical device picks them up on its next
+refresh — what you tune is what the device shows. The overrides live in
+memory only and are gone when the server restarts, so commit anything you
 want to keep to `config.yaml`.
+
+This does not extend to measured colours. Changing them here — via **Show
+actual panel colors** or the panel profile choice — only affects what the
+preview shows you; it has no effect on any real device. Calibrating what a
+device actually displays is the **Tune** panel's job — see [Tune: colour
+calibration](#tune-colour-calibration) below.
 
 ## Display calibration
 
@@ -253,7 +275,7 @@ The dither dropdown lets you try all 9 algorithms on your content:
 
 ### Dither Tuning Controls
 
-The drawer exposes these tuning parameters:
+The Simulate panel exposes these tuning parameters:
 
 | Control | Effect |
 |---------|--------|
@@ -262,9 +284,42 @@ The drawer exposes these tuning parameters:
 | **Chroma clamp** | Limits chromatic error propagation. Prevents color bleeding on chromatic palettes. |
 | **Strength** | Error diffusion strength (0.0–2.0, default 1.0). Lower means less dithering texture. |
 
-### Color Calibration
+### Tune: colour calibration
 
-Click any actual-color swatch to open the HSL adjustment popup. Adjust hue, saturation, and lightness with live preview to match what your panel really displays. The adjusted `colors_actual` string can be copied to `config.yaml`.
+The **Tune** panel — the icon between Editor and Preview — calibrates a
+panel profile's measured colours (`colors_actual`) against a real device, in
+two separate stages. They are separate on purpose: e-ink is reflective, so a
+panel only shows the truth under the light it actually hangs in, and a
+calibration judged from the browser preview is a guess until you have checked
+it there.
+
+1. **Pick a panel or a device.** Choosing a device also starts a short
+   session that answers its next few polls faster than usual, so you are not
+   waiting minutes between iterations; choosing a panel directly leaves that
+   cadence alone.
+2. **Adjust a swatch.** Select one of the panel's colours, then drag hue,
+   saturation and lightness or type a hex value. This only updates the
+   working copy and the live preview — no server or device is touched — and
+   an original/live pair shows the change against the panel's currently
+   configured colour.
+3. **Push to panel.** Sends the working colours to the device so its next
+   refresh repaints under its own light. This is a **button**, never
+   automatic: unlike dragging a slider, a push drives a battery-powered
+   device into a refresh cycle, so nothing repaints until you ask it to.
+4. Walk over, look at the device under its own light, and repeat 2-3 until it
+   looks right.
+5. **Save to config** writes the result into `panels.<id>.colors_actual` in
+   `config.yaml` — the durable step. **Discard**, closing the Tune panel, or
+   picking a different device instead clears the temporary override without
+   writing anything, and every device using that panel reverts to its
+   configured colours.
+
+An active override is visible outside the Tune panel too: the status bar
+reports which panel currently has one live, since it changes what every
+device using that panel renders until it is saved or cleared. Saving works
+the same way whether Byonk is running standalone or as the Home Assistant
+add-on — the add-on's Options screen does not own `panels:`, so nothing
+blocks this write there.
 
 ### Calibrator Screen
 
@@ -353,27 +408,27 @@ what a real screen gets, not a tuning surface.
 ### Calibration Workflow
 
 1. **Assign the `byonk-builtin/calibration/color` screen** to your device in `config.yaml`
-2. **Select your device** in the Simulate drawer — this loads its screen, panel, and dither settings
+2. **Select your device** in the Simulate panel — this loads its screen, panel, and dither settings, and syncs your dither choices live to it (see [Live device sync](#live-device-sync))
 3. **Choose a dither algorithm** that works well for your content type
-4. **Adjust tuning parameters** (max_error, noise_scale, chroma_clamp, strength) until the preview looks good
-5. **Calibrate measured colors** by clicking actual-color swatches and adjusting HSL to match the solid patches on the physical display
-6. **Verify on device** — changes sync automatically; wait for the next device refresh
-7. **Commit to config** — copy the values to `config.yaml` and switch back to your normal screen:
+4. **Adjust tuning parameters** (max_error, noise_scale, chroma_clamp, strength) until the preview looks good — note the values down, since they are not saved for you (step 7)
+5. **Open the Tune panel** and select the same device, then adjust its measured colours against what the solid patches actually show — drag hue/saturation/lightness or type a hex value per swatch
+6. **Push to panel**, walk over, and check the device under its own light; repeat step 5 until it matches
+7. **Save to config** from the Tune panel — this writes `panels.<id>.colors_actual` for you — then copy the dither algorithm and tuning values from step 4 into `config.yaml` by hand, and switch the device back to its normal screen:
 
 ```yaml
 panels:
   my_panel:
     name: "My Panel"
     colors: "#000000,#FFFFFF,#FF0000,#FFFF00"
-    colors_actual: "#303030,#D0D0C8,#C04040,#D0D020"  # from dev mode calibration
+    colors_actual: "#303030,#D0D0C8,#C04040,#D0D020"  # written by Tune's Save to config
 
 devices:
   "ABCDE-FGHJK":
     screen: examples/gphoto
     panel: my_panel
     dither: floyd-steinberg
-    max_error: 1.0    # from dev mode tuning
-    noise_scale: 0.5    # from dev mode tuning
+    max_error: 1.0    # from dev mode tuning, copied in by hand
+    noise_scale: 0.5    # from dev mode tuning, copied in by hand
 ```
 
 Tuning values can also be set per-script in the Lua return table — see [Lua API](../api/lua-api.md#max_error-noise_scale-chroma_clamp-strength).
@@ -411,16 +466,17 @@ full list.
 
 3. Open `http://localhost:3000/dev/` and log in
 
-4. Pick a screen in the left column — or **Copy** one of the examples into
-   `local` and work on that
+4. Pick a screen in the **Files** panel — or **Copy** one of the examples
+   into `local` and work on that
 
-5. Edit `script.lua` and `screen.svg`; problems appear as you type, and the
-   preview updates on save
+5. Edit `script.lua` and `screen.svg` in the **Editor** panel; the preview
+   updates on save
 
 6. Open **Simulate** to try another panel, freeze the clock, or pass custom
    params
 
-7. Use the calibration tools to tune dithering for your panel
+7. Open **Tune** to calibrate a panel's measured colours against a real
+   device, and use the calibration screens below to tune dithering
 
 ## The `/dev/api` endpoints
 
@@ -445,7 +501,9 @@ than a redirect when you are not admitted.
 | `GET /dev/api/render` | Render a screen to PNG under simulated device context |
 | `GET /dev/api/events` | Server-Sent Events stream for live reload |
 | `GET /dev/api/resolve-mac` | Resolve a MAC or registration code to that device's screen and params |
-| `POST /dev/api/panel-colors`, `DELETE /dev/api/panel-colors/{panel}` | Set and clear the measured-colour override synced to the device |
+| `PUT /dev/api/panel-colors/{panel}`, `DELETE /dev/api/panel-colors/{panel}` | Set and clear a panel's temporary measured-colour override |
+| `POST /dev/api/panel-colors/{panel}/save` | Write the override into `config.yaml` as that panel's `colors_actual`, then clear it |
+| `PUT /dev/api/tuning-session/{device}`, `DELETE /dev/api/tuning-session/{device}` | Start or refresh, and end, a device's faster tuning-refresh session (see [Tune: colour calibration](#tune-colour-calibration)) |
 | `GET /dev/api/whoami` | Who the server thinks you are, and whether you can log out |
 
 For scripted or LLM-driven authoring, prefer the [MCP interface](mcp.md),

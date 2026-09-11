@@ -35,10 +35,9 @@ for details.
 
 ## Dev Mode
 
-Byonk has a built-in screen editor: pick a screen, edit its Lua and SVG with
-syntax checking as you type, and watch the rendered result beside them. It is
-part of the normal server, at `/dev/`, behind a login you enable by setting a
-username and a password:
+Byonk has a built-in screen editor: pick a screen, edit its Lua and SVG, and
+watch the rendered result beside them. It is part of the normal server, at
+`/dev/`, behind a login you enable by setting a username and a password:
 
 ```bash
 docker run --rm -it --pull always -p 3000:3000 \

@@ -201,7 +201,10 @@ holding `config.yaml`, `screens/` (your writable `local` screen repo),
 run, and fork them), and `fonts/`. Edit these with the **File editor** or
 **Studio Code Server** app. Empty folders are seeded with the embedded
 defaults on first start — see [Screen Authoring](authoring.md) for what gets
-seeded where. Edits to `config.yaml` are applied without a restart.
+seeded where. Byonk does not watch `config.yaml` for changes made outside its
+own writers, so an edit made this way — through the File editor, Studio Code
+Server, or any other route that touches the file directly — takes effect only
+after you restart the app.
 
 > **Note:** the `screen_repos:` section and the `auth_mode` /
 > `screen_repo_refresh_interval` settings in `config.yaml` are **ignored** —
@@ -210,7 +213,10 @@ seeded where. Edits to `config.yaml` are applied without a restart.
 > through the entities in [Entities](#entities) above), including the reserved
 > `devices.DEFAULT` entry that controls what an un-onboarded or unassigned
 > device displays — set live from the **Byonk Default** device's Screen select
-> (see [Entities](#entities) above), no restart needed.
+> (see [Entities](#entities) above). That entity, and every other write this
+> page describes, goes through Byonk's own config writer, which reloads the
+> file it just wrote — no restart needed there. Only a manual edit to the
+> file itself, bypassing Byonk, needs one.
 
 ## Screen editor
 
@@ -223,11 +229,12 @@ If the entry is missing, open Byonk's page under **Settings** and turn on
 installed app regardless of what the app requests, so it is a one-time step
 rather than a sign that something is wrong.
 
-The editor lists your screens, edits their Lua and SVG with syntax checking as
-you type, saves with conflict detection, and previews the rendered result. Here
-the writable repos are `screens/` (the `local` handle) and `examples/`; the
-built-in screens and anything fetched from git are read-only, so fork one with
-**Copy** to customize it. See [Dev Mode](dev-mode.md) for the full tour.
+The editor lists your screens, edits their Lua and SVG, saves with conflict
+detection, previews the rendered result, and calibrates a panel's measured
+colours against the device itself. Here the writable repos are `screens/`
+(the `local` handle) and `examples/`; the built-in screens and anything
+fetched from git are read-only, so fork one with **Copy** to customize it.
+See [Dev Mode](dev-mode.md) for the full tour.
 
 To reach the editor from outside Home Assistant as well, set **Dev UI
 username** and **Dev UI password** in [Settings](#settings) and open

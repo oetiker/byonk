@@ -140,9 +140,9 @@ only those can be edited in place, so fork a builtin first.
 ## Editing in the browser
 
 Byonk also ships a web-based screen editor at `/dev/`: a screens list, a code
-editor with syntax checking as you type, and a live preview, plus the New /
-Copy / Rename / Delete operations over the same `ScreenStore` the MCP tools
-use. See [Dev Mode](dev-mode.md) for how to enable and open it.
+editor, and a live preview, plus the New / Copy / Rename / Delete operations
+over the same `ScreenStore` the MCP tools use. See [Dev Mode](dev-mode.md) for
+how to enable and open it.
 
 ## Next Steps
 

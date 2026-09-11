@@ -1330,12 +1330,12 @@ Must have the same number of entries as the resolved palette (`colors`, above). 
 the render still succeeds: the value is ignored, the next source in the chain is used instead, and
 a warning is written to the script log. On the authoring path this is visible in the MCP
 `render_screen` tool's `log` field; on `/dev/api/render` the warning goes only to the server's
-`tracing` output. The dev UI does have a console and a problems bar, but neither shows this:
+`tracing` output. The dev UI does have a console, but it doesn't show this either:
 `/dev/api/render` answers with the PNG and nothing else — it does not carry the script log — so
 the warning never reaches the page.
 
-A script that returns `colors_actual` wins over every other source, including the dev
-colour-tuning popup. The winning source isn't rendered anywhere in the dev UI, but it is visible
+A script that returns `colors_actual` wins over every other source, including the dev UI's Tune
+panel. The winning source isn't rendered anywhere in the dev UI, but it is visible
 as `measured_source` in the MCP `render_screen` tool's diagnostics, and as a `tracing` field in
 server logs — so it's inspectable rather than mysterious, just not from the dev UI itself. See
 `device.colors_actual` above for the full precedence chain and why measured colours steer

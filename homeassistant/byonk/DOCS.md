@@ -63,10 +63,12 @@ does not edit them, so this tab stays the single editor.
 Your configuration, screens, and fonts live in the app's config folder
 (mapped to `/config` inside the app). Edit them with the **File editor** or
 **Studio Code Server** app. Empty folders are seeded with sensible defaults on
-first start. Edits to `config.yaml` are picked up without a restart.
+first start. Byonk does not watch `config.yaml` for outside changes, so an
+edit made this way takes effect only after you restart the app.
 
-Per-device screen mappings are best managed through the Byonk integration; manual
-edits to the `devices:` section of `config.yaml` also work.
+Per-device screen mappings are best managed through the Byonk integration,
+which writes live with no restart needed; manual edits to the `devices:`
+section of `config.yaml` also work, but only take effect after a restart.
 
 ## Screen editor
 
@@ -80,9 +82,10 @@ newly installed app, whatever the app asks for. Open Byonk's own page under
 once.
 
 The editor lets you browse the screens in your screen repos, edit their Lua
-scripts and SVG templates with syntax checking as you type, save with
-conflict detection (so two open tabs can't silently overwrite each other's
-changes), and see a live preview of the rendered screen.
+scripts and SVG templates, save with conflict detection (so two open tabs
+can't silently overwrite each other's changes), see a live preview of the
+rendered screen, and calibrate a panel's measured colours against the device
+itself.
 
 Editing works in the **writable** screen repos: `local` (your own config
 folder) and `examples`, both seeded and made writable automatically — no

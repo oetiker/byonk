@@ -48,22 +48,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### New
 
 - **A screen editor in the browser.** The dev UI is no longer just a preview:
-  it is a three-column editor. The screens you can reach are listed on the
-  left, the selected screen's files open as tabs in the middle, and the
-  rendered result sits on the right and updates as you work.
+  it is a full editor behind an icon rail of five toggleable panels — Files,
+  Editor, Tune, Preview and Simulate — so you can hide anything you are not
+  using and give the space to what you are. Every combination is allowed, a
+  hidden panel comes back at the size it had, and splitter positions are
+  remembered between visits.
+
+  Files lists every screen you can reach; Editor opens its files as tabs and
+  saves your work; Preview renders it through the same pipeline the device
+  uses and updates as you work, so a mistake in `script.lua`, `screen.svg` or
+  `meta.yaml` shows up as a render error right next to the code, not after
+  you ship it.
 
   You can create a screen from a starter, copy any screen — including the
   built-in ones and anything fetched from git — into a repo you can write to,
   rename it, and delete it. Every file in a screen is editable, not just the
   core three, and you can add new ones.
-
-  Your Lua and SVG are checked while you type: `meta.yaml` against its schema,
-  `script.lua` compiled, `screen.svg` compiled as a template with its
-  `{% extends %}` and `{% include %}` chain resolved, so a misspelled include
-  is caught before you save. Errors appear under the editor with their line
-  numbers. The script is compiled but never run, so what a script *does* —
-  a failing request, an API that changed shape — still shows up only in the
-  preview.
 
   Saving checks that the file has not changed underneath you. If it has —
   another browser tab, an editor on the server, a git fetch — the save is
@@ -75,13 +75,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stay read-only, so the way to customize one is **Copy** — the same
   fork-to-edit that previously meant copying directories in a shell.
 
+  **Tune, the fifth panel, calibrates a panel's measured colours against the
+  physical device.** Pick a device, drag hue/saturation/lightness or type a
+  hex value against its swatches, then **Push to panel** to see the result on
+  the device itself, under the light it actually hangs in — e-ink is
+  reflective, so a calibration judged from a screenshot is a guess. Push is a
+  button, not automatic: it wakes a battery-powered device into a refresh
+  cycle, so nothing repaints until you ask it to. Once it looks right, **Save
+  to config** writes it into `config.yaml`; until you do, it is only a
+  temporary preview on that device, and closing the panel or discarding
+  clears it.
+
 - **A pop-out preview window.** The preview opens in a window of its own, with
   **Fit** and **100%** zoom, and follows the editor as you work — useful on a
   second monitor, and the only comfortable way to look at a 1872×1404 TRMNL X
   render at its real size.
 
 - **Light and dark colour schemes for the dev UI.** A **System / Light / Dark**
-  control in the toolbar, defaulting to System so it follows your operating
+  control in the icon rail, defaulting to System so it follows your operating
   system. Your choice is remembered and applies to the pop-out window too.
 
 - **A Byonk entry in the Home Assistant sidebar**, opening the screen editor

@@ -885,8 +885,9 @@ async fn run_server() -> anyhow::Result<()> {
 
     // Create application state, injecting the add-on admin token (if any) into config.
     // Explicit BYONK_ADMIN_TOKEN env still wins (server resolves env before config.admin.token).
-    let mut config = byonk::models::AppConfig::load_from_assets(&asset_loader)?;
-    byonk::addon_options::apply_to_config(&addon, &mut config);
+    // Same loader as `reload_config`, so a reload can never produce a
+    // different config from the same files (see `load_config_with_addon_overlay`).
+    let config = byonk::server::load_config_with_addon_overlay(&asset_loader)?;
     let mut state = server::create_app_state_with_config(asset_loader, config)?;
     // Add-on mode = the options file was present and parsed. Gates global-config
     // admin writes to read-only (the add-on Options form is the sole editor).

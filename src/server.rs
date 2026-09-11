@@ -245,9 +245,23 @@ pub fn create_app_state_with_overrides(
     })
 }
 
-/// Reparse the config file via the asset loader and atomically swap it in.
+/// Load `config.yaml` and fold the Home Assistant add-on options over it.
+///
+/// Startup and reload must produce the same config from the same inputs, so
+/// both go through here. `read_options` returns `Missing` when there is no
+/// options file — the normal non-add-on case — and `apply_to_config` is then
+/// a no-op, so this is safe to call unconditionally.
+pub fn load_config_with_addon_overlay(loader: &AssetLoader) -> anyhow::Result<AppConfig> {
+    let mut config = AppConfig::load_from_assets(loader)?;
+    let opts = crate::addon_options::read_options(&crate::addon_options::options_path());
+    crate::addon_options::apply_to_config(&opts, &mut config);
+    Ok(config)
+}
+
+/// Reparse the config file via the asset loader, re-fold the add-on options
+/// overlay, and atomically swap it in.
 pub fn reload_config(state: &AppState) -> anyhow::Result<()> {
-    let fresh = AppConfig::load_from_assets(&state.asset_loader)?;
+    let fresh = load_config_with_addon_overlay(&state.asset_loader)?;
     state.config.store(Arc::new(fresh));
     state.screen_repo_manager.rebuild_loader();
     // A device preview's fingerprint only covers that device's own config, so

@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/svelte";
 import IconRail from "../src/lib/components/IconRail.svelte";
 import { layout, PANELS } from "../src/lib/state/layout.svelte.js";
+import { theme } from "../src/lib/state/theme.svelte.js";
 
 beforeEach(() => {
   // The brief's beforeEach resets localStorage and the layout store but
@@ -21,6 +22,7 @@ beforeEach(() => {
   cleanup();
   localStorage.clear();
   layout.reset();
+  theme.reset();
 });
 
 describe("IconRail", () => {
@@ -50,7 +52,14 @@ describe("IconRail", () => {
 
   it("shows one toggle per panel, including tune", () => {
     render(IconRail);
-    expect(screen.getAllByRole("button")).toHaveLength(5);
+    // Scoped to `aria-pressed`, not "every button in the rail": Task 11
+    // added the theme switch as a 6th button here (Ruling 52), and it is
+    // not a panel toggle -- it carries `aria-haspopup`, never
+    // `aria-pressed`.
+    const panelToggles = screen
+      .getAllByRole("button")
+      .filter((el) => el.hasAttribute("aria-pressed"));
+    expect(panelToggles).toHaveLength(5);
     expect(screen.getByLabelText("Tune")).toBeTruthy();
   });
 
@@ -61,5 +70,25 @@ describe("IconRail", () => {
     expect(btn.getAttribute("aria-pressed")).toBe("false");
     await fireEvent.click(btn);
     expect(btn.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  // Ruling 52: the brief creates ThemeSwitch.svelte but never mounts it.
+  // It is mounted here, pushed to the bottom with `mt-auto`, specifically
+  // because IconRail is the one piece of chrome no panel toggle can
+  // unmount -- this pins that it stays reachable even when the editor
+  // panel (the one the brief's own text calls out) is closed.
+  //
+  // Mutation performed to confirm this can fail (then reverted): wrapped
+  // the `<div class="mt-auto"><ThemeSwitch /></div>` block in
+  // IconRail.svelte inside `{#if layout.isOpen("editor")}...{/if}`.
+  // Result: this test failed with
+  //   TestingLibraryElementError: Unable to find an accessible element
+  //   with the role "button" and name `/theme/i`
+  // confirming it actually exercises the gating, not just the mount.
+  it("keeps the theme switch reachable with the editor panel closed", () => {
+    if (layout.isOpen("editor")) layout.toggle("editor");
+    render(IconRail);
+    expect(layout.isOpen("editor")).toBe(false);
+    expect(screen.getByRole("button", { name: /theme/i })).toBeInTheDocument();
   });
 });

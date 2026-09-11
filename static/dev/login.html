@@ -4,16 +4,143 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Byonk Login</title>
-<link rel="stylesheet" href="dev.css">
-<!-- Same before-first-paint scheme applier as index.html. This is the first
-     page a user sees, and it is a separate document, so it needs its own
-     copy; there is no dev.js here at all. -->
+<style>
+/* Task 11: this page carries no Tailwind and no shared stylesheet -- see
+   the header comment on the theme-applier script below for why -- so the
+   density scale and colour tokens are written out by hand here, using the
+   SAME custom-property names as webui/src/app.css so this page and the
+   Svelte app read as one product. Bare :root carries the complete light
+   palette; .dark redefines only what differs, exactly as app.css does. */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg-color: #ffffff;
+  --panel-bg: #f6f7f9;
+  --input-bg: #ffffff;
+  --border-color: #d8dce3;
+  --text-color: #1a1d23;
+  --text-muted: #5a6472;
+  --accent-color: #1e5aa8;
+  --danger-color: #b3261e;
+  --on-accent: #ffffff;
+  color-scheme: light;
+}
+
+.dark {
+  --bg-color: #0f1622;
+  --panel-bg: #172030;
+  --input-bg: #0b111c;
+  --border-color: #27354a;
+  --text-color: #dbe3ef;
+  --text-muted: #8896aa;
+  --accent-color: #5b9bf5;
+  --danger-color: #f2837c;
+  --on-accent: #0f1622;
+  color-scheme: dark;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 0.875rem;
+  background: var(--bg-color);
+  color: var(--text-color);
+  min-height: 100vh;
+  line-height: 1.5;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+input[type="text"], input[type="password"] {
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--text-color);
+  background: var(--input-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.5rem;
+}
+
+input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.login-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+.login-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 280px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+}
+
+.login-card h1 {
+  font-size: 1.25rem;
+  margin-bottom: 0.25rem;
+}
+
+.login-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.login-card button {
+  margin-top: 0.5rem;
+  background: var(--accent-color);
+  border: 1px solid var(--accent-color);
+  color: var(--on-accent);
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.75rem;
+}
+
+.login-card button:hover {
+  opacity: 0.9;
+}
+
+.login-message {
+  color: var(--danger-color);
+  font-size: 0.8125rem;
+  min-height: 1.2em;
+}
+</style>
+<!-- Same before-first-paint scheme applier as preview.html. This is the
+     first page a user sees, and it is a separate document, so it needs its
+     own copy; there is no app bundle here at all.
+
+     Reads the SAME key and the SAME three-way values ("system" | "light" |
+     "dark", default "system") as webui/src/lib/state/theme.svelte.js, and
+     applies the choice the identical way the store does: a ".dark" class on
+     <html>, following the OS preference for "system". This page never
+     writes the key -- only the editor does -- so it only ever needs to read
+     it once, before paint. -->
 <script>
 (function () {
   try {
-    var t = localStorage.getItem("byonk-dev-theme");
-    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
-  } catch (e) { /* private window or blocked site data: keep the default */ }
+    var mode = localStorage.getItem("byonk.theme.v1");
+    var dark = mode === "dark" ||
+      (mode !== "light" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    if (dark) document.documentElement.classList.add("dark");
+  } catch (e) { /* private window or blocked site data: keep the light default */ }
 })();
 </script>
 </head>

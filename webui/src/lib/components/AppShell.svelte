@@ -5,6 +5,7 @@
   import ConflictBanner from "./ConflictBanner.svelte";
   import StatusStrip from "./StatusStrip.svelte";
   import { layout } from "../state/layout.svelte.js";
+  import { theme } from "../state/theme.svelte.js";
   import { editor } from "../state/editor.svelte.js";
   import * as api from "../api.js";
 
@@ -30,6 +31,11 @@
   // state doesn't have this problem below because `layout.isOpen(...)` is
   // read live from the template, never snapshotted into local state.
   layout.load();
+  // Same reasoning as layout.load() above: read synchronously here, before
+  // ThemeSwitch (mounted inside IconRail) reads `theme.mode` for its first
+  // render, so a persisted explicit choice from a prior session is never
+  // shown as "System" for one frame before flipping.
+  theme.load();
 
   let xSize = $state(layout.size("x"));
   let ySize = $state(layout.size("y"));

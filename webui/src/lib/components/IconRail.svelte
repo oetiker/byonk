@@ -1,6 +1,7 @@
 <script>
   import { Files, Code, Palette, Monitor, SlidersHorizontal } from "@lucide/svelte";
   import { layout, PANELS } from "../state/layout.svelte.js";
+  import ThemeSwitch from "./ThemeSwitch.svelte";
 
   const ICONS = {
     files: Files,
@@ -41,4 +42,11 @@
       <Icon size={16} aria-hidden="true" />
     </button>
   {/each}
+
+  <!-- Ruling 52: grouped with the Shell in spec, mounted here because
+       IconRail is the only chrome no panel toggle can unmount -- it must
+       stay reachable with every panel, including the editor, closed. -->
+  <div class="mt-auto">
+    <ThemeSwitch />
+  </div>
 </div>

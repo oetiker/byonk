@@ -13,7 +13,9 @@
 // element, which is usually scaled down to fit; a page that never calls
 // `updateLensImage` gets a lens that stays invisible rather than a wrong one.
 //
-// The styling (`.lens`, `.lens.hidden`, `.lens canvas`) lives in dev.css.
+// The styling (`.lens`, `.lens.hidden`, `.lens canvas`) lives in the
+// consuming page's own inline stylesheet (static/dev/preview.html as of
+// Task 11), not in a shared file this script could name here.
 
 "use strict";
 

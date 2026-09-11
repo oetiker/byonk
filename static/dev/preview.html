@@ -4,16 +4,162 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Byonk Preview</title>
-<link rel="stylesheet" href="dev.css">
-<!-- Same before-first-paint scheme applier as index.html and login.html. This
-     is a separate document opened by window.open(), so it needs its own copy;
-     dev.js is not loaded here at all. -->
+<style>
+/* Task 11: no Tailwind and no shared stylesheet here (see the theme-applier
+   script's comment below), so the density scale and colour tokens are
+   written out by hand, using the SAME custom-property names as
+   webui/src/app.css so this page and the Svelte app read as one product.
+   Bare :root carries the complete light palette; .dark redefines only what
+   differs, exactly as app.css does. */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg-color: #ffffff;
+  --panel-bg: #f6f7f9;
+  --border-color: #d8dce3;
+  --text-color: #1a1d23;
+  --text-muted: #5a6472;
+  --accent-color: #1e5aa8;
+  /* The device screen is a physical, backlit-white object: it does not
+     flip with the scheme, only the page around it does (ported from
+     static/dev/dev.css's identical reasoning). Declared once, here. */
+  --device-screen-bg: #ffffff;
+  color-scheme: light;
+}
+
+.dark {
+  --bg-color: #0f1622;
+  --panel-bg: #172030;
+  --border-color: #27354a;
+  --text-color: #dbe3ef;
+  --text-muted: #8896aa;
+  --accent-color: #5b9bf5;
+  color-scheme: dark;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 0.875rem;
+  background: var(--bg-color);
+  color: var(--text-color);
+  line-height: 1.5;
+}
+
+.preview-body {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.preview-bar label {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.preview-size {
+  margin-right: auto;
+  font-family: 'Monaco', 'Menlo', monospace;
+}
+
+.preview-stage {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.5rem;
+  background: var(--bg-color);
+}
+
+/* An e-ink render is mostly white paper, so it needs an edge of its own to
+   read as an object on a light ground. A ring rather than a border: it
+   must not change the layout the 100% mode measures. */
+.preview-stage img {
+  display: block;
+  background: var(--device-screen-bg);
+  box-shadow: 0 0 0 1px var(--border-color);
+}
+
+/* Fit: the image can never exceed the stage, so it is safe to centre it. */
+.preview-stage.fit {
+  display: grid;
+  place-items: center;
+}
+
+.preview-stage.fit img {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+/* 100%: the image usually overflows, and every centring mechanism (flex or
+   grid centring, auto margins, text-align) pushes the overflow past the
+   scroll container's start edge, where it cannot be scrolled back into
+   view. So it anchors top-left, the way an image viewer at 1:1 does. On a
+   HiDPI screen the browser still upscales by the device pixel ratio;
+   `pixelated` keeps the dither pattern crisp through that. */
+.preview-stage.full img {
+  image-rendering: pixelated;
+}
+
+/* Lens for 1:1 pixel viewing (static/dev/lens.js owns the markup and the
+   show/hide/move logic; this page owns only the look). */
+.lens {
+  position: fixed;
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+  outline: 3px solid var(--accent-color);
+  outline-offset: -3px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  z-index: 1000;
+  overflow: hidden;
+  background: var(--device-screen-bg);
+}
+
+.lens.hidden {
+  display: none;
+}
+
+.lens canvas {
+  display: block;
+  border-radius: 50%;
+}
+</style>
+<!-- Same before-first-paint scheme applier as login.html. This is a
+     separate document opened by window.open(), so it needs its own copy;
+     the app bundle is not loaded here at all.
+
+     Reads the SAME key and the SAME three-way values ("system" | "light" |
+     "dark", default "system") as webui/src/lib/state/theme.svelte.js, and
+     applies the choice the identical way the store does: a ".dark" class
+     on <html>, following the OS preference for "system". Live updates
+     after this (both a change made while this window is open, and the OS
+     preference changing while mode is "system") are handled by the page
+     script below, over the byonk-preview BroadcastChannel. -->
 <script>
 (function () {
   try {
-    var t = localStorage.getItem("byonk-dev-theme");
-    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
-  } catch (e) { /* private window or blocked site data: keep the default */ }
+    var mode = localStorage.getItem("byonk.theme.v1");
+    var dark = mode === "dark" ||
+      (mode !== "light" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    if (dark) document.documentElement.classList.add("dark");
+  } catch (e) { /* private window or blocked site data: keep the light default */ }
 })();
 </script>
 </head>
@@ -41,58 +187,97 @@
   const sizeEl = document.getElementById("preview-size");
   const stage = document.getElementById("preview-stage");
 
-  // The colour scheme is chosen in the editor window and stored in
-  // localStorage, which raises a `storage` event in every OTHER document of
-  // the origin. Without this a pop-out left open on a second monitor would
-  // keep the scheme it opened with while the editor changed.
-  // `e.key === null` means the whole store was cleared.
-  window.addEventListener("storage", (e) => {
-    if (e.key !== null && e.key !== "byonk-dev-theme") return;
-    let t = null;
-    try { t = localStorage.getItem("byonk-dev-theme"); } catch (err) { t = null; }
-    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
-    else document.documentElement.removeAttribute("data-theme");
-  });
-
   // Fit scales the render down to the window; 100% shows it at its own pixel
   // size and lets the stage scroll.
   document.querySelectorAll("input[name=zoom]").forEach((r) => {
     r.addEventListener("change", () => { stage.className = "preview-stage " + r.value; });
   });
 
-  setupLens();
+  // --- colour scheme --------------------------------------------------
+  //
+  // Mirrors webui/src/lib/state/theme.svelte.js: same storage key, same
+  // three-way values. Live updates arrive as `{theme: mode}` on the SAME
+  // "byonk-preview" channel this page already listens on for renders
+  // (Ruling 51) -- one channel is simpler than two.
+  let currentMode = "system";
+  try {
+    const stored = localStorage.getItem("byonk.theme.v1");
+    if (stored === "light" || stored === "dark") currentMode = stored;
+  } catch (e) { /* keep "system" */ }
 
-  // Guarded exactly like dev.js's: the constructor is missing in a few
-  // browsers, and an unguarded throw here would take the zoom controls with
-  // it and leave a window that does nothing without saying why.
-  let channel = null;
-  try { channel = new BroadcastChannel("byonk-preview"); } catch (e) { channel = null; }
-  if (!channel) {
-    sizeEl.textContent = "this browser cannot mirror the editor";
-    return;
+  function systemPrefersDark() {
+    try {
+      return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    } catch (e) {
+      return false;
+    }
   }
 
-  channel.onmessage = (ev) => {
-    // A `hello` from a second pop-out reaches this one too: only a message
-    // carrying a url is from the editor.
-    if (!ev.data || !ev.data.url) return;
-    img.src = ev.data.url;
-    updateLensImage(ev.data.url);
-    sizeEl.textContent = `${ev.data.width} x ${ev.data.height}`;
-  };
+  function applyTheme(mode) {
+    currentMode = mode;
+    const dark = mode === "dark" || (mode === "system" && systemPrefersDark());
+    document.documentElement.classList.toggle("dark", dark);
+  }
 
-  // The editor only broadcasts when an image finishes decoding, so a pop-out
-  // opened between two renders would sit blank until the next one. Asking for
-  // what is on screen right now costs one message.
-  channel.postMessage({ hello: true });
+  // Keeps a "system" choice following the OS while this window stays open,
+  // the same live behaviour theme.svelte.js gives the editor window.
+  try {
+    if (window.matchMedia) {
+      const mql = window.matchMedia("(prefers-color-scheme: dark)");
+      const onSystemChange = () => { if (currentMode === "system") applyTheme("system"); };
+      if (mql.addEventListener) mql.addEventListener("change", onSystemChange);
+      else if (mql.addListener) mql.addListener(onSystemChange);
+    }
+  } catch (e) { /* matchMedia unsupported here: "system" just won't live-update */ }
 
-  // The blob is the editor window's, and it revokes the previous one as it
-  // assigns the next. A render finishing in the sliver between the broadcast
-  // and this window fetching the URL leaves a blank frame; say so rather than
-  // showing an unexplained empty stage. The next render repaints it.
-  img.addEventListener("error", () => {
-    sizeEl.textContent = "image expired — render again in the editor";
-  });
+  // --- mirror channel ---------------------------------------------------
+  //
+  // Created and wired BEFORE setupLens() below, not after: setupLens()
+  // lives in lens.js, a file this page does not own, and a throw in it
+  // must not take the mirror (or the theme-follow above) down with it.
+  // Wiring the channel first means both survive a lens failure -- only the
+  // hover lens itself, and the "expired" listener further down, would be
+  // lost.
+  let channel = null;
+  try { channel = new BroadcastChannel("byonk-preview"); } catch (e) { channel = null; }
+
+  if (!channel) {
+    sizeEl.textContent = "this browser cannot mirror the editor";
+  } else {
+    channel.onmessage = (ev) => {
+      if (!ev.data) return;
+
+      if (typeof ev.data.theme === "string") {
+        applyTheme(ev.data.theme);
+        return;
+      }
+
+      // A `hello` from a second pop-out reaches this one too: only a
+      // message carrying a url is from the editor.
+      if (!ev.data.url) return;
+      img.src = ev.data.url;
+      updateLensImage(ev.data.url);
+      sizeEl.textContent = `${ev.data.width} x ${ev.data.height}`;
+    };
+
+    // The editor only broadcasts a render when an image finishes decoding,
+    // so a pop-out opened between two renders would sit blank until the
+    // next one. Asking for what is on screen right now costs one message.
+    channel.postMessage({ hello: true });
+  }
+
+  setupLens();
+
+  if (channel) {
+    // The blob is the editor window's, and it revokes the previous one as
+    // it assigns the next. A render finishing in the sliver between the
+    // broadcast and this window fetching the URL leaves a blank frame; say
+    // so rather than showing an unexplained empty stage. The next render
+    // repaints it.
+    img.addEventListener("error", () => {
+      sizeEl.textContent = "image expired — render again in the editor";
+    });
+  }
 })();
 </script>
 </body>

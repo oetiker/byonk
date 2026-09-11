@@ -16,37 +16,47 @@ describe("api", () => {
     // completeness assertion at the end.
 
     // Coverage table: each entry specifies a function, how to call it,
-    // the exact expected URL, and optionally a custom response.
+    // the exact expected URL and HTTP method, and optionally a custom
+    // response. `expectedMethod` matters as much as `expectedUrl` --
+    // `setPanelOverride`/`clearPanelOverride` share a URL and differ only by
+    // verb (PUT vs DELETE), so a URL-only check can't tell a push from a
+    // discard, or catch the two being swapped outright.
     const urlCoverage = [
       {
         name: "whoami",
         call: () => api.whoami(),
         expectedUrl: "api/whoami",
+        expectedMethod: "GET",
       },
       {
         name: "listRepos",
         call: () => api.listRepos(),
         expectedUrl: "api/repos",
+        expectedMethod: "GET",
       },
       {
         name: "listScreens",
         call: () => api.listScreens(),
         expectedUrl: "api/screens",
+        expectedMethod: "GET",
       },
       {
         name: "listFiles",
         call: () => api.listFiles("local/hello"),
         expectedUrl: "api/files?ref=local%2Fhello",
+        expectedMethod: "GET",
       },
       {
         name: "readFile",
         call: () => api.readFile("local/hello", "script.lua"),
         expectedUrl: "api/file?ref=local%2Fhello&name=script.lua",
+        expectedMethod: "GET",
       },
       {
         name: "writeFile",
         call: () => api.writeFile("local/hello", "script.lua", "x", null),
         expectedUrl: "api/file?ref=local%2Fhello&name=script.lua",
+        expectedMethod: "PUT",
         responseStatus: 204,
         responseHeaders: { ETag: '"new"' },
       },
@@ -54,61 +64,72 @@ describe("api", () => {
         name: "deleteFile",
         call: () => api.deleteFile("local/hello", "script.lua"),
         expectedUrl: "api/file?ref=local%2Fhello&name=script.lua",
+        expectedMethod: "DELETE",
       },
       {
         name: "createScreen",
         call: () => api.createScreen("local", "test"),
         expectedUrl: "api/screen",
+        expectedMethod: "POST",
         responseBody: '{"ref":"local/test"}',
       },
       {
         name: "deleteScreen",
         call: () => api.deleteScreen("local/test"),
         expectedUrl: "api/screen",
+        expectedMethod: "DELETE",
         responseBody: '{"ref":"local/test"}',
       },
       {
         name: "copyScreen",
         call: () => api.copyScreen("local/src", "dest", "copy"),
         expectedUrl: "api/screen/copy",
+        expectedMethod: "POST",
         responseBody: '{"ref":"local/dest/copy"}',
       },
       {
         name: "renameScreen",
         call: () => api.renameScreen("local/test", "renamed"),
         expectedUrl: "api/screen/rename",
+        expectedMethod: "POST",
         responseBody: '{"ref":"local/renamed"}',
       },
       {
         name: "checkFile",
         call: () => api.checkFile("local/test", "script.lua", "x"),
         expectedUrl: "api/screen/check",
+        expectedMethod: "POST",
         responseBody: '{"ok":true,"issues":[]}',
       },
       {
         name: "setPanelOverride",
         call: () => api.setPanelOverride("e1004", "#101010,#E8E8E8"),
         expectedUrl: "api/panel-colors/e1004",
+        expectedMethod: "PUT",
       },
       {
         name: "clearPanelOverride",
         call: () => api.clearPanelOverride("e1004"),
         expectedUrl: "api/panel-colors/e1004",
+        expectedMethod: "DELETE",
       },
       {
         name: "savePanelColors",
         call: () => api.savePanelColors("e1004", "#101010,#E8E8E8"),
         expectedUrl: "api/panel-colors/e1004/save",
+        expectedMethod: "POST",
       },
       {
         name: "startTuningSession",
         call: () => api.startTuningSession("kitchen"),
         expectedUrl: "api/tuning-session/kitchen",
+        expectedMethod: "PUT",
       },
       {
         name: "endTuningSession",
         call: () => api.endTuningSession("kitchen"),
         expectedUrl: "api/tuning-session/kitchen",
+        expectedMethod: "DELETE",
       },
       {
         name: "renderUrl",
@@ -148,10 +169,16 @@ describe("api", () => {
         // String builders don't fetch, just return the URL
         expect(result).toBe(entry.expectedUrl);
       } else {
-        // HTTP requests: await and verify the URL
+        // HTTP requests: await and verify the URL AND the method. URL alone
+        // can't tell `setPanelOverride` (PUT) from `clearPanelOverride`
+        // (DELETE) -- they share a URL and differ only by verb.
         await result;
-        const calledUrl = globalThis.fetch.mock.calls.at(-1)[0];
+        const [calledUrl, calledInit] = globalThis.fetch.mock.calls.at(-1);
         expect(calledUrl).toBe(entry.expectedUrl);
+        // A call made with no `init.method` is a GET by fetch's own default;
+        // this codebase's helpers only ever omit it for GETs, so `?? "GET"`
+        // reflects that rather than papering over a missing assertion.
+        expect(calledInit?.method ?? "GET").toBe(entry.expectedMethod);
       }
     }
 

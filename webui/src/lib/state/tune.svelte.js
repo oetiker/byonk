@@ -87,18 +87,37 @@ class Tune {
     this.#mirror();
   }
 
-  /** Stage 1: push the working copy to the panel as a temporary override. */
+  /**
+   * Stage 1: push the working copy to the panel as a temporary override.
+   *
+   * The override write and the session re-touch are independent server
+   * calls, deliberately not under one `try`/`catch`. `pushed` must be true
+   * whenever a server-side override is actually live -- `release()` (below)
+   * gates its close-time `clearPanelOverride` on it, so if a successful
+   * override write were followed by a failed session re-touch and both fell
+   * into one catch that reset `pushed` to `false`, `release()` would skip
+   * clearing an override that is, in fact, still sitting on the server: the
+   * "an override nobody is watching" trap the spec calls out, self-inflicted
+   * by this store's own error handling. A session failure is real and must
+   * be surfaced, but as its own error, not by understating the override.
+   */
   async push() {
     try {
       await api.setPanelOverride(this.panel, this.wire);
-      this.pushed = true;
-      this.error = null;
-      // The override is keyed by panel and the session by device, so the
-      // server cannot refresh the session from the push. The client does it.
-      if (this.device) await api.startTuningSession(this.device);
     } catch (e) {
       this.pushed = false;
       this.error = { op: "push", message: e.message };
+      return;
+    }
+    this.pushed = true;
+    this.error = null;
+    if (!this.device) return;
+    // The override is keyed by panel and the session by device, so the
+    // server cannot refresh the session from the push. The client does it.
+    try {
+      await api.startTuningSession(this.device);
+    } catch (e) {
+      this.error = { op: "session", message: e.message };
     }
   }
 
@@ -119,7 +138,24 @@ class Tune {
     }
   }
 
-  /** Revert the working copy, drop the override, and end the session. */
+  /**
+   * Revert the working copy, drop the override, and end the session.
+   *
+   * Reverts the working copy even if `clearPanelOverride` throws: the same
+   * best-effort tradeoff `release()` makes below. A failed clear can leave
+   * the browser showing the reverted (pre-push) colours while the server
+   * may still be serving the override until the request is retried or the
+   * session's 30-minute backstop expires; `tune.error` records the failure
+   * so it is visible, but discarding is user-initiated and idempotent to
+   * retry, so it is not blocked on the DELETE succeeding.
+   *
+   * Unlike `release()`, this clears unconditionally rather than gating on
+   * `this.pushed` -- discard is the user explicitly asking "make sure
+   * nothing of mine is live," so it is allowed to issue a DELETE against a
+   * panel that was never actually pushed (a no-op server-side); `release()`
+   * gates on `pushed` only to avoid an unnecessary call on the common path
+   * where the panel closes without ever having been pushed.
+   */
   async discard() {
     try {
       await api.clearPanelOverride(this.panel);

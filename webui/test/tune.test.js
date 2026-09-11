@@ -98,6 +98,34 @@ describe("tune store", () => {
     expect(tune.error).toBeNull();
   });
 
+  it("keeps `pushed` true when the override succeeds but the session re-touch fails, so a later release() still clears it", async () => {
+    const put = vi.spyOn(api, "setPanelOverride").mockResolvedValue();
+    vi.spyOn(api, "startTuningSession").mockRejectedValue(new Error("session boom"));
+    const del = vi.spyOn(api, "clearPanelOverride").mockResolvedValue();
+    vi.spyOn(api, "endTuningSession").mockResolvedValue();
+
+    tune.selectPanel(PANEL.id, PANEL);
+    await tune.selectDevice("kitchen");
+    // The device-select above already exercised startTuningSession once
+    // (mocked to reject too); push() must re-touch it a second time.
+    tune.setColor(2, "#00994D");
+
+    await tune.push();
+
+    // The override write itself succeeded, so the server-side override IS
+    // live -- `pushed` must say so, even though the session re-touch that
+    // followed it failed.
+    expect(put).toHaveBeenCalledWith("e1004", "#101010,#E8E8E8,#00994D");
+    expect(tune.pushed).toBe(true);
+    expect(tune.error).toMatchObject({ op: "session" });
+
+    // release() (panel close) decides whether to clear the override by
+    // reading `pushed`. A wrongly-`false` `pushed` here would silently skip
+    // this call and leave the live override unwatched.
+    await tune.release();
+    expect(del).toHaveBeenCalledWith("e1004");
+  });
+
   it("records a failure instead of letting it reject unhandled", async () => {
     vi.spyOn(api, "setPanelOverride").mockRejectedValue(new Error("boom"));
     tune.selectPanel(PANEL.id, PANEL);

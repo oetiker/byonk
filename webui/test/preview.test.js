@@ -39,8 +39,8 @@ describe("PreviewPane", () => {
     //
     // Controller Ruling 29: the brief's original version fired `hello`
     // immediately after `render(PreviewPane)`, before any render had
-    // completed -- `lastBlob` is still null at that point, so the
-    // component's (correct) `if (e.data?.hello && lastBlob)` guard posts
+    // completed -- `blobUrl` is still null at that point, so the
+    // component's (correct) `if (e.data?.hello && blobUrl)` guard posts
     // nothing and the assertion could never pass. Fixed here by mocking
     // `fetch` and selecting a screen so one render actually completes
     // first, THEN sending `hello`.
@@ -62,10 +62,30 @@ describe("PreviewPane", () => {
     // Wait for the mount-time $effect's renderNow() to finish and post the
     // render itself, before touching the handshake.
     await waitFor(() => expect(posted.length).toBeGreaterThan(0));
+
+    // Ruling 57: this used to accept `"blob" in m || "url" in m`, which
+    // reports green whether PreviewPane posts the real, only-ever-
+    // understood-by-preview.html contract (`{url, width, height}`) or the
+    // `{blob}` shape a rewrite regression actually shipped. Pin the exact
+    // shape, on the render broadcast itself first...
+    expect(posted[0]).toEqual({
+      url: expect.stringMatching(/^blob:/),
+      width: simulate.size.width,
+      height: simulate.size.height,
+    });
     posted.length = 0;
 
+    // ...and again on the hello reply, since the two are built from the
+    // same call in the component but that is an implementation detail this
+    // test must not assume -- each wire message is asserted independently.
     fake.onmessage?.({ data: { hello: true } });
-    expect(posted.some((m) => "blob" in m || "url" in m)).toBe(true);
+    expect(posted).toEqual([
+      {
+        url: expect.stringMatching(/^blob:/),
+        width: simulate.size.width,
+        height: simulate.size.height,
+      },
+    ]);
   });
 
   it("fits the device to its box without distorting the aspect ratio", () => {

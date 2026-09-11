@@ -5,7 +5,6 @@
 
   let blobUrl = $state(null);
   let channel;
-  let lastBlob = null;
 
   // --- device frame -------------------------------------------------------
   //
@@ -119,16 +118,27 @@
     ctx.restore();
   }
 
+  // Ruling 57: the wire contract to static/dev/preview.html's pop-out is
+  // `{url, width, height}` -- the one thing that page's `channel.onmessage`
+  // has ever understood (it was ported from vanilla dev.js, unchanged, in
+  // Task 11). `postFrame()` is the single place that shape gets built, so
+  // the render broadcast below and the hello reply here can never drift
+  // apart from each other again the way they did when this component
+  // shipped posting `{blob}` instead.
+  function postFrame() {
+    channel?.postMessage({ url: blobUrl, width: simulate.size.width, height: simulate.size.height });
+  }
+
   onMount(() => {
     channel = new BroadcastChannel("byonk-preview");
     // A reloaded pop-out says hello; answer with the current render so it
     // recovers instead of sitting blank (spec §8.4). There is nothing to
-    // answer with until a render has actually completed -- `lastBlob` stays
+    // answer with until a render has actually completed -- `blobUrl` stays
     // null until then, which is deliberate (Controller Ruling 29): a
     // pop-out opened before any screen is selected has no "current image"
     // to recover.
     channel.onmessage = (e) => {
-      if (e.data?.hello && lastBlob) channel.postMessage({ blob: lastBlob });
+      if (e.data?.hello && blobUrl) postFrame();
     };
     return () => channel?.close();
   });
@@ -171,8 +181,7 @@
       const blob = await res.blob();
       if (blobUrl) URL.revokeObjectURL(blobUrl);
       blobUrl = URL.createObjectURL(blob);
-      lastBlob = blob;
-      channel?.postMessage({ blob });
+      postFrame();
     } catch (e) {
       simulate.error = { op: "render", message: e.message };
     }

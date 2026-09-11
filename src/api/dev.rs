@@ -161,24 +161,24 @@ pub struct RenderErrorResponse {
     pub details: Option<String>,
 }
 
-/// Serve the dev mode HTML page
+/// Serve the dev UI's HTML shell, built by `make webui`.
 pub async fn handle_dev_page() -> Html<&'static str> {
-    Html(include_str!("../../static/dev/index.html"))
+    Html(include_str!("../../webui/dist/index.html"))
 }
 
-/// Serve the dev mode CSS
-pub async fn handle_dev_css() -> impl IntoResponse {
+/// Serve the dev UI application bundle.
+pub async fn handle_app_js() -> impl IntoResponse {
     (
-        [(header::CONTENT_TYPE, "text/css")],
-        include_str!("../../static/dev/dev.css"),
+        [(header::CONTENT_TYPE, "application/javascript")],
+        include_str!("../../webui/dist/app.js"),
     )
 }
 
-/// Serve the dev mode JavaScript
-pub async fn handle_dev_js() -> impl IntoResponse {
+/// Serve the dev UI stylesheet.
+pub async fn handle_app_css() -> impl IntoResponse {
     (
-        [(header::CONTENT_TYPE, "application/javascript")],
-        include_str!("../../static/dev/dev.js"),
+        [(header::CONTENT_TYPE, "text/css")],
+        include_str!("../../webui/dist/app.css"),
     )
 }
 
@@ -188,14 +188,6 @@ pub async fn handle_lens_js() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "application/javascript")],
         include_str!("../../static/dev/lens.js"),
-    )
-}
-
-/// Serve the editor bundle (built by `static/dev/editor`, see Task 7).
-pub async fn handle_editor_bundle() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "application/javascript")],
-        include_str!("../../static/dev/editor.bundle.js"),
     )
 }
 
@@ -943,8 +935,10 @@ pub async fn handle_render(
 }
 
 /// Everything under `/dev`. Protected routes get `require_dev` as a route
-/// layer; `/login`, `/logout` and the stylesheet stay open (the stylesheet
-/// so the login page itself can be styled).
+/// layer; `/login` and `/logout` stay open. The hand-written UI's login page
+/// used to need an open `/dev.css` route alongside them (so it could style
+/// itself before authenticating) — Task 11 inlined the login page's CSS, so
+/// that route is gone outright, not repointed at the app's own stylesheet.
 ///
 /// This registers the nest root (`/`, i.e. bare `/dev`) but — per axum's own
 /// `nest` semantics — nothing at `/dev/`; `server::build_router` registers
@@ -969,9 +963,9 @@ pub fn dev_router(state: &AppState) -> Router<AppState> {
         .merge(crate::api::dev_files::files_router());
     let protected = Router::new()
         .route("/", get(handle_dev_page))
-        .route("/dev.js", get(handle_dev_js))
+        .route("/app.js", get(handle_app_js))
+        .route("/app.css", get(handle_app_css))
         .route("/lens.js", get(handle_lens_js))
-        .route("/editor.bundle.js", get(handle_editor_bundle))
         // Flat, not nested: `require_dev` redirects an unauthenticated visitor
         // to the relative string "login", which is only correct one level
         // below `/dev/`.
@@ -983,6 +977,5 @@ pub fn dev_router(state: &AppState) -> Router<AppState> {
         ));
     Router::new()
         .merge(protected)
-        .route("/dev.css", get(handle_dev_css))
         .merge(crate::api::dev_auth::dev_auth_router())
 }

@@ -8,10 +8,11 @@ use axum::{
 use serde::Deserialize;
 use std::collections::HashMap;
 
+use crate::api::config_persist::{persist, require_file_config};
 use crate::error::ApiError;
 use crate::models::config::{normalize_algorithm_name, DITHER_ALGORITHMS, RESERVED_DEFAULT_KEY};
 use crate::models::param_schema::validate_params;
-use crate::server::{reload_config, AppState};
+use crate::server::AppState;
 use crate::services::config_writer;
 use crate::services::screen_repo_loader::BUILTIN_HANDLE;
 
@@ -52,15 +53,6 @@ pub struct DeviceWrite {
     /// Ignored on add: a device being created has nothing to clear, so a
     /// `clear` there is a mistake and is rejected rather than dropped.
     pub clear: Option<Vec<String>>,
-}
-
-/// Guard: writes require a file-backed config.
-fn require_file_config(state: &AppState) -> Result<std::path::PathBuf, ApiError> {
-    state
-        .asset_loader
-        .config_path()
-        .map(|p| p.to_path_buf())
-        .ok_or_else(|| ApiError::Conflict("config is embedded/read-only; set CONFIG_FILE".into()))
 }
 
 /// Guard: global-config registry/settings writes are read-only when byonk runs
@@ -418,27 +410,6 @@ fn device_block(w: &DeviceWrite, screen: &str) -> serde_yaml::Mapping {
         m.insert("params".into(), serde_yaml::Value::Mapping(pm));
     }
     m
-}
-
-fn persist(state: &AppState, path: &std::path::Path, new_yaml: String) -> Result<(), ApiError> {
-    // Snapshot current contents so we can roll back if the new text fails to reparse.
-    let previous = std::fs::read_to_string(path).ok();
-
-    // Atomic write: temp file in same dir, then rename.
-    let tmp = path.with_extension("yaml.tmp");
-    std::fs::write(&tmp, &new_yaml).map_err(|e| ApiError::Internal(format!("write temp: {e}")))?;
-    std::fs::rename(&tmp, path).map_err(|e| ApiError::Internal(format!("rename: {e}")))?;
-
-    // Reload into the live config; on failure, roll the file back.
-    if let Err(e) = reload_config(state) {
-        if let Some(prev) = previous {
-            let _ = std::fs::write(path, prev);
-        }
-        return Err(ApiError::Internal(format!(
-            "reload failed, rolled back: {e}"
-        )));
-    }
-    Ok(())
 }
 
 /// Apply a device *add*: reject a duplicate key, validate the screen and

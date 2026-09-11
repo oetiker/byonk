@@ -378,6 +378,46 @@ pub async fn handle_set_panel_colors(
     Ok(StatusCode::OK)
 }
 
+/// Write a panel's tuned measured colours into `config.yaml`, durably.
+///
+/// This is stage 2 of colour tuning: stage 1 is the in-memory override above,
+/// which lets a calibration reach real hardware without becoming the
+/// configuration. Saving makes it the configuration and drops the override,
+/// because an override that merely restates the config is invisible weight.
+///
+/// Deliberately NOT guarded by `require_writable_global`: `panels` is absent
+/// from the Home Assistant add-on Options schema, so nothing else owns it, and
+/// the sidebar dev UI is the main way this is used. See spec §5.
+pub async fn handle_save_panel_colors(
+    State(state): State<AppState>,
+    axum::extract::Path(panel): axum::extract::Path<String>,
+    Json(body): Json<PanelColorsRequest>,
+) -> Result<StatusCode, ApiError> {
+    require_known_panel(&state, &panel)?;
+    let path = crate::api::config_persist::require_file_config(&state)?;
+    let _guard = state.write_lock.lock().await;
+
+    let yaml = std::fs::read_to_string(&path)
+        .map_err(|e| ApiError::Internal(format!("read config: {e}")))?;
+    let new_yaml = crate::services::config_writer::set_scalar(
+        &yaml,
+        &["panels", &panel, "colors_actual"],
+        serde_yaml::Value::from(body.colors_actual.as_str()),
+    )
+    .map_err(|e| ApiError::Internal(format!("patch config: {e}")))?;
+
+    crate::api::config_persist::persist(&state, &path, new_yaml)?;
+
+    // The config now carries the value, so the override would only restate it.
+    state
+        .dev_overrides
+        .panel_colors
+        .write()
+        .await
+        .remove(&panel);
+    Ok(StatusCode::OK)
+}
+
 /// Remove a panel's temporary colour override, reverting to `config.yaml`.
 pub async fn handle_delete_panel_colors(
     State(state): State<AppState>,
@@ -910,7 +950,7 @@ pub async fn handle_render(
 /// `nest` semantics — nothing at `/dev/`; `server::build_router` registers
 /// that explicitly, outside this nest, wearing the same `require_dev` layer.
 pub fn dev_router(state: &AppState) -> Router<AppState> {
-    use axum::routing::{get, put};
+    use axum::routing::{get, post, put};
     let api = Router::new()
         .route("/screens", get(handle_screens))
         .route("/events", get(handle_events))
@@ -920,6 +960,7 @@ pub fn dev_router(state: &AppState) -> Router<AppState> {
             "/panel-colors/{panel}",
             put(handle_set_panel_colors).delete(handle_delete_panel_colors),
         )
+        .route("/panel-colors/{panel}/save", post(handle_save_panel_colors))
         .route(
             "/tuning-session/{device}",
             put(handle_start_tuning_session).delete(handle_end_tuning_session),

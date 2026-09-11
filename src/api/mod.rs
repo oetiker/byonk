@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod config_persist;
 pub mod dev;
 pub mod dev_auth;
 pub mod dev_files;

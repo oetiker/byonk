@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, cleanup } from "@testing-library/svelte";
+import { render, cleanup, fireEvent } from "@testing-library/svelte";
 import { flushSync } from "svelte";
 import * as api from "../src/lib/api.js";
 import { editor } from "../src/lib/state/editor.svelte.js";
@@ -117,5 +117,57 @@ describe("EditorPane", () => {
 
     expect(cmMock.setDoc.mock.calls.length).toBeGreaterThan(callsAfterMount);
     expect(cmMock.setDoc).toHaveBeenLastCalledWith("theirs", "lua", false);
+  });
+
+  // --- Ruling 38: save must actually be wired -------------------------------
+  //
+  // No brief in this plan wired a save action at all: codemirror.js's Mod-s
+  // keymap called `opts.onSave`, and this component never passed one --
+  // the keybinding was inert. These pin both halves of the fix: the
+  // keybinding routes to `editor.trySave()`, AND there is a control a user
+  // can find without knowing the keybinding exists.
+  it("passes onSave to createEditor, wired to editor.trySave() (Ruling 38)", async () => {
+    vi.spyOn(api, "readFile").mockResolvedValue({ text: "hello", etag: '"1"' });
+    await editor.open("local/a", "script.lua");
+    const trySaveSpy = vi.spyOn(editor, "trySave").mockResolvedValue();
+
+    render(EditorPane);
+    flushSync();
+
+    expect(lastOpts.onSave).toBeTypeOf("function");
+    lastOpts.onSave();
+    expect(trySaveSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a visible Save control, enabled only while the active tab is dirty, that calls trySave (Ruling 38)", async () => {
+    vi.spyOn(api, "readFile").mockResolvedValue({ text: "hello", etag: '"1"' });
+    await editor.open("local/a", "script.lua");
+    const trySaveSpy = vi.spyOn(editor, "trySave").mockResolvedValue();
+
+    const { getByRole } = render(EditorPane);
+    flushSync();
+
+    const save = getByRole("button", { name: /save/i });
+    expect(save).toBeDisabled();
+
+    lastOpts.onChange("hello!"); // dirties the active tab, same as a keystroke
+    flushSync();
+    expect(save).not.toBeDisabled();
+
+    await fireEvent.click(save);
+    expect(trySaveSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes onCursor to createEditor, wired to editor.setCursor() (spec §1 status bar)", async () => {
+    vi.spyOn(api, "readFile").mockResolvedValue({ text: "hello", etag: '"1"' });
+    await editor.open("local/a", "script.lua");
+    const setCursorSpy = vi.spyOn(editor, "setCursor");
+
+    render(EditorPane);
+    flushSync();
+
+    expect(lastOpts.onCursor).toBeTypeOf("function");
+    lastOpts.onCursor(3, 22);
+    expect(setCursorSpy).toHaveBeenCalledWith(3, 22);
   });
 });

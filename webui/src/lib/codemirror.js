@@ -160,6 +160,16 @@ export function createEditor(parent, opts = {}) {
       keymap.of([{ key: "Mod-s", run: onSave }, indentWithTab, ...defaultKeymap, ...historyKeymap, ...searchKeymap]),
       EditorView.updateListener.of((u) => {
         if (u.docChanged && opts.onChange) opts.onChange(u.state.doc.toString());
+        // The status bar's cursor position (spec §1, Task 10). Fires on a
+        // caret move AND on a doc change (typing moves the caret too, and
+        // `setDoc`'s full-document replace below counts as one) so a tab
+        // swap's own dispatch reports the new buffer's position without a
+        // separate initial call.
+        if ((u.docChanged || u.selectionSet) && opts.onCursor) {
+          const pos = u.state.selection.main.head;
+          const line = u.state.doc.lineAt(pos);
+          opts.onCursor(line.number, pos - line.from + 1);
+        }
       }),
     ],
   });

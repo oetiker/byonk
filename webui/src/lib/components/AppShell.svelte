@@ -1,7 +1,11 @@
 <script>
+  import { onMount } from "svelte";
   import IconRail from "./IconRail.svelte";
   import SplitPane from "./SplitPane.svelte";
+  import ConflictBanner from "./ConflictBanner.svelte";
   import { layout } from "../state/layout.svelte.js";
+  import { editor } from "../state/editor.svelte.js";
+  import * as api from "../api.js";
 
   // Placeholders until Tasks 6-10 fill them in.
   import FilesPane from "./FilesPane.svelte";
@@ -69,9 +73,58 @@
     const id = setTimeout(() => layout.setSize("y", value), PERSIST_DEBOUNCE_MS);
     return () => clearTimeout(id);
   });
+
+  // Live-reload watcher (spec §8.5, Task 10). `handle_events` (src/api/
+  // dev.rs) emits a JSON array of bare basenames on a `file-change` event
+  // -- `editor.onWatchEvent` does the real matching (Ruling 36); this is
+  // only the transport and the connection-state bookkeeping (Ruling 40),
+  // which is WHY the state it writes (`editor.watchConnected`) lives in a
+  // shared rune module rather than a local `const es` no other component
+  // could read.
+  //
+  // Guarded on `typeof EventSource` rather than assumed: this project's
+  // jsdom+vitest test environment does not define it (confirmed directly --
+  // unlike BroadcastChannel/URL.createObjectURL, which DO survive from
+  // Node's globals), so every existing AppShell test that renders this
+  // component would otherwise throw in onMount. Every real browser this
+  // ships to has it; a test that needs the SSE path installs its own
+  // EventSource before rendering (see conflict.test.js).
+  onMount(() => {
+    if (typeof EventSource === "undefined") return;
+
+    let es;
+    let reconnectTimer;
+
+    function connect() {
+      es = new EventSource(api.eventsUrl());
+      es.onopen = () => {
+        editor.watchConnected = true;
+      };
+      es.onerror = () => {
+        editor.watchConnected = false;
+        es.close();
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+      es.addEventListener("file-change", (e) => {
+        try {
+          editor.onWatchEvent(JSON.parse(e.data));
+        } catch {
+          // A malformed event is not worth breaking the page over.
+        }
+      });
+    }
+    connect();
+
+    return () => {
+      clearTimeout(reconnectTimer);
+      es?.close();
+      editor.watchConnected = false;
+    };
+  });
 </script>
 
 <div class="flex h-full flex-col bg-[var(--bg-color)] text-[var(--text-color)]">
+  <ConflictBanner />
   <div class="flex min-h-0 flex-1">
     <IconRail />
 

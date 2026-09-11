@@ -132,3 +132,55 @@ describe("createEditor read-only mechanism (Ruling 24)", () => {
     }
   });
 });
+
+// StatusBar (Task 10, spec §1) needs the cursor's line/column. `opts.onCursor`
+// is the only way out of CodeMirror's own EditorView -- this proves it fires
+// with the real 1-based line/col on both a selection move and a doc change,
+// against the REAL module (not EditorPane's mock in editorpane.test.js,
+// which only proves wiring, not that codemirror.js actually reports the
+// right numbers).
+describe("createEditor onCursor", () => {
+  it("reports 1-based line/col on a caret move and on a doc change", async () => {
+    const { createEditor } = await import("../src/lib/codemirror.js");
+    const host = document.createElement("div");
+    const calls = [];
+    const { view, destroy } = createEditor(host, {
+      doc: "one\ntwo\nthree",
+      onCursor: (line, col) => calls.push([line, col]),
+    });
+    try {
+      const line2From = view.state.doc.line(2).from;
+
+      calls.length = 0;
+      view.dispatch({ selection: { anchor: line2From } });
+      expect(calls.at(-1)).toEqual([2, 1]);
+
+      view.dispatch({ selection: { anchor: line2From + 2 } });
+      expect(calls.at(-1)).toEqual([2, 3]);
+
+      // A doc change moves the caret too (setDoc's full-document replace,
+      // used on a tab swap, is exactly this): the tab-swap case must not
+      // require a second, separate call to report the new position. A
+      // full-document replace maps the old selection (inside the replaced
+      // range) to the start of the new content, not its end -- confirmed
+      // directly against CodeMirror's own mapping, not assumed.
+      calls.length = 0;
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "x" } });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toEqual([1, 1]);
+    } finally {
+      destroy();
+    }
+  });
+
+  it("does not require onCursor -- it stays optional like onChange", async () => {
+    const { createEditor } = await import("../src/lib/codemirror.js");
+    const host = document.createElement("div");
+    const { view, destroy } = createEditor(host, { doc: "abc" });
+    try {
+      expect(() => view.dispatch({ selection: { anchor: 1 } })).not.toThrow();
+    } finally {
+      destroy();
+    }
+  });
+});

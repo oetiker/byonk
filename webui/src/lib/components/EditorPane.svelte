@@ -2,6 +2,7 @@
   import { onMount, untrack } from "svelte";
   import { editor } from "../state/editor.svelte.js";
   import { createEditor } from "../codemirror.js";
+  import StatusBar from "./StatusBar.svelte";
 
   // $state, not a plain `let`: `bind:this` and the assignment inside onMount
   // are both plain writes, and an $effect reading a plain `let` captures its
@@ -24,6 +25,12 @@
       language: languageOf(editor.active?.name),
       readOnly: editor.active?.readOnly ?? true,
       onChange: (text) => editor.setText(text),
+      // Ruling 38: no brief in this plan wired a save action at all --
+      // codemirror.js's Mod-s keymap was calling nothing. trySave() is
+      // this store's own conflict-aware save, so wiring it straight through
+      // here also gets the keybinding conflict handling for free.
+      onSave: () => editor.trySave(),
+      onCursor: (line, col) => editor.setCursor(line, col),
     });
     return () => cm?.destroy();
   });
@@ -56,19 +63,37 @@
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col">
-  <div role="tablist" class="flex border-b border-[var(--border-color)] text-xs">
-    {#each editor.tabs as t, i (t.ref + t.name)}
-      <div
-        role="tab"
-        aria-selected={i === editor.activeIndex}
-        class="flex items-center gap-1 border-r border-[var(--border-color)] px-2 py-1"
-      >
-        <button type="button" onclick={() => (editor.activeIndex = i)}>{t.name}</button>
-        {#if t.dirty}<span aria-label="unsaved changes">●</span>{/if}
-        {#if t.issues.length}<span aria-label="has errors" class="text-[var(--danger-color)]">▲</span>{/if}
-        <button type="button" aria-label={`Close ${t.name}`} onclick={() => editor.close(i)}>×</button>
-      </div>
-    {/each}
+  <div class="flex items-center border-b border-[var(--border-color)] text-xs">
+    <div role="tablist" class="flex min-w-0 flex-1 overflow-x-auto">
+      {#each editor.tabs as t, i (t.ref + t.name)}
+        <div
+          role="tab"
+          aria-selected={i === editor.activeIndex}
+          class="flex items-center gap-1 border-r border-[var(--border-color)] px-2 py-1"
+        >
+          <button type="button" onclick={() => (editor.activeIndex = i)}>{t.name}</button>
+          {#if t.dirty}<span aria-label="unsaved changes">●</span>{/if}
+          {#if t.issues.length}<span aria-label="has errors" class="text-[var(--danger-color)]">▲</span>{/if}
+          <button type="button" aria-label={`Close ${t.name}`} onclick={() => editor.close(i)}>×</button>
+        </div>
+      {/each}
+    </div>
+    <!--
+      The keybinding above is invisible unless you already know it's there
+      (Ruling 38). Enabled exactly when there is something worth saving --
+      same rule the old UI's toolbar Save button used (dev.js: "enabled
+      whenever any buffer is dirty").
+    -->
+    <button
+      type="button"
+      class="mx-1 shrink-0 rounded border border-[var(--border-color)] px-2 py-0.5
+             disabled:opacity-40"
+      disabled={!editor.active || editor.active.readOnly || !editor.active.dirty}
+      onclick={() => editor.trySave()}
+    >
+      Save
+    </button>
   </div>
   <div bind:this={host} class="min-h-0 flex-1 overflow-auto"></div>
+  <StatusBar />
 </div>

@@ -414,6 +414,15 @@ impl TestApp {
             .await
     }
 
+    pub async fn put_json(&self, path: &str, headers: &[(&str, &str)], body: &str) -> TestResponse {
+        let mut builder = Request::put(path).header("Content-Type", "application/json");
+        for (n, v) in headers {
+            builder = builder.header(*n, *v);
+        }
+        self.request(builder.body(Body::from(body.to_string())).unwrap())
+            .await
+    }
+
     pub async fn delete(&self, path: &str, headers: &[(&str, &str)]) -> TestResponse {
         let mut builder = Request::delete(path);
         for (n, v) in headers {

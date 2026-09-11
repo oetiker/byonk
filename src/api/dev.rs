@@ -20,6 +20,7 @@ use std::convert::Infallible;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
+use crate::error::ApiError;
 use crate::models::DisplaySpec;
 use crate::server::AppState;
 use crate::services::DeviceContext;
@@ -347,40 +348,55 @@ pub async fn handle_resolve_mac(
     }
 }
 
-/// Request body for POST /dev/panel-colors
+/// Request body for `PUT /dev/api/panel-colors/{panel}`.
 #[derive(Debug, Deserialize)]
 pub struct PanelColorsRequest {
-    pub device: String,
     pub colors_actual: String,
 }
 
-/// Set color overrides for a device (dev mode color tuning).
-/// Keyed by device config key so each device's tuning is independent.
+/// Set a temporary colour override for a panel profile (dev colour tuning).
+///
+/// Keyed by panel, not device: a calibration belongs to the panel profile, so
+/// every device using it picks the override up on its next poll. In memory
+/// only — `POST .../save` (below) is what makes a calibration durable.
 pub async fn handle_set_panel_colors(
     State(state): State<AppState>,
+    axum::extract::Path(panel): axum::extract::Path<String>,
     Json(body): Json<PanelColorsRequest>,
+) -> Result<StatusCode, ApiError> {
+    require_known_panel(&state, &panel)?;
+    state
+        .dev_overrides
+        .panel_colors
+        .write()
+        .await
+        .insert(panel, body.colors_actual);
+    Ok(StatusCode::OK)
+}
+
+/// Remove a panel's temporary colour override, reverting to `config.yaml`.
+pub async fn handle_delete_panel_colors(
+    State(state): State<AppState>,
+    axum::extract::Path(panel): axum::extract::Path<String>,
 ) -> StatusCode {
     state
         .dev_overrides
         .panel_colors
         .write()
         .await
-        .insert(body.device, body.colors_actual);
+        .remove(&panel);
     StatusCode::OK
 }
 
-/// Remove color overrides for a device, reverting to config.yaml values
-pub async fn handle_delete_panel_colors(
-    State(state): State<AppState>,
-    axum::extract::Path(device): axum::extract::Path<String>,
-) -> StatusCode {
-    state
-        .dev_overrides
-        .panel_colors
-        .write()
-        .await
-        .remove(&device);
-    StatusCode::OK
+/// Guard: an override for a panel that does not exist could never be read
+/// back, because the lookup is by resolved panel key. Refuse it rather than
+/// storing it where nothing will find it.
+fn require_known_panel(state: &AppState, panel: &str) -> Result<(), ApiError> {
+    if state.config.load().get_panel(panel).is_some() {
+        Ok(())
+    } else {
+        Err(ApiError::NotFound)
+    }
 }
 
 /// Render a screen and return PNG
@@ -859,14 +875,16 @@ pub async fn handle_render(
 /// `nest` semantics — nothing at `/dev/`; `server::build_router` registers
 /// that explicitly, outside this nest, wearing the same `require_dev` layer.
 pub fn dev_router(state: &AppState) -> Router<AppState> {
-    use axum::routing::{delete, get, post};
+    use axum::routing::{get, put};
     let api = Router::new()
         .route("/screens", get(handle_screens))
         .route("/events", get(handle_events))
         .route("/render", get(handle_render))
         .route("/resolve-mac", get(handle_resolve_mac))
-        .route("/panel-colors", post(handle_set_panel_colors))
-        .route("/panel-colors/{panel}", delete(handle_delete_panel_colors))
+        .route(
+            "/panel-colors/{panel}",
+            put(handle_set_panel_colors).delete(handle_delete_panel_colors),
+        )
         .route("/whoami", get(crate::api::dev_auth::whoami))
         .merge(crate::api::dev_files::files_router());
     let protected = Router::new()

@@ -12,7 +12,7 @@ use super::headers::HeaderMapExt;
 use crate::error::ApiError;
 use crate::models::{
     normalize_algorithm_name, verify_ed25519_signature, ApiKey, AppConfig, Device, DeviceId,
-    DisplaySpec, DitherTuningValues,
+    DisplaySpec, DitherTuningValues, PanelConfig,
 };
 use crate::server::DevOverrides;
 
@@ -445,6 +445,46 @@ pub fn resolve_render_params(
     }
 }
 
+/// Resolve a device's panel profile, returning the profile, its **config key**
+/// and a human-readable source label.
+///
+/// The key is what dev colour overrides are keyed by (`DevOverrides::panel_colors`),
+/// so it must be the `config.panels` map key and not the profile's display name.
+pub fn resolve_panel<'a>(
+    config: &'a AppConfig,
+    device_config_panel: Option<&str>,
+    board_header: Option<&str>,
+    model_str: &str,
+) -> (Option<&'a PanelConfig>, Option<String>, Option<String>) {
+    if let Some(panel_name) = device_config_panel {
+        return match config.get_panel(panel_name) {
+            Some(p) => (
+                Some(p),
+                Some(panel_name.to_string()),
+                Some(format!("device_config:{panel_name}")),
+            ),
+            None => (None, None, None),
+        };
+    }
+    if let Some((name, p)) = board_header.and_then(|b| config.find_panel_for_board(b)) {
+        return (
+            Some(p),
+            Some(name.to_string()),
+            Some(format!("board_header:{name}")),
+        );
+    }
+    // Some devices (e.g. reTerminal E1004) report their panel identity in the
+    // `Model` header rather than `Board`; fall back to matching against it.
+    if let Some((name, p)) = config.find_panel_for_board(model_str) {
+        return (
+            Some(p),
+            Some(name.to_string()),
+            Some(format!("model_header:{name}")),
+        );
+    }
+    (None, None, None)
+}
+
 /// Get display content for a device
 ///
 /// Returns JSON with an image_url that the device should fetch separately.
@@ -786,30 +826,19 @@ pub async fn handle_display<R: DeviceRegistry>(
     let device_config_panel = device_config.and_then(|dc| dc.panel.clone());
     let device_config_colors = device_config.and_then(|dc| dc.colors.clone());
 
-    let (panel, panel_source) = if let Some(ref panel_name) = device_config_panel {
-        if let Some(p) = config.get_panel(panel_name) {
-            (Some(p), Some(format!("device_config:{}", panel_name)))
-        } else {
-            (None, None)
-        }
-    } else if let Some((name, p)) = board_header
-        .as_deref()
-        .and_then(|b| config.find_panel_for_board(b))
-    {
-        (Some(p), Some(format!("board_header:{}", name)))
-    } else if let Some((name, p)) = config.find_panel_for_board(model_str) {
-        // Some devices (e.g. reTerminal E1004) report their panel identity in the
-        // `Model` header rather than `Board`; fall back to matching against it.
-        (Some(p), Some(format!("model_header:{}", name)))
-    } else {
-        (None, None)
-    };
+    let (panel, panel_key, panel_source) = resolve_panel(
+        &config,
+        device_config_panel.as_deref(),
+        board_header.as_deref(),
+        model_str,
+    );
 
-    // Resolve measured colors: dev override > panel.colors_actual > Measured-Colors header > None
-    // Dev overrides are keyed by device config key (not panel name) so each device
-    // can be tuned independently even when sharing the same panel profile.
+    // Resolve measured colors: dev override > panel.colors_actual >
+    // Measured-Colors header > None. Dev overrides are keyed by PANEL config
+    // key, because a calibration belongs to the panel profile: every device
+    // using that profile shares it. (2026-09-10 colour-tuning amendment.)
     let measured_colors_header = headers.get_str("Measured-Colors").map(|s| s.to_string());
-    let override_colors = if let Some(ref key) = device_entry_key {
+    let override_colors = if let Some(ref key) = panel_key {
         dev_overrides.panel_colors.read().await.get(key).cloned()
     } else {
         None
@@ -1410,6 +1439,46 @@ pub struct DisplayJsonResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_panel_reports_the_config_key_in_every_branch() {
+        // `AppConfig` derives `Deserialize`, so YAML is the shortest honest
+        // way to build one — and it exercises the same parse the server uses.
+        let config: AppConfig = serde_yaml::from_str(
+            "\
+panels:
+  e1004:
+    name: reTerminal E1004
+    match: e1004
+    colors: '#000000,#FFFFFF'
+",
+        )
+        .expect("fixture config parses");
+
+        // (a) the device names the panel
+        let (p, key, src) = resolve_panel(&config, Some("e1004"), None, "");
+        assert!(p.is_some());
+        assert_eq!(key.as_deref(), Some("e1004"));
+        assert_eq!(src.as_deref(), Some("device_config:e1004"));
+
+        // (b) the Board header matches
+        let (p, key, src) = resolve_panel(&config, None, Some("e1004"), "");
+        assert!(p.is_some());
+        assert_eq!(key.as_deref(), Some("e1004"));
+        assert_eq!(src.as_deref(), Some("board_header:e1004"));
+
+        // (c) the Model header matches
+        let (p, key, src) = resolve_panel(&config, None, None, "e1004");
+        assert!(p.is_some());
+        assert_eq!(key.as_deref(), Some("e1004"));
+        assert_eq!(src.as_deref(), Some("model_header:e1004"));
+
+        // (d) nothing matches
+        let (p, key, src) = resolve_panel(&config, None, None, "unknown");
+        assert!(p.is_none());
+        assert_eq!(key, None);
+        assert_eq!(src, None);
+    }
 
     #[test]
     fn temperature_profile_defaults_when_unset() {

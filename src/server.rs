@@ -30,12 +30,14 @@ use crate::services::{
 
 /// Runtime overrides set by the dev GUI and consumed by production handlers.
 ///
-/// Both maps are keyed by **device config key** (the key from `config.devices`)
-/// so that each device can be tuned independently, even when multiple devices
-/// share the same panel profile.
+/// `panel_colors` is keyed by **panel config key** (the key from
+/// `config.panels`): a calibration belongs to the panel profile, so every
+/// device sharing that profile picks it up. `dither` and `tuning` stay keyed
+/// by **device config key** (the key from `config.devices`), so each device's
+/// dither tuning remains independent even when devices share a panel.
 #[derive(Clone, Default)]
 pub struct DevOverrides {
-    /// device_config_key → overridden `colors_actual` string (from color-tuning popup).
+    /// panel_config_key → overridden `colors_actual` string (from color-tuning popup).
     pub panel_colors: Arc<RwLock<HashMap<String, String>>>,
     /// device_config_key → dither algorithm string (from dither dropdown).
     pub dither: Arc<RwLock<HashMap<String, String>>>,

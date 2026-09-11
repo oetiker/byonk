@@ -71,6 +71,91 @@ describe("conflict handling", () => {
     expect(editor.conflict).toBeNull();
   });
 
+  // --- Review finding 1: conflict clobber race ------------------------------
+  //
+  // resolveReload()/resolveOverwrite() capture `const c = this.conflict` on
+  // entry but null `this.conflict` unconditionally on success. If a fresh
+  // conflict for a DIFFERENT file arrives from the watcher while the first
+  // resolve is still awaiting its own network call, the fresh conflict gets
+  // silently clobbered by the first resolve's completion -- the second
+  // file's banner vanishes with no notification, even though that buffer is
+  // still dirty and out of sync with disk.
+  describe("resolving one conflict must not clobber a different one raised in the meantime", () => {
+    it("resolveReload: a fresh conflict raised mid-await survives the in-flight reload's completion", async () => {
+      // Tab A: open, dirty, conflicted via the watcher.
+      vi.spyOn(api, "readFile").mockResolvedValue({ text: "disk-a", etag: '"1"' });
+      await editor.open("local/a", "a.lua");
+      editor.setText("mine-a");
+      editor.onFileChange({ ref: "local/a", name: "a.lua" });
+      expect(editor.conflict).toMatchObject({ ref: "local/a", name: "a.lua" });
+
+      // Tab B: open and dirty, not yet conflicted.
+      vi.spyOn(api, "readFile").mockResolvedValue({ text: "disk-b", etag: '"1"' });
+      await editor.open("local/b", "b.lua");
+      editor.setText("mine-b");
+
+      // A's reload is now in flight, held open by a deferred readFile so a
+      // second conflict can be interleaved mid-await.
+      let releaseReadFile;
+      const deferred = new Promise((resolve) => {
+        releaseReadFile = () => resolve({ text: "theirs-a", etag: '"2"' });
+      });
+      vi.spyOn(api, "readFile").mockReturnValue(deferred);
+
+      const reloadPromise = editor.resolveReload();
+
+      // While A's reload is still awaiting readFile, the watcher reports B.
+      editor.onFileChange({ ref: "local/b", name: "b.lua" });
+      expect(editor.conflict).toMatchObject({ ref: "local/b", name: "b.lua" });
+
+      // Let A's reload complete.
+      releaseReadFile();
+      await reloadPromise;
+
+      // A's own reload must have gone through...
+      const tabA = editor.tabs.find((t) => t.ref === "local/a");
+      expect(tabA.text).toBe("theirs-a");
+      expect(tabA.dirty).toBe(false);
+      // ...but B's banner, which A's completion did not raise and is not
+      // resolving, must survive.
+      expect(editor.conflict).toMatchObject({ ref: "local/b", name: "b.lua" });
+    });
+
+    it("resolveOverwrite: a fresh conflict raised mid-await survives the in-flight overwrite's completion", async () => {
+      vi.spyOn(api, "readFile").mockResolvedValue({ text: "disk-a", etag: '"1"' });
+      await editor.open("local/a", "a.lua");
+      editor.setText("mine-a");
+      editor.onFileChange({ ref: "local/a", name: "a.lua" });
+      expect(editor.conflict).toMatchObject({ ref: "local/a", name: "a.lua" });
+
+      vi.spyOn(api, "readFile").mockResolvedValue({ text: "disk-b", etag: '"1"' });
+      await editor.open("local/b", "b.lua");
+      editor.setText("mine-b");
+
+      let releaseReadFile;
+      const deferred = new Promise((resolve) => {
+        releaseReadFile = () => resolve({ text: "ignored-a", etag: '"2"' });
+      });
+      vi.spyOn(api, "readFile").mockReturnValue(deferred);
+      vi.spyOn(api, "writeFile").mockResolvedValue({ etag: '"3"' });
+
+      const overwritePromise = editor.resolveOverwrite();
+
+      editor.onFileChange({ ref: "local/b", name: "b.lua" });
+      expect(editor.conflict).toMatchObject({ ref: "local/b", name: "b.lua" });
+
+      releaseReadFile();
+      await overwritePromise;
+
+      // A's overwrite kept its own text and won, per Overwrite's contract...
+      const tabA = editor.tabs.find((t) => t.ref === "local/a");
+      expect(tabA.text).toBe("mine-a");
+      expect(tabA.dirty).toBe(false);
+      // ...but B's banner must survive A's completion.
+      expect(editor.conflict).toMatchObject({ ref: "local/b", name: "b.lua" });
+    });
+  });
+
   // --- Ruling 37: onFileChange must respect dirty ---------------------------
   //
   // The brief's own test only ever calls onFileChange on a DIRTY buffer

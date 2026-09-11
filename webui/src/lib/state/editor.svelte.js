@@ -227,7 +227,14 @@ class Editor {
     if (!c) return;
     try {
       await this.replaceFromDisk(c.ref, c.name);
-      this.conflict = null;
+      // Only clear the conflict THIS call was resolving. A different file's
+      // conflict can arrive from the watcher while this await is in
+      // flight (onFileChange runs synchronously and overwrites
+      // `this.conflict` the moment it's raised) -- nulling unconditionally
+      // here would silently clobber that fresh banner with no notification,
+      // even though its buffer is still dirty and out of sync with disk
+      // (review finding 1, fix round 2).
+      if (this.conflict === c) this.conflict = null;
     } catch (e) {
       // Leave `conflict` up so the banner (and its buttons) stay available
       // to retry -- same reasoning as the old UI's reload.onclick catch.
@@ -248,7 +255,7 @@ class Editor {
     if (!c) return;
     const t = this.tabs.find((x) => x.ref === c.ref && x.name === c.name);
     if (!t) {
-      this.conflict = null;
+      if (this.conflict === c) this.conflict = null;
       return;
     }
     try {
@@ -256,7 +263,11 @@ class Editor {
       const res = await api.writeFile(c.ref, c.name, t.text, etag);
       t.etag = res.etag;
       t.saved = t.text;
-      this.conflict = null;
+      // Same guard as resolveReload() above, same reason: a different
+      // file's fresh conflict can arrive from the watcher while the
+      // readFile/writeFile round trip above is in flight, and must not be
+      // clobbered by THIS call's completion (review finding 1, fix round 2).
+      if (this.conflict === c) this.conflict = null;
     } catch (e) {
       this.error = { op: "overwrite", message: e.message };
     }

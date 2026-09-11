@@ -3,18 +3,18 @@ import { render, cleanup, screen } from "@testing-library/svelte";
 import { flushSync } from "svelte";
 import * as api from "../src/lib/api.js";
 import { editor } from "../src/lib/state/editor.svelte.js";
-import { screens } from "../src/lib/state/screens.svelte.js";
-import { simulate } from "../src/lib/state/simulate.svelte.js";
-import { tune } from "../src/lib/state/tune.svelte.js";
 import StatusBar from "../src/lib/components/StatusBar.svelte";
+
+// StatusBar is scoped to exactly what spec §1's table names for the
+// Editor's own status bar: validity, cursor position, watch state. The
+// four captured-error fields (editor.error/screens.error/simulate.error/
+// tune.error) and tune.pushed moved to StatusStrip (AppShell-level,
+// review finding 2 / "Ruling 49") -- see statusstrip.test.js for those.
 
 beforeEach(() => {
   cleanup();
   vi.restoreAllMocks();
   editor.reset();
-  screens.error = null;
-  simulate.error = null;
-  tune.reset();
 });
 
 afterEach(() => {
@@ -62,63 +62,9 @@ describe("StatusBar", () => {
     expect(screen.getByText(/watch: connected/)).toBeTruthy();
   });
 
-  // --- Rulings 20, 39, 41/43, tune amendment: render every captured error ---
-  //
-  // Each of these was captured by an earlier task onto a store field and
-  // never read by anything -- a captured-but-never-displayed error is worse
-  // than the unhandled rejection it replaced, because it looks handled.
-  it("renders a save failure from editor.error (Ruling 39)", () => {
-    editor.error = { op: "save", message: "disk full" };
+  it("does not render any of the error/override fields -- those live in StatusStrip now", () => {
+    editor.error = { op: "save", message: "should-not-appear-here" };
     render(StatusBar);
-    expect(screen.getByText(/disk full/)).toBeTruthy();
-  });
-
-  it("renders a failed file operation from screens.error (Ruling 20)", () => {
-    screens.error = { op: "rename", message: "name already exists" };
-    render(StatusBar);
-    expect(screen.getByText(/rename/)).toBeTruthy();
-    expect(screen.getByText(/name already exists/)).toBeTruthy();
-  });
-
-  it("renders a failed render from simulate.error (Rulings 41, 43)", () => {
-    simulate.error = { op: "render", message: "bad panel id" };
-    render(StatusBar);
-    expect(screen.getByText(/bad panel id/)).toBeTruthy();
-  });
-
-  it("renders a failed tune operation from tune.error (tune amendment)", () => {
-    tune.error = { op: "push", message: "server unreachable" };
-    render(StatusBar);
-    expect(screen.getByText(/push/)).toBeTruthy();
-    expect(screen.getByText(/server unreachable/)).toBeTruthy();
-  });
-
-  it("renders all four error surfaces at once, none clobbering another", () => {
-    editor.error = { op: "save", message: "save-msg" };
-    screens.error = { op: "delete", message: "screens-msg" };
-    simulate.error = { op: "render", message: "simulate-msg" };
-    tune.error = { op: "save", message: "tune-msg" };
-
-    render(StatusBar);
-
-    expect(screen.getByText(/save-msg/)).toBeTruthy();
-    expect(screen.getByText(/screens-msg/)).toBeTruthy();
-    expect(screen.getByText(/simulate-msg/)).toBeTruthy();
-    expect(screen.getByText(/tune-msg/)).toBeTruthy();
-  });
-
-  it("warns when a panel colour override is live and nobody may be watching (tune.pushed)", () => {
-    tune.panel = "e1004";
-    tune.pushed = true;
-
-    render(StatusBar);
-
-    expect(screen.getByText(/override live on e1004/)).toBeTruthy();
-  });
-
-  it("shows no override warning when nothing is pushed", () => {
-    tune.pushed = false;
-    render(StatusBar);
-    expect(screen.queryByText(/override live/)).toBeNull();
+    expect(screen.queryByText(/should-not-appear-here/)).toBeNull();
   });
 });

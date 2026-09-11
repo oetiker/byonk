@@ -3,6 +3,7 @@
   import IconRail from "./IconRail.svelte";
   import SplitPane from "./SplitPane.svelte";
   import ConflictBanner from "./ConflictBanner.svelte";
+  import StatusStrip from "./StatusStrip.svelte";
   import { layout } from "../state/layout.svelte.js";
   import { editor } from "../state/editor.svelte.js";
   import * as api from "../api.js";
@@ -125,6 +126,7 @@
 
 <div class="flex h-full flex-col bg-[var(--bg-color)] text-[var(--text-color)]">
   <ConflictBanner />
+  <StatusStrip />
   <div class="flex min-h-0 flex-1">
     <IconRail />
 

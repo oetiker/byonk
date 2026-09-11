@@ -359,6 +359,10 @@ pub struct PanelColorsRequest {
 /// Keyed by panel, not device: a calibration belongs to the panel profile, so
 /// every device using it picks the override up on its next poll. In memory
 /// only — `POST .../save` (below) is what makes a calibration durable.
+///
+/// Note: this does NOT refresh a tuning session. The override is keyed by
+/// panel and a session by device, and one panel may have several. The client
+/// re-PUTs its own session alongside each push (spec §3).
 pub async fn handle_set_panel_colors(
     State(state): State<AppState>,
     axum::extract::Path(panel): axum::extract::Path<String>,
@@ -397,6 +401,37 @@ fn require_known_panel(state: &AppState, panel: &str) -> Result<(), ApiError> {
     } else {
         Err(ApiError::NotFound)
     }
+}
+
+/// Start or refresh a tuning session for a device.
+///
+/// Idempotent: a repeat PUT is how the dev UI keeps the session alive while a
+/// calibration is in progress.
+pub async fn handle_start_tuning_session(
+    State(state): State<AppState>,
+    axum::extract::Path(device): axum::extract::Path<String>,
+) -> StatusCode {
+    state
+        .dev_overrides
+        .tuning_sessions
+        .write()
+        .await
+        .insert(device, std::time::Instant::now());
+    StatusCode::OK
+}
+
+/// End a tuning session, handing the device its normal refresh rate back.
+pub async fn handle_end_tuning_session(
+    State(state): State<AppState>,
+    axum::extract::Path(device): axum::extract::Path<String>,
+) -> StatusCode {
+    state
+        .dev_overrides
+        .tuning_sessions
+        .write()
+        .await
+        .remove(&device);
+    StatusCode::OK
 }
 
 /// Render a screen and return PNG
@@ -884,6 +919,10 @@ pub fn dev_router(state: &AppState) -> Router<AppState> {
         .route(
             "/panel-colors/{panel}",
             put(handle_set_panel_colors).delete(handle_delete_panel_colors),
+        )
+        .route(
+            "/tuning-session/{device}",
+            put(handle_start_tuning_session).delete(handle_end_tuning_session),
         )
         .route("/whoami", get(crate::api::dev_auth::whoami))
         .merge(crate::api::dev_files::files_router());

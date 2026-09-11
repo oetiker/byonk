@@ -11,6 +11,7 @@ use axum::{
 };
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tower_http::{
     set_header::SetResponseHeaderLayer,
@@ -43,6 +44,38 @@ pub struct DevOverrides {
     pub dither: Arc<RwLock<HashMap<String, String>>>,
     /// device_config_key → dither tuning values.
     pub tuning: Arc<RwLock<HashMap<String, DitherTuningValues>>>,
+    /// device_config_key → when the dev UI last touched this tuning session.
+    ///
+    /// Present and fresh ⇒ `/api/display` answers `TUNING_REFRESH_SECS` for
+    /// that device. Expiry is lazy (see `tuning_session_active`), so there is
+    /// no background task to schedule, leak or shut down.
+    pub tuning_sessions: Arc<RwLock<HashMap<String, Instant>>>,
+}
+
+/// Refresh rate answered to a device with a live tuning session, in seconds.
+///
+/// Sixty, not less: a six-colour panel needs most of a minute to repaint, and
+/// the person calibrating it needs time to look at the result before it goes
+/// again.
+pub const TUNING_REFRESH_SECS: u32 = 60;
+
+/// How long a tuning session survives without being touched.
+///
+/// The backstop for a closed lid or a crashed tab. A battery-powered device
+/// must not be left repainting every minute until byonk restarts.
+pub const TUNING_SESSION_TTL: Duration = Duration::from_secs(30 * 60);
+
+/// Is a tuning session live for `device_key`? Drops the entry if it has expired.
+pub async fn tuning_session_active(overrides: &DevOverrides, device_key: &str) -> bool {
+    let mut sessions = overrides.tuning_sessions.write().await;
+    match sessions.get(device_key) {
+        Some(touched) if touched.elapsed() < TUNING_SESSION_TTL => true,
+        Some(_) => {
+            sessions.remove(device_key);
+            false
+        }
+        None => false,
+    }
 }
 
 /// Custom span maker that adds a unique request ID to each request's tracing span.
@@ -576,5 +609,43 @@ mod reload_tests {
             state.config.load().default_device_screen(),
             Some("sentinel")
         );
+    }
+}
+
+#[cfg(test)]
+mod tuning_session_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_stale_tuning_session_expires_and_is_dropped() {
+        let overrides = DevOverrides::default();
+        let stale = Instant::now()
+            .checked_sub(TUNING_SESSION_TTL + Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        overrides
+            .tuning_sessions
+            .write()
+            .await
+            .insert("kitchen".to_string(), stale);
+
+        assert!(!tuning_session_active(&overrides, "kitchen").await);
+        assert!(
+            overrides.tuning_sessions.read().await.is_empty(),
+            "a stale entry must be removed, not merely ignored — otherwise the \
+             map grows for the life of the process"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fresh_tuning_session_is_active_and_kept() {
+        let overrides = DevOverrides::default();
+        overrides
+            .tuning_sessions
+            .write()
+            .await
+            .insert("kitchen".to_string(), Instant::now());
+
+        assert!(tuning_session_active(&overrides, "kitchen").await);
+        assert!(!overrides.tuning_sessions.read().await.is_empty());
     }
 }

@@ -14,7 +14,7 @@ use crate::models::{
     normalize_algorithm_name, verify_ed25519_signature, ApiKey, AppConfig, Device, DeviceId,
     DisplaySpec, DitherTuningValues, PanelConfig,
 };
-use crate::server::DevOverrides;
+use crate::server::{tuning_session_active, DevOverrides, TUNING_REFRESH_SECS};
 
 /// Filename that makes TRMNL firmware run a full-panel wipe instead of
 /// displaying the image. Recognised in `bl.cpp` right after the display
@@ -1253,9 +1253,28 @@ pub async fn handle_display<R: DeviceRegistry>(
     // rate back.
     let recovery_active = wipe.is_some() || recovery.get(&recovery_device_id).await.is_some();
     let refresh_rate = if recovery_active {
+        // A tuning session must lose to recovery, never win over it: recovery
+        // is checked and applied first, and the tuning check below only runs
+        // when recovery isn't active.
         crate::services::RECOVERY_REFRESH_RATE_SECS
     } else {
-        refresh_rate
+        // A live tuning session shortens this device's cadence so a colour
+        // calibration iterates in a minute. This deliberately overrides
+        // `resolve_refresh_rate`'s rule that the screen owns its own cadence:
+        // during a calibration the thing changing the content is a person
+        // with a slider. Narrow (one device), bounded (TUNING_SESSION_TTL)
+        // and logged.
+        match device_entry_key.as_deref() {
+            Some(key) if tuning_session_active(&dev_overrides, key).await => {
+                tracing::info!(
+                    device = key,
+                    refresh_rate = TUNING_REFRESH_SECS,
+                    "tuning session active — shortening refresh rate"
+                );
+                TUNING_REFRESH_SECS
+            }
+            _ => refresh_rate,
+        }
     };
 
     // Return JSON response

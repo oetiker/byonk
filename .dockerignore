@@ -46,9 +46,12 @@ Thumbs.db
 # binary whose built-in documentation is empty. Silent, so keep the negation.
 !docs/src/**/*.md
 
-# The committed editor.bundle.js is what the build uses; its 17 MB of
-# node_modules only bloats the build context.
-static/dev/editor/node_modules/
+# static/dev/editor/ was the hand-written UI's CodeMirror build tooling,
+# deleted from git in Task 12. Nothing in the build uses it any more, but its
+# node_modules/ and dist/ are untracked local build artifacts that git rm
+# cannot remove -- left for the maintainer to clean up, not for us to delete
+# -- so exclude the directory wholesale rather than one stale subpath.
+static/dev/editor/
 
 # The webui Node stage does its own `pnpm install` and `pnpm build` inside
 # the image (COPY webui ./webui); a developer's local node_modules

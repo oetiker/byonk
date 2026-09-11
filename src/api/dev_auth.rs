@@ -218,7 +218,7 @@ fn admit(state: &AppState, request: &Request) -> Result<DevPrincipal, StatusCode
 /// `/`, original path not ending in `/`) is detected and redirected here.
 /// The check is scoped to the nest root (`request.uri().path() == "/"`)
 /// rather than "doesn't end in `/`" generally — Task 4 serves static
-/// assets like `/dev/dev.js` through this same layer, and none of those
+/// assets like `/dev/app.js` through this same layer, and none of those
 /// end in `/` either; redirecting them would 404 the dev UI's own scripts.
 ///
 /// The redirect only fires when the dev UI is visible at all: admitted, or

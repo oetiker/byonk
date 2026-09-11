@@ -52,6 +52,10 @@ beforeEach(() => {
 describe("TunePane", () => {
   it("shows one swatch per colour once a panel is chosen", async () => {
     render(TunePane);
+    // Before selection: a component that rendered every swatch regardless
+    // of panel choice would pass the assertion below unchanged, so assert
+    // the absence first.
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
     await fireEvent.change(screen.getByLabelText("Panel"), { target: { value: "e1004" } });
     expect(screen.getAllByRole("radio")).toHaveLength(3);
   });
@@ -106,6 +110,27 @@ describe("TunePane", () => {
     expect(push).toHaveBeenCalled();
     expect(save).toHaveBeenCalled();
     expect(discard).toHaveBeenCalled();
+  });
+
+  it("dragging a slider or editing the hex box never calls push (Push is a button, not a debounce)", async () => {
+    // Spec §1: the old popup pushed on a 300ms debounce; that is wrong now
+    // because a push drives a battery-powered device into a 60s refresh, so
+    // dragging a slider (or typing a hex value) must never call tune.push()
+    // on its own -- only the Push button may. Covers both input paths
+    // separately, since they are wired through two different effects/
+    // handlers in the component.
+    const push = vi.spyOn(tune, "push").mockResolvedValue();
+    render(TunePane);
+    await fireEvent.change(screen.getByLabelText("Panel"), { target: { value: "e1004" } });
+    await fireEvent.click(screen.getAllByRole("radio")[2]);
+
+    await fireEvent.input(screen.getByLabelText("Hue"), { target: { value: "10" } });
+    await fireEvent.input(screen.getByLabelText("Saturation"), { target: { value: "20" } });
+    await fireEvent.input(screen.getByLabelText("Lightness"), { target: { value: "30" } });
+    await fireEvent.input(screen.getByLabelText("Hex"), { target: { value: "112233" } });
+    await tick();
+
+    expect(push).not.toHaveBeenCalled();
   });
 
   it("releases the server-side override when it unmounts", async () => {

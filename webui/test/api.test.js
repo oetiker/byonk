@@ -143,6 +143,17 @@ describe("api", () => {
         expectedUrl: "api/events",
         isStringBuilder: true,
       },
+      {
+        // Ruling 63: the SPA never called this at all. `/logout` is a
+        // sibling of `/dev`, not `/dev/api/...` (dev_auth_router() merges
+        // it into the nest root, unlike whoami/screens/etc which live
+        // under `/api` -- see src/api/dev.rs's dev_router()), so the
+        // relative URL is "logout", not "api/logout".
+        name: "logout",
+        call: () => api.logout(),
+        expectedUrl: "logout",
+        expectedMethod: "POST",
+      },
     ];
 
     // Mock factory: store the current entry so the mock can respond accordingly

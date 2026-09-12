@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, cleanup, fireEvent } from "@testing-library/svelte";
 import { flushSync } from "svelte";
 import * as api from "../src/lib/api.js";
@@ -36,6 +36,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   lastOpts = null;
   editor.reset();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("EditorPane", () => {
@@ -156,6 +160,81 @@ describe("EditorPane", () => {
 
     await fireEvent.click(save);
     expect(trySaveSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // --- Ruling 64: syntax checking must actually reach the gutter ----------
+  //
+  // `editor.svelte.js`'s `check()` existed and worked; NOTHING ever called
+  // it. These pin the fix at the level where the actual defect lived: this
+  // component's `onChange` wiring, not the store or codemirror.js (both of
+  // which were already individually correct -- see editor.test.js's own
+  // Ruling-64 coverage for that half).
+  describe("syntax checking (Ruling 64)", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    it("debounces a check() call after typing, which reaches CodeMirror's setDiagnostics", async () => {
+      vi.spyOn(api, "readFile").mockResolvedValue({ text: "ok", etag: '"1"' });
+      await editor.open("local/a", "script.lua");
+      vi.spyOn(api, "checkFile").mockResolvedValue({
+        ok: false,
+        issues: [{ severity: "error", location: "script.lua", message: "boom", line: 1 }],
+      });
+
+      render(EditorPane);
+      flushSync();
+      cmMock.setDiagnostics.mockClear();
+
+      lastOpts.onChange("bad lua");
+      flushSync();
+      // Not yet -- still inside the debounce window.
+      expect(cmMock.setDiagnostics).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1000);
+      flushSync();
+
+      expect(editor.active.issues).toHaveLength(1);
+      expect(cmMock.setDiagnostics).toHaveBeenLastCalledWith(editor.active.issues);
+    });
+
+    it("keys the debounce per tab -- switching tabs must not cancel a pending check for the tab that was actually edited", async () => {
+      // The old hand-written UI (static/dev/dev.js's `scheduleCheck`) kept
+      // ONE shared timer for every open file: editing file A then switching
+      // to file B within the debounce window cancelled A's pending check
+      // outright (`clearTimeout(checkTimer)` has no idea which file it was
+      // scheduled for). That is a real defect, not a style choice -- worth
+      // fixing here rather than porting faithfully.
+      vi.spyOn(api, "readFile").mockResolvedValue({ text: "ok", etag: '"1"' });
+      await editor.open("local/a", "one.lua");
+      await editor.open("local/a", "two.lua");
+      const checkFileSpy = vi
+        .spyOn(api, "checkFile")
+        .mockResolvedValue({ ok: false, issues: [{ severity: "error", message: "boom", line: 1 }] });
+
+      const oneLua = editor.tabs.find((t) => t.name === "one.lua");
+      const twoLua = editor.tabs.find((t) => t.name === "two.lua");
+      editor.activeIndex = editor.tabs.indexOf(oneLua);
+
+      render(EditorPane);
+      flushSync();
+
+      lastOpts.onChange("bad one"); // edits one.lua, schedules its check
+
+      editor.activeIndex = editor.tabs.indexOf(twoLua); // switch away within the window
+      flushSync();
+      lastOpts.onChange("bad two"); // edits two.lua, schedules ITS OWN check
+
+      await vi.advanceTimersByTimeAsync(1000);
+      flushSync();
+
+      // Both files' checks must have gone through -- neither cancelled the
+      // other's.
+      expect(checkFileSpy).toHaveBeenCalledWith(oneLua.ref, "one.lua", "bad one");
+      expect(checkFileSpy).toHaveBeenCalledWith(twoLua.ref, "two.lua", "bad two");
+      expect(oneLua.issues).toHaveLength(1);
+      expect(twoLua.issues).toHaveLength(1);
+    });
   });
 
   it("passes onCursor to createEditor, wired to editor.setCursor() (spec §1 status bar)", async () => {

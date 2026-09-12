@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 // The brief's code block imports `fireEvent` from "@testing-library/dom"
 // directly; that package is only a transitive dependency here (pulled in by
 // @testing-library/svelte), and pnpm's strict node-linker refuses to
@@ -10,6 +10,7 @@ import { render, screen, fireEvent, cleanup } from "@testing-library/svelte";
 import IconRail from "../src/lib/components/IconRail.svelte";
 import { layout, PANELS } from "../src/lib/state/layout.svelte.js";
 import { theme } from "../src/lib/state/theme.svelte.js";
+import { auth } from "../src/lib/state/auth.svelte.js";
 
 beforeEach(() => {
   // The brief's beforeEach resets localStorage and the layout store but
@@ -23,6 +24,7 @@ beforeEach(() => {
   localStorage.clear();
   layout.reset();
   theme.reset();
+  auth.reset();
 });
 
 describe("IconRail", () => {
@@ -90,5 +92,39 @@ describe("IconRail", () => {
     render(IconRail);
     expect(layout.isOpen("editor")).toBe(false);
     expect(screen.getByRole("button", { name: /theme/i })).toBeInTheDocument();
+  });
+
+  // Ruling 63: the rewrite dropped Logout outright -- `can_logout` in
+  // `whoami`'s response (src/api/dev_auth.rs) exists for exactly one
+  // purpose, telling this UI whether to render the control. Both
+  // directions are pinned, not just the positive case: under Home
+  // Assistant Ingress `can_logout` is false and Task 14 Step 3 item 3
+  // requires that NO Logout control renders at all.
+  //
+  // Mounted alongside the theme switch, inside the same `mt-auto` group --
+  // IconRail is the one piece of chrome no panel toggle can unmount
+  // (Ruling 49/52's reasoning applies here just as much as it did to the
+  // theme switch).
+  it("renders no Logout control when can_logout is false (e.g. Ingress)", () => {
+    auth.canLogout = false;
+    render(IconRail);
+    expect(screen.queryByRole("button", { name: /logout/i })).toBeNull();
+  });
+
+  it("renders a Logout control when can_logout is true, reachable with every panel closed", () => {
+    for (const p of PANELS) {
+      if (layout.isOpen(p)) layout.toggle(p);
+    }
+    auth.canLogout = true;
+    render(IconRail);
+    expect(screen.getByRole("button", { name: /logout/i })).toBeInTheDocument();
+  });
+
+  it("clicking Logout calls auth.logout()", async () => {
+    auth.canLogout = true;
+    const logoutSpy = vi.spyOn(auth, "logout").mockResolvedValue();
+    render(IconRail);
+    await fireEvent.click(screen.getByRole("button", { name: /logout/i }));
+    expect(logoutSpy).toHaveBeenCalledTimes(1);
   });
 });

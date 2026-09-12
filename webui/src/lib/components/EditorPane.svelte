@@ -19,12 +19,50 @@
     return null;
   }
 
+  // Ruling 64: nothing ever called `editor.check()`, so the lint gutter
+  // (codemirror.js's `lintGutter()`) rendered but stayed permanently empty.
+  // A debounce while typing -- not a check on every keystroke (each one is
+  // a server round trip, api/screen/check), and not check-only-on-save
+  // (Task 14's own walkthrough shows the error marker appearing BEFORE the
+  // fix-then-save step, so it has to surface from typing alone).
+  //
+  // Keyed PER TAB (a Map, not one shared timer): the old hand-written UI's
+  // `scheduleCheck` (static/dev/dev.js) kept a single `checkTimer` for
+  // every open file, so editing file A and then switching to file B within
+  // the debounce window silently cancelled A's pending check via
+  // `clearTimeout` -- A's gutter would then sit stale until its next
+  // keystroke. That is a real defect in the original, not a design choice
+  // worth reproducing here; a Map keyed by the tab's own identity lets two
+  // files' pending checks coexist.
+  const CHECK_DEBOUNCE_MS = 400;
+  const checkTimers = new Map();
+
+  function scheduleCheck(t) {
+    const key = t.ref + t.name;
+    clearTimeout(checkTimers.get(key));
+    checkTimers.set(
+      key,
+      setTimeout(() => {
+        checkTimers.delete(key);
+        editor.check(t);
+      }, CHECK_DEBOUNCE_MS),
+    );
+  }
+
   onMount(() => {
     cm = createEditor(host, {
       doc: editor.active?.text ?? "",
       language: languageOf(editor.active?.name),
       readOnly: editor.active?.readOnly ?? true,
-      onChange: (text) => editor.setText(text),
+      onChange: (text) => {
+        editor.setText(text);
+        // The tab being edited, captured NOW -- not re-read from
+        // `editor.active` inside the timeout, which could by then be a
+        // different tab if the user switched away during the debounce
+        // window (see the Map comment above).
+        const t = editor.active;
+        if (t) scheduleCheck(t);
+      },
       // Ruling 38: no brief in this plan wired a save action at all --
       // codemirror.js's Mod-s keymap was calling nothing. trySave() is
       // this store's own conflict-aware save, so wiring it straight through
@@ -32,7 +70,11 @@
       onSave: () => editor.trySave(),
       onCursor: (line, col) => editor.setCursor(line, col),
     });
-    return () => cm?.destroy();
+    return () => {
+      for (const id of checkTimers.values()) clearTimeout(id);
+      checkTimers.clear();
+      cm?.destroy();
+    };
   });
 
   // Swapping tabs replaces the document rather than rebuilding the view.

@@ -33,6 +33,38 @@ describe("editor store", () => {
     expect(editor.active.issues).toHaveLength(1); // still broken, just saved
   });
 
+  // Ruling 64, fix-round guard: the old hand-written UI's `scheduleCheck`
+  // (static/dev/dev.js, pre-rewrite) fired the check request and wrote its
+  // response straight into the editor with no staleness check at all. An
+  // async round trip started for an older buffer can resolve AFTER the
+  // user has typed further -- writing that stale response over the
+  // meanwhile-updated `issues` would show diagnostics for text the buffer
+  // no longer contains. `check()` must compare the buffer's CURRENT text
+  // against what it actually sent before applying a response.
+  it("discards a check() response if the buffer changed while the request was in flight", async () => {
+    vi.spyOn(api, "readFile").mockResolvedValue({ text: "a", etag: '"1"' });
+    await editor.open("local/a", "script.lua");
+
+    let resolveCheck;
+    vi.spyOn(api, "checkFile").mockImplementation(
+      () => new Promise((resolve) => (resolveCheck = resolve)),
+    );
+
+    const pending = editor.check(); // in flight, checking text "a"
+    editor.setText("b"); // the buffer moves on before the response arrives
+
+    resolveCheck({
+      ok: false,
+      issues: [{ severity: "error", location: "script.lua", message: "boom", line: 1 }],
+    });
+    await pending;
+
+    // The stale response (for "a") must not land now that the buffer reads
+    // "b" -- applying it would show a diagnostic for text that is no longer
+    // in the editor.
+    expect(editor.active.issues).toEqual([]);
+  });
+
   it("handles the tab lifecycle, including closing the active one", async () => {
     vi.spyOn(api, "readFile").mockResolvedValue({ text: "x", etag: '"1"' });
     await editor.open("local/a", "one.lua");
@@ -181,6 +213,39 @@ describe("createEditor onCursor", () => {
       expect(() => view.dispatch({ selection: { anchor: 1 } })).not.toThrow();
     } finally {
       destroy();
+    }
+  });
+});
+
+// Ruling 64: `editor.svelte.js`'s `check()` and `codemirror.js`'s
+// `setDiagnostics()` were each individually fine -- the defect was that
+// NOTHING called them together. This proves the two real modules (not
+// EditorPane's mock, see editorpane.test.js for the wiring-level proof)
+// actually connect: a syntax error reported by `check()` must show up as a
+// real CodeMirror diagnostic, not just as an entry in `editor.active.issues`.
+describe("editor.check() + real CodeMirror (Ruling 64)", () => {
+  it("a checked syntax error becomes a real CodeMirror diagnostic", async () => {
+    const { createEditor } = await import("../src/lib/codemirror.js");
+    const { diagnosticCount } = await import("@codemirror/lint");
+
+    vi.spyOn(api, "readFile").mockResolvedValue({ text: "bad lua", etag: '"1"' });
+    await editor.open("local/a", "script.lua");
+
+    const host = document.createElement("div");
+    const cm = createEditor(host, { doc: editor.active.text, language: "lua" });
+    try {
+      expect(diagnosticCount(cm.view.state)).toBe(0);
+
+      vi.spyOn(api, "checkFile").mockResolvedValue({
+        ok: false,
+        issues: [{ severity: "error", location: "script.lua", message: "boom", line: 1 }],
+      });
+      await editor.check();
+      cm.setDiagnostics(editor.active.issues); // EditorPane's own $effect does exactly this
+
+      expect(diagnosticCount(cm.view.state)).toBe(1);
+    } finally {
+      cm.destroy();
     }
   });
 });

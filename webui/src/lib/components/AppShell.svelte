@@ -7,6 +7,7 @@
   import { layout } from "../state/layout.svelte.js";
   import { theme } from "../state/theme.svelte.js";
   import { editor } from "../state/editor.svelte.js";
+  import { auth } from "../state/auth.svelte.js";
   import * as api from "../api.js";
 
   // Placeholders until Tasks 6-10 fill them in.
@@ -36,6 +37,14 @@
   // render, so a persisted explicit choice from a prior session is never
   // shown as "System" for one frame before flipping.
   theme.load();
+
+  // Who is looking, and whether IconRail should offer a way to log out
+  // (Ruling 63). Not awaited and not needed before first paint like
+  // layout/theme above -- `whoami` requires the caller to already be
+  // authenticated (it lives behind `require_dev`, which is what got this
+  // page served in the first place), so this is purely "fill in the
+  // control once the answer comes back", not a gate on rendering anything.
+  auth.load();
 
   let xSize = $state(layout.size("x"));
   let ySize = $state(layout.size("y"));

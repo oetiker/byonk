@@ -41,6 +41,20 @@ function qs(params) {
 }
 
 export const whoami = () => json("api/whoami");
+
+/**
+ * `POST /logout` (src/api/dev_auth.rs's `logout()`) is a sibling of `/dev`,
+ * not `/dev/api/...` -- `dev_auth_router()` merges it into the nest root
+ * alongside `/login`, deliberately outside `require_dev`, so the relative
+ * URL here is "logout", not "api/logout". The handler answers with a
+ * `Set-Cookie` clearing the session and a redirect to `login`; nothing in
+ * that body is needed here; only that the round trip actually happened.
+ */
+export async function logout() {
+  const res = await fetch("logout", { method: "POST" });
+  if (!res.ok) throw await fail(res);
+}
+
 export const listRepos = () => json("api/repos");
 export const listScreens = () => json("api/screens");
 export const listFiles = (ref) => json(`api/files?${qs({ ref })}`);

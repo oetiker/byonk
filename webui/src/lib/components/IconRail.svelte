@@ -1,6 +1,7 @@
 <script>
-  import { Files, Code, Palette, Monitor, SlidersHorizontal } from "@lucide/svelte";
+  import { Files, Code, Palette, Monitor, SlidersHorizontal, LogOut } from "@lucide/svelte";
   import { layout, PANELS } from "../state/layout.svelte.js";
+  import { auth } from "../state/auth.svelte.js";
   import ThemeSwitch from "./ThemeSwitch.svelte";
 
   const ICONS = {
@@ -43,10 +44,30 @@
     </button>
   {/each}
 
-  <!-- Ruling 52: grouped with the Shell in spec, mounted here because
-       IconRail is the only chrome no panel toggle can unmount -- it must
-       stay reachable with every panel, including the editor, closed. -->
-  <div class="mt-auto">
+  <!-- Ruling 52 (theme switch) / Ruling 63 (logout): both grouped with the
+       Shell in spec, mounted here because IconRail is the only chrome no
+       panel toggle can unmount -- either must stay reachable with every
+       panel, including the editor, closed, and in every legal panel
+       combination (Ruling 49). -->
+  <div class="mt-auto flex flex-col items-center gap-1">
+    {#if auth.canLogout}
+      <!-- Hidden outright, not disabled, when `can_logout` is false (e.g.
+           under Home Assistant Ingress or the admin bearer token) --
+           spec docs/superpowers/specs/2026-09-07-dev-mode-editor-design.md:360
+           and Task 14 Step 3 item 3 both require that no Logout control
+           renders at all in that case, not merely an inert one. -->
+      <button
+        type="button"
+        aria-label="Logout"
+        title={auth.user ? `Logout (${auth.user})` : "Logout"}
+        onclick={() => auth.logout()}
+        class="flex h-8 w-8 items-center justify-center rounded
+               text-[var(--text-muted)] hover:bg-[var(--bg-color)]
+               hover:text-[var(--danger-color)]"
+      >
+        <LogOut size={16} aria-hidden="true" />
+      </button>
+    {/if}
     <ThemeSwitch />
   </div>
 </div>

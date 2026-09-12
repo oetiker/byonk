@@ -120,10 +120,27 @@ class Editor {
     t.text = text;
   }
 
-  async check() {
-    const t = this.active;
+  /**
+   * `t` defaults to the active tab but can name a specific one -- Task
+   * 13a/Ruling 64: EditorPane debounces a call per EDITED tab, not per
+   * "whatever is active when the timer fires", so a tab switch during the
+   * debounce window doesn't route the check at the wrong buffer.
+   *
+   * Staleness guard: `text` is snapshotted before the request goes out, and
+   * the response is discarded if the tab's text no longer matches it. The
+   * old hand-written UI's equivalent (static/dev/dev.js's `scheduleCheck`)
+   * wrote a response straight in with no such check -- harmless there only
+   * because it re-read `e.editor.getValue()` fresh at write time in a
+   * single-threaded callback with no snapshot to compare against; porting
+   * that here (writing whatever comes back, whenever it comes back) would
+   * let a slow response for an EARLIER keystroke overwrite a newer one that
+   * already arrived, showing diagnostics for text no longer in the buffer.
+   */
+  async check(t = this.active) {
     if (!t) return;
-    const report = await api.checkFile(t.ref, t.name, t.text);
+    const text = t.text;
+    const report = await api.checkFile(t.ref, t.name, text);
+    if (t.text !== text) return; // stale: the buffer moved on while this was in flight
     t.issues = report.issues ?? [];
   }
 

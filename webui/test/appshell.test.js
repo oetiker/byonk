@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import AppShell from "../src/lib/components/AppShell.svelte";
 import { layout, STORAGE_KEY } from "../src/lib/state/layout.svelte.js";
+import { screens } from "../src/lib/state/screens.svelte.js";
+import * as api from "../src/lib/api.js";
 
 // The brief's own AppShell code block (task-5-brief.md Step 5) restores
 // persisted layout from `onMount(() => layout.load())` and then wires
@@ -129,5 +131,40 @@ describe("AppShell", () => {
     // The splitter separates the editor from everything to its right; tune
     // being the only thing there is still something there.
     expect(screen.getByRole("separator", { name: /vertical|horizontal|resize/i })).toBeTruthy();
+  });
+});
+
+describe("AppShell initial data load", () => {
+  // Task 14's browser walk found the SPA unusable on a fresh load: the
+  // screen list, the Device and Panel Profile menus and the Dither menu
+  // were all empty, while `/dev/api/repos` and `/dev/api/screens` both
+  // answered 200 with full payloads. `screens.refresh()` was reachable
+  // only from FilesPane's four buttons and from `tune`, and three of those
+  // four buttons need a screen already selected -- so nothing populated the
+  // store at boot and the only unblocked action was "New".
+  //
+  // Every FilesPane/simulate test calls `screens.refresh()` in its own
+  // beforeEach, which is why the whole suite passed over this: the store
+  // was hand-fed in the tests and fed by nobody in the app.
+  it("populates repos, screens and meta on mount, with no user action", async () => {
+    vi.spyOn(api, "listRepos").mockResolvedValue([{ handle: "local", writable: true }]);
+    vi.spyOn(api, "listScreens").mockResolvedValue({
+      screens: [{ name: "local/a" }],
+      devices: [{ id: "d1" }],
+      panels: [{ name: "p1" }],
+      dither_algorithms: ["floyd-steinberg"],
+    });
+    screens.repos = [];
+    screens.list = [];
+    screens.meta = { devices: [], panels: [], dither_algorithms: [] };
+
+    render(AppShell);
+
+    await waitFor(() => expect(screens.repos).toHaveLength(1));
+    expect(screens.list.map((s) => s.ref)).toEqual(["local/a"]);
+    expect(screens.meta.dither_algorithms).toEqual(["floyd-steinberg"]);
+    // `grouped` is what FilesPane renders; it derives from `repos`, so an
+    // empty repo list hides every screen even when `list` is full.
+    expect(screens.grouped).toHaveLength(1);
   });
 });

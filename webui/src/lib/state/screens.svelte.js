@@ -44,6 +44,31 @@ class Screens {
     this.selected = ref;
   }
 
+  /**
+   * The boot-time load, mirroring `auth.load()`: same contract, same
+   * swallow-and-record handling, so a failed first fetch shows up in
+   * `StatusStrip` as "load: ..." instead of as an unhandled rejection and a
+   * silently empty UI.
+   *
+   * This exists because `refresh()` was reachable only from FilesPane's four
+   * buttons and from `tune`, and three of those four need a screen already
+   * selected -- so on a fresh page load nothing populated the store and the
+   * screen list, the Device and Panel Profile menus and the Dither menu were
+   * all empty. Found by Task 14's browser walk.
+   */
+  async load() {
+    // No `this.error = null` here, unlike FilesPane's `run()`. That clear
+    // exists so a fresh user-initiated operation drops the previous
+    // failure; a boot load has no previous failure to drop, and clearing
+    // anyway lets mounting the app wipe an error set moments earlier.
+    // `auth.load()` does not clear either.
+    try {
+      await this.refresh();
+    } catch (e) {
+      this.error = { op: "load", message: e?.message ?? String(e) };
+    }
+  }
+
   async refresh() {
     const [repos, payload] = await Promise.all([api.listRepos(), api.listScreens()]);
     this.repos = repos;

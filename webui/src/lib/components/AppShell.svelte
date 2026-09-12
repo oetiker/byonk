@@ -8,6 +8,7 @@
   import { theme } from "../state/theme.svelte.js";
   import { editor } from "../state/editor.svelte.js";
   import { auth } from "../state/auth.svelte.js";
+  import { screens } from "../state/screens.svelte.js";
   import * as api from "../api.js";
 
   // Placeholders until Tasks 6-10 fill them in.
@@ -45,6 +46,15 @@
   // page served in the first place), so this is purely "fill in the
   // control once the answer comes back", not a gate on rendering anything.
   auth.load();
+
+  // The repo list, the screen list and the simulate metadata (devices,
+  // panels, dither algorithms). Same shape as auth.load() above and for the
+  // same reason: not a gate on first paint, just "fill the lists in once
+  // the answer comes back". Without it nothing ever calls `screens.refresh()`
+  // on a fresh load, and since `screens.grouped` derives from `repos`, an
+  // empty repo list hides every screen -- there is then no way to open one
+  // at all. Task 14's browser walk found exactly that.
+  screens.load();
 
   let xSize = $state(layout.size("x"));
   let ySize = $state(layout.size("y"));

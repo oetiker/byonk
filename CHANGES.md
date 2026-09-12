@@ -58,7 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   saves your work; Preview renders it through the same pipeline the device
   uses and updates as you work, so a mistake in `script.lua`, `screen.svg` or
   `meta.yaml` shows up as a render error right next to the code, not after
-  you ship it.
+  you ship it. Editor also checks the file you're typing in on its own,
+  marking the line of any problem in the gutter shortly after you stop —
+  you don't have to save or wait for a render to see it.
 
   You can create a screen from a starter, copy any screen — including the
   built-in ones and anything fetched from git — into a repo you can write to,
@@ -94,6 +96,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Light and dark colour schemes for the dev UI.** A **System / Light / Dark**
   control in the icon rail, defaulting to System so it follows your operating
   system. Your choice is remembered and applies to the pop-out window too.
+
+- **A Logout button in the icon rail** ends a dev-login session, next to the
+  colour scheme control. It only appears when there is a session to end —
+  signing in through the Home Assistant sidebar or an admin token has nothing
+  to log out of, and shows no button either.
 
 - **A Byonk entry in the Home Assistant sidebar**, opening the screen editor
   with no second login — Home Assistant has already authenticated you. It is

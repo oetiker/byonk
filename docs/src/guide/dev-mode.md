@@ -51,10 +51,12 @@ the server starts, so restarting Byonk logs everyone out. A wrong username or
 password is answered after a one-second delay, and the message never says
 which of the two was wrong.
 
-The editor currently has no Logout control of its own — ending a cookie
-session means clearing the `byonk_dev` cookie yourself, or waiting out its
-30-day expiry. `POST /dev/logout` clears it server-side if you want to script
-that. The two routes below are not sessions to end.
+A **Logout** button sits at the foot of the icon rail, next to the theme
+control, whenever there is a cookie session to end — click it (or `POST
+/dev/logout` yourself, if you want to script it) to clear the `byonk_dev`
+cookie and return to the login form. The two routes below are not sessions to
+end, and the button does not appear for either of them: signing in through
+Home Assistant or the admin token has nothing for it to log out of.
 
 ### The admin token also works
 
@@ -86,8 +88,8 @@ An icon rail on the left carries one toggle button per panel: **Files**,
 hide that panel — every combination is allowed, including all five hidden at
 once. A panel you hide comes back at the size it had, and the splitters
 between open panels keep their position, both remembered between visits (the
-theme control described in [Colour scheme](#colour-scheme) lives at the foot
-of the same rail).
+theme control described in [Colour scheme](#colour-scheme), and Logout when a
+cookie session is open, both live at the foot of the same rail).
 
 **Files.** Every screen the server can resolve, grouped by screen repo
 handle. A repo you cannot write to is labelled "read-only" next to its
@@ -177,9 +179,14 @@ include is caught. This is exposed as `POST /dev/api/screen/check` (one
 unsaved file's text) and `POST /dev/api/screen/validate` (a screen as it is
 on disk) for scripted or MCP-driven authoring.
 
-The editor itself does not call these as you type; save, and **Preview**
-re-renders through the full pipeline, which catches everything a check would
-and more.
+The editor checks the file you are typing in automatically: shortly after you
+stop typing, it sends the buffer's current text to `POST
+/dev/api/screen/check` and marks any reported line in the gutter, with the
+message on hover. It is debounced, not sent on every keystroke, so a burst of
+typing costs one check, not one per character. The tab strip also marks a tab
+that has any open issue. Saving does not depend on this check passing — a
+broken file can still be saved — and **Preview** re-renders through the full
+pipeline on save, which catches everything a check would and more.
 
 **What only a render catches.** Because a render actually executes the Lua,
 it also catches what a syntax check cannot: a failing HTTP request, indexing

@@ -8,6 +8,7 @@ import { editor } from "../src/lib/state/editor.svelte.js";
 import { screens } from "../src/lib/state/screens.svelte.js";
 import { simulate } from "../src/lib/state/simulate.svelte.js";
 import { tune } from "../src/lib/state/tune.svelte.js";
+import { auth } from "../src/lib/state/auth.svelte.js";
 
 // Ruling 49 (review finding 2): editor.error/screens.error/simulate.error/
 // tune.error and tune.pushed used to render only inside StatusBar, and
@@ -34,6 +35,7 @@ beforeEach(() => {
   screens.error = null;
   simulate.error = null;
   tune.reset();
+  auth.reset();
 });
 
 afterEach(() => {
@@ -74,11 +76,12 @@ describe("the error/override strip is visible independent of the Editor panel", 
     expect(screen.getByText(/server unreachable/)).toBeTruthy();
   });
 
-  it("shows editor.error and screens.error and simulate.error with the Editor panel CLOSED, none clobbering another", async () => {
+  it("shows editor.error and screens.error and simulate.error and auth.error with the Editor panel CLOSED, none clobbering another", async () => {
     closeEditor();
     editor.error = { op: "save", message: "save-msg" };
     screens.error = { op: "delete", message: "screens-msg" };
     simulate.error = { op: "render", message: "simulate-msg" };
+    auth.error = { op: "logout", message: "auth-msg" };
 
     render(AppShell);
     await tick();
@@ -87,6 +90,27 @@ describe("the error/override strip is visible independent of the Editor panel", 
     expect(screen.getByText(/save-msg/)).toBeTruthy();
     expect(screen.getByText(/screens-msg/)).toBeTruthy();
     expect(screen.getByText(/simulate-msg/)).toBeTruthy();
+    expect(screen.getByText(/auth-msg/)).toBeTruthy();
+  });
+
+  // Ruling 66: restoring Logout (Task 13a) created a fifth error owner
+  // (auth.error, from a failed whoami or a failed logout) and left it with
+  // no surface at all -- worse than hidden, since a failed logout with no
+  // visible consequence reads to the user as a session that ended when it
+  // did not. Same requirement as the four fields above: visible with the
+  // Editor panel closed, since a failed Logout click (mounted in IconRail,
+  // reachable in every panel combination) has nothing to do with the
+  // Editor panel being open.
+  it("shows a live auth.error with the Editor panel CLOSED", async () => {
+    closeEditor();
+    auth.error = { op: "logout", message: "session did not end" };
+
+    render(AppShell);
+    await tick();
+
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.getByText(/logout/)).toBeTruthy();
+    expect(screen.getByText(/session did not end/)).toBeTruthy();
   });
 
   it("renders nothing extra when there is nothing to report (no empty bar eating height)", async () => {
@@ -119,11 +143,12 @@ describe("StatusStrip", () => {
     expect(container.textContent.trim()).toBe("");
   });
 
-  it("renders all four error surfaces at once, none clobbering another", () => {
+  it("renders all five error surfaces at once, none clobbering another", () => {
     editor.error = { op: "save", message: "save-msg" };
     screens.error = { op: "delete", message: "screens-msg" };
     simulate.error = { op: "render", message: "simulate-msg" };
     tune.error = { op: "save", message: "tune-msg" };
+    auth.error = { op: "logout", message: "auth-msg" };
 
     render(StatusStrip);
 
@@ -131,6 +156,18 @@ describe("StatusStrip", () => {
     expect(screen.getByText(/screens-msg/)).toBeTruthy();
     expect(screen.getByText(/simulate-msg/)).toBeTruthy();
     expect(screen.getByText(/tune-msg/)).toBeTruthy();
+    expect(screen.getByText(/auth-msg/)).toBeTruthy();
+  });
+
+  it("renders auth.error, labelled with its own op", () => {
+    auth.error = { op: "logout", message: "network down" };
+    render(StatusStrip);
+    expect(screen.getByText(/logout: network down/)).toBeTruthy();
+  });
+
+  it("shows no auth error when nothing failed", () => {
+    render(StatusStrip);
+    expect(screen.queryByText(/logout/)).toBeNull();
   });
 
   // Minor from the review: StatusBar.svelte used to hardcode "render:"

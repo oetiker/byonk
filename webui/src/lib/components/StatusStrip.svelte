@@ -18,9 +18,22 @@
   import { screens } from "../state/screens.svelte.js";
   import { simulate } from "../state/simulate.svelte.js";
   import { tune } from "../state/tune.svelte.js";
+  import { auth } from "../state/auth.svelte.js";
 
+  // Ruling 66: restoring Logout (Task 13a) created a FIFTH error owner
+  // (auth.error, from a failed whoami or a failed logout) and left it with
+  // no surface at all -- worse than merely hidden, since a failed logout
+  // with no visible consequence reads to the user as a session that ended
+  // when it did not. Same rule as the other four: this is the one place no
+  // panel toggle can hide, so it belongs here, not somewhere a click could
+  // unmount it.
   const hasAnything = $derived(
-    !!editor.error || !!screens.error || !!simulate.error || !!tune.error || tune.pushed,
+    !!editor.error ||
+      !!screens.error ||
+      !!simulate.error ||
+      !!tune.error ||
+      tune.pushed ||
+      !!auth.error,
   );
 </script>
 
@@ -50,6 +63,11 @@
     {#if tune.error}
       <div role="alert" class="text-[var(--danger-color)]">
         tune {tune.error.op}: {tune.error.message}
+      </div>
+    {/if}
+    {#if auth.error}
+      <div role="alert" class="text-[var(--danger-color)]">
+        {auth.error.op}: {auth.error.message}
       </div>
     {/if}
   </div>

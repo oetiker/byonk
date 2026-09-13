@@ -3,6 +3,7 @@ import { render, cleanup, fireEvent } from "@testing-library/svelte";
 import { flushSync } from "svelte";
 import * as api from "../src/lib/api.js";
 import { editor } from "../src/lib/state/editor.svelte.js";
+import { screens } from "../src/lib/state/screens.svelte.js";
 
 // EditorPane is tested against a mocked codemirror.js: component tests
 // cannot drive CodeMirror's real key handling in jsdom (that mechanism is
@@ -36,6 +37,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   lastOpts = null;
   editor.reset();
+  editor.files = [];
+  screens.selected = null;
+  screens.repos = [];
 });
 
 afterEach(() => {
@@ -90,6 +94,9 @@ describe("EditorPane", () => {
     // re-renders.
     vi.spyOn(api, "readFile").mockResolvedValue({ text: "hello", etag: '"1"' });
     await editor.open("local/a", "script.lua");
+    // The tab strip now renders from `editor.files` (Task 1), not `tabs` --
+    // give it a listing entry for the file this test already opened above.
+    editor.files = [{ name: "script.lua", size: 5, text: true }];
 
     const { queryByLabelText } = render(EditorPane);
     flushSync();
@@ -248,5 +255,67 @@ describe("EditorPane", () => {
     expect(lastOpts.onCursor).toBeTypeOf("function");
     lastOpts.onCursor(3, 22);
     expect(setCursorSpy).toHaveBeenCalledWith(3, 22);
+  });
+});
+
+// --- Task 1: the tab strip renders editor.files, not editor.tabs ---------
+//
+// Before this fix, selecting a screen never populated `editor.files` (or
+// `tabs`), so the tab strip -- iterating `tabs` -- was permanently empty:
+// there was no way to open a second, third, ... file from the UI at all,
+// only whatever `script.lua` auto-open produced. These pin the three
+// listing-driven behaviours from task-1-brief.md Step 3/4.
+describe("EditorPane renders editor.files (Task 1)", () => {
+  beforeEach(() => {
+    screens.selected = "local/a";
+    screens.repos = [{ handle: "local", writable: true }];
+  });
+
+  it("renders a binary entry disabled, not clickable, and it does not open on click", async () => {
+    editor.files = [{ name: "logo.png", size: 1234, text: false }];
+    const readFileSpy = vi.spyOn(api, "readFile");
+
+    const { getByText, queryByRole } = render(EditorPane);
+    flushSync();
+
+    const entry = getByText("logo.png (1234)");
+    expect(entry).toHaveAttribute("aria-disabled", "true");
+    // Not a tab, and not a button -- nothing to focus or activate.
+    expect(queryByRole("tab")).toBeNull();
+    expect(queryByRole("button", { name: /logo\.png/ })).toBeNull();
+
+    await fireEvent.click(entry);
+    expect(readFileSpy).not.toHaveBeenCalled();
+  });
+
+  it("opens a text entry on click", async () => {
+    editor.files = [{ name: "script.lua", size: 10, text: true }];
+    vi.spyOn(api, "readFile").mockResolvedValue({ text: "-- hi", etag: '"1"' });
+
+    const { getByRole } = render(EditorPane);
+    flushSync();
+
+    await fireEvent.click(getByRole("button", { name: "script.lua" }));
+    flushSync();
+
+    expect(editor.active?.name).toBe("script.lua");
+    expect(editor.active?.text).toBe("-- hi");
+  });
+
+  it("shows the dirty marker only for a loaded, edited buffer -- not merely because the file is listed", async () => {
+    editor.files = [{ name: "script.lua", size: 10, text: true }];
+    vi.spyOn(api, "readFile").mockResolvedValue({ text: "ok", etag: '"1"' });
+
+    const { queryByLabelText, getByRole } = render(EditorPane);
+    flushSync();
+    expect(queryByLabelText("unsaved changes")).toBeNull(); // listed, never opened
+
+    await fireEvent.click(getByRole("button", { name: "script.lua" }));
+    flushSync();
+    expect(queryByLabelText("unsaved changes")).toBeNull(); // opened, clean
+
+    editor.setText("changed");
+    flushSync();
+    expect(queryByLabelText("unsaved changes")).not.toBeNull(); // opened, dirty
   });
 });

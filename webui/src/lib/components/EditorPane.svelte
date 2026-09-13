@@ -1,6 +1,7 @@
 <script>
   import { onMount, untrack } from "svelte";
   import { editor } from "../state/editor.svelte.js";
+  import { screens } from "../state/screens.svelte.js";
   import { createEditor } from "../codemirror.js";
   import StatusBar from "./StatusBar.svelte";
 
@@ -107,17 +108,56 @@
 <div class="flex min-h-0 flex-1 flex-col">
   <div class="flex items-center border-b border-[var(--border-color)] text-xs">
     <div role="tablist" class="flex min-w-0 flex-1 overflow-x-auto">
-      {#each editor.tabs as t, i (t.ref + t.name)}
-        <div
-          role="tab"
-          aria-selected={i === editor.activeIndex}
-          class="flex items-center gap-1 border-r border-[var(--border-color)] px-2 py-1"
-        >
-          <button type="button" onclick={() => (editor.activeIndex = i)}>{t.name}</button>
-          {#if t.dirty}<span aria-label="unsaved changes">●</span>{/if}
-          {#if t.issues.length}<span aria-label="has errors" class="text-[var(--danger-color)]">▲</span>{/if}
-          <button type="button" aria-label={`Close ${t.name}`} onclick={() => editor.close(i)}>×</button>
-        </div>
+      <!--
+        Iterates `editor.files` (the SCREEN's listing), not `editor.tabs`
+        (loaded buffers) -- Task 1. One tab strip entry per file that
+        exists, whether or not it has ever been opened. A binary file
+        (`text: false`, e.g. a rendered PNG) has nothing a text buffer could
+        show, so it renders as a disabled, non-interactive entry instead of
+        a `role="tab"` button.
+      -->
+      {#each editor.files as f (f.name)}
+        {@const t = editor.tabs.find((x) => x.name === f.name)}
+        {#if f.text}
+          <div
+            role="tab"
+            aria-selected={t != null && t === editor.active}
+            class="flex items-center gap-1 border-r border-[var(--border-color)] px-2 py-1"
+          >
+            <button
+              type="button"
+              onclick={() =>
+                editor.open(screens.selected, f.name, {
+                  readOnly: !screens.writable(screens.selected),
+                })}
+            >
+              {f.name}
+            </button>
+            <!-- Dirty/issues follow the LOADED buffer, not the listing entry: a
+                 file that has never been opened has neither. -->
+            {#if t?.dirty}<span aria-label="unsaved changes">●</span>{/if}
+            {#if t?.issues.length}<span aria-label="has errors" class="text-[var(--danger-color)]">▲</span>{/if}
+            {#if t}
+              <!-- Closes the BUFFER only -- `editor.close()` never touches `files`,
+                   so the file stays listed and can be reopened. -->
+              <button
+                type="button"
+                aria-label={`Close ${f.name}`}
+                onclick={() => editor.close(editor.tabs.indexOf(t))}
+              >
+                ×
+              </button>
+            {/if}
+          </div>
+        {:else}
+          <div
+            aria-disabled="true"
+            class="flex cursor-not-allowed items-center gap-1 border-r
+                   border-[var(--border-color)] px-2 py-1 text-[var(--text-muted)] opacity-60"
+          >
+            {f.name} ({f.size})
+          </div>
+        {/if}
       {/each}
     </div>
     <!--

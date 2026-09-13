@@ -1,4 +1,5 @@
 import * as api from "../api.js";
+import { screens } from "./screens.svelte.js";
 
 /**
  * Open files and their buffers.
@@ -44,6 +45,17 @@ class Editor {
   tabs = $state([]);
   activeIndex = $state(-1);
 
+  /**
+   * The currently selected screen's file LISTING -- `{name, size, text}`
+   * exactly as `api.listFiles(ref)` returns it, one entry per file that
+   * exists on disk. This is distinct from `tabs`: `files` is what EXISTS,
+   * `tabs` is what has actually been LOADED into a buffer (opened, possibly
+   * edited, possibly never saved). A file can be listed here with no tab
+   * open for it -- e.g. before it's ever clicked, or after its tab was
+   * closed (closing a buffer does not delete the file).
+   */
+  files = $state([]);
+
   /** `null` or `{ref, name, source: "save" | "watch"}` -- Task 10, spec §8.5. */
   conflict = $state(null);
 
@@ -85,7 +97,14 @@ class Editor {
     this.error = null;
     this.cursorLine = 1;
     this.cursorCol = 1;
-    this.watchConnected = false;
+    // Deliberately NOT touched here (it was, until Task 1): `loadScreen()`
+    // below calls `reset()` on every screen switch, and `watchConnected`
+    // reflects whether the SSE connection AppShell opened is live -- a fact
+    // about the transport, not about which screen is open. Clearing it here
+    // would flip StatusBar's "watch: connected" to "disconnected" for a
+    // frame on every screen switch even though the connection never
+    // dropped. AppShell's `onMount` (the only writer of `true`) still sets
+    // it back to `false` on its own teardown/onerror paths.
   }
 
   setCursor(line, col) {
@@ -102,6 +121,47 @@ class Editor {
     const { text, etag } = await api.readFile(ref, name);
     this.tabs.push(makeTab(ref, name, text, etag, readOnly));
     this.activeIndex = this.tabs.length - 1;
+  }
+
+  /**
+   * Switch to a different screen: replace `files` with its listing, and
+   * auto-open `script.lua` when it's present as a text file -- mirrors the
+   * pre-rewrite UI's static/dev/dev.js:436-438 ("if there's a script.lua
+   * with text, open it").
+   *
+   * `reset()` first: switching screens must not carry another screen's
+   * buffers, conflict banner, or error across (`watchConnected` is the one
+   * exception -- see `reset()`'s own comment).
+   *
+   * `files` is left in the order the server sends it -- `meta.yaml`,
+   * `script.lua`, `screen.svg`, then alphabetical
+   * (src/services/screen_store.rs:1074) -- and is NOT re-sorted here. The
+   * pre-rewrite UI sorted it again client-side; that duplication is not
+   * worth porting.
+   */
+  async loadScreen(ref, { readOnly = false } = {}) {
+    this.reset();
+    if (!ref) {
+      this.files = [];
+      return;
+    }
+    try {
+      this.files = await api.listFiles(ref);
+    } catch (e) {
+      // Caught, not re-thrown: a failed listing must not take the page
+      // down. Recorded on `screens.error`, NOT `this.error` -- StatusStrip
+      // hard-codes a "save:" prefix on `editor.error` (Ruling 39), which
+      // would misreport a listing failure as a save failure. `screens.error`
+      // renders as "files: <message>" instead, which is what actually
+      // happened (Ruling R6).
+      screens.error = { op: "files", message: e?.message ?? String(e) };
+      this.files = [];
+      return;
+    }
+    const scriptLua = this.files.find((f) => f.name === "script.lua");
+    if (scriptLua?.text) {
+      await this.open(ref, "script.lua", { readOnly });
+    }
   }
 
   close(i) {

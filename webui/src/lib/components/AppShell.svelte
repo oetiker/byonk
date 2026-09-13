@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import IconRail from "./IconRail.svelte";
   import SplitPane from "./SplitPane.svelte";
   import ConflictBanner from "./ConflictBanner.svelte";
@@ -55,6 +55,22 @@
   // empty repo list hides every screen -- there is then no way to open one
   // at all. Task 14's browser walk found exactly that.
   screens.load();
+
+  // Task 1: selecting a screen (FilesPane, via `screens.select()`) is what
+  // is supposed to list its files and open one -- nothing did, because
+  // nothing ever called `editor.loadScreen()`. Read ONLY `screens.selected`
+  // as the reactive dependency; `screens.writable(ref)` reads `screens.repos`
+  // internally, and computing it (plus the `loadScreen()` call itself)
+  // inside `untrack` keeps this effect from re-running when `refresh()`
+  // replaces the repo/screen lists for an unrelated reason -- that must not
+  // reload the already-open screen and discard unsaved buffers via
+  // `loadScreen()`'s `reset()`.
+  $effect(() => {
+    const ref = screens.selected;
+    untrack(() => {
+      editor.loadScreen(ref, { readOnly: !screens.writable(ref) });
+    });
+  });
 
   let xSize = $state(layout.size("x"));
   let ySize = $state(layout.size("y"));

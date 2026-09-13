@@ -1,10 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { editor } from "../src/lib/state/editor.svelte.js";
+import { screens } from "../src/lib/state/screens.svelte.js";
 import * as api from "../src/lib/api.js";
 
 beforeEach(() => {
   vi.restoreAllMocks();
   editor.reset();
+  editor.files = [];
+  screens.error = null;
 });
 
 describe("editor store", () => {
@@ -120,6 +123,95 @@ describe("editor store", () => {
     expect(editor.active.text).toBe("theirs");
     expect(editor.active.etag).toBe('"2"');
     expect(editor.active.dirty).toBe(false);
+  });
+});
+
+// --- Task 1: loadScreen() ---------------------------------------------
+//
+// Before this fix, nothing ever called `api.listFiles()`, so selecting a
+// screen never populated `editor.files` and the tab strip had nothing to
+// render.
+describe("editor.loadScreen()", () => {
+  it("populates files from api.listFiles", async () => {
+    const entries = [
+      { name: "meta.yaml", size: 1, text: true },
+      { name: "script.lua", size: 2, text: true },
+      { name: "screen.svg", size: 3, text: true },
+    ];
+    vi.spyOn(api, "listFiles").mockResolvedValue(entries);
+    vi.spyOn(api, "readFile").mockResolvedValue({ text: "-- lua", etag: '"1"' });
+
+    await editor.loadScreen("local/a");
+
+    expect(editor.files).toEqual(entries);
+  });
+
+  it("auto-opens script.lua when present and text", async () => {
+    vi.spyOn(api, "listFiles").mockResolvedValue([
+      { name: "script.lua", size: 2, text: true },
+    ]);
+    vi.spyOn(api, "readFile").mockResolvedValue({ text: "-- lua", etag: '"1"' });
+
+    await editor.loadScreen("local/a");
+
+    expect(editor.active?.name).toBe("script.lua");
+    expect(editor.active?.text).toBe("-- lua");
+  });
+
+  it("does not auto-open when script.lua is absent", async () => {
+    vi.spyOn(api, "listFiles").mockResolvedValue([{ name: "meta.yaml", size: 1, text: true }]);
+    const readFileSpy = vi.spyOn(api, "readFile");
+
+    await editor.loadScreen("local/a");
+
+    expect(editor.tabs).toHaveLength(0);
+    expect(readFileSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-open a script.lua entry that is text: false", async () => {
+    vi.spyOn(api, "listFiles").mockResolvedValue([
+      { name: "script.lua", size: 2, text: false },
+    ]);
+    const readFileSpy = vi.spyOn(api, "readFile");
+
+    await editor.loadScreen("local/a");
+
+    expect(editor.tabs).toHaveLength(0);
+    expect(readFileSpy).not.toHaveBeenCalled();
+  });
+
+  it("loadScreen(null) empties files", async () => {
+    vi.spyOn(api, "listFiles").mockResolvedValue([{ name: "meta.yaml", size: 1, text: true }]);
+    await editor.loadScreen("local/a");
+    expect(editor.files).toHaveLength(1);
+
+    await editor.loadScreen(null);
+    expect(editor.files).toEqual([]);
+  });
+
+  it("switching screens clears the previous screen's buffers", async () => {
+    vi.spyOn(api, "listFiles").mockResolvedValue([{ name: "one.lua", size: 1, text: true }]);
+    vi.spyOn(api, "readFile").mockResolvedValue({ text: "x", etag: '"1"' });
+    await editor.open("local/a", "one.lua");
+    expect(editor.tabs).toHaveLength(1);
+
+    vi.spyOn(api, "listFiles").mockResolvedValue([{ name: "two.lua", size: 1, text: true }]);
+    await editor.loadScreen("local/b");
+
+    expect(editor.tabs).toHaveLength(0);
+    expect(editor.active).toBeNull();
+  });
+
+  it("a rejecting listFiles sets screens.error, leaves files empty, and does not reject", async () => {
+    vi.spyOn(api, "listFiles").mockRejectedValue(new Error("disk gone"));
+
+    await expect(editor.loadScreen("local/a")).resolves.toBeUndefined();
+
+    expect(editor.files).toEqual([]);
+    expect(screens.error).toEqual({ op: "files", message: "disk gone" });
+    // Not editor.error -- StatusStrip hard-codes a "save:" prefix on that
+    // field (Ruling R6), which would misreport a listing failure as one.
+    expect(editor.error).toBeNull();
   });
 });
 

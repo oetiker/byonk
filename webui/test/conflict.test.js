@@ -315,12 +315,18 @@ describe("AppShell's SSE wiring (Ruling 36 full path, Ruling 40)", () => {
 
   it("parses the server's real array-of-basenames payload and raises the conflict banner end to end", async () => {
     vi.spyOn(api, "readFile").mockResolvedValue({ text: "disk", etag: '"1"' });
-    await editor.open("local/a", "script.lua");
-    editor.setText("mine");
 
     render(AppShell);
     const es = FakeEventSource.instances.at(-1);
     expect(es).toBeTruthy();
+    // Opened AFTER mount, not before: AppShell's own Task-1 effect calls
+    // `editor.loadScreen(screens.selected, ...)` on mount (screens.selected
+    // is null here, so it's a no-op past `reset()`) -- opening the tab
+    // first and mounting second would have this mount's own `reset()` wipe
+    // it right back out, which is not what this test is about.
+    await tick();
+    await editor.open("local/a", "script.lua");
+    editor.setText("mine");
 
     es.emit("file-change", JSON.stringify(["script.lua"]));
     await tick();

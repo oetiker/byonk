@@ -4,6 +4,7 @@ import { tick } from "svelte";
 import AppShell from "../src/lib/components/AppShell.svelte";
 import { layout, STORAGE_KEY } from "../src/lib/state/layout.svelte.js";
 import { screens } from "../src/lib/state/screens.svelte.js";
+import { editor } from "../src/lib/state/editor.svelte.js";
 import * as api from "../src/lib/api.js";
 
 // The brief's own AppShell code block (task-5-brief.md Step 5) restores
@@ -38,6 +39,9 @@ beforeEach(() => {
   cleanup();
   localStorage.clear();
   layout.reset();
+  screens.selected = null;
+  editor.reset();
+  editor.files = [];
 });
 
 afterEach(() => {
@@ -166,5 +170,40 @@ describe("AppShell initial data load", () => {
     // `grouped` is what FilesPane renders; it derives from `repos`, so an
     // empty repo list hides every screen even when `list` is full.
     expect(screens.grouped).toHaveLength(1);
+  });
+});
+
+describe("AppShell wires screens.selected to editor.loadScreen (Task 1, the journey test)", () => {
+  // This is the point of the whole plan. The rewrite's own component tests
+  // all passed while the app itself loaded nothing (see the boot-load test
+  // above, and 32106892's report of the identical class of defect): every
+  // one of them hand-fed the store it was testing in its own beforeEach.
+  // This test does NOT call `screens.refresh()`, `editor.loadScreen()` or
+  // `editor.open()` itself -- it mounts the real app root and drives it
+  // only through `screens.select()`, the same call FilesPane's click
+  // handler makes, then asserts on data the app itself must have put there.
+  it("lists a selected screen's files and opens script.lua, with no direct store call", async () => {
+    vi.spyOn(api, "listRepos").mockResolvedValue([{ handle: "local", writable: true }]);
+    vi.spyOn(api, "listScreens").mockResolvedValue({ screens: [{ name: "local/a" }] });
+    vi.spyOn(api, "listFiles").mockResolvedValue([
+      { name: "meta.yaml", size: 10, text: true },
+      { name: "script.lua", size: 20, text: true },
+      { name: "screen.svg", size: 30, text: true },
+    ]);
+    vi.spyOn(api, "readFile").mockResolvedValue({ text: "-- lua", etag: '"1"' });
+
+    render(AppShell);
+
+    screens.select("local/a");
+
+    await waitFor(() =>
+      expect(editor.files.map((f) => f.name)).toEqual(["meta.yaml", "script.lua", "screen.svg"]),
+    );
+    await waitFor(() => expect(editor.active?.name).toBe("script.lua"));
+    expect(editor.active?.text).toBe("-- lua");
+
+    // The tab strip (EditorPane) rendered real tabs from that listing --
+    // not just the store fields in isolation.
+    await waitFor(() => expect(screen.getAllByRole("tab").length).toBe(3));
   });
 });

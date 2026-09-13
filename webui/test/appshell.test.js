@@ -206,4 +206,65 @@ describe("AppShell wires screens.selected to editor.loadScreen (Task 1, the jour
     // not just the store fields in isolation.
     await waitFor(() => expect(screen.getAllByRole("tab").length).toBe(3));
   });
+
+  // Fix round 1: the brief's Step 2 named two properties the effect "must
+  // have, both testable" -- neither had a test. Inspection alone is what
+  // let the original unwired-seam defect ship (see the journey test's own
+  // comment above), so these drive the real effect through the real app
+  // root, the same as the journey test.
+  it("does not re-run when screens.refresh() replaces repos/list for an unrelated reason, so an open buffer survives", async () => {
+    vi.spyOn(api, "listRepos").mockResolvedValue([{ handle: "local", writable: true }]);
+    vi.spyOn(api, "listScreens").mockResolvedValue({ screens: [{ name: "local/a" }] });
+    const listFilesSpy = vi
+      .spyOn(api, "listFiles")
+      .mockResolvedValue([{ name: "script.lua", size: 1, text: true }]);
+    vi.spyOn(api, "readFile").mockResolvedValue({ text: "-- lua", etag: '"1"' });
+
+    render(AppShell);
+    screens.select("local/a");
+    await waitFor(() => expect(editor.active?.name).toBe("script.lua"));
+
+    editor.setText("unsaved edit"); // dirty the open buffer
+    expect(listFilesSpy).toHaveBeenCalledTimes(1);
+
+    // Something unrelated to screens.selected replaces repos/list -- e.g. a
+    // rename or delete elsewhere causing FilesPane to call screens.refresh().
+    vi.spyOn(api, "listRepos").mockResolvedValue([
+      { handle: "local", writable: true },
+      { handle: "other", writable: true },
+    ]);
+    vi.spyOn(api, "listScreens").mockResolvedValue({
+      screens: [{ name: "local/a" }, { name: "other/b" }],
+    });
+    await screens.refresh();
+    await tick();
+
+    // If the effect had re-run, loadScreen()'s reset() would have discarded
+    // the unsaved edit and listFiles would have been called again.
+    expect(listFilesSpy).toHaveBeenCalledTimes(1);
+    expect(editor.active?.text).toBe("unsaved edit");
+  });
+
+  it("watchConnected survives a screen switch -- StatusBar's 'watch: connected' must not flip for a screen change", async () => {
+    vi.spyOn(api, "listRepos").mockResolvedValue([{ handle: "local", writable: true }]);
+    vi.spyOn(api, "listScreens").mockResolvedValue({
+      screens: [{ name: "local/a" }, { name: "local/b" }],
+    });
+    vi.spyOn(api, "listFiles").mockResolvedValue([{ name: "script.lua", size: 1, text: true }]);
+    vi.spyOn(api, "readFile").mockResolvedValue({ text: "x", etag: '"1"' });
+
+    render(AppShell);
+    screens.select("local/a");
+    await waitFor(() => expect(editor.active?.ref).toBe("local/a"));
+
+    // Stand-in for `es.onopen` having already fired -- jsdom has no
+    // EventSource (see AppShell's own onMount guard), so this simulates the
+    // live-connection state StatusBar's "watch: connected" reflects.
+    editor.watchConnected = true;
+
+    screens.select("local/b");
+    await waitFor(() => expect(editor.active?.ref).toBe("local/b"));
+
+    expect(editor.watchConnected).toBe(true);
+  });
 });

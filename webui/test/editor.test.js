@@ -213,6 +213,26 @@ describe("editor.loadScreen()", () => {
     // field (Ruling R6), which would misreport a listing failure as one.
     expect(editor.error).toBeNull();
   });
+
+  // Fix round 1, Important finding: loadScreen() set screens.error on a
+  // failure but never cleared it on a later success -- giving up on a
+  // broken screen and picking a working one (or just deselecting) left the
+  // stale banner on screen forever. FilesPane.run() establishes the house
+  // convention (a fresh operation clears the previous failure first);
+  // loadScreen() now follows it, same as any other user-initiated
+  // operation -- unlike screens.load()'s boot-time load, which has no
+  // previous failure of its own to drop.
+  it("a successful load after a failed one clears the stale screens.error", async () => {
+    vi.spyOn(api, "listFiles").mockRejectedValueOnce(new Error("disk gone"));
+    await editor.loadScreen("local/a");
+    expect(screens.error).toEqual({ op: "files", message: "disk gone" });
+
+    vi.spyOn(api, "listFiles").mockResolvedValue([{ name: "meta.yaml", size: 1, text: true }]);
+    await editor.loadScreen("local/b");
+
+    expect(screens.error).toBeNull();
+    expect(editor.files).toEqual([{ name: "meta.yaml", size: 1, text: true }]);
+  });
 });
 
 describe("createEditor read-only mechanism (Ruling 24)", () => {

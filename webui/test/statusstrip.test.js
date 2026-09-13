@@ -78,19 +78,21 @@ describe("the error/override strip is visible independent of the Editor panel", 
 
   it("shows editor.error and screens.error and simulate.error and auth.error with the Editor panel CLOSED, none clobbering another", async () => {
     closeEditor();
-    screens.error = { op: "delete", message: "screens-msg" };
     simulate.error = { op: "render", message: "simulate-msg" };
     auth.error = { op: "logout", message: "auth-msg" };
 
     render(AppShell);
     await tick();
-    // Set AFTER mount, unlike the other three fields above: AppShell's own
-    // Task-1 effect calls `editor.loadScreen(screens.selected, ...)` on
-    // mount, and `loadScreen()` starts with `editor.reset()` (screens.error/
-    // simulate.error/auth.error live on other stores untouched by that
-    // reset). Setting it before mount would have it wiped by that same
-    // mount, which is not what this test is about.
+    // Set AFTER mount, unlike simulate.error/auth.error above: AppShell's
+    // own Task-1 effect calls `editor.loadScreen(screens.selected, ...)` on
+    // mount, and `loadScreen()` now clears `screens.error` (fix round 1, same
+    // "a fresh operation clears the previous failure" convention
+    // FilesPane's run() uses) as well as calling `editor.reset()`.
+    // simulate.error/auth.error live on other stores untouched by either.
+    // Setting editor.error/screens.error before mount would have them wiped
+    // by that same mount, which is not what this test is about.
     editor.error = { op: "save", message: "save-msg" };
+    screens.error = { op: "delete", message: "screens-msg" };
     await tick();
 
     expect(screen.queryByRole("tablist")).toBeNull();

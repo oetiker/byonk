@@ -133,6 +133,18 @@ class Editor {
    * buffers, conflict banner, or error across (`watchConnected` is the one
    * exception -- see `reset()`'s own comment).
    *
+   * Also clears `screens.error` first, same shape as `FilesPane.svelte`'s
+   * `run()` ("a fresh operation clears the previous error so a stale
+   * failure can't linger after a later success"): without this, giving up
+   * on a screen whose listing failed and picking a working one -- or just
+   * deselecting -- left that banner on screen forever, since only the
+   * catch branch below ever touched it. This is deliberately NOT the same
+   * rule `screens.load()` follows: that is the boot-time load, which has no
+   * previous failure of its own to drop and would otherwise risk wiping an
+   * error set moments earlier by something else. `loadScreen()` is
+   * user-initiated (a click, or the effect that follows one) every time
+   * it runs, so it always has "previous" to clear, exactly like `run()`.
+   *
    * `files` is left in the order the server sends it -- `meta.yaml`,
    * `script.lua`, `screen.svg`, then alphabetical
    * (src/services/screen_store.rs:1074) -- and is NOT re-sorted here. The
@@ -140,6 +152,7 @@ class Editor {
    * worth porting.
    */
   async loadScreen(ref, { readOnly = false } = {}) {
+    screens.error = null;
     this.reset();
     if (!ref) {
       this.files = [];

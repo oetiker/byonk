@@ -111,11 +111,7 @@ export const renameScreen = (ref, name) => post("api/screen/rename", { ref, name
 export const checkFile = (ref, file, text) => post("api/screen/check", { ref, file, text });
 
 export async function deleteScreen(ref) {
-  const res = await fetch("api/screen", {
-    method: "DELETE",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ref }),
-  });
+  const res = await fetch(`api/screen?${qs({ ref })}`, { method: "DELETE" });
   if (!res.ok) throw await fail(res);
 }
 

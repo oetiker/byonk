@@ -76,7 +76,7 @@ describe("api", () => {
       {
         name: "deleteScreen",
         call: () => api.deleteScreen("local/test"),
-        expectedUrl: "api/screen",
+        expectedUrl: "api/screen?ref=local%2Ftest",
         expectedMethod: "DELETE",
         responseBody: '{"ref":"local/test"}',
       },
@@ -250,6 +250,23 @@ describe("api", () => {
     expect(u).toContain("screen=local%2Fhello");
     expect(u).toContain("dither=atkinson");
     expect(u).not.toContain("panel=");
+  });
+
+  it("sends deleteScreen's ref as a query parameter, not a JSON body", async () => {
+    // Regression test: the server's delete_screen handler extracts
+    // Query<RefQuery> (src/api/dev_files.rs) and has no Json extractor at
+    // all, so a JSON body -- what this used to send -- always fails
+    // deserialization server-side. The coverage table above only pins the
+    // URL string; this test pins the *shape* of the request (no body, no
+    // Content-Type) so that regression can't come back unnoticed.
+    mockFetch(async () => new Response(null, { status: 204 }));
+    await api.deleteScreen("local/zz-delete-me");
+
+    const [calledUrl, calledInit] = globalThis.fetch.mock.calls[0];
+    expect(calledUrl).toBe("api/screen?ref=local%2Fzz-delete-me");
+    expect(calledInit.method).toBe("DELETE");
+    expect(calledInit.body).toBeUndefined();
+    expect(calledInit.headers).toBeUndefined();
   });
 
   it("throws on unparseable JSON response from POST", async () => {

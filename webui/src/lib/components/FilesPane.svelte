@@ -5,8 +5,29 @@
 
   const canEdit = $derived(screens.writable(screens.selected));
 
-  function firstWritableHandle() {
-    return screens.repos.find((r) => r.writable)?.handle;
+  /**
+   * Where New and Copy put a screen when the user is not asked.
+   *
+   * `local` is the reserved handle for the user's own screens
+   * (`LOCAL_HANDLE`, src/services/screen_repo_manager.rs:34), so it is the
+   * default even though /api/repos does not sort it first: that list is
+   * writable-first then handle-ascending (src/api/dev_files.rs:149), and
+   * `examples` -- the directory byonk seeds with its own samples -- sorts
+   * ahead of `local`. Taking the first writable entry put every new screen
+   * in with the shipped examples (Finding G).
+   *
+   * Falls back to the first writable repo, because `local` is registered
+   * from `screens_dir` and a deployment can leave it out or make it
+   * read-only; New must degrade rather than stop working.
+   *
+   * This picks a default, it does not restore the choice. The pre-rewrite UI
+   * let the repo be chosen in its inline create form; that choice has nowhere
+   * to go while these dialogs are native `prompt()`s, and returning it is
+   * part of the parked inline-form question (R5).
+   */
+  function defaultWritableHandle() {
+    const writable = screens.repos.filter((r) => r.writable);
+    return (writable.find((r) => r.handle === "local") ?? writable[0])?.handle;
   }
 
   /**
@@ -31,7 +52,7 @@
 
   function newScreen() {
     return run("create", async () => {
-      const handle = firstWritableHandle();
+      const handle = defaultWritableHandle();
       const name = prompt("New screen name");
       if (!handle || !name) return;
       const { ref } = await api.createScreen(handle, name);
@@ -42,7 +63,7 @@
 
   function copyScreen() {
     return run("copy", async () => {
-      const to = firstWritableHandle();
+      const to = defaultWritableHandle();
       const name = prompt("Copy to name");
       if (!to || !name || !screens.selected) return;
       const { ref } = await api.copyScreen(screens.selected, to, name);

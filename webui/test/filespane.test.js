@@ -97,3 +97,79 @@ describe("FilesPane", () => {
     await waitFor(() => expect(screens.error).toBeNull());
   });
 });
+
+describe("FilesPane with more than one writable repo", () => {
+  // Finding G. The suite above seeds exactly ONE writable repo, so which one
+  // gets picked is never observable there. A real install has at least two --
+  // `local` and the seeded `examples` -- and /api/repos sorts them
+  // writable-first then handle-ascending (src/api/dev_files.rs:149), so
+  // `examples` always arrives first. This fixture reproduces that order.
+  beforeEach(async () => {
+    cleanup();
+    vi.restoreAllMocks();
+    screens.selected = null;
+    screens.error = null;
+    vi.spyOn(api, "listRepos").mockResolvedValue([
+      { handle: "examples", writable: true },
+      { handle: "local", writable: true },
+      { handle: "byonk-builtin", writable: false },
+    ]);
+    vi.spyOn(api, "listScreens").mockResolvedValue({
+      screens: [{ name: "examples/sample" }, { name: "byonk-builtin/b" }],
+      devices: [],
+      panels: [],
+      dither_algorithms: [],
+    });
+    await screens.refresh();
+  });
+
+  it("creates a new screen in local, not in the alphabetically-first examples", async () => {
+    vi.spyOn(window, "prompt").mockReturnValue("fresh");
+    const create = vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "local/fresh" });
+    render(FilesPane);
+    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    expect(create.mock.calls[0][0]).toBe("local");
+  });
+
+  it("copies into local, not into the alphabetically-first examples", async () => {
+    vi.spyOn(window, "prompt").mockReturnValue("dup");
+    const copy = vi.spyOn(api, "copyScreen").mockResolvedValue({ ref: "local/dup" });
+    screens.select("byonk-builtin/b");
+    render(FilesPane);
+    await fireEvent.click(screen.getByRole("button", { name: /copy/i }));
+    await waitFor(() => expect(copy).toHaveBeenCalled());
+    expect(copy.mock.calls[0][1]).toBe("local");
+  });
+
+  it("falls back to the first writable repo when local is absent", async () => {
+    // `local` is registered from `screens_dir`, but a deployment that points
+    // every repo elsewhere can leave it out. The default must degrade, not
+    // break New entirely.
+    vi.spyOn(api, "listRepos").mockResolvedValue([
+      { handle: "examples", writable: true },
+      { handle: "byonk-builtin", writable: false },
+    ]);
+    await screens.refresh();
+    vi.spyOn(window, "prompt").mockReturnValue("fresh");
+    const create = vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "examples/fresh" });
+    render(FilesPane);
+    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    expect(create.mock.calls[0][0]).toBe("examples");
+  });
+
+  it("falls back to the first writable repo when local is read-only", async () => {
+    vi.spyOn(api, "listRepos").mockResolvedValue([
+      { handle: "examples", writable: true },
+      { handle: "local", writable: false },
+    ]);
+    await screens.refresh();
+    vi.spyOn(window, "prompt").mockReturnValue("fresh");
+    const create = vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "examples/fresh" });
+    render(FilesPane);
+    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    expect(create.mock.calls[0][0]).toBe("examples");
+  });
+});

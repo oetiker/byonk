@@ -159,8 +159,8 @@ working on.
 
 | Button | What it needs | What it does |
 |--------|---------------|--------------|
-| **New** | a writable repo to put it in | Scaffolds `meta.yaml`, `script.lua` and `screen.svg` from a minimal starter. The generated `meta.yaml` pins the running engine's `byonk:` compatibility requirement. |
-| **Copy** | any selected screen | Forks it — every file in its folder — into a writable repo you choose. This works from `byonk-builtin` and from git-fetched repos, which is the supported way to customize a screen you cannot edit. |
+| **New** | a writable repo to put it in | Scaffolds `meta.yaml`, `script.lua` and `screen.svg` from a minimal starter. The generated `meta.yaml` pins the running engine's `byonk:` compatibility requirement. The screen is created in `local`, your own screen repo; if `local` is missing or read-only, the first writable repo is used instead. |
+| **Copy** | any selected screen | Forks it — every file in its folder — into `local`, the same default **New** uses. This works from `byonk-builtin` and from git-fetched repos, which is the supported way to customize a screen you cannot edit. |
 | **Rename** | a writable repo | Moves the screen within its own repo. You are asked to confirm first if you have unsaved edits, because the rename would leave them unsavable. |
 | **Delete** | a writable repo | Removes the screen. |
 

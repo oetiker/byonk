@@ -6,6 +6,26 @@
   let blobUrl = $state(null);
   let channel;
 
+  /**
+   * Which render is the current one.
+   *
+   * Renders overlap: `screens.refresh()` rewrites `screens.meta`, which this
+   * component's `$effect` reads through `simulate.url()`, so a refresh starts
+   * a render of whatever is selected AT THAT MOMENT -- and `FilesPane`'s
+   * create/copy/rename all refresh first and select afterwards, across an
+   * `await`. Two requests are then in flight for two different screens.
+   *
+   * Without this counter the one that WINS is the one the server answers
+   * last, not the one the user is looking at. A screen that fetches real data
+   * is slower than a freshly created starter, so after New the old screen's
+   * render routinely landed second and painted over the new one, with nothing
+   * to correct it afterwards (Finding J). `AbortController` would cancel the
+   * fetch instead, but the request is already served by then in every case
+   * that matters here; ignoring the answer is what makes the preview follow
+   * the SELECTION rather than the network.
+   */
+  let renderSeq = 0;
+
   // --- device frame -------------------------------------------------------
   //
   // Spec §"work areas" (docs/superpowers/specs/2026-09-09-dev-ui-svelte-
@@ -166,6 +186,7 @@
   async function renderNow() {
     const ref = screens.selected;
     if (!ref) return;
+    const seq = ++renderSeq;
     simulate.error = null;
 
     try {
@@ -179,10 +200,12 @@
         throw new Error(message);
       }
       const blob = await res.blob();
+      if (seq !== renderSeq) return; // superseded -- see `renderSeq`
       if (blobUrl) URL.revokeObjectURL(blobUrl);
       blobUrl = URL.createObjectURL(blob);
       postFrame();
     } catch (e) {
+      if (seq !== renderSeq) return; // a superseded render's failure is not news
       simulate.error = { op: "render", message: e.message };
     }
   }

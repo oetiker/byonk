@@ -205,4 +205,77 @@ describe("PreviewPane", () => {
     render(PreviewPane);
     await waitFor(() => expect(simulate.error).toBeNull());
   });
+
+  // --- Finding J: out-of-order render responses -------------------------
+
+  it("ignores a render response that arrives after a newer render started", async () => {
+    // Finding J. `renderNow()` writes whatever comes back, so two renders in
+    // flight are resolved by WHICHEVER SERVER ANSWER LANDS LAST -- not by
+    // which screen is selected. A screen that fetches real data is slower
+    // than a freshly created starter, so after New the old screen's render
+    // routinely lands second and paints over the new one, permanently.
+    //
+    // This fails without a sequence guard in `renderNow()`, and only that
+    // guard makes it pass: nothing else in the component knows that an
+    // in-flight render has been superseded.
+    //
+    // `img.src` is an opaque `blob:` URL, so map each Blob back to the ref
+    // it was fetched for and let `createObjectURL` report that instead.
+    const refOf = new WeakMap();
+    vi.spyOn(URL, "createObjectURL").mockImplementation((b) => `blob:${refOf.get(b)}`);
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+
+    // Each render is held open until its ref is released, so the two
+    // responses can be landed in a chosen order with no timing guesswork.
+    const release = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      const ref = new URL(url, "http://localhost/").searchParams.get("screen");
+      await new Promise((r) => (release[ref] = r));
+      const blob = new Blob([ref]);
+      refOf.set(blob, ref);
+      return { ok: true, blob: async () => blob };
+    });
+
+    screens.selected = "local/slow";
+    render(PreviewPane);
+    const img = screen.getByRole("img", { name: /screen preview/i });
+    await waitFor(() => expect(release["local/slow"]).toBeTypeOf("function"));
+
+    // Selection moves on while that first render is still in flight.
+    screens.selected = "local/fresh";
+    await waitFor(() => expect(release["local/fresh"]).toBeTypeOf("function"));
+
+    // The newly selected screen answers first...
+    release["local/fresh"]();
+    await waitFor(() => expect(img.src).toBe("blob:local/fresh"));
+
+    // ...and the superseded one answers second. It must not win.
+    release["local/slow"]();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(img.src).toBe("blob:local/fresh");
+  });
+
+  it("does not surface a render failure that belongs to a superseded render", async () => {
+    // Same guard, other branch: a stale render that fails must not raise an
+    // error banner over a newer render that succeeded.
+    const release = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      const ref = new URL(url, "http://localhost/").searchParams.get("screen");
+      await new Promise((r) => (release[ref] = r));
+      if (ref === "local/slow") throw new Error("gone");
+      return { ok: true, blob: async () => new Blob([ref]) };
+    });
+
+    screens.selected = "local/slow";
+    render(PreviewPane);
+    await waitFor(() => expect(release["local/slow"]).toBeTypeOf("function"));
+    screens.selected = "local/fresh";
+    await waitFor(() => expect(release["local/fresh"]).toBeTypeOf("function"));
+
+    release["local/fresh"]();
+    await waitFor(() => expect(simulate.error).toBeNull());
+    release["local/slow"]();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(simulate.error).toBeNull();
+  });
 });

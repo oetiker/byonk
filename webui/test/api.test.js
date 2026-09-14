@@ -276,4 +276,18 @@ describe("api", () => {
     mockFetch(async () => new Response("not valid json", { status: 200 }));
     await expect(api.checkFile("local/test", "script.lua", "x")).rejects.toThrow();
   });
+
+  it("tolerates the empty 200 body savePanelColors' handler actually returns", async () => {
+    // Regression test: handle_save_panel_colors (src/api/dev.rs) returns
+    // Result<StatusCode, ApiError> -> Ok(StatusCode::OK), i.e. 200 with an
+    // EMPTY body. post() used to hand that straight to res.json(), which
+    // rejects on empty input, so every *successful* save threw. tune.svelte.js
+    // catches that throw and reports a failure for a calibration that had
+    // already been written to config.yaml -- and never ends the tuning session.
+    // The coverage table can't catch this: entries with no `responseBody` get
+    // a fabricated '{}' from the mock factory, a body the real server never
+    // sends.
+    mockFetch(async () => new Response(null, { status: 200 }));
+    await expect(api.savePanelColors("e1004", "#101010,#E8E8E8")).resolves.toBeNull();
+  });
 });

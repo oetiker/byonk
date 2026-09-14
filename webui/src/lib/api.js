@@ -97,10 +97,15 @@ async function post(url, body) {
     body: JSON.stringify(body),
   });
   if (!res.ok) throw await fail(res);
-  // Current endpoints (create, copy, rename, check via dev_files.rs:286,303,313,346)
-  // all return 200 with JSON. The 204 branch is kept as a guard for potential
-  // future endpoints that may return no content.
-  return res.status === 204 ? null : res.json();
+  // The rule, not a list of today's endpoints: a handler may answer with a
+  // body or without one, so read the text and only parse when there is
+  // something to parse. An earlier version enumerated the endpoints instead
+  // and asserted they "all return 200 with JSON"; `savePanelColors` was added
+  // later, its handler returns a bare `Ok(StatusCode::OK)` with an empty body,
+  // and `res.json()` rejected on every successful save. `put()` and `del()`
+  // below already work this way -- all three verbs now obey one rule.
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
 }
 
 export const createScreen = (handle, name, starter = "minimal") =>
@@ -120,11 +125,10 @@ export async function deleteScreen(ref) {
  * error on a non-OK status so the caller's error handling is uniform across
  * verbs.
  *
- * Unlike `post()`'s endpoints, the colour-tuning routes below answer with a
- * bare `StatusCode` and no body (`handle_set_panel_colors` et al.,
- * `src/api/dev.rs`), so -- unlike `post()`, which can assume a 200 always
- * carries JSON -- an empty 200 body must not be handed to `res.json()`,
- * which throws on empty input.
+ * The colour-tuning routes below answer with a bare `StatusCode` and no body
+ * (`handle_set_panel_colors` et al., `src/api/dev.rs`), so an empty 200 body
+ * must not be handed to `res.json()`, which throws on empty input. `post()`
+ * reads its body the same way for the same reason.
  */
 async function put(url, body) {
   const res = await fetch(url, {

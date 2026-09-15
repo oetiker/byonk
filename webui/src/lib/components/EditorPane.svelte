@@ -4,6 +4,7 @@
   import { screens } from "../state/screens.svelte.js";
   import { createEditor } from "../codemirror.js";
   import StatusBar from "./StatusBar.svelte";
+  import { Button } from "$lib/ui/button/index.js";
 
   // $state, not a plain `let`: `bind:this` and the assignment inside onMount
   // are both plain writes, and an $effect reading a plain `let` captures its
@@ -141,8 +142,19 @@
   }
 </script>
 
-<div class="flex min-h-0 flex-1 flex-col">
-  <div class="flex items-center border-b border-[var(--border-color)] text-xs">
+<!-- `min-w-0` is load-bearing, not tidiness (Finding M). As a flex item this
+     pane defaults to `min-width: auto`, which refuses to shrink below its
+     content's min-content width -- and CodeMirror's min-content width is its
+     LONGEST LINE. So a screen with long source (examples/swiss-departure-board:
+     912px against an 827px slot) pushed the whole pane 85px past the split
+     slot, which is `overflow: hidden`, silently clipping the right end of the
+     toolbar: `-` and Save became invisible and unclickable, with nothing on
+     screen to explain it. Content-dependent, so it disappeared on a
+     short-lined screen like examples/hello -- which is why it survived every
+     test and the earlier walk. With `min-w-0` the pane takes the slot's width
+     and CodeMirror scrolls inside its own `overflow-auto` host, as intended. -->
+<div class="flex min-h-0 min-w-0 flex-1 flex-col">
+  <div class="flex min-w-0 items-center border-b border-[var(--border-color)] text-xs">
     <div role="tablist" class="flex min-w-0 flex-1 overflow-x-auto">
       <!--
         Iterates `editor.files` (the SCREEN's listing), not `editor.tabs`
@@ -226,43 +238,46 @@
       the server refuses them too (`CORE_FILES`, src/api/dev_files.rs) and is
       the authority -- this only avoids offering an action that cannot work.
     -->
-    <button
+    <Button
       type="button"
+      size="icon-xs"
+      variant="outline"
       aria-label="Add file"
       title="Add a file to this screen"
-      class="mx-0.5 shrink-0 rounded border border-[var(--border-color)] px-2 py-0.5
-             disabled:opacity-40"
+      class="mx-0.5"
       disabled={!canEdit}
       onclick={addFile}
     >
       +
-    </button>
-    <button
+    </Button>
+    <Button
       type="button"
+      size="icon-xs"
+      variant="outline"
       aria-label="Delete file"
       title={deletableName ? `Delete ${deletableName}` : "Select a deletable file"}
-      class="mx-0.5 shrink-0 rounded border border-[var(--border-color)] px-2 py-0.5
-             disabled:opacity-40"
+      class="mx-0.5"
       disabled={!deletableName}
       onclick={deleteFile}
     >
       −
-    </button>
+    </Button>
     <!--
       The keybinding above is invisible unless you already know it's there
       (Ruling 38). Enabled exactly when there is something worth saving --
       same rule the old UI's toolbar Save button used (dev.js: "enabled
       whenever any buffer is dirty").
     -->
-    <button
+    <Button
       type="button"
-      class="mx-1 shrink-0 rounded border border-[var(--border-color)] px-2 py-0.5
-             disabled:opacity-40"
+      size="xs"
+      variant="outline"
+      class="mx-1"
       disabled={!editor.active || editor.active.readOnly || !editor.active.dirty}
       onclick={() => editor.trySave()}
     >
       Save
-    </button>
+    </Button>
   </div>
   <div bind:this={host} class="min-h-0 flex-1 overflow-auto"></div>
   <StatusBar />

@@ -169,6 +169,19 @@ describe("StatusStrip", () => {
     expect(screen.getByText(/auth-msg/)).toBeTruthy();
   });
 
+  // Every fixture in this file used to set `op: "save"` on editor.error, and
+  // the component hard-coded a "save:" label -- so a failed Reload told the
+  // user a save had failed, and no test could see it. `editor.error` is
+  // raised by four different operations; all four must name themselves.
+  it.each(["save", "reload", "overwrite", "watch-reload"])(
+    "labels editor.error with its own op (%s), not always 'save'",
+    (op) => {
+      editor.error = { op, message: "network down" };
+      render(StatusStrip);
+      expect(screen.getByText(new RegExp(`${op}: network down`))).toBeTruthy();
+    },
+  );
+
   it("renders auth.error, labelled with its own op", () => {
     auth.error = { op: "logout", message: "network down" };
     render(StatusStrip);

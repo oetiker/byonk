@@ -48,7 +48,14 @@
       </span>
     {/if}
     {#if editor.error}
-      <div role="alert" class="text-[var(--danger-color)]">save: {editor.error.message}</div>
+      <!-- `{op}:`, not a hard-coded "save:". `editor.error` is raised by four
+           different operations (save, reload, overwrite, watch-reload --
+           editor.svelte.js), and labelling every one of them "save" told the
+           user a save had failed when none had been attempted. The other four
+           surfaces below already render their own `op`. -->
+      <div role="alert" class="text-[var(--danger-color)]">
+        {editor.error.op}: {editor.error.message}
+      </div>
     {/if}
     {#if screens.error}
       <div role="alert" class="text-[var(--danger-color)]">

@@ -102,6 +102,13 @@ describe("api", () => {
         responseBody: '{"ok":true,"issues":[]}',
       },
       {
+        name: "validateScreen",
+        call: () => api.validateScreen("local/test"),
+        expectedUrl: "api/screen/validate",
+        expectedMethod: "POST",
+        responseBody: '{"ok":true,"issues":[]}',
+      },
+      {
         name: "setPanelOverride",
         call: () => api.setPanelOverride("e1004", "#101010,#E8E8E8"),
         expectedUrl: "api/panel-colors/e1004",

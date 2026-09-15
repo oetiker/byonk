@@ -103,6 +103,42 @@
   $effect(() => {
     if (cm && editor.active) cm.setDiagnostics(editor.active.issues);
   });
+
+  // --- add / delete a file (R5) -------------------------------------------
+  //
+  // The three files every screen must have. The server refuses to delete
+  // them (`CORE_FILES`, src/api/dev_files.rs) and is the authority; this list
+  // exists only so the UI does not offer an action that cannot succeed.
+  const CORE_FILES = ["meta.yaml", "script.lua", "screen.svg"];
+
+  const canEdit = $derived(
+    !!screens.selected && screens.writable(screens.selected),
+  );
+
+  /**
+   * The file the delete button would remove, or null when there is nothing
+   * it may remove. The ACTIVE tab, not "the selected listing entry": the
+   * strip has no selection of its own, and acting on the buffer the user is
+   * looking at is the only unambiguous reading.
+   */
+  const deletableName = $derived(
+    canEdit && editor.active && !CORE_FILES.includes(editor.active.name)
+      ? editor.active.name
+      : null,
+  );
+
+  async function addFile() {
+    const name = prompt("New file name");
+    if (!name) return;
+    await editor.addFile(name.trim());
+  }
+
+  async function deleteFile() {
+    const name = deletableName;
+    if (!name) return;
+    if (!confirm(`Delete ${name}? This cannot be undone.`)) return;
+    await editor.deleteFile(name);
+  }
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col">
@@ -137,6 +173,18 @@
                  file that has never been opened has neither. -->
             {#if t?.dirty}<span aria-label="unsaved changes">●</span>{/if}
             {#if t?.issues.length}<span aria-label="has errors" class="text-[var(--danger-color)]">▲</span>{/if}
+            <!-- Spec :326, "one green tick per clean file". This one DOES
+                 follow the listing rather than a loaded buffer: `validate`
+                 examines every file on disk, so a file that was never opened
+                 can still have been checked and found clean. The tick is not
+                 "has no issues" but "was examined and had none" -- before any
+                 validate has run, `editor.clean` is empty and nothing ticks,
+                 because a tick then would assert a check that never
+                 happened. Suppressed while a buffer is dirty: the verdict
+                 describes the saved text, not what is on screen. -->
+            {#if editor.clean.has(f.name) && !t?.dirty}
+              <span aria-label={`${f.name} is valid`} class="text-[var(--ok-color)]">✓</span>
+            {/if}
             {#if t}
               <!-- Closes the BUFFER only -- `editor.close()` never touches `files`,
                    so the file stays listed and can be reopened. -->
@@ -160,6 +208,46 @@
         {/if}
       {/each}
     </div>
+    <!--
+      Add and delete a file (R5, ruled 2026-09-15).
+      docs/src/guide/dev-mode.md has described both since the hand-written UI
+      and neither existed in the SPA: `api.deleteFile` had no caller at all.
+      The server side was already there (`PUT`/`DELETE /dev/api/file`), so
+      this is the client catching up with its own documentation.
+
+      `prompt()`/`confirm()`, matching FilesPane's New/Copy/Rename/Delete
+      rather than inventing a second interaction model for the same kind of
+      question. Whether all of them become inline forms is a separate,
+      unruled decision (R5's other half) -- when it is taken it should move
+      these together with FilesPane's, not leave the two halves different.
+
+      Both are gated on the screen being WRITABLE, the same rule FilesPane's
+      Rename/Delete use. Delete additionally refuses the three core files;
+      the server refuses them too (`CORE_FILES`, src/api/dev_files.rs) and is
+      the authority -- this only avoids offering an action that cannot work.
+    -->
+    <button
+      type="button"
+      aria-label="Add file"
+      title="Add a file to this screen"
+      class="mx-0.5 shrink-0 rounded border border-[var(--border-color)] px-2 py-0.5
+             disabled:opacity-40"
+      disabled={!canEdit}
+      onclick={addFile}
+    >
+      +
+    </button>
+    <button
+      type="button"
+      aria-label="Delete file"
+      title={deletableName ? `Delete ${deletableName}` : "Select a deletable file"}
+      class="mx-0.5 shrink-0 rounded border border-[var(--border-color)] px-2 py-0.5
+             disabled:opacity-40"
+      disabled={!deletableName}
+      onclick={deleteFile}
+    >
+      −
+    </button>
     <!--
       The keybinding above is invisible unless you already know it's there
       (Ruling 38). Enabled exactly when there is something worth saving --

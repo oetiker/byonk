@@ -115,6 +115,18 @@ export const copyScreen = (ref, to_handle, to_name) =>
 export const renameScreen = (ref, name) => post("api/screen/rename", { ref, name });
 export const checkFile = (ref, file, text) => post("api/screen/check", { ref, file, text });
 
+/**
+ * Validate a whole screen on disk, as opposed to `checkFile`'s single draft
+ * buffer.
+ *
+ * Answers `{ok, issues}` where each issue carries a `location` -- usually the
+ * screen-relative file it belongs to, but sometimes the screen ref itself for
+ * a finding no single file owns (src/services/screen_store.rs). Spec
+ * 2026-09-07-dev-mode-editor-design.md:315 runs this after every successful
+ * save; :326 turns its result into one green tick per clean file.
+ */
+export const validateScreen = (ref) => post("api/screen/validate", { ref });
+
 export async function deleteScreen(ref) {
   const res = await fetch(`api/screen?${qs({ ref })}`, { method: "DELETE" });
   if (!res.ok) throw await fail(res);

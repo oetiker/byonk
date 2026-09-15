@@ -255,6 +255,11 @@ describe("conflict handling", () => {
 
     it("a successful save clears a previous error", async () => {
       await openDirty();
+      // A successful save now runs `validate` on the screen (spec :315), so
+      // it has to answer here -- otherwise the save succeeds, the validate
+      // fails, and `editor.error` is correctly non-null for a reason this
+      // test is not about.
+      vi.spyOn(api, "validateScreen").mockResolvedValue({ ok: true, issues: [] });
       vi.spyOn(api, "writeFile").mockRejectedValueOnce(new Error("boom"));
       await editor.trySave();
       expect(editor.error).not.toBeNull();

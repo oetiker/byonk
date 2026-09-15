@@ -86,6 +86,31 @@ class Editor {
   // a guarantee the page cannot make.
   watchConnected = $state(false);
 
+  /**
+   * The last whole-screen `validate` result, or `null` when none has run for
+   * the current screen.
+   *
+   * `{clean: [name, ...], issues: [...]}`. Spec
+   * 2026-09-07-dev-mode-editor-design.md:315 runs `validate` after every
+   * successful save and :326 shows "one green tick per clean file" -- so what
+   * has to be remembered is not just the issues but WHICH files were examined
+   * and found clean. A file with no issue is not automatically clean: before
+   * the first validate nothing has been examined at all, and a tick then
+   * would assert a check that never happened (Ruling 40's reasoning, applied
+   * to validity instead of the watcher).
+   *
+   * Cleared by `reset()`, so it never outlives the screen it describes.
+   */
+  report = $state(null);
+
+  /**
+   * Files the last validate examined and found clean, as a Set for the tab
+   * strip to test against. Empty when no validate has run.
+   */
+  get clean() {
+    return new Set(this.report?.clean ?? []);
+  }
+
   get active() {
     return this.tabs[this.activeIndex] ?? null;
   }
@@ -97,6 +122,10 @@ class Editor {
     this.error = null;
     this.cursorLine = 1;
     this.cursorCol = 1;
+    // A validate result describes ONE screen. Carrying it across a switch
+    // would tick files in the new screen because files of the same name
+    // validated in the old one.
+    this.report = null;
     // Deliberately NOT touched here (it was, until Task 1): `loadScreen()`
     // below calls `reset()` on every screen switch, and `watchConnected`
     // reflects whether the SSE connection AppShell opened is live -- a fact
@@ -171,11 +200,12 @@ class Editor {
       this.files = await api.listFiles(ref);
     } catch (e) {
       // Caught, not re-thrown: a failed listing must not take the page
-      // down. Recorded on `screens.error`, NOT `this.error` -- StatusStrip
-      // hard-codes a "save:" prefix on `editor.error` (Ruling 39), which
-      // would misreport a listing failure as a save failure. `screens.error`
-      // renders as "files: <message>" instead, which is what actually
-      // happened (Ruling R6).
+      // down. Recorded on `screens.error`, NOT `this.error` -- listing a
+      // screen's files is the screens store's business, and it renders as
+      // "files: <message>", which is what actually happened (Ruling R6).
+      // (StatusStrip used to hard-code a "save:" prefix on `editor.error`,
+      // which was a second reason to route it here; that mislabel is fixed
+      // -- Finding L -- and the routing above stands on its own.)
       screens.error = { op: "files", message: e?.message ?? String(e) };
       this.files = [];
       return;
@@ -234,6 +264,117 @@ class Editor {
     t.saved = t.text;
   }
 
+  /**
+   * Validate the whole screen on disk and fan the result out.
+   *
+   * Spec :315 ("after a successful save the page runs `validate` on the
+   * screen") and :326 ("the `validate` result ... shows one green tick per
+   * clean file"). `check` is the typing-time counterpart and looks at ONE
+   * draft buffer; this looks at every file as it now exists on disk, which is
+   * why it belongs after a save and not during one.
+   *
+   * Issues are matched to files by `location`. An issue whose location is not
+   * a file in the listing -- the screen ref itself, for a finding no single
+   * file owns -- is kept in `report.issues` and simply ticks nothing; it must
+   * not silently mark every file clean, and it must not be dropped.
+   *
+   * A loaded tab's `issues` are replaced ONLY for a clean-or-flagged file
+   * this report actually covers, and only while the buffer matches disk:
+   * overwriting a dirty buffer's typing-time diagnostics with a verdict about
+   * the saved text would show the user marks for text they can no longer see.
+   */
+  async validate(ref = screens.selected) {
+    if (!ref) return;
+    const report = await api.validateScreen(ref);
+    const issues = report?.issues ?? [];
+
+    const byFile = new Map();
+    for (const i of issues) {
+      if (!i?.location) continue;
+      if (!byFile.has(i.location)) byFile.set(i.location, []);
+      byFile.get(i.location).push(i);
+    }
+
+    // Only files that exist in the listing can be ticked. `files` is the
+    // screen's own listing, so this cannot tick a name the report invented.
+    const clean = this.files.filter((f) => !byFile.has(f.name)).map((f) => f.name);
+
+    this.report = { clean, issues };
+
+    for (const t of this.tabs) {
+      if (t.ref !== ref || t.dirty) continue;
+      t.issues = byFile.get(t.name) ?? [];
+    }
+  }
+
+  /**
+   * Create an empty file in the current screen and open it.
+   *
+   * `writeFile` with a null etag sends `If-Match: *`, which byonk reads as
+   * "create, and fail with 412 if it already exists" (api.js) -- so an
+   * existing name comes back as `ConflictError` and is REPORTED rather than
+   * silently opening the file that is already there
+   * (docs/src/guide/dev-mode.md).
+   *
+   * The listing is refreshed from the server rather than appended to locally:
+   * the server decides the order (`meta.yaml`, `script.lua`, `screen.svg`,
+   * then alphabetical) and inventing a position here would put a new file in
+   * a place a reload then moves it out of.
+   */
+  async addFile(name) {
+    const ref = screens.selected;
+    if (!ref || !name) return;
+    this.error = null;
+    try {
+      await api.writeFile(ref, name, "", null);
+    } catch (e) {
+      const message =
+        e instanceof api.ConflictError ? `${name} already exists` : e.message;
+      this.error = { op: "add-file", message };
+      return;
+    }
+    await this.refreshFiles(ref);
+    await this.open(ref, name, { readOnly: false });
+  }
+
+  /**
+   * Delete one file from the current screen and close its buffer.
+   *
+   * `meta.yaml`, `script.lua` and `screen.svg` are refused by the server
+   * (`CORE_FILES`, src/api/dev_files.rs) with a 422. The UI does not offer
+   * the control for them, but the check is not duplicated here -- one
+   * authority, and the server's answer is reported if something asks anyway.
+   */
+  async deleteFile(name) {
+    const ref = screens.selected;
+    if (!ref || !name) return;
+    this.error = null;
+    try {
+      await api.deleteFile(ref, name);
+    } catch (e) {
+      this.error = { op: "delete-file", message: e.message };
+      return;
+    }
+    const i = this.tabs.findIndex((t) => t.ref === ref && t.name === name);
+    if (i >= 0) this.close(i);
+    await this.refreshFiles(ref);
+  }
+
+  /**
+   * Re-read the screen's listing without disturbing open buffers.
+   *
+   * Deliberately NOT `loadScreen()`, which calls `reset()` and would discard
+   * every unsaved buffer -- adding or deleting one file must not cost the
+   * user their edits to another.
+   */
+  async refreshFiles(ref) {
+    try {
+      this.files = await api.listFiles(ref);
+    } catch (e) {
+      screens.error = { op: "files", message: e?.message ?? String(e) };
+    }
+  }
+
   async replaceFromDisk(ref, name) {
     const t = this.tabs.find((x) => x.ref === ref && x.name === name);
     if (!t) return;
@@ -265,6 +406,21 @@ class Editor {
         return;
       }
       this.error = { op: "save", message: e.message };
+      return;
+    }
+
+    // Spec :315 -- "after a successful save the page runs `validate` on the
+    // screen". Only after a SUCCESSFUL save: a save that conflicted or failed
+    // left disk untouched, so there is nothing new to validate and a verdict
+    // there would describe the other side's file, not the user's.
+    //
+    // Its own catch, and its own `op`: a validate that fails must not be
+    // reported as a failed save. The save DID land, and telling the user
+    // otherwise would push them to save again over their own fresh etag.
+    try {
+      await this.validate(t.ref);
+    } catch (e) {
+      this.error = { op: "validate", message: e.message };
     }
   }
 

@@ -164,10 +164,11 @@ working on.
 | **Rename** | a writable repo | Moves the screen within its own repo. You are asked to confirm first if you have unsaved edits, because the rename would leave them unsavable. |
 | **Delete** | a writable repo | Removes the screen. |
 
-The **+** next to the file tabs adds a file to the current screen. Creating a
-file that already exists is reported rather than silently opening the existing
-one. `meta.yaml`, `script.lua` and `screen.svg` cannot be deleted, and no
-single file may exceed 5 MB.
+The **+** next to the file tabs adds a file to the current screen, and **−**
+deletes the file you are currently looking at. Both need a writable repo.
+Creating a file that already exists is reported rather than silently opening
+the existing one. `meta.yaml`, `script.lua` and `screen.svg` cannot be deleted
+— **−** stays disabled for them — and no single file may exceed 5 MB.
 
 ## Syntax checking
 
@@ -187,6 +188,13 @@ typing costs one check, not one per character. The tab strip also marks a tab
 that has any open issue. Saving does not depend on this check passing — a
 broken file can still be saved — and **Preview** re-renders through the full
 pipeline on save, which catches everything a check would and more.
+
+After a save succeeds, the whole screen is validated as it now stands on disk
+and every file that came back clean gets a green ✓ in the tab strip — including
+files you never opened. A ✓ means "checked just now and found clean", so
+nothing is ticked before the first save, and a file's tick disappears again the
+moment you type in it, because the verdict describes the saved text rather than
+what is on screen.
 
 **What only a render catches.** Because a render actually executes the Lua,
 it also catches what a syntax check cannot: a failing HTTP request, indexing

@@ -318,4 +318,25 @@ describe("EditorPane renders editor.files (Task 1)", () => {
     flushSync();
     expect(queryByLabelText("unsaved changes")).not.toBeNull(); // opened, dirty
   });
+
+  it("empties CodeMirror when no tab is left active (Finding H)", async () => {
+    // Deleting the selected screen resets the store to no tabs, and the
+    // status line says "no file open" -- but the tab-swap effect returned
+    // early on a null tab, so CodeMirror kept painting the deleted file.
+    vi.spyOn(api, "readFile").mockResolvedValue({ text: "old text", etag: '"1"' });
+    await editor.open("local/a", "script.lua");
+    render(EditorPane);
+    flushSync();
+    cmMock.setDoc.mockClear();
+    cmMock.setDiagnostics.mockClear();
+
+    editor.reset();
+    flushSync();
+
+    expect(cmMock.setDoc).toHaveBeenCalledTimes(1);
+    const [text, , readOnly] = cmMock.setDoc.mock.calls[0];
+    expect(text).toBe("");
+    expect(readOnly).toBe(true);
+    expect(cmMock.setDiagnostics).toHaveBeenCalledWith([]);
+  });
 });

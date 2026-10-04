@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { simulate } from "../state/simulate.svelte.js";
   import { screens } from "../state/screens.svelte.js";
 
@@ -185,8 +185,22 @@
    */
   async function renderNow() {
     const ref = screens.selected;
-    if (!ref) return;
     const seq = ++renderSeq;
+    if (!ref) {
+      // Nothing selected -- typically because the selected screen was just
+      // deleted. Drop its last render here and in the pop-out, rather than
+      // keep painting a screen that no longer exists (Finding H). Bumping
+      // `renderSeq` above also drops a render still in flight for it.
+      // Untracked: the re-render effect below calls this synchronously, and
+      // must depend on the selection and the controls, not on `blobUrl`.
+      untrack(() => {
+        if (!blobUrl) return;
+        URL.revokeObjectURL(blobUrl);
+        blobUrl = null;
+        channel?.postMessage({ clear: true });
+      });
+      return;
+    }
     simulate.error = null;
 
     try {

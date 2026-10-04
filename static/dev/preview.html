@@ -252,6 +252,15 @@ body {
         return;
       }
 
+      // The editor's selection was cleared (its screen was deleted): stop
+      // showing a screen that no longer exists. Removing `src` rather than
+      // emptying it does not fire the image's `error` listener below.
+      if (ev.data.clear) {
+        img.removeAttribute("src");
+        sizeEl.textContent = "no screen selected";
+        return;
+      }
+
       // A `hello` from a second pop-out reaches this one too: only a
       // message carrying a url is from the editor.
       if (!ev.data.url) return;

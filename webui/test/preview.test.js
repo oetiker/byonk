@@ -278,4 +278,55 @@ describe("PreviewPane", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(simulate.error).toBeNull();
   });
+
+  // --- Finding H: a cleared selection must clear the preview -------------
+
+  it("clears the image, and tells the pop-out, when the selection is cleared", async () => {
+    // Finding H. Deleting the selected screen sets `screens.selected` to
+    // null; the preview kept painting the deleted screen's last render, and
+    // so did the pop-out that mirrors it.
+    const posted = [];
+    const fake = { postMessage: (m) => posted.push(m), close() {}, onmessage: null };
+    vi.spyOn(globalThis, "BroadcastChannel").mockImplementation(function () {
+      return fake;
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob(["png"], { type: "image/png" }),
+    });
+    screens.selected = "local/a";
+    render(PreviewPane);
+    const img = screen.getByRole("img", { name: /screen preview/i });
+    await waitFor(() => expect(img.getAttribute("src")).toMatch(/^blob:/));
+
+    posted.length = 0;
+    screens.selected = null;
+    await waitFor(() => expect(img.getAttribute("src")).toBeNull());
+    expect(posted).toEqual([{ clear: true }]);
+
+    // A reloaded pop-out asking for "the current render" gets none.
+    posted.length = 0;
+    fake.onmessage?.({ data: { hello: true } });
+    expect(posted).toEqual([]);
+  });
+
+  it("drops a render that lands after the selection was cleared", async () => {
+    // The same sequence guard as Finding J: a render still in flight when
+    // the screen is deleted must not repaint it afterwards.
+    let release;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      await new Promise((r) => (release = r));
+      return { ok: true, blob: async () => new Blob(["png"]) };
+    });
+    screens.selected = "local/a";
+    render(PreviewPane);
+    const img = screen.getByRole("img", { name: /screen preview/i });
+    await waitFor(() => expect(release).toBeTypeOf("function"));
+
+    screens.selected = null;
+    await new Promise((r) => setTimeout(r, 0));
+    release();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(img.getAttribute("src")).toBeNull();
+  });
 });

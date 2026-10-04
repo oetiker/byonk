@@ -92,9 +92,18 @@
   // signal this effect would never re-run and CodeMirror would keep showing
   // the stale text while the store's text/etag/dirty were already correct
   // underneath (task-7 fix round 1, Ruling 28).
+  //
+  // No active tab (the selected screen was deleted, or none is selected)
+  // empties the view, the same blank read-only state `onMount` creates --
+  // returning early left the last file painted under a "no file open"
+  // status line (Finding H).
   $effect(() => {
     const t = editor.active;
-    if (!cm || !t) return;
+    if (!cm) return;
+    if (!t) {
+      untrack(() => cm.setDoc("", languageOf(undefined), true));
+      return;
+    }
     const name = t.name;
     const readOnly = t.readOnly;
     t.revision; // read only to establish the tracked dependency, see above
@@ -102,7 +111,7 @@
   });
 
   $effect(() => {
-    if (cm && editor.active) cm.setDiagnostics(editor.active.issues);
+    if (cm) cm.setDiagnostics(editor.active?.issues ?? []);
   });
 
   // --- add / delete a file (R5) -------------------------------------------

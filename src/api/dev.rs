@@ -790,10 +790,10 @@ pub async fn handle_render(
 
     // Resolve panel dither tuning for the effective algorithm
     let panel_dither_config = panel.as_ref().and_then(|p| p.dither.clone());
-    let effective_algo = effective_device_dither
-        .or(effective_script_dither)
-        .or(device_config_dither.as_deref());
-    let effective_algo_normalized = effective_algo.map(crate::models::normalize_algorithm_name);
+    // Same two slots as the `resolve_render_params` call below, so the
+    // tuning is looked up for the algorithm that is rendered.
+    let effective_algo_normalized =
+        crate::api::display::effective_dither(effective_device_dither, effective_script_dither);
     let panel_tuning = panel_dither_config
         .as_ref()
         .map(|pdc| pdc.resolve_for_algorithm(effective_algo_normalized.as_deref()))

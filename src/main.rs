@@ -426,11 +426,12 @@ fn run_render_command(
 
         // Resolve panel dither tuning for the effective algorithm
         let panel_dither_config = panel.and_then(|p| p.dither.clone());
-        let effective_algo = script_result
-            .script_dither
-            .as_deref()
-            .or(dc_dither.as_deref());
-        let effective_algo_normalized = effective_algo.map(byonk::models::normalize_algorithm_name);
+        // Same two slots as the `resolve_render_params` call below, so the
+        // tuning is looked up for the algorithm that is rendered.
+        let effective_algo_normalized = byonk::api::display::effective_dither(
+            dc_dither.as_deref(),
+            script_result.script_dither.as_deref(),
+        );
         let panel_tuning = panel_dither_config
             .as_ref()
             .map(|pdc| pdc.resolve_for_algorithm(effective_algo_normalized.as_deref()))

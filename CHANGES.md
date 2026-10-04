@@ -282,6 +282,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still is. Explicit controls for the other settings are coming; until then,
   set them in `config.yaml` (or through the Home Assistant device controls) as
   you would any other device setting.
+- **`byonk render` and device previews now use the panel tuning of the
+  algorithm they actually render with.** A panel profile can tune each dither
+  algorithm differently. When a device and its screen both named an algorithm
+  and the two differed, the device's algorithm was rendered — but `byonk
+  render --mac` looked up the tuning for the *screen's* algorithm, and the
+  device preview (the admin API's preview image, which Home Assistant shows)
+  ignored the device's algorithm in that lookup altogether. Both now match
+  what the device itself receives from `/api/display`.
+- **A dither tuning override that sets only some numbers keeps the rest.**
+  Setting, say, only `max_error` in the dev editor's preview dropped every
+  other tuning number the panel profile or the device supplied, so the preview
+  quietly fell back to algorithm defaults for those. Each number is now
+  overridden on its own.
 - **Your own screen repo now appears in the editor before it holds any
   screens.** The dev editor listed a repo only if it already contained a
   screen, so on a fresh install `local` — the repo your own screens belong in —

@@ -11,8 +11,8 @@ use utoipa::ToSchema;
 use super::headers::HeaderMapExt;
 use crate::error::ApiError;
 use crate::models::{
-    normalize_algorithm_name, verify_ed25519_signature, ApiKey, AppConfig, Device, DeviceId,
-    DisplaySpec, DitherTuningValues, PanelConfig,
+    verify_ed25519_signature, ApiKey, AppConfig, Device, DeviceId, DisplaySpec, DitherTuningValues,
+    PanelConfig,
 };
 use crate::server::{tuning_session_active, DevOverrides, TUNING_REFRESH_SECS};
 
@@ -157,28 +157,23 @@ pub fn resolve_query_palette(model: &str, colors_override: Option<&str>) -> Vec<
     }
 }
 
-/// If `override_tuning` has any field set, it wins wholesale — an explicit
-/// UI/API tuning override beats the script/device-config/panel chain even
-/// for the fields the caller left `None` (matching `/dev/render`'s existing
-/// "an explicit override replaces the whole tuning struct" behavior).
-/// Otherwise falls back to the normal `resolve_tuning` priority chain.
-/// Shared by `/dev/render` and `ScreenStore::render`.
+/// Resolve tuning with an explicit UI/API override on top of the normal
+/// `resolve_tuning` chain. Field by field: a field the override sets wins,
+/// and a field it leaves `None` falls through to script > device config >
+/// panel. (It used to replace the whole block when any field was set, so
+/// overriding `strength` alone dropped the panel's `max_error`.)
+/// Shared by `/dev/render`, `ScreenStore::render` and `/api/display`.
 pub fn resolve_effective_tuning(
     override_tuning: &DitherTuningValues,
     script_tuning: &DitherTuningValues,
     device_config_tuning: &DitherTuningValues,
     panel_tuning: &DitherTuningValues,
 ) -> DitherTuningValues {
-    if override_tuning.max_error.is_some()
-        || override_tuning.noise_scale.is_some()
-        || override_tuning.chroma_clamp.is_some()
-        || override_tuning.strength.is_some()
-        || !override_tuning.gamut.is_empty()
-    {
-        override_tuning.clone()
-    } else {
-        resolve_tuning(script_tuning, device_config_tuning, panel_tuning)
-    }
+    override_tuning.or(&resolve_tuning(
+        script_tuning,
+        device_config_tuning,
+        panel_tuning,
+    ))
 }
 
 /// Build the eink-dither tuning override + whether any override is
@@ -353,6 +348,17 @@ fn resolve_temperature_profile(configured: Option<&str>) -> String {
     }
 }
 
+/// The algorithm a render uses: the device slot, else the script slot,
+/// canonicalised. `resolve_render_params` decides the algorithm with this,
+/// and every caller looks up the panel's per-algorithm tuning with it too,
+/// passing the same two values it passes to `resolve_render_params` — so the
+/// tuning always belongs to the algorithm that is rendered.
+pub fn effective_dither(device_slot: Option<&str>, script_slot: Option<&str>) -> Option<String> {
+    device_slot
+        .or(script_slot)
+        .map(crate::models::normalize_algorithm_name)
+}
+
 /// Palette:  script_colors > device_config_colors > panel_colors > fallback
 /// Measured: script_colors_actual > pre_script_measured_candidates (in the
 ///           order the caller supplies them, e.g. dev override >
@@ -422,7 +428,7 @@ pub fn resolve_render_params(
             ));
         }
     }
-    let dither = device_algo.or(script_algo);
+    let dither = effective_dither(device_config_dither, script_dither);
 
     let script_measured = script_colors_actual.map(parse_measured_color_list);
     let mut candidates: Vec<MeasuredCandidate> =
@@ -1019,13 +1025,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                     // override > device config > script. If these two ever
                     // disagree, per-algorithm tuning is looked up for one
                     // algorithm while another is rendered.
-                    let final_algo_str = if dev_dither.is_some() {
-                        dev_dither.as_deref()
-                    } else {
-                        dc_dither.as_deref().or(result.script_dither.as_deref())
-                    };
-                    let final_algo_normalized =
-                        final_algo_str.map(normalize_algorithm_name);
+                    let final_algo_normalized = effective_dither(eff_dc_dither, eff_script_dither);
 
                     // Re-resolve panel tuning for the final algorithm (may differ from pre-script)
                     let panel_final_tuning = panel_dither_for_closure
@@ -1045,11 +1045,12 @@ pub async fn handle_display<R: DeviceRegistry>(
                     };
 
                     // Resolve tuning: dev override > script > device config > panel > algorithm defaults
-                    let tuning = if let Some(ref dt) = dev_tuning {
-                        dt.clone()
-                    } else {
-                        resolve_tuning(&script_tuning, &dc_tuning_for_closure, &panel_final_tuning)
-                    };
+                    let tuning = resolve_effective_tuning(
+                        &dev_tuning.clone().unwrap_or_default(),
+                        &script_tuning,
+                        &dc_tuning_for_closure,
+                        &panel_final_tuning,
+                    );
 
                     let mut render_warnings: Vec<String> = Vec::new();
                     let params = resolve_render_params(
@@ -2068,9 +2069,11 @@ panels:
     }
 
     #[test]
-    fn a_gamut_only_override_counts_as_an_override() {
-        // `resolve_effective_tuning` short-circuits when any override field is
-        // set. A gamut-only override must not be silently ignored.
+    fn an_override_wins_field_by_field() {
+        // Defect 5.3: an override that sets one field must win that field
+        // and leave every other field to the chain below it — not replace
+        // the whole block. A gamut-only override is the case that used to
+        // need its own short-circuit check.
         let over = DitherTuningValues {
             deprecated_error_clamp: None,
             gamut: crate::models::GamutTuningValues {
@@ -2085,10 +2088,15 @@ panels:
             ..Default::default()
         };
         let resolved = resolve_effective_tuning(&over, &other, &other, &other);
-        assert_eq!(resolved.gamut.amount, Some(0.0));
         assert_eq!(
-            resolved.max_error, None,
-            "an explicit override replaces the whole struct"
+            resolved.gamut.amount,
+            Some(0.0),
+            "the override wins its field"
+        );
+        assert_eq!(
+            resolved.max_error,
+            Some(0.5),
+            "a field the override leaves unset falls through"
         );
     }
 

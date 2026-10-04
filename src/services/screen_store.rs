@@ -11,7 +11,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::models::screen_meta::ScreenMeta;
-use crate::models::{normalize_algorithm_name, DisplaySpec, DitherTuningValues};
+use crate::models::{DisplaySpec, DitherTuningValues};
 use crate::services::content_pipeline::{ContentPipeline, DeviceContext};
 use crate::services::screen_repo_loader::{ReadOutcome, ScreenRepoSource};
 use crate::services::screen_repo_manager::ScreenRepoManager;
@@ -184,6 +184,7 @@ pub struct RenderOpts {
     pub max_error: Option<f32>,
     pub chroma_clamp: Option<f32>,
     pub noise_scale: Option<f32>,
+    pub strength: Option<f32>,
     /// Optional gamut mapping overrides for dithering
     pub gamut: crate::models::GamutTuningValues,
     pub timestamp: Option<i64>,
@@ -225,6 +226,7 @@ impl Default for RenderOpts {
             max_error: None,
             chroma_clamp: None,
             noise_scale: None,
+            strength: None,
             gamut: Default::default(),
             timestamp: None,
             include_raw: false,
@@ -1374,12 +1376,16 @@ impl ScreenStore {
                 None => (script_result.script_dither.as_deref(), None),
             };
 
-        let effective_algo = dither_override.or(effective_script_dither);
+        // Same two slots as the `resolve_render_params` call below, so the
+        // tuning is looked up for the algorithm that is rendered — the
+        // device's dither included.
+        let effective_algo = crate::api::display::effective_dither(
+            dither_override.or(device_dither),
+            effective_script_dither,
+        );
         let panel_tuning = panel_dither_config
             .as_ref()
-            .map(|pdc| {
-                pdc.resolve_for_algorithm(effective_algo.map(normalize_algorithm_name).as_deref())
-            })
+            .map(|pdc| pdc.resolve_for_algorithm(effective_algo.as_deref()))
             .unwrap_or_default();
 
         let opts_tuning = DitherTuningValues {
@@ -1387,7 +1393,7 @@ impl ScreenStore {
             max_error: opts.max_error,
             noise_scale: opts.noise_scale,
             chroma_clamp: opts.chroma_clamp,
-            strength: None,
+            strength: opts.strength,
             gamut: opts.gamut.clone(),
         };
         let script_tuning = DitherTuningValues {
@@ -1504,7 +1510,7 @@ impl ScreenStore {
 mod tests {
     use super::*;
     use crate::assets::AssetLoader;
-    use crate::models::config::PanelConfig;
+    use crate::models::config::{PanelConfig, PanelDitherConfig};
     use crate::models::AppConfig;
     use crate::server::SharedConfig;
     use crate::services::screen_repo_manager::tests::test_manager_with_screens_dir;
@@ -3275,6 +3281,195 @@ mod tests {
         assert!(
             warning_line.contains("has 2 usable"),
             "warning must name the mismatched entry count: {warning_line}"
+        );
+    }
+
+    /// A screen that fills the whole canvas with one mid-grey that lies
+    /// between two palette entries. Dithered with any diffusion it comes out
+    /// as a pattern of two inks; with `strength: 0` it comes out flat — so
+    /// the number of distinct colours in the PNG shows whether a `strength`
+    /// setting reached the ditherer.
+    fn write_grey_screen(store: &ScreenStore, name: &str, script_dither: Option<&str>) {
+        store
+            .create_screen("local", name, StarterKind::Minimal)
+            .unwrap();
+        let dither = script_dither
+            .map(|d| format!("dither = \"{d}\","))
+            .unwrap_or_default();
+        let script = format!("return {{ data = {{}}, {dither} refresh_rate = 60 }}");
+        let screen_ref = format!("local/{name}");
+        store
+            .write_file(&screen_ref, "script.lua", script.as_bytes(), None)
+            .unwrap();
+        store
+            .write_file(
+                &screen_ref,
+                "screen.svg",
+                br##"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480"><rect width="800" height="480" fill="#606060"/></svg>"##,
+                None,
+            )
+            .unwrap();
+    }
+
+    fn distinct_colors(png_bytes: &[u8]) -> usize {
+        let img = image::load_from_memory(png_bytes)
+            .expect("render must be a PNG")
+            .to_rgb8();
+        img.pixels()
+            .map(|p| p.0)
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+    }
+
+    fn grey_panel(dither: PanelDitherConfig) -> HashMap<String, PanelConfig> {
+        let mut panels = HashMap::new();
+        panels.insert(
+            "grey-panel".to_string(),
+            PanelConfig {
+                name: "Grey Panel".to_string(),
+                match_pattern: None,
+                width: None,
+                height: None,
+                colors: "#000000,#404040,#808080,#FFFFFF".to_string(),
+                colors_actual: None,
+                dither: Some(dither),
+            },
+        );
+        panels
+    }
+
+    #[test]
+    fn grey_screen_fixture_distinguishes_strength_zero_from_default() {
+        // Guards the fixture the tuning tests below rely on: if a flat fill
+        // and a diffused fill ever stopped differing in colour count, every
+        // one of those tests would pass vacuously.
+        let (store, _repo_root) = test_store_with_local();
+        write_grey_screen(&store, "fixture", None);
+        let diffused = store.render("local/fixture", RenderOpts::default());
+        assert!(diffused.error.is_none(), "{:?}", diffused.error);
+        assert!(
+            distinct_colors(&diffused.png) > 1,
+            "default strength must diffuse"
+        );
+
+        let config = AppConfig {
+            panels: grey_panel(PanelDitherConfig {
+                defaults: DitherTuningValues {
+                    strength: Some(0.0),
+                    ..Default::default()
+                },
+                algorithms: HashMap::new(),
+            }),
+            ..AppConfig::default()
+        };
+        let (store, _repo_root) = test_store_with_local_and_config(config);
+        write_grey_screen(&store, "fixture", None);
+        let flat = store.render(
+            "local/fixture",
+            RenderOpts {
+                panel: Some("grey-panel".to_string()),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(flat.error.is_none(), "{:?}", flat.error);
+        assert_eq!(distinct_colors(&flat.png), 1, "strength 0 must render flat");
+    }
+
+    #[test]
+    fn device_preview_looks_up_panel_tuning_for_the_algorithm_it_renders_with() {
+        // The device's `dither` outranks the screen's, so this renders with
+        // floyd-steinberg. The per-algorithm panel tuning must therefore be
+        // floyd-steinberg's (`strength: 0`, a flat fill), not that of the
+        // atkinson the screen asked for (no entry, so default diffusion).
+        let mut algorithms = HashMap::new();
+        algorithms.insert(
+            "floyd-steinberg".to_string(),
+            DitherTuningValues {
+                strength: Some(0.0),
+                ..Default::default()
+            },
+        );
+        let config = AppConfig {
+            panels: grey_panel(PanelDitherConfig {
+                defaults: DitherTuningValues::default(),
+                algorithms,
+            }),
+            ..AppConfig::default()
+        };
+        let (store, _repo_root) = test_store_with_local_and_config(config);
+        write_grey_screen(&store, "algo", Some("atkinson"));
+        let res = store.render(
+            "local/algo",
+            RenderOpts {
+                panel: Some("grey-panel".to_string()),
+                device: Some(DevicePreview {
+                    mac: "AA:BB:CC:DD:EE:FF".to_string(),
+                    firmware_version: None,
+                    battery_voltage: None,
+                    rssi: None,
+                    colors: None,
+                    dither: Some("floyd-steinberg".to_string()),
+                    tuning: DitherTuningValues::default(),
+                    refresh: None,
+                }),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert_eq!(
+            distinct_colors(&res.png),
+            1,
+            "floyd-steinberg's panel tuning (strength 0) must apply"
+        );
+    }
+
+    #[test]
+    fn render_opts_strength_override_reaches_the_ditherer() {
+        // Defect 5.4: `strength` is the one tuning number an authoring
+        // render could not override.
+        let (store, _repo_root) = test_store_with_local();
+        write_grey_screen(&store, "strength", None);
+        let res = store.render(
+            "local/strength",
+            RenderOpts {
+                strength: Some(0.0),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert_eq!(distinct_colors(&res.png), 1, "strength 0 must render flat");
+    }
+
+    #[test]
+    fn tuning_override_of_one_field_keeps_the_panels_other_fields() {
+        // Defect 5.3: an override that sets only `max_error` must leave the
+        // panel's `strength` in force, not drop it with the rest of the
+        // panel's block.
+        let config = AppConfig {
+            panels: grey_panel(PanelDitherConfig {
+                defaults: DitherTuningValues {
+                    strength: Some(0.0),
+                    ..Default::default()
+                },
+                algorithms: HashMap::new(),
+            }),
+            ..AppConfig::default()
+        };
+        let (store, _repo_root) = test_store_with_local_and_config(config);
+        write_grey_screen(&store, "partial", None);
+        let res = store.render(
+            "local/partial",
+            RenderOpts {
+                panel: Some("grey-panel".to_string()),
+                max_error: Some(1.0),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert_eq!(
+            distinct_colors(&res.png),
+            1,
+            "the panel's strength 0 must survive a max_error-only override"
         );
     }
 

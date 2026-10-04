@@ -259,6 +259,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Looking at a preview no longer re-tunes the display you are previewing.**
+  When the dev editor's preview had a device selected, the render request wrote
+  its dither algorithm and its tuning numbers into the server's override table
+  for that device — so the physical panel started rendering with whatever was
+  in the drawer, from the moment you glanced at it. There was no button to
+  press and nothing on screen to say it had happened. Worse, a preview that
+  left those fields empty took the other branch and *removed* the override, so
+  opening a plain preview silently undid tuning someone had set on purpose.
+  The preview is now read-only: it renders and answers, and it cannot reach a
+  device.
+
+  A related cross-wiring went with it. The colour half of that sync stored its
+  value under the *device's* name while the renderer looks the value up under
+  the *panel profile's* name. The two names normally differ, so the write was
+  simply lost; where they happened to match, previewing one device repainted
+  every other device sharing that panel.
+
+  **What you lose for now:** changing a device's dither algorithm or its
+  tuning numbers from the dev editor no longer reaches the real device. Colour
+  tuning is unaffected — **Push to panel** was always an explicit button and
+  still is. Explicit controls for the other settings are coming; until then,
+  set them in `config.yaml` (or through the Home Assistant device controls) as
+  you would any other device setting.
 - **Your own screen repo now appears in the editor before it holds any
   screens.** The dev editor listed a repo only if it already contained a
   screen, so on a fresh install `local` — the repo your own screens belong in —

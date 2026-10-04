@@ -764,52 +764,29 @@ pub async fn handle_render(
         (script_dither.as_deref(), device_config_dither.as_deref())
     };
 
-    // Sync overrides to shared state so the production /api/display handler picks
-    // them up for the actual device render.  Both maps are keyed by the device
-    // config key (= query.mac when a device entry is selected in the dev UI).
-    if let Some(ref device_key) = query.mac {
-        // Dither
-        let mut dither_map = state.dev_overrides.dither.write().await;
-        if let Some(ref dither_val) = query.dither {
-            dither_map.insert(device_key.clone(), dither_val.clone());
-        } else {
-            dither_map.remove(device_key.as_str());
-        }
-        drop(dither_map);
-
-        // Color (actual/measured) — only sync when the dev UI sends tuned colors
-        if let Some(ref ca) = query.colors_actual {
-            state
-                .dev_overrides
-                .panel_colors
-                .write()
-                .await
-                .insert(device_key.clone(), ca.clone());
-        }
-
-        // Tuning — sync when the dev UI sends tuning params
-        let has_query_tuning = query.max_error.is_some()
-            || query.noise_scale.is_some()
-            || query.chroma_clamp.is_some()
-            || query.strength.is_some();
-        let mut tuning_map = state.dev_overrides.tuning.write().await;
-        if has_query_tuning {
-            tuning_map.insert(
-                device_key.clone(),
-                crate::models::DitherTuningValues {
-                    deprecated_error_clamp: None,
-                    max_error: query.max_error,
-                    noise_scale: query.noise_scale,
-                    chroma_clamp: query.chroma_clamp,
-                    strength: query.strength,
-                    gamut: Default::default(),
-                },
-            );
-        } else {
-            tuning_map.remove(device_key.as_str());
-        }
-        drop(tuning_map);
-    }
+    // This handler writes NO server state. It renders a preview and answers
+    // with it; nothing it does can reach a physical device.
+    //
+    // It used to sync `query.dither`/`query.colors_actual`/the tuning numbers
+    // into `DevOverrides`, keyed by `query.mac`, so that `/api/display` would
+    // serve them to the real device. Two things were wrong with that, and
+    // `tests/dev_render_is_read_only_test.rs` pins both:
+    //
+    //  - Merely *looking* at a preview re-tuned the selected display, with no
+    //    button and no indication — and a preview that omitted `dither` or the
+    //    tuning numbers took the `else` branch and *removed* an override
+    //    someone had set on purpose.
+    //  - The colour sync inserted into `dev_overrides.panel_colors` under the
+    //    DEVICE key, while `api::display` reads that map by PANEL key (see
+    //    `resolve_panel`'s doc comment). Inert while the two key spaces don't
+    //    collide; a silent cross-device repaint when they do.
+    //
+    // Reaching real hardware is a separate, explicit act — `PUT
+    // /dev/api/panel-colors/{panel}` — so that a push is something the
+    // operator does, not something a preview does to them. See
+    // `docs/superpowers/specs/2026-10-04-render-resolution-cascade-design.md`
+    // §5.1/§5.2, which is where the explicit routes for the dither and tuning
+    // overrides are specified.
 
     // Resolve panel dither tuning for the effective algorithm
     let panel_dither_config = panel.as_ref().and_then(|p| p.dither.clone());

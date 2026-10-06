@@ -161,8 +161,22 @@ async fn the_header_reports_every_setting_with_every_rung() {
             "panel",
             "fallback",
         ] {
-            assert!(s["rungs"][rung]["status"].is_string(), "{key}.{rung}");
+            // `order` names all six rungs; a rung missing from `rungs` is
+            // absent, a present one carries its status.
+            assert!(
+                s["order"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&serde_json::json!(rung)),
+                "{key}.order lacks {rung}"
+            );
+            let entry = &s["rungs"][rung];
+            assert!(
+                entry.is_null() || entry["status"].is_string(),
+                "{key}.{rung}"
+            );
         }
+        assert!(s["rungs"].get("device_final").is_none(), "{key}");
     }
     assert_eq!(res["dither"]["from"], "screen");
     assert_eq!(res["refresh"]["effective"], 60);
@@ -300,10 +314,11 @@ async fn the_header_stays_inside_its_budget_for_sixteen_entry_palettes() {
     let r = app.post_json("/dev/api/render", &[AUTH], &body).await;
     assert!(r.status.is_success(), "{} {}", r.status, r.text());
     let len = r.headers.get("x-byonk-resolution").unwrap().len();
-    // Home Assistant Ingress reads the add-on's answer with aiohttp, whose
-    // default `max_field_size` is 8190 bytes per header field; past that the
-    // preview fails under Ingress only.
-    assert!(len < 8190, "X-Byonk-Resolution is {len} bytes");
+    // nginx's default `proxy_buffer_size` is one memory page (4 KiB on
+    // x86_64) and must hold the status line and EVERY response header; past
+    // it a reverse-proxied preview fails with 502. 3.5 KiB leaves room for
+    // the other headers. (HA Ingress's aiohttp allows 8190 per field.)
+    assert!(len < 3584, "X-Byonk-Resolution is {len} bytes");
 }
 
 /// The image and the report come from one computation: whatever algorithm the

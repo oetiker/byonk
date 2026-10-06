@@ -111,9 +111,14 @@ impl<T> Resolved<T> {
                 .unwrap_or(serde_json::Value::Null),
             from: self.from,
             order: self.order.clone(),
+            // An absent rung is left out: `order` names every rung, so a rung
+            // missing here is absent. Listing them cost ~1.5 KiB of a header
+            // that must fit nginx's 4 KiB default buffer with 16-entry
+            // palettes on several rungs.
             rungs: self
                 .rungs
                 .iter()
+                .filter(|(_, _, status)| *status != RungStatus::Absent)
                 .map(|(rung, value, status)| {
                     (
                         *rung,
@@ -575,9 +580,9 @@ mod tests {
             json["rungs"]["device_base"],
             serde_json::json!({"value": 3, "status": "outranked"})
         );
-        assert_eq!(
-            json["rungs"]["override"],
-            serde_json::json!({"status": "absent"})
+        assert!(
+            json["rungs"].get("override").is_none(),
+            "an absent rung is left out of the report"
         );
     }
 
@@ -705,11 +710,11 @@ mod tests {
     fn device_final_is_always_absent_in_piece_2() {
         let r = resolve_dev_render(&inputs());
         for (name, rep) in &r.report {
-            assert_eq!(
-                rep.rungs[&Rung::DeviceFinal].status,
-                RungStatus::Absent,
-                "{name}"
+            assert!(
+                !rep.rungs.contains_key(&Rung::DeviceFinal),
+                "{name}: device_final must be absent (left out of the report)"
             );
+            assert!(rep.order.contains(&Rung::DeviceFinal), "{name}");
         }
     }
 

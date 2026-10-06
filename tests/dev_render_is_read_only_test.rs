@@ -1,4 +1,4 @@
-//! `GET /dev/api/render` is a preview. It must not change what a real device
+//! `POST /dev/api/render` is a preview. It must not change what a real device
 //! renders.
 //!
 //! The dev render used to sync its query parameters into `DevOverrides`
@@ -153,9 +153,10 @@ async fn a_dev_preview_does_not_retune_the_device_it_previews() {
     // A preview, with a device selected and an algorithm the device is not
     // configured for.
     let preview = app
-        .get_with_headers(
-            "/dev/api/render?mac=kitchen&dither=floyd-steinberg&width=800&height=480",
+        .post_json(
+            "/dev/api/render",
             &[AUTH],
+            r#"{"device":"kitchen","width":800,"height":480,"override":{"dither":"floyd-steinberg"}}"#,
         )
         .await;
     assert!(
@@ -185,9 +186,10 @@ async fn a_dev_preview_does_not_retune_the_device_with_tuning_numbers() {
     let before = fetch_device_png(&app, &headers).await;
 
     let preview = app
-        .get_with_headers(
-            "/dev/api/render?mac=kitchen&strength=0.2&max_error=0.1&width=800&height=480",
+        .post_json(
+            "/dev/api/render",
             &[AUTH],
+            r#"{"device":"kitchen","width":800,"height":480,"override":{"strength":0.2,"max_error":0.1}}"#,
         )
         .await;
     assert!(
@@ -233,9 +235,10 @@ async fn a_dev_preview_cannot_leak_colours_into_the_panel_key_space() {
     // Preview the colliding device with measured colours well away from the
     // panel's configured ones.
     let preview = app
-        .get_with_headers(
-            "/dev/api/render?mac=e1004&colors_actual=%231A1A1A,%23F0F0F0,%23C04040,%23E0D050,%234050B0,%2320A860&width=800&height=480",
+        .post_json(
+            "/dev/api/render",
             &[AUTH],
+            r##"{"device":"e1004","width":800,"height":480,"override":{"colors_actual":"#1A1A1A,#F0F0F0,#C04040,#E0D050,#4050B0,#20A860"}}"##,
         )
         .await;
     assert!(

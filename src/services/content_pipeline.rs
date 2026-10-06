@@ -55,6 +55,11 @@ pub struct ScriptResult {
     pub data: serde_json::Value,
     /// Refresh rate in seconds
     pub refresh_rate: u32,
+    /// The script's own `refresh_rate`, when it set one (`> 0`) — the screen
+    /// rung of the refresh ladder.
+    pub script_refresh_rate: Option<u32>,
+    /// The screen's `meta.yaml` `refresh`, or 900 — the refresh fallback.
+    pub screen_default_refresh: u32,
     /// If true, no new content - just tell device to check back later
     pub skip_update: bool,
     /// Screen name (a `handle/path` ref), for logging
@@ -382,6 +387,8 @@ impl ContentPipeline {
         Ok(ScriptResult {
             data: lua_result.data,
             refresh_rate,
+            script_refresh_rate: (lua_result.refresh_rate > 0).then_some(lua_result.refresh_rate),
+            screen_default_refresh: screen_default,
             skip_update: lua_result.skip_update,
             screen_name,
             source: resolved.source.clone(),

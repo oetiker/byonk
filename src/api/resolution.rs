@@ -253,11 +253,14 @@ pub const ORDER_TUNING: &[Rung] = &[
     Rung::Fallback,
 ];
 /// `content_pipeline::resolve_refresh_rate`: the script beats the device.
+/// A panel has no `refresh`, so its rung is always absent; it is listed so
+/// every setting reports the same six rungs.
 pub const ORDER_REFRESH: &[Rung] = &[
     Rung::Override,
     Rung::DeviceFinal,
     Rung::Screen,
     Rung::DeviceBase,
+    Rung::Panel,
     Rung::Fallback,
 ];
 

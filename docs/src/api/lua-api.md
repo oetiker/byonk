@@ -1329,10 +1329,9 @@ return {
 Must have the same number of entries as the resolved palette (`colors`, above). If it does not,
 the render still succeeds: the value is ignored, the next source in the chain is used instead, and
 a warning is written to the script log. On the authoring path this is visible in the MCP
-`render_screen` tool's `log` field; on `/dev/api/render` the warning goes only to the server's
-`tracing` output. The dev UI does have a console, but it doesn't show this either:
-`/dev/api/render` answers with the PNG and nothing else — it does not carry the script log — so
-the warning never reaches the page.
+`render_screen` tool's `log` field. On `/dev/api/render` the warning goes to the server's
+`tracing` output, and the rejected value and its reason are reported in the response's
+`X-Byonk-Resolution` header (the dev UI does not display it yet).
 
 A script that returns `colors_actual` wins over every other source, including the dev UI's Tune
 panel. The winning source isn't rendered anywhere in the dev UI, but it is visible

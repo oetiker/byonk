@@ -20,18 +20,27 @@ use std::convert::Infallible;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
+use crate::api::resolution::{
+    header_value, resolve_dev_render, DevRenderInputs, Resolution, Rung, RungSettings, RungStatus,
+    RESOLUTION_HEADER,
+};
 use crate::error::ApiError;
-use crate::models::DisplaySpec;
+use crate::models::{CascadeValues, DisplaySpec, PanelDitherConfig};
 use crate::server::AppState;
 use crate::services::DeviceContext;
 
-/// Query parameters for /dev/render
-#[derive(Debug, Deserialize)]
-pub struct RenderQuery {
-    /// Screen name from config (optional if mac is provided)
+/// Body of `POST /dev/api/render`. See `docs/src/guide/dev-mode.md`
+/// ("Rendering a preview") for the contract.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenderRequest {
+    /// Screen repo ref. With `device`, this screen is rendered with the
+    /// device's settings; without it, the device's own screen is rendered.
     pub screen: Option<String>,
-    /// MAC address to resolve screen from config
-    pub mac: Option<String>,
+    /// MAC, config key, or registration code.
+    pub device: Option<String>,
+    /// Panel profile id; beats the device's own `panel`.
+    pub panel: Option<String>,
     /// Device model: "og" or "x"
     #[serde(default = "default_model")]
     pub model: String,
@@ -39,32 +48,77 @@ pub struct RenderQuery {
     pub width: Option<u32>,
     /// Display height (overrides model default)
     pub height: Option<u32>,
+    #[serde(default)]
+    pub draft: RenderDraft,
+    /// Ad-hoc knobs from the dev UI: the `override` rung.
+    #[serde(default, rename = "override")]
+    pub over: CascadeValues,
+    #[serde(default)]
+    pub simulated: SimulatedInputs,
+    #[serde(default)]
+    pub view: ViewOptions,
+}
+
+/// An uncommitted edit. Each present rung REPLACES the configured one, so a
+/// preview can show the effect of removing a value (plan ruling 2).
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenderDraft {
+    pub base: Option<CascadeValues>,
+    pub panel: Option<PanelDraft>,
+}
+
+/// The panel rung of a draft. Every field absent means the panel carries
+/// nothing — it does not fall back to the configured panel.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelDraft {
+    pub colors: Option<String>,
+    pub colors_actual: Option<String>,
+    pub dither: Option<PanelDitherConfig>,
+}
+
+/// What the device would report about itself.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SimulatedInputs {
     /// Battery voltage (default: 4.2)
     pub battery_voltage: Option<f32>,
     /// WiFi RSSI in dBm (default: -50)
     pub rssi: Option<i32>,
     /// Unix timestamp override for time_now() in Lua
     pub timestamp: Option<i64>,
-    /// Custom parameters as JSON string
-    pub params: Option<String>,
-    /// Display colors as comma-separated hex RGB (e.g. "#000000,#FFFFFF,#FF0000,#FFFF00")
-    pub colors: Option<String>,
-    /// Panel profile name (references panels section in config)
-    pub panel: Option<String>,
-    /// Show actual measured panel colors in preview (default: true when panel has measured colors)
+    /// Merged over the device's configured params.
+    #[serde(default)]
+    pub params: HashMap<String, serde_json::Value>,
+}
+
+/// How the answer is drawn, as opposed to how it is resolved.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViewOptions {
+    /// Show actual measured panel colors in preview (default: true when
+    /// measured colors resolve)
     pub use_actual: Option<bool>,
-    /// Dither algorithm override from dev UI (e.g. "atkinson", "floyd-steinberg")
-    pub dither: Option<String>,
-    /// Measured/actual colors override from dev UI color tuning
-    pub colors_actual: Option<String>,
-    /// Error clamp override
-    pub max_error: Option<f32>,
-    /// Chroma clamp override
-    pub chroma_clamp: Option<f32>,
-    /// Blue noise jitter scale override
-    pub noise_scale: Option<f32>,
-    /// Dither strength override (0.0 = no diffusion, 1.0 = standard)
-    pub strength: Option<f32>,
+}
+
+/// Fields the cascade cannot carry until piece 3 (plan ruling 4).
+fn refused_until_cascade(req: &RenderRequest) -> Option<&'static str> {
+    if req
+        .draft
+        .base
+        .as_ref()
+        .is_some_and(|b| b.colors_actual.is_some())
+    {
+        return Some("draft.base.colors_actual: a device-level colors_actual is not supported yet");
+    }
+    if req.over.colors.is_some() {
+        return Some("override.colors is not supported: the script could not see it");
+    }
+    if req.over.refresh.is_some() {
+        return Some("override.refresh is not supported");
+    }
+    None
 }
 
 /// Convert serde_yaml params to serde_json values
@@ -466,187 +520,162 @@ pub async fn handle_end_tuning_session(
     StatusCode::OK
 }
 
-/// Render a screen and return PNG
+fn render_error(status: StatusCode, error: impl Into<String>, details: Option<String>) -> Response {
+    (
+        status,
+        Json(RenderErrorResponse {
+            error: error.into(),
+            details,
+        }),
+    )
+        .into_response()
+}
+
+/// What the dev render needs back from the blocking script run.
+struct ScriptOutputs {
+    svg: String,
+    script: RungSettings,
+    screen_default_refresh: u32,
+    font_hinting: Option<crate::rendering::font_config::FontHintingDirective>,
+}
+
+/// Render a screen and return PNG, with the resolution of every render
+/// setting in `X-Byonk-Resolution`.
 pub async fn handle_render(
     State(state): State<AppState>,
-    Query(query): Query<RenderQuery>,
+    Json(req): Json<RenderRequest>,
 ) -> Response {
+    use crate::api::display;
+
+    if let Some(refusal) = refused_until_cascade(&req) {
+        return render_error(StatusCode::BAD_REQUEST, refusal, None);
+    }
+
     let config = state.config.load();
 
-    // Resolve screen ref: MAC takes precedence, then explicit screen
-    let (
-        screen_ref,
-        resolved_params,
-        device_config_colors,
-        device_config_panel,
-        device_config_dither,
-        dc_max_error,
-        dc_noise_scale,
-        dc_chroma_clamp,
-        dc_strength,
-        dc_gamut,
-    ) = if let Some(ref mac) = query.mac {
-        // Try MAC lookup first, then registration code lookup
-        match config
-            .get_device_config(mac)
-            .or_else(|| config.get_device_config_for_code(mac))
+    // The device supplies every render setting and its params; `screen`, when
+    // given, replaces only which screen is rendered (spec §4.6).
+    let device = match req.device.as_deref() {
+        Some(key) => match config
+            .get_device_config(key)
+            .or_else(|| config.get_device_config_for_code(key))
         {
-            Some(dc) => {
-                // The device's `screen` is a `handle/path` screen repo ref.
-                // Convert device params to JSON
-                let params: HashMap<String, serde_json::Value> = yaml_params_to_json(&dc.params);
-                (
-                    dc.screen.clone(),
-                    Some(params),
-                    dc.colors.clone(),
-                    dc.panel.clone(),
-                    dc.dither.clone(),
-                    dc.max_error,
-                    dc.noise_scale,
-                    dc.chroma_clamp,
-                    dc.strength,
-                    dc.gamut.clone(),
-                )
-            }
+            Some(dc) => Some(dc),
             None => {
-                return (
+                return render_error(
                     StatusCode::NOT_FOUND,
-                    Json(RenderErrorResponse {
-                        error: format!("Device '{}' not configured", mac),
-                        details: None,
-                    }),
-                )
-                    .into_response();
+                    format!("Device '{key}' not configured"),
+                    None,
+                );
             }
-        }
-    } else if let Some(ref screen_name) = query.screen {
-        // `screen_name` is a `handle/path` screen repo ref; validity is checked when
-        // the pipeline resolves it below.
-        (
-            screen_name.clone(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            crate::models::GamutTuningValues::default(),
-        )
-    } else {
-        return (
+        },
+        None => None,
+    };
+    // A screen ref is a `handle/path` screen repo ref; validity is checked
+    // when the pipeline resolves it below.
+    let Some(screen_ref) = req
+        .screen
+        .clone()
+        .or_else(|| device.map(|d| d.screen.clone()))
+    else {
+        return render_error(
             StatusCode::BAD_REQUEST,
-            Json(RenderErrorResponse {
-                error: "Either 'screen' or 'mac' parameter is required".to_string(),
-                details: None,
-            }),
-        )
-            .into_response();
+            "Either 'screen' or 'device' is required",
+            None,
+        );
+    };
+
+    // The rungs, draft-aware: a draft rung REPLACES the configured one
+    // (plan ruling 2).
+    let device_rung: CascadeValues = req
+        .draft
+        .base
+        .clone()
+        .unwrap_or_else(|| device.map(|d| d.base()).unwrap_or_default());
+    let panel_cfg = req
+        .panel
+        .as_deref()
+        .or(device.and_then(|d| d.panel.as_deref()))
+        .and_then(|name| config.get_panel(name));
+    let (panel_colors, panel_colors_actual, panel_dither_config): (
+        Option<String>,
+        Option<String>,
+        Option<PanelDitherConfig>,
+    ) = match &req.draft.panel {
+        Some(d) => (d.colors.clone(), d.colors_actual.clone(), d.dither.clone()),
+        None => (
+            panel_cfg.map(|p| p.colors.clone()),
+            panel_cfg.and_then(|p| p.colors_actual.clone()),
+            panel_cfg.and_then(|p| p.dither.clone()),
+        ),
     };
 
     // Determine dimensions from model or explicit values
-    let (width, height) =
-        crate::api::display::resolve_preview_dimensions(&query.model, query.width, query.height);
+    let (width, height) = display::resolve_preview_dimensions(&req.model, req.width, req.height);
 
-    // Parse custom params (these override resolved params from MAC)
-    let mut custom_params: HashMap<String, serde_json::Value> = resolved_params.unwrap_or_default();
+    // Device params, with the simulated ones on top.
+    let mut custom_params: HashMap<String, serde_json::Value> = device
+        .map(|d| yaml_params_to_json(&d.params))
+        .unwrap_or_default();
+    custom_params.extend(req.simulated.params.clone());
 
-    // Merge query params on top of resolved params
-    if let Some(ref params_str) = query.params {
-        if let Ok(query_params) =
-            serde_json::from_str::<HashMap<String, serde_json::Value>>(params_str)
-        {
-            custom_params.extend(query_params);
-        }
-    }
+    // The model's default palette stands in for the firmware `Colors` header.
+    let query_palette: Vec<(u8, u8, u8)> = display::resolve_query_palette(&req.model, None);
 
-    // Build initial palette from colors param or model default (acts as "firmware header")
-    // Priority chain: script_colors > device_config_colors > panel_colors > query.colors > model default
-    let query_palette: Vec<(u8, u8, u8)> =
-        crate::api::display::resolve_query_palette(&query.model, query.colors.as_deref());
+    // ---- Pre-script device context: what the script sees as `device.*`.
+    // Unchanged logic (plan ruling 6), fed from the draft-aware rungs.
 
-    // Resolve panel: query.panel (UI override) > device_config_panel > None
-    let panel = query
-        .panel
-        .as_deref()
-        .or(device_config_panel.as_deref())
-        .and_then(|name| config.get_panel(name));
-    let panel_colors: Option<String> = panel.as_ref().map(|p| p.colors.clone());
-
-    // Apply priority chain: device_config_colors > panel_colors > query/model default
-    let default_palette: Vec<(u8, u8, u8)> = crate::api::display::resolve_ctx_palette(
-        device_config_colors.as_deref(),
+    // Chain: device colors > panel colors > model default
+    let default_palette: Vec<(u8, u8, u8)> = display::resolve_ctx_palette(
+        device_rung.colors.as_deref(),
         panel_colors.as_deref(),
         &query_palette,
     );
 
-    // Pre-script dither algorithm: query dither > device config > "atkinson"
-    let pre_script_algo = query
+    // Pre-script dither algorithm: override > device > "atkinson"
+    let pre_script_algo = req
+        .over
         .dither
         .as_deref()
-        .or(device_config_dither.as_deref())
+        .or(device_rung.dither.as_deref())
         .unwrap_or("atkinson");
 
     // Pre-script panel tuning for device context
-    let panel_dither_config_pre = panel.as_ref().and_then(|p| p.dither.clone());
-    let pre_panel_tuning = panel_dither_config_pre
+    let pre_panel_tuning = panel_dither_config
         .as_ref()
         .map(|pdc| pdc.resolve_for_algorithm(Some(pre_script_algo)))
         .unwrap_or_default();
-    let pre_dc_tuning = crate::models::DitherTuningValues {
-        deprecated_error_clamp: None,
-        max_error: dc_max_error,
-        noise_scale: dc_noise_scale,
-        chroma_clamp: dc_chroma_clamp,
-        strength: dc_strength,
-        gamut: dc_gamut.clone(),
-    };
-    let pre_script_tuning = pre_dc_tuning.or(&pre_panel_tuning);
+    let pre_script_tuning = RungSettings::from_cascade(&device_rung)
+        .tuning
+        .or(&pre_panel_tuning);
 
-    // Resolve measured colors: query param (from dev UI color tuning) > panel.colors_actual
-    let query_actual_parsed: Option<Vec<(u8, u8, u8)>> = query
+    // Measured colours: override (dev UI colour tuning) > panel.colors_actual
+    let over_actual: Option<Vec<(u8, u8, u8)>> = req
+        .over
         .colors_actual
         .as_deref()
-        .map(crate::api::display::parse_colors_header);
-    let panel_actual_parsed: Option<Vec<(u8, u8, u8)>> = panel
-        .as_ref()
-        .and_then(|p| p.colors_actual.as_deref())
-        .map(crate::api::display::parse_colors_header);
-    // Pre-script chain, in precedence order, for the final measured-colour
-    // resolution after the script runs (see `resolve_render_params`'s doc
-    // comment) — the dev UI's `colors_actual` query param stands in for a
-    // "dev override" layer.
-    let pre_script_measured_candidates: Vec<crate::api::display::MeasuredCandidate> = vec![
-        (crate::api::display::SRC_DEV_OVERRIDE, query_actual_parsed),
-        (crate::api::display::SRC_PANEL_ACTUAL, panel_actual_parsed),
-    ];
-    // Pre-script winner, used only to populate `DeviceContext.colors_actual`
-    // (what the script sees before it runs). Derived from the candidate
-    // array above rather than its own `.or_else` chain so the two can't
-    // silently drift on precedence (see Task 1's `main.rs` finding, of
-    // which a separately-maintained duplicate here would be a recurrence).
-    let measured_colors: Option<Vec<(u8, u8, u8)>> = pre_script_measured_candidates
-        .iter()
-        .find_map(|(_, c)| c.clone());
+        .map(display::parse_colors_header);
+    let panel_actual: Option<Vec<(u8, u8, u8)>> = panel_colors_actual
+        .as_deref()
+        .map(display::parse_colors_header);
+    let pre_script_measured = over_actual.clone().or_else(|| panel_actual.clone());
 
-    // Create device context
     let device_ctx = DeviceContext {
-        mac: query
-            .mac
+        mac: req
+            .device
             .clone()
             .unwrap_or_else(|| "dev-simulator".to_string()),
-        battery_voltage: Some(query.battery_voltage.unwrap_or(4.2)),
-        rssi: Some(query.rssi.unwrap_or(-50)),
-        model: Some(query.model.clone()),
+        battery_voltage: Some(req.simulated.battery_voltage.unwrap_or(4.2)),
+        rssi: Some(req.simulated.rssi.unwrap_or(-50)),
+        model: Some(req.model.clone()),
         firmware_version: Some("dev".to_string()),
         width: Some(width),
         height: Some(height),
         registration_code: None,
-        colors: Some(crate::api::display::colors_to_hex_strings(&default_palette)),
-        colors_actual: measured_colors
+        colors: Some(display::colors_to_hex_strings(&default_palette)),
+        colors_actual: pre_script_measured
             .as_deref()
-            .map(crate::api::display::colors_to_hex_strings),
+            .map(display::colors_to_hex_strings),
         dither_algorithm: Some(pre_script_algo.to_string()),
         dither_max_error: pre_script_tuning.max_error,
         dither_noise_scale: pre_script_tuning.noise_scale,
@@ -658,13 +687,12 @@ pub async fn handle_render(
         ..Default::default()
     };
 
-    // Run script directly with the resolved screen ref
+    // ---- Run the script with the resolved screen ref
     let pipeline = state.content_pipeline.clone();
     let ctx = device_ctx.clone();
-    let timestamp_override = query.timestamp;
+    let timestamp_override = req.simulated.timestamp;
 
     let result = tokio::task::spawn_blocking(move || {
-        // Run the Lua script with optional timestamp override
         let script_result = pipeline.run_script_direct(
             &screen_ref,
             crate::services::content_pipeline::json_params_to_yaml(custom_params),
@@ -673,95 +701,51 @@ pub async fn handle_render(
             None,
         )?;
 
-        // Render SVG
         let svg = pipeline
             .render_svg_from_script(&script_result, Some(&ctx))
             .map_err(|e| e.to_string())?;
 
-        Ok::<
-            (
-                String,
-                Option<Vec<String>>,
-                Option<Vec<String>>,
-                Option<String>,
-                Option<f32>,
-                Option<f32>,
-                Option<f32>,
-                Option<f32>,
-                Option<crate::models::GamutTuningValues>,
-                Option<crate::rendering::font_config::FontHintingDirective>,
-            ),
-            String,
-        >((
+        let script = RungSettings {
+            colors: script_result
+                .script_colors
+                .as_ref()
+                .map(|v| display::parse_colors_header(&v.join(","))),
+            colors_actual: script_result
+                .script_colors_actual
+                .as_deref()
+                .map(display::parse_measured_color_list),
+            dither: script_result.script_dither.clone(),
+            tuning: crate::models::DitherTuningValues {
+                deprecated_error_clamp: None,
+                max_error: script_result.script_max_error,
+                noise_scale: script_result.script_noise_scale,
+                chroma_clamp: script_result.script_chroma_clamp,
+                strength: script_result.script_strength,
+                gamut: script_result.script_gamut.clone().unwrap_or_default(),
+            },
+            refresh: script_result.script_refresh_rate,
+        };
+        Ok::<ScriptOutputs, String>(ScriptOutputs {
             svg,
-            script_result.script_colors,
-            script_result.script_colors_actual,
-            script_result.script_dither,
-            script_result.script_max_error,
-            script_result.script_noise_scale,
-            script_result.script_chroma_clamp,
-            script_result.script_strength,
-            script_result.script_gamut,
-            script_result.font_hinting,
-        ))
+            script,
+            screen_default_refresh: script_result.screen_default_refresh,
+            font_hinting: script_result.font_hinting,
+        })
     })
     .await;
 
-    let (
-        svg,
-        script_colors,
-        script_colors_actual,
-        script_dither,
-        script_max_error,
-        script_noise_scale,
-        script_chroma_clamp,
-        script_strength,
-        script_gamut,
-        script_font_hinting,
-    ) = match result {
+    let out = match result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(RenderErrorResponse {
-                    error: "Render error".to_string(),
-                    details: Some(e),
-                }),
-            )
-                .into_response();
+            return render_error(StatusCode::INTERNAL_SERVER_ERROR, "Render error", Some(e));
         }
         Err(e) => {
-            return (
+            return render_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(RenderErrorResponse {
-                    error: "Task error".to_string(),
-                    details: Some(e.to_string()),
-                }),
-            )
-                .into_response();
+                "Task error",
+                Some(e.to_string()),
+            );
         }
-    };
-
-    tracing::debug!(
-        screen = ?query.screen,
-        mac = ?query.mac,
-        script_colors = ?script_colors,
-        script_dither = ?script_dither,
-        dc_colors = ?device_config_colors,
-        dc_dither = ?device_config_dither,
-        panel_colors = ?panel_colors,
-        query_colors = ?query.colors,
-        measured_colors = ?measured_colors.as_deref().map(crate::api::display::colors_to_hex_strings),
-        "Resolving dev render params"
-    );
-
-    // In dev mode, UI dither overrides everything including script dither
-    let (effective_script_dither, effective_device_dither) = if query.dither.is_some() {
-        // UI explicitly selected a dither — override script and device config
-        (None, query.dither.as_deref())
-    } else {
-        // No UI override — normal priority: script > device config
-        (script_dither.as_deref(), device_config_dither.as_deref())
     };
 
     // This handler writes NO server state. It renders a preview and answers
@@ -788,83 +772,30 @@ pub async fn handle_render(
     // §5.1/§5.2, which is where the explicit routes for the dither and tuning
     // overrides are specified.
 
-    // Resolve panel dither tuning for the effective algorithm
-    let panel_dither_config = panel.as_ref().and_then(|p| p.dither.clone());
-    // Same two slots as the `resolve_render_params` call below, so the
-    // tuning is looked up for the algorithm that is rendered.
-    let effective_algo_normalized =
-        crate::api::display::effective_dither(effective_device_dither, effective_script_dither);
-    let panel_tuning = panel_dither_config
-        .as_ref()
-        .map(|pdc| pdc.resolve_for_algorithm(effective_algo_normalized.as_deref()))
-        .unwrap_or_default();
+    // ---- Post-script: every render setting resolves on the ladder, and the
+    // renderer is fed from that same resolution — the report and the pixels
+    // cannot disagree.
+    let res = resolve_dev_render(&DevRenderInputs {
+        over: RungSettings::from_cascade(&req.over),
+        screen: out.script,
+        device_base: RungSettings::from_cascade(&device_rung),
+        panel: RungSettings {
+            colors: panel_colors.as_deref().map(display::parse_colors_header),
+            colors_actual: panel_actual,
+            ..Default::default()
+        },
+        panel_dither: panel_dither_config.as_ref(),
+        fallback_palette: query_palette,
+        screen_default_refresh: out.screen_default_refresh,
+    });
+    log_render_warnings(&res.report, &req);
 
-    let dc_tuning = crate::models::DitherTuningValues {
-        deprecated_error_clamp: None,
-        max_error: dc_max_error,
-        noise_scale: dc_noise_scale,
-        chroma_clamp: dc_chroma_clamp,
-        strength: dc_strength,
-        gamut: dc_gamut.clone(),
-    };
-
-    // Resolve tuning: query params (dev UI) > script > device config > panel > None
-    // `gamut` deliberately keeps its `Default::default()` placeholder here:
-    // there are no gamut query parameters, so a dev-UI tuning override never
-    // carries gamut knobs. Adding that would be new query-string surface,
-    // not threading (see Task 12's amendment F).
-    let query_tuning = crate::models::DitherTuningValues {
-        deprecated_error_clamp: None,
-        max_error: query.max_error,
-        noise_scale: query.noise_scale,
-        chroma_clamp: query.chroma_clamp,
-        strength: query.strength,
-        gamut: Default::default(),
-    };
-    let script_tuning = crate::models::DitherTuningValues {
-        deprecated_error_clamp: None,
-        max_error: script_max_error,
-        noise_scale: script_noise_scale,
-        chroma_clamp: script_chroma_clamp,
-        strength: script_strength,
-        gamut: script_gamut.clone().unwrap_or_default(),
-    };
-    let tuning = crate::api::display::resolve_effective_tuning(
-        &query_tuning,
-        &script_tuning,
-        &dc_tuning,
-        &panel_tuning,
-    );
-
-    let mut render_warnings: Vec<String> = Vec::new();
-    let render_params = crate::api::display::resolve_render_params(
-        script_colors.as_deref(),
-        script_colors_actual.as_deref(),
-        effective_script_dither,
-        device_config_colors.as_deref(),
-        effective_device_dither,
-        panel_colors.as_deref(),
-        &query_palette,
-        &pre_script_measured_candidates,
-        &tuning,
-        &mut render_warnings,
-    );
-    for w in &render_warnings {
-        tracing::warn!(screen = ?query.screen, mac = ?query.mac, "{w}");
-    }
-
-    let (tuning, has_tuning) = crate::api::display::resolve_dither_tuning(&render_params);
-
-    let final_palette = render_params.palette;
-    let final_dither = render_params.dither;
-    let measured_source = render_params.measured_source;
-    let measured_colors = render_params.measured_colors;
+    let (tuning, has_tuning) = display::resolve_dither_tuning_from(&res.tuning);
 
     tracing::debug!(
-        resolved_palette = ?crate::api::display::colors_to_hex_strings(&final_palette),
-        resolved_dither = ?final_dither,
-        has_measured = measured_colors.is_some(),
-        measured_source = measured_source,
+        resolved_palette = ?display::colors_to_hex_strings(&res.palette),
+        resolved_dither = ?res.dither,
+        has_measured = res.measured_colors.is_some(),
         "Resolved dev render params"
     );
 
@@ -872,42 +803,76 @@ pub async fn handle_render(
     let display_spec = DisplaySpec::from_dimensions(width, height).unwrap_or(DisplaySpec::OG);
 
     // Dev mode uses measured colors for preview.
-    // Respect explicit query param; default to true when panel has measured
-    // colors. Shared rule — see `resolve_use_actual`'s doc comment.
+    // Respect an explicit request; default to true when measured colors
+    // resolve. Shared rule — see `resolve_use_actual`'s doc comment.
     let use_actual =
-        crate::api::display::resolve_use_actual(query.use_actual, measured_colors.is_some());
+        display::resolve_use_actual(req.view.use_actual, res.measured_colors.is_some());
 
     match state.content_pipeline.render_png_from_svg(
-        &svg,
+        &out.svg,
         display_spec,
-        &final_palette,
-        measured_colors.as_deref(),
+        &res.palette,
+        res.measured_colors.as_deref(),
         use_actual,
-        final_dither.as_deref(),
+        res.dither.as_deref(),
         if has_tuning { Some(&tuning) } else { None },
-        script_font_hinting.as_ref(),
-        // `/dev/render` answers with an image and nothing else — it does not
-        // carry the script log either (see `run_script_direct`), so there is
-        // nowhere to put this.
+        out.font_hinting.as_ref(),
+        // `/dev/render` does not carry the script log (see
+        // `run_script_direct`), so there is nowhere to put this.
         &mut None,
     ) {
         Ok(png_bytes) => (
             StatusCode::OK,
             [
-                (header::CONTENT_TYPE, "image/png"),
-                (header::CACHE_CONTROL, "no-cache"),
+                (header::CONTENT_TYPE, "image/png".to_string()),
+                (header::CACHE_CONTROL, "no-cache".to_string()),
+                (
+                    header::HeaderName::from_static(RESOLUTION_HEADER),
+                    header_value(&res.report),
+                ),
             ],
             Bytes::from(png_bytes),
         )
             .into_response(),
-        Err(e) => (
+        Err(e) => render_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(RenderErrorResponse {
-                error: "PNG render error".to_string(),
-                details: Some(e.to_string()),
-            }),
-        )
-            .into_response(),
+            "PNG render error",
+            Some(e.to_string()),
+        ),
+    }
+}
+
+/// The two warnings the legacy `resolve_render_params` pushed, read from the
+/// resolution so the server log keeps saying what it said: a rejected
+/// `colors_actual`, and a screen `dither` the device outranks.
+fn log_render_warnings(report: &Resolution, req: &RenderRequest) {
+    if let Some(actual) = report.get("colors_actual") {
+        for (rung, r) in &actual.rungs {
+            if let RungStatus::Rejected { reason } = &r.status {
+                tracing::warn!(
+                    screen = ?req.screen,
+                    device = ?req.device,
+                    "{rung:?}: colors_actual {reason}; skipping it."
+                );
+            }
+        }
+    }
+    if let Some(dither) = report.get("dither") {
+        let screen_value = dither
+            .rungs
+            .get(&Rung::Screen)
+            .and_then(|r| r.value.as_ref());
+        if let (Rung::DeviceBase, Some(screen_value)) = (dither.from, screen_value) {
+            if *screen_value != dither.effective {
+                tracing::warn!(
+                    screen = ?req.screen,
+                    device = ?req.device,
+                    "screen asked for dither {screen_value} but the device is configured \
+                     for {}; the device wins.",
+                    dither.effective
+                );
+            }
+        }
     }
 }
 
@@ -925,7 +890,7 @@ pub fn dev_router(state: &AppState) -> Router<AppState> {
     let api = Router::new()
         .route("/screens", get(handle_screens))
         .route("/events", get(handle_events))
-        .route("/render", get(handle_render))
+        .route("/render", post(handle_render))
         .route("/resolve-mac", get(handle_resolve_mac))
         .route(
             "/panel-colors/{panel}",

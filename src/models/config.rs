@@ -1372,4 +1372,15 @@ colors: "#000000,#FFFFFF"
         assert_eq!(b.gamut.knee, Some(0.7));
         assert_eq!(b.colors_actual, None);
     }
+
+    /// The dev render's `draft.panel.dither` arrives as JSON, so the
+    /// hand-written deserializer must accept the YAML shape from JSON too.
+    #[test]
+    fn panel_dither_config_deserializes_from_json() {
+        let pdc: PanelDitherConfig =
+            serde_json::from_str(r#"{"max_error": 1.0, "floyd-steinberg": {"noise_scale": 0.6}}"#)
+                .unwrap();
+        assert_eq!(pdc.defaults.max_error, Some(1.0));
+        assert_eq!(pdc.algorithms["floyd-steinberg"].noise_scale, Some(0.6));
+    }
 }

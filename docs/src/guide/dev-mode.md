@@ -513,13 +513,92 @@ than a redirect when you are not admitted.
 | `POST /dev/api/screen/rename` | Rename a screen within its repo |
 | `POST /dev/api/screen/validate` | Validate a screen as it is on disk |
 | `POST /dev/api/screen/check` | Check one file's unsaved text |
-| `GET /dev/api/render` | Render a screen to PNG under simulated device context |
+| `POST /dev/api/render` | Render a screen to PNG under simulated device context; the answer carries `X-Byonk-Resolution` (see [Rendering a preview](#rendering-a-preview)) |
 | `GET /dev/api/events` | Server-Sent Events stream for live reload |
 | `GET /dev/api/resolve-mac` | Resolve a MAC or registration code to that device's screen and params |
 | `PUT /dev/api/panel-colors/{panel}`, `DELETE /dev/api/panel-colors/{panel}` | Set and clear a panel's temporary measured-colour override |
 | `POST /dev/api/panel-colors/{panel}/save` | Write the override into `config.yaml` as that panel's `colors_actual`, then clear it |
 | `PUT /dev/api/tuning-session/{device}`, `DELETE /dev/api/tuning-session/{device}` | Start or refresh, and end, a device's faster tuning-refresh session (see [Tune: colour calibration](#tune-colour-calibration)) |
 | `GET /dev/api/whoami` | Who the server thinks you are, and whether you can log out |
+
+### Rendering a preview
+
+`POST /dev/api/render` takes a JSON body and answers with the PNG. It is a
+preview only: it changes no server state and reaches no device.
+
+```json
+{
+  "screen": "local/hello",
+  "device": "kitchen",
+  "panel": "trmnl_x",
+  "model": "og",
+  "width": 800,
+  "height": 480,
+  "draft": {
+    "base": { "dither": "floyd-steinberg", "strength": 0.8 },
+    "panel": { "colors": "#000000,#FFFFFF", "colors_actual": "#101010,#E8E8E8", "dither": { "max_error": 1.0 } }
+  },
+  "override": { "dither": "atkinson" },
+  "simulated": { "battery_voltage": 4.2, "rssi": -50, "timestamp": 1700000000, "params": {} },
+  "view": { "use_actual": true }
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `screen` | The screen to render. Required when `device` is not given. |
+| `device` | A MAC, device config key or registration code. Every render setting and the params come from this device. Without `screen`, the device's own screen is rendered; with it, `screen` is rendered as this device. |
+| `panel` | A panel profile id. Replaces the device's own `panel`. |
+| `model` | `og` (default) or `x`. Gives the default size and the fallback palette. |
+| `width`, `height` | The render size, when it differs from the model's. |
+| `draft.base` | An unsaved device rung: the device's `colors`, `dither`, the tuning numbers, `gamut` and `refresh`. |
+| `draft.panel` | An unsaved panel rung: `colors`, `colors_actual` and the panel `dither` block. |
+| `override` | Ad-hoc values from the dev UI controls, above every other rung: `dither`, `colors_actual`, the tuning numbers and `gamut`. |
+| `simulated` | What the device would report: battery voltage, RSSI, the clock, and params that are merged over the device's own. |
+| `view.use_actual` | Draw the PNG in the measured panel colours. Defaults to on when measured colours resolve. |
+
+**A draft rung replaces its configured rung completely.** A `draft.base`
+without `dither` removes the device's `dither` from the preview, so you can
+see what the device does without it. A field that the draft leaves out is
+absent, not inherited.
+
+Some fields are refused with `400`, because the configuration cannot hold
+them yet: `draft.final`, `draft.base.colors_actual`, `override.colors` and
+`override.refresh`. A script would see a different palette than the one that
+is rendered with `override.colors`. Unknown fields are refused too.
+
+The answer carries an `X-Byonk-Resolution` header. It is one line of JSON
+that tells, for every render setting, which value won and why. Example for
+one setting, a device with `dither: floyd-steinberg` rendering a screen that
+asks for `atkinson`:
+
+```json
+{"dither":{"effective":"floyd-steinberg","from":"device_base",
+ "order":["override","device_final","device_base","screen","panel","fallback"],
+ "rungs":{"override":{"status":"absent"},"device_final":{"status":"absent"},
+  "screen":{"value":"atkinson","status":"outranked"},
+  "device_base":{"value":"floyd-steinberg","status":"winner"},
+  "panel":{"status":"absent"},"fallback":{"value":"atkinson","status":"outranked"}}}}
+```
+
+(The header is a single line; it is wrapped here for reading.) The settings
+are `colors`, `colors_actual`, `dither`, `max_error`, `noise_scale`,
+`chroma_clamp`, `strength`, `gamut.knee`, `gamut.amount`,
+`gamut.max_compression` and `refresh`. Each rung has one status:
+
+| Status | Meaning |
+|--------|---------|
+| `winner` | This rung's value is used. |
+| `outranked` | This rung has a value, but a rung higher in `order` won. |
+| `rejected` | This rung has a value that cannot be used. A `reason` tells why — for example a `colors_actual` with a different number of entries than the palette. The next rung is tried. |
+| `absent` | This rung has no value. |
+
+`order` is the precedence that byonk uses today, highest first. It is not
+the same for every setting: for `dither`, the device is above the screen,
+while for the other settings the screen is above the device. `device_final`
+is always `absent` for now. The `fallback` rung is byonk's own default; it
+is reported, but a setting that falls back to it is left to the dithering
+engine's own default.
 
 For scripted or LLM-driven authoring, prefer the [MCP interface](mcp.md),
 which covers the same screen-store operations with a stable tool contract.

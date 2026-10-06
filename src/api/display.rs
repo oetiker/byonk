@@ -183,19 +183,35 @@ pub fn resolve_effective_tuning(
 pub fn resolve_dither_tuning(
     render_params: &RenderParams,
 ) -> (crate::rendering::svg_to_png::DitherTuning, bool) {
+    resolve_dither_tuning_from(&DitherTuningValues {
+        max_error: render_params.max_error,
+        noise_scale: render_params.noise_scale,
+        chroma_clamp: render_params.chroma_clamp,
+        strength: render_params.strength,
+        gamut: render_params.gamut.clone(),
+        deprecated_error_clamp: None,
+    })
+}
+
+/// [`resolve_dither_tuning`] for a caller that resolved its tuning without a
+/// `RenderParams` — the dev render, which resolves on the cascade ladder
+/// (`api::resolution`). One `has_tuning` rule for both.
+pub fn resolve_dither_tuning_from(
+    values: &DitherTuningValues,
+) -> (crate::rendering::svg_to_png::DitherTuning, bool) {
     let tuning = crate::rendering::svg_to_png::DitherTuning {
         serpentine: None,
-        max_error: render_params.max_error,
-        chroma_clamp: render_params.chroma_clamp,
-        noise_scale: render_params.noise_scale,
-        strength: render_params.strength,
-        gamut: Some(render_params.gamut.resolve()),
+        max_error: values.max_error,
+        chroma_clamp: values.chroma_clamp,
+        noise_scale: values.noise_scale,
+        strength: values.strength,
+        gamut: Some(values.gamut.resolve()),
     };
     let has_tuning = tuning.max_error.is_some()
         || tuning.chroma_clamp.is_some()
         || tuning.noise_scale.is_some()
         || tuning.strength.is_some()
-        || !render_params.gamut.is_empty();
+        || !values.gamut.is_empty();
     (tuning, has_tuning)
 }
 

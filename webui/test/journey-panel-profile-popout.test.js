@@ -15,7 +15,7 @@ import * as api from "../src/lib/api.js";
  *
  * The three pieces are each covered and the chain between them is not.
  * `simulatecontrols.test.js` drives the select and asserts the `simulate`
- * store; `simulate.test.js` asserts the query `url()` builds; and
+ * store; `simulate.test.js` asserts the request `request()` builds; and
  * `preview.test.js` asserts the pop-out's URL and its hello handshake. Nobody
  * has changed the Panel Profile in the real shell and checked what the
  * SECOND window is then shown.
@@ -44,12 +44,12 @@ function captureChannel() {
 
 /** A render server that answers every request with a distinguishable blob. */
 function stubRenders() {
-  const urls = [];
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
-    urls.push(String(url));
+  const bodies = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+    bodies.push(JSON.parse(init.body));
     return { ok: true, blob: async () => new Blob([String(url)], { type: "image/png" }) };
   });
-  return urls;
+  return bodies;
 }
 
 const PANELS_META = [
@@ -112,7 +112,7 @@ describe("a Panel Profile change, all the way to the pop-out", () => {
 
   it("changing the panel re-renders at the new size and tells the pop-out the new size too", async () => {
     const { posted } = captureChannel();
-    const urls = stubRenders();
+    const bodies = stubRenders();
     await mountWithScreen();
 
     // The default: no panel chosen, so 800x480 (simulate.svelte.js).
@@ -126,10 +126,7 @@ describe("a Panel Profile change, all the way to the pop-out", () => {
 
     // A fresh render went out, and it asked for the new panel's size.
     await waitFor(() => expect(posted.length).toBeGreaterThan(before));
-    const lastUrl = urls.at(-1);
-    expect(lastUrl).toContain("panel=x");
-    expect(lastUrl).toContain("width=1600");
-    expect(lastUrl).toContain("height=1200");
+    expect(bodies.at(-1)).toMatchObject({ panel: "x", width: 1600, height: 1200 });
 
     // And the pop-out was told the new size, not the old one. The width and
     // height travel WITH the image in a single message, so a stale pair here

@@ -88,7 +88,7 @@ describe("SimulateControls", () => {
   // handle that path when driven through the real component, not just
   // through a test that assigns "" by hand. ---------------------------------
 
-  it("Ruling 34: clearing the Strength field drops `strength` from the URL instead of sending a bogus value", async () => {
+  it("Ruling 34: clearing the Strength field drops `strength` from the request instead of sending a bogus value", async () => {
     simulate.strength = "0.5";
 
     const { getByLabelText } = render(SimulateControls);
@@ -97,8 +97,8 @@ describe("SimulateControls", () => {
     await fireEvent.input(strengthInput, { target: { value: "" } });
 
     expect(simulate.strength).toBeNull();
-    const u = simulate.url("local/hello");
-    expect(u).not.toContain("strength=");
-    expect(u).not.toContain("null");
+    const b = simulate.request("local/hello");
+    expect(Object.hasOwn(b.override, "strength")).toBe(false);
+    expect(JSON.stringify(b)).not.toContain("null");
   });
 });

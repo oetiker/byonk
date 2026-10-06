@@ -1,26 +1,27 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { simulate } from "../src/lib/state/simulate.svelte.js";
 import { screens } from "../src/lib/state/screens.svelte.js";
-import * as api from "../src/lib/api.js";
-
-const realRenderUrl = api.renderUrl;
 
 beforeEach(() => {
   simulate.reset();
   screens.meta = { devices: [], panels: [], dither_algorithms: [] };
 });
 
-afterEach(() => vi.restoreAllMocks());
-
 describe("simulate store", () => {
-  it("builds a relative render URL and omits unset controls", () => {
+  it("builds a render request and omits unset controls", () => {
     simulate.dither = "atkinson";
-    const u = simulate.url("local/hello");
-    expect(u.startsWith("/")).toBe(false);
-    expect(u).toContain("screen=local%2Fhello");
-    expect(u).toContain("dither=atkinson");
-    expect(u).not.toContain("panel=");
-    expect(u).not.toContain("colors_actual=");
+    const b = simulate.request("local/hello");
+    expect(b.screen).toBe("local/hello");
+    expect(b.width).toBe(800);
+    expect(b.height).toBe(480);
+    expect(b.override.dither).toBe("atkinson");
+    expect(b.simulated.params).toEqual({});
+    expect(b.panel).toBeUndefined();
+    expect(b.override.colors_actual).toBeUndefined();
+    expect(b.view).toBeUndefined();
+    // Blank fields are left out, not sent as "".
+    expect(Object.hasOwn(b.simulated, "battery_voltage")).toBe(false);
+    expect(Object.hasOwn(b.override, "chroma_clamp")).toBe(false);
   });
 
   it("takes width and height from the chosen panel profile", () => {
@@ -43,11 +44,25 @@ describe("simulate store", () => {
 
   // --- Controller Ruling 26/27: one test per conditional rule -------------
 
-  it("(a) sends the device selection as `mac`, not `device`", () => {
+  it("(a) sends the device selection as `device`, and then no `screen`", () => {
     simulate.mac = "AA:BB:CC:DD:EE:FF";
-    const u = simulate.url("local/hello");
-    expect(u).toContain("mac=AA%3ABB%3ACC%3ADD%3AEE%3AFF");
-    expect(u).not.toContain("device=");
+    const b = simulate.request("local/hello");
+    expect(b.device).toBe("AA:BB:CC:DD:EE:FF");
+    expect(Object.hasOwn(b, "mac")).toBe(false);
+    // With a device selected the preview shows that device's own screen, as
+    // it did before the POST: the server would otherwise render `screen` AS
+    // the device, which is the dev-UI work area's mode a, not this drawer's.
+    expect(Object.hasOwn(b, "screen")).toBe(false);
+  });
+
+  it("sends numeric controls as JSON numbers", () => {
+    simulate.battery_voltage = "4.1";
+    simulate.rssi = "-67";
+    simulate.chroma_clamp = "0.3";
+    const b = simulate.request("local/hello");
+    expect(b.simulated.battery_voltage).toBe(4.1);
+    expect(b.simulated.rssi).toBe(-67);
+    expect(b.override.chroma_clamp).toBe(0.3);
   });
 
   it("(b) sends width/height from the chosen panel's profile, not as raw fields", () => {
@@ -57,12 +72,12 @@ describe("simulate store", () => {
       panels: [{ id: "trmnl_x", name: "TRMNL X (16-grey)", width: 1872, height: 1404 }],
     };
     simulate.panel = "trmnl_x";
-    const u = simulate.url("local/hello");
-    expect(u).toContain("width=1872");
-    expect(u).toContain("height=1404");
+    const b = simulate.request("local/hello");
+    expect(b.width).toBe(1872);
+    expect(b.height).toBe(1404);
     // The wire value is the panel's id, never its display name.
-    expect(u).toContain("panel=trmnl_x");
-    expect(u).not.toContain("TRMNL");
+    expect(b.panel).toBe("trmnl_x");
+    expect(JSON.stringify(b)).not.toContain("TRMNL");
   });
 
   it("(c) sends use_actual and colors_actual only when a panel is chosen, and colors_actual only when the panel has one", () => {
@@ -77,41 +92,42 @@ describe("simulate store", () => {
 
     // No panel chosen: neither field appears (already covered by the floor
     // test above, restated here for locality with its siblings).
-    let u = simulate.url("local/hello");
-    expect(u).not.toContain("use_actual=");
-    expect(u).not.toContain("colors_actual=");
+    let b = simulate.request("local/hello");
+    expect(b.view).toBeUndefined();
+    expect(b.override.colors_actual).toBeUndefined();
 
     // Panel chosen and it has colors_actual: both travel.
     simulate.panel = "with_actual";
-    u = simulate.url("local/hello");
-    expect(u).toContain("use_actual=true");
-    expect(u).toContain("colors_actual=%23111%2C%23EEE");
+    b = simulate.request("local/hello");
+    expect(b.view.use_actual).toBe(true);
+    expect(b.override.colors_actual).toBe("#111,#EEE");
 
     // Panel chosen but it has no colors_actual: use_actual still travels,
     // colors_actual does not.
     simulate.panel = "no_actual";
-    u = simulate.url("local/hello");
-    expect(u).toContain("use_actual=true");
-    expect(u).not.toContain("colors_actual=");
+    simulate.use_actual = false;
+    b = simulate.request("local/hello");
+    expect(b.view.use_actual).toBe(false);
+    expect(b.override.colors_actual).toBeUndefined();
   });
 
   it("(d) sends timestamp only while time is locked", () => {
     simulate.timestamp = 1234567890;
-    let u = simulate.url("local/hello");
-    expect(u).not.toContain("timestamp=");
+    let b = simulate.request("local/hello");
+    expect(b.simulated.timestamp).toBeUndefined();
 
     simulate.timeLocked = true;
-    u = simulate.url("local/hello");
-    expect(u).toContain("timestamp=1234567890");
+    b = simulate.request("local/hello");
+    expect(b.simulated.timestamp).toBe(1234567890);
   });
 
-  it("(e) JSON-parses and re-stringifies params, and throws on invalid JSON", () => {
+  it("(e) JSON-parses params into an object, and throws on invalid JSON", () => {
     simulate.params = '{"a": 1}';
-    const u = simulate.url("local/hello");
-    expect(u).toContain(`params=${encodeURIComponent('{"a":1}')}`);
+    const b = simulate.request("local/hello");
+    expect(b.simulated.params).toEqual({ a: 1 });
 
     simulate.params = "{not json";
-    expect(() => simulate.url("local/hello")).toThrow();
+    expect(() => simulate.request("local/hello")).toThrow();
   });
 
   it("(f) sends max_error/noise_scale only when they differ from the selected algorithm's default; chroma_clamp always; strength only when not 1", () => {
@@ -125,29 +141,29 @@ describe("simulate store", () => {
     // Matches the default for the selected algorithm: omitted.
     simulate.max_error = "1.0";
     simulate.noise_scale = "8.0";
-    let u = simulate.url("local/hello");
-    expect(u).not.toContain("max_error=");
-    expect(u).not.toContain("noise_scale=");
+    let b = simulate.request("local/hello");
+    expect(b.override.max_error).toBeUndefined();
+    expect(b.override.noise_scale).toBeUndefined();
 
     // Differs from the default: sent.
     simulate.max_error = "0.5";
     simulate.noise_scale = "2.0";
-    u = simulate.url("local/hello");
-    expect(u).toContain("max_error=0.5");
-    expect(u).toContain("noise_scale=2");
+    b = simulate.request("local/hello");
+    expect(b.override.max_error).toBe(0.5);
+    expect(b.override.noise_scale).toBe(2);
 
     // chroma_clamp has no per-algorithm default: sent whenever non-empty.
     simulate.chroma_clamp = "0.3";
-    u = simulate.url("local/hello");
-    expect(u).toContain("chroma_clamp=0.3");
+    b = simulate.request("local/hello");
+    expect(b.override.chroma_clamp).toBe(0.3);
 
     // strength: 1 is the engine default, omitted; anything else is sent.
     simulate.strength = "1";
-    u = simulate.url("local/hello");
-    expect(u).not.toContain("strength=");
+    b = simulate.request("local/hello");
+    expect(b.override.strength).toBeUndefined();
     simulate.strength = "0.5";
-    u = simulate.url("local/hello");
-    expect(u).toContain("strength=0.5");
+    b = simulate.request("local/hello");
+    expect(b.override.strength).toBe(0.5);
   });
 
   it("(f) sends every non-empty tunable when the selected algorithm's defaults are unknown", () => {
@@ -157,9 +173,9 @@ describe("simulate store", () => {
     simulate.dither = "unknown-algo";
     simulate.max_error = "2.0";
     simulate.noise_scale = "3.0";
-    const u = simulate.url("local/hello");
-    expect(u).toContain("max_error=2");
-    expect(u).toContain("noise_scale=3");
+    const b = simulate.request("local/hello");
+    expect(b.override.max_error).toBe(2);
+    expect(b.override.noise_scale).toBe(3);
   });
 
   // --- Fix round 1: Controller Rulings 32 and 34 ---------------------------
@@ -182,24 +198,10 @@ describe("simulate store", () => {
     expect(simulate.size).toEqual({ width: 1872, height: 1404 });
   });
 
-  it("Ruling 34: guards `strength` against null (what a cleared number input yields), not just against empty string", () => {
+  it("Ruling 34: never puts a `strength` key on the request when it is null (what a cleared number input yields)", () => {
     simulate.strength = null;
-    const u = simulate.url("local/hello");
-    expect(u).not.toContain("strength=");
-  });
-
-  it("Ruling 34: never even puts a `strength` key on the query object when it is null -- not relying on qs() to filter it out downstream", () => {
-    // `qs()` drops `null` values regardless of this guard, which is exactly
-    // the "accidental correctness" the guard closes: a plain
-    // `expect(url).not.toContain("strength=")` passes whether or not the
-    // guard exists, because qs() silently absorbs the mistake. Spy on
-    // `api.renderUrl` (pass-through) to see the object `url()` actually
-    // built, before qs() ever touches it.
-    const spy = vi.spyOn(api, "renderUrl").mockImplementation((p) => realRenderUrl(p));
-    simulate.strength = null;
-    simulate.url("local/hello");
-    const query = spy.mock.calls[0][0];
-    expect(Object.hasOwn(query, "strength")).toBe(false);
+    const b = simulate.request("local/hello");
+    expect(Object.hasOwn(b.override, "strength")).toBe(false);
   });
 
   // --- colors_actual_override: the tune store's working copy --------------
@@ -213,10 +215,8 @@ describe("simulate store", () => {
     simulate.panel = "e1004";
     simulate.use_actual = true;
     simulate.colors_actual_override = { panel: "e1004", colors: "#111111,#EEEEEE" };
-    const u = simulate.url("local/a");
-    expect(u).toContain(encodeURIComponent("#111111,#EEEEEE"));
-    // And the configured value it overrode must not also be present.
-    expect(u).not.toContain(encodeURIComponent("#101010,#E8E8E8"));
+    const b = simulate.request("local/a");
+    expect(b.override.colors_actual).toBe("#111111,#EEEEEE");
   });
 
   it("ignores an override that names a different panel", () => {
@@ -228,10 +228,9 @@ describe("simulate store", () => {
     simulate.panel = "e1004";
     simulate.use_actual = true;
     simulate.colors_actual_override = { panel: "og", colors: "#111111,#EEEEEE" };
-    const u = simulate.url("local/a");
-    expect(u).not.toContain(encodeURIComponent("#111111,#EEEEEE"));
+    const b = simulate.request("local/a");
     // The panel actually selected still gets its own configured colours.
-    expect(u).toContain(encodeURIComponent("#101010,#E8E8E8"));
+    expect(b.override.colors_actual).toBe("#101010,#E8E8E8");
   });
 
   it("falls back to the configured colors once the override is cleared", () => {
@@ -244,8 +243,7 @@ describe("simulate store", () => {
     simulate.use_actual = true;
     simulate.colors_actual_override = { panel: "e1004", colors: "#111111,#EEEEEE" };
     simulate.colors_actual_override = null;
-    const u = simulate.url("local/a");
-    expect(u).not.toContain(encodeURIComponent("#111111,#EEEEEE"));
-    expect(u).toContain(encodeURIComponent("#101010,#E8E8E8"));
+    const b = simulate.request("local/a");
+    expect(b.override.colors_actual).toBe("#101010,#E8E8E8");
   });
 });

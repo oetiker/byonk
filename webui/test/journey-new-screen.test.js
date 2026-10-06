@@ -48,8 +48,8 @@ describe("New screen", () => {
     // Every render is held open until its ref is released, so the answers can
     // be landed in a chosen order instead of raced against a timer.
     const release = {};
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
-      const ref = new URL(url, "http://localhost/").searchParams.get("screen");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const ref = JSON.parse(init.body).screen;
       await new Promise((r) => (release[ref] = r));
       const blob = new Blob([ref]);
       refOf.set(blob, ref);

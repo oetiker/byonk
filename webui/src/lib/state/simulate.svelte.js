@@ -1,17 +1,16 @@
-import * as api from "../api.js";
 import { screens } from "./screens.svelte.js";
 
 /**
- * The simulate drawer's controls, and the render URL they build.
+ * The simulate drawer's controls, and the render request they build.
  *
- * This is a straight port of `drawerParams()` in the old `static/dev/dev.js`
- * (see it for the semantics this mirrors) onto `RenderQuery`
- * (`src/api/dev.rs:29`) -- NOT the plan brief's `DEFAULTS`/`url()` sketch,
- * which contradicts the old UI in six ways (Controller Ruling 26):
+ * This began as a straight port of `drawerParams()` in the old
+ * `static/dev/dev.js` (see it for the semantics this mirrors) onto the GET
+ * render's query; it now builds the JSON body of `POST /dev/api/render`
+ * (`RenderRequest`, src/api/dev.rs). The six rules (Controller Ruling 26)
+ * are unchanged:
  *
- *   (a) the Device control's wire name is `mac`, not `device` -- with a
- *       device selected the server resolves the screen from its config and
- *       ignores `screen` entirely.
+ *   (a) the Device control travels as `device`, and with a device selected
+ *       `screen` is NOT sent: the preview shows the device's own screen.
  *   (b) `width`/`height` are never user fields: they come from the chosen
  *       panel's profile (`size`, below), falling back to 800x480.
  *   (c) `use_actual` and `colors_actual` travel only when a panel is chosen
@@ -21,7 +20,7 @@ import { screens } from "./screens.svelte.js";
  *   (d) `timestamp` is Unix seconds and travels only while `timeLocked` --
  *       a live clock needs no override, and sending one would pin every
  *       render to the second the field last ticked.
- *   (e) `params` is JSON-parsed and re-stringified, and THROWS on invalid
+ *   (e) `params` is JSON-parsed into `simulated.params`, and THROWS on invalid
  *       JSON so the error surfaces instead of silently rendering with
  *       whatever the box last held. The caller (Task 9's `renderNow()`)
  *       catches it.
@@ -37,7 +36,8 @@ import { screens } from "./screens.svelte.js";
  *
  * `colors` and `model` are deliberately absent from the field set: the old
  * UI's render query omits `colors` too and lets the server apply its own
- * fallback (dev.js:237-241).
+ * fallback (dev.js:237-241). The ad-hoc tuning knobs travel in `override`,
+ * the cascade's top rung.
  *
  * Fix round 1 (Rulings 32-34) corrected three things found in review:
  *   - Ruling 32: `panel` is matched by `id` only (see `#selectedPanel()`),
@@ -47,7 +47,7 @@ import { screens } from "./screens.svelte.js";
  *     `selectIfPresent()` (only when the value is actually present in the
  *     list) -- see `SimulateControls.svelte`'s `onDeviceChange()`.
  *   - Ruling 34: `strength` is guarded against `null` explicitly (see
- *     `isBlank()`), not left to `qs()` to drop downstream.
+ *     `isBlank()`), not left to a later step to drop.
  */
 
 const DEFAULT_SIZE = { width: 800, height: 480 };
@@ -91,11 +91,11 @@ class Simulate {
   /**
    * The last failed render, or null. Shape: `{ op, message }`, matching
    * `screens.error` (screens.svelte.js) -- `op` is always "render" (there is
-   * only one kind of render here); `message` is either `url()`'s own thrown
+   * only one kind of render here); `message` is either `request()`'s own thrown
    * message (invalid params JSON, rule (e) above) or the server's
    * `RenderErrorResponse.error`/`.details` (src/api/dev.rs:157-161).
    * Captured by `PreviewPane`'s `renderNow()`, which is the one place that
-   * calls `fetch`/`url()` and can see either failure; rendering it is Task
+   * calls `renderPreview`/`request()` and can see either failure; rendering it is Task
    * 10's job (Controller Ruling 41), the same split `screens.error` uses
    * with `FilesPane`. Not touched by `reset()`: a render failure isn't a
    * drawer field, and `renderNow()` clears it itself at the start of the
@@ -121,7 +121,7 @@ class Simulate {
    * A live colour-tuning working copy, or `null`.
    *
    * `{panel, colors}` -- the panel it belongs to, and the comma-separated
-   * `colors_actual` string. Written by the `tune` store, read only by `url()`
+   * `colors_actual` string. Written by the `tune` store, read only by `request()`
    * below. It lives here rather than on `tune` because `tune` imports this
    * module for its default panel, and the reverse import would close a cycle
    * between two rune modules that both evaluate at page load. Same reasoning
@@ -146,7 +146,7 @@ class Simulate {
     this.colors_actual_override = DEFAULTS.colors_actual_override;
   }
 
-  /** A snapshot of every field, keyed by its `RenderQuery` wire name. */
+  /** A snapshot of every drawer field, keyed by its old query name. */
   get fields() {
     return {
       mac: this.mac,
@@ -166,7 +166,7 @@ class Simulate {
 
   /**
    * The panel profile the `panel` field currently names, matched against
-   * `screens.meta.panels` by `id` only -- the wire value (`RenderQuery.
+   * `screens.meta.panels` by `id` only -- the wire value (`RenderRequest.
    * panel`), confirmed from both ends: the old UI's select uses `p.id` as
    * its option value (dev.js:971), and the server resolves it via
    * `Config::get_panel`, a lookup by config id (src/models/
@@ -188,28 +188,41 @@ class Simulate {
     return p && p.width && p.height ? { width: p.width, height: p.height } : DEFAULT_SIZE;
   }
 
-  url(ref) {
+  /**
+   * The body of `POST /dev/api/render` (`RenderRequest`, src/api/dev.rs).
+   * Blank fields are left out, never sent as `""`; numbers travel as JSON
+   * numbers, because the server's fields are typed.
+   */
+  request(ref) {
     const size = this.size;
-    const query = {
-      screen: ref,
-      mac: this.mac,
-      width: size.width,
-      height: size.height,
-      battery_voltage: this.battery_voltage,
-      rssi: this.rssi,
-      dither: this.dither,
-      chroma_clamp: this.chroma_clamp,
+    const body = { width: size.width, height: size.height };
+    const simulated = {};
+    const override = {};
+    const put = (obj, key, v) => {
+      if (!isBlank(v)) obj[key] = v;
     };
+
+    // (a) With a device selected the preview shows that device's own
+    // screen, so `screen` is not sent: the server renders a `screen` given
+    // together with a `device` AS that device, which is the work area's
+    // mode a and not this drawer's behaviour.
+    if (this.mac) body.device = this.mac;
+    else body.screen = ref;
+
+    put(simulated, "battery_voltage", isBlank(this.battery_voltage) ? null : Number(this.battery_voltage));
+    put(simulated, "rssi", isBlank(this.rssi) ? null : Number(this.rssi));
+    put(override, "dither", this.dither);
+    put(override, "chroma_clamp", isBlank(this.chroma_clamp) ? null : Number(this.chroma_clamp));
 
     // (d) Only while frozen. A live clock needs no override, and sending
     // one would pin every render to the second the field last ticked.
-    if (this.timeLocked) query.timestamp = this.timestamp;
+    if (this.timeLocked) put(simulated, "timestamp", isBlank(this.timestamp) ? null : Number(this.timestamp));
 
-    // (e) Throws on invalid JSON -- the caller (Task 9) catches it and
-    // surfaces the message instead of rendering with parameters the user
-    // did not write.
+    // (e) Throws on invalid JSON -- the caller (`renderNow()`) catches it
+    // and surfaces the message instead of rendering with parameters the
+    // user did not write.
     try {
-      query.params = JSON.stringify(JSON.parse(this.params || "{}"));
+      simulated.params = JSON.parse(this.params || "{}");
     } catch (e) {
       throw new Error("Invalid JSON in parameters: " + e.message);
     }
@@ -217,17 +230,17 @@ class Simulate {
     // (c) Only when a panel is chosen; colors_actual further requires that
     // panel to actually carry one.
     if (this.panel) {
-      query.panel = this.panel;
-      query.use_actual = this.use_actual ? "true" : "false";
+      body.panel = this.panel;
+      body.view = { use_actual: !!this.use_actual };
       const p = this.#selectedPanel();
       // A live tuning working copy wins, but only for the panel it belongs
       // to -- otherwise switching panels mid-calibration would render the
       // new panel with the old panel's colours.
       const ov = this.colors_actual_override;
       if (ov && ov.panel === this.panel) {
-        query.colors_actual = ov.colors;
+        override.colors_actual = ov.colors;
       } else if (p && p.colors_actual) {
-        query.colors_actual = p.colors_actual;
+        override.colors_actual = p.colors_actual;
       }
     }
 
@@ -237,22 +250,23 @@ class Simulate {
     const algo = screens.meta.dither_algorithms?.find((a) => a.name === this.dither);
     const defaults = algo ? algo.defaults : null;
     if (differsFromDefault(this.max_error, defaults?.max_error)) {
-      query.max_error = this.max_error;
+      override.max_error = Number(this.max_error);
     }
     if (differsFromDefault(this.noise_scale, defaults?.noise_scale)) {
-      query.noise_scale = this.noise_scale;
+      override.noise_scale = Number(this.noise_scale);
     }
 
     // No per-algorithm default: the engine leaves strength at 1.0 whatever
     // the kernel, so only a departure from that is sent. Guard against
-    // `null` explicitly (Ruling 34) rather than relying on `qs()` to drop
-    // it downstream -- `parseFloat(null)` is `NaN`, which is `!== 1` and
-    // would otherwise send a bogus `strength=null`.
+    // `null` explicitly (Ruling 34) -- `parseFloat(null)` is `NaN`, which is
+    // `!== 1` and would otherwise send a bogus `strength`.
     if (!isBlank(this.strength) && parseFloat(this.strength) !== 1) {
-      query.strength = this.strength;
+      override.strength = Number(this.strength);
     }
 
-    return api.renderUrl(query);
+    body.simulated = simulated;
+    body.override = override;
+    return body;
   }
 }
 

@@ -1,5 +1,6 @@
 <script>
   import { onMount, untrack } from "svelte";
+  import * as api from "../api.js";
   import { simulate } from "../state/simulate.svelte.js";
   import { screens } from "../state/screens.svelte.js";
 
@@ -10,7 +11,7 @@
    * Which render is the current one.
    *
    * Renders overlap: `screens.refresh()` rewrites `screens.meta`, which this
-   * component's `$effect` reads through `simulate.url()`, so a refresh starts
+   * component's `$effect` reads through `simulate.request()`, so a refresh starts
    * a render of whatever is selected AT THAT MOMENT -- and `FilesPane`'s
    * create/copy/rename all refresh first and select afterwards, across an
    * `await`. Two requests are then in flight for two different screens.
@@ -43,7 +44,7 @@
   // from the decoded PNG's actual `naturalWidth`/`naturalHeight`, because
   // its render request could omit width/height and let the server fall
   // back to a model default the page didn't know ahead of time. That case
-  // doesn't exist here: `simulate.url()` always sends explicit `width` and
+  // doesn't exist here: `simulate.request()` always sends explicit `width` and
   // `height` computed from this same `simulate.size` (simulate.svelte.js),
   // and `resolve_preview_dimensions` (src/api/display.rs) honors an
   // explicit width/height whenever the query carries one -- so the
@@ -169,7 +170,7 @@
    * Two failures are caught here instead of becoming unhandled rejections
    * (Controller Ruling 41):
    *
-   *  - `simulate.url(ref)` THROWS on invalid params JSON (Task 8 rule (e),
+   *  - `simulate.request(ref)` THROWS on invalid params JSON (Task 8 rule (e),
    *    simulate.svelte.js) -- deliberately, so the user is never shown a
    *    render made from parameters they didn't write.
    *  - the server can answer a real render request with a JSON
@@ -204,8 +205,7 @@
     simulate.error = null;
 
     try {
-      const url = simulate.url(ref);
-      const res = await fetch(url);
+      const res = await api.renderPreview(simulate.request(ref));
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         const message = body?.details

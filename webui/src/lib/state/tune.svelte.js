@@ -215,7 +215,7 @@ class Tune {
     }
   }
 
-  /** Feed the working copy to `simulate.url()`, or clear it if empty. */
+  /** Feed the working copy to `simulate.request()`, or clear it if empty. */
   #mirror() {
     simulate.colors_actual_override = this.colors.length
       ? { panel: this.panel, colors: this.wire }

@@ -177,6 +177,15 @@ export const startTuningSession = (device) =>
   put(`api/tuning-session/${encodeURIComponent(device)}`);
 export const endTuningSession = (device) => del(`api/tuning-session/${encodeURIComponent(device)}`);
 
-/** Params are RenderQuery in src/api/dev.rs:29. Blanks are omitted, not sent. */
-export const renderUrl = (params) => `api/render?${qs(params)}`;
+/**
+ * POST a preview render (see docs/src/guide/dev-mode.md, "Rendering a
+ * preview"). Relative, for HA Ingress. Returns the raw `Response`, so the
+ * caller reads the PNG blob and the `X-Byonk-Resolution` header.
+ */
+export const renderPreview = (body) =>
+  fetch("api/render", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 export const eventsUrl = () => "api/events";

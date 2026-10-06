@@ -228,8 +228,12 @@ describe("PreviewPane", () => {
     // Each render is held open until its ref is released, so the two
     // responses can be landed in a chosen order with no timing guesswork.
     const release = {};
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
-      const ref = new URL(url, "http://localhost/").searchParams.get("screen");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      // A POST to the relative `api/render` (Ingress), carrying the ref in
+      // its JSON body.
+      expect(url).toBe("api/render");
+      expect(init.method).toBe("POST");
+      const ref = JSON.parse(init.body).screen;
       await new Promise((r) => (release[ref] = r));
       const blob = new Blob([ref]);
       refOf.set(blob, ref);
@@ -259,8 +263,8 @@ describe("PreviewPane", () => {
     // Same guard, other branch: a stale render that fails must not raise an
     // error banner over a newer render that succeeded.
     const release = {};
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
-      const ref = new URL(url, "http://localhost/").searchParams.get("screen");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const ref = JSON.parse(init.body).screen;
       await new Promise((r) => (release[ref] = r));
       if (ref === "local/slow") throw new Error("gone");
       return { ok: true, blob: async () => new Blob([ref]) };

@@ -139,10 +139,10 @@ describe("api", () => {
         expectedMethod: "DELETE",
       },
       {
-        name: "renderUrl",
-        call: () => api.renderUrl({ screen: "local/hello" }),
-        expectedUrl: "api/render?screen=local%2Fhello",
-        isStringBuilder: true,
+        name: "renderPreview",
+        call: () => api.renderPreview({ screen: "local/hello" }),
+        expectedUrl: "api/render",
+        expectedMethod: "POST",
       },
       {
         name: "eventsUrl",
@@ -252,11 +252,18 @@ describe("api", () => {
     );
   });
 
-  it("omits empty render params rather than sending blanks", () => {
-    const u = api.renderUrl({ screen: "local/hello", panel: "", dither: "atkinson" });
-    expect(u).toContain("screen=local%2Fhello");
-    expect(u).toContain("dither=atkinson");
-    expect(u).not.toContain("panel=");
+  it("POSTs the render request as a JSON body and returns the raw Response", async () => {
+    const response = new Response("png", { status: 200, headers: { "X-Byonk-Resolution": "{}" } });
+    mockFetch(async () => response);
+    const body = { screen: "local/hello", override: { dither: "atkinson" } };
+    const res = await api.renderPreview(body);
+    // The raw Response, so the caller can read the blob AND the header.
+    expect(res).toBe(response);
+    const [url, init] = globalThis.fetch.mock.calls.at(-1);
+    expect(url).toBe("api/render");
+    expect(init.method).toBe("POST");
+    expect(init.headers["Content-Type"]).toBe("application/json");
+    expect(JSON.parse(init.body)).toEqual(body);
   });
 
   it("sends deleteScreen's ref as a query parameter, not a JSON body", async () => {

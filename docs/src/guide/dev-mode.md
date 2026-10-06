@@ -553,7 +553,7 @@ preview only: it changes no server state and reaches no device.
 | `width`, `height` | The render size, when it differs from the model's. |
 | `draft.base` | An unsaved device rung: the device's `colors`, `dither`, the tuning numbers, `gamut` and `refresh`. |
 | `draft.panel` | An unsaved panel rung: `colors`, `colors_actual` and the panel `dither` block. |
-| `override` | Ad-hoc values from the dev UI controls, above every other rung: `dither`, `colors_actual`, the tuning numbers and `gamut`. |
+| `override` | Ad-hoc values from the dev UI controls: `dither`, `colors_actual`, the tuning numbers and `gamut`. They are above every other rung, except for `colors_actual`: a screen that returns `colors_actual` is above the override. |
 | `simulated` | What the device would report: battery voltage, RSSI, the clock, and params that are merged over the device's own. |
 | `view.use_actual` | Draw the PNG in the measured panel colours. Defaults to on when measured colours resolve. |
 
@@ -563,9 +563,10 @@ see what the device does without it. A field that the draft leaves out is
 absent, not inherited.
 
 Some fields are refused with `400`, because the configuration cannot hold
-them yet: `draft.final`, `draft.base.colors_actual`, `override.colors` and
+them yet: `draft.base.colors_actual`, `override.colors` and
 `override.refresh`. A script would see a different palette than the one that
-is rendered with `override.colors`. Unknown fields are refused too.
+is rendered with `override.colors`. An unknown field, `draft.final` included,
+is refused with `422`.
 
 The answer carries an `X-Byonk-Resolution` header. It is one line of JSON
 that tells, for every render setting, which value won and why. Example for
@@ -575,10 +576,9 @@ asks for `atkinson`:
 ```json
 {"dither":{"effective":"floyd-steinberg","from":"device_base",
  "order":["override","device_final","device_base","screen","panel","fallback"],
- "rungs":{"override":{"status":"absent"},"device_final":{"status":"absent"},
-  "screen":{"value":"atkinson","status":"outranked"},
+ "rungs":{"screen":{"value":"atkinson","status":"outranked"},
   "device_base":{"value":"floyd-steinberg","status":"winner"},
-  "panel":{"status":"absent"},"fallback":{"value":"atkinson","status":"outranked"}}}}
+  "fallback":{"value":"atkinson","status":"outranked"}}}}
 ```
 
 (The header is a single line; it is wrapped here for reading.) The settings
@@ -591,14 +591,15 @@ are `colors`, `colors_actual`, `dither`, `max_error`, `noise_scale`,
 | `winner` | This rung's value is used. |
 | `outranked` | This rung has a value, but a rung higher in `order` won. |
 | `rejected` | This rung has a value that cannot be used. A `reason` tells why — for example a `colors_actual` with a different number of entries than the palette. The next rung is tried. |
-| `absent` | This rung has no value. |
+| (missing) | This rung has no value. `order` names every rung; a rung that is not in `rungs` is absent. Absent rungs are left out to keep the header small. |
 
 `order` is the precedence that byonk uses today, highest first. It is not
 the same for every setting: for `dither`, the device is above the screen,
 while for the other settings the screen is above the device. `device_final`
-is always `absent` for now. The `fallback` rung is byonk's own default; it
-is reported, but a setting that falls back to it is left to the dithering
-engine's own default.
+is always absent for now. The `fallback` rung is byonk's own default. For
+`colors` it is the model's default palette, and it is used. For the other
+settings it is only reported: a setting that falls back is left to the
+dithering engine's own default, which is the same value.
 
 For scripted or LLM-driven authoring, prefer the [MCP interface](mcp.md),
 which covers the same screen-store operations with a stable tool contract.

@@ -257,7 +257,11 @@ async fn fields_the_config_cannot_hold_yet_are_refused() {
         let r = app.post_json("/dev/api/render", &[AUTH], body).await;
         assert!(r.status.is_client_error(), "{body} → {}", r.status);
         // A 405 would mean the route is missing, not that the body was refused.
-        assert_ne!(r.status, axum::http::StatusCode::METHOD_NOT_ALLOWED, "{body}");
+        assert_ne!(
+            r.status,
+            axum::http::StatusCode::METHOD_NOT_ALLOWED,
+            "{body}"
+        );
     }
 }
 

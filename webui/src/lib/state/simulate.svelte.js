@@ -13,10 +13,9 @@ import { screens } from "./screens.svelte.js";
  *       `screen` is NOT sent: the preview shows the device's own screen.
  *   (b) `width`/`height` are never user fields: they come from the chosen
  *       panel's profile (`size`, below), falling back to 800x480.
- *   (c) `use_actual` and `colors_actual` travel only when a panel is chosen
- *       -- `colors_actual` further requires that panel to actually have
- *       one, so the preview does not depend on the server's override map
- *       having been written first.
+ *   (c) `use_actual` and the tune working copy's `colors_actual` travel
+ *       only when a panel is chosen. The panel's configured `colors_actual`
+ *       does not travel: the server resolves it on the panel rung.
  *   (d) `timestamp` is Unix seconds and travels only while `timeLocked` --
  *       a live clock needs no override, and sending one would pin every
  *       render to the second the field last ticked.
@@ -227,20 +226,18 @@ class Simulate {
       throw new Error("Invalid JSON in parameters: " + e.message);
     }
 
-    // (c) Only when a panel is chosen; colors_actual further requires that
-    // panel to actually carry one.
+    // (c) Only when a panel is chosen. The panel's own `colors_actual` is
+    // NOT sent: the server reads it from the panel rung, and sending it as
+    // `override` would make `X-Byonk-Resolution` name the wrong rung.
     if (this.panel) {
       body.panel = this.panel;
       body.view = { use_actual: !!this.use_actual };
-      const p = this.#selectedPanel();
-      // A live tuning working copy wins, but only for the panel it belongs
-      // to -- otherwise switching panels mid-calibration would render the
-      // new panel with the old panel's colours.
+      // A live tuning working copy is an override, but only for the panel it
+      // belongs to -- otherwise switching panels mid-calibration would render
+      // the new panel with the old panel's colours.
       const ov = this.colors_actual_override;
       if (ov && ov.panel === this.panel) {
         override.colors_actual = ov.colors;
-      } else if (p && p.colors_actual) {
-        override.colors_actual = p.colors_actual;
       }
     }
 

@@ -96,11 +96,14 @@ describe("simulate store", () => {
     expect(b.view).toBeUndefined();
     expect(b.override.colors_actual).toBeUndefined();
 
-    // Panel chosen and it has colors_actual: both travel.
+    // Panel chosen and it has colors_actual: use_actual travels, the panel's
+    // own colors_actual does NOT -- the server reads it from the panel rung,
+    // and sending it as `override` would make the provenance header name
+    // the wrong rung.
     simulate.panel = "with_actual";
     b = simulate.request("local/hello");
     expect(b.view.use_actual).toBe(true);
-    expect(b.override.colors_actual).toBe("#111,#EEE");
+    expect(b.override.colors_actual).toBeUndefined();
 
     // Panel chosen but it has no colors_actual: use_actual still travels,
     // colors_actual does not.
@@ -229,8 +232,9 @@ describe("simulate store", () => {
     simulate.use_actual = true;
     simulate.colors_actual_override = { panel: "og", colors: "#111111,#EEEEEE" };
     const b = simulate.request("local/a");
-    // The panel actually selected still gets its own configured colours.
-    expect(b.override.colors_actual).toBe("#101010,#E8E8E8");
+    // The panel actually selected keeps its own configured colours, which the
+    // server reads from the panel rung: nothing is overridden.
+    expect(b.override.colors_actual).toBeUndefined();
   });
 
   it("falls back to the configured colors once the override is cleared", () => {
@@ -244,6 +248,6 @@ describe("simulate store", () => {
     simulate.colors_actual_override = { panel: "e1004", colors: "#111111,#EEEEEE" };
     simulate.colors_actual_override = null;
     const b = simulate.request("local/a");
-    expect(b.override.colors_actual).toBe("#101010,#E8E8E8");
+    expect(b.override.colors_actual).toBeUndefined();
   });
 });

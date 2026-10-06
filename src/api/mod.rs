@@ -6,6 +6,7 @@ pub mod dev_files;
 pub mod display;
 mod headers;
 pub mod log;
+pub mod resolution;
 pub mod setup;
 pub mod time;
 

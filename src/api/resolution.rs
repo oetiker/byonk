@@ -400,9 +400,13 @@ pub fn resolve_dev_render(i: &DevRenderInputs) -> DevRenderResolution {
         .effective
         .clone()
         .unwrap_or_else(|| "atkinson".to_string());
+    // The panel block is looked up for the CONFIGURED algorithm: with no
+    // rung setting `dither` that is `None`, which selects the panel's flat
+    // defaults only — what every other render path does today. `algo` (the
+    // fallback included) only names the engine defaults reported below.
     let panel_tuning = i
         .panel_dither
-        .map(|p| p.resolve_for_algorithm(Some(&algo)))
+        .map(|p| p.resolve_for_algorithm(dither.configured().map(String::as_str)))
         .unwrap_or_default();
     let (default_max_error, default_noise_scale) =
         crate::models::config::dither_algorithm_for_name(&algo).defaults();
@@ -781,6 +785,16 @@ mod tests {
             DitherTuningValues {
                 strength: Some(0.3),
                 max_error: Some(0.6),
+                ..Default::default()
+            },
+        );
+        // A block for the FALLBACK algorithm: with no rung setting `dither`,
+        // the legacy path looks the panel up for `None` (its defaults only),
+        // never for the engine's own default algorithm.
+        algorithms.insert(
+            "atkinson".to_string(),
+            DitherTuningValues {
+                strength: Some(0.4),
                 ..Default::default()
             },
         );

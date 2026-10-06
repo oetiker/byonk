@@ -51,7 +51,7 @@ impl GamutTuningValues {
 ///
 /// Used at every level of the tuning priority chain:
 /// panel defaults, device config, script overrides, dev UI overrides.
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
 pub struct DitherTuningValues {
     pub max_error: Option<f32>,
     pub noise_scale: Option<f32>,
@@ -95,6 +95,46 @@ impl DitherTuningValues {
             && self.chroma_clamp.is_none()
             && self.strength.is_none()
             && self.gamut.is_empty()
+    }
+}
+
+/// The settings that take part in the resolution cascade.
+///
+/// Used for the `final:` block and as the shape the resolver works in. One
+/// struct and one resolver is what stops a newly added setting from quietly
+/// acquiring a precedence order of its own, which is how `dither` came to be
+/// inverted relative to its four neighbours.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CascadeValues {
+    pub colors: Option<String>,
+    pub colors_actual: Option<String>,
+    pub dither: Option<String>,
+    pub max_error: Option<f32>,
+    pub noise_scale: Option<f32>,
+    pub chroma_clamp: Option<f32>,
+    pub strength: Option<f32>,
+    pub refresh: Option<u32>,
+    #[serde(default)]
+    pub gamut: GamutTuningValues,
+}
+
+impl DeviceConfig {
+    /// The device's base rung as a `CascadeValues`. `colors_actual` is
+    /// always `None`: a device-level measurement arrives with the cascade
+    /// (spec §8 piece 3).
+    pub fn base(&self) -> CascadeValues {
+        CascadeValues {
+            colors: self.colors.clone(),
+            colors_actual: None,
+            dither: self.dither.clone(),
+            max_error: self.max_error,
+            noise_scale: self.noise_scale,
+            chroma_clamp: self.chroma_clamp,
+            strength: self.strength,
+            refresh: self.refresh,
+            gamut: self.gamut.clone(),
+        }
     }
 }
 
@@ -1307,5 +1347,29 @@ colors: "#000000,#FFFFFF"
         assert_eq!(merged.gamut.amount, Some(0.0));
         assert_eq!(merged.gamut.knee, Some(0.55));
         assert!(!merged.is_empty());
+    }
+
+    #[test]
+    fn cascade_values_refuses_unknown_fields() {
+        let err = serde_yaml::from_str::<CascadeValues>("screen: local/x\n").unwrap_err();
+        assert!(err.to_string().contains("unknown field"), "{err}");
+    }
+
+    #[test]
+    fn device_base_copies_every_cascade_field() {
+        let dc: DeviceConfig = serde_yaml::from_str(
+            "screen: local/x\ncolors: '#000000,#FFFFFF'\ndither: atkinson\nmax_error: 0.5\nnoise_scale: 2.0\nchroma_clamp: 0.1\nstrength: 0.8\nrefresh: 600\ngamut: { knee: 0.7 }\n",
+        )
+        .unwrap();
+        let b = dc.base();
+        assert_eq!(b.colors.as_deref(), Some("#000000,#FFFFFF"));
+        assert_eq!(b.dither.as_deref(), Some("atkinson"));
+        assert_eq!(
+            (b.max_error, b.noise_scale, b.chroma_clamp, b.strength),
+            (Some(0.5), Some(2.0), Some(0.1), Some(0.8))
+        );
+        assert_eq!(b.refresh, Some(600));
+        assert_eq!(b.gamut.knee, Some(0.7));
+        assert_eq!(b.colors_actual, None);
     }
 }

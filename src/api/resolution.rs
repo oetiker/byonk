@@ -217,11 +217,13 @@ pub fn header_value(resolution: &Resolution) -> String {
     out
 }
 
-// Today's precedence, per setting, highest first. Piece 3 of the cascade spec
-// replaces all five with one order; until then each mirrors the code it took
-// over from, named in the comment.
+// One order, for every setting. Spec §2: `override → device final → screen →
+// device base → panel → fallback`. The constants stay per-setting rather than
+// collapsing into one so that a future setting that genuinely needs a
+// different walk has to say so here, in the one file that owns precedence,
+// instead of growing its own chain in a handler.
 
-/// `resolve_render_params`: script > device > panel > fallback.
+/// Spec §2's order.
 pub const ORDER_COLORS: &[Rung] = &[
     Rung::Override,
     Rung::DeviceFinal,
@@ -230,44 +232,46 @@ pub const ORDER_COLORS: &[Rung] = &[
     Rung::Panel,
     Rung::Fallback,
 ];
-/// `resolve_render_params` puts the script's candidate before the dev override.
-pub const ORDER_COLORS_ACTUAL: &[Rung] = &[
-    Rung::Screen,
-    Rung::Override,
-    Rung::DeviceFinal,
-    Rung::DeviceBase,
-    Rung::Panel,
-    Rung::Fallback,
-];
-/// `display::effective_dither`: the device outranks the screen (spec §1's inversion).
-pub const ORDER_DITHER: &[Rung] = &[
-    Rung::Override,
-    Rung::DeviceFinal,
-    Rung::DeviceBase,
-    Rung::Screen,
-    Rung::Panel,
-    Rung::Fallback,
-];
-/// `display::resolve_effective_tuning`.
-pub const ORDER_TUNING: &[Rung] = &[
-    Rung::Override,
-    Rung::DeviceFinal,
-    Rung::Screen,
-    Rung::DeviceBase,
-    Rung::Panel,
-    Rung::Fallback,
-];
-/// `content_pipeline::resolve_refresh_rate`: the script beats the device.
-/// A panel has no `refresh`, so its rung is always absent; it is listed so
-/// every setting reports the same six rungs.
-pub const ORDER_REFRESH: &[Rung] = &[
-    Rung::Override,
-    Rung::DeviceFinal,
-    Rung::Screen,
-    Rung::DeviceBase,
-    Rung::Panel,
-    Rung::Fallback,
-];
+/// Spec §2's order. Piece 2 put `Screen` on top to match the legacy
+/// `resolve_render_params`, which resolved the script's candidate before the
+/// caller's override chain. The override rung exists so a dev-UI calibration
+/// push can show what it does, so it goes back on top.
+pub const ORDER_COLORS_ACTUAL: &[Rung] = ORDER_COLORS;
+/// Spec §2's order. **This is the release's one behaviour change**: the
+/// legacy `display::effective_dither` put `DeviceBase` above `Screen`, so a
+/// bare `devices.<k>.dither` vetoed a screen that set its own. The veto now
+/// lives in `final:`, where it can be told apart from a default.
+pub const ORDER_DITHER: &[Rung] = ORDER_COLORS;
+/// Spec §2's order.
+pub const ORDER_TUNING: &[Rung] = ORDER_COLORS;
+/// Spec §2's order. A panel has no `refresh`, so its rung is always absent;
+/// it is listed so every setting reports the same six rungs.
+pub const ORDER_REFRESH: &[Rung] = ORDER_COLORS;
+
+impl Rung {
+    /// The `SRC_*` label this rung contributes to
+    /// `RenderParams::measured_source` (plan ruling 2).
+    ///
+    /// The labels are the ones byonk has always reported, kept because
+    /// `measured_source` reaches the MCP `render_screen` tool's diagnostics
+    /// and this release promises exactly one behaviour change. `Override`
+    /// takes the caller's label: the override rung genuinely has a different
+    /// origin per path, and naming that origin is what the diagnostic is for.
+    pub fn measured_source(
+        self,
+        override_source: &'static str,
+        fallback_present: bool,
+    ) -> &'static str {
+        match self {
+            Rung::Override => override_source,
+            Rung::DeviceFinal | Rung::DeviceBase => display::SRC_DEVICE,
+            Rung::Screen => display::SRC_SCRIPT,
+            Rung::Panel => display::SRC_PANEL_ACTUAL,
+            Rung::Fallback if fallback_present => display::SRC_MEASURED_HEADER,
+            Rung::Fallback => display::SRC_NONE,
+        }
+    }
+}
 
 /// One rung's settings, parsed. Colours are RGB because each source parses
 /// its own way (a script returns a list, config holds a comma string) and the
@@ -300,24 +304,40 @@ impl RungSettings {
     }
 }
 
-pub struct DevRenderInputs<'a> {
+/// Everything the cascade needs from one render, whichever path asked for it.
+///
+/// Renamed from `RenderInputs` in piece 3: four production paths build it
+/// now, and a type called "dev" that `/api/display` constructs would be a lie
+/// in the name.
+pub struct RenderInputs<'a> {
     pub over: RungSettings,
+    pub device_final: RungSettings,
     pub screen: RungSettings,
     pub device_base: RungSettings,
     /// Colours only; the panel's tuning is per algorithm and comes from
     /// `panel_dither` once the algorithm is known (spec §4.2).
     pub panel: RungSettings,
     pub panel_dither: Option<&'a PanelDitherConfig>,
-    /// The model's default palette — the dev render's stand-in for the
-    /// firmware `Colors` header.
+    /// The model's default palette — this path's stand-in for the firmware
+    /// `Colors` header.
     pub fallback_palette: Vec<(u8, u8, u8)>,
+    /// The firmware `Measured-Colors` header, the fallback below the panel
+    /// rung for `colors_actual` (spec §2: a hardware self-report is evidence,
+    /// not policy, so it is a fallback and not a rung). Only `/api/display`
+    /// ever has one; the other four paths pass `None`.
+    pub fallback_colors_actual: Option<Vec<(u8, u8, u8)>>,
     /// The screen's `meta.yaml` `refresh`.
     pub screen_default_refresh: u32,
+    /// What to call the override rung in `measured_source` — `SRC_DEV_OVERRIDE`
+    /// on the device paths, `SRC_RENDER_OPTS` where a `RenderOpts` supplied it.
+    pub override_source: &'static str,
 }
 
-pub struct DevRenderResolution {
+pub struct RenderResolution {
     pub palette: Vec<(u8, u8, u8)>,
     pub measured_colors: Option<Vec<(u8, u8, u8)>>,
+    /// Which rung supplied `measured_colors`, as a `SRC_*` label.
+    pub measured_source: &'static str,
     /// Canonical name, or `None` for the engine default.
     pub dither: Option<String>,
     /// Configured winners only — never fallbacks (plan ruling 7).
@@ -327,14 +347,14 @@ pub struct DevRenderResolution {
 }
 
 fn ladder_of<T: Clone>(
-    i: &DevRenderInputs,
+    i: &RenderInputs,
     pick: impl Fn(&RungSettings) -> Option<T>,
     panel: Option<T>,
     fallback: Option<T>,
 ) -> Ladder<T> {
     Ladder {
         over: pick(&i.over),
-        device_final: None,
+        device_final: pick(&i.device_final),
         screen: pick(&i.screen),
         device_base: pick(&i.device_base),
         panel,
@@ -346,7 +366,7 @@ fn hex_json(c: &[(u8, u8, u8)]) -> serde_json::Value {
     serde_json::json!(display::colors_to_hex_strings(c).join(","))
 }
 
-pub fn resolve_dev_render(i: &DevRenderInputs) -> DevRenderResolution {
+pub fn resolve_render(i: &RenderInputs) -> RenderResolution {
     let mut report = Resolution::new();
 
     // Colours first: the measured colours' validity depends on the palette.
@@ -372,7 +392,7 @@ pub fn resolve_dev_render(i: &DevRenderInputs) -> DevRenderResolution {
             i,
             |r| r.colors_actual.clone(),
             i.panel.colors_actual.clone(),
-            None,
+            i.fallback_colors_actual.clone(),
         ),
         ORDER_COLORS_ACTUAL,
         |c: &Vec<(u8, u8, u8)>| {
@@ -457,9 +477,16 @@ pub fn resolve_dev_render(i: &DevRenderInputs) -> DevRenderResolution {
     );
     report.insert("refresh", refresh.report(|v| serde_json::json!(v)));
 
-    DevRenderResolution {
+    RenderResolution {
         palette,
         measured_colors: colors_actual.effective.clone(),
+        measured_source: colors_actual.from.measured_source(
+            i.override_source,
+            colors_actual
+                .rungs
+                .iter()
+                .any(|(r, v, _)| *r == Rung::Fallback && v.is_some()),
+        ),
         dither: dither.configured().cloned(),
         tuning,
         refresh: refresh.effective.unwrap_or(i.screen_default_refresh),
@@ -622,15 +649,18 @@ mod tests {
         display::parse_colors_header("#101010,#E0E0E0,#B03030,#D0C040,#3040A0,#00994D")
     }
 
-    fn inputs<'a>() -> DevRenderInputs<'a> {
-        DevRenderInputs {
+    fn inputs<'a>() -> RenderInputs<'a> {
+        RenderInputs {
             over: RungSettings::default(),
+            device_final: RungSettings::default(),
             screen: RungSettings::default(),
             device_base: RungSettings::default(),
             panel: RungSettings::default(),
             panel_dither: None,
             fallback_palette: grey4(),
+            fallback_colors_actual: None,
             screen_default_refresh: 900,
+            override_source: display::SRC_DEV_OVERRIDE,
         }
     }
 
@@ -639,7 +669,7 @@ mod tests {
         let mut i = inputs();
         i.over.colors_actual = Some(act6()); // palette is 4 entries
         i.panel.colors_actual = Some(act4());
-        let r = resolve_dev_render(&i);
+        let r = resolve_render(&i);
         assert_eq!(r.measured_colors, Some(act4()));
         let rep = &r.report["colors_actual"];
         assert_eq!(rep.from, Rung::Panel);
@@ -668,9 +698,9 @@ mod tests {
         };
         let mut i = inputs();
         i.panel_dither = Some(&pdc);
-        i.screen.dither = Some("atkinson".to_string());
-        i.device_base.dither = Some("floyd-steinberg".to_string()); // wins today
-        let r = resolve_dev_render(&i);
+        i.screen.dither = Some("floyd-steinberg".to_string()); // wins: screen beats device base
+        i.device_base.dither = Some("atkinson".to_string());
+        let r = resolve_render(&i);
         assert_eq!(r.dither.as_deref(), Some("floyd-steinberg"));
         assert_eq!(r.tuning.strength, Some(0.3));
         assert_eq!(r.report["strength"].from, Rung::Panel);
@@ -678,7 +708,7 @@ mod tests {
 
     #[test]
     fn fallbacks_are_reported_but_not_handed_to_the_renderer() {
-        let r = resolve_dev_render(&inputs());
+        let r = resolve_render(&inputs());
         assert_eq!(r.dither, None);
         assert_eq!(r.report["dither"].from, Rung::Fallback);
         assert_eq!(r.report["dither"].effective, serde_json::json!("atkinson"));
@@ -694,21 +724,8 @@ mod tests {
     }
 
     #[test]
-    fn refresh_follows_todays_rule_screen_over_device() {
-        let mut i = inputs();
-        i.screen.refresh = Some(60);
-        i.device_base.refresh = Some(600);
-        let r = resolve_dev_render(&i);
-        assert_eq!(r.refresh, 60);
-        assert_eq!(
-            r.report["refresh"].rungs[&Rung::DeviceBase].status,
-            RungStatus::Outranked
-        );
-    }
-
-    #[test]
-    fn device_final_is_always_absent_in_piece_2() {
-        let r = resolve_dev_render(&inputs());
+    fn device_final_is_absent_from_the_report_when_the_device_sets_none() {
+        let r = resolve_render(&inputs());
         for (name, rep) in &r.report {
             assert!(
                 !rep.rungs.contains_key(&Rung::DeviceFinal),
@@ -730,10 +747,15 @@ mod tests {
     /// block for that algorithm, `resolve_effective_tuning`, then
     /// `resolve_render_params`. The override's dither rides the device slot
     /// and blanks the script's, exactly as `dev.rs` did.
-    fn legacy(i: &DevRenderInputs) -> Legacy {
+    fn legacy(i: &RenderInputs) -> Legacy {
+        // The legacy resolver's two dither slots rank the DEVICE slot above the
+        // SCRIPT slot. Spec §2 ranks the screen above the device base, so the
+        // screen's dither is fed through the device slot and the device base's
+        // through the script slot — that is what expresses the new order
+        // with the old function.
         let (script_dither, device_dither) = match i.over.dither.as_deref() {
             Some(d) => (None, Some(d)),
-            None => (i.screen.dither.as_deref(), i.device_base.dither.as_deref()),
+            None => (i.device_base.dither.as_deref(), i.screen.dither.as_deref()),
         };
         let algo = display::effective_dither(device_dither, script_dither);
         let panel_tuning = i
@@ -748,16 +770,19 @@ mod tests {
         );
         let hex = |c: &Vec<(u8, u8, u8)>| display::colors_to_hex_strings(c);
         let script_colors = i.screen.colors.as_ref().map(hex);
-        let script_actual = i.screen.colors_actual.as_ref().map(hex);
         let dc_colors = i.device_base.colors.as_ref().map(|c| hex(c).join(","));
         let panel_colors = i.panel.colors.as_ref().map(|c| hex(c).join(","));
+        // The legacy resolver always tries the script's measurement first;
+        // spec §2 puts the override above the screen. So the screen's
+        // measurement is passed as a plain candidate, after the override's.
         let candidates = vec![
             (display::SRC_DEV_OVERRIDE, i.over.colors_actual.clone()),
+            (display::SRC_SCRIPT, i.screen.colors_actual.clone()),
             (display::SRC_PANEL_ACTUAL, i.panel.colors_actual.clone()),
         ];
         let p = display::resolve_render_params(
             script_colors.as_deref(),
-            script_actual.as_deref(),
+            None,
             script_dither,
             dc_colors.as_deref(),
             device_dither,
@@ -778,12 +803,21 @@ mod tests {
         (p.palette, p.measured_colors, p.dither, t)
     }
 
+    // Piece 3 flipped ORDER_DITHER and ORDER_COLORS_ACTUAL (spec §2), so the
+    // ladder deliberately DISAGREES with the legacy resolvers on these two
+    // settings. `legacy()` above feeds the legacy functions through the new
+    // order (screen dither above device base; override measurement above the
+    // screen's), so the matrix keeps its full size and encodes the new,
+    // intended answer; every other row still pins the ladder to the legacy
+    // behaviour. This whole test is retired in Task 8, when the legacy
+    // resolvers are deleted and the five-paths convergence test takes over.
+    ///
     /// The new resolver must produce exactly what the legacy one produced, for
     /// every combination below. This is what licenses moving the dev render
     /// onto the ladder; a failure here is a behaviour change, not a test to
     /// loosen.
     #[test]
-    fn resolve_dev_render_matches_the_legacy_resolver() {
+    fn resolve_render_matches_the_legacy_resolver() {
         let mut algorithms = HashMap::new();
         algorithms.insert(
             "floyd-steinberg".to_string(),
@@ -836,7 +870,7 @@ mod tests {
                                     i.screen.tuning.strength = ss;
                                     i.device_base.tuning.strength = bs;
                                     i.screen.tuning.max_error = Some(0.4);
-                                    let n = resolve_dev_render(&i);
+                                    let n = resolve_render(&i);
                                     assert_eq!(
                                         (n.palette, n.measured_colors, n.dither, n.tuning),
                                         legacy(&i),
@@ -864,7 +898,7 @@ mod tests {
                                 i.screen.colors_actual = sa.clone();
                                 i.over.colors_actual = oa.clone();
                                 i.panel.colors_actual = pa.clone();
-                                let n = resolve_dev_render(&i);
+                                let n = resolve_render(&i);
                                 assert_eq!(
                                     (n.palette, n.measured_colors, n.dither, n.tuning),
                                     legacy(&i),
@@ -887,8 +921,262 @@ mod tests {
         let mut i = inputs();
         i.screen.refresh = Some(0);
         i.device_base.refresh = Some(600);
-        let r = resolve_dev_render(&i);
+        let r = resolve_render(&i);
         assert_eq!(r.refresh, 600);
         assert_eq!(r.report["refresh"].from, Rung::DeviceBase);
+    }
+
+    use crate::models::config::{CascadeValues, GamutTuningValues};
+
+    /// A distinct value for every cascade setting, keyed by rung number so a
+    /// winner names its rung unambiguously. `colors` and `colors_actual` get the
+    /// same entry count, or the validity rule would reject the measurement and
+    /// mask the ordering this test is about.
+    fn rung_values(n: u8) -> CascadeValues {
+        let hex = format!("#{0:02X}{0:02X}{0:02X},#FFFFFF", n * 16);
+        CascadeValues {
+            colors: Some(hex.clone()),
+            colors_actual: Some(hex),
+            dither: Some(DITHER_BY_RUNG[n as usize].to_string()),
+            max_error: Some(n as f32),
+            noise_scale: Some(n as f32),
+            chroma_clamp: Some(n as f32),
+            strength: Some(n as f32),
+            refresh: Some(100 * n as u32),
+            gamut: GamutTuningValues {
+                knee: Some(n as f32),
+                amount: Some(n as f32),
+                max_compression: Some(n as f32),
+            },
+        }
+    }
+
+    /// Real canonical algorithm names — the resolver normalises and the renderer
+    /// matches canonical names only, so a made-up name would silently become
+    /// atkinson and the test would pass for the wrong reason.
+    const DITHER_BY_RUNG: [&str; 6] = [
+        "burkes",              // 0 — unused, keeps the indices readable
+        "stucki",              // 1 — panel (never supplied; see below)
+        "sierra",              // 2 — device base
+        "jarvis-judice-ninke", // 3 — screen
+        "atkinson",            // 4 — device final
+        "floyd-steinberg",     // 5 — override
+    ];
+    const OVERRIDE_DITHER: &str = DITHER_BY_RUNG[5];
+
+    fn rung_inputs(rungs: &[Rung]) -> (RungSettings, RungSettings, RungSettings, RungSettings) {
+        let pick = |r: Rung, n: u8| {
+            if rungs.contains(&r) {
+                RungSettings::from_cascade(&rung_values(n))
+            } else {
+                RungSettings::default()
+            }
+        };
+        let over = pick(Rung::Override, 5);
+        (
+            over,
+            pick(Rung::DeviceFinal, 4),
+            pick(Rung::Screen, 3),
+            pick(Rung::DeviceBase, 2),
+        )
+    }
+
+    /// Build a `RenderInputs` in which exactly `rungs` carry values. The panel
+    /// rung supplies colours only — a panel has a `dither:` *block*, not an
+    /// algorithm name, and its numbers come from `panel_dither` once the
+    /// algorithm is known (spec §4.2).
+    fn table_inputs(rungs: &[Rung]) -> RenderInputs<'static> {
+        let (over, device_final, screen, device_base) = rung_inputs(rungs);
+        let panel = if rungs.contains(&Rung::Panel) {
+            RungSettings {
+                colors: Some(display::parse_colors_header("#111111,#FFFFFF")),
+                colors_actual: Some(display::parse_colors_header("#121212,#FEFEFE")),
+                ..Default::default()
+            }
+        } else {
+            RungSettings::default()
+        };
+        RenderInputs {
+            over,
+            device_final,
+            screen,
+            device_base,
+            panel,
+            panel_dither: None,
+            fallback_palette: display::parse_colors_header("#000000,#FFFFFF"),
+            fallback_colors_actual: None,
+            screen_default_refresh: 900,
+            override_source: display::SRC_DEV_OVERRIDE,
+        }
+    }
+
+    fn winner(res: &Resolution, setting: &str) -> Rung {
+        res.get(setting)
+            .unwrap_or_else(|| panic!("no report for `{setting}`"))
+            .from
+    }
+
+    /// Every setting resolves through the SAME order. This is the test a newly
+    /// added setting with a precedence order of its own fails — which is exactly
+    /// how `dither` came to be inverted relative to its four neighbours.
+    #[test]
+    fn resolution_table_every_setting_walks_the_same_six_rungs() {
+        const SETTINGS: [&str; 10] = [
+            "colors",
+            "colors_actual",
+            "dither",
+            "max_error",
+            "noise_scale",
+            "chroma_clamp",
+            "strength",
+            "gamut.knee",
+            "gamut.amount",
+            "refresh",
+        ];
+        // Highest first. Peel one rung off the top at a time; the next must win.
+        // The panel and fallback rungs are per-setting (a panel has no `dither`,
+        // no `refresh`), so the walk stops at DeviceBase and the lower rungs get
+        // their own assertions below.
+        let ladder = [
+            Rung::Override,
+            Rung::DeviceFinal,
+            Rung::Screen,
+            Rung::DeviceBase,
+        ];
+        for peeled in 0..ladder.len() {
+            let present = &ladder[peeled..];
+            let res = resolve_render(&table_inputs(present)).report;
+            let expected = present[0];
+            for setting in SETTINGS {
+                assert_eq!(
+                    winner(&res, setting),
+                    expected,
+                    "`{setting}` with rungs {present:?} must be won by {expected:?}"
+                );
+            }
+            // Everything still present below the winner is Outranked, never Absent
+            // — a rung the builder forgot reports Absent and would pass a
+            // winner-only assertion.
+            for setting in SETTINGS {
+                let report = &res[setting];
+                for lower in &present[1..] {
+                    let found = report.rungs.iter().find(|(r, _)| *r == lower);
+                    let (_, entry) = found.unwrap_or_else(|| {
+                        panic!(
+                            "`{setting}`: rung {lower:?} is missing from the report, so the \
+                         ladder builder never offered it a slot"
+                        )
+                    });
+                    assert_eq!(
+                        entry.status,
+                        RungStatus::Outranked,
+                        "`{setting}`: rung {lower:?} below the winner must be Outranked"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Spec §7, named explicitly because this is the one behaviour change in the
+    /// release: today the device's bare `dither` beats a screen that sets its own.
+    #[test]
+    fn dither_screen_beats_device_base() {
+        let res = resolve_render(&table_inputs(&[Rung::Screen, Rung::DeviceBase]));
+        assert_eq!(res.dither.as_deref(), Some(DITHER_BY_RUNG[3]));
+        assert_eq!(winner(&res.report, "dither"), Rung::Screen);
+    }
+
+    #[test]
+    fn dither_device_final_beats_screen() {
+        let res = resolve_render(&table_inputs(&[Rung::DeviceFinal, Rung::Screen]));
+        assert_eq!(res.dither.as_deref(), Some(DITHER_BY_RUNG[4]));
+        assert_eq!(winner(&res.report, "dither"), Rung::DeviceFinal);
+    }
+
+    #[test]
+    fn dither_override_beats_everything() {
+        let res = resolve_render(&table_inputs(&[
+            Rung::Override,
+            Rung::DeviceFinal,
+            Rung::Screen,
+            Rung::DeviceBase,
+        ]));
+        assert_eq!(res.dither.as_deref(), Some(OVERRIDE_DITHER));
+        assert_eq!(winner(&res.report, "dither"), Rung::Override);
+    }
+
+    /// `colors_actual` loses its exception: piece 2 put the screen above the
+    /// override to match the legacy resolver. Spec §2 gives it the same order as
+    /// everything else, so a dev-UI calibration push now wins — which is the
+    /// whole point of the override rung.
+    #[test]
+    fn colors_actual_override_beats_the_screen() {
+        let res = resolve_render(&table_inputs(&[Rung::Override, Rung::Screen]));
+        assert_eq!(winner(&res.report, "colors_actual"), Rung::Override);
+    }
+
+    /// Spec §7: the test that would have caught the first draft's inverted
+    /// migration instruction. `refresh` is a ZERO behaviour change — a script's
+    /// `refresh_rate` still beats a bare `devices.<k>.refresh`.
+    #[test]
+    fn refresh_script_still_beats_the_device_base_rung() {
+        let res = resolve_render(&table_inputs(&[Rung::Screen, Rung::DeviceBase]));
+        assert_eq!(
+            res.refresh, 300,
+            "the script's 100*3, not the device's 100*2"
+        );
+        assert_eq!(winner(&res.report, "refresh"), Rung::Screen);
+    }
+
+    /// …and the one new capability: an owner's veto on how often a
+    /// battery-powered display wakes up.
+    #[test]
+    fn refresh_final_beats_the_script() {
+        let res = resolve_render(&table_inputs(&[Rung::DeviceFinal, Rung::Screen]));
+        assert_eq!(res.refresh, 400);
+        assert_eq!(winner(&res.report, "refresh"), Rung::DeviceFinal);
+    }
+
+    /// Field by field, not block by block (regression test for defect 5.3, at
+    /// the resolver level): the final rung setting one number must leave the
+    /// others to the rungs below it.
+    #[test]
+    fn a_rung_setting_one_field_leaves_the_others_to_lower_rungs() {
+        let mut i = table_inputs(&[Rung::DeviceBase]);
+        i.device_final = RungSettings {
+            tuning: crate::models::DitherTuningValues {
+                strength: Some(0.25),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let res = resolve_render(&i);
+        assert_eq!(
+            res.tuning.strength,
+            Some(0.25),
+            "the final rung's own field"
+        );
+        assert_eq!(
+            res.tuning.max_error,
+            Some(2.0),
+            "max_error must still come from the device base rung"
+        );
+        assert_eq!(winner(&res.report, "strength"), Rung::DeviceFinal);
+        assert_eq!(winner(&res.report, "max_error"), Rung::DeviceBase);
+    }
+
+    /// Ruling 2's mapping, which Tasks 3–6 depend on for their diagnostics.
+    #[test]
+    fn measured_source_names_the_rung_that_won() {
+        let res = resolve_render(&table_inputs(&[Rung::Screen]));
+        assert_eq!(res.measured_source, display::SRC_SCRIPT);
+        let res = resolve_render(&table_inputs(&[Rung::DeviceFinal]));
+        assert_eq!(res.measured_source, display::SRC_DEVICE);
+        let res = resolve_render(&table_inputs(&[Rung::Panel]));
+        assert_eq!(res.measured_source, display::SRC_PANEL_ACTUAL);
+        let res = resolve_render(&table_inputs(&[Rung::Override]));
+        assert_eq!(res.measured_source, display::SRC_DEV_OVERRIDE);
+        let res = resolve_render(&table_inputs(&[]));
+        assert_eq!(res.measured_source, display::SRC_NONE);
     }
 }

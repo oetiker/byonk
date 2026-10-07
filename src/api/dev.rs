@@ -21,7 +21,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
 use crate::api::resolution::{
-    header_value, resolve_dev_render, DevRenderInputs, Resolution, Rung, RungSettings, RungStatus,
+    header_value, resolve_render, RenderInputs, Resolution, Rung, RungSettings, RungStatus,
     RESOLUTION_HEADER,
 };
 use crate::error::ApiError;
@@ -592,6 +592,9 @@ pub async fn handle_render(
         .base
         .clone()
         .unwrap_or_else(|| device.map(|d| d.base()).unwrap_or_default());
+    // The device's `final:` block. A draft that sets final fields is piece 2's
+    // `req.over`, not this rung.
+    let device_final_rung: CascadeValues = device.map(|d| d.device_final()).unwrap_or_default();
     let panel_cfg = req
         .panel
         .as_deref()
@@ -775,8 +778,9 @@ pub async fn handle_render(
     // ---- Post-script: every render setting resolves on the ladder, and the
     // renderer is fed from that same resolution — the report and the pixels
     // cannot disagree.
-    let res = resolve_dev_render(&DevRenderInputs {
+    let res = resolve_render(&RenderInputs {
         over: RungSettings::from_cascade(&req.over),
+        device_final: RungSettings::from_cascade(&device_final_rung),
         screen: out.script,
         device_base: RungSettings::from_cascade(&device_rung),
         panel: RungSettings {
@@ -786,7 +790,9 @@ pub async fn handle_render(
         },
         panel_dither: panel_dither_config.as_ref(),
         fallback_palette: query_palette,
+        fallback_colors_actual: None,
         screen_default_refresh: out.screen_default_refresh,
+        override_source: display::SRC_DEV_OVERRIDE,
     });
     log_render_warnings(&res.report, &req);
 

@@ -195,11 +195,15 @@ async fn screen_and_device_together_take_the_screen_and_the_devices_settings() {
         .await;
     assert!(r.status.is_success(), "{} {}", r.status, r.text());
     let res = resolution(&r);
-    // Today the device outranks the screen for dither (plan ruling 1).
-    assert_eq!(res["dither"]["effective"], "floyd-steinberg");
-    assert_eq!(res["dither"]["from"], "device_base");
-    assert_eq!(res["dither"]["rungs"]["screen"]["value"], "atkinson");
-    assert_eq!(res["dither"]["rungs"]["screen"]["status"], "outranked");
+    // Spec §2: a screen that sets its own dither beats the device's bare
+    // `dither:` (piece 3 flipped this; the veto now lives in `final:`).
+    assert_eq!(res["dither"]["effective"], "atkinson");
+    assert_eq!(res["dither"]["from"], "screen");
+    assert_eq!(
+        res["dither"]["rungs"]["device_base"]["value"],
+        "floyd-steinberg"
+    );
+    assert_eq!(res["dither"]["rungs"]["device_base"]["status"], "outranked");
     // The screen still wins refresh; the device's value is outranked.
     assert_eq!(res["refresh"]["effective"], 60);
     assert_eq!(res["refresh"]["rungs"]["device_base"]["value"], 600);

@@ -223,6 +223,11 @@ pub fn resolve_dither_tuning_from(
 /// `tracing` fields (server logs) and via `RenderResult::measured_source` /
 /// the MCP `render_screen` tool's diagnostics.
 pub const SRC_SCRIPT: &str = "script";
+/// A device rung supplied the measurement — base or final. The two are one
+/// label because the diagnostic answers "whose decision was this", and both
+/// rungs belong to the device owner; the `X-Byonk-Resolution` report is where
+/// the exact rung is named.
+pub const SRC_DEVICE: &str = "device";
 pub const SRC_DEV_OVERRIDE: &str = "dev_override";
 /// The authoring path's own dev-override slot: a `colors_actual` passed
 /// directly in `RenderOpts` (e.g. by the MCP `render_screen` tool), so an

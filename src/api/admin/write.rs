@@ -119,15 +119,12 @@ fn validate_screen_and_params(
     Ok(())
 }
 
-/// Validate the device settings a caller actually provided.
-///
-/// Only the provided fields, never the merged result: a device whose
-/// `config.yaml` entry was hand-edited into an invalid state must still accept
-/// an unrelated patch, otherwise the API that exists to fix such a device is
-/// the one thing that cannot.
-///
-/// This matters most for `dither`. An unrecognised algorithm name does not
 /// Validate a dither algorithm name, reporting errors with a fully-qualified key name.
+///
+/// An unrecognised algorithm name does not fail anywhere downstream —
+/// `svg_to_png`'s match ends in `_ => DitherAlgorithm::Atkinson` — so without
+/// this check a typo silently rendered Atkinson, and the only symptom was on
+/// the glass.
 fn validate_dither_name(name: &str, key: &str) -> Result<(), ApiError> {
     let canonical = normalize_algorithm_name(name);
     if !DITHER_ALGORITHMS.contains(&canonical.as_str()) {
@@ -139,6 +136,14 @@ fn validate_dither_name(name: &str, key: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Validate the device settings a caller actually provided.
+///
+/// Only the provided fields, never the merged result: a device whose
+/// `config.yaml` entry was hand-edited into an invalid state must still accept
+/// an unrelated patch, otherwise the API that exists to fix such a device is
+/// the one thing that cannot.
+///
+/// This matters most for `dither`: an unrecognised algorithm name does not
 /// fail anywhere downstream — `svg_to_png`'s match ends in `_ =>
 /// DitherAlgorithm::Atkinson` — so before this check a typo silently rendered
 /// Atkinson, and the only symptom was on the glass.
@@ -160,7 +165,7 @@ fn validate_device_settings(state: &AppState, w: &DeviceWrite) -> Result<(), Api
     }
 
     if let Some(colors) = &w.colors {
-        validate_colors(colors)?;
+        validate_colors(colors, "colors")?;
     }
 
     // `c` is rejected on purpose: firmware 1.8.14 still has its mapping
@@ -194,12 +199,7 @@ fn validate_device_settings(state: &AppState, w: &DeviceWrite) -> Result<(), Api
     }
 
     if let Some(colors) = &w.colors_actual {
-        validate_colors(colors).map_err(|e| match e {
-            ApiError::BadRequest(m) => {
-                ApiError::BadRequest(m.replace("`colors`", "`colors_actual`"))
-            }
-            other => other,
-        })?;
+        validate_colors(colors, "colors_actual")?;
     }
     if let Some(g) = &w.gamut {
         validate_gamut(g, "gamut")?;
@@ -220,10 +220,7 @@ fn validate_cascade_values(v: &CascadeValues, prefix: &str) -> Result<(), ApiErr
     }
     for (key, colors) in [("colors", &v.colors), ("colors_actual", &v.colors_actual)] {
         if let Some(c) = colors {
-            validate_colors(c).map_err(|e| match e {
-                ApiError::BadRequest(m) => ApiError::BadRequest(format!("`{prefix}{key}`: {m}")),
-                other => other,
-            })?;
+            validate_colors(c, &format!("{prefix}{key}"))?;
         }
     }
     for (key, value) in [
@@ -261,26 +258,27 @@ fn validate_gamut(g: &GamutTuningValues, name: &str) -> Result<(), ApiError> {
 }
 
 /// A `colors` override must be a comma-separated list of `#rrggbb` entries.
+/// `key` is the fully-qualified name the caller used, so errors point at it.
 ///
 /// Strict where the render path is forgiving: `parse_colors_header` builds the
 /// palette with `filter_map`, so it drops the entries it cannot read and
 /// carries on with a shorter palette. That is the right behaviour for a header
 /// arriving from a device and the wrong one for a value being written to disk.
-fn validate_colors(colors: &str) -> Result<(), ApiError> {
+fn validate_colors(colors: &str, key: &str) -> Result<(), ApiError> {
     let entries: Vec<&str> = colors.split(',').map(str::trim).collect();
     for entry in &entries {
         let hex = entry.strip_prefix('#').unwrap_or(entry);
         let valid = hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit());
         if !valid {
             return Err(ApiError::BadRequest(format!(
-                "`colors` entry `{entry}` is not a #rrggbb color"
+                "`{key}` entry `{entry}` is not a #rrggbb color"
             )));
         }
     }
     if entries.len() < 2 {
-        return Err(ApiError::BadRequest(
-            "`colors` needs at least two colors to dither between".into(),
-        ));
+        return Err(ApiError::BadRequest(format!(
+            "`{key}` needs at least two colors to dither between"
+        )));
     }
     Ok(())
 }

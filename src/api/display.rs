@@ -151,6 +151,7 @@ pub struct RenderParams {
 
 /// Resolve the pre-script palette for device context.
 /// Chain: device_config_colors > panel_colors > fallback_palette
+/// (callers pass the device's `final:` colours ahead of its base colours)
 pub fn resolve_ctx_palette(
     device_config_colors: Option<&str>,
     panel_colors: Option<&str>,
@@ -937,7 +938,10 @@ pub async fn handle_display<R: DeviceRegistry>(
                                 let error_msg = e.to_string();
                                 let error_svg = pipeline.render_error_svg(&error_msg);
                                 let fallback_palette = resolve_ctx_palette(
-                                    dc_colors.as_deref(),
+                                    device_final_rung
+                                        .colors
+                                        .as_deref()
+                                        .or(dc_colors.as_deref()),
                                     panel_colors_for_chain.as_deref(),
                                     &fallback,
                                 );
@@ -963,7 +967,10 @@ pub async fn handle_display<R: DeviceRegistry>(
                         .map(parse_colors_header)
                         .unwrap_or_else(|| parse_colors_header(DEFAULT_COLORS));
                     let fallback_palette = resolve_ctx_palette(
-                        dc_colors.as_deref(),
+                        device_final_rung
+                            .colors
+                            .as_deref()
+                            .or(dc_colors.as_deref()),
                         panel_colors_for_chain.as_deref(),
                         &fallback,
                     );

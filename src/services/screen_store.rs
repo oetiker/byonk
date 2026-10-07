@@ -1232,18 +1232,27 @@ impl ScreenStore {
         // model default`, the screen rung empty), so a preview tells the
         // script what `/dev/render` and `/api/display` would.
         //
-        // The base rung carries the device's colours and dither only. Its
-        // tuning is deliberately NOT shown here — this preview has never
-        // shown it, and this change adds the `final:` rung without moving
-        // anything else. (`/dev/render` and `/api/display` do show it.)
+        // The base rung carries everything the device's own config sets,
+        // tuning and measured colours included: the render below uses the
+        // same base, so a script must be told the numbers the glass gets.
         let device_base = RungSettings {
             colors: opts
                 .device
                 .as_ref()
                 .and_then(|d| d.colors.as_deref())
                 .map(crate::api::display::parse_colors_header),
+            colors_actual: opts
+                .device
+                .as_ref()
+                .and_then(|d| d.colors_actual.as_deref())
+                .map(crate::api::display::parse_colors_header),
             dither: opts.device.as_ref().and_then(|d| d.dither.clone()),
-            ..Default::default()
+            tuning: opts
+                .device
+                .as_ref()
+                .map(|d| d.tuning.clone())
+                .unwrap_or_default(),
+            refresh: None,
         };
         let pre = resolve_pre_script(&PreScriptInputs {
             over: RungSettings {

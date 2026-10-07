@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use super::require_admin;
 use crate::api::display::{resolve_preview_dimensions, resolve_query_palette};
 use crate::error::ApiError;
-use crate::models::{config::DeviceConfig, DisplaySpec, DitherTuningValues};
+use crate::models::{config::DeviceConfig, Device, DisplaySpec, DitherTuningValues};
 use crate::server::AppState;
 use crate::services::screen_store::{DevicePreview, RenderOpts};
 use crate::services::DeviceRegistry;
@@ -130,26 +130,7 @@ pub async fn device_preview(
         height: panel.and_then(|p| p.height),
         panel: device_config.panel.clone(),
         params: device_config.params.clone(),
-        device: Some(DevicePreview {
-            mac: key.clone(),
-            firmware_version: seen.as_ref().map(|d| d.firmware_version.clone()),
-            battery_voltage: seen.as_ref().and_then(|d| d.battery_voltage),
-            rssi: seen.as_ref().and_then(|d| d.rssi),
-            colors: device_config.colors.clone(),
-            dither: device_config.dither.clone(),
-            tuning: DitherTuningValues {
-                deprecated_error_clamp: None,
-                max_error: device_config.max_error,
-                noise_scale: device_config.noise_scale,
-                chroma_clamp: device_config.chroma_clamp,
-                strength: device_config.strength,
-                gamut: device_config.gamut.clone(),
-            },
-            refresh: device_config.refresh,
-            // Task 6 wires the device's own rungs in.
-            colors_actual: None,
-            final_rung: Default::default(),
-        }),
+        device: Some(device_preview_for(device_config, &key, seen.as_ref())),
         // Undithered means the pre-dither, full-colour PNG, which the
         // renderer produces alongside the normal one.
         include_raw: !dithered,
@@ -235,6 +216,38 @@ pub async fn device_preview(
     Ok(png_response(png, "miss"))
 }
 
+/// Build the preview's device identity and its cascade rungs.
+///
+/// Named rather than inlined so a field added to `DevicePreview` has one
+/// place to be added and one place to be tested. The admin preview must
+/// render the same image `/api/display` would for the same device; a rung
+/// missing here is a preview that quietly disagrees with the glass.
+fn device_preview_for(
+    device_config: &DeviceConfig,
+    key: &str,
+    seen: Option<&Device>,
+) -> DevicePreview {
+    DevicePreview {
+        mac: key.to_string(),
+        firmware_version: seen.map(|d| d.firmware_version.clone()),
+        battery_voltage: seen.and_then(|d| d.battery_voltage),
+        rssi: seen.and_then(|d| d.rssi),
+        colors: device_config.colors.clone(),
+        colors_actual: device_config.colors_actual.clone(),
+        dither: device_config.dither.clone(),
+        tuning: DitherTuningValues {
+            deprecated_error_clamp: None,
+            max_error: device_config.max_error,
+            noise_scale: device_config.noise_scale,
+            chroma_clamp: device_config.chroma_clamp,
+            strength: device_config.strength,
+            gamut: device_config.gamut.clone(),
+        },
+        refresh: device_config.refresh,
+        final_rung: device_config.device_final(),
+    }
+}
+
 /// Hash everything the render depends on that this handler can see.
 ///
 /// It cannot see the screen's *source*, so editing a screen's files does not
@@ -276,6 +289,14 @@ fn fingerprint(device_config: &DeviceConfig, model: &str, opts: &RenderOpts) -> 
         )
         .as_bytes(),
     );
+    hasher.update([0]);
+    hasher.update(format!("{:?}", device_config.colors_actual).as_bytes());
+    hasher.update([0]);
+    // The whole final rung, not a field list: a field added to CascadeValues
+    // is then covered automatically. The derived Debug form distinguishes
+    // every field, which is all the cache needs -- it is a change detector,
+    // not a stable identifier.
+    hasher.update(format!("{:?}", device_config.final_rung).as_bytes());
     hex::encode(hasher.finalize())
 }
 
@@ -293,4 +314,108 @@ fn png_response(png: Vec<u8>, cache_state: &'static str) -> Response {
         Bytes::from(png),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{DeviceId, DitherTuningValues};
+
+    fn dc(yaml: &str) -> DeviceConfig {
+        serde_yaml::from_str(yaml).expect("device config parses")
+    }
+
+    /// `fingerprint` is the preview cache's only idea of "has anything
+    /// changed". A `final:` edit it cannot see serves a stale image until the
+    /// TTL.
+    #[test]
+    fn fingerprint_changes_when_only_the_final_rung_changes() {
+        let base = dc("screen: local/hello");
+        let vetoed = dc("screen: local/hello\nfinal:\n  dither: atkinson\n");
+        let opts = RenderOpts::default();
+        assert_ne!(
+            fingerprint(&base, "og", &opts),
+            fingerprint(&vetoed, "og", &opts),
+            "a final: change must invalidate the cached preview"
+        );
+    }
+
+    #[test]
+    fn fingerprint_changes_when_only_device_colors_actual_changes() {
+        let a = dc("screen: local/hello");
+        let b = dc("screen: local/hello\ncolors_actual: '#1C5240,#FFFFFF'\n");
+        let opts = RenderOpts::default();
+        assert_ne!(fingerprint(&a, "og", &opts), fingerprint(&b, "og", &opts));
+    }
+
+    /// Two different `final:` blocks must not collide.
+    #[test]
+    fn fingerprint_distinguishes_two_different_final_rungs() {
+        let a = dc("screen: local/hello\nfinal:\n  dither: atkinson\n");
+        let b = dc("screen: local/hello\nfinal:\n  dither: stucki\n");
+        let opts = RenderOpts::default();
+        assert_ne!(fingerprint(&a, "og", &opts), fingerprint(&b, "og", &opts));
+    }
+
+    /// Every field gets a distinct value, so swapping any pair fails.
+    #[test]
+    fn device_preview_for_assigns_each_field_from_its_own_source() {
+        let cfg = dc("screen: local/hello
+colors: '#000003,#FFFFFC'
+colors_actual: '#060606,#F9F9F9'
+dither: atkinson
+max_error: 0.71
+noise_scale: 0.72
+chroma_clamp: 0.73
+strength: 0.74
+refresh: 777
+final:
+  colors: '#000004,#FFFFFB'
+  colors_actual: '#050505,#FAFAFA'
+  dither: stucki
+  max_error: 0.51
+  noise_scale: 0.52
+  chroma_clamp: 0.53
+  strength: 0.54
+  refresh: 1800
+");
+        let mut seen = Device::new(
+            DeviceId::new("AA:BB:CC:DD:EE:FF"),
+            "og".into(),
+            "1.2.3".into(),
+        );
+        seen.battery_voltage = Some(3.9);
+        seen.rssi = Some(-61);
+
+        let p = device_preview_for(&cfg, "key-1", Some(&seen));
+        assert_eq!(p.mac, "key-1");
+        assert_eq!(p.firmware_version.as_deref(), Some("1.2.3"));
+        assert_eq!(p.battery_voltage, Some(3.9));
+        assert_eq!(p.rssi, Some(-61));
+        // Base rung.
+        assert_eq!(p.colors.as_deref(), Some("#000003,#FFFFFC"));
+        assert_eq!(p.colors_actual.as_deref(), Some("#060606,#F9F9F9"));
+        assert_eq!(p.dither.as_deref(), Some("atkinson"));
+        assert_eq!(p.tuning.max_error, Some(0.71));
+        assert_eq!(p.tuning.noise_scale, Some(0.72));
+        assert_eq!(p.tuning.chroma_clamp, Some(0.73));
+        assert_eq!(p.tuning.strength, Some(0.74));
+        assert_eq!(p.refresh, Some(777));
+        // Final rung: its own values, none of the base ones.
+        let f = &p.final_rung;
+        assert_eq!(f.colors.as_deref(), Some("#000004,#FFFFFB"));
+        assert_eq!(f.colors_actual.as_deref(), Some("#050505,#FAFAFA"));
+        assert_eq!(f.dither.as_deref(), Some("stucki"));
+        assert_eq!(f.max_error, Some(0.51));
+        assert_eq!(f.noise_scale, Some(0.52));
+        assert_eq!(f.chroma_clamp, Some(0.53));
+        assert_eq!(f.strength, Some(0.54));
+        assert_eq!(f.refresh, Some(1800));
+
+        // No sighting, no `final:` block: identity empty, final rung empty.
+        let bare = device_preview_for(&dc("screen: local/hello"), "k", None);
+        assert_eq!(bare.firmware_version, None);
+        assert_eq!(bare.final_rung, crate::models::config::CascadeValues::default());
+        let _ = DitherTuningValues::default();
+    }
 }

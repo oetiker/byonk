@@ -120,13 +120,11 @@ pub struct CascadeValues {
 }
 
 impl DeviceConfig {
-    /// The device's base rung as a `CascadeValues`. `colors_actual` is
-    /// always `None`: a device-level measurement arrives with the cascade
-    /// (spec §8 piece 3).
+    /// The device's base rung as a `CascadeValues`.
     pub fn base(&self) -> CascadeValues {
         CascadeValues {
             colors: self.colors.clone(),
-            colors_actual: None,
+            colors_actual: self.colors_actual.clone(),
             dither: self.dither.clone(),
             max_error: self.max_error,
             noise_scale: self.noise_scale,
@@ -135,6 +133,14 @@ impl DeviceConfig {
             refresh: self.refresh,
             gamut: self.gamut.clone(),
         }
+    }
+
+    /// The device's final rung, or an empty rung when there is none. Every
+    /// render path reads it through this, so "no `final:` block" and "a
+    /// `final:` block that sets nothing" resolve identically — which they
+    /// must, or deleting the last field from the block would change pixels.
+    pub fn device_final(&self) -> CascadeValues {
+        self.final_rung.clone().unwrap_or_default()
     }
 }
 
@@ -406,6 +412,16 @@ pub struct DeviceConfig {
     /// Optional display color override (comma-separated hex, e.g. "#000000,#FFFFFF,#FF0000")
     pub colors: Option<String>,
 
+    /// Optional measured-colour override for this one display,
+    /// comma-separated hex. The **base rung** of `colors_actual`: it outranks
+    /// the panel's calibration (which describes the hardware type) and is
+    /// outranked by a screen that measures its own, and by `final:`.
+    ///
+    /// Same validity rule as every other rung: an entry count that does not
+    /// match the resolved palette is reported `rejected` and the resolver
+    /// walks on down (spec §4.4).
+    pub colors_actual: Option<String>,
+
     /// Optional dither algorithm override (e.g. "atkinson", "floyd-steinberg")
     pub dither: Option<String>,
 
@@ -500,6 +516,19 @@ pub struct DeviceConfig {
     /// construction.
     #[serde(default)]
     pub min_png_bytes: Option<u32>,
+
+    /// The **final rung** — the owner's veto: "whatever the screen says, on
+    /// *this* display, no." Nothing outranks it but a live dev-UI override.
+    ///
+    /// `final` is a reserved word in Rust, hence the rename. Read it through
+    /// [`DeviceConfig::device_final`], which saves every call site an
+    /// `unwrap_or_default`.
+    ///
+    /// Strict, unlike the base rung: `CascadeValues` carries
+    /// `deny_unknown_fields`, so `final: {screen: …}` fails at startup with
+    /// the field named rather than being silently dropped (spec §3).
+    #[serde(rename = "final", default)]
+    pub final_rung: Option<CascadeValues>,
 }
 
 /// Admin/management API settings.
@@ -1371,6 +1400,103 @@ colors: "#000000,#FFFFFF"
         assert_eq!(b.refresh, Some(600));
         assert_eq!(b.gamut.knee, Some(0.7));
         assert_eq!(b.colors_actual, None);
+    }
+
+    #[test]
+    fn device_final_rung_parses_from_the_final_key() {
+        let yaml = r#"
+screen: local/hello
+dither: floyd-steinberg
+final:
+  dither: atkinson
+  refresh: 1800
+"#;
+        let dc: DeviceConfig = serde_yaml::from_str(yaml).expect("parses");
+        assert_eq!(dc.dither.as_deref(), Some("floyd-steinberg"), "base rung");
+        let f = dc.final_rung.expect("final rung present");
+        assert_eq!(f.dither.as_deref(), Some("atkinson"));
+        assert_eq!(f.refresh, Some(1800));
+        // Untouched fields of the final rung stay None, so the resolver walks
+        // past them to a lower rung instead of vetoing with nothing.
+        assert_eq!(f.strength, None);
+    }
+
+    #[test]
+    fn absent_final_key_is_none_not_an_empty_rung() {
+        let dc: DeviceConfig = serde_yaml::from_str("screen: local/hello").expect("parses");
+        assert!(dc.final_rung.is_none());
+        // …and `device_final()` still answers, so callers need no branch.
+        assert_eq!(dc.device_final(), CascadeValues::default());
+    }
+
+    /// The asymmetry spec §3 asks for: the `final:` block is strict so that a
+    /// non-cascade key there is a startup error naming the field, because in
+    /// add-on mode that message is the only diagnostic the operator sees.
+    #[test]
+    fn a_non_cascade_key_in_final_is_an_error_naming_the_field() {
+        let yaml = r#"
+screen: local/hello
+final:
+  screen: local/other
+"#;
+        let err = serde_yaml::from_str::<DeviceConfig>(yaml)
+            .expect_err("`final.screen` must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("screen"),
+            "the error must name the offending field, got: {msg}"
+        );
+    }
+
+    /// The base rung keeps today's tolerant behaviour. Making it strict is a
+    /// separate, larger decision about every existing config.yaml (spec §3).
+    #[test]
+    fn an_unknown_key_on_the_base_rung_is_still_tolerated() {
+        let yaml = r#"
+screen: local/hello
+some_future_key: 42
+"#;
+        serde_yaml::from_str::<DeviceConfig>(yaml).expect("base rung stays tolerant");
+    }
+
+    #[test]
+    fn device_colors_actual_is_a_base_rung_string() {
+        let yaml = r#"
+screen: local/hello
+colors_actual: '#1C5240,#FFFFFF'
+"#;
+        let dc: DeviceConfig = serde_yaml::from_str(yaml).expect("parses");
+        assert_eq!(dc.colors_actual.as_deref(), Some("#1C5240,#FFFFFF"));
+    }
+
+    /// `base()` is how every render path reads the base rung. A field it forgets
+    /// is a setting that silently stops working at that rung only.
+    #[test]
+    fn base_carries_every_cascade_field_including_the_new_ones() {
+        let yaml = r#"
+screen: local/hello
+colors: '#000000,#FFFFFF'
+colors_actual: '#1C5240,#FEFEFE'
+dither: stucki
+max_error: 1.5
+noise_scale: 0.6
+chroma_clamp: 2.0
+strength: 0.9
+refresh: 900
+gamut:
+  knee: 0.8
+"#;
+        let dc: DeviceConfig = serde_yaml::from_str(yaml).expect("parses");
+        let b = dc.base();
+        assert_eq!(b.colors.as_deref(), Some("#000000,#FFFFFF"));
+        assert_eq!(b.colors_actual.as_deref(), Some("#1C5240,#FEFEFE"));
+        assert_eq!(b.dither.as_deref(), Some("stucki"));
+        assert_eq!(b.max_error, Some(1.5));
+        assert_eq!(b.noise_scale, Some(0.6));
+        assert_eq!(b.chroma_clamp, Some(2.0));
+        assert_eq!(b.strength, Some(0.9));
+        assert_eq!(b.refresh, Some(900));
+        assert_eq!(b.gamut.knee, Some(0.8));
     }
 
     /// The dev render's `draft.panel.dither` arrives as JSON, so the

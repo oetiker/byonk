@@ -1616,7 +1616,15 @@ Update the call site (`:361-363`):
             resolve_refresh_rate(lua_result.refresh_rate, device_base, device_final, screen_default);
 ```
 
-Then fill `refresh_final` at every `DeviceContext` construction: `grep -rn "refresh_override:" src/` and add `refresh_final:` beside each. On `/api/display` it is `device_config.and_then(|dc| dc.device_final().refresh)`; where no device config exists, `None`.
+Then fill `refresh_final` at **all three** sites that supply the base rung. Do **not** find them with `grep "refresh_override:"` — the colon makes that pattern miss the decisive one, which is an assignment rather than a struct field:
+
+| Site | What it does now | What to add |
+|---|---|---|
+| `src/services/content_pipeline.rs:279` | `ctx.refresh_override = device_config.refresh;` — **no colon, so a `refresh_override:` grep misses it**. This is the site that serves `/api/display`, i.e. real hardware. | `ctx.refresh_final = device_config.device_final().refresh;` |
+| `src/services/screen_store.rs:1293` | `refresh_override: opts.device.as_ref().and_then(|d| d.refresh)` — serves the authoring render and the admin device preview. | `refresh_final: opts.device.as_ref().and_then(|d| d.final_rung.refresh)` |
+| `src/api/display.rs:1034` | `refresh_override: None` — this handler leaves it to `content_pipeline` above. | `refresh_final: None`, for the same reason |
+
+**This is the task that makes `final.refresh` work at all.** A Task-6 investigation confirmed it is currently inert on *every* path, the device included: nothing consumes the cascade's resolved `refresh`, because both `/api/display` and the previews take their rate from `resolve_refresh_rate`. So `final.refresh` is a capability this plan announces and only this task delivers. Prove it on two paths, not one: the device path (`/api/display`) and the admin device preview, whose **cache TTL** must also follow the veto.
 
 - [ ] **Step 5: Run the tests**
 

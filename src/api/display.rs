@@ -12,10 +12,11 @@ use super::headers::HeaderMapExt;
 use super::resolution::{resolve_render, RenderInputs, RungSettings};
 use crate::error::ApiError;
 use crate::models::{
-    normalize_algorithm_name, verify_ed25519_signature, ApiKey, AppConfig, Device, DeviceId,
-    DisplaySpec, DitherTuningValues, PanelConfig,
+    normalize_algorithm_name, verify_ed25519_signature, ApiKey, AppConfig, CascadeValues, Device,
+    DeviceId, DisplaySpec, DitherTuningValues, PanelConfig, PanelDitherConfig,
 };
 use crate::server::{tuning_session_active, DevOverrides, TUNING_REFRESH_SECS};
+use crate::services::content_pipeline::ScriptResult;
 
 /// Filename that makes TRMNL firmware run a full-panel wipe instead of
 /// displaying the image. Recognised in `bl.cpp` right after the display
@@ -67,6 +68,77 @@ pub fn parse_colors_header(s: &str) -> Vec<(u8, u8, u8)> {
 /// `parse_colors_header`'s silent-drop behaviour for a single entry.
 pub fn parse_measured_color_list(items: &[String]) -> Vec<(u8, u8, u8)> {
     items.iter().filter_map(|s| parse_hex_color(s)).collect()
+}
+
+/// Assign the handler's bindings to the six rungs of the cascade (spec §2).
+///
+/// Pulled out of the handler so the assignment can be tested: a pair of rungs
+/// swapped here would still resolve cleanly and quietly render with the wrong
+/// calibration or algorithm, and nothing downstream could tell.
+#[allow(clippy::too_many_arguments)]
+fn render_inputs_for<'a>(
+    result: &ScriptResult,
+    override_colors_actual: Option<&[(u8, u8, u8)]>,
+    dev_dither: Option<&str>,
+    dev_tuning: Option<&DitherTuningValues>,
+    device_final: &CascadeValues,
+    device_base: &CascadeValues,
+    panel_colors: Option<&str>,
+    panel_colors_actual: Option<&[(u8, u8, u8)]>,
+    panel_dither: Option<&'a PanelDitherConfig>,
+    fallback_palette: Vec<(u8, u8, u8)>,
+    header_colors_actual: Option<&[(u8, u8, u8)]>,
+) -> RenderInputs<'a> {
+    RenderInputs {
+        over: RungSettings {
+            colors_actual: override_colors_actual.map(<[_]>::to_vec),
+            dither: dev_dither.map(normalize_algorithm_name),
+            tuning: dev_tuning.cloned().unwrap_or_default(),
+            ..Default::default()
+        },
+        device_final: RungSettings::from_cascade(device_final),
+        screen: RungSettings {
+            colors: result
+                .script_colors
+                .as_deref()
+                .map(|c| parse_colors_header(&c.join(","))),
+            // Never join-then-parse here: an entry containing a comma would
+            // fracture into extra "valid" colours, inflate the count and mask
+            // a genuine length mismatch (see `parse_measured_color_list`).
+            colors_actual: result
+                .script_colors_actual
+                .as_deref()
+                .map(parse_measured_color_list),
+            dither: result
+                .script_dither
+                .as_deref()
+                .map(normalize_algorithm_name),
+            tuning: DitherTuningValues {
+                deprecated_error_clamp: None,
+                max_error: result.script_max_error,
+                noise_scale: result.script_noise_scale,
+                chroma_clamp: result.script_chroma_clamp,
+                strength: result.script_strength,
+                gamut: result.script_gamut.clone().unwrap_or_default(),
+            },
+            // `refresh` is resolved in content_pipeline, which is the only
+            // place the script's return value is in hand (plan ruling 3).
+            refresh: None,
+        },
+        device_base: RungSettings::from_cascade(device_base),
+        panel: RungSettings {
+            colors: panel_colors.map(parse_colors_header),
+            colors_actual: panel_colors_actual.map(<[_]>::to_vec),
+            ..Default::default()
+        },
+        panel_dither,
+        // The firmware `Colors` / `Measured-Colors` headers are fallbacks, not
+        // rungs: a hardware self-report is evidence, not policy (spec §2).
+        fallback_palette,
+        fallback_colors_actual: header_colors_actual.map(<[_]>::to_vec),
+        screen_default_refresh: 0,
+        override_source: SRC_DEV_OVERRIDE,
+    }
 }
 
 /// Convert RGB tuples back to hex strings for Lua/template exposure
@@ -1028,61 +1100,21 @@ pub async fn handle_display<R: DeviceRegistry>(
                         "Resolving render params for device"
                     );
 
-                    let script_tuning = DitherTuningValues {
-                        deprecated_error_clamp: None,
-                        max_error: result.script_max_error,
-                        noise_scale: result.script_noise_scale,
-                        chroma_clamp: result.script_chroma_clamp,
-                        strength: result.script_strength,
-                        gamut: result.script_gamut.clone().unwrap_or_default(),
-                    };
-
-                    // One ladder, spec §2. Every rung is a slot here; nothing
-                    // below decides a precedence of its own.
-                    let params = resolve_render(&RenderInputs {
-                        over: RungSettings {
-                            colors_actual: override_colors_parsed.clone(),
-                            dither: dev_dither.as_deref().map(normalize_algorithm_name),
-                            tuning: dev_tuning.clone().unwrap_or_default(),
-                            ..Default::default()
-                        },
-                        device_final: RungSettings::from_cascade(&device_final_rung),
-                        screen: RungSettings {
-                            colors: result
-                                .script_colors
-                                .as_deref()
-                                .map(|c| parse_colors_header(&c.join(","))),
-                            colors_actual: result
-                                .script_colors_actual
-                                .as_deref()
-                                .map(|c| parse_colors_header(&c.join(","))),
-                            dither: result
-                                .script_dither
-                                .as_deref()
-                                .map(normalize_algorithm_name),
-                            tuning: script_tuning,
-                            // `refresh` is resolved in content_pipeline, which
-                            // is the only place the script's return value is in
-                            // hand (plan ruling 3).
-                            refresh: None,
-                        },
-                        device_base: RungSettings::from_cascade(&device_base_rung),
-                        panel: RungSettings {
-                            colors: panel_colors_for_chain
-                                .as_deref()
-                                .map(parse_colors_header),
-                            colors_actual: panel_actual_parsed.clone(),
-                            ..Default::default()
-                        },
-                        panel_dither: panel_dither_for_closure.as_ref(),
-                        // The firmware `Colors` / `Measured-Colors` headers are
-                        // fallbacks, not rungs: a hardware self-report is
-                        // evidence, not policy (spec §2).
-                        fallback_palette: fallback.clone(),
-                        fallback_colors_actual: header_parsed.clone(),
-                        screen_default_refresh: 0,
-                        override_source: SRC_DEV_OVERRIDE,
-                    })
+                    // One ladder, spec §2. `render_inputs_for` is the only
+                    // place a binding is assigned to a rung.
+                    let params = resolve_render(&render_inputs_for(
+                        &result,
+                        override_colors_parsed.as_deref(),
+                        dev_dither.as_deref(),
+                        dev_tuning.as_ref(),
+                        &device_final_rung,
+                        &device_base_rung,
+                        panel_colors_for_chain.as_deref(),
+                        panel_actual_parsed.as_deref(),
+                        panel_dither_for_closure.as_ref(),
+                        fallback.clone(),
+                        header_parsed.as_deref(),
+                    ))
                     .into_params();
                     for w in &params.warnings {
                         tracing::warn!(device = %mac, "{w}");
@@ -1869,145 +1901,214 @@ panels:
         );
     }
 
-    /// A wrong-length measurement on the device base rung must be reported
-    /// `rejected` and the walk must continue: the image uses the lower
-    /// rung's value, not nominal colours.
-    #[test]
-    fn display_rejects_a_wrong_length_device_colors_actual_and_uses_the_panel() {
-        use crate::api::resolution::{
-            resolve_render, RenderInputs, Rung, RungSettings, RungStatus,
-        };
-        let res = resolve_render(&RenderInputs {
-            over: RungSettings::default(),
-            device_final: RungSettings::default(),
-            screen: RungSettings::default(),
-            device_base: RungSettings {
-                // Three entries against a two-entry palette.
-                colors_actual: Some(parse_colors_header("#111111,#222222,#333333")),
-                ..Default::default()
-            },
-            panel: RungSettings {
-                colors: Some(parse_colors_header("#000000,#FFFFFF")),
-                colors_actual: Some(parse_colors_header("#0A0A0A,#F5F5F5")),
-                ..Default::default()
-            },
-            panel_dither: None,
-            fallback_palette: parse_colors_header("#000000,#FFFFFF"),
-            fallback_colors_actual: None,
+    /// Minimal screen-repo source: `ScriptResult` carries an `Arc` of one, and
+    /// the wiring tests need a result, not a repo.
+    struct NoRepo(crate::models::screen_repo_manifest::ScreenRepoManifest);
+    impl crate::services::screen_repo_loader::ScreenRepoSource for NoRepo {
+        fn read(&self, _rel: &str) -> Option<Vec<u8>> {
+            None
+        }
+        fn screen_paths(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn svg_files(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
+            &self.0
+        }
+        fn screen_files(&self, _screen_path: &str) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    fn script_result(colors: Option<&[&str]>, actual: Option<&[&str]>) -> ScriptResult {
+        let owned = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let manifest = crate::models::screen_repo_manifest::ScreenRepoManifest::from_yaml(
+            "name: t\ndescription: d\nauthor: a\nlicense: MIT\n",
+        )
+        .unwrap();
+        ScriptResult {
+            data: serde_json::Value::Null,
+            refresh_rate: 900,
+            script_refresh_rate: None,
             screen_default_refresh: 900,
-            override_source: SRC_DEV_OVERRIDE,
-        });
+            skip_update: false,
+            screen_name: "t".into(),
+            source: Arc::new(NoRepo(manifest)),
+            screen_dir: String::new(),
+            params: Default::default(),
+            script_colors: colors.map(owned),
+            script_colors_actual: actual.map(owned),
+            script_dither: Some("sierra-lite".into()),
+            script_max_error: Some(0.11),
+            script_noise_scale: Some(0.12),
+            script_chroma_clamp: Some(0.13),
+            script_strength: Some(0.14),
+            script_gamut: None,
+            font_hinting: None,
+            logs: Vec::new(),
+        }
+    }
+
+    /// Every rung carries the value from the binding it is meant to carry.
+    ///
+    /// If this breaks, it means: two bindings were swapped in
+    /// `render_inputs_for`. The resolver would accept that happily and the
+    /// device would render against another source's calibration or
+    /// algorithm; nothing else in the suite compares dither precedence
+    /// against the ladder, so nothing else would notice.
+    #[test]
+    fn render_inputs_for_assigns_each_binding_to_its_own_rung() {
+        let result = script_result(Some(&["#000001", "#FFFFFE"]), Some(&["#010101", "#FEFEFE"]));
+        let over_actual = parse_colors_header("#020202,#FDFDFD");
+        let panel_actual = parse_colors_header("#030303,#FCFCFC");
+        let header_actual = parse_colors_header("#040404,#FBFBFB");
+        let dev_tuning = DitherTuningValues {
+            max_error: Some(0.91),
+            ..Default::default()
+        };
+        let device_final = CascadeValues {
+            dither: Some("floyd_steinberg".into()),
+            colors_actual: Some("#050505,#FAFAFA".into()),
+            ..Default::default()
+        };
+        let device_base = CascadeValues {
+            dither: Some("atkinson".into()),
+            colors_actual: Some("#060606,#F9F9F9".into()),
+            ..Default::default()
+        };
+        let fallback = parse_colors_header("#0A0A0A,#F0F0F0");
+        let i = render_inputs_for(
+            &result,
+            Some(&over_actual),
+            Some("stucki"),
+            Some(&dev_tuning),
+            &device_final,
+            &device_base,
+            Some("#000002,#FFFFFD"),
+            Some(&panel_actual),
+            None,
+            fallback.clone(),
+            Some(&header_actual),
+        );
+
+        // Override: the dev override and nothing else.
+        assert_eq!(i.over.colors_actual, Some(over_actual));
+        assert_eq!(i.over.dither.as_deref(), Some("stucki"));
+        assert_eq!(i.over.tuning.max_error, Some(0.91));
+        // Final and base come from their own cascade values.
+        assert_eq!(i.device_final.dither.as_deref(), Some("floyd_steinberg"));
+        assert_eq!(
+            i.device_final.colors_actual,
+            Some(parse_colors_header("#050505,#FAFAFA"))
+        );
+        assert_eq!(i.device_base.dither.as_deref(), Some("atkinson"));
+        assert_eq!(
+            i.device_base.colors_actual,
+            Some(parse_colors_header("#060606,#F9F9F9"))
+        );
+        // Screen: the script's return value, normalised.
+        assert_eq!(
+            i.screen.colors,
+            Some(parse_colors_header("#000001,#FFFFFE"))
+        );
+        assert_eq!(
+            i.screen.colors_actual,
+            Some(parse_colors_header("#010101,#FEFEFE"))
+        );
+        assert_eq!(i.screen.dither.as_deref(), Some("sierra-lite"));
+        assert_eq!(i.screen.tuning.max_error, Some(0.11));
+        assert_eq!(i.screen.tuning.noise_scale, Some(0.12));
+        assert_eq!(i.screen.tuning.chroma_clamp, Some(0.13));
+        assert_eq!(i.screen.tuning.strength, Some(0.14));
+        // Panel: its palette and its measurement, no dither of its own here.
+        assert_eq!(i.panel.colors, Some(parse_colors_header("#000002,#FFFFFD")));
+        assert_eq!(i.panel.colors_actual, Some(panel_actual));
+        assert_eq!(i.panel.dither, None);
+        // Firmware self-report and model default are fallbacks, not rungs.
+        assert_eq!(i.fallback_palette, fallback);
+        assert_eq!(i.fallback_colors_actual, Some(header_actual));
+        assert_eq!(i.over.colors, None);
+        assert_eq!(i.device_final.colors, None);
+        assert_eq!(i.device_base.colors, None);
+    }
+
+    /// A script's `colors_actual` entry that itself contains a comma must be
+    /// rejected against a palette of a different length, not fractured into
+    /// extra "valid" colours by a join-then-split.
+    ///
+    /// If this breaks, it means: the screen rung's `colors_actual` is parsed
+    /// through a join again, and a mismatched script calibration is accepted.
+    #[test]
+    fn a_script_colors_actual_entry_with_a_comma_is_rejected_not_fractured() {
+        use crate::api::resolution::{resolve_render, Rung, RungStatus};
+        // Two entries, one of them malformed: 1 usable colour. A join would
+        // turn it into 3, matching the 3-colour palette below.
+        let result = script_result(None, Some(&["#111111,#222222", "#333333"]));
+        let panel_actual = parse_colors_header("#0A0A0A,#808080,#F5F5F5");
+        let res = resolve_render(&render_inputs_for(
+            &result,
+            None,
+            None,
+            None,
+            &CascadeValues::default(),
+            &CascadeValues::default(),
+            None,
+            Some(&panel_actual),
+            None,
+            parse_colors_header("#000000,#808080,#FFFFFF"),
+            None,
+        ));
         let report = &res.report["colors_actual"];
-        let base = report
-            .rungs
-            .get(&Rung::DeviceBase)
-            .expect("the device base rung must appear in the report");
         assert!(
-            matches!(base.status, RungStatus::Rejected { .. }),
-            "a wrong-length measurement must be Rejected, got {:?}",
-            base.status
+            matches!(
+                report.rungs[&Rung::Screen].status,
+                RungStatus::Rejected { .. }
+            ),
+            "got {:?}",
+            report.rungs[&Rung::Screen].status
         );
-        assert_eq!(report.from, Rung::Panel, "the walk must continue downwards");
+        assert_eq!(
+            report.from,
+            Rung::Panel,
+            "must fall through to a lower rung"
+        );
         let params = res.into_params();
-        assert_eq!(
-            params.measured_colors,
-            Some(parse_colors_header("#0A0A0A,#F5F5F5")),
-            "the IMAGE must use the panel's measurement, not nominal colours"
-        );
-        assert_eq!(params.measured_source, SRC_PANEL_ACTUAL);
-        assert_eq!(
-            params.warnings.len(),
-            1,
-            "the rejection is the one complaint: {:?}",
-            params.warnings
-        );
+        assert_eq!(params.measured_colors, Some(panel_actual));
+        assert_eq!(params.warnings.len(), 1);
     }
 
     /// A device/screen dither disagreement is the cascade working as
     /// specified (§4.3), so it is no longer a warning: the screen wins.
     #[test]
     fn a_dither_disagreement_produces_no_warning() {
-        use crate::api::resolution::{resolve_render, RenderInputs, RungSettings};
-        let res = resolve_render(&RenderInputs {
-            over: RungSettings::default(),
-            device_final: RungSettings::default(),
-            screen: RungSettings {
-                dither: Some("stucki".into()),
-                ..Default::default()
-            },
-            device_base: RungSettings {
-                dither: Some("atkinson".into()),
-                ..Default::default()
-            },
-            panel: RungSettings::default(),
-            panel_dither: None,
-            fallback_palette: parse_colors_header("#000000,#FFFFFF"),
-            fallback_colors_actual: None,
-            screen_default_refresh: 900,
-            override_source: SRC_DEV_OVERRIDE,
-        });
-        let params = res.into_params();
-        assert_eq!(
-            params.dither.as_deref(),
-            Some("stucki"),
-            "the screen wins now"
-        );
+        use crate::api::resolution::resolve_render;
+        let result = script_result(None, None); // screen dither: sierra-lite
+        let device_base = CascadeValues {
+            dither: Some("atkinson".into()),
+            ..Default::default()
+        };
+        let params = resolve_render(&render_inputs_for(
+            &result,
+            None,
+            None,
+            None,
+            &CascadeValues::default(),
+            &device_base,
+            None,
+            None,
+            None,
+            parse_colors_header("#000000,#FFFFFF"),
+            None,
+        ))
+        .into_params();
+        assert_eq!(params.dither.as_deref(), Some("sierra-lite"));
         assert!(
             params.warnings.is_empty(),
             "the cascade working as specified is not a warning: {:?}",
             params.warnings
         );
-    }
-
-    /// `final:` is the veto the old bare device `dither` used to be: it
-    /// beats the screen. And the Measured-Colors header is a fallback only.
-    #[test]
-    fn display_final_dither_beats_screen_and_header_is_the_last_resort() {
-        use crate::api::resolution::{resolve_render, RenderInputs, RungSettings};
-        let inputs = |header: Option<Vec<(u8, u8, u8)>>,
-                      panel_actual: Option<Vec<(u8, u8, u8)>>| {
-            resolve_render(&RenderInputs {
-                over: RungSettings::default(),
-                device_final: RungSettings {
-                    dither: Some("floyd_steinberg".into()),
-                    ..Default::default()
-                },
-                screen: RungSettings {
-                    dither: Some("stucki".into()),
-                    ..Default::default()
-                },
-                device_base: RungSettings {
-                    dither: Some("atkinson".into()),
-                    ..Default::default()
-                },
-                panel: RungSettings {
-                    colors_actual: panel_actual,
-                    ..Default::default()
-                },
-                panel_dither: None,
-                fallback_palette: parse_colors_header("#000000,#FFFFFF"),
-                fallback_colors_actual: header,
-                screen_default_refresh: 0,
-                override_source: SRC_DEV_OVERRIDE,
-            })
-            .into_params()
-        };
-        let header = parse_colors_header("#010101,#FEFEFE");
-        let panel = parse_colors_header("#0A0A0A,#F5F5F5");
-
-        let p = inputs(Some(header.clone()), Some(panel.clone()));
-        assert_eq!(p.dither.as_deref(), Some("floyd-steinberg"));
-        assert_eq!(p.measured_colors, Some(panel));
-        assert_eq!(p.measured_source, SRC_PANEL_ACTUAL);
-
-        let p = inputs(Some(header.clone()), None);
-        assert_eq!(p.measured_colors, Some(header));
-        assert_eq!(p.measured_source, SRC_MEASURED_HEADER);
-
-        // A wrong-length header is rejected and names no source.
-        let p = inputs(Some(parse_colors_header("#010101")), None);
-        assert_eq!(p.measured_colors, None);
-        assert_eq!(p.measured_source, SRC_NONE);
     }
 
     #[test]

@@ -27,6 +27,22 @@ pub enum Rung {
     Fallback,
 }
 
+impl Rung {
+    /// How a person who writes `config.yaml` would name this level, for
+    /// messages an operator reads. `Debug` names (`DeviceBase`) are Rust
+    /// identifiers, not words anyone configures.
+    pub fn label(self) -> &'static str {
+        match self {
+            Rung::Override => "the dev override",
+            Rung::DeviceFinal => "`final:`",
+            Rung::Screen => "the screen",
+            Rung::DeviceBase => "the device",
+            Rung::Panel => "the panel",
+            Rung::Fallback => "the firmware header",
+        }
+    }
+}
+
 /// What happened to one rung's value during resolution (spec §4.4).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -382,7 +398,9 @@ fn rejection_warnings(report: &SettingReport) -> Vec<String> {
         .iter()
         .filter_map(|(rung, entry)| match &entry.status {
             RungStatus::Rejected { reason } => Some(format!(
-                "measured colours from the {rung:?} rung ignored: {reason}"
+                "measured colours from {} ignored: {reason} (entries that are not \
+                 6-digit hex colours are dropped, which also shortens the list)",
+                rung.label()
             )),
             _ => None,
         })

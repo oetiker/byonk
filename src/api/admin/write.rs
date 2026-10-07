@@ -10,7 +10,10 @@ use std::collections::HashMap;
 
 use crate::api::config_persist::{persist, require_file_config};
 use crate::error::ApiError;
-use crate::models::config::{normalize_algorithm_name, DITHER_ALGORITHMS, RESERVED_DEFAULT_KEY};
+use crate::models::config::{
+    normalize_algorithm_name, CascadeValues, GamutTuningValues, DITHER_ALGORITHMS,
+    RESERVED_DEFAULT_KEY,
+};
 use crate::models::param_schema::validate_params;
 use crate::server::AppState;
 use crate::services::config_writer;
@@ -26,6 +29,23 @@ pub struct DeviceWrite {
     pub panel: Option<String>,
     pub dither: Option<String>,
     pub colors: Option<String>,
+    /// Measured colours for this one display, comma-separated hex. The base
+    /// rung: it outranks the panel's calibration and is outranked by a screen
+    /// that measures its own.
+    pub colors_actual: Option<String>,
+    /// Gamut mapping for continuous-tone regions. Base rung.
+    ///
+    /// Reachable only since the cascade work: it was in `DeviceConfig` but in
+    /// neither `DeviceWrite` nor `MANAGED_DEVICE_KEYS`, so it could be
+    /// hand-edited into config.yaml and nothing could set it. That is the
+    /// silent-overwrite trap, and this field was the proof it bites.
+    pub gamut: Option<GamutTuningValues>,
+    /// The final rung -- the owner's veto. Merged **field by field**, like
+    /// every other rung: setting `final.dither` must not wipe
+    /// `final.strength`. A field is removed only through `clear`, which is
+    /// why both `final.<field>` and `final` are clearable.
+    #[serde(rename = "final")]
+    pub final_rung: Option<CascadeValues>,
     pub params: Option<HashMap<String, serde_yaml::Value>>,
     pub refresh: Option<u32>,
     pub name: Option<String>,
@@ -167,6 +187,71 @@ fn validate_device_settings(state: &AppState, w: &DeviceWrite) -> Result<(), Api
         }
     }
 
+    if let Some(colors) = &w.colors_actual {
+        validate_colors(colors)?;
+    }
+    if let Some(g) = &w.gamut {
+        validate_gamut(g, "gamut")?;
+    }
+    if let Some(f) = &w.final_rung {
+        validate_cascade_values(f, "final.")?;
+    }
+
+    Ok(())
+}
+
+/// The same checks the base rung gets, applied to a rung written as a block.
+/// `prefix` is how the caller names the fields (`final.`), so an error points
+/// at the field the request actually contained.
+fn validate_cascade_values(v: &CascadeValues, prefix: &str) -> Result<(), ApiError> {
+    if let Some(dither) = &v.dither {
+        let canonical = normalize_algorithm_name(dither);
+        if !DITHER_ALGORITHMS.contains(&canonical.as_str()) {
+            return Err(ApiError::BadRequest(format!(
+                "unknown dither algorithm `{dither}` in `{prefix}dither`; known: {}",
+                DITHER_ALGORITHMS.join(", ")
+            )));
+        }
+    }
+    for (key, colors) in [("colors", &v.colors), ("colors_actual", &v.colors_actual)] {
+        if let Some(c) = colors {
+            validate_colors(c).map_err(|e| match e {
+                ApiError::BadRequest(m) => ApiError::BadRequest(format!("`{prefix}{key}`: {m}")),
+                other => other,
+            })?;
+        }
+    }
+    for (key, value) in [
+        ("max_error", v.max_error),
+        ("noise_scale", v.noise_scale),
+        ("chroma_clamp", v.chroma_clamp),
+        ("strength", v.strength),
+    ] {
+        if let Some(n) = value {
+            if !n.is_finite() || n < 0.0 {
+                return Err(ApiError::BadRequest(format!(
+                    "`{prefix}{key}` must be a finite, non-negative number, got {n}"
+                )));
+            }
+        }
+    }
+    validate_gamut(&v.gamut, &format!("{prefix}gamut"))
+}
+
+fn validate_gamut(g: &GamutTuningValues, name: &str) -> Result<(), ApiError> {
+    for (key, value) in [
+        ("knee", g.knee),
+        ("amount", g.amount),
+        ("max_compression", g.max_compression),
+    ] {
+        if let Some(n) = value {
+            if !n.is_finite() || n < 0.0 {
+                return Err(ApiError::BadRequest(format!(
+                    "`{name}.{key}` must be a finite, non-negative number, got {n}"
+                )));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -207,15 +292,18 @@ fn resolve_clear(w: &DeviceWrite) -> Result<Vec<String>, ApiError> {
     };
     let mut out = Vec::new();
     for name in requested {
-        if !CLEARABLE_DEVICE_KEYS.contains(&name.as_str()) {
+        let acceptable = CLEARABLE_DEVICE_KEYS.contains(&name.as_str())
+            || name.strip_prefix("final.").is_some_and(is_cascade_field);
+        if !acceptable {
             let hint = if name == "screen" {
                 " (a device must always have a screen; assign a different one instead)"
             } else {
                 ""
             };
             return Err(ApiError::BadRequest(format!(
-                "cannot clear `{name}`{hint}; clearable: {}",
-                CLEARABLE_DEVICE_KEYS.join(", ")
+                "cannot clear `{name}`{hint}; clearable: {}, or `final.<field>` for one of: {}",
+                CLEARABLE_DEVICE_KEYS.join(", "),
+                CASCADE_FIELDS.join(", ")
             )));
         }
         let also_set = match name.as_str() {
@@ -232,6 +320,13 @@ fn resolve_clear(w: &DeviceWrite) -> Result<Vec<String>, ApiError> {
             "temperature_profile" => w.temperature_profile.is_some(),
             "maximum_compatibility" => w.maximum_compatibility.is_some(),
             "min_png_bytes" => w.min_png_bytes.is_some(),
+            "colors_actual" => w.colors_actual.is_some(),
+            "gamut" => w.gamut.is_some(),
+            "final" => w.final_rung.is_some(),
+            dotted if dotted.starts_with("final.") => w
+                .final_rung
+                .as_ref()
+                .is_some_and(|f| cascade_field_is_set(f, &dotted["final.".len()..])),
             _ => false,
         };
         if also_set {
@@ -244,7 +339,61 @@ fn resolve_clear(w: &DeviceWrite) -> Result<Vec<String>, ApiError> {
     Ok(out)
 }
 
+/// The field names a `final.<name>` clear may address -- `CascadeValues`'
+/// own fields, and nothing else. `final: {screen: ...}` is a config error at
+/// startup; `clear: ["final.screen"]` must be an API error for the same
+/// reason, named rather than ignored.
+const CASCADE_FIELDS: [&str; 9] = [
+    "colors",
+    "colors_actual",
+    "dither",
+    "max_error",
+    "noise_scale",
+    "chroma_clamp",
+    "strength",
+    "refresh",
+    "gamut",
+];
+
+fn is_cascade_field(name: &str) -> bool {
+    CASCADE_FIELDS.contains(&name)
+}
+
+fn cascade_field_is_set(v: &CascadeValues, field: &str) -> bool {
+    match field {
+        "colors" => v.colors.is_some(),
+        "colors_actual" => v.colors_actual.is_some(),
+        "dither" => v.dither.is_some(),
+        "max_error" => v.max_error.is_some(),
+        "noise_scale" => v.noise_scale.is_some(),
+        "chroma_clamp" => v.chroma_clamp.is_some(),
+        "strength" => v.strength.is_some(),
+        "refresh" => v.refresh.is_some(),
+        "gamut" => !v.gamut.is_empty(),
+        _ => false,
+    }
+}
+
+fn clear_cascade_field(v: &mut CascadeValues, field: &str) {
+    match field {
+        "colors" => v.colors = None,
+        "colors_actual" => v.colors_actual = None,
+        "dither" => v.dither = None,
+        "max_error" => v.max_error = None,
+        "noise_scale" => v.noise_scale = None,
+        "chroma_clamp" => v.chroma_clamp = None,
+        "strength" => v.strength = None,
+        "refresh" => v.refresh = None,
+        "gamut" => v.gamut = GamutTuningValues::default(),
+        // Unreachable: `resolve_clear` rejects anything else.
+        _ => {}
+    }
+}
+
 /// Drop the named settings from an already-merged write.
+///
+/// A bare name addresses the base rung only; `final.<field>` one field of the
+/// final rung and `final` the whole rung.
 ///
 /// Applied after the merge, so a cleared field is not carried over from the
 /// existing entry; `device_block` then omits it, and `unmanaged_device_keys`
@@ -265,6 +414,17 @@ fn apply_clear(merged: &mut DeviceWrite, clear: &[String]) {
             "temperature_profile" => merged.temperature_profile = None,
             "maximum_compatibility" => merged.maximum_compatibility = None,
             "min_png_bytes" => merged.min_png_bytes = None,
+            "colors_actual" => merged.colors_actual = None,
+            "gamut" => merged.gamut = None,
+            // The whole rung, as one key.
+            "final" => merged.final_rung = None,
+            dotted if dotted.starts_with("final.") => {
+                if let Some(f) = merged.final_rung.as_mut() {
+                    clear_cascade_field(f, &dotted["final.".len()..]);
+                }
+                // A rung whose every field was cleared emits nothing anyway
+                // (`device_block`), so there is no empty-rung case to handle.
+            }
             // Unreachable: `resolve_clear` rejects anything else.
             _ => {}
         }
@@ -277,7 +437,7 @@ fn apply_clear(merged: &mut DeviceWrite, clear: &[String]) {
 ///
 /// Kept as a list rather than derived from `DeviceWrite`'s fields because the
 /// mapping is not one-to-one: `key` is the entry name, not a key inside it.
-const MANAGED_DEVICE_KEYS: [&str; 14] = [
+const MANAGED_DEVICE_KEYS: [&str; 17] = [
     "screen",
     "panel",
     "dither",
@@ -292,6 +452,9 @@ const MANAGED_DEVICE_KEYS: [&str; 14] = [
     "temperature_profile",
     "maximum_compatibility",
     "min_png_bytes",
+    "colors_actual",
+    "gamut",
+    "final",
 ];
 
 /// The settings `clear` accepts: every managed key except `screen`, which a
@@ -300,7 +463,7 @@ const MANAGED_DEVICE_KEYS: [&str; 14] = [
 ///
 /// A test asserts this stays exactly `MANAGED_DEVICE_KEYS` minus `screen`, so
 /// a field added to one list cannot go missing from the other.
-const CLEARABLE_DEVICE_KEYS: [&str; 13] = [
+const CLEARABLE_DEVICE_KEYS: [&str; 16] = [
     "panel",
     "dither",
     "colors",
@@ -314,6 +477,9 @@ const CLEARABLE_DEVICE_KEYS: [&str; 13] = [
     "temperature_profile",
     "maximum_compatibility",
     "min_png_bytes",
+    "colors_actual",
+    "gamut",
+    "final",
 ];
 
 /// Every key of an existing device entry that this writer does not model.
@@ -361,6 +527,87 @@ fn yaml_f32(v: f32) -> serde_yaml::Value {
         .unwrap_or_else(|_| serde_yaml::Value::from(v))
 }
 
+/// One rung's settings as a YAML mapping. Shared by the `final:` block (and
+/// by anything else that writes a rung) so `yaml_f32` applies at every rung --
+/// a float written one way at one rung and another way at the other churns
+/// the diff on every rewrite.
+fn cascade_mapping(v: &CascadeValues) -> serde_yaml::Mapping {
+    let mut m = serde_yaml::Mapping::new();
+    if let Some(c) = &v.colors {
+        m.insert("colors".into(), c.as_str().into());
+    }
+    if let Some(c) = &v.colors_actual {
+        m.insert("colors_actual".into(), c.as_str().into());
+    }
+    if let Some(d) = &v.dither {
+        m.insert("dither".into(), d.as_str().into());
+    }
+    for (key, value) in [
+        ("max_error", v.max_error),
+        ("noise_scale", v.noise_scale),
+        ("chroma_clamp", v.chroma_clamp),
+        ("strength", v.strength),
+    ] {
+        if let Some(n) = value {
+            m.insert(key.into(), yaml_f32(n));
+        }
+    }
+    if let Some(r) = v.refresh.filter(|&r| r > 0) {
+        m.insert("refresh".into(), serde_yaml::Value::from(r));
+    }
+    if let Some(g) = gamut_mapping(&v.gamut) {
+        m.insert("gamut".into(), g.into());
+    }
+    m
+}
+
+/// A `GamutTuningValues` as a mapping, or `None` when it sets nothing -- an
+/// empty `gamut: {}` in the file would be noise.
+fn gamut_mapping(g: &GamutTuningValues) -> Option<serde_yaml::Mapping> {
+    if g.is_empty() {
+        return None;
+    }
+    let mut m = serde_yaml::Mapping::new();
+    for (key, value) in [
+        ("knee", g.knee),
+        ("amount", g.amount),
+        ("max_compression", g.max_compression),
+    ] {
+        if let Some(n) = value {
+            m.insert(key.into(), yaml_f32(n));
+        }
+    }
+    Some(m)
+}
+
+/// Merge the patch's final rung onto the existing one, field by field.
+///
+/// `body.or(existing)` on the whole `Option` would be whole-block
+/// replacement: a patch setting `final.dither` would silently drop
+/// `final.strength`. Returns `None` when neither side has a rung, so
+/// `device_block` emits no `final:` key at all.
+fn merge_final(
+    body: Option<&CascadeValues>,
+    existing: Option<&CascadeValues>,
+) -> Option<CascadeValues> {
+    match (body, existing) {
+        (None, None) => None,
+        (Some(b), None) => Some(b.clone()),
+        (None, Some(e)) => Some(e.clone()),
+        (Some(b), Some(e)) => Some(CascadeValues {
+            colors: b.colors.clone().or_else(|| e.colors.clone()),
+            colors_actual: b.colors_actual.clone().or_else(|| e.colors_actual.clone()),
+            dither: b.dither.clone().or_else(|| e.dither.clone()),
+            max_error: b.max_error.or(e.max_error),
+            noise_scale: b.noise_scale.or(e.noise_scale),
+            chroma_clamp: b.chroma_clamp.or(e.chroma_clamp),
+            strength: b.strength.or(e.strength),
+            refresh: b.refresh.or(e.refresh),
+            gamut: b.gamut.or(&e.gamut),
+        }),
+    }
+}
+
 fn device_block(w: &DeviceWrite, screen: &str) -> serde_yaml::Mapping {
     let mut m = serde_yaml::Mapping::new();
     m.insert("screen".into(), screen.into());
@@ -391,6 +638,20 @@ fn device_block(w: &DeviceWrite, screen: &str) -> serde_yaml::Mapping {
     ] {
         if let Some(v) = value {
             m.insert(key.into(), yaml_f32(v));
+        }
+    }
+    if let Some(c) = &w.colors_actual {
+        m.insert("colors_actual".into(), c.as_str().into());
+    }
+    if let Some(g) = w.gamut.as_ref().and_then(gamut_mapping) {
+        m.insert("gamut".into(), g.into());
+    }
+    // An empty final rung emits nothing: `final: {}` in the file would read
+    // as a veto that vetoes nothing.
+    if let Some(f) = &w.final_rung {
+        let mapping = cascade_mapping(f);
+        if !mapping.is_empty() {
+            m.insert("final".into(), mapping.into());
         }
     }
     if let Some(t) = &w.temperature_profile {
@@ -542,6 +803,12 @@ pub async fn apply_device_patch(
         panel: body.panel.clone().or(existing.panel.clone()),
         dither: body.dither.clone().or(existing.dither.clone()),
         colors: body.colors.clone().or(existing.colors.clone()),
+        colors_actual: body
+            .colors_actual
+            .clone()
+            .or(existing.colors_actual.clone()),
+        gamut: Some(body.gamut.clone().unwrap_or_default().or(&existing.gamut)),
+        final_rung: merge_final(body.final_rung.as_ref(), existing.final_rung.as_ref()),
         params: Some(params),
         refresh: body.refresh.or(existing.refresh),
         name: body.name.clone().or(existing.name.clone()),
@@ -948,12 +1215,10 @@ devices:
     #[test]
     fn unmanaged_device_keys_are_preserved() {
         let kept = unmanaged_device_keys(DEVICE_YAML, "1C:DB:D4:66:5B:50");
-        for key in ["error_clamp", "gamut"] {
-            assert!(
-                kept.contains_key(serde_yaml::Value::from(key)),
-                "{key} must survive a device patch, kept: {kept:?}"
-            );
-        }
+        assert!(
+            kept.contains_key(serde_yaml::Value::from("error_clamp")),
+            "error_clamp must survive a device patch, kept: {kept:?}"
+        );
         assert_eq!(
             kept.get(serde_yaml::Value::from("error_clamp")),
             Some(&serde_yaml::Value::from(0.2)),
@@ -992,6 +1257,306 @@ devices:
                 !kept.contains_key(serde_yaml::Value::from(key)),
                 "{key} is written by device_block and must not be carried over"
             );
+        }
+    }
+
+    fn device_write_for_test() -> DeviceWrite {
+        DeviceWrite {
+            key: None,
+            screen: Some("local/a".into()),
+            panel: None,
+            dither: None,
+            colors: None,
+            colors_actual: None,
+            gamut: None,
+            final_rung: None,
+            params: None,
+            refresh: None,
+            name: None,
+            max_error: None,
+            noise_scale: None,
+            chroma_clamp: None,
+            strength: None,
+            temperature_profile: None,
+            maximum_compatibility: None,
+            min_png_bytes: None,
+            clear: None,
+        }
+    }
+
+    fn with_clear(mut w: DeviceWrite, names: &[&str]) -> DeviceWrite {
+        w.clear = Some(names.iter().map(|n| n.to_string()).collect());
+        w
+    }
+
+    /// The failure is silent: the response is 200 and the config keeps the
+    /// OLD final block.
+    #[test]
+    fn a_patch_setting_final_survives_unmanaged_device_keys() {
+        let yaml = "devices:\n  AA:\n    screen: local/a\n    final:\n      dither: stucki\n";
+        let kept = unmanaged_device_keys(yaml, "AA");
+        assert!(
+            !kept.contains_key(serde_yaml::Value::from("final")),
+            "`final` must be MANAGED, or every patch that sets it is silently \
+             overwritten by the block already in the file"
+        );
+    }
+
+    /// Field by field, like every other rung: setting `final.dither` must not
+    /// wipe `final.strength`.
+    #[test]
+    fn setting_one_final_field_keeps_the_others() {
+        let existing = CascadeValues {
+            dither: Some("stucki".into()),
+            strength: Some(0.4),
+            ..Default::default()
+        };
+        let body = CascadeValues {
+            dither: Some("atkinson".into()),
+            ..Default::default()
+        };
+        let m = merge_final(Some(&body), Some(&existing)).expect("a final rung survives");
+        assert_eq!(
+            m.dither.as_deref(),
+            Some("atkinson"),
+            "the patch's field wins"
+        );
+        assert_eq!(m.strength, Some(0.4), "the untouched field must survive");
+    }
+
+    /// A bare name clears the BASE rung only. Clearing both would be
+    /// indistinguishable from success in the response.
+    #[test]
+    fn a_bare_clear_name_clears_the_base_rung_only() {
+        let mut merged = DeviceWrite {
+            dither: Some("sierra".into()),
+            final_rung: Some(CascadeValues {
+                dither: Some("atkinson".into()),
+                ..Default::default()
+            }),
+            ..device_write_for_test()
+        };
+        apply_clear(&mut merged, &["dither".to_string()]);
+        assert_eq!(merged.dither, None, "the base rung is cleared");
+        assert_eq!(
+            merged.final_rung.as_ref().and_then(|f| f.dither.as_deref()),
+            Some("atkinson"),
+            "`clear: [\"dither\"]` must never reach the final rung"
+        );
+    }
+
+    #[test]
+    fn a_dotted_clear_name_clears_that_final_field_only() {
+        let mut merged = DeviceWrite {
+            dither: Some("sierra".into()),
+            final_rung: Some(CascadeValues {
+                dither: Some("atkinson".into()),
+                strength: Some(0.4),
+                ..Default::default()
+            }),
+            ..device_write_for_test()
+        };
+        apply_clear(&mut merged, &["final.dither".to_string()]);
+        assert_eq!(
+            merged.dither.as_deref(),
+            Some("sierra"),
+            "the base rung stands"
+        );
+        let f = merged
+            .final_rung
+            .as_ref()
+            .expect("the rung itself survives");
+        assert_eq!(f.dither, None);
+        assert_eq!(f.strength, Some(0.4), "its other fields survive");
+    }
+
+    #[test]
+    fn clearing_final_removes_the_whole_rung() {
+        let mut merged = DeviceWrite {
+            final_rung: Some(CascadeValues {
+                dither: Some("atkinson".into()),
+                strength: Some(0.4),
+                ..Default::default()
+            }),
+            ..device_write_for_test()
+        };
+        apply_clear(&mut merged, &["final".to_string()]);
+        assert!(merged.final_rung.is_none());
+    }
+
+    #[test]
+    fn clearing_the_new_base_keys_removes_them() {
+        let mut merged = DeviceWrite {
+            colors_actual: Some("#000000,#FFFFFF".into()),
+            gamut: Some(GamutTuningValues {
+                knee: Some(0.8),
+                ..Default::default()
+            }),
+            ..device_write_for_test()
+        };
+        apply_clear(
+            &mut merged,
+            &["colors_actual".to_string(), "gamut".to_string()],
+        );
+        assert!(merged.colors_actual.is_none());
+        assert!(merged.gamut.is_none());
+    }
+
+    #[test]
+    fn an_unknown_dotted_clear_name_is_rejected_by_name() {
+        for bad in ["final.screen", "final.nonsense", "base.dither"] {
+            let err = resolve_clear(&with_clear(device_write_for_test(), &[bad]))
+                .expect_err("not a cascade field");
+            assert!(format!("{err:?}").contains(bad), "{bad}: {err:?}");
+        }
+    }
+
+    /// Setting and clearing the same thing in one request is a caller mistake
+    /// at every rung, not just the base one.
+    #[test]
+    fn a_final_field_cannot_be_set_and_cleared_in_one_request() {
+        let body = DeviceWrite {
+            final_rung: Some(CascadeValues {
+                dither: Some("atkinson".into()),
+                ..Default::default()
+            }),
+            ..device_write_for_test()
+        };
+        resolve_clear(&with_clear(body, &["final.dither"]))
+            .expect_err("set and cleared in the same request");
+    }
+
+    /// Clearing one final field while setting a different one is fine -- that
+    /// is the whole point of field-by-field addressing.
+    #[test]
+    fn a_final_field_may_be_cleared_while_another_is_set() {
+        let body = DeviceWrite {
+            final_rung: Some(CascadeValues {
+                dither: Some("atkinson".into()),
+                ..Default::default()
+            }),
+            ..device_write_for_test()
+        };
+        resolve_clear(&with_clear(body, &["final.strength"])).expect("different fields");
+    }
+
+    #[test]
+    fn device_block_emits_the_final_mapping_and_the_two_new_base_keys() {
+        let w = DeviceWrite {
+            colors_actual: Some("#1C5240,#FFFFFF".into()),
+            gamut: Some(GamutTuningValues {
+                knee: Some(0.8),
+                ..Default::default()
+            }),
+            final_rung: Some(CascadeValues {
+                dither: Some("atkinson".into()),
+                ..Default::default()
+            }),
+            ..device_write_for_test()
+        };
+        let block = device_block(&w, "local/a");
+        assert_eq!(
+            block
+                .get(serde_yaml::Value::from("colors_actual"))
+                .and_then(|v| v.as_str()),
+            Some("#1C5240,#FFFFFF")
+        );
+        let gamut = block
+            .get(serde_yaml::Value::from("gamut"))
+            .expect("gamut is emitted");
+        assert!(gamut.as_mapping().is_some(), "gamut is a nested mapping");
+        let f = block
+            .get(serde_yaml::Value::from("final"))
+            .expect("final is emitted");
+        assert_eq!(
+            f.as_mapping()
+                .and_then(|m| m.get(serde_yaml::Value::from("dither")))
+                .and_then(|v| v.as_str()),
+            Some("atkinson")
+        );
+        // A final rung that sets nothing must not leave `final: {}` behind.
+        let empty = DeviceWrite {
+            final_rung: Some(CascadeValues::default()),
+            ..device_write_for_test()
+        };
+        assert!(device_block(&empty, "local/a")
+            .get(serde_yaml::Value::from("final"))
+            .is_none());
+    }
+
+    /// An f32 in the final rung (and in a gamut, at either rung) must come
+    /// back out of config.yaml as the decimal the caller sent.
+    #[test]
+    fn f32_values_are_written_as_the_decimal_the_caller_sent_at_every_rung() {
+        let w = DeviceWrite {
+            gamut: Some(GamutTuningValues {
+                knee: Some(0.7),
+                ..Default::default()
+            }),
+            final_rung: Some(CascadeValues {
+                strength: Some(0.9),
+                gamut: GamutTuningValues {
+                    amount: Some(0.3),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..device_write_for_test()
+        };
+        let yaml = serde_yaml::to_string(&device_block(&w, "local/a")).unwrap();
+        for expected in ["strength: 0.9", "amount: 0.3", "knee: 0.7"] {
+            assert!(yaml.contains(expected), "want `{expected}`, got:\n{yaml}");
+        }
+        assert!(!yaml.contains("0.8999"), "widened f32 leaked:\n{yaml}");
+    }
+
+    /// Every `CascadeValues` field must be addressable as `final.<field>`, or
+    /// a final-rung setting becomes a one-way door.
+    #[test]
+    fn every_cascade_field_is_clearable_in_the_final_rung() {
+        for field in CASCADE_FIELDS {
+            let name = format!("final.{field}");
+            resolve_clear(&with_clear(device_write_for_test(), &[name.as_str()]))
+                .unwrap_or_else(|e| panic!("`{name}` must be clearable: {e:?}"));
+        }
+    }
+
+    /// `CASCADE_FIELDS` is hand-maintained beside `CascadeValues`; a field
+    /// added there but not here would be a one-way door. Round-trip through
+    /// serde so the struct itself is the witness.
+    #[test]
+    fn cascade_fields_matches_the_struct() {
+        let v = serde_json::to_value(CascadeValues::default()).unwrap();
+        let mut from_struct: Vec<&str> =
+            v.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        let mut listed = CASCADE_FIELDS.to_vec();
+        from_struct.sort_unstable();
+        listed.sort_unstable();
+        assert_eq!(from_struct, listed);
+    }
+
+    #[test]
+    fn final_rung_values_are_validated_like_the_base_rung() {
+        let state = state_with_addon_mode(false);
+        for bad in [
+            CascadeValues {
+                dither: Some("nonsense".into()),
+                ..Default::default()
+            },
+            CascadeValues {
+                colors: Some("#00000,#FFFFFF".into()),
+                ..Default::default()
+            },
+            CascadeValues {
+                strength: Some(-1.0),
+                ..Default::default()
+            },
+        ] {
+            let w = DeviceWrite {
+                final_rung: Some(bad),
+                ..device_write_for_test()
+            };
+            assert!(validate_device_settings(&state, &w).is_err());
         }
     }
 

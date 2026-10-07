@@ -870,6 +870,39 @@ mod tests {
         assert_eq!(r.report["strength"].from, Rung::Panel);
     }
 
+    /// The panel's per-algorithm block applies only to an algorithm a rung
+    /// NAMED. With no rung setting `dither`, `resolve_for_algorithm(None)`
+    /// returns the flat defaults, even though the fallback algorithm
+    /// (atkinson) has a block -- what every render path did before the cascade.
+    #[test]
+    fn a_panel_algorithm_block_does_not_apply_when_no_rung_sets_dither() {
+        let mut algorithms = HashMap::new();
+        algorithms.insert(
+            "atkinson".to_string(),
+            DitherTuningValues {
+                strength: Some(0.3),
+                ..Default::default()
+            },
+        );
+        let pdc = PanelDitherConfig {
+            defaults: DitherTuningValues {
+                strength: Some(0.9),
+                ..Default::default()
+            },
+            algorithms,
+        };
+        let mut i = inputs();
+        i.panel_dither = Some(&pdc);
+        let r = resolve_render(&i);
+        assert_eq!(r.dither, None, "no rung sets dither");
+        assert_eq!(
+            r.tuning.strength,
+            Some(0.9),
+            "flat panel default, not the atkinson block"
+        );
+        assert_eq!(r.report["strength"].from, Rung::Panel);
+    }
+
     #[test]
     fn fallbacks_are_reported_but_not_handed_to_the_renderer() {
         let r = resolve_render(&inputs());

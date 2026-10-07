@@ -19,7 +19,7 @@
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},
-    http::{header, HeaderMap, HeaderName, StatusCode},
+    http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
@@ -62,6 +62,13 @@ pub struct PreviewQuery {
     /// Has no effect when `dither` is off: an undithered render has no
     /// palette to map.
     measured: Option<String>,
+    /// Truthy (`?resolution`, `?resolution=1`) adds the `X-Byonk-Resolution`
+    /// diagnostic to a response that rendered. Off by default: this is the
+    /// Home Assistant camera frame, the path most likely to sit behind nginx
+    /// or HA Ingress, and the header can approach nginx's 4 KiB
+    /// `proxy_buffer_size` (see `c5fbde6a`). Only a caller that asks pays for
+    /// it.
+    resolution: Option<String>,
 }
 
 /// Read a query parameter as a flag. `None` means the caller did not say.
@@ -216,7 +223,8 @@ pub async fn device_preview(
         .preview_cache
         .store(&cache_key, &fingerprint, png.clone(), refresh_rate, now);
 
-    Ok(png_response(png, "miss", resolution.as_ref()))
+    let report = resolution.filter(|_| flag(query.resolution.as_ref()).unwrap_or(false));
+    Ok(png_response(png, "miss", report.as_ref()))
 }
 
 /// Build the preview's device identity and its cascade rungs.
@@ -305,8 +313,9 @@ fn fingerprint(device_config: &DeviceConfig, model: &str, opts: &RenderOpts) -> 
 
 /// `resolution` is the cascade report of the render that produced these
 /// bytes, and is `Some` only when this response rendered (`X-Byonk-Preview:
-/// miss`): a cache hit re-serves bytes without resolving anything, and the
-/// error image resolves nothing at all. The header is the same diagnostic
+/// miss`) AND the caller asked for it with `?resolution`: a cache hit
+/// re-serves bytes without resolving anything, and the error image resolves
+/// nothing at all. The header is the same diagnostic
 /// `/dev/api/render` answers with, so the preview a device page shows can be
 /// checked against the glass without guessing which rung won.
 fn png_response(
@@ -328,11 +337,13 @@ fn png_response(
     )
         .into_response();
     if let Some(report) = resolution {
-        if let Ok(value) = header_value(report).parse() {
-            response
-                .headers_mut()
-                .insert(HeaderName::from_static(RESOLUTION_HEADER), value);
-        }
+        // Same emitter semantics as `/dev/api/render`: `header_value` escapes
+        // every non-ASCII character, so the value is always a legal header.
+        response.headers_mut().insert(
+            HeaderName::from_static(RESOLUTION_HEADER),
+            HeaderValue::from_str(&header_value(report))
+                .expect("header_value yields printable ASCII"),
+        );
     }
     response
 }

@@ -2,10 +2,14 @@
 //! resolved through `/api/display`, `POST /dev/api/render`,
 //! `ScreenStore::render`, the CLI and `/api/admin/devices/{key}/preview`.
 //!
-//! The fixture deliberately contests every rung at once: the panel has a
+//! The fixture deliberately contests every rung it can: the panel has a
 //! per-algorithm dither block, the device sets a base rung AND a final rung,
 //! and the script sets its own algorithm and tuning. A fixture that set one
 //! value per setting would pass against five different resolvers.
+//!
+//! The `Override` rung is the exception: it is empty on all five paths. The
+//! CLI and the admin preview have no override by design, so it is not a
+//! convergence dimension and nothing here exercises it.
 //!
 //! It carries TWO devices, because one cannot contest every ordering. A
 //! device whose `final.dither` vetoes the script masks the screen-versus-base
@@ -445,7 +449,7 @@ impl Fixture {
         let r = self
             .app
             .get_with_headers(
-                &format!("/api/admin/devices/{device}/preview?force=1"),
+                &format!("/api/admin/devices/{device}/preview?force=1&resolution=1"),
                 &[AUTH],
             )
             .await;

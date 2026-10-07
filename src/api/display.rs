@@ -734,11 +734,12 @@ pub async fn handle_display<R: DeviceRegistry>(
         .map(parse_colors_header);
     let header_parsed: Option<Vec<(u8, u8, u8)>> =
         measured_colors_header.as_deref().map(parse_colors_header);
-    // The pre-script chain, as a candidate array in precedence order — the
-    // final resolution (after the script runs and the palette length is
-    // known) prepends the script's own `colors_actual` in front of this and
-    // applies the length rule uniformly across all four, so a mismatch at
-    // ANY position falls through to the next rather than only the front.
+    // The PRE-script chain, in precedence order. Its only job is to populate
+    // `DeviceContext.colors_actual`, which is what the Lua script sees before
+    // it runs. It is not a cascade resolution: the palette length is not
+    // known yet, so no length rule applies, and the final resolution does not
+    // read this array (the override and header parses are handed to
+    // `render_inputs_for` separately).
     let pre_script_measured_candidates: Vec<MeasuredCandidate> = vec![
         (SRC_DEV_OVERRIDE, override_colors_parsed.clone()),
         (SRC_PANEL_ACTUAL, panel_actual_parsed.clone()),

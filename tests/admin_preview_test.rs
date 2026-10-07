@@ -371,3 +371,129 @@ async fn final_refresh_sets_the_preview_cache_ttl() {
     );
     assert_eq!(ttl_secs(Some(7200)).await, 7200);
 }
+
+// ---- X-Byonk-Resolution on the preview --------------------------------
+
+/// A 16-entry palette whose entries differ per `seed`, as a comma string.
+fn grey16(seed: u8) -> String {
+    (0..16u8)
+        .map(|i| {
+            let v = i * 15 + seed;
+            format!("#{v:02X}{v:02X}{v:02X}")
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// An app whose one device carries a 16-entry palette on EVERY rung of this
+/// path that can hold one: device base and `final:` (both `colors` and
+/// `colors_actual`), the panel (both), and the screen (both, returned by its
+/// script). The override rung does not exist on the preview path.
+fn adversarial_app(dir: &std::path::Path) -> TestApp {
+    let repo = dir.join("local");
+    let screen = repo.join("wide");
+    std::fs::create_dir_all(&screen).unwrap();
+    std::fs::write(
+        repo.join("byonk-screens.yaml"),
+        "name: local\ndescription: Header budget fixture.\nauthor: test\nlicense: MIT\n",
+    )
+    .unwrap();
+    std::fs::write(
+        screen.join("meta.yaml"),
+        format!(
+            "title: Wide\ndescription: Header budget fixture.\nbyonk: \"{}\"\nrefresh: 1800\n",
+            byonk::models::compat::engine_compat_req()
+        ),
+    )
+    .unwrap();
+    let lua_list = |seed: u8| {
+        grey16(seed)
+            .split(',')
+            .map(|c| format!("\"{c}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    std::fs::write(
+        screen.join("script.lua"),
+        format!(
+            "return {{ data = {{}}, colors = {{ {} }}, colors_actual = {{ {} }} }}\n",
+            lua_list(1),
+            lua_list(2)
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        screen.join("screen.svg"),
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480"><rect width="800" height="480" fill="#808080"/></svg>"##,
+    )
+    .unwrap();
+
+    let yaml = format!(
+        "admin:\n  token: secret\nscreen_repos:\n  local:\n    path: {repo}\n\
+panels:\n  trmnl_x:\n    name: TRMNL X\n    colors: '{pc}'\n    colors_actual: '{pa}'\n\
+devices:\n  wide:\n    screen: local/wide\n    panel: trmnl_x\n    colors: '{bc}'\n    colors_actual: '{ba}'\n\
+    final:\n      colors: '{fc}'\n      colors_actual: '{fa}'\n",
+        repo = repo.display(),
+        pc = grey16(3),
+        pa = grey16(4),
+        bc = grey16(5),
+        ba = grey16(6),
+        fc = grey16(7),
+        fa = grey16(8),
+    );
+    let (app, _) = TestApp::new_with_config_yaml(&yaml, dir);
+    app
+}
+
+/// The diagnostic is opt-in: this is the Home Assistant camera frame, and an
+/// always-on header of unbounded size is what `c5fbde6a` already fixed once.
+#[tokio::test]
+async fn resolution_header_is_absent_unless_requested() {
+    let app = app_with_default_screen("byonk-builtin/calibration/grey");
+    let plain = app
+        .get_with_headers("/api/admin/devices/DEFAULT/preview?force=1", &[AUTH])
+        .await;
+    assert_eq!(cache_state(&plain), "miss");
+    assert!(plain.headers.get("x-byonk-resolution").is_none());
+
+    let asked = app
+        .get_with_headers(
+            "/api/admin/devices/DEFAULT/preview?force=1&resolution=1",
+            &[AUTH],
+        )
+        .await;
+    assert!(asked.headers.get("x-byonk-resolution").is_some());
+
+    // `?resolution=0` says no, like every other flag on this endpoint.
+    let off = app
+        .get_with_headers(
+            "/api/admin/devices/DEFAULT/preview?force=1&resolution=0",
+            &[AUTH],
+        )
+        .await;
+    assert!(off.headers.get("x-byonk-resolution").is_none());
+}
+
+#[tokio::test]
+async fn the_requested_header_stays_inside_its_budget_for_sixteen_entry_palettes() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = adversarial_app(dir.path());
+    let r = app
+        .get_with_headers(
+            "/api/admin/devices/wide/preview?force=1&resolution=1",
+            &[AUTH],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(cache_state(&r), "miss");
+    let len = r.headers.get("x-byonk-resolution").unwrap().len();
+    eprintln!("preview X-Byonk-Resolution: {len} bytes");
+    // nginx's default `proxy_buffer_size` is one memory page (4 KiB on
+    // x86_64) and must hold the status line and EVERY response header; past
+    // it a reverse-proxied preview fails with 502. 3.5 KiB leaves room for
+    // the other headers. (HA Ingress's aiohttp allows 8190 per field.) This
+    // endpoint can carry more palette strings than `/dev/api/render` -- base,
+    // `final:`, screen and panel rungs, each for `colors` and `colors_actual`
+    // -- so the dev endpoint's headroom does not transfer.
+    assert!(len < 3584, "X-Byonk-Resolution is {len} bytes");
+}

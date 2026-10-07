@@ -482,10 +482,9 @@ pub fn resolve_render(i: &RenderInputs) -> RenderResolution {
         measured_colors: colors_actual.effective.clone(),
         measured_source: colors_actual.from.measured_source(
             i.override_source,
-            colors_actual
-                .rungs
-                .iter()
-                .any(|(r, v, _)| *r == Rung::Fallback && v.is_some()),
+            // Only an ACCEPTED measurement may be named as a source: a
+            // rejected fallback (wrong entry count) leaves `effective` None.
+            colors_actual.effective.is_some(),
         ),
         dither: dither.configured().cloned(),
         tuning,
@@ -743,10 +742,13 @@ mod tests {
     );
 
     /// The legacy computation `handle_render` performed before this piece,
-    /// verbatim in structure: `effective_dither` for the algorithm, the panel
-    /// block for that algorithm, `resolve_effective_tuning`, then
-    /// `resolve_render_params`. The override's dither rides the device slot
-    /// and blanks the script's, exactly as `dev.rs` did.
+    /// driven through the NEW order: `effective_dither` for the algorithm, the
+    /// panel block for that algorithm, `resolve_effective_tuning`, then
+    /// `resolve_render_params`. It is not verbatim: the screen's dither is
+    /// permuted into the device slot (and the device base's into the script
+    /// slot), the override's dither blanks the script slot, and
+    /// `script_actual` is always blanked so the override's measurement can
+    /// outrank the screen's. Do NOT permute these back to what `dev.rs` did.
     fn legacy(i: &RenderInputs) -> Legacy {
         // The legacy resolver's two dither slots rank the DEVICE slot above the
         // SCRIPT slot. Spec §2 ranks the screen above the device base, so the
@@ -804,20 +806,25 @@ mod tests {
     }
 
     // Piece 3 flipped ORDER_DITHER and ORDER_COLORS_ACTUAL (spec §2), so the
-    // ladder deliberately DISAGREES with the legacy resolvers on these two
-    // settings. `legacy()` above feeds the legacy functions through the new
-    // order (screen dither above device base; override measurement above the
-    // screen's), so the matrix keeps its full size and encodes the new,
-    // intended answer; every other row still pins the ladder to the legacy
-    // behaviour. This whole test is retired in Task 8, when the legacy
-    // resolvers are deleted and the five-paths convergence test takes over.
+    // ladder deliberately DISAGREES with the legacy resolvers' own order on
+    // these two settings. `legacy()` above feeds the legacy functions through
+    // the new order (screen dither above device base; override measurement
+    // above the screen's), so the matrix keeps its full size and encodes the
+    // new, intended answer; every other row still pins the ladder to the
+    // legacy behaviour. This is not a tautology: `legacy()` is a second,
+    // independent encoding of the order (permuted slots versus the ladder's
+    // order constants), so reverting either constant, or the permutation,
+    // makes the two disagree. It is the only guard on the new dither order
+    // outside `resolution.rs`'s unit tests: a failure here is a real
+    // disagreement, not a test to loosen, and the permutation must not be
+    // "fixed" back to the old order. This whole test is retired in Task 8,
+    // when the legacy resolvers are deleted and the five-paths convergence
+    // test takes over.
     ///
-    /// The new resolver must produce exactly what the legacy one produced, for
-    /// every combination below. This is what licenses moving the dev render
-    /// onto the ladder; a failure here is a behaviour change, not a test to
-    /// loosen.
+    /// The ladder must produce what the legacy resolvers produce when driven
+    /// through the new order, for every combination below.
     #[test]
-    fn resolve_render_matches_the_legacy_resolver() {
+    fn resolve_render_matches_the_legacy_resolver_under_the_new_order() {
         let mut algorithms = HashMap::new();
         algorithms.insert(
             "floyd-steinberg".to_string(),
@@ -1177,6 +1184,22 @@ mod tests {
         let res = resolve_render(&table_inputs(&[Rung::Override]));
         assert_eq!(res.measured_source, display::SRC_DEV_OVERRIDE);
         let res = resolve_render(&table_inputs(&[]));
+        assert_eq!(res.measured_source, display::SRC_NONE);
+
+        // A fallback (the `Measured-Colors` header) that matches the resolved
+        // palette's length wins and is named as such.
+        let mut inputs = table_inputs(&[]);
+        inputs.fallback_colors_actual = Some(display::parse_colors_header("#010101,#FEFEFE"));
+        let res = resolve_render(&inputs);
+        assert!(res.measured_colors.is_some());
+        assert_eq!(res.measured_source, display::SRC_MEASURED_HEADER);
+
+        // A wrong-length header is rejected: no measurement is used, so none
+        // may be named as the source.
+        let mut inputs = table_inputs(&[]);
+        inputs.fallback_colors_actual = Some(display::parse_colors_header("#010101"));
+        let res = resolve_render(&inputs);
+        assert_eq!(res.measured_colors, None);
         assert_eq!(res.measured_source, display::SRC_NONE);
     }
 }

@@ -125,6 +125,28 @@ pub struct AdminDevice {
     pub params: serde_json::Value,
     pub refresh: Option<u32>,
     pub name: Option<String>,
+    /// The device's `final:` rung (owner vetoes that outrank the screen).
+    /// Omitted when the device vetoes nothing the integration can read, so an
+    /// empty or absent `final:` block looks the same to a client.
+    #[serde(rename = "final", skip_serializing_if = "Option::is_none")]
+    pub final_rung: Option<AdminFinal>,
+}
+
+/// The slice of the `final:` rung exposed on [`AdminDevice`].
+///
+/// Deliberately only `dither`: that is the one veto the Home Assistant
+/// integration writes, so it must be able to read it back. Like the rest of
+/// `AdminDevice` this is a read projection, not the full config.
+#[derive(Serialize)]
+pub struct AdminFinal {
+    pub dither: String,
+}
+
+impl AdminFinal {
+    fn from_device(dc: Option<&crate::models::DeviceConfig>) -> Option<Self> {
+        dc.and_then(|c| c.device_final().dither)
+            .map(|dither| Self { dither })
+    }
 }
 
 pub async fn list_devices(
@@ -167,6 +189,7 @@ pub async fn list_devices(
                 .unwrap_or(serde_json::Value::Null),
             refresh: dc.and_then(|c| c.refresh),
             name: dc.and_then(|c| c.name.clone()),
+            final_rung: AdminFinal::from_device(dc),
         });
     }
 
@@ -210,6 +233,7 @@ pub async fn list_devices(
             params: serde_json::to_value(&dc.params).unwrap_or(serde_json::Value::Null),
             refresh: dc.refresh,
             name: dc.name.clone(),
+            final_rung: AdminFinal::from_device(Some(dc)),
         });
     }
 

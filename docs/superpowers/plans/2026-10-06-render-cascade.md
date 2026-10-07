@@ -990,8 +990,14 @@ Replace `src/api/display.rs:1032-1085` — from the `// Dev UI dither override b
                         screen: RungSettings {
                             colors: result.script_colors.as_deref()
                                 .map(|c| parse_colors_header(&c.join(","))),
+                            // parse_measured_color_list, NOT a join into
+                            // parse_colors_header: a script entry that itself
+                            // contains a comma would fracture into extra
+                            // "valid" colours under a join/re-split, inflate
+                            // the parsed count and mask a genuine length
+                            // mismatch. The parser's doc comment forbids it.
                             colors_actual: result.script_colors_actual.as_deref()
-                                .map(|c| parse_colors_header(&c.join(","))),
+                                .map(parse_measured_color_list),
                             dither: result.script_dither.as_deref().map(normalize_algorithm_name),
                             tuning: script_tuning,
                             // `refresh` is resolved in content_pipeline, which
@@ -1140,8 +1146,11 @@ Replace `src/services/screen_store.rs:1379-1440` — from the `// Same two slots
             screen: RungSettings {
                 colors: script_result.script_colors.as_deref()
                     .map(|c| crate::api::display::parse_colors_header(&c.join(","))),
+                // parse_measured_color_list, NOT a join (see its doc comment):
+                // a script entry containing a comma would inflate the parsed
+                // count and mask a length mismatch.
                 colors_actual: script_result.script_colors_actual.as_deref()
-                    .map(|c| crate::api::display::parse_colors_header(&c.join(","))),
+                    .map(crate::api::display::parse_measured_color_list),
                 dither: script_result.script_dither.as_deref()
                     .map(crate::models::normalize_algorithm_name),
                 tuning: script_tuning,
@@ -1225,8 +1234,11 @@ Replace `src/main.rs:429-460` and the `resolve_measured_colors` call at `:383` w
             screen: RungSettings {
                 colors: script_result.script_colors.as_deref()
                     .map(|c| byonk::api::display::parse_colors_header(&c.join(","))),
+                // parse_measured_color_list, NOT a join (see its doc comment):
+                // a script entry containing a comma would inflate the parsed
+                // count and mask a length mismatch.
                 colors_actual: script_result.script_colors_actual.as_deref()
-                    .map(|c| byonk::api::display::parse_colors_header(&c.join(","))),
+                    .map(byonk::api::display::parse_measured_color_list),
                 dither: script_result.script_dither.as_deref()
                     .map(byonk::models::normalize_algorithm_name),
                 tuning: script_tuning,
@@ -1721,6 +1733,8 @@ async fn all_five_render_paths_resolve_identically() {
     }
 }
 ```
+
+**The convergence test must be HANDLER-level, not resolver-level.** Each `via_*` drives the path's own entry point — the axum handler, `ScreenStore::render`, the CLI's render function — and never builds a `RenderInputs` by hand. A test that constructs `RenderInputs` itself re-tests the resolver (already covered in Task 2) and would still pass with two rungs swapped in a handler, which is precisely the wiring this piece rewires. If a path's resolution is unreachable without a refactor, extract its rung mapping into a named function and drive that.
 
 `Fixture` and `ExpectedParams` are this file's own helpers. Each `via_*` must reach the real resolution for that path — for `/api/display` and the two HTTP previews, read the resolved values out of the `X-Byonk-Resolution` header where the path emits one and out of the handler's `RenderParams` otherwise; for the CLI, call the same function `main.rs` calls rather than shelling out. **Do not** compare PNG bytes: two paths can render the same pixels from different settings, and the point is the settings.
 

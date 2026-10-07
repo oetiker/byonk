@@ -113,7 +113,7 @@ itself — a screen's dithering targets measured colours whenever they resolve, 
 | `include_svg` | bool, default `false` | Also return the fully expanded SVG that was rasterized. |
 | `data_uris` | `shorten` \| `full` \| `omit` | How to treat embedded base64 `data:` URIs in `data` and the SVG. Default `shorten`. |
 | `use_actual` | bool, optional | Draw the returned PNG in the panel's measured colours instead of the spec colours. Defaults to on whenever measured colours are available. `true` with nothing measured is a no-op, not an error. |
-| `colors_actual` | string, optional | Comma-separated hex, index-parallel to the palette (e.g. `#0A0A0A,#E8E6E0,#A83A30`). Lets you preview a calibration without adding a `panel` to `config.yaml`. A `colors_actual` returned by the screen's own script still wins over this; a length mismatch is ignored (with a warning in the diagnostics' `log`) rather than failing the render. |
+| `colors_actual` | string, optional | Comma-separated hex, index-parallel to the palette (e.g. `#0A0A0A,#E8E6E0,#A83A30`). Lets you preview a calibration without adding a `panel` to `config.yaml`. It takes the cascade's override rung, so **since 0.20.0 it wins over a `colors_actual` returned by the screen's own script** — it used to lose to it, which left no way to preview a calibration against a screen that measures its own. A length mismatch is ignored (with a warning in the diagnostics' `log`) rather than failing the render. |
 
 #### Keeping the response small
 
@@ -182,8 +182,9 @@ Five arguments let the caller decide what a render is worth:
   worth it when you genuinely need the bytes.
 
 The diagnostics also include `measured_source`, naming which layer actually supplied the
-measured colours for that render: `script`, `render_opts` (the `colors_actual` argument
-above), `panel.colors_actual`, or `none`.
+measured colours for that render: `render_opts` (the `colors_actual` argument above),
+`device` (the device's own `colors_actual` or its `final.colors_actual` — new in 0.20.0),
+`script`, `panel.colors_actual`, `Measured-Colors header`, or `none`.
 
 ### Configure a device
 
@@ -196,13 +197,35 @@ one call can change a single setting without disturbing the others. `screen_ref`
 is only required the first time a device is configured.
 
 Besides `screen_ref` the tool covers the device's `panel`, `dither` algorithm,
-`colors` palette, script `params`, `refresh` interval and `name`, the dither
-tuning knobs `max_error`, `noise_scale`, `chroma_clamp` and `strength`, and the
-panel-behaviour flags `temperature_profile`, `maximum_compatibility` and
+`colors` palette, its own `colors_actual` measurement, script `params`,
+`refresh` interval and `name`, the dither tuning knobs `max_error`,
+`noise_scale`, `chroma_clamp`, `strength` and `gamut`, the `final` block, and
+the panel-behaviour flags `temperature_profile`, `maximum_compatibility` and
 `min_png_bytes`. It reaches the same settings as
 `PATCH /api/admin/devices/{key}`, which spells two of them differently: there
 the device is named by the URL rather than by `mac`, and its screen field is
 `screen` rather than `screen_ref`.
+
+`colors_actual`, `gamut` and `final` are new in 0.20.0. `colors_actual` and
+`gamut` were configurable in `config.yaml` before, but no tool could reach
+them.
+
+**`final` is where a setting that a screen must not override goes.** Everything
+written directly on the device is a *default*: a screen that returns its own
+`dither`, palette or tuning overrides it, because only the script can inspect
+what it just drew. `final` holds the owner's vetoes, and nothing overrides
+those:
+
+```json
+{ "mac": "44:1B:F6:83:93:38", "dither": "floyd-steinberg",
+  "final": { "dither": "atkinson", "refresh": 1800 } }
+```
+
+`final` accepts exactly `colors`, `colors_actual`, `dither`, `max_error`,
+`noise_scale`, `chroma_clamp`, `strength`, `refresh` and `gamut`, and merges
+field by field like the rest of the call. See the configuration guide's
+[Settings order](configuration.md#settings-order-defaults-and-vetoes) for the
+full ladder.
 
 To take a setting back rather than change it, name it in `clear`:
 
@@ -213,12 +236,18 @@ To take a setting back rather than change it, name it in `clear`:
 A device setting overrides the panel's, so removing it lets the panel's own
 value apply again. Setting and clearing the same field in one call is refused.
 
+**A name in `clear` takes at most one dot**, and a bare name never reaches
+`final`: `"dither"` clears the device's default, `"final.dither"` one field of
+the veto block, and `"final"` the whole block. So clearing `"dither"` on a
+device whose algorithm came from `final` changes nothing the renderer sees.
+
 Names are checked before anything is written: an unknown dither algorithm, an
-unconfigured panel, a malformed `colors` list or a `temperature_profile` other
-than `default`/`a`/`b` all fail with a message listing what is accepted. This
-matters most for `dither` — an unrecognised algorithm name is not an error
-further down the pipeline, it just renders Atkinson, so a typo used to be
-invisible until you looked at the panel.
+unconfigured panel, a malformed `colors` or `colors_actual` list, a negative
+tuning number or a `temperature_profile` other than `default`/`a`/`b` all fail
+with a message listing what is accepted — inside `final` too, where the message
+names the field as `final.dither`. This matters most for `dither` — an
+unrecognised algorithm name is not an error further down the pipeline, it just
+renders Atkinson, so a typo used to be invisible until you looked at the panel.
 
 ## Resources
 

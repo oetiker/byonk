@@ -45,6 +45,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/dev/render` is now `/dev/api/render`, and so on for `screens`, `events`,
   `resolve-mac` and `panel-colors`.
 
+- **Home Assistant: re-pick Dither once per device.** The integration's
+  **Dither** control has always meant "on this display, use *this*". It wrote
+  the device's `dither:` key, which any screen that names its own algorithm
+  overrides — so what the control displayed was not always what the panel
+  rendered. It now writes the device's new `final:` block, which nothing
+  overrides, and what it shows is what you get.
+
+  The one-time cost: a device configured through the older control still holds
+  a bare `dither:`, and the control no longer reads that, so its Dither entity
+  shows **empty** until you pick a value again. Nothing about the panel changes
+  while it is empty — the device goes on using that algorithm for every screen
+  that names none of its own, exactly as before, and a screen that names one
+  goes on winning, exactly as before. Picking the same value again turns it
+  into a veto that no screen can override.
+
+  byonk deliberately does not migrate the value for you: `config.yaml` is the
+  operator's document, and a release that rewrites it unprompted is worse than
+  one that asks. To do it by hand, move the key under `final:`:
+
+  ```yaml
+  devices:
+    "AA:BB:CC:DD:EE:FF":
+      final:
+        dither: atkinson
+  ```
+
+  **Update the integration together with byonk.** An older integration writes
+  the device's default instead of its veto, and its Dither entity would then
+  report a value a screen can override.
+
+  `refresh` needs nothing: a screen's `refresh_rate` outranked a device's
+  `refresh` before and still does. The new `final.refresh` is the way to
+  override a screen — see below.
+
 ### New
 
 - **A screen editor in the browser.** The dev UI is no longer just a preview:
@@ -142,6 +176,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   normally too small to reach its better setting. Setting `min_png_bytes: 102401`
   pads the image with data that decoders ignore, so the picture is unchanged and
   only the size grows. Updates take longer in exchange. Useful on a TRMNL X only.
+- **`final:` on a device — the settings no screen can override.** Everything
+  written directly under a device is a default a screen may replace, which is
+  usually what you want: the script is the only participant that can look at
+  the content it is about to render. `final:` is for when it is not — when the
+  panel hangs in a dark hallway, or runs on a battery, and the owner can see
+  the result and the screen's author cannot.
+
+  ```yaml
+  devices:
+    "AA:BB:CC:DD:EE:FF":
+      dither: floyd-steinberg    # a default — a screen may pick its own
+      final:
+        dither: atkinson         # a veto — no screen overrides this
+        refresh: 1800            # this panel runs on a battery
+  ```
+
+  It accepts exactly `colors`, `colors_actual`, `dither`, `max_error`,
+  `noise_scale`, `chroma_clamp`, `strength`, `refresh` and `gamut`, and nothing
+  else: an unrecognised key under `final:` stops the server at startup with the
+  field named, so a typo there cannot silently do nothing. (A device's own keys
+  stay tolerant of names byonk does not know, because a device entry carries
+  settings that have nothing to do with rendering.)
+
+  `final.colors` reaches the error screen too, so the one picture whose job is
+  to be legible is drawn in the inks the owner chose.
+- **`final.refresh` — a refresh interval a screen cannot argue with.** Until
+  now nothing outranked a screen's own `refresh_rate`, so there was no way to
+  hold a battery-powered display to an interval its owner can live with.
+  `final.refresh` replaces whatever the screen asked for, in either direction.
+- **`colors_actual` on a device** — this one display's measured colours,
+  overriding the calibration in its panel profile. For the single panel that
+  drifted, rather than a profile of its own.
+- **`gamut` and `colors_actual` are now writable** through
+  `POST`/`PATCH /api/admin/devices` and the MCP `configure_device` tool, as is
+  the whole `final:` block. `gamut` and `colors_actual` were configurable in
+  `config.yaml` all along, but no API or MCP client could reach them, so they
+  look new from the outside.
+
+  A setting is removed with `clear`, which now takes **one dot**:
+  `clear: ["dither"]` removes the device's default, `clear: ["final.dither"]`
+  one field of its veto block, and `clear: ["final"]` the whole block. A bare
+  name never touches `final:`.
+- **`GET /api/admin/devices` reports `final.dither`**, so a client that writes
+  the veto can read back what it wrote. It is omitted for a device that vetoes
+  no algorithm.
+- **The device preview can report how a render was resolved.**
+  `GET /api/admin/devices/{key}/preview?resolution` adds the
+  `X-Byonk-Resolution` header, one line of JSON naming, for every render
+  setting, which rung won and what each other rung held — the same diagnostic
+  the dev render answers with, so a picture on a Home Assistant device page can
+  be checked without guessing. It is opt-in because that header can be larger
+  than a reverse proxy's default header buffer, and it is absent on a cache hit
+  or an error image, neither of which resolved anything.
 
 ### Changed
 
@@ -233,15 +320,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dither algorithms and each one's defaults are served by the renderer itself,
   so the two cannot drift apart again.
 
-- **A device's dither algorithm now wins over a screen's, instead of losing to
-  it silently.** Setting `dither` on a device in `config.yaml` had no effect on
-  any screen that named its own — the screen won, and nothing said so. A device
-  set to `atkinson-hybrid` went on rendering `atkinson`, which took a session
-  to notice. The algorithm suits the panel rather than the content, and the
-  operator who set it on the device is the one who cannot see it being
-  replaced, so the device decides. A screen's `dither` still applies on any
-  device that does not name one, and when the two disagree Byonk logs which
-  value was dropped.
+- **Every render setting now resolves in one documented order, and all five
+  render paths use it.** `colors`, `colors_actual`, `dither`, `max_error`,
+  `noise_scale`, `chroma_clamp`, `strength`, `gamut` and `refresh` each carried
+  a precedence chain of its own, and the five places that render a screen — the
+  device itself, the dev preview, the authoring render, `byonk render` and the
+  admin device preview — did not agree about them. A screen could therefore
+  look one way in a preview and another on the panel. One ladder now replaces
+  all of it, highest first:
+
+  **override → the device's `final:` → the screen → the device → the panel →
+  byonk's own defaults.**
+
+  What is written directly under a device is a **default**, which a screen may
+  override, because only the script can inspect the content it just drew. What
+  is written under the new `final:` block is a **veto**, which nothing
+  overrides. So a device's `dither:` does not override a screen that names its
+  own algorithm — it never did — and `final: {dither: …}` is how you make that
+  choice stick. The configuration guide's *Settings order* section has the
+  whole table, and the Lua API reference states it for every value a script can
+  return.
+
+  Two consequences are worth knowing even if you configure nothing:
+
+  - **A device preview's script is now told the device's own tuning.** The
+    preview rendered with the device's numbers but handed the script the
+    panel's, so a screen branching on `device.dither.max_error` could draw
+    something in a preview that it would never draw on the glass. All three
+    pre-script paths agree now. This affects devices with no `final:` block.
+  - **A caller's explicit measurement now outranks a script's own.** The dev
+    UI's Tune panel, `POST /dev/api/render`'s `override.colors_actual` and the
+    MCP `render_screen` tool's `colors_actual` argument used to lose to a
+    `colors_actual` returned by the screen, which left no way to preview a
+    calibration against a screen that measures its own.
+
+- **A device's `final:` block is visible to screen scripts.** `device.colors`,
+  `device.colors_actual` and `device.dither` resolve the device's two rungs with
+  the veto first, so a script is told the decision the renderer will actually
+  make rather than a value it is about to overrule. One rung is necessarily
+  missing: the screen's, which is what the script is about to return.
+
+  One wart to know about: `device.dither.algorithm` is the string as
+  configured, not a canonical one. Byonk accepts aliases and spelling variants
+  everywhere else and normalises them internally, but a script that configures
+  `Floyd_Steinberg` is shown `Floyd_Steinberg`. Lowercase it and swap `_` for
+  `-` before matching, or branch on the tuning numbers instead.
 
 - **A screen's `refresh_rate` still wins over a device's `refresh`, but no
   longer in silence.** This one keeps its precedence: only the script knows
@@ -284,11 +407,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   you would any other device setting.
 - **`byonk render` and device previews now use the panel tuning of the
   algorithm they actually render with.** A panel profile can tune each dither
-  algorithm differently. When a device and its screen both named an algorithm
-  and the two differed, the device's algorithm was rendered — but `byonk
-  render --mac` looked up the tuning for the *screen's* algorithm, and the
-  device preview (the admin API's preview image, which Home Assistant shows)
-  ignored the device's algorithm in that lookup altogether. Both now match
+  algorithm differently. When a device and its screen named different
+  algorithms, `byonk render --mac` and the device preview (the admin API's
+  preview image, which Home Assistant shows) each looked that tuning up for an
+  algorithm other than the one they went on to render with. Both now match
   what the device itself receives from `/api/display`.
 - **A dither tuning override that sets only some numbers keeps the rest.**
   Setting, say, only `max_error` in the dev editor's preview dropped every

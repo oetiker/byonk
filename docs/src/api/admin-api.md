@@ -78,7 +78,8 @@ config mapping, plus any configured devices that have never connected yet.
     "dither": "atkinson",
     "panel": null,
     "colors": null,
-    "params": { "station": "Olten, Südwest", "limit": 8 }
+    "params": { "station": "Olten, Südwest", "limit": 8 },
+    "final": { "dither": "floyd-steinberg" }
   }
 ]
 ```
@@ -94,6 +95,12 @@ Field notes:
   `null` for devices that are configured but have never connected.
 - `screen`, `dither`, `panel`, `colors`, `params` reflect the resolved config mapping; they
   are `null` when the device has no mapping.
+- `final` reports the device's `final:` rung — the vetoes that outrank the
+  screen. Only `final.dither` is projected here, because that is the one veto a
+  client writes and has to read back. The key is **omitted** when the device
+  vetoes no dither, so an absent `final:` block and one that sets nothing a
+  client can read look the same. Note that `dither` beside it is the device's
+  *default*, which a screen may override — the two are different settings.
 
 ---
 
@@ -429,6 +436,7 @@ The full set of writable settings is:
 | `panel` | Panel profile name, as configured under `panels` |
 | `dither` | Dither algorithm — `GET /api/admin/screens` lists the accepted names |
 | `colors` | Palette override, comma-separated `#rrggbb`, at least two |
+| `colors_actual` | This one display's measured colors, comma-separated `#rrggbb`, index-parallel to the resolved palette. Overrides the panel profile's calibration |
 | `params` | Parameters for the screen's Lua script |
 | `refresh` | Refresh interval in seconds; `0` means "use the screen's own default" |
 | `name` | Friendly name |
@@ -436,19 +444,31 @@ The full set of writable settings is:
 | `noise_scale` | Blue-noise jitter scale |
 | `chroma_clamp` | Chroma clamp for dithering |
 | `strength` | Dither strength — `0.0` diffuses nothing, `1.0` is standard |
+| `gamut` | Gamut compression: `{ "knee": …, "amount": …, "max_compression": … }` |
+| `final` | The device's **vetoes**: `{ "dither": …, "colors": …, "colors_actual": …, "max_error": …, "noise_scale": …, "chroma_clamp": …, "strength": …, "refresh": …, "gamut": … }`. Nothing else is accepted |
 | `temperature_profile` | `default`, `a` or `b`; passed to the device |
 | `maximum_compatibility` | Ask the firmware to force a full-waveform refresh every update |
 | `min_png_bytes` | Pad the served PNG to at least this many bytes |
 
-`panel`, `dither`, `colors` and `temperature_profile` are validated against what
-this server actually understands, and an unknown value is a `400`. This matters
-for `dither` in particular: an unrecognised algorithm name is not an error
-anywhere further down the pipeline — the renderer falls back to `atkinson` — so
-without the check a typo would be invisible until you looked at the panel.
+**`final` is not a duplicate of the fields above it.** Everything written
+directly on the device is a *default* a screen may override; everything under
+`final` is a *veto* nothing overrides. See the configuration guide's
+[Settings order](../guide/configuration.md#settings-order-defaults-and-vetoes)
+for the whole ladder. `final` merges field by field like the rest of the body,
+so setting `final.dither` leaves `final.strength` alone.
 
-The device's `gamut` block and the deprecated `error_clamp` key are not writable
-here, but an existing entry keeps them: a write preserves every key it does not
-manage itself.
+`panel`, `dither`, `colors`, `colors_actual` and `temperature_profile` are
+validated against what this server actually understands, and an unknown value
+is a `400` — inside `final` too, where the error names the field as
+`final.dither`. This matters for `dither` in particular: an unrecognised
+algorithm name is not an error anywhere further down the pipeline — the
+renderer falls back to `atkinson` — so without the check a typo would be
+invisible until you looked at the panel.
+
+`gamut` and `colors_actual` became writable here in 0.20.0. They were
+configurable in `config.yaml` before that, but no API or MCP client could
+reach them. The deprecated `error_clamp` key is still not writable; an existing
+entry keeps it, because a write preserves every key it does not manage itself.
 
 **Responses**:
 
@@ -500,6 +520,20 @@ always have a screen, so change it instead. Setting and clearing the same field
 in one request is a `400`, as is clearing a name that is not a setting. `clear`
 is only valid on `PATCH`; on `POST` there is nothing to clear and it is refused.
 
+**A name in `clear` takes at most one dot**, and a bare name never reaches
+`final`:
+
+| `clear` entry | What it removes |
+|---------------|-----------------|
+| `"dither"` | The device's default — its bare `dither:` key |
+| `"final.dither"` | One field of the veto block, leaving the rest of `final:` alone |
+| `"final"` | The whole `final:` block |
+
+So `{ "clear": ["dither"] }` on a device whose algorithm came from `final:`
+changes nothing the renderer sees. `final.<field>` accepts only the nine
+cascade settings; `clear: ["final.screen"]` is a `400`, for the same reason
+`final: {screen: …}` is a startup error.
+
 **Responses**:
 
 | Status | Meaning |
@@ -535,6 +569,13 @@ screen that reads `device.mac` or `device.battery_voltage` sees the real values.
 A device that has never checked in reports no telemetry rather than placeholder
 values.
 
+Both of the device's cascade rungs apply — its own settings and its `final:`
+vetoes — and its script is shown the same pre-resolved `device.dither` it is
+shown on the real device. Up to 0.20.0 this preview rendered with the device's
+numbers but told the script the panel's, so a screen that branched on
+`device.dither.max_error` could draw something here that it would not draw on
+the glass. The cache key covers both rungs, so changing a veto invalidates it.
+
 **Query parameters**:
 
 | Parameter | Meaning |
@@ -542,9 +583,19 @@ values.
 | `force` | Present in any form (`?force`, `?force=1`) — re-render instead of serving the cached copy |
 | `dither` | `off`/`0`/`false`/`no` returns the screen *before* dithering: the full-colour rasterization, with no palette restriction. Anything else, or absent, keeps the dithered render the panel receives |
 | `measured` | `off`/`0`/`false`/`no` draws the palette in the **spec** colors byonk sends to the panel, instead of the **measured** colors a calibration says it really produces. No effect when `dither` is off — an undithered render has no palette to map |
+| `resolution` | Present in any form (`?resolution`, `?resolution=1`) — add the `X-Byonk-Resolution` header, naming for every render setting which rung won and what each other rung held. New in 0.20.0; it used to be available on the dev render only |
 
 Only an explicit no turns an option off; `dither=on`, `dither=1` and `dither=true`
-all keep it on. Neither parameter changes what the device displays — they select
+all keep it on.
+
+`resolution` is opt-in rather than always on because the header is one line of
+JSON covering eleven settings and six rungs each, which can exceed a reverse
+proxy's default header buffer (4 KiB in nginx). It appears only on a response
+that actually rendered: a cache *hit* re-serves bytes without resolving
+anything, and the error image resolves nothing at all, so neither carries the
+header even with `?resolution` — pair it with `?force` when you need the report
+for certain. The header's shape is documented under
+[dev mode](../guide/dev-mode.md). Neither parameter changes what the device displays — they select
 how this picture is drawn, nothing more. Each combination is cached separately, so
 flipping one back and forth does not re-render.
 

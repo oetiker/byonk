@@ -553,7 +553,7 @@ preview only: it changes no server state and reaches no device.
 | `width`, `height` | The render size, when it differs from the model's. |
 | `draft.base` | An unsaved device rung: the device's `colors`, `dither`, the tuning numbers, `gamut` and `refresh`. |
 | `draft.panel` | An unsaved panel rung: `colors`, `colors_actual` and the panel `dither` block. |
-| `override` | Ad-hoc values from the dev UI controls: `dither`, `colors_actual`, the tuning numbers and `gamut`. They are above every other rung, except for `colors_actual`: a screen that returns `colors_actual` is above the override. |
+| `override` | Ad-hoc values from the dev UI controls: `dither`, `colors_actual`, the tuning numbers and `gamut`. They are above every other rung, `colors_actual` included — a change in 0.20.0, where a script that returned its own measurement used to beat the override. |
 | `simulated` | What the device would report: battery voltage, RSSI, the clock, and params that are merged over the device's own. |
 | `view.use_actual` | Draw the PNG in the measured panel colours. Defaults to on when measured colours resolve. |
 
@@ -562,22 +562,24 @@ without `dither` removes the device's `dither` from the preview, so you can
 see what the device does without it. A field that the draft leaves out is
 absent, not inherited.
 
-Some fields are refused with `400`, because the configuration cannot hold
-them yet: `draft.base.colors_actual`, `override.colors` and
-`override.refresh`. A script would see a different palette than the one that
-is rendered with `override.colors`. An unknown field, `draft.final` included,
-is refused with `422`.
+Three fields are refused with `400`. `override.colors` is refused because the
+script would then have been shown a different palette from the one rendered;
+`override.refresh` because nothing on this path consumes it. And
+`draft.base.colors_actual` is still refused, even though a device may now carry
+its own `colors_actual` in `config.yaml` — this request cannot draft one yet.
+An unknown field, `draft.final` included, is refused with `422`, so a device's
+`final:` rung can be seen in the resolution report but not yet drafted here.
 
 The answer carries an `X-Byonk-Resolution` header. It is one line of JSON
 that tells, for every render setting, which value won and why. Example for
-one setting, a device with `dither: floyd-steinberg` rendering a screen that
-asks for `atkinson`:
+one setting, a device with `final: {dither: floyd-steinberg}` rendering a
+screen that asks for `atkinson`:
 
 ```json
-{"dither":{"effective":"floyd-steinberg","from":"device_base",
- "order":["override","device_final","device_base","screen","panel","fallback"],
- "rungs":{"screen":{"value":"atkinson","status":"outranked"},
-  "device_base":{"value":"floyd-steinberg","status":"winner"},
+{"dither":{"effective":"floyd-steinberg","from":"device_final",
+ "order":["override","device_final","screen","device_base","panel","fallback"],
+ "rungs":{"device_final":{"value":"floyd-steinberg","status":"winner"},
+  "screen":{"value":"atkinson","status":"outranked"},
   "fallback":{"value":"atkinson","status":"outranked"}}}}
 ```
 
@@ -593,13 +595,22 @@ are `colors`, `colors_actual`, `dither`, `max_error`, `noise_scale`,
 | `rejected` | This rung has a value that cannot be used. A `reason` tells why — for example a `colors_actual` with a different number of entries than the palette. The next rung is tried. |
 | (missing) | This rung has no value. `order` names every rung; a rung that is not in `rungs` is absent. Absent rungs are left out to keep the header small. |
 
-`order` is the precedence that byonk uses today, highest first. It is not
-the same for every setting: for `dither`, the device is above the screen,
-while for the other settings the screen is above the device. `device_final`
-is always absent for now. The `fallback` rung is byonk's own default. For
-`colors` it is the model's default palette, and it is used. For the other
-settings it is only reported: a setting that falls back is left to the
-dithering engine's own default, which is the same value.
+`order` is the precedence byonk uses, highest first, and since 0.20.0 it is
+**the same for every setting**: `override` > `device_final` > `screen` >
+`device_base` > `panel` > `fallback`. All five render paths — the device, this
+dev render, the authoring render, the CLI and the admin device preview —
+resolve on it, so a preview and the glass cannot disagree.
+
+`device_final` is the device's `final:` block, the owner's veto. `device_base`
+is what is written directly under the device, which the screen may override.
+The `fallback` rung is byonk's own default. For `colors` it is the model's
+default palette, and it is used. For the other settings it is only reported: a
+setting that falls back is left to the dithering engine's own default, which is
+the same value.
+
+The same header is available on the admin device preview,
+`GET /api/admin/devices/{key}/preview?resolution` — opt-in there, because a
+proxy's default header buffer is not always large enough for it.
 
 For scripted or LLM-driven authoring, prefer the [MCP interface](mcp.md),
 which covers the same screen-store operations with a stable tool contract.

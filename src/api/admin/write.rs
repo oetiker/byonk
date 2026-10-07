@@ -5,7 +5,7 @@ use axum::{
     http::HeaderMap,
     Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::api::config_persist::{persist, require_file_config};
@@ -22,7 +22,12 @@ use crate::services::screen_repo_loader::BUILTIN_HANDLE;
 use super::read::{build_screen_repo_info, ScreenRepoInfo};
 use super::require_admin;
 
-#[derive(Deserialize)]
+// `Serialize` + `Default` exist for the MCP mirror test: serialising a default
+// value lists every field, so `ConfigureDeviceArgs` can be checked against the
+// struct itself rather than against a hand-kept list. They change nothing at
+// runtime (`ToSchema` would need a schema for every nested type, including
+// `serde_yaml::Value`).
+#[derive(Default, Deserialize, Serialize)]
 pub struct DeviceWrite {
     pub key: Option<String>, // required for POST, ignored for PATCH (taken from URL)
     pub screen: Option<String>,

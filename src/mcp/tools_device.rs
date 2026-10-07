@@ -278,38 +278,34 @@ impl ByonkMcp {
 mod tests {
     use super::*;
 
-    fn args() -> ConfigureDeviceArgs {
-        serde_json::from_value(serde_json::json!({ "mac": "AA:BB:CC:DD:EE:FF" }))
-            .expect("only `mac` is required")
+    /// The settable fields of `DeviceWrite`, as the agent-facing names, read
+    /// off the struct itself. `key` is excluded: it is the entry name, not a
+    /// setting, and the tool takes `mac` instead. `screen` is `screen_ref`
+    /// here.
+    fn device_write_fields() -> std::collections::BTreeSet<String> {
+        let v = serde_json::to_value(DeviceWrite::default()).expect("DeviceWrite serialises");
+        v.as_object()
+            .expect("a struct serialises to an object")
+            .keys()
+            .filter(|k| *k != "key")
+            .map(|k| {
+                if k == "screen" {
+                    "screen_ref".to_string()
+                } else {
+                    k.clone()
+                }
+            })
+            .collect()
     }
-
-    /// The settable fields of `DeviceWrite`, as the agent-facing names. `key`
-    /// is excluded: it is the entry name, not a setting, and the tool takes
-    /// `mac` instead. `screen` is `screen_ref` here.
-    const MIRRORED: [&str; 18] = [
-        "screen_ref",
-        "panel",
-        "dither",
-        "colors",
-        "colors_actual",
-        "gamut",
-        "params",
-        "refresh",
-        "name",
-        "max_error",
-        "noise_scale",
-        "chroma_clamp",
-        "strength",
-        "temperature_profile",
-        "maximum_compatibility",
-        "min_png_bytes",
-        "final",
-        "clear",
-    ];
 
     /// `ConfigureDeviceArgs` is a hand-written mirror of `DeviceWrite`. Only a
     /// test keeps the two in step: `gamut` went missing from this mirror for a
     /// whole release because nothing checked.
+    ///
+    /// `DeviceWrite` is the witness: its field set comes from serialising a
+    /// default value, not from a list a human must remember to edit. Adding a
+    /// field there (and writing `None` for it in `to_device_write`) therefore
+    /// fails here until the tool gains it too.
     ///
     /// The nested config types are embedded directly (not re-mirrored), so
     /// they follow the config model by construction; the test pins that the
@@ -318,18 +314,25 @@ mod tests {
     fn the_mcp_mirror_carries_every_device_write_field() {
         let schema = schemars::schema_for!(ConfigureDeviceArgs);
         let json = serde_json::to_value(&schema).expect("schema serialises");
-        let props = json["properties"].as_object().expect("an object schema");
-        for field in MIRRORED {
-            assert!(
-                props.contains_key(field),
-                "`{field}` is missing from the MCP tool's schema, so no agent can set it"
-            );
-        }
-        // Nothing in the schema that DeviceWrite cannot take (besides `mac`).
-        assert_eq!(
-            props.len(),
-            MIRRORED.len() + 1,
-            "unexpected extra properties"
+        let props: std::collections::BTreeSet<String> = json["properties"]
+            .as_object()
+            .expect("an object schema")
+            .keys()
+            .cloned()
+            .collect();
+        let want = device_write_fields();
+        // `mac` is the tool's address for the device; DeviceWrite has no such
+        // field (its `key` is excluded from `want` for the same reason).
+        let mut have = props.clone();
+        have.remove("mac");
+
+        let missing: Vec<_> = want.difference(&have).collect();
+        let extra: Vec<_> = have.difference(&want).collect();
+        assert!(
+            missing.is_empty() && extra.is_empty(),
+            "ConfigureDeviceArgs and DeviceWrite disagree.\n  \
+             DeviceWrite fields missing from ConfigureDeviceArgs (add them, and map them in to_device_write): {missing:?}\n  \
+             ConfigureDeviceArgs fields DeviceWrite cannot take: {extra:?}"
         );
 
         // The embedded types expose their own fields through $defs.
@@ -364,10 +367,17 @@ mod tests {
     }
 
     /// Carrying a field in the schema is not enough: the conversion must
-    /// actually pass it on.
+    /// actually pass it on. Every field is populated (no `..` shorthand, so a
+    /// new `ConfigureDeviceArgs` field breaks this literal), then every
+    /// `DeviceWrite` field must come out non-null.
     #[test]
-    fn the_mcp_mirror_passes_the_new_fields_to_device_write() {
+    fn the_mcp_mirror_passes_every_field_to_device_write() {
         let a = ConfigureDeviceArgs {
+            mac: "AA:BB:CC:DD:EE:FF".into(),
+            screen_ref: Some("builtin/clock".into()),
+            panel: Some("p".into()),
+            dither: Some("sierra".into()),
+            colors: Some("#000000,#FFFFFF".into()),
             colors_actual: Some("#1C5240,#FFFFFF".into()),
             gamut: Some(GamutTuningValues {
                 knee: Some(0.8),
@@ -377,10 +387,29 @@ mod tests {
                 dither: Some("atkinson".into()),
                 ..Default::default()
             }),
+            params: Some(HashMap::from([("k".to_string(), serde_json::json!(1))])),
+            refresh: Some(60),
+            name: Some("n".into()),
+            max_error: Some(1.0),
+            noise_scale: Some(2.0),
+            chroma_clamp: Some(3.0),
+            strength: Some(0.5),
+            temperature_profile: Some("a".into()),
+            maximum_compatibility: Some(true),
+            min_png_bytes: Some(102401),
             clear: Some(vec!["final.strength".into()]),
-            ..args()
         };
         let w = a.to_device_write();
+        let v = serde_json::to_value(&w).unwrap();
+        for (field, value) in v.as_object().unwrap() {
+            if field == "key" {
+                continue; // the entry name comes from `mac`, not from the body
+            }
+            assert!(
+                !value.is_null(),
+                "`{field}` stays unset in DeviceWrite although the tool call set it"
+            );
+        }
         assert_eq!(w.colors_actual.as_deref(), Some("#1C5240,#FFFFFF"));
         assert_eq!(w.gamut.and_then(|g| g.knee), Some(0.8));
         assert_eq!(

@@ -1688,6 +1688,7 @@ devices:
     panel: trmnl_x
     dither: sierra          # base rung — the screen outranks this now
     strength: 0.9           # base rung
+    gamut: { knee: 0.8 }    # base rung — unasserted by every wiring test
     final:
       dither: atkinson      # the veto: beats the script's stucki
 "#;
@@ -1707,6 +1708,11 @@ fn expected() -> ExpectedParams {
         noise_scale: Some(0.25),
         max_error: Some(2.0),   // the script's, which no higher rung sets
         strength: Some(0.9),    // the device base rung's
+        // `gamut` is a four-field struct that reaches the ditherer, and the
+        // per-path wiring tests do NOT cover it — a swapped gamut source passes
+        // every one of them. The fixture must therefore set `gamut` on a rung
+        // and assert it here, or this is the hole the convergence test leaves open.
+        gamut_knee: Some(0.8),  // the device base rung's
         palette_hex: "#000000,#555555,#AAAAAA,#FFFFFF",
         measured_hex: Some("#0A0A0A,#4F4F4F,#A6A6A6,#F5F5F5"),
     }

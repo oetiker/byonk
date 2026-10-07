@@ -207,9 +207,9 @@ pub struct RenderOpts {
     /// decisions (see `api::display::resolve_use_actual`).
     pub use_actual: Option<bool>,
     /// Measured-colour override for this render, comma-separated hex. Sits
-    /// in the dev-override slot of the measured chain: `script > this >
-    /// panel.colors_actual > none`. Lets an agent preview a calibration
-    /// without writing a panel into the config.
+    /// in the override rung of the cascade: `this > device final > screen
+    /// (script) > device > panel.colors_actual > firmware header`. Lets an
+    /// agent preview a calibration without writing a panel into the config.
     pub colors_actual: Option<String>,
     /// Lua `params` table for the run. Empty for an authoring render; a
     /// device preview supplies the device's configured params.
@@ -3626,14 +3626,15 @@ mod tests {
             RenderOpts {
                 device: Some(DevicePreview {
                     mac: "AA:BB:CC:DD:EE:FF".to_string(),
-                    // base rung: diffuse
+                    // base rung: no diffusion
                     tuning: DitherTuningValues {
-                        strength: Some(1.0),
+                        strength: Some(0.0),
                         ..Default::default()
                     },
-                    // final rung: veto it
+                    // final rung: force diffusion (only the final rung
+                    // winning can produce more than one colour)
                     final_rung: CascadeValues {
-                        strength: Some(0.0),
+                        strength: Some(1.0),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -3642,10 +3643,9 @@ mod tests {
             },
         );
         assert!(res.error.is_none(), "{:?}", res.error);
-        assert_eq!(
-            distinct_colors(&res.png),
-            1,
-            "final.strength = 0 must win over base strength = 1.0, giving a flat block"
+        assert!(
+            distinct_colors(&res.png) > 1,
+            "final.strength = 1.0 must win over base strength = 0.0, giving a diffused block"
         );
     }
 

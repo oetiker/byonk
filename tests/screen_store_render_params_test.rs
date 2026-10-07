@@ -289,7 +289,7 @@ fn render_opts_dither_overrides_the_device_config() {
 /// release's one deliberate behaviour change.) A screen's choice still applies when the device is
 /// silent, which the contrast case below pins.
 #[test]
-fn the_device_config_dither_beats_the_script() {
+fn the_device_final_dither_beats_the_script() {
     let dir = tempfile::tempdir().unwrap();
     let store = dither_store(dir.path());
 
@@ -300,7 +300,7 @@ fn the_device_config_dither_beats_the_script() {
     assert!(!script_choice.png.is_empty());
     assert_ne!(
         script_choice.png, device_choice.png,
-        "a device-config dither must displace the script's own choice"
+        "a device `final:` dither must displace the script's own choice"
     );
 
     // ...and it lands on the device's algorithm specifically, not just on
@@ -310,7 +310,32 @@ fn the_device_config_dither_beats_the_script() {
     assert_eq!(
         device_choice.png, plain_sierra.png,
         "the opinionated screen must render exactly as the same content does \
-         with no opinion at all, since the device decides in both cases"
+         with no opinion at all, since the device's `final:` decides in both cases"
+    );
+}
+
+/// The release's one behaviour change, end to end: a bare device `dither:`
+/// (the base rung) no longer beats a screen that sets its own algorithm. The
+/// opinionated screen must render exactly as it does with no device dither.
+#[test]
+fn a_bare_device_dither_does_not_beat_the_screens_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dither_store(dir.path());
+
+    let script_choice = store.render("testrepo/opinionated", with_device_dither(None));
+    let base_dither = store.render("testrepo/opinionated", with_device_dither(Some("sierra")));
+    let final_dither = store.render("testrepo/opinionated", with_final_dither("sierra"));
+    assert!(script_choice.error.is_none(), "{:?}", script_choice.error);
+    assert!(base_dither.error.is_none(), "{:?}", base_dither.error);
+    assert!(final_dither.error.is_none(), "{:?}", final_dither.error);
+    assert_eq!(
+        script_choice.png, base_dither.png,
+        "a bare device dither must not displace the screen's own algorithm"
+    );
+    // Guard against vacuity: sierra really would differ from the screen's choice.
+    assert_ne!(
+        base_dither.png, final_dither.png,
+        "the same algorithm under `final:` must differ, or this test proves nothing"
     );
 }
 

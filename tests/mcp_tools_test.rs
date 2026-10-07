@@ -1596,7 +1596,7 @@ panels:
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        log.contains("the dev override") && log.contains("has 2 usable"),
+        log.contains("render_opts") && log.contains("has 2 usable"),
         "the discarded render option must be explained in the log, naming \
          the layer and the count: {log}"
     );

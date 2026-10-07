@@ -360,6 +360,9 @@ pub struct RenderResolution {
     pub tuning: DitherTuningValues,
     pub refresh: u32,
     pub report: Resolution,
+    /// What this path calls its override rung (`RenderInputs::override_source`),
+    /// kept so diagnostics built later name the real origin.
+    pub override_source: &'static str,
 }
 
 impl RenderResolution {
@@ -384,7 +387,7 @@ impl RenderResolution {
             warnings: self
                 .report
                 .get("colors_actual")
-                .map(rejection_warnings)
+                .map(|r| rejection_warnings(r, self.override_source))
                 .unwrap_or_default(),
         }
     }
@@ -392,16 +395,25 @@ impl RenderResolution {
 
 /// The `Rejected` reasons from one setting's report, as the warning lines the
 /// device paths log and the authoring paths put in the script log.
-fn rejection_warnings(report: &SettingReport) -> Vec<String> {
+///
+/// The override rung is named by `override_source`, because its origin differs
+/// per path (a dev-UI push vs a caller-supplied `RenderOpts`); the other rungs
+/// use `Rung::label()`.
+fn rejection_warnings(report: &SettingReport, override_source: &str) -> Vec<String> {
     report
         .rungs
         .iter()
         .filter_map(|(rung, entry)| match &entry.status {
-            RungStatus::Rejected { reason } => Some(format!(
-                "measured colours from {} ignored: {reason} (entries that are not \
-                 6-digit hex colours are dropped, which also shortens the list)",
-                rung.label()
-            )),
+            RungStatus::Rejected { reason } => {
+                let layer = match rung {
+                    Rung::Override => override_source,
+                    other => other.label(),
+                };
+                Some(format!(
+                    "measured colours from {layer} ignored: {reason} (entries that are not \
+                     6-digit hex colours are dropped, which also shortens the list)"
+                ))
+            }
             _ => None,
         })
         .collect()
@@ -551,6 +563,7 @@ pub fn resolve_render(i: &RenderInputs) -> RenderResolution {
         tuning,
         refresh: refresh.effective.unwrap_or(i.screen_default_refresh),
         report,
+        override_source: i.override_source,
     }
 }
 

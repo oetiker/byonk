@@ -86,6 +86,12 @@ impl PreviewCache {
         Some(entry.png.clone())
     }
 
+    /// How long the entry under `key` is served for, whatever its fingerprint.
+    /// Exists so a test can read the TTL the handler chose.
+    pub fn ttl(&self, key: &str) -> Option<Duration> {
+        self.entries.lock().ok()?.get(key).map(|e| e.ttl)
+    }
+
     /// Store a freshly rendered preview. `refresh_rate` is the script's own,
     /// in seconds; it is floored at [`MIN_TTL_SECS`]. Pass `0` for a render
     /// that has no opinion (a failed render's error image) to get the floor.

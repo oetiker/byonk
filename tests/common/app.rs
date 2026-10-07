@@ -206,6 +206,21 @@ impl TestApp {
         }
     }
 
+    /// Build a test app around a state the caller keeps a handle to, so a
+    /// test can look at what the handlers left in it (the preview cache).
+    pub fn from_state(state: byonk::server::AppState) -> Self {
+        let registry = state.registry.clone();
+        let content_cache = state.content_cache.clone();
+        let recovery = state.recovery.clone();
+        let router = build_router(state);
+        Self {
+            router,
+            registry,
+            content_cache,
+            recovery,
+        }
+    }
+
     /// Build a test app backed by an arbitrary config YAML string written to a file.
     /// Returns `(app, config_path)`. `dir` must outlive the app.
     pub fn new_with_config_yaml(yaml: &str, dir: &std::path::Path) -> (Self, std::path::PathBuf) {

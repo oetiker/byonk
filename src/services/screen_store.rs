@@ -1291,6 +1291,7 @@ impl ScreenStore {
             dither_gamut_amount: pre_panel_tuning.gamut.amount,
             dither_gamut_max_compression: pre_panel_tuning.gamut.max_compression,
             refresh_override: opts.device.as_ref().and_then(|d| d.refresh),
+            refresh_final: opts.device.as_ref().and_then(|d| d.final_rung.refresh),
             ..Default::default()
         };
 

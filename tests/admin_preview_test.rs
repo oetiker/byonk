@@ -327,3 +327,47 @@ async fn off_zero_false_and_no_all_disable() {
         assert_eq!(resp.body, raw.body, "{query} should disable dithering");
     }
 }
+
+/// The preview cache must keep an image exactly as long as the device is
+/// told to sleep. A `final.refresh` that moved the device's cadence but left
+/// the preview expiring on the screen's own interval would serve a stale
+/// image, or re-render needlessly, for the old interval.
+///
+/// If this breaks, `DevicePreview::final_rung` no longer reaches
+/// `RenderResult::refresh_rate`, which is what the handler stores as the TTL.
+#[tokio::test]
+async fn final_refresh_sets_the_preview_cache_ttl() {
+    use byonk::models::CascadeValues;
+
+    async fn ttl_secs(fin: Option<u32>) -> i64 {
+        let asset_loader = Arc::new(AssetLoader::new(None, None, None));
+        let mut config = AppConfig::load_from_assets(&asset_loader).expect("load config");
+        config.admin.token = Some("secret".to_string());
+        let device = config.devices.get_mut("DEFAULT").expect("DEFAULT");
+        device.screen = "byonk-builtin/calibration/grey".to_string();
+        device.final_rung = fin.map(|r| CascadeValues {
+            refresh: Some(r),
+            ..Default::default()
+        });
+        let state = byonk::server::create_app_state_with_config(asset_loader, config)
+            .expect("create state");
+        let cache = state.preview_cache.clone();
+        let app = TestApp::from_state(state);
+        let resp = app
+            .get_with_headers("/api/admin/devices/DEFAULT/preview", &[AUTH])
+            .await;
+        assert_eq!(resp.status, StatusCode::OK);
+        assert_eq!(cache_state(&resp), "miss");
+        cache
+            .ttl("DEFAULT#11")
+            .expect("the render was cached")
+            .num_seconds()
+    }
+
+    let own = ttl_secs(None).await;
+    assert_ne!(
+        own, 7200,
+        "the veto value must differ from the screen's own rate"
+    );
+    assert_eq!(ttl_secs(Some(7200)).await, 7200);
+}

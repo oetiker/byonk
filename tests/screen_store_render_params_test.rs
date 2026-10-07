@@ -381,3 +381,36 @@ fn device_config_colors_reach_the_script_context() {
     assert_eq!(out.data["colors"][1], "#FFFFFF");
     assert_eq!(out.data["colors"].as_array().map(Vec::len), Some(2));
 }
+
+/// The refresh a device preview reports -- and the admin cache uses as its
+/// TTL -- follows the cascade: `final.refresh` beats the script's own 60,
+/// a base `refresh` does not, and `0` is unset.
+#[test]
+fn a_device_previews_refresh_follows_the_final_rung() {
+    use byonk::models::CascadeValues;
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(dir.path());
+    let rate = |base: Option<u32>, fin: Option<u32>| {
+        let out = store.render(
+            "testrepo/echo",
+            RenderOpts {
+                device: Some(DevicePreview {
+                    mac: "AA:BB:CC:DD:EE:FF".to_string(),
+                    refresh: base,
+                    final_rung: CascadeValues {
+                        refresh: fin,
+                        ..Default::default()
+                    },
+                    ..DevicePreview::default()
+                }),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(out.error.is_none(), "render failed: {:?}", out.error);
+        out.refresh_rate
+    };
+    assert_eq!(rate(None, Some(7200)), 7200, "final beats the script");
+    assert_eq!(rate(Some(600), Some(7200)), 7200);
+    assert_eq!(rate(Some(600), None), 60, "base stays below the script");
+    assert_eq!(rate(None, Some(0)), 60, "0 is unset");
+}

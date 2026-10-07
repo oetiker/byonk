@@ -1032,6 +1032,8 @@ pub async fn handle_display<R: DeviceRegistry>(
         dither_gamut_amount: pre_script_tuning.gamut.amount,
         dither_gamut_max_compression: pre_script_tuning.gamut.max_compression,
         refresh_override: None,
+        // Filled by `content_pipeline` from the device config, as the base is.
+        refresh_final: None,
     };
 
     // Run script, render SVG, and cache the result (PNG rendering happens in /api/image)

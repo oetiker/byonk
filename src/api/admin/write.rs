@@ -127,18 +127,24 @@ fn validate_screen_and_params(
 /// the one thing that cannot.
 ///
 /// This matters most for `dither`. An unrecognised algorithm name does not
+/// Validate a dither algorithm name, reporting errors with a fully-qualified key name.
+fn validate_dither_name(name: &str, key: &str) -> Result<(), ApiError> {
+    let canonical = normalize_algorithm_name(name);
+    if !DITHER_ALGORITHMS.contains(&canonical.as_str()) {
+        return Err(ApiError::BadRequest(format!(
+            "unknown dither algorithm `{name}` in `{key}`; known: {}",
+            DITHER_ALGORITHMS.join(", ")
+        )));
+    }
+    Ok(())
+}
+
 /// fail anywhere downstream — `svg_to_png`'s match ends in `_ =>
 /// DitherAlgorithm::Atkinson` — so before this check a typo silently rendered
 /// Atkinson, and the only symptom was on the glass.
 fn validate_device_settings(state: &AppState, w: &DeviceWrite) -> Result<(), ApiError> {
     if let Some(dither) = &w.dither {
-        let canonical = normalize_algorithm_name(dither);
-        if !DITHER_ALGORITHMS.contains(&canonical.as_str()) {
-            return Err(ApiError::BadRequest(format!(
-                "unknown dither algorithm `{dither}`; known: {}",
-                DITHER_ALGORITHMS.join(", ")
-            )));
-        }
+        validate_dither_name(dither, "dither")?;
     }
 
     if let Some(panel) = &w.panel {
@@ -188,7 +194,12 @@ fn validate_device_settings(state: &AppState, w: &DeviceWrite) -> Result<(), Api
     }
 
     if let Some(colors) = &w.colors_actual {
-        validate_colors(colors)?;
+        validate_colors(colors).map_err(|e| match e {
+            ApiError::BadRequest(m) => {
+                ApiError::BadRequest(m.replace("`colors`", "`colors_actual`"))
+            }
+            other => other,
+        })?;
     }
     if let Some(g) = &w.gamut {
         validate_gamut(g, "gamut")?;
@@ -205,13 +216,7 @@ fn validate_device_settings(state: &AppState, w: &DeviceWrite) -> Result<(), Api
 /// at the field the request actually contained.
 fn validate_cascade_values(v: &CascadeValues, prefix: &str) -> Result<(), ApiError> {
     if let Some(dither) = &v.dither {
-        let canonical = normalize_algorithm_name(dither);
-        if !DITHER_ALGORITHMS.contains(&canonical.as_str()) {
-            return Err(ApiError::BadRequest(format!(
-                "unknown dither algorithm `{dither}` in `{prefix}dither`; known: {}",
-                DITHER_ALGORITHMS.join(", ")
-            )));
-        }
+        validate_dither_name(dither, &format!("{prefix}dither"))?;
     }
     for (key, colors) in [("colors", &v.colors), ("colors_actual", &v.colors_actual)] {
         if let Some(c) = colors {
@@ -1209,9 +1214,8 @@ devices:
     /// guarded here. They are managed fields now, kept by the patch merge
     /// instead — `test_patch_preserves_every_tuning_knob` in
     /// `tests/admin_write_test.rs` is what proves they still survive, end to
-    /// end. What is left for this door are the keys the writer models nowhere:
-    /// `gamut`, and the deprecated `error_clamp` whose whole job is to stay on
-    /// disk and keep reporting itself.
+    /// end. What is left for this door is the deprecated key: `error_clamp`,
+    /// whose whole job is to stay on disk and keep reporting itself.
     #[test]
     fn unmanaged_device_keys_are_preserved() {
         let kept = unmanaged_device_keys(DEVICE_YAML, "1C:DB:D4:66:5B:50");

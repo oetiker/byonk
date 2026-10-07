@@ -10,8 +10,9 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::models::config::PanelDitherConfig;
 use crate::models::screen_meta::ScreenMeta;
-use crate::models::{DisplaySpec, DitherTuningValues};
+use crate::models::{CascadeValues, DisplaySpec, DitherTuningValues};
 use crate::services::content_pipeline::{ContentPipeline, DeviceContext};
 use crate::services::screen_repo_loader::{ReadOutcome, ScreenRepoSource};
 use crate::services::screen_repo_manager::ScreenRepoManager;
@@ -155,6 +156,11 @@ pub struct DevicePreview {
     /// screen's own. The preview cache uses it as the entry's TTL, which is
     /// what keeps a preview exactly as fresh as the panel it stands for.
     pub refresh: Option<u32>,
+    /// The device's base-rung measured colours, if it has its own.
+    pub colors_actual: Option<String>,
+    /// The device's final rung — the owner's veto. Empty when the device has
+    /// no `final:` block, which resolves identically to having an empty one.
+    pub final_rung: CascadeValues,
 }
 
 /// Options for `ScreenStore::render`. Mirrors the knobs `/dev/render`
@@ -1210,36 +1216,16 @@ impl ScreenStore {
         let panel_actual_parsed: Option<Vec<(u8, u8, u8)>> = panel
             .and_then(|p| p.colors_actual.as_deref())
             .map(crate::api::display::parse_colors_header);
-        // Pre-script chain for the final measured-colour resolution after
-        // the script runs — there is no header layer in an authoring render,
-        // but `RenderOpts::colors_actual` occupies the dev-override slot (see
-        // `resolve_render_params`'s doc comment). Kept as a candidate ARRAY
-        // rather than collapsed to a winner here: the length rule lives
-        // inside `resolve_measured_colors`'s loop, so a wrong-length render
-        // option falls through to a valid `panel.colors_actual` instead of
-        // killing the calibration outright.
-        let pre_script_measured_candidates: [crate::api::display::MeasuredCandidate; 2] = [
-            (crate::api::display::SRC_RENDER_OPTS, opts_actual_parsed),
-            (crate::api::display::SRC_PANEL_ACTUAL, panel_actual_parsed),
-        ];
         // Pre-script winner, used only to populate `DeviceContext.colors_actual`
-        // (what the script sees before it runs). Derived from the candidate
-        // array rather than its own `.or_else` chain so the two can't
-        // silently drift on precedence — same construction as `api::dev`.
-        let measured_colors: Option<Vec<(u8, u8, u8)>> = pre_script_measured_candidates
-            .iter()
-            .find_map(|(_, c)| c.clone());
+        // (what the script sees before it runs): the override, then the panel.
+        let measured_colors: Option<Vec<(u8, u8, u8)>> =
+            opts_actual_parsed.or_else(|| panel_actual_parsed.clone());
 
         // The device-config layer of every chain below. Absent for an
         // authoring render (there is no device), populated for a device
         // preview — see `DevicePreview`.
         let device_colors: Option<&str> = opts.device.as_ref().and_then(|d| d.colors.as_deref());
         let device_dither: Option<&str> = opts.device.as_ref().and_then(|d| d.dither.as_deref());
-        let device_tuning: DitherTuningValues = opts
-            .device
-            .as_ref()
-            .map(|d| d.tuning.clone())
-            .unwrap_or_default();
 
         // The palette the script sees via `device.colors` — device-config
         // colors, then panel colors, then the model default, same as
@@ -1365,74 +1351,18 @@ impl ScreenStore {
             }
         };
 
-        // Explicit render-option dither wins outright over the script's own
-        // choice (like a `/dev/render` UI override); otherwise the script's
-        // `dither` return value is used. Mirrors `effective_script_dither`/
-        // `effective_device_dither` in `handle_render` (there is no device
-        // config layer in an authoring render, so that layer is always empty).
-        let (effective_script_dither, dither_override): (Option<&str>, Option<&str>) =
-            match opts.dither.as_deref() {
-                Some(d) => (None, Some(d)),
-                None => (script_result.script_dither.as_deref(), None),
-            };
-
-        // Same two slots as the `resolve_render_params` call below, so the
-        // tuning is looked up for the algorithm that is rendered — the
-        // device's dither included.
-        let effective_algo = crate::api::display::effective_dither(
-            dither_override.or(device_dither),
-            effective_script_dither,
-        );
-        let panel_tuning = panel_dither_config
-            .as_ref()
-            .map(|pdc| pdc.resolve_for_algorithm(effective_algo.as_deref()))
-            .unwrap_or_default();
-
-        let opts_tuning = DitherTuningValues {
-            deprecated_error_clamp: None,
-            max_error: opts.max_error,
-            noise_scale: opts.noise_scale,
-            chroma_clamp: opts.chroma_clamp,
-            strength: opts.strength,
-            gamut: opts.gamut.clone(),
-        };
-        let script_tuning = DitherTuningValues {
-            deprecated_error_clamp: None,
-            max_error: script_result.script_max_error,
-            noise_scale: script_result.script_noise_scale,
-            chroma_clamp: script_result.script_chroma_clamp,
-            strength: script_result.script_strength,
-            gamut: script_result.script_gamut.clone().unwrap_or_default(),
-        };
-        let tuning = crate::api::display::resolve_effective_tuning(
-            &opts_tuning,
-            &script_tuning,
-            &device_tuning,
-            &panel_tuning,
-        );
-
-        let mut render_warnings: Vec<String> = Vec::new();
-        let render_params = crate::api::display::resolve_render_params(
-            script_result.script_colors.as_deref(),
-            script_result.script_colors_actual.as_deref(),
-            effective_script_dither,
-            device_colors,
-            // `resolve_render_params` resolves dither as
-            // `device_config_dither.or(script_dither)`, and an explicit
-            // override already blanked `effective_script_dither` above — so
-            // the override rides in this slot when present, and the device's
-            // configured dither takes it otherwise. Both layers that outrank
-            // the script share this one slot, in their own priority order.
-            dither_override.or(device_dither),
+        let render_params = crate::api::resolution::resolve_render(&render_inputs_for(
+            &opts,
+            &script_result,
             panel_colors.as_deref(),
-            &query_palette,
-            &pre_script_measured_candidates,
-            &tuning,
-            &mut render_warnings,
-        );
+            panel_actual_parsed.as_deref(),
+            panel_dither_config.as_ref(),
+            query_palette,
+        ))
+        .into_params();
         // The authoring path's warning channel is the script log, which
         // render_screen returns to the agent — not the server's log stream.
-        for w in render_warnings {
+        for w in &render_params.warnings {
             log.push(format!("[warn] {w}"));
         }
 
@@ -1503,6 +1433,96 @@ impl ScreenStore {
             measured_source: render_params.measured_source,
             svg: opts.include_svg.then_some(svg),
         }
+    }
+}
+
+/// Assign this path's bindings to the six rungs of the cascade (spec §2).
+///
+/// Pulled out of `ScreenStore::render` so the assignment can be tested: a pair
+/// of rungs swapped here would still resolve cleanly and quietly preview the
+/// wrong calibration or algorithm, and nothing downstream could tell.
+/// `RenderOpts` is this path's override rung: an agent or the authoring UI
+/// asking "what would this look like".
+fn render_inputs_for<'a>(
+    opts: &RenderOpts,
+    script: &crate::services::content_pipeline::ScriptResult,
+    panel_colors: Option<&str>,
+    panel_colors_actual: Option<&[(u8, u8, u8)]>,
+    panel_dither: Option<&'a PanelDitherConfig>,
+    fallback_palette: Vec<(u8, u8, u8)>,
+) -> crate::api::resolution::RenderInputs<'a> {
+    use crate::api::display::{parse_colors_header, parse_measured_color_list, SRC_RENDER_OPTS};
+    use crate::api::resolution::{RenderInputs, RungSettings};
+    use crate::models::normalize_algorithm_name;
+
+    let device = opts.device.as_ref();
+    RenderInputs {
+        over: RungSettings {
+            colors_actual: opts.colors_actual.as_deref().map(parse_colors_header),
+            dither: opts.dither.as_deref().map(normalize_algorithm_name),
+            tuning: DitherTuningValues {
+                deprecated_error_clamp: None,
+                max_error: opts.max_error,
+                noise_scale: opts.noise_scale,
+                chroma_clamp: opts.chroma_clamp,
+                strength: opts.strength,
+                gamut: opts.gamut.clone(),
+            },
+            ..Default::default()
+        },
+        device_final: RungSettings::from_cascade(
+            &device.map(|d| d.final_rung.clone()).unwrap_or_default(),
+        ),
+        screen: RungSettings {
+            colors: script
+                .script_colors
+                .as_deref()
+                .map(|c| parse_colors_header(&c.join(","))),
+            // parse_measured_color_list, NOT a join (see its doc comment): a
+            // script entry containing a comma would inflate the parsed count
+            // and mask a length mismatch.
+            colors_actual: script
+                .script_colors_actual
+                .as_deref()
+                .map(parse_measured_color_list),
+            dither: script
+                .script_dither
+                .as_deref()
+                .map(normalize_algorithm_name),
+            tuning: DitherTuningValues {
+                deprecated_error_clamp: None,
+                max_error: script.script_max_error,
+                noise_scale: script.script_noise_scale,
+                chroma_clamp: script.script_chroma_clamp,
+                strength: script.script_strength,
+                gamut: script.script_gamut.clone().unwrap_or_default(),
+            },
+            refresh: None,
+        },
+        device_base: RungSettings {
+            colors: device
+                .and_then(|d| d.colors.as_deref())
+                .map(parse_colors_header),
+            colors_actual: device
+                .and_then(|d| d.colors_actual.as_deref())
+                .map(parse_colors_header),
+            dither: device
+                .and_then(|d| d.dither.as_deref())
+                .map(normalize_algorithm_name),
+            tuning: device.map(|d| d.tuning.clone()).unwrap_or_default(),
+            refresh: None,
+        },
+        panel: RungSettings {
+            colors: panel_colors.map(parse_colors_header),
+            colors_actual: panel_colors_actual.map(<[_]>::to_vec),
+            ..Default::default()
+        },
+        panel_dither,
+        fallback_palette,
+        // Only `/api/display` has a firmware `Measured-Colors` header.
+        fallback_colors_actual: None,
+        screen_default_refresh: 0,
+        override_source: SRC_RENDER_OPTS,
     }
 }
 
@@ -3275,8 +3295,8 @@ mod tests {
             .find(|l| l.starts_with("[warn]"))
             .unwrap_or_else(|| panic!("expected a [warn] log entry, got: {:?}", res.log));
         assert!(
-            warning_line.contains(crate::api::display::SRC_SCRIPT),
-            "warning must name the script as the mismatched source: {warning_line}"
+            warning_line.contains(crate::api::resolution::Rung::Screen.label()),
+            "warning must name the screen as the mismatched source: {warning_line}"
         );
         assert!(
             warning_line.contains("has 2 usable"),
@@ -3377,7 +3397,7 @@ mod tests {
 
     #[test]
     fn device_preview_looks_up_panel_tuning_for_the_algorithm_it_renders_with() {
-        // The device's `dither` outranks the screen's, so this renders with
+        // The device's `final:` dither outranks the screen's, so this renders with
         // floyd-steinberg. The per-algorithm panel tuning must therefore be
         // floyd-steinberg's (`strength: 0`, a flat fill), not that of the
         // atkinson the screen asked for (no entry, so default diffusion).
@@ -3408,9 +3428,16 @@ mod tests {
                     battery_voltage: None,
                     rssi: None,
                     colors: None,
-                    dither: Some("floyd-steinberg".to_string()),
+                    dither: None,
                     tuning: DitherTuningValues::default(),
                     refresh: None,
+                    colors_actual: None,
+                    // `final:` outranks the screen's atkinson on the ladder;
+                    // a base-rung device dither no longer does.
+                    final_rung: CascadeValues {
+                        dither: Some("floyd-steinberg".to_string()),
+                        ..Default::default()
+                    },
                 }),
                 ..RenderOpts::default()
             },
@@ -3420,6 +3447,205 @@ mod tests {
             distinct_colors(&res.png),
             1,
             "floyd-steinberg's panel tuning (strength 0) must apply"
+        );
+    }
+
+    /// Minimal screen-repo source: `ScriptResult` carries an `Arc` of one, and
+    /// the wiring test needs a result, not a repo.
+    struct NoRepo(crate::models::screen_repo_manifest::ScreenRepoManifest);
+    impl crate::services::screen_repo_loader::ScreenRepoSource for NoRepo {
+        fn read(&self, _rel: &str) -> Option<Vec<u8>> {
+            None
+        }
+        fn screen_paths(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn svg_files(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
+            &self.0
+        }
+        fn screen_files(&self, _screen_path: &str) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    fn script_result_for_wiring() -> crate::services::content_pipeline::ScriptResult {
+        let manifest = crate::models::screen_repo_manifest::ScreenRepoManifest::from_yaml(
+            "name: t\ndescription: d\nauthor: a\nlicense: MIT\n",
+        )
+        .unwrap();
+        crate::services::content_pipeline::ScriptResult {
+            data: serde_json::Value::Null,
+            refresh_rate: 900,
+            script_refresh_rate: None,
+            screen_default_refresh: 900,
+            skip_update: false,
+            screen_name: "t".into(),
+            source: Arc::new(NoRepo(manifest)),
+            screen_dir: String::new(),
+            params: Default::default(),
+            script_colors: Some(vec!["#000001".into(), "#FFFFFE".into()]),
+            script_colors_actual: Some(vec!["#010101".into(), "#FEFEFE".into()]),
+            script_dither: Some("sierra-lite".into()),
+            script_max_error: Some(0.11),
+            script_noise_scale: Some(0.12),
+            script_chroma_clamp: Some(0.13),
+            script_strength: Some(0.14),
+            script_gamut: None,
+            font_hinting: None,
+            logs: Vec::new(),
+        }
+    }
+
+    /// Every rung carries the value from the binding it is meant to carry.
+    ///
+    /// If this breaks, it means: two bindings were swapped in
+    /// `render_inputs_for`. The resolver would accept that happily and the
+    /// preview would show another source's calibration or algorithm; nothing
+    /// else in the suite compares precedence against the ladder.
+    #[test]
+    fn render_inputs_for_assigns_each_binding_to_its_own_rung() {
+        use crate::api::display::{parse_colors_header, SRC_RENDER_OPTS};
+        let opts = RenderOpts {
+            dither: Some("stucki".into()),
+            max_error: Some(0.91),
+            noise_scale: Some(0.92),
+            chroma_clamp: Some(0.93),
+            strength: Some(0.94),
+            colors_actual: Some("#020202,#FDFDFD".into()),
+            device: Some(DevicePreview {
+                colors: Some("#000003,#FFFFFC".into()),
+                dither: Some("atkinson".into()),
+                tuning: DitherTuningValues {
+                    max_error: Some(0.71),
+                    noise_scale: Some(0.72),
+                    chroma_clamp: Some(0.73),
+                    strength: Some(0.74),
+                    ..Default::default()
+                },
+                colors_actual: Some("#060606,#F9F9F9".into()),
+                final_rung: CascadeValues {
+                    dither: Some("floyd_steinberg".into()),
+                    colors: Some("#000004,#FFFFFB".into()),
+                    colors_actual: Some("#050505,#FAFAFA".into()),
+                    max_error: Some(0.51),
+                    noise_scale: Some(0.52),
+                    chroma_clamp: Some(0.53),
+                    strength: Some(0.54),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..RenderOpts::default()
+        };
+        let panel_actual = parse_colors_header("#030303,#FCFCFC");
+        let fallback = parse_colors_header("#0A0A0A,#F0F0F0");
+        let i = render_inputs_for(
+            &opts,
+            &script_result_for_wiring(),
+            Some("#000002,#FFFFFD"),
+            Some(&panel_actual),
+            None,
+            fallback.clone(),
+        );
+
+        // Override: RenderOpts and nothing else.
+        assert_eq!(
+            i.over.colors_actual,
+            Some(parse_colors_header("#020202,#FDFDFD"))
+        );
+        assert_eq!(i.over.dither.as_deref(), Some("stucki"));
+        assert_eq!(i.over.colors, None);
+        assert_eq!(i.over.tuning.max_error, Some(0.91));
+        assert_eq!(i.over.tuning.noise_scale, Some(0.92));
+        assert_eq!(i.over.tuning.chroma_clamp, Some(0.93));
+        assert_eq!(i.over.tuning.strength, Some(0.94));
+        // Final: the device's `final_rung`.
+        assert_eq!(i.device_final.dither.as_deref(), Some("floyd_steinberg"));
+        assert_eq!(
+            i.device_final.colors,
+            Some(parse_colors_header("#000004,#FFFFFB"))
+        );
+        assert_eq!(
+            i.device_final.colors_actual,
+            Some(parse_colors_header("#050505,#FAFAFA"))
+        );
+        assert_eq!(i.device_final.tuning.max_error, Some(0.51));
+        assert_eq!(i.device_final.tuning.noise_scale, Some(0.52));
+        assert_eq!(i.device_final.tuning.chroma_clamp, Some(0.53));
+        assert_eq!(i.device_final.tuning.strength, Some(0.54));
+        // Screen: the script's return value, normalised.
+        assert_eq!(
+            i.screen.colors,
+            Some(parse_colors_header("#000001,#FFFFFE"))
+        );
+        assert_eq!(
+            i.screen.colors_actual,
+            Some(parse_colors_header("#010101,#FEFEFE"))
+        );
+        assert_eq!(i.screen.dither.as_deref(), Some("sierra-lite"));
+        assert_eq!(i.screen.tuning.max_error, Some(0.11));
+        assert_eq!(i.screen.tuning.noise_scale, Some(0.12));
+        assert_eq!(i.screen.tuning.chroma_clamp, Some(0.13));
+        assert_eq!(i.screen.tuning.strength, Some(0.14));
+        // Device base: the device's own configured values.
+        assert_eq!(
+            i.device_base.colors,
+            Some(parse_colors_header("#000003,#FFFFFC"))
+        );
+        assert_eq!(
+            i.device_base.colors_actual,
+            Some(parse_colors_header("#060606,#F9F9F9"))
+        );
+        assert_eq!(i.device_base.dither.as_deref(), Some("atkinson"));
+        assert_eq!(i.device_base.tuning.max_error, Some(0.71));
+        assert_eq!(i.device_base.tuning.noise_scale, Some(0.72));
+        assert_eq!(i.device_base.tuning.chroma_clamp, Some(0.73));
+        assert_eq!(i.device_base.tuning.strength, Some(0.74));
+        // Panel: its palette and measurement; tuning comes from panel_dither.
+        assert_eq!(i.panel.colors, Some(parse_colors_header("#000002,#FFFFFD")));
+        assert_eq!(i.panel.colors_actual, Some(panel_actual));
+        assert_eq!(i.panel.dither, None);
+        // Fallbacks, and no firmware header on this path.
+        assert_eq!(i.fallback_palette, fallback);
+        assert_eq!(i.fallback_colors_actual, None);
+        assert_eq!(i.override_source, SRC_RENDER_OPTS);
+    }
+
+    /// The device's `final:` rung must reach the rendered pixels through this
+    /// path, not just through `/api/display`. A preview that ignores it shows
+    /// the operator an image their panel will never produce.
+    #[test]
+    fn device_final_strength_reaches_the_rendered_image() {
+        let (store, _repo_root) = test_store_with_local();
+        write_grey_screen(&store, "final", None);
+        let res = store.render(
+            "local/final",
+            RenderOpts {
+                device: Some(DevicePreview {
+                    mac: "AA:BB:CC:DD:EE:FF".to_string(),
+                    // base rung: diffuse
+                    tuning: DitherTuningValues {
+                        strength: Some(1.0),
+                        ..Default::default()
+                    },
+                    // final rung: veto it
+                    final_rung: CascadeValues {
+                        strength: Some(0.0),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert_eq!(
+            distinct_colors(&res.png),
+            1,
+            "final.strength = 0 must win over base strength = 1.0, giving a flat block"
         );
     }
 

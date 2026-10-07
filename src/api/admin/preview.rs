@@ -146,6 +146,9 @@ pub async fn device_preview(
                 gamut: device_config.gamut.clone(),
             },
             refresh: device_config.refresh,
+            // Task 6 wires the device's own rungs in.
+            colors_actual: None,
+            final_rung: Default::default(),
         }),
         // Undithered means the pre-dither, full-colour PNG, which the
         // renderer produces alongside the normal one.

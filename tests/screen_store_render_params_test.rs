@@ -248,6 +248,22 @@ fn with_device_dither(algo: Option<&str>) -> RenderOpts {
     }
 }
 
+/// A device whose `final:` block pins the dither algorithm. `final:` is the
+/// owner's veto and outranks the screen; a plain `dither:` no longer does.
+fn with_final_dither(algo: &str) -> RenderOpts {
+    RenderOpts {
+        device: Some(DevicePreview {
+            mac: "AA:BB:CC:DD:EE:FF".to_string(),
+            final_rung: byonk::models::CascadeValues {
+                dither: Some(algo.to_string()),
+                ..Default::default()
+            },
+            ..DevicePreview::default()
+        }),
+        ..RenderOpts::default()
+    }
+}
+
 #[test]
 fn device_config_dither_reaches_the_script_context() {
     let dir = tempfile::tempdir().unwrap();
@@ -266,10 +282,11 @@ fn render_opts_dither_overrides_the_device_config() {
     assert_eq!(out.data["algo"], "burkes");
 }
 
-/// The precedence that matters: `device_config > script`. The dither
-/// algorithm is a property of the panel, so the device decides even on a
-/// screen that names its own — and the preview follows, because the panel
-/// will do the same. A screen's choice still applies when the device is
+/// The precedence that matters: `device final: > script`. The dither
+/// algorithm is a property of the panel, so the owner's `final:` decides even
+/// on a screen that names its own — and the preview follows, because the panel
+/// will do the same. (A plain device `dither:` now ranks below the screen: the
+/// release's one deliberate behaviour change.) A screen's choice still applies when the device is
 /// silent, which the contrast case below pins.
 #[test]
 fn the_device_config_dither_beats_the_script() {
@@ -277,7 +294,7 @@ fn the_device_config_dither_beats_the_script() {
     let store = dither_store(dir.path());
 
     let script_choice = store.render("testrepo/opinionated", with_device_dither(None));
-    let device_choice = store.render("testrepo/opinionated", with_device_dither(Some("sierra")));
+    let device_choice = store.render("testrepo/opinionated", with_final_dither("sierra"));
     assert!(script_choice.error.is_none(), "{:?}", script_choice.error);
     assert!(device_choice.error.is_none(), "{:?}", device_choice.error);
     assert!(!script_choice.png.is_empty());
@@ -288,7 +305,7 @@ fn the_device_config_dither_beats_the_script() {
 
     // ...and it lands on the device's algorithm specifically, not just on
     // "something other than the script's".
-    let plain_sierra = store.render("testrepo/plain", with_device_dither(Some("sierra")));
+    let plain_sierra = store.render("testrepo/plain", with_final_dither("sierra"));
     assert!(plain_sierra.error.is_none(), "{:?}", plain_sierra.error);
     assert_eq!(
         device_choice.png, plain_sierra.png,

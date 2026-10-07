@@ -196,49 +196,6 @@ fn resolve_cli_display_spec(
     }
 }
 
-/// The CLI's binding-to-rung mapping, kept as its own function so a test can
-/// pin it: nothing else fails if two rungs are swapped.
-///
-/// The CLI has no override flags of its own (its only flag that feeds a
-/// setting is `--colors`, which is the fallback palette), so the override rung
-/// is empty. The device rungs come from the device config the MAC (or
-/// registration code) selected, through `base()` and `device_final()`; with
-/// no device config both are empty.
-fn cli_render_inputs_for<'a>(
-    device_config: Option<&byonk::models::DeviceConfig>,
-    script: &byonk::services::content_pipeline::ScriptResult,
-    panel_colors: Option<&str>,
-    panel_colors_actual: Option<&[(u8, u8, u8)]>,
-    panel_dither: Option<&'a byonk::models::config::PanelDitherConfig>,
-    fallback_palette: Vec<(u8, u8, u8)>,
-) -> byonk::api::resolution::RenderInputs<'a> {
-    use byonk::api::display::{parse_colors_header, SRC_RENDER_OPTS};
-    use byonk::api::resolution::{RenderInputs, RungSettings};
-
-    RenderInputs {
-        over: RungSettings::default(),
-        device_final: RungSettings::from_cascade(
-            &device_config.map(|d| d.device_final()).unwrap_or_default(),
-        ),
-        // `refresh` stays `None`: resolved in content_pipeline.
-        screen: RungSettings::from_script(script),
-        device_base: RungSettings::from_cascade(
-            &device_config.map(|d| d.base()).unwrap_or_default(),
-        ),
-        panel: RungSettings {
-            colors: panel_colors.map(parse_colors_header),
-            colors_actual: panel_colors_actual.map(<[_]>::to_vec),
-            ..Default::default()
-        },
-        panel_dither,
-        fallback_palette,
-        // Only `/api/display` has a firmware `Measured-Colors` header.
-        fallback_colors_actual: None,
-        screen_default_refresh: 0,
-        override_source: SRC_RENDER_OPTS,
-    }
-}
-
 /// Render a screen directly to a PNG file (no server needed)
 #[allow(clippy::too_many_arguments)]
 fn run_render_command(
@@ -456,19 +413,18 @@ fn run_render_command(
             // and mislabelled every variant that is not a script failure.
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        // device_config/panel/panel_colors/measured were already resolved
-        // once above (before the device context) and are reused here rather
-        // than looked up a second time.
-        let panel_dither_config = panel.and_then(|p| p.dither.as_ref());
-        let render_params = byonk::api::resolution::resolve_render(&cli_render_inputs_for(
-            device_config,
-            &script_result,
-            panel_colors.as_deref(),
-            measured.as_deref(),
-            panel_dither_config,
-            cli_palette.clone(),
-        ))
-        .into_params();
+        // device_config/panel were already resolved once above (before the
+        // device context) and are reused here rather than looked up a second
+        // time. `cli_render_inputs_for` derives the panel rung — colours,
+        // measurement and per-algorithm tuning — from the profile itself.
+        let render_params =
+            byonk::api::resolution::resolve_render(&byonk::api::resolution::cli_render_inputs_for(
+                device_config,
+                panel,
+                &script_result,
+                cli_palette.clone(),
+            ))
+            .into_params();
         for w in &render_params.warnings {
             tracing::warn!(mac = %mac, "{w}");
         }
@@ -1026,9 +982,9 @@ mod tests {
     }
 
     /// Every binding gets a distinct value, so swapping ANY two rungs (or any
-    /// two slots) fails. Nothing else in the suite compares this path's
-    /// precedence against the ladder: the legacy resolver decided dither
-    /// through `effective_dither`, so a mis-wired rung leaves everything green.
+    /// two slots) fails. `tests/render_cascade_convergence_test.rs` drives the
+    /// same function against the other four paths; this one pins the slots
+    /// one by one, which a whole-path comparison cannot localise.
     #[test]
     fn cli_render_inputs_for_assigns_each_binding_to_its_own_rung() {
         use byonk::api::display::{parse_colors_header, SRC_RENDER_OPTS};
@@ -1078,14 +1034,20 @@ final:
 "##,
         )
         .unwrap();
+        let panel: byonk::models::config::PanelConfig = serde_yaml::from_str(
+            r##"
+name: Test panel
+colors: "#000002,#FFFFFD"
+colors_actual: "#030303,#FCFCFC"
+"##,
+        )
+        .unwrap();
         let panel_actual = parse_colors_header("#030303,#FCFCFC");
         let fallback = parse_colors_header("#0A0A0A,#F0F0F0");
-        let i = cli_render_inputs_for(
+        let i = byonk::api::resolution::cli_render_inputs_for(
             Some(&device),
+            Some(&panel),
             &script,
-            Some("#000002,#FFFFFD"),
-            Some(&panel_actual),
-            None,
             fallback.clone(),
         );
 
@@ -1149,7 +1111,7 @@ final:
         assert_eq!(i.override_source, SRC_RENDER_OPTS);
 
         // No device config: both device rungs are empty.
-        let none = cli_render_inputs_for(None, &script, None, None, None, fallback);
+        let none = byonk::api::resolution::cli_render_inputs_for(None, None, &script, fallback);
         assert_eq!(none.device_final.dither, None);
         assert_eq!(none.device_base.dither, None);
         assert_eq!(none.device_base.tuning.strength, None);

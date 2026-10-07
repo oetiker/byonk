@@ -499,7 +499,8 @@ impl SvgRenderer {
     /// size of the panel — see [`Self::scale_warning`]. The renderer has no
     /// channel of its own to reach the screen's author, so the caller decides
     /// where it goes; the ones with nowhere to put it pass `&mut None`. This
-    /// mirrors `api::display::resolve_render_params`' `measured_warning`.
+    /// mirrors `RenderParams::warnings`, which the cascade fills in the same
+    /// way.
     fn rasterize_svg(
         &self,
         svg_data: &[u8],
@@ -796,8 +797,8 @@ fn build_eink_palette(
         Some(unique_actual.as_slice())
     } else {
         // Never fail a device render over calibration — but do not lose it
-        // silently either. After the length check in
-        // `api::display::resolve_measured_colors` this should be unreachable
+        // silently either. After the `colors_actual` length check in
+        // `api::resolution::resolve_render` this should be unreachable
         // from the script path; if it fires, something upstream disagrees
         // about palette length (e.g. dedup removed a duplicate official
         // colour without a matching measured entry).

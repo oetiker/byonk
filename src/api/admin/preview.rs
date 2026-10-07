@@ -28,6 +28,7 @@ use std::collections::BTreeMap;
 
 use super::require_admin;
 use crate::api::display::{resolve_preview_dimensions, resolve_query_palette};
+use crate::api::resolution::{header_value, Resolution, RESOLUTION_HEADER};
 use crate::error::ApiError;
 use crate::models::{config::DeviceConfig, Device, DisplaySpec, DitherTuningValues};
 use crate::server::AppState;
@@ -155,7 +156,7 @@ pub async fn device_preview(
 
     if !forced {
         if let Some(png) = state.preview_cache.get(&cache_key, &fingerprint, now) {
-            return Ok(png_response(png, "hit"));
+            return Ok(png_response(png, "hit", None));
         }
     }
 
@@ -178,7 +179,7 @@ pub async fn device_preview(
                 result.raw_png
             };
             if let Some(png) = chosen.filter(|p| !p.is_empty()) {
-                return (png, result.refresh_rate);
+                return (png, result.refresh_rate, result.resolution);
             }
         }
         let message = match result.error.as_ref() {
@@ -199,12 +200,14 @@ pub async fn device_preview(
             .unwrap_or_default();
         // Refresh rate 0: the cache floors it, so a broken screen is retried
         // on a short cycle rather than pinned for the screen's own interval.
-        (png, 0)
+        // The error image is not the screen's render, so it carries no
+        // resolution to report.
+        (png, 0, None)
     })
     .await
     .map_err(|e| ApiError::Internal(format!("preview render panicked: {e}")))?;
 
-    let (png, refresh_rate) = rendered;
+    let (png, refresh_rate, resolution) = rendered;
     if png.is_empty() {
         return Err(ApiError::Internal("preview produced no image".to_string()));
     }
@@ -213,7 +216,7 @@ pub async fn device_preview(
         .preview_cache
         .store(&cache_key, &fingerprint, png.clone(), refresh_rate, now);
 
-    Ok(png_response(png, "miss"))
+    Ok(png_response(png, "miss", resolution.as_ref()))
 }
 
 /// Build the preview's device identity and its cascade rungs.
@@ -300,8 +303,18 @@ fn fingerprint(device_config: &DeviceConfig, model: &str, opts: &RenderOpts) -> 
     hex::encode(hasher.finalize())
 }
 
-fn png_response(png: Vec<u8>, cache_state: &'static str) -> Response {
-    (
+/// `resolution` is the cascade report of the render that produced these
+/// bytes, and is `Some` only when this response rendered (`X-Byonk-Preview:
+/// miss`): a cache hit re-serves bytes without resolving anything, and the
+/// error image resolves nothing at all. The header is the same diagnostic
+/// `/dev/api/render` answers with, so the preview a device page shows can be
+/// checked against the glass without guessing which rung won.
+fn png_response(
+    png: Vec<u8>,
+    cache_state: &'static str,
+    resolution: Option<&Resolution>,
+) -> Response {
+    let mut response = (
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "image/png".to_string()),
@@ -313,7 +326,15 @@ fn png_response(png: Vec<u8>, cache_state: &'static str) -> Response {
         ],
         Bytes::from(png),
     )
-        .into_response()
+        .into_response();
+    if let Some(report) = resolution {
+        if let Ok(value) = header_value(report).parse() {
+            response
+                .headers_mut()
+                .insert(HeaderName::from_static(RESOLUTION_HEADER), value);
+        }
+    }
+    response
 }
 
 #[cfg(test)]

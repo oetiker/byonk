@@ -26,8 +26,8 @@ pub struct ScriptResult {
     pub colors: Option<Vec<String>>,
     /// Optional measured-colour override from script (hex RGB strings),
     /// index-parallel to `colors`. Wins the measured chain when its length
-    /// matches the resolved official palette; see
-    /// `crate::api::display::resolve_measured_colors`.
+    /// matches the resolved official palette; see the `colors_actual` ladder
+    /// in `crate::api::resolution::resolve_render`.
     pub colors_actual: Option<Vec<String>>,
     /// Optional dither mode from script ("photo" or "graphics")
     pub dither: Option<String>,

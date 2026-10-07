@@ -832,7 +832,7 @@ pub async fn handle_render(
     }
 }
 
-/// The two warnings the legacy `resolve_render_params` pushed, read from the
+/// The two warnings the pre-cascade resolver pushed, read from the
 /// resolution so the server log keeps saying what it said: a rejected
 /// `colors_actual`, and a screen `dither` the device outranks.
 fn log_render_warnings(report: &Resolution, req: &RenderRequest) {

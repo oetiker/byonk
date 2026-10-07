@@ -131,13 +131,14 @@ pub struct FileEntry {
 ///   back to the authoring placeholders — showing 4.2 V for a device that
 ///   has never reported its battery is a fabricated reading, not a default.
 ///
-/// * **Config layer** — `colors`, `dither` and `tuning` occupy the
-///   *device-config* slots of `resolve_ctx_palette`,
-///   `resolve_render_params` and `resolve_effective_tuning`, which sit
-///   *below* the script's own choices and *above* the panel's. Passing a
-///   device's configured dither as `RenderOpts::dither` instead would put it
-///   in the override slot, where it beats the script — the preview would
-///   then disagree with the panel for any screen that sets its own dither.
+/// * **Config layer** — `colors`, `colors_actual`, `dither`, `tuning` and
+///   `refresh` are this render's *device base* rung of the cascade, and
+///   `final_rung` its *device final* rung (spec §2): both sit *below* a
+///   dev-UI override, the base rung also below the script's own choices, and
+///   both above the panel's. Passing a device's configured dither as
+///   `RenderOpts::dither` instead would put it in the override rung, where it
+///   beats the script — the preview would then disagree with the panel for
+///   any screen that sets its own dither.
 #[derive(Debug, Clone, Default)]
 pub struct DevicePreview {
     pub mac: String,
@@ -284,6 +285,15 @@ pub struct RenderResult {
     /// inlined verbatim. `None` on a failure that happened before or during
     /// SVG generation, since there is then no expanded markup to show.
     pub svg: Option<String>,
+    /// Every render setting's cascade resolution — the same report
+    /// `/dev/api/render` answers with in `X-Byonk-Resolution` (spec §4.4).
+    ///
+    /// `None` when the render failed before resolution happened. Carried on
+    /// the result rather than recomputed by the caller because this *is* the
+    /// resolution the pixels were produced from: `/api/admin/devices/{key}/preview`
+    /// forwards it as its own `X-Byonk-Resolution`, and a convergence test can
+    /// read it without reaching into the resolver.
+    pub resolution: Option<crate::api::resolution::Resolution>,
 }
 
 /// Best-effort line number from a validator/render-error message. Recognizes
@@ -1192,6 +1202,7 @@ impl ScreenStore {
             error: None,
             measured_source: crate::api::display::SRC_NONE,
             svg: None,
+            resolution: None,
         };
 
         // Dimensions + base palette: explicit override, else the model's
@@ -1352,15 +1363,18 @@ impl ScreenStore {
             }
         };
 
-        let render_params = crate::api::resolution::resolve_render(&render_inputs_for(
+        let resolved = crate::api::resolution::resolve_render(&render_inputs_for(
             &opts,
             &script_result,
             panel_colors.as_deref(),
             panel_actual_parsed.as_deref(),
             panel_dither_config.as_ref(),
             query_palette,
-        ))
-        .into_params();
+        ));
+        // Kept before `into_params` consumes the resolution: the report and
+        // the params must be the same computation, never two.
+        let resolution = resolved.report.clone();
+        let render_params = resolved.into_params();
         // The authoring path's warning channel is the script log, which
         // render_screen returns to the agent — not the server's log stream.
         for w in &render_params.warnings {
@@ -1433,6 +1447,7 @@ impl ScreenStore {
             // may differ from the pre-script winner above.
             measured_source: render_params.measured_source,
             svg: opts.include_svg.then_some(svg),
+            resolution: Some(resolution),
         }
     }
 }

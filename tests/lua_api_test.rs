@@ -742,7 +742,7 @@ mod lua_unit_tests {
     fn test_script_colors_actual_length_mismatch_appears_in_log_and_falls_back() {
         // The script returns a 4-entry palette but only 2 measured colours.
         // The runtime itself does not judge lengths — it just carries the
-        // value through unchanged; Task 4's `resolve_render_params` is what
+        // value through unchanged; the cascade's `colors_actual` ladder is what
         // turns the mismatch into a fallback + warning (see
         // `services::screen_store::tests::
         // render_script_colors_actual_length_mismatch_falls_back_to_panel_and_logs_warning`

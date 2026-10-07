@@ -118,7 +118,7 @@ fn muted_photo(w: u32, h: u32) -> Vec<u8> {
 /// The only way to get a chromatic entry into the palette actually used for
 /// dithering is `RenderOpts::panel`, resolved against the `panels:` config
 /// section (`ScreenStore::render`'s `panel_colors` ->
-/// `resolve_render_params`). There is no shared store-builder for this in
+/// the cascade). There is no shared store-builder for this in
 /// `tests/common/store.rs` (its `build_store` hardcodes a `panels:`-free
 /// config), so this helper builds its own fixture.
 fn build_store_with_color_panel(dir: &std::path::Path) -> Arc<ScreenStore> {

@@ -153,8 +153,7 @@ impl<T> Resolved<T> {
 /// Walk `order` (highest first). The first present value that `accept`
 /// allows wins; a present value it refuses before the winner is `Rejected`
 /// and the walk continues; everything present below the winner is
-/// `Outranked` without being checked — the same rule
-/// `display::resolve_measured_colors` applies.
+/// `Outranked` without being checked.
 pub fn resolve<T: Clone>(
     ladder: &Ladder<T>,
     order: &[Rung],
@@ -249,15 +248,16 @@ pub const ORDER_COLORS: &[Rung] = &[
     Rung::Panel,
     Rung::Fallback,
 ];
-/// Spec §2's order. Piece 2 put `Screen` on top to match the legacy
-/// `resolve_render_params`, which resolved the script's candidate before the
-/// caller's override chain. The override rung exists so a dev-UI calibration
-/// push can show what it does, so it goes back on top.
+/// Spec §2's order. Piece 2 put `Screen` on top to match the pre-cascade
+/// resolver, which resolved the script's candidate before the caller's
+/// override chain. The override rung exists so a dev-UI calibration push can
+/// show what it does, so it goes back on top.
 pub const ORDER_COLORS_ACTUAL: &[Rung] = ORDER_COLORS;
 /// Spec §2's order. **This is the release's one behaviour change**: the
-/// legacy `display::effective_dither` put `DeviceBase` above `Screen`, so a
-/// bare `devices.<k>.dither` vetoed a screen that set its own. The veto now
-/// lives in `final:`, where it can be told apart from a default.
+/// pre-cascade resolver put `DeviceBase` above `Screen`, so a bare
+/// `devices.<k>.dither` vetoed a screen that set its own. The veto now lives
+/// in `final:`, where it can be told apart from a default. Pinned across all
+/// five render paths by `tests/render_cascade_convergence_test.rs`.
 pub const ORDER_DITHER: &[Rung] = ORDER_COLORS;
 /// Spec §2's order.
 pub const ORDER_TUNING: &[Rung] = ORDER_COLORS;
@@ -363,6 +363,54 @@ impl RungSettings {
     pub fn with_refresh(mut self, refresh: Option<u32>) -> Self {
         self.refresh = refresh;
         self
+    }
+}
+
+/// The `byonk render` CLI's binding-to-rung mapping (spec §2).
+///
+/// Lives here rather than in `main.rs` because the binary crate is
+/// unreachable from an integration test: the five-paths convergence test
+/// (`tests/render_cascade_convergence_test.rs`) has to drive the same
+/// function `run_render_command` calls, or the CLI is the one path whose
+/// wiring nothing outside its own unit test pins.
+///
+/// The CLI has no override flags of its own (its only flag that feeds a
+/// setting is `--colors`, which becomes `fallback_palette`), so the override
+/// rung is empty. The device rungs come from the device config the MAC — or
+/// the registration code — selected, through `base()` and `device_final()`;
+/// with no device config both are empty. The panel rung is derived from the
+/// profile itself, so a caller cannot cross `colors` with `colors_actual`.
+pub fn cli_render_inputs_for<'a>(
+    device_config: Option<&crate::models::DeviceConfig>,
+    panel: Option<&'a crate::models::config::PanelConfig>,
+    script: &ScriptResult,
+    fallback_palette: Vec<(u8, u8, u8)>,
+) -> RenderInputs<'a> {
+    use crate::api::display::{parse_colors_header, SRC_RENDER_OPTS};
+
+    RenderInputs {
+        over: RungSettings::default(),
+        device_final: RungSettings::from_cascade(
+            &device_config.map(|d| d.device_final()).unwrap_or_default(),
+        ),
+        // `refresh` stays `None`: resolved in content_pipeline.
+        screen: RungSettings::from_script(script),
+        device_base: RungSettings::from_cascade(
+            &device_config.map(|d| d.base()).unwrap_or_default(),
+        ),
+        panel: RungSettings {
+            colors: panel.map(|p| parse_colors_header(&p.colors)),
+            colors_actual: panel
+                .and_then(|p| p.colors_actual.as_deref())
+                .map(parse_colors_header),
+            ..Default::default()
+        },
+        panel_dither: panel.and_then(|p| p.dither.as_ref()),
+        fallback_palette,
+        // Only `/api/display` has a firmware `Measured-Colors` header.
+        fallback_colors_actual: None,
+        screen_default_refresh: 0,
+        override_source: SRC_RENDER_OPTS,
     }
 }
 
@@ -758,9 +806,6 @@ mod tests {
     fn grey4() -> Vec<(u8, u8, u8)> {
         display::parse_colors_header("#000000,#555555,#AAAAAA,#FFFFFF")
     }
-    fn col6() -> Vec<(u8, u8, u8)> {
-        display::parse_colors_header("#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00")
-    }
     fn act4() -> Vec<(u8, u8, u8)> {
         display::parse_colors_header("#101010,#505050,#A0A0A0,#E0E0E0")
     }
@@ -852,194 +897,6 @@ mod tests {
             );
             assert!(rep.order.contains(&Rung::DeviceFinal), "{name}");
         }
-    }
-
-    type Legacy = (
-        Vec<(u8, u8, u8)>,
-        Option<Vec<(u8, u8, u8)>>,
-        Option<String>,
-        DitherTuningValues,
-    );
-
-    /// The legacy computation `handle_render` performed before this piece,
-    /// driven through the NEW order: `effective_dither` for the algorithm, the
-    /// panel block for that algorithm, `resolve_effective_tuning`, then
-    /// `resolve_render_params`. It is not verbatim: the screen's dither is
-    /// permuted into the device slot (and the device base's into the script
-    /// slot), the override's dither blanks the script slot, and
-    /// `script_actual` is always blanked so the override's measurement can
-    /// outrank the screen's. Do NOT permute these back to what `dev.rs` did.
-    fn legacy(i: &RenderInputs) -> Legacy {
-        // The legacy resolver's two dither slots rank the DEVICE slot above the
-        // SCRIPT slot. Spec §2 ranks the screen above the device base, so the
-        // screen's dither is fed through the device slot and the device base's
-        // through the script slot — that is what expresses the new order
-        // with the old function.
-        let (script_dither, device_dither) = match i.over.dither.as_deref() {
-            Some(d) => (None, Some(d)),
-            None => (i.device_base.dither.as_deref(), i.screen.dither.as_deref()),
-        };
-        let algo = display::effective_dither(device_dither, script_dither);
-        let panel_tuning = i
-            .panel_dither
-            .map(|p| p.resolve_for_algorithm(algo.as_deref()))
-            .unwrap_or_default();
-        let tuning = display::resolve_effective_tuning(
-            &i.over.tuning,
-            &i.screen.tuning,
-            &i.device_base.tuning,
-            &panel_tuning,
-        );
-        let hex = |c: &Vec<(u8, u8, u8)>| display::colors_to_hex_strings(c);
-        let script_colors = i.screen.colors.as_ref().map(hex);
-        let dc_colors = i.device_base.colors.as_ref().map(|c| hex(c).join(","));
-        let panel_colors = i.panel.colors.as_ref().map(|c| hex(c).join(","));
-        // The legacy resolver always tries the script's measurement first;
-        // spec §2 puts the override above the screen. So the screen's
-        // measurement is passed as a plain candidate, after the override's.
-        let candidates = vec![
-            (display::SRC_DEV_OVERRIDE, i.over.colors_actual.clone()),
-            (display::SRC_SCRIPT, i.screen.colors_actual.clone()),
-            (display::SRC_PANEL_ACTUAL, i.panel.colors_actual.clone()),
-        ];
-        let p = display::resolve_render_params(
-            script_colors.as_deref(),
-            None,
-            script_dither,
-            dc_colors.as_deref(),
-            device_dither,
-            panel_colors.as_deref(),
-            &i.fallback_palette,
-            &candidates,
-            &tuning,
-            &mut Vec::new(),
-        );
-        let t = DitherTuningValues {
-            max_error: p.max_error,
-            noise_scale: p.noise_scale,
-            chroma_clamp: p.chroma_clamp,
-            strength: p.strength,
-            gamut: p.gamut,
-            ..Default::default()
-        };
-        (p.palette, p.measured_colors, p.dither, t)
-    }
-
-    // Piece 3 flipped ORDER_DITHER and ORDER_COLORS_ACTUAL (spec §2), so the
-    // ladder deliberately DISAGREES with the legacy resolvers' own order on
-    // these two settings. `legacy()` above feeds the legacy functions through
-    // the new order (screen dither above device base; override measurement
-    // above the screen's), so the matrix keeps its full size and encodes the
-    // new, intended answer; every other row still pins the ladder to the
-    // legacy behaviour. This is not a tautology: `legacy()` is a second,
-    // independent encoding of the order (permuted slots versus the ladder's
-    // order constants), so reverting either constant, or the permutation,
-    // makes the two disagree. It is the only guard on the new dither order
-    // outside `resolution.rs`'s unit tests: a failure here is a real
-    // disagreement, not a test to loosen, and the permutation must not be
-    // "fixed" back to the old order. This whole test is retired in Task 8,
-    // when the legacy resolvers are deleted and the five-paths convergence
-    // test takes over.
-    ///
-    /// The ladder must produce what the legacy resolvers produce when driven
-    /// through the new order, for every combination below.
-    #[test]
-    fn resolve_render_matches_the_legacy_resolver_under_the_new_order() {
-        let mut algorithms = HashMap::new();
-        algorithms.insert(
-            "floyd-steinberg".to_string(),
-            DitherTuningValues {
-                strength: Some(0.3),
-                max_error: Some(0.6),
-                ..Default::default()
-            },
-        );
-        // A block for the FALLBACK algorithm: with no rung setting `dither`,
-        // the legacy path looks the panel up for `None` (its defaults only),
-        // never for the engine's own default algorithm.
-        algorithms.insert(
-            "atkinson".to_string(),
-            DitherTuningValues {
-                strength: Some(0.4),
-                ..Default::default()
-            },
-        );
-        let pdc = PanelDitherConfig {
-            defaults: DitherTuningValues {
-                strength: Some(0.9),
-                ..Default::default()
-            },
-            algorithms,
-        };
-        let dithers = [
-            None,
-            Some("atkinson"),
-            Some("floyd-steinberg"),
-            Some("Floyd_Steinberg"),
-        ];
-        let palettes = [None, Some(grey4()), Some(col6())];
-        let actuals = [None, Some(act4()), Some(act6())];
-        let strengths = [None, Some(0.1f32)];
-        let mut cases = 0;
-        for pd in [None, Some(&pdc)] {
-            for od in dithers {
-                for sd in dithers {
-                    for bd in dithers {
-                        for os in strengths {
-                            for ss in strengths {
-                                for bs in strengths {
-                                    let mut i = inputs();
-                                    i.panel_dither = pd;
-                                    i.over.dither = od.map(str::to_string);
-                                    i.screen.dither = sd.map(str::to_string);
-                                    i.device_base.dither = bd.map(str::to_string);
-                                    i.over.tuning.strength = os;
-                                    i.screen.tuning.strength = ss;
-                                    i.device_base.tuning.strength = bs;
-                                    i.screen.tuning.max_error = Some(0.4);
-                                    let n = resolve_render(&i);
-                                    assert_eq!(
-                                        (n.palette, n.measured_colors, n.dither, n.tuning),
-                                        legacy(&i),
-                                        "{od:?} {sd:?} {bd:?} {os:?} {ss:?} {bs:?} panel={}",
-                                        pd.is_some()
-                                    );
-                                    cases += 1;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        for sc in palettes.clone() {
-            for bc in palettes.clone() {
-                for pc in palettes.clone() {
-                    for sa in actuals.clone() {
-                        for oa in actuals.clone() {
-                            for pa in actuals.clone() {
-                                let mut i = inputs();
-                                i.screen.colors = sc.clone();
-                                i.device_base.colors = bc.clone();
-                                i.panel.colors = pc.clone();
-                                i.screen.colors_actual = sa.clone();
-                                i.over.colors_actual = oa.clone();
-                                i.panel.colors_actual = pa.clone();
-                                let n = resolve_render(&i);
-                                assert_eq!(
-                                    (n.palette, n.measured_colors, n.dither, n.tuning),
-                                    legacy(&i),
-                                    "{sc:?} {bc:?} {pc:?} {sa:?} {oa:?} {pa:?}"
-                                );
-                                cases += 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // 2 panels × 4³ dithers × 2³ strengths + 3⁶ colour combinations.
-        assert_eq!(cases, 1753, "the matrix changed size");
     }
 
     #[test]

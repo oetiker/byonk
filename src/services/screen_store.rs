@@ -1451,7 +1451,7 @@ fn render_inputs_for<'a>(
     panel_dither: Option<&'a PanelDitherConfig>,
     fallback_palette: Vec<(u8, u8, u8)>,
 ) -> crate::api::resolution::RenderInputs<'a> {
-    use crate::api::display::{parse_colors_header, parse_measured_color_list, SRC_RENDER_OPTS};
+    use crate::api::display::{parse_colors_header, SRC_RENDER_OPTS};
     use crate::api::resolution::{RenderInputs, RungSettings};
     use crate::models::normalize_algorithm_name;
 
@@ -1473,32 +1473,8 @@ fn render_inputs_for<'a>(
         device_final: RungSettings::from_cascade(
             &device.map(|d| d.final_rung.clone()).unwrap_or_default(),
         ),
-        screen: RungSettings {
-            colors: script
-                .script_colors
-                .as_deref()
-                .map(|c| parse_colors_header(&c.join(","))),
-            // parse_measured_color_list, NOT a join (see its doc comment): a
-            // script entry containing a comma would inflate the parsed count
-            // and mask a length mismatch.
-            colors_actual: script
-                .script_colors_actual
-                .as_deref()
-                .map(parse_measured_color_list),
-            dither: script
-                .script_dither
-                .as_deref()
-                .map(normalize_algorithm_name),
-            tuning: DitherTuningValues {
-                deprecated_error_clamp: None,
-                max_error: script.script_max_error,
-                noise_scale: script.script_noise_scale,
-                chroma_clamp: script.script_chroma_clamp,
-                strength: script.script_strength,
-                gamut: script.script_gamut.clone().unwrap_or_default(),
-            },
-            refresh: None,
-        },
+        // `refresh` stays `None`: resolved in content_pipeline.
+        screen: RungSettings::from_script(script),
         device_base: RungSettings {
             colors: device
                 .and_then(|d| d.colors.as_deref())
@@ -1527,7 +1503,7 @@ fn render_inputs_for<'a>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::assets::AssetLoader;
     use crate::models::config::{PanelConfig, PanelDitherConfig};
@@ -3471,7 +3447,7 @@ mod tests {
         }
     }
 
-    fn script_result_for_wiring() -> crate::services::content_pipeline::ScriptResult {
+    pub(crate) fn script_result_for_wiring() -> crate::services::content_pipeline::ScriptResult {
         let manifest = crate::models::screen_repo_manifest::ScreenRepoManifest::from_yaml(
             "name: t\ndescription: d\nauthor: a\nlicense: MIT\n",
         )

@@ -708,26 +708,10 @@ pub async fn handle_render(
             .render_svg_from_script(&script_result, Some(&ctx))
             .map_err(|e| e.to_string())?;
 
-        let script = RungSettings {
-            colors: script_result
-                .script_colors
-                .as_ref()
-                .map(|v| display::parse_colors_header(&v.join(","))),
-            colors_actual: script_result
-                .script_colors_actual
-                .as_deref()
-                .map(display::parse_measured_color_list),
-            dither: script_result.script_dither.clone(),
-            tuning: crate::models::DitherTuningValues {
-                deprecated_error_clamp: None,
-                max_error: script_result.script_max_error,
-                noise_scale: script_result.script_noise_scale,
-                chroma_clamp: script_result.script_chroma_clamp,
-                strength: script_result.script_strength,
-                gamut: script_result.script_gamut.clone().unwrap_or_default(),
-            },
-            refresh: script_result.script_refresh_rate,
-        };
+        // The dev preview has the script's return value in hand, so it
+        // resolves `refresh` through the ladder as well.
+        let script = RungSettings::from_script(&script_result)
+            .with_refresh(script_result.script_refresh_rate);
         Ok::<ScriptOutputs, String>(ScriptOutputs {
             svg,
             script,

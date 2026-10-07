@@ -8,6 +8,7 @@ use crate::api::display;
 use crate::models::{
     normalize_algorithm_name, CascadeValues, DitherTuningValues, PanelDitherConfig,
 };
+use crate::services::content_pipeline::ScriptResult;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -317,6 +318,51 @@ impl RungSettings {
             },
             refresh: v.refresh,
         }
+    }
+
+    /// Build the screen rung from a script's return value.
+    ///
+    /// The one place all four script-driven render paths share. `refresh` is
+    /// left `None` on purpose: three paths resolve it in `content_pipeline`,
+    /// where the script result lives; the dev preview opts in with
+    /// [`RungSettings::with_refresh`].
+    ///
+    /// The two colour slots are parsed DIFFERENTLY, and that is deliberate.
+    /// `colors` is joined and re-split (`parse_colors_header`), but
+    /// `colors_actual` is parsed entry by entry (`parse_measured_color_list`).
+    /// Never join-then-parse a measured list: an entry containing a comma
+    /// would fracture into extra "valid" colours, inflate the parsed count and
+    /// mask a genuine length mismatch (see `parse_measured_color_list`).
+    pub fn from_script(script: &ScriptResult) -> Self {
+        Self {
+            colors: script
+                .script_colors
+                .as_deref()
+                .map(|c| display::parse_colors_header(&c.join(","))),
+            colors_actual: script
+                .script_colors_actual
+                .as_deref()
+                .map(display::parse_measured_color_list),
+            dither: script
+                .script_dither
+                .as_deref()
+                .map(normalize_algorithm_name),
+            tuning: DitherTuningValues {
+                deprecated_error_clamp: None,
+                max_error: script.script_max_error,
+                noise_scale: script.script_noise_scale,
+                chroma_clamp: script.script_chroma_clamp,
+                strength: script.script_strength,
+                gamut: script.script_gamut.clone().unwrap_or_default(),
+            },
+            refresh: None,
+        }
+    }
+
+    /// Set the rung's `refresh` (see [`RungSettings::from_script`]).
+    pub fn with_refresh(mut self, refresh: Option<u32>) -> Self {
+        self.refresh = refresh;
+        self
     }
 }
 
@@ -1275,5 +1321,67 @@ mod tests {
         let res = resolve_render(&inputs);
         assert_eq!(res.measured_colors, None);
         assert_eq!(res.measured_source, display::SRC_NONE);
+    }
+
+    // ---- RungSettings::from_script -------------------------------------
+
+    fn distinct_script() -> ScriptResult {
+        let mut s = crate::services::screen_store::tests::script_result_for_wiring();
+        s.script_colors = Some(vec!["#000001".into(), "#FFFFFE".into()]);
+        s.script_colors_actual = Some(vec!["#010203".into(), "#FEFDFC".into()]);
+        s.script_dither = Some("Sierra_Lite".into());
+        s.script_max_error = Some(0.21);
+        s.script_noise_scale = Some(0.22);
+        s.script_chroma_clamp = Some(0.23);
+        s.script_strength = Some(0.24);
+        s.script_gamut = Some(crate::models::GamutTuningValues {
+            knee: Some(0.31),
+            amount: Some(0.32),
+            max_compression: Some(0.33),
+        });
+        s.script_refresh_rate = Some(777);
+        s
+    }
+
+    #[test]
+    fn from_script_puts_every_field_in_its_own_slot() {
+        let r = RungSettings::from_script(&distinct_script());
+        assert_eq!(r.colors, Some(vec![(0, 0, 1), (255, 255, 254)]));
+        assert_eq!(r.colors_actual, Some(vec![(1, 2, 3), (254, 253, 252)]));
+        assert_eq!(r.dither, Some(normalize_algorithm_name("Sierra_Lite")));
+        assert_eq!(r.tuning.max_error, Some(0.21));
+        assert_eq!(r.tuning.noise_scale, Some(0.22));
+        assert_eq!(r.tuning.chroma_clamp, Some(0.23));
+        assert_eq!(r.tuning.strength, Some(0.24));
+        assert_eq!(r.tuning.gamut.knee, Some(0.31));
+        assert_eq!(r.tuning.gamut.amount, Some(0.32));
+        assert_eq!(r.tuning.gamut.max_compression, Some(0.33));
+        assert_eq!(r.tuning.deprecated_error_clamp, None);
+    }
+
+    #[test]
+    fn from_script_leaves_refresh_to_the_caller() {
+        let s = distinct_script();
+        assert_eq!(RungSettings::from_script(&s).refresh, None);
+        assert_eq!(
+            RungSettings::from_script(&s)
+                .with_refresh(s.script_refresh_rate)
+                .refresh,
+            Some(777)
+        );
+    }
+
+    #[test]
+    fn from_script_does_not_inflate_colors_actual_with_a_comma_entry() {
+        let mut s = distinct_script();
+        // One list element that itself holds two colours.
+        s.script_colors_actual = Some(vec!["#111111,#222222".into(), "#333333".into()]);
+        let r = RungSettings::from_script(&s);
+        // Entry-by-entry: the comma entry is dropped, so the count stays
+        // honest (1) instead of fracturing into 3 "valid" colours.
+        assert_eq!(r.colors_actual, Some(vec![(0x33, 0x33, 0x33)]));
+        // `colors` is the deliberate join-and-split: the same shape yields 3.
+        s.script_colors = Some(vec!["#111111,#222222".into(), "#333333".into()]);
+        assert_eq!(RungSettings::from_script(&s).colors.unwrap().len(), 3);
     }
 }

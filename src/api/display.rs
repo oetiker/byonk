@@ -97,34 +97,9 @@ fn render_inputs_for<'a>(
             ..Default::default()
         },
         device_final: RungSettings::from_cascade(device_final),
-        screen: RungSettings {
-            colors: result
-                .script_colors
-                .as_deref()
-                .map(|c| parse_colors_header(&c.join(","))),
-            // Never join-then-parse here: an entry containing a comma would
-            // fracture into extra "valid" colours, inflate the count and mask
-            // a genuine length mismatch (see `parse_measured_color_list`).
-            colors_actual: result
-                .script_colors_actual
-                .as_deref()
-                .map(parse_measured_color_list),
-            dither: result
-                .script_dither
-                .as_deref()
-                .map(normalize_algorithm_name),
-            tuning: DitherTuningValues {
-                deprecated_error_clamp: None,
-                max_error: result.script_max_error,
-                noise_scale: result.script_noise_scale,
-                chroma_clamp: result.script_chroma_clamp,
-                strength: result.script_strength,
-                gamut: result.script_gamut.clone().unwrap_or_default(),
-            },
-            // `refresh` is resolved in content_pipeline, which is the only
-            // place the script's return value is in hand (plan ruling 3).
-            refresh: None,
-        },
+        // `refresh` stays `None`: it is resolved in content_pipeline, which is
+        // the only place the script's return value is in hand (plan ruling 3).
+        screen: RungSettings::from_script(result),
         device_base: RungSettings::from_cascade(device_base),
         panel: RungSettings {
             colors: panel_colors.map(parse_colors_header),

@@ -212,41 +212,16 @@ fn cli_render_inputs_for<'a>(
     panel_dither: Option<&'a byonk::models::config::PanelDitherConfig>,
     fallback_palette: Vec<(u8, u8, u8)>,
 ) -> byonk::api::resolution::RenderInputs<'a> {
-    use byonk::api::display::{parse_colors_header, parse_measured_color_list, SRC_RENDER_OPTS};
+    use byonk::api::display::{parse_colors_header, SRC_RENDER_OPTS};
     use byonk::api::resolution::{RenderInputs, RungSettings};
-    use byonk::models::{normalize_algorithm_name, DitherTuningValues};
 
     RenderInputs {
         over: RungSettings::default(),
         device_final: RungSettings::from_cascade(
             &device_config.map(|d| d.device_final()).unwrap_or_default(),
         ),
-        screen: RungSettings {
-            colors: script
-                .script_colors
-                .as_deref()
-                .map(|c| parse_colors_header(&c.join(","))),
-            // parse_measured_color_list, NOT a join (see its doc comment): a
-            // script entry containing a comma would inflate the parsed count
-            // and mask a length mismatch.
-            colors_actual: script
-                .script_colors_actual
-                .as_deref()
-                .map(parse_measured_color_list),
-            dither: script
-                .script_dither
-                .as_deref()
-                .map(normalize_algorithm_name),
-            tuning: DitherTuningValues {
-                deprecated_error_clamp: None,
-                max_error: script.script_max_error,
-                noise_scale: script.script_noise_scale,
-                chroma_clamp: script.script_chroma_clamp,
-                strength: script.script_strength,
-                gamut: script.script_gamut.clone().unwrap_or_default(),
-            },
-            refresh: None,
-        },
+        // `refresh` stays `None`: resolved in content_pipeline.
+        screen: RungSettings::from_script(script),
         device_base: RungSettings::from_cascade(
             &device_config.map(|d| d.base()).unwrap_or_default(),
         ),

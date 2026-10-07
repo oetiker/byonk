@@ -2638,11 +2638,19 @@ Under `## [Unreleased]`, user-visible only — no CI, tooling or process:
         dither: atkinson
   ```
 
-  **Home Assistant users need do nothing.** The integration's Dither control
-  has always meant "on this display, no", and now writes `final.dither`, so
-  what it shows is what the device renders. Update the integration together
-  with byonk: an older integration writes the device's default instead, and
-  its Dither entity would then report a value the screen overrides.
+  **Home Assistant users: re-pick Dither once per device.** The integration's
+  Dither control has always meant "on this display, no", and now writes
+  `final.dither`, so what it shows is what the device renders. But a device
+  configured through the old control holds a bare `dither:`, which this release
+  demotes to a screen-overridable default — so its Dither entity shows empty
+  until you pick the value again, and until you do, a screen that sets its own
+  algorithm wins. Re-picking the same value restores the veto. byonk does not
+  migrate the bare value automatically: `config.yaml` is the operator's
+  document, and this release does not rewrite it behind your back.
+
+  Update the integration together with byonk: an older integration writes the
+  device's default instead, and its Dither entity would then report a value the
+  screen overrides.
 
   `refresh` is unaffected — a screen's `refresh_rate` already outranked a
   device's `refresh`, and still does.

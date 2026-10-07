@@ -21,8 +21,8 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
 use crate::api::resolution::{
-    header_value, resolve_render, RenderInputs, Resolution, Rung, RungSettings, RungStatus,
-    RESOLUTION_HEADER,
+    header_value, resolve_pre_script, resolve_render, PreScriptInputs, RenderInputs, Resolution,
+    Rung, RungSettings, RungStatus, RESOLUTION_HEADER,
 };
 use crate::error::ApiError;
 use crate::models::{CascadeValues, DisplaySpec, PanelDitherConfig};
@@ -625,43 +625,36 @@ pub async fn handle_render(
     // The model's default palette stands in for the firmware `Colors` header.
     let query_palette: Vec<(u8, u8, u8)> = display::resolve_query_palette(&req.model, None);
 
-    // ---- Pre-script device context: what the script sees as `device.*`.
-    // Unchanged logic (plan ruling 6), fed from the draft-aware rungs.
-
-    // Chain: device colors > panel colors > model default
-    let default_palette: Vec<(u8, u8, u8)> = display::resolve_ctx_palette(
-        device_rung.colors.as_deref(),
-        panel_colors.as_deref(),
-        &query_palette,
-    );
-
-    // Pre-script dither algorithm: override > device > "atkinson"
-    let pre_script_algo = req
-        .over
-        .dither
-        .as_deref()
-        .or(device_rung.dither.as_deref())
-        .unwrap_or("atkinson");
-
-    // Pre-script panel tuning for device context
-    let pre_panel_tuning = panel_dither_config
-        .as_ref()
-        .map(|pdc| pdc.resolve_for_algorithm(Some(pre_script_algo)))
-        .unwrap_or_default();
-    let pre_script_tuning = RungSettings::from_cascade(&device_rung)
-        .tuning
-        .or(&pre_panel_tuning);
-
-    // Measured colours: override (dev UI colour tuning) > panel.colors_actual
-    let over_actual: Option<Vec<(u8, u8, u8)>> = req
-        .over
-        .colors_actual
-        .as_deref()
-        .map(display::parse_colors_header);
+    // ---- Pre-script device context: what the script sees as `device.*`,
+    // from the one shared resolution (`override -> device final -> device
+    // base -> panel -> model default`, the screen rung empty), fed from the
+    // draft-aware rungs.
     let panel_actual: Option<Vec<(u8, u8, u8)>> = panel_colors_actual
         .as_deref()
         .map(display::parse_colors_header);
-    let pre_script_measured = over_actual.clone().or_else(|| panel_actual.clone());
+    let pre = resolve_pre_script(&PreScriptInputs {
+        over: RungSettings {
+            dither: req.over.dither.clone(),
+            colors_actual: req
+                .over
+                .colors_actual
+                .as_deref()
+                .map(display::parse_colors_header),
+            ..Default::default()
+        },
+        device_final: RungSettings::from_cascade(&device_final_rung),
+        device_base: RungSettings::from_cascade(&device_rung),
+        panel: RungSettings {
+            colors: panel_colors.as_deref().map(display::parse_colors_header),
+            colors_actual: panel_actual.clone(),
+            ..Default::default()
+        },
+        panel_dither: panel_dither_config.as_ref(),
+        fallback_palette: query_palette.clone(),
+        fallback_colors_actual: None,
+    });
+    let pre_script_tuning = &pre.tuning;
+    let default_palette = &pre.palette;
 
     let device_ctx = DeviceContext {
         mac: req
@@ -675,11 +668,12 @@ pub async fn handle_render(
         width: Some(width),
         height: Some(height),
         registration_code: None,
-        colors: Some(display::colors_to_hex_strings(&default_palette)),
-        colors_actual: pre_script_measured
+        colors: Some(display::colors_to_hex_strings(default_palette)),
+        colors_actual: pre
+            .colors_actual
             .as_deref()
             .map(display::colors_to_hex_strings),
-        dither_algorithm: Some(pre_script_algo.to_string()),
+        dither_algorithm: Some(pre.algorithm.clone()),
         dither_max_error: pre_script_tuning.max_error,
         dither_noise_scale: pre_script_tuning.noise_scale,
         dither_chroma_clamp: pre_script_tuning.chroma_clamp,

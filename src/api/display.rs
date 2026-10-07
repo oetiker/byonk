@@ -9,7 +9,9 @@ use std::sync::Arc;
 use utoipa::ToSchema;
 
 use super::headers::HeaderMapExt;
-use super::resolution::{resolve_render, RenderInputs, RungSettings};
+use super::resolution::{
+    resolve_pre_script, resolve_render, PreScriptInputs, RenderInputs, RungSettings,
+};
 use crate::error::ApiError;
 use crate::models::{
     normalize_algorithm_name, verify_ed25519_signature, ApiKey, AppConfig, CascadeValues, Device,
@@ -734,36 +736,6 @@ pub async fn handle_display<R: DeviceRegistry>(
         .map(parse_colors_header);
     let header_parsed: Option<Vec<(u8, u8, u8)>> =
         measured_colors_header.as_deref().map(parse_colors_header);
-    // The PRE-script chain, in precedence order. Its only job is to populate
-    // `DeviceContext.colors_actual`, which is what the Lua script sees before
-    // it runs. It is not a cascade resolution: the palette length is not
-    // known yet, so no length rule applies, and the final resolution does not
-    // read this array (the override and header parses are handed to
-    // `render_inputs_for` separately).
-    let pre_script_measured_candidates: Vec<MeasuredCandidate> = vec![
-        (SRC_DEV_OVERRIDE, override_colors_parsed.clone()),
-        (SRC_PANEL_ACTUAL, panel_actual_parsed.clone()),
-        (SRC_MEASURED_HEADER, header_parsed.clone()),
-    ];
-    // Pre-script winner, used only to populate `DeviceContext.colors_actual`
-    // (what the *script* sees before it runs, when the final palette length
-    // isn't known yet — no length check applies here). Derived from
-    // `pre_script_measured_candidates` above rather than its own
-    // if/else-if chain: two separately-maintained encodings of the same
-    // precedence order drift apart silently (see Task 1's `main.rs`
-    // finding, of which this was a recurrence) — add a source to the array
-    // and forget the if/else-if (or vice versa) and this and the final
-    // dithered render quietly stop agreeing on what "measured" means. Not
-    // length-checked (unlike the final resolution): this is just "first
-    // supplied", the palette length isn't known yet.
-    let pre_script_measured_winner = pre_script_measured_candidates
-        .iter()
-        .find_map(|(s, c)| c.clone().map(|c| (*s, c)));
-    let pre_script_measured_source = pre_script_measured_winner
-        .as_ref()
-        .map_or(SRC_NONE, |(s, _)| *s);
-    let measured_colors = pre_script_measured_winner.map(|(_, c)| c);
-
     // Panel official colors for palette chain
     let panel_colors_for_chain: Option<String> = panel.map(|p| p.colors.clone());
 
@@ -778,7 +750,6 @@ pub async fn handle_display<R: DeviceRegistry>(
         panel_colors_actual = ?panel.and_then(|p| p.colors_actual.as_deref()),
         board_header = ?board_header,
         measured_colors_header = ?measured_colors_header,
-        pre_script_measured_source = pre_script_measured_source,
         "Device config and panel resolution"
     );
 
@@ -793,41 +764,48 @@ pub async fn handle_display<R: DeviceRegistry>(
     };
     let device_config_dither = device_config.and_then(|dc| dc.dither.clone());
 
-    // Tuning: dev override > device config > panel > None (algorithm defaults)
+    // Tuning override, handed to the render resolution further down.
     let dev_tuning_override: Option<DitherTuningValues> = if let Some(ref key) = device_entry_key {
         dev_overrides.tuning.read().await.get(key).cloned()
     } else {
         None
     };
-    let dc_tuning = DitherTuningValues {
-        deprecated_error_clamp: None,
-        max_error: device_config.and_then(|dc| dc.max_error),
-        noise_scale: device_config.and_then(|dc| dc.noise_scale),
-        chroma_clamp: device_config.and_then(|dc| dc.chroma_clamp),
-        strength: device_config.and_then(|dc| dc.strength),
-        gamut: device_config.map(|dc| dc.gamut.clone()).unwrap_or_default(),
-    };
 
-    // Resolve panel dither config for pre-script algorithm
+    // What the script sees as `device.*`, from the one shared resolution
+    // (`override -> device final -> device base -> panel -> fallback`, the
+    // screen rung empty). Not a cascade resolution of its own: the palette
+    // length is not known yet, so no length rule applies.
     let panel_dither_config = panel.and_then(|p| p.dither.clone());
-    // Pre-script algorithm: dev override > device config > default "atkinson"
-    let pre_script_algo = dev_dither_override
-        .as_deref()
-        .or(device_config_dither.as_deref())
-        .unwrap_or("atkinson");
-    let panel_tuning = panel_dither_config
-        .as_ref()
-        .map(|pdc| pdc.resolve_for_algorithm(Some(pre_script_algo)))
+    let device_base_rung = device_config.map(|dc| dc.base()).unwrap_or_default();
+    let device_final_rung = device_config
+        .map(|dc| dc.device_final())
         .unwrap_or_default();
-    // Pre-script resolved tuning for device context: dc > panel
-    let pre_script_tuning = dc_tuning.or(&panel_tuning);
-
-    let ctx_palette = resolve_ctx_palette(
-        device_config_colors.as_deref(),
-        panel_colors_for_chain.as_deref(),
-        &initial_palette,
+    let pre = resolve_pre_script(&PreScriptInputs {
+        over: RungSettings {
+            dither: dev_dither_override.clone(),
+            colors_actual: override_colors_parsed.clone(),
+            ..Default::default()
+        },
+        device_final: RungSettings::from_cascade(&device_final_rung),
+        device_base: RungSettings::from_cascade(&device_base_rung),
+        panel: RungSettings {
+            colors: panel_colors_for_chain.as_deref().map(parse_colors_header),
+            colors_actual: panel_actual_parsed.clone(),
+            ..Default::default()
+        },
+        panel_dither: panel_dither_config.as_ref(),
+        fallback_palette: initial_palette.clone(),
+        fallback_colors_actual: header_parsed.clone(),
+    });
+    let pre_script_measured_source = pre
+        .colors_actual_from
+        .measured_source(SRC_DEV_OVERRIDE, pre.colors_actual.is_some());
+    let pre_script_tuning = &pre.tuning;
+    tracing::debug!(
+        pre_script_measured_source = pre_script_measured_source,
+        "Pre-script device context resolved"
     );
-    let ctx_color_hex = colors_to_hex_strings(&ctx_palette);
+    let ctx_color_hex = colors_to_hex_strings(&pre.palette);
 
     // Build device context for script (palette matches dithering chain)
     let device_ctx = DeviceContext {
@@ -842,8 +820,8 @@ pub async fn handle_display<R: DeviceRegistry>(
         registration_code: Some(registration_code.clone()),
         board: board_header.clone(),
         colors: Some(ctx_color_hex),
-        colors_actual: measured_colors.as_deref().map(colors_to_hex_strings),
-        dither_algorithm: Some(pre_script_algo.to_string()),
+        colors_actual: pre.colors_actual.as_deref().map(colors_to_hex_strings),
+        dither_algorithm: Some(pre.algorithm.clone()),
         dither_max_error: pre_script_tuning.max_error,
         dither_noise_scale: pre_script_tuning.noise_scale,
         dither_chroma_clamp: pre_script_tuning.chroma_clamp,
@@ -868,10 +846,6 @@ pub async fn handle_display<R: DeviceRegistry>(
     let dc_min_png_bytes = device_config.and_then(|dc| dc.min_png_bytes);
     let dev_dither = dev_dither_override;
     let dev_tuning = dev_tuning_override;
-    let device_base_rung = device_config.map(|dc| dc.base()).unwrap_or_default();
-    let device_final_rung = device_config
-        .map(|dc| dc.device_final())
-        .unwrap_or_default();
     let panel_dither_for_closure = panel_dither_config;
 
     // Run in spawn_blocking because Lua scripts use blocking HTTP requests
@@ -893,7 +867,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                         dev_dither = ?dev_dither,
                         panel_colors = ?panel_colors_for_chain,
                         header_colors = ?header_colors_for_chain,
-                        measured_colors = ?measured_colors.as_ref().map(|mc| colors_to_hex_strings(mc)),
+                        measured_colors = ?pre.colors_actual.as_ref().map(|mc| colors_to_hex_strings(mc)),
                         "Resolving render params for device"
                     );
 

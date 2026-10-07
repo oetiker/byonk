@@ -661,6 +661,137 @@ pub fn resolve_render(i: &RenderInputs) -> RenderResolution {
     }
 }
 
+/// What the script is told about the device before it runs.
+///
+/// The same cascade as [`resolve_render`] with the screen rung left empty:
+/// what the script is about to return IS that rung, so it cannot be known
+/// yet. The order is therefore `override -> device final -> device base ->
+/// panel -> fallback` — [`ORDER_COLORS`] walked over a [`Ladder`] whose
+/// `screen` slot is `None`. Everything a script reads as `device.*` for the
+/// device's own settings comes from here; three call sites used to hand-roll
+/// this and all three forgot the `final:` rung at once.
+pub struct PreScriptInputs<'a> {
+    /// The live dev-UI override. Only `dither` and `colors_actual` are
+    /// consulted: that is what every call site has always shown a script.
+    pub over: RungSettings,
+    /// The device's `final:` rung — the owner's veto. Every field counts.
+    pub device_final: RungSettings,
+    /// The device's base rung. Its `colors_actual` is NOT consulted: no
+    /// call site has ever shown a script the device's own measurement, and
+    /// this fix changes only what `final:` does (see the task-8c report).
+    pub device_base: RungSettings,
+    /// Colours and measured colours; its tuning comes from `panel_dither`
+    /// once the algorithm is known.
+    pub panel: RungSettings,
+    pub panel_dither: Option<&'a PanelDitherConfig>,
+    pub fallback_palette: Vec<(u8, u8, u8)>,
+    /// The firmware `Measured-Colors` header (`/api/display` only).
+    pub fallback_colors_actual: Option<Vec<(u8, u8, u8)>>,
+}
+
+/// The values for `DeviceContext`'s `colors`, `colors_actual` and `dither_*`.
+#[derive(Debug, Clone)]
+pub struct PreScriptContext {
+    pub palette: Vec<(u8, u8, u8)>,
+    pub colors_actual: Option<Vec<(u8, u8, u8)>>,
+    /// The rung `colors_actual` came from (`Fallback` when none or the header).
+    pub colors_actual_from: Rung,
+    /// As configured (not re-normalised), `"atkinson"` when nothing sets one.
+    pub algorithm: String,
+    /// Winners only; `None` where no rung sets a value.
+    pub tuning: DitherTuningValues,
+}
+
+pub fn resolve_pre_script(i: &PreScriptInputs) -> PreScriptContext {
+    // One ladder per setting, screen slot empty by construction.
+    fn ladder<T: Clone>(
+        i: &PreScriptInputs,
+        pick: impl Fn(&RungSettings) -> Option<T>,
+        panel: Option<T>,
+        fallback: Option<T>,
+    ) -> Ladder<T> {
+        Ladder {
+            over: pick(&i.over),
+            device_final: pick(&i.device_final),
+            screen: None,
+            device_base: pick(&i.device_base),
+            panel,
+            fallback,
+        }
+    }
+
+    let palette = resolve(
+        &ladder(
+            i,
+            |r| r.colors.clone(),
+            i.panel.colors.clone(),
+            Some(i.fallback_palette.clone()),
+        ),
+        ORDER_COLORS,
+        accept_any,
+    )
+    .effective
+    .unwrap_or_else(|| i.fallback_palette.clone());
+
+    // No length rule: the palette the renderer will use is not final yet.
+    let actual = resolve(
+        &Ladder {
+            over: i.over.colors_actual.clone(),
+            device_final: i.device_final.colors_actual.clone(),
+            screen: None,
+            device_base: None,
+            panel: i.panel.colors_actual.clone(),
+            fallback: i.fallback_colors_actual.clone(),
+        },
+        ORDER_COLORS_ACTUAL,
+        accept_any,
+    );
+
+    // The algorithm before its numbers: the panel's per-algorithm block is
+    // looked up for whichever algorithm WON, so a `final:` dither brings its
+    // own tuning with it. Unlike the renderer, the lookup is always for a
+    // concrete name — `"atkinson"` when nothing is configured — which is
+    // what the script has always been shown.
+    let algorithm = resolve(
+        &ladder(i, |r| r.dither.clone(), None, Some("atkinson".to_string())),
+        ORDER_DITHER,
+        accept_any,
+    )
+    .effective
+    .unwrap_or_else(|| "atkinson".to_string());
+    let panel_tuning = i
+        .panel_dither
+        .map(|p| p.resolve_for_algorithm(Some(&algorithm)))
+        .unwrap_or_default();
+
+    let mut tuning = DitherTuningValues::default();
+    macro_rules! number {
+        ($($field:ident).+) => {
+            tuning.$($field).+ = resolve(
+                &ladder(i, |s| s.tuning.$($field).+, panel_tuning.$($field).+, None),
+                ORDER_TUNING,
+                accept_any,
+            )
+            .effective;
+        };
+    }
+    number!(max_error);
+    number!(noise_scale);
+    number!(chroma_clamp);
+    number!(strength);
+    number!(gamut.knee);
+    number!(gamut.amount);
+    number!(gamut.max_compression);
+
+    PreScriptContext {
+        palette,
+        colors_actual_from: actual.from,
+        colors_actual: actual.effective,
+        algorithm,
+        tuning,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1273,5 +1404,245 @@ mod tests {
         // `colors` is the deliberate join-and-split: the same shape yields 3.
         s.script_colors = Some(vec!["#111111,#222222".into(), "#333333".into()]);
         assert_eq!(RungSettings::from_script(&s).colors.unwrap().len(), 3);
+    }
+
+    // ---- resolve_pre_script ----
+
+    fn rgb(n: u8) -> Vec<(u8, u8, u8)> {
+        vec![(n, n, n), (n, n, 255)]
+    }
+
+    /// A panel with a flat default and two per-algorithm blocks whose numbers
+    /// differ, so looking the numbers up for the wrong algorithm is visible.
+    fn two_algorithm_panel() -> PanelDitherConfig {
+        let block = |max_error: f32| DitherTuningValues {
+            max_error: Some(max_error),
+            ..Default::default()
+        };
+        let mut algorithms = std::collections::HashMap::new();
+        algorithms.insert("sierra".to_string(), block(0.5));
+        algorithms.insert("atkinson".to_string(), block(0.9));
+        PanelDitherConfig {
+            defaults: DitherTuningValues {
+                max_error: Some(0.1),
+                noise_scale: Some(9.0),
+                ..Default::default()
+            },
+            algorithms,
+        }
+    }
+
+    fn pre_inputs(panel_dither: Option<&PanelDitherConfig>) -> PreScriptInputs<'_> {
+        PreScriptInputs {
+            over: RungSettings::default(),
+            device_final: RungSettings::default(),
+            device_base: RungSettings::default(),
+            panel: RungSettings::default(),
+            panel_dither,
+            fallback_palette: rgb(4),
+            fallback_colors_actual: None,
+        }
+    }
+
+    #[test]
+    fn pre_script_every_rung_lands_where_it_should() {
+        let panel_dither = PanelDitherConfig {
+            defaults: DitherTuningValues {
+                strength: Some(0.3),
+                gamut: crate::models::GamutTuningValues {
+                    knee: Some(0.03),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut i = pre_inputs(Some(&panel_dither));
+        i.over = RungSettings {
+            colors_actual: Some(rgb(1)),
+            ..Default::default()
+        };
+        i.device_final = RungSettings {
+            colors: Some(rgb(2)),
+            colors_actual: Some(rgb(3)),
+            tuning: DitherTuningValues {
+                max_error: Some(0.2),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        i.device_base = RungSettings {
+            colors: Some(rgb(5)),
+            colors_actual: Some(rgb(99)), // never shown, see the field doc
+            tuning: DitherTuningValues {
+                max_error: Some(0.4),
+                noise_scale: Some(4.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        i.panel = RungSettings {
+            colors: Some(rgb(6)),
+            colors_actual: Some(rgb(7)),
+            ..Default::default()
+        };
+        i.fallback_colors_actual = Some(rgb(8));
+
+        let r = resolve_pre_script(&i);
+        // final beats base beats panel beats fallback, field by field.
+        assert_eq!(r.palette, rgb(2), "final colours beat base (5), panel (6)");
+        assert_eq!(r.colors_actual, Some(rgb(1)), "override beats final (3)");
+        assert_eq!(r.colors_actual_from, Rung::Override);
+        assert_eq!(r.tuning.max_error, Some(0.2), "final beats base (0.4)");
+        assert_eq!(
+            r.tuning.noise_scale,
+            Some(4.0),
+            "base fills what final omits"
+        );
+        assert_eq!(r.tuning.strength, Some(0.3), "panel fills what both omit");
+        assert_eq!(r.tuning.gamut.knee, Some(0.03));
+        assert_eq!(r.tuning.chroma_clamp, None, "nobody sets it");
+
+        // Peel the top rung off, one at a time; each next rung must surface.
+        i.over.colors_actual = None;
+        let r = resolve_pre_script(&i);
+        assert_eq!(r.colors_actual, Some(rgb(3)), "final measured");
+        assert_eq!(r.colors_actual_from, Rung::DeviceFinal);
+        i.device_final.colors_actual = None;
+        i.device_final.colors = None;
+        let r = resolve_pre_script(&i);
+        assert_eq!(
+            r.colors_actual,
+            Some(rgb(7)),
+            "the base measurement is skipped; the panel's is next"
+        );
+        assert_eq!(r.colors_actual_from, Rung::Panel);
+        assert_eq!(r.palette, rgb(5), "base colours once final has none");
+        i.device_base.colors = None;
+        assert_eq!(resolve_pre_script(&i).palette, rgb(6), "panel colours");
+        i.panel.colors = None;
+        assert_eq!(resolve_pre_script(&i).palette, rgb(4), "fallback palette");
+        i.panel.colors_actual = None;
+        let r = resolve_pre_script(&i);
+        assert_eq!(r.colors_actual, Some(rgb(8)), "firmware header");
+        assert_eq!(r.colors_actual_from, Rung::Fallback);
+    }
+
+    #[test]
+    fn pre_script_algorithm_ladder_and_default() {
+        let mut i = pre_inputs(None);
+        assert_eq!(resolve_pre_script(&i).algorithm, "atkinson");
+        i.device_base.dither = Some("burkes".into());
+        assert_eq!(resolve_pre_script(&i).algorithm, "burkes");
+        i.device_final.dither = Some("stucki".into());
+        assert_eq!(
+            resolve_pre_script(&i).algorithm,
+            "stucki",
+            "final beats base"
+        );
+        i.over.dither = Some("sierra".into());
+        assert_eq!(
+            resolve_pre_script(&i).algorithm,
+            "sierra",
+            "override beats final"
+        );
+    }
+
+    /// The failure the algorithm-then-numbers rule exists to prevent: the
+    /// veto wins the name but the panel numbers are looked up for the loser.
+    #[test]
+    fn pre_script_panel_numbers_follow_the_final_algorithm() {
+        let panel = two_algorithm_panel();
+        let mut i = pre_inputs(Some(&panel));
+        i.device_base.dither = Some("sierra".into());
+        assert_eq!(resolve_pre_script(&i).tuning.max_error, Some(0.5));
+        i.device_final.dither = Some("atkinson".into());
+        let r = resolve_pre_script(&i);
+        assert_eq!(r.algorithm, "atkinson");
+        assert_eq!(
+            r.tuning.max_error,
+            Some(0.9),
+            "atkinson's block, not the base algorithm's 0.5"
+        );
+        assert_eq!(r.tuning.noise_scale, Some(9.0), "flat default still merges");
+    }
+
+    /// With no `final:` the new function must say exactly what the three
+    /// hand-rolled chains said. The oracle below is that old chain, verbatim,
+    /// compared over every present/absent combination of the base rung's
+    /// colours, dither and tuning, the panel's colours and measurement, the
+    /// header and the override.
+    #[test]
+    fn pre_script_without_final_matches_the_legacy_chain() {
+        let panel = two_algorithm_panel();
+        for mask in 0u32..(1 << 9) {
+            let on = |bit: u32| mask & (1 << bit) != 0;
+            let base = RungSettings {
+                colors: on(0).then(|| rgb(10)),
+                colors_actual: on(1).then(|| rgb(11)),
+                dither: on(2).then(|| "sierra".to_string()),
+                tuning: DitherTuningValues {
+                    max_error: on(3).then_some(0.25),
+                    strength: on(4).then_some(0.75),
+                    ..Default::default()
+                },
+                refresh: None,
+            };
+            let over = RungSettings {
+                dither: on(5).then(|| "floyd-steinberg".to_string()),
+                colors_actual: on(6).then(|| rgb(12)),
+                ..Default::default()
+            };
+            let panel_rung = RungSettings {
+                colors: on(7).then(|| rgb(13)),
+                colors_actual: on(8).then(|| rgb(14)),
+                ..Default::default()
+            };
+            let mut i = pre_inputs(Some(&panel));
+            i.over = over.clone();
+            i.device_base = base.clone();
+            i.panel = panel_rung.clone();
+            i.fallback_colors_actual = Some(rgb(15));
+            let got = resolve_pre_script(&i);
+
+            // Legacy chain.
+            let algo = over
+                .dither
+                .as_deref()
+                .or(base.dither.as_deref())
+                .unwrap_or("atkinson");
+            let legacy_tuning = base.tuning.or(&panel.resolve_for_algorithm(Some(algo)));
+            let legacy_palette = base
+                .colors
+                .clone()
+                .or(panel_rung.colors.clone())
+                .unwrap_or_else(|| rgb(4));
+            let legacy_actual = over
+                .colors_actual
+                .clone()
+                .or(panel_rung.colors_actual.clone())
+                .or(Some(rgb(15)));
+
+            assert_eq!(got.algorithm, algo, "mask {mask:#b}");
+            assert_eq!(got.palette, legacy_palette, "mask {mask:#b}");
+            assert_eq!(got.colors_actual, legacy_actual, "mask {mask:#b}");
+            assert_eq!(
+                got.tuning.max_error, legacy_tuning.max_error,
+                "mask {mask:#b}"
+            );
+            assert_eq!(
+                got.tuning.noise_scale, legacy_tuning.noise_scale,
+                "mask {mask:#b}"
+            );
+            assert_eq!(
+                got.tuning.strength, legacy_tuning.strength,
+                "mask {mask:#b}"
+            );
+            assert_eq!(
+                got.tuning.chroma_clamp, legacy_tuning.chroma_clamp,
+                "mask {mask:#b}"
+            );
+            assert_eq!(got.tuning.gamut, legacy_tuning.gamut, "mask {mask:#b}");
+        }
     }
 }

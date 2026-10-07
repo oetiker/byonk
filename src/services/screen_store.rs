@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::api::resolution::{resolve_pre_script, PreScriptInputs, RungSettings};
 use crate::models::config::PanelDitherConfig;
 use crate::models::screen_meta::ScreenMeta;
 use crate::models::{CascadeValues, DisplaySpec, DitherTuningValues};
@@ -1220,46 +1221,58 @@ impl ScreenStore {
             .as_deref()
             .and_then(|name| config.get_panel(name));
         let panel_colors: Option<String> = panel.map(|p| p.colors.clone());
-        let opts_actual_parsed: Option<Vec<(u8, u8, u8)>> = opts
-            .colors_actual
-            .as_deref()
-            .map(crate::api::display::parse_colors_header);
         let panel_actual_parsed: Option<Vec<(u8, u8, u8)>> = panel
             .and_then(|p| p.colors_actual.as_deref())
             .map(crate::api::display::parse_colors_header);
-        // Pre-script winner, used only to populate `DeviceContext.colors_actual`
-        // (what the script sees before it runs): the override, then the panel.
-        let measured_colors: Option<Vec<(u8, u8, u8)>> =
-            opts_actual_parsed.or_else(|| panel_actual_parsed.clone());
 
-        // The device-config layer of every chain below. Absent for an
-        // authoring render (there is no device), populated for a device
-        // preview — see `DevicePreview`.
-        let device_colors: Option<&str> = opts.device.as_ref().and_then(|d| d.colors.as_deref());
-        let device_dither: Option<&str> = opts.device.as_ref().and_then(|d| d.dither.as_deref());
-
-        // The palette the script sees via `device.colors` — device-config
-        // colors, then panel colors, then the model default, same as
-        // `/dev/render`'s `default_palette`.
-        let ctx_palette: Vec<(u8, u8, u8)> = crate::api::display::resolve_ctx_palette(
-            device_colors,
-            panel_colors.as_deref(),
-            &query_palette,
-        );
-
-        // Pre-script dither algorithm + tuning, for the device context the
-        // script sees via `device.dither.*` — same resolution `/dev/render`
-        // does before running the script.
-        let pre_script_algo = opts
-            .dither
-            .as_deref()
-            .or(device_dither)
-            .unwrap_or("atkinson");
         let panel_dither_config = panel.and_then(|p| p.dither.clone());
-        let pre_panel_tuning = panel_dither_config
-            .as_ref()
-            .map(|pdc| pdc.resolve_for_algorithm(Some(pre_script_algo)))
-            .unwrap_or_default();
+
+        // What the script sees as `device.*`: the one shared pre-script
+        // resolution (`override -> device final -> device base -> panel ->
+        // model default`, the screen rung empty), so a preview tells the
+        // script what `/dev/render` and `/api/display` would.
+        //
+        // The base rung carries the device's colours and dither only. Its
+        // tuning is deliberately NOT shown here — this preview has never
+        // shown it, and this change adds the `final:` rung without moving
+        // anything else. (`/dev/render` and `/api/display` do show it.)
+        let device_base = RungSettings {
+            colors: opts
+                .device
+                .as_ref()
+                .and_then(|d| d.colors.as_deref())
+                .map(crate::api::display::parse_colors_header),
+            dither: opts.device.as_ref().and_then(|d| d.dither.clone()),
+            ..Default::default()
+        };
+        let pre = resolve_pre_script(&PreScriptInputs {
+            over: RungSettings {
+                dither: opts.dither.clone(),
+                colors_actual: opts
+                    .colors_actual
+                    .as_deref()
+                    .map(crate::api::display::parse_colors_header),
+                ..Default::default()
+            },
+            device_final: opts
+                .device
+                .as_ref()
+                .map(|d| RungSettings::from_cascade(&d.final_rung))
+                .unwrap_or_default(),
+            device_base,
+            panel: RungSettings {
+                colors: panel_colors
+                    .as_deref()
+                    .map(crate::api::display::parse_colors_header),
+                colors_actual: panel_actual_parsed.clone(),
+                ..Default::default()
+            },
+            panel_dither: panel_dither_config.as_ref(),
+            fallback_palette: query_palette.clone(),
+            fallback_colors_actual: None,
+        });
+        let ctx_palette = &pre.palette;
+        let pre_tuning = &pre.tuning;
 
         // Device identity: the real one when this render is on a device's
         // behalf, else the authoring placeholders. Kept as a whole-identity
@@ -1289,18 +1302,19 @@ impl ScreenStore {
             firmware_version: ctx_fw,
             width: Some(width),
             height: Some(height),
-            colors: Some(crate::api::display::colors_to_hex_strings(&ctx_palette)),
-            colors_actual: measured_colors
+            colors: Some(crate::api::display::colors_to_hex_strings(ctx_palette)),
+            colors_actual: pre
+                .colors_actual
                 .as_deref()
                 .map(crate::api::display::colors_to_hex_strings),
-            dither_algorithm: Some(pre_script_algo.to_string()),
-            dither_max_error: pre_panel_tuning.max_error,
-            dither_noise_scale: pre_panel_tuning.noise_scale,
-            dither_chroma_clamp: pre_panel_tuning.chroma_clamp,
-            dither_strength: pre_panel_tuning.strength,
-            dither_gamut_knee: pre_panel_tuning.gamut.knee,
-            dither_gamut_amount: pre_panel_tuning.gamut.amount,
-            dither_gamut_max_compression: pre_panel_tuning.gamut.max_compression,
+            dither_algorithm: Some(pre.algorithm.clone()),
+            dither_max_error: pre_tuning.max_error,
+            dither_noise_scale: pre_tuning.noise_scale,
+            dither_chroma_clamp: pre_tuning.chroma_clamp,
+            dither_strength: pre_tuning.strength,
+            dither_gamut_knee: pre_tuning.gamut.knee,
+            dither_gamut_amount: pre_tuning.gamut.amount,
+            dither_gamut_max_compression: pre_tuning.gamut.max_compression,
             refresh_override: opts.device.as_ref().and_then(|d| d.refresh),
             refresh_final: opts.device.as_ref().and_then(|d| d.final_rung.refresh),
             ..Default::default()
@@ -1468,7 +1482,7 @@ fn render_inputs_for<'a>(
     fallback_palette: Vec<(u8, u8, u8)>,
 ) -> crate::api::resolution::RenderInputs<'a> {
     use crate::api::display::{parse_colors_header, SRC_RENDER_OPTS};
-    use crate::api::resolution::{RenderInputs, RungSettings};
+    use crate::api::resolution::RenderInputs;
     use crate::models::normalize_algorithm_name;
 
     let device = opts.device.as_ref();

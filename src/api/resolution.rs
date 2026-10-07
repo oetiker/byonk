@@ -346,6 +346,49 @@ pub struct RenderResolution {
     pub report: Resolution,
 }
 
+impl RenderResolution {
+    /// The shape the renderer and `/api/display`'s response already speak.
+    ///
+    /// One conversion for all five paths: a path that built its own
+    /// `RenderParams` from a `RenderResolution` could drop a field, and the
+    /// convergence test would then be comparing two different mistakes.
+    pub fn into_params(self) -> display::RenderParams {
+        display::RenderParams {
+            palette: self.palette,
+            measured_colors: self.measured_colors,
+            measured_source: self.measured_source,
+            dither: self.dither,
+            max_error: self.tuning.max_error,
+            noise_scale: self.tuning.noise_scale,
+            chroma_clamp: self.tuning.chroma_clamp,
+            strength: self.tuning.strength,
+            gamut: self.tuning.gamut,
+            // The measurement's own validity complaints. A disagreement
+            // between rungs is NOT one of them (spec §4.3).
+            warnings: self
+                .report
+                .get("colors_actual")
+                .map(rejection_warnings)
+                .unwrap_or_default(),
+        }
+    }
+}
+
+/// The `Rejected` reasons from one setting's report, as the warning lines the
+/// device paths log and the authoring paths put in the script log.
+fn rejection_warnings(report: &SettingReport) -> Vec<String> {
+    report
+        .rungs
+        .iter()
+        .filter_map(|(rung, entry)| match &entry.status {
+            RungStatus::Rejected { reason } => Some(format!(
+                "measured colours from the {rung:?} rung ignored: {reason}"
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
 fn ladder_of<T: Clone>(
     i: &RenderInputs,
     pick: impl Fn(&RungSettings) -> Option<T>,

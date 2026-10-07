@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use super::{ok_json, ByonkMcp};
 use crate::api::admin::write::{apply_device_add, apply_device_patch, DeviceWrite};
 use crate::error::ApiError;
-use crate::models::DeviceId;
+use crate::models::{CascadeValues, DeviceId, GamutTuningValues};
 use crate::services::device_registry::DeviceRegistry;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -35,6 +35,25 @@ pub struct ConfigureDeviceArgs {
     pub dither: Option<String>,
     /// Palette override, comma-separated `#rrggbb` (at least two).
     pub colors: Option<String>,
+    /// Measured colours for this one display, comma-separated `#rrggbb` with
+    /// the same entry count as the resolved palette. Overrides the panel
+    /// profile's calibration for this device only; a screen that measures its
+    /// own still outranks it.
+    pub colors_actual: Option<String>,
+    /// Gamut mapping for continuous-tone regions: `knee` (where compression
+    /// begins), `amount` (0 = off, 1 = full) and `max_compression`.
+    pub gamut: Option<GamutTuningValues>,
+    /// The device owner's **veto**. Anything set here outrules the screen's
+    /// own choice — use it when a setting must hold on this display whatever
+    /// the script asks for, for example a `refresh` floor on a
+    /// battery-powered panel. Settings outside this block are defaults the
+    /// screen may override. Takes the same cascade settings as above
+    /// (`colors`, `colors_actual`, `dither`, `max_error`, `noise_scale`,
+    /// `chroma_clamp`, `strength`, `refresh`, `gamut`) and nothing else.
+    /// Merged field by field; remove a field with `clear: ["final.<field>"]`,
+    /// or the whole block with `clear: ["final"]`.
+    #[serde(rename = "final")]
+    pub final_rung: Option<CascadeValues>,
     /// Parameters for the screen's Lua script, validated against its
     /// `meta.yaml` schema. Merged key-by-key into the device's existing
     /// params, so setting one does not drop the others — unless `screen_ref`
@@ -70,7 +89,42 @@ pub struct ConfigureDeviceArgs {
     /// the only way to take a setting back and let the panel's value (or the
     /// firmware's default) apply again. A field cannot be set and cleared in
     /// the same call.
+    ///
+    /// One dot addresses the veto block: `"dither"` clears the device's
+    /// default, `"final.dither"` clears its veto, and `"final"` removes the
+    /// whole veto block. A bare name never touches `final`.
     pub clear: Option<Vec<String>>,
+}
+
+impl ConfigureDeviceArgs {
+    /// The `DeviceWrite` this call means.
+    ///
+    /// A named method rather than a closure inside `configure_device`: the
+    /// conversion is the half of the mirror that drifts (`gamut` reached
+    /// `DeviceConfig` and never reached here), and a closure cannot be tested.
+    pub fn to_device_write(&self) -> DeviceWrite {
+        DeviceWrite {
+            key: None,
+            screen: self.screen_ref.clone(),
+            panel: self.panel.clone(),
+            dither: self.dither.clone(),
+            colors: self.colors.clone(),
+            colors_actual: self.colors_actual.clone(),
+            gamut: self.gamut.clone(),
+            final_rung: self.final_rung.clone(),
+            params: self.params.clone().map(params_to_yaml),
+            refresh: self.refresh,
+            name: self.name.clone(),
+            max_error: self.max_error,
+            noise_scale: self.noise_scale,
+            chroma_clamp: self.chroma_clamp,
+            strength: self.strength,
+            temperature_profile: self.temperature_profile.clone(),
+            maximum_compatibility: self.maximum_compatibility,
+            min_png_bytes: self.min_png_bytes,
+            clear: self.clear.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -123,27 +177,7 @@ impl ByonkMcp {
         &self,
         Parameters(a): Parameters<ConfigureDeviceArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let body = || DeviceWrite {
-            key: None,
-            screen: a.screen_ref.clone(),
-            panel: a.panel.clone(),
-            dither: a.dither.clone(),
-            colors: a.colors.clone(),
-            colors_actual: None,
-            gamut: None,
-            final_rung: None,
-            params: a.params.clone().map(params_to_yaml),
-            refresh: a.refresh,
-            name: a.name.clone(),
-            max_error: a.max_error,
-            noise_scale: a.noise_scale,
-            chroma_clamp: a.chroma_clamp,
-            strength: a.strength,
-            temperature_profile: a.temperature_profile.clone(),
-            maximum_compatibility: a.maximum_compatibility,
-            min_png_bytes: a.min_png_bytes,
-            clear: a.clear.clone(),
-        };
+        let body = || a.to_device_write();
         // Resolve the identifier the agent passed (its actual MAC, as
         // `list_devices` reports it, or its config key directly) to the
         // *existing* `config.devices` key, if any — the same resolution
@@ -237,5 +271,136 @@ impl ByonkMcp {
                 e.to_string(),
             )])),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args() -> ConfigureDeviceArgs {
+        serde_json::from_value(serde_json::json!({ "mac": "AA:BB:CC:DD:EE:FF" }))
+            .expect("only `mac` is required")
+    }
+
+    /// The settable fields of `DeviceWrite`, as the agent-facing names. `key`
+    /// is excluded: it is the entry name, not a setting, and the tool takes
+    /// `mac` instead. `screen` is `screen_ref` here.
+    const MIRRORED: [&str; 18] = [
+        "screen_ref",
+        "panel",
+        "dither",
+        "colors",
+        "colors_actual",
+        "gamut",
+        "params",
+        "refresh",
+        "name",
+        "max_error",
+        "noise_scale",
+        "chroma_clamp",
+        "strength",
+        "temperature_profile",
+        "maximum_compatibility",
+        "min_png_bytes",
+        "final",
+        "clear",
+    ];
+
+    /// `ConfigureDeviceArgs` is a hand-written mirror of `DeviceWrite`. Only a
+    /// test keeps the two in step: `gamut` went missing from this mirror for a
+    /// whole release because nothing checked.
+    ///
+    /// The nested config types are embedded directly (not re-mirrored), so
+    /// they follow the config model by construction; the test pins that the
+    /// schema really exposes their fields.
+    #[test]
+    fn the_mcp_mirror_carries_every_device_write_field() {
+        let schema = schemars::schema_for!(ConfigureDeviceArgs);
+        let json = serde_json::to_value(&schema).expect("schema serialises");
+        let props = json["properties"].as_object().expect("an object schema");
+        for field in MIRRORED {
+            assert!(
+                props.contains_key(field),
+                "`{field}` is missing from the MCP tool's schema, so no agent can set it"
+            );
+        }
+        // Nothing in the schema that DeviceWrite cannot take (besides `mac`).
+        assert_eq!(
+            props.len(),
+            MIRRORED.len() + 1,
+            "unexpected extra properties"
+        );
+
+        // The embedded types expose their own fields through $defs.
+        let defs = json["$defs"].as_object().expect("nested types in $defs");
+        let fields_of = |name: &str| -> Vec<String> {
+            defs[name]["properties"]
+                .as_object()
+                .unwrap_or_else(|| panic!("`{name}` has no properties in the schema"))
+                .keys()
+                .cloned()
+                .collect()
+        };
+        for f in ["knee", "amount", "max_compression"] {
+            assert!(
+                fields_of("GamutTuningValues").contains(&f.to_string()),
+                "{f}"
+            );
+        }
+        for f in [
+            "colors",
+            "colors_actual",
+            "dither",
+            "max_error",
+            "noise_scale",
+            "chroma_clamp",
+            "strength",
+            "refresh",
+            "gamut",
+        ] {
+            assert!(fields_of("CascadeValues").contains(&f.to_string()), "{f}");
+        }
+    }
+
+    /// Carrying a field in the schema is not enough: the conversion must
+    /// actually pass it on.
+    #[test]
+    fn the_mcp_mirror_passes_the_new_fields_to_device_write() {
+        let a = ConfigureDeviceArgs {
+            colors_actual: Some("#1C5240,#FFFFFF".into()),
+            gamut: Some(GamutTuningValues {
+                knee: Some(0.8),
+                ..Default::default()
+            }),
+            final_rung: Some(CascadeValues {
+                dither: Some("atkinson".into()),
+                ..Default::default()
+            }),
+            clear: Some(vec!["final.strength".into()]),
+            ..args()
+        };
+        let w = a.to_device_write();
+        assert_eq!(w.colors_actual.as_deref(), Some("#1C5240,#FFFFFF"));
+        assert_eq!(w.gamut.and_then(|g| g.knee), Some(0.8));
+        assert_eq!(
+            w.final_rung.and_then(|f| f.dither),
+            Some("atkinson".to_string()),
+            "the conversion must pass the final rung, not drop it"
+        );
+        assert_eq!(w.clear, Some(vec!["final.strength".to_string()]));
+    }
+
+    /// `final` arrives under that name on the wire, not `final_rung`.
+    #[test]
+    fn the_final_block_is_read_from_the_wire_name() {
+        let a: ConfigureDeviceArgs = serde_json::from_value(serde_json::json!({
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "final": { "refresh": 900 },
+            "gamut": { "amount": 0.5 },
+        }))
+        .unwrap();
+        assert_eq!(a.final_rung.and_then(|f| f.refresh), Some(900));
+        assert_eq!(a.gamut.and_then(|g| g.amount), Some(0.5));
     }
 }

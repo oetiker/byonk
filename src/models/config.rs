@@ -1,4 +1,6 @@
 use crate::assets::AssetLoader;
+// The MCP tool's argument schema embeds these two types, so they derive it.
+use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -11,7 +13,8 @@ pub const RESERVED_DEFAULT_KEY: &str = "DEFAULT";
 ///
 /// Frame-level, not per adaptation group: groups change only which pixels are
 /// measured together to derive the compression factor, not the curve's shape.
-#[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 pub struct GamutTuningValues {
     /// Where compression begins, as a fraction of the reachable chroma limit.
     pub knee: Option<f32>,
@@ -104,8 +107,9 @@ impl DitherTuningValues {
 /// struct and one resolver is what stops a newly added setting from quietly
 /// acquiring a precedence order of its own, which is how `dither` came to be
 /// inverted relative to its four neighbours.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(crate = "rmcp::schemars")]
 pub struct CascadeValues {
     pub colors: Option<String>,
     pub colors_actual: Option<String>,

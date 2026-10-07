@@ -441,6 +441,9 @@ final:
         // No sighting, no `final:` block: identity empty, final rung empty.
         let bare = device_preview_for(&dc("screen: local/hello"), "k", None);
         assert_eq!(bare.firmware_version, None);
-        assert_eq!(bare.final_rung, crate::models::config::CascadeValues::default());
+        assert_eq!(
+            bare.final_rung,
+            crate::models::config::CascadeValues::default()
+        );
     }
 }

@@ -319,7 +319,7 @@ fn png_response(png: Vec<u8>, cache_state: &'static str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{DeviceId, DitherTuningValues};
+    use crate::models::DeviceId;
 
     fn dc(yaml: &str) -> DeviceConfig {
         serde_yaml::from_str(yaml).expect("device config parses")
@@ -357,6 +357,18 @@ mod tests {
         assert_ne!(fingerprint(&a, "og", &opts), fingerprint(&b, "og", &opts));
     }
 
+    #[test]
+    fn fingerprint_changes_when_only_final_rung_gamut_changes() {
+        let base = dc("screen: local/hello\nfinal:\n  gamut:\n    knee: 0.41\n    amount: 0.42\n    max_compression: 0.43\n");
+        let changed = dc("screen: local/hello\nfinal:\n  gamut:\n    knee: 0.51\n    amount: 0.52\n    max_compression: 0.53\n");
+        let opts = RenderOpts::default();
+        assert_ne!(
+            fingerprint(&base, "og", &opts),
+            fingerprint(&changed, "og", &opts),
+            "changing gamut inside final: must invalidate the cached preview"
+        );
+    }
+
     /// Every field gets a distinct value, so swapping any pair fails.
     #[test]
     fn device_preview_for_assigns_each_field_from_its_own_source() {
@@ -368,6 +380,10 @@ max_error: 0.71
 noise_scale: 0.72
 chroma_clamp: 0.73
 strength: 0.74
+gamut:
+  knee: 0.81
+  amount: 0.82
+  max_compression: 0.83
 refresh: 777
 final:
   colors: '#000004,#FFFFFB'
@@ -377,6 +393,10 @@ final:
   noise_scale: 0.52
   chroma_clamp: 0.53
   strength: 0.54
+  gamut:
+    knee: 0.41
+    amount: 0.42
+    max_compression: 0.43
   refresh: 1800
 ");
         let mut seen = Device::new(
@@ -400,6 +420,9 @@ final:
         assert_eq!(p.tuning.noise_scale, Some(0.72));
         assert_eq!(p.tuning.chroma_clamp, Some(0.73));
         assert_eq!(p.tuning.strength, Some(0.74));
+        assert_eq!(p.tuning.gamut.knee, Some(0.81));
+        assert_eq!(p.tuning.gamut.amount, Some(0.82));
+        assert_eq!(p.tuning.gamut.max_compression, Some(0.83));
         assert_eq!(p.refresh, Some(777));
         // Final rung: its own values, none of the base ones.
         let f = &p.final_rung;
@@ -410,12 +433,14 @@ final:
         assert_eq!(f.noise_scale, Some(0.52));
         assert_eq!(f.chroma_clamp, Some(0.53));
         assert_eq!(f.strength, Some(0.54));
+        assert_eq!(f.gamut.knee, Some(0.41));
+        assert_eq!(f.gamut.amount, Some(0.42));
+        assert_eq!(f.gamut.max_compression, Some(0.43));
         assert_eq!(f.refresh, Some(1800));
 
         // No sighting, no `final:` block: identity empty, final rung empty.
         let bare = device_preview_for(&dc("screen: local/hello"), "k", None);
         assert_eq!(bare.firmware_version, None);
         assert_eq!(bare.final_rung, crate::models::config::CascadeValues::default());
-        let _ = DitherTuningValues::default();
     }
 }

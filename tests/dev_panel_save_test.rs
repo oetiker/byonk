@@ -338,3 +338,45 @@ async fn the_old_panel_colors_save_route_is_gone() {
     assert!(r.status.is_client_error(), "{}", r.status);
     assert_eq!(std::fs::read_to_string(&config_path).unwrap(), before);
 }
+
+/// A flow-style panel (`og: {…}`) survives a Save that removes or changes a
+/// key inside it: the panel is rewritten as a block, never dropped.
+#[tokio::test]
+async fn saving_a_flow_style_panel_keeps_the_panel() {
+    const FLOW: &str = "\
+admin:
+  token: secret
+panels:
+  og: {name: TRMNL OG, colors: '#000000,#FFFFFF', colors_actual: '#1A1A1A,#D8D8D8'}
+  e1004:   # the six-colour one
+    name: reTerminal E1004
+    colors: '#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00'
+";
+    let dir = tempfile::tempdir().unwrap();
+    let (app, config_path) = TestApp::new_with_config_yaml(FLOW, dir.path());
+    let r = app
+        .post_json("/dev/api/panels/og/save", &[AUTH], "{}")
+        .await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+    let yaml = std::fs::read_to_string(&config_path).unwrap();
+    let p = panel_of(&yaml, "og");
+    assert_eq!(p["name"], "TRMNL OG", "{yaml}");
+    assert_eq!(p["colors"], "#000000,#FFFFFF", "{yaml}");
+    assert!(p.get("colors_actual").is_none(), "{yaml}");
+
+    let r = app
+        .post_json(
+            "/dev/api/panels/og/save",
+            &[AUTH],
+            r##"{"colors_actual":"#222222,#DDDDDD","dither":{"strength":0.8}}"##,
+        )
+        .await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+    let yaml = std::fs::read_to_string(&config_path).unwrap();
+    let p = panel_of(&yaml, "og");
+    assert_eq!(p["name"], "TRMNL OG", "{yaml}");
+    assert_eq!(p["colors_actual"], "#222222,#DDDDDD", "{yaml}");
+    assert_eq!(p["dither"]["strength"].as_f64(), Some(0.8), "{yaml}");
+    assert!(yaml.contains("# the six-colour one"), "{yaml}");
+    assert_eq!(panel_order(&yaml), vec!["og", "e1004"]);
+}

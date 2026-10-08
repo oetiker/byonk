@@ -588,27 +588,39 @@ fn require_known_panel(state: &AppState, panel: &str) -> Result<(), ApiError> {
 pub async fn handle_start_tuning_session(
     State(state): State<AppState>,
     axum::extract::Path(device): axum::extract::Path<String>,
-) -> StatusCode {
+) -> Result<StatusCode, ApiError> {
+    // `/api/display` looks the session up by config key, so store it there.
+    let key = state
+        .config
+        .load()
+        .resolve_device_key(&device, Some(&device))
+        .ok_or(ApiError::NotFound)?;
     state
         .dev_overrides
         .tuning_sessions
         .write()
         .await
-        .insert(device, std::time::Instant::now());
-    StatusCode::OK
+        .insert(key, std::time::Instant::now());
+    Ok(StatusCode::OK)
 }
 
 /// End a tuning session, handing the device its normal refresh rate back.
+/// Idempotent: an unknown device is a no-op.
 pub async fn handle_end_tuning_session(
     State(state): State<AppState>,
     axum::extract::Path(device): axum::extract::Path<String>,
 ) -> StatusCode {
+    let key = state
+        .config
+        .load()
+        .resolve_device_key(&device, Some(&device))
+        .unwrap_or(device);
     state
         .dev_overrides
         .tuning_sessions
         .write()
         .await
-        .remove(&device);
+        .remove(&key);
     StatusCode::OK
 }
 

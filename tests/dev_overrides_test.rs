@@ -532,14 +532,14 @@ async fn a_device_override_refuses_colors_and_refresh_and_unknown_devices() {
 async fn a_device_override_is_listed_under_the_config_key_and_delete_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     let (app, _cfg) = app(dir.path());
-    let yaml_upper = app
+    let put = app
         .put_json(
             "/dev/api/overrides/devices/kitchen",
             &[AUTH],
             r#"{"strength":0.3}"#,
         )
         .await;
-    assert!(yaml_upper.status.is_success(), "{}", yaml_upper.text());
+    assert!(put.status.is_success(), "{}", put.text());
     let v: serde_json::Value = app
         .get_with_headers("/dev/api/overrides", &[AUTH])
         .await
@@ -591,4 +591,73 @@ async fn the_listing_shows_every_live_override_and_session_with_its_time_left() 
         .await
         .json();
     assert_eq!(v["panels"], serde_json::json!([]));
+}
+
+/// A config with a MAC-keyed device and a registration-code-keyed device.
+fn keyed_app(dir: &std::path::Path) -> TestApp {
+    let yaml = "\
+admin:
+  token: secret
+devices:
+  'AA:BB:CC:DD:EE:01':
+    screen: byonk-builtin/default
+  'ABCDE-FGHJK':
+    screen: byonk-builtin/default
+";
+    TestApp::new_with_config_yaml(yaml, dir).0
+}
+
+#[tokio::test]
+async fn tuning_sessions_and_device_overrides_are_listed_under_the_config_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = keyed_app(dir.path());
+    // Lowercase MAC and a code written in another case and without the hyphen.
+    for addressed in ["aa:bb:cc:dd:ee:01", "abcdefghjk"] {
+        let r = app
+            .put_json(&format!("/dev/api/tuning-session/{addressed}"), &[AUTH], "")
+            .await;
+        assert!(r.status.is_success(), "{addressed}: {}", r.text());
+        let r = app
+            .put_json(
+                &format!("/dev/api/overrides/devices/{addressed}"),
+                &[AUTH],
+                r#"{"strength":0.5}"#,
+            )
+            .await;
+        assert!(r.status.is_success(), "{addressed}: {}", r.text());
+    }
+    let v: serde_json::Value = app
+        .get_with_headers("/dev/api/overrides", &[AUTH])
+        .await
+        .json();
+    let keys = |name: &str| -> Vec<String> {
+        v[name]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["key"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let expected = ["AA:BB:CC:DD:EE:01", "ABCDE-FGHJK"];
+    assert_eq!(keys("tuning_sessions"), expected);
+    assert_eq!(keys("devices"), expected);
+
+    // DELETE in a different case ends the real session.
+    app.delete("/dev/api/tuning-session/aa:bb:cc:dd:ee:01", &[AUTH])
+        .await;
+    let v: serde_json::Value = app
+        .get_with_headers("/dev/api/overrides", &[AUTH])
+        .await
+        .json();
+    assert_eq!(v["tuning_sessions"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_tuning_session_for_an_unknown_device_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _cfg) = app(dir.path());
+    let r = app
+        .put_json("/dev/api/tuning-session/nosuchdevice", &[AUTH], "")
+        .await;
+    assert_eq!(r.status, axum::http::StatusCode::NOT_FOUND);
 }

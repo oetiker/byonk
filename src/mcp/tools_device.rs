@@ -87,8 +87,10 @@ pub struct ConfigureDeviceArgs {
     /// Settings to remove from this device, by name — for example
     /// `["noise_scale"]`. Omitting a field means "leave it alone", so this is
     /// the only way to take a setting back and let the panel's value (or the
-    /// firmware's default) apply again. A field cannot be set and cleared in
-    /// the same call.
+    /// firmware's default) apply again. A field may be cleared and set in
+    /// one call: the clear applies first, so the new value wins. Single gamut
+    /// knobs clear as `gamut.knee`, `gamut.amount`, `gamut.max_compression`
+    /// (and `final.gamut.<knob>`).
     ///
     /// One dot addresses the veto block: `"dither"` clears the device's
     /// default, `"final.dither"` clears its veto, and `"final"` removes the

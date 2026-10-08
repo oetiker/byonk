@@ -536,6 +536,26 @@ pub async fn handle_delete_device_override(
     StatusCode::OK
 }
 
+/// `PATCH /dev/api/devices/{key}`: Save a device draft. The same write as the
+/// admin PATCH and the MCP tool -- `apply_device_patch`, with its screen,
+/// params, clear and read-only-config guards -- then drop the device's live
+/// override, which the config now carries (P1-9). The override is keyed by the
+/// resolved config key, as the override routes are.
+pub async fn handle_save_device(
+    State(state): State<AppState>,
+    axum::extract::Path(key): axum::extract::Path<String>,
+    Json(body): Json<crate::api::admin::write::DeviceWrite>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let key = state
+        .config
+        .load()
+        .resolve_device_key(&key, Some(&key))
+        .unwrap_or(key);
+    let out = crate::api::admin::write::apply_device_patch(&state, &key, body).await?;
+    state.dev_overrides.devices.remove(&key).await;
+    Ok(Json(out))
+}
+
 /// One live override in the listing.
 #[derive(Debug, Serialize)]
 pub struct LiveOverride {
@@ -1015,7 +1035,7 @@ fn log_render_warnings(report: &Resolution, req: &RenderRequest) {
 /// `nest` semantics — nothing at `/dev/`; `server::build_router` registers
 /// that explicitly, outside this nest, wearing the same `require_dev` layer.
 pub fn dev_router(state: &AppState) -> Router<AppState> {
-    use axum::routing::{get, post, put};
+    use axum::routing::{get, patch, post, put};
     let api = Router::new()
         .route("/screens", get(handle_screens))
         .route("/events", get(handle_events))
@@ -1031,6 +1051,7 @@ pub fn dev_router(state: &AppState) -> Router<AppState> {
             put(handle_put_panel_override).delete(handle_delete_panel_override),
         )
         .route("/panels/{panel}/save", post(handle_save_panel))
+        .route("/devices/{key}", patch(handle_save_device))
         .route(
             "/tuning-session/{device}",
             put(handle_start_tuning_session).delete(handle_end_tuning_session),

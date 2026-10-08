@@ -289,11 +289,10 @@ fn validate_colors(colors: &str, key: &str) -> Result<(), ApiError> {
 }
 
 /// Resolve the `clear` list into the set of keys to drop, rejecting names that
-/// are not settings and names the same call also sets.
+/// are not settings.
 ///
-/// Setting and clearing one field in a single call has no sensible reading, so
-/// it is refused rather than resolved by precedence — a caller that does it is
-/// confused about what it wants, and either outcome would surprise it.
+/// A name may also be set in the same request: `apply_device_patch` clears
+/// first and sets second, so the set wins (ruling C3).
 fn resolve_clear(w: &DeviceWrite) -> Result<Vec<String>, ApiError> {
     let Some(requested) = &w.clear else {
         return Ok(Vec::new());
@@ -301,7 +300,10 @@ fn resolve_clear(w: &DeviceWrite) -> Result<Vec<String>, ApiError> {
     let mut out = Vec::new();
     for name in requested {
         let acceptable = CLEARABLE_DEVICE_KEYS.contains(&name.as_str())
-            || name.strip_prefix("final.").is_some_and(is_cascade_field);
+            || GAMUT_SUBFIELDS.contains(&name.as_str())
+            || name
+                .strip_prefix("final.")
+                .is_some_and(|f| is_cascade_field(f) || GAMUT_SUBFIELDS.contains(&f));
         if !acceptable {
             let hint = if name == "screen" {
                 " (a device must always have a screen; assign a different one instead)"
@@ -309,37 +311,10 @@ fn resolve_clear(w: &DeviceWrite) -> Result<Vec<String>, ApiError> {
                 ""
             };
             return Err(ApiError::BadRequest(format!(
-                "cannot clear `{name}`{hint}; clearable: {}, or `final.<field>` for one of: {}",
+                "cannot clear `{name}`{hint}; clearable: {}, gamut.knee, gamut.amount, \
+                 gamut.max_compression, or `final.<field>` for one of: {}",
                 CLEARABLE_DEVICE_KEYS.join(", "),
                 CASCADE_FIELDS.join(", ")
-            )));
-        }
-        let also_set = match name.as_str() {
-            "panel" => w.panel.is_some(),
-            "dither" => w.dither.is_some(),
-            "colors" => w.colors.is_some(),
-            "refresh" => w.refresh.is_some(),
-            "name" => w.name.is_some(),
-            "params" => w.params.is_some(),
-            "max_error" => w.max_error.is_some(),
-            "noise_scale" => w.noise_scale.is_some(),
-            "chroma_clamp" => w.chroma_clamp.is_some(),
-            "strength" => w.strength.is_some(),
-            "temperature_profile" => w.temperature_profile.is_some(),
-            "maximum_compatibility" => w.maximum_compatibility.is_some(),
-            "min_png_bytes" => w.min_png_bytes.is_some(),
-            "colors_actual" => w.colors_actual.is_some(),
-            "gamut" => w.gamut.is_some(),
-            "final" => w.final_rung.is_some(),
-            dotted if dotted.starts_with("final.") => w
-                .final_rung
-                .as_ref()
-                .is_some_and(|f| cascade_field_is_set(f, &dotted["final.".len()..])),
-            _ => false,
-        };
-        if also_set {
-            return Err(ApiError::BadRequest(format!(
-                "`{name}` is both set and cleared in the same request"
             )));
         }
         out.push(name.clone());
@@ -363,23 +338,21 @@ const CASCADE_FIELDS: [&str; 9] = [
     "gamut",
 ];
 
-fn is_cascade_field(name: &str) -> bool {
-    CASCADE_FIELDS.contains(&name)
+/// Single gamut knobs, clearable on their own (ruling C3) so one can be
+/// removed without restating the others.
+const GAMUT_SUBFIELDS: [&str; 3] = ["gamut.knee", "gamut.amount", "gamut.max_compression"];
+
+fn clear_gamut_sub(g: &mut GamutTuningValues, name: &str) {
+    match name {
+        "gamut.knee" => g.knee = None,
+        "gamut.amount" => g.amount = None,
+        "gamut.max_compression" => g.max_compression = None,
+        _ => {}
+    }
 }
 
-fn cascade_field_is_set(v: &CascadeValues, field: &str) -> bool {
-    match field {
-        "colors" => v.colors.is_some(),
-        "colors_actual" => v.colors_actual.is_some(),
-        "dither" => v.dither.is_some(),
-        "max_error" => v.max_error.is_some(),
-        "noise_scale" => v.noise_scale.is_some(),
-        "chroma_clamp" => v.chroma_clamp.is_some(),
-        "strength" => v.strength.is_some(),
-        "refresh" => v.refresh.is_some(),
-        "gamut" => !v.gamut.is_empty(),
-        _ => false,
-    }
+fn is_cascade_field(name: &str) -> bool {
+    CASCADE_FIELDS.contains(&name)
 }
 
 fn clear_cascade_field(v: &mut CascadeValues, field: &str) {
@@ -393,6 +366,7 @@ fn clear_cascade_field(v: &mut CascadeValues, field: &str) {
         "strength" => v.strength = None,
         "refresh" => v.refresh = None,
         "gamut" => v.gamut = GamutTuningValues::default(),
+        sub if GAMUT_SUBFIELDS.contains(&sub) => clear_gamut_sub(&mut v.gamut, sub),
         // Unreachable: `resolve_clear` rejects anything else.
         _ => {}
     }
@@ -403,9 +377,11 @@ fn clear_cascade_field(v: &mut CascadeValues, field: &str) {
 /// A bare name addresses the base rung only; `final.<field>` one field of the
 /// final rung and `final` the whole rung.
 ///
-/// Applied after the merge, so a cleared field is not carried over from the
-/// existing entry; `device_block` then omits it, and `unmanaged_device_keys`
-/// cannot put it back because every clearable key is managed.
+/// Applied to the existing entry BEFORE the body's sets are merged over it
+/// (ruling C3), so a cleared field is not carried over, and a key that is also
+/// set in the same request ends up set. `device_block` omits a cleared field,
+/// and `unmanaged_device_keys` cannot put it back because every clearable key
+/// is managed.
 fn apply_clear(merged: &mut DeviceWrite, clear: &[String]) {
     for name in clear {
         match name.as_str() {
@@ -426,6 +402,11 @@ fn apply_clear(merged: &mut DeviceWrite, clear: &[String]) {
             "gamut" => merged.gamut = None,
             // The whole rung, as one key.
             "final" => merged.final_rung = None,
+            sub if GAMUT_SUBFIELDS.contains(&sub) => {
+                if let Some(g) = merged.gamut.as_mut() {
+                    clear_gamut_sub(g, sub);
+                }
+            }
             dotted if dotted.starts_with("final.") => {
                 if let Some(f) = merged.final_rung.as_mut() {
                     clear_cascade_field(f, &dotted["final.".len()..]);
@@ -765,7 +746,34 @@ pub async fn apply_device_patch(
         config.devices.get(key).cloned().ok_or(ApiError::NotFound)?
     };
 
-    // Merge: start from existing, override provided fields.
+    // Ruling C3: clear the existing entry first, then merge the body's sets
+    // over what is left. A key both cleared and set therefore ends up set,
+    // and the whole change is one write under one lock.
+    let mut base = DeviceWrite {
+        key: Some(key.to_string()),
+        screen: Some(existing.screen.clone()),
+        panel: existing.panel.clone(),
+        dither: existing.dither.clone(),
+        colors: existing.colors.clone(),
+        colors_actual: existing.colors_actual.clone(),
+        gamut: Some(existing.gamut.clone()),
+        final_rung: existing.final_rung.clone(),
+        params: Some(existing.params.clone()),
+        refresh: existing.refresh,
+        name: existing.name.clone(),
+        max_error: existing.max_error,
+        noise_scale: existing.noise_scale,
+        chroma_clamp: existing.chroma_clamp,
+        strength: existing.strength,
+        temperature_profile: existing.temperature_profile.clone(),
+        maximum_compatibility: existing.maximum_compatibility,
+        min_png_bytes: existing.min_png_bytes,
+        clear: None,
+    };
+    apply_clear(&mut base, &clear);
+    let base_params = base.params.clone().unwrap_or_default();
+
+    // Merge: start from the cleared base, override provided fields.
     let screen = body.screen.clone().unwrap_or(existing.screen.clone());
 
     // Params: a screen change replaces params wholesale with whatever the
@@ -777,55 +785,51 @@ pub async fn apply_device_patch(
     let params = if body.screen.is_none() {
         match &body.params {
             Some(p) => {
-                let mut merged = existing.params.clone();
+                let mut merged = base_params.clone();
                 for (k, v) in p {
                     merged.insert(k.clone(), v.clone());
                 }
                 merged
             }
-            None => existing.params.clone(),
+            None => base_params.clone(),
         }
     } else {
-        body.params
-            .clone()
-            .unwrap_or_else(|| existing.params.clone())
+        body.params.clone().unwrap_or_else(|| base_params.clone())
     };
 
     // Every managed key needs a line here. A key listed in
     // `MANAGED_DEVICE_KEYS` but missing from this merge is *deleted* by any
     // patch that omits it — `unmanaged_device_keys` no longer protects it —
     // and the loss is silent until it shows up on the glass.
-    let mut merged = DeviceWrite {
+    let merged = DeviceWrite {
         key: Some(key.to_string()),
         screen: Some(screen.clone()),
-        panel: body.panel.clone().or(existing.panel.clone()),
-        dither: body.dither.clone().or(existing.dither.clone()),
-        colors: body.colors.clone().or(existing.colors.clone()),
-        colors_actual: body
-            .colors_actual
-            .clone()
-            .or(existing.colors_actual.clone()),
-        gamut: Some(body.gamut.clone().unwrap_or_default().or(&existing.gamut)),
-        final_rung: merge_final(body.final_rung.as_ref(), existing.final_rung.as_ref()),
+        panel: body.panel.clone().or(base.panel.clone()),
+        dither: body.dither.clone().or(base.dither.clone()),
+        colors: body.colors.clone().or(base.colors.clone()),
+        colors_actual: body.colors_actual.clone().or(base.colors_actual.clone()),
+        gamut: Some(
+            body.gamut
+                .clone()
+                .unwrap_or_default()
+                .or(&base.gamut.clone().unwrap_or_default()),
+        ),
+        final_rung: merge_final(body.final_rung.as_ref(), base.final_rung.as_ref()),
         params: Some(params),
-        refresh: body.refresh.or(existing.refresh),
-        name: body.name.clone().or(existing.name.clone()),
-        max_error: body.max_error.or(existing.max_error),
-        noise_scale: body.noise_scale.or(existing.noise_scale),
-        chroma_clamp: body.chroma_clamp.or(existing.chroma_clamp),
-        strength: body.strength.or(existing.strength),
+        refresh: body.refresh.or(base.refresh),
+        name: body.name.clone().or(base.name.clone()),
+        max_error: body.max_error.or(base.max_error),
+        noise_scale: body.noise_scale.or(base.noise_scale),
+        chroma_clamp: body.chroma_clamp.or(base.chroma_clamp),
+        strength: body.strength.or(base.strength),
         temperature_profile: body
             .temperature_profile
             .clone()
-            .or(existing.temperature_profile.clone()),
-        maximum_compatibility: body
-            .maximum_compatibility
-            .or(existing.maximum_compatibility),
-        min_png_bytes: body.min_png_bytes.or(existing.min_png_bytes),
+            .or(base.temperature_profile.clone()),
+        maximum_compatibility: body.maximum_compatibility.or(base.maximum_compatibility),
+        min_png_bytes: body.min_png_bytes.or(base.min_png_bytes),
         clear: None,
     };
-    apply_clear(&mut merged, &clear);
-
     let empty = HashMap::new();
     validate_screen_and_params(state, &screen, merged.params.as_ref().unwrap_or(&empty))?;
 
@@ -1408,19 +1412,64 @@ devices:
         }
     }
 
-    /// Setting and clearing the same thing in one request is a caller mistake
-    /// at every rung, not just the base one.
+    /// Ruling C3 (named by ruling PF7): setting and clearing one field in a
+    /// request is no longer a refusal. `apply_device_patch` clears the existing
+    /// entry first and merges the sets second, so the set wins. This walks
+    /// those steps in that order and asserts the field ends up SET.
     #[test]
-    fn a_final_field_cannot_be_set_and_cleared_in_one_request() {
-        let body = DeviceWrite {
+    fn a_final_field_set_and_cleared_in_one_request_ends_up_set() {
+        let mut existing = DeviceWrite {
             final_rung: Some(CascadeValues {
-                dither: Some("atkinson".into()),
+                dither: Some("floyd-steinberg".into()),
+                strength: Some(0.4),
                 ..Default::default()
             }),
             ..device_write_for_test()
         };
-        resolve_clear(&with_clear(body, &["final.dither"]))
-            .expect_err("set and cleared in the same request");
+        let body = with_clear(
+            DeviceWrite {
+                final_rung: Some(CascadeValues {
+                    dither: Some("atkinson".into()),
+                    ..Default::default()
+                }),
+                ..device_write_for_test()
+            },
+            &["final.dither"],
+        );
+        let clear = resolve_clear(&body).expect("set + clear is accepted");
+        assert_eq!(clear, vec!["final.dither".to_string()]);
+        apply_clear(&mut existing, &clear);
+        let merged = merge_final(body.final_rung.as_ref(), existing.final_rung.as_ref())
+            .expect("a final rung remains");
+        assert_eq!(merged.dither.as_deref(), Some("atkinson"), "the set wins");
+        assert_eq!(merged.strength, Some(0.4), "an uncleared sibling is kept");
+    }
+
+    #[test]
+    fn gamut_sub_fields_are_clearable_on_both_rungs_and_nothing_else_is() {
+        resolve_clear(&with_clear(
+            device_write_for_test(),
+            &["gamut.knee", "gamut.amount", "final.gamut.max_compression"],
+        ))
+        .expect("gamut sub-fields are clearable");
+        for bad in ["gamut.nope", "final.gamut.nope", "gamut."] {
+            resolve_clear(&with_clear(device_write_for_test(), &[bad])).expect_err(bad);
+        }
+    }
+
+    #[test]
+    fn clearing_a_gamut_sub_field_leaves_its_siblings() {
+        let mut w = DeviceWrite {
+            gamut: Some(GamutTuningValues {
+                knee: Some(0.5),
+                amount: Some(0.9),
+                ..Default::default()
+            }),
+            ..device_write_for_test()
+        };
+        apply_clear(&mut w, &["gamut.knee".to_string()]);
+        assert_eq!(w.gamut.as_ref().unwrap().knee, None);
+        assert_eq!(w.gamut.as_ref().unwrap().amount, Some(0.9));
     }
 
     /// Clearing one final field while setting a different one is fine -- that

@@ -739,13 +739,12 @@ async fn test_clear_rejects_screen_and_unknown_names() {
     }
 }
 
-/// Setting and clearing the same field has no sensible reading, so it is
-/// refused rather than resolved by precedence — either outcome would surprise
-/// the caller that asked for both.
+/// Ruling C3: a field both cleared and set in one request ends up set -- the
+/// clear applies to the existing entry first, the sets merge over the result.
 #[tokio::test]
-async fn test_clear_rejects_a_field_the_same_call_sets() {
+async fn test_clear_then_set_of_the_same_field_ends_up_set() {
     let dir = tempfile::tempdir().unwrap();
-    let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
+    let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
     seed_fully_configured(&app).await;
 
     let resp = app
@@ -755,8 +754,11 @@ async fn test_clear_rejects_a_field_the_same_call_sets() {
             r#"{"noise_scale":1.5,"clear":["noise_scale"]}"#,
         )
         .await;
-    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
-    assert!(resp.text().contains("noise_scale"), "{}", resp.text());
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    let block = on_disk.split(MAC).nth(1).expect("device block");
+    assert!(block.contains("noise_scale: 1.5"), "set wins:\n{block}");
 }
 
 #[tokio::test]

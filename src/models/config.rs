@@ -100,6 +100,22 @@ impl DitherTuningValues {
     }
 }
 
+/// An `f32` as the `f64` with the same shortest decimal, so `0.8` is written
+/// and reported as `0.8` and not `0.800000011920929`. The one place f32
+/// representation noise is removed (plan ruling PF1).
+pub fn tidy(v: f32) -> f64 {
+    v.to_string().parse().unwrap_or(v as f64)
+}
+
+/// `serialize_with` for an `Option<f32>` field: `None` stays `null`, `Some`
+/// goes through [`tidy`].
+pub fn serialize_tidy_opt<S: serde::Serializer>(v: &Option<f32>, s: S) -> Result<S::Ok, S::Error> {
+    match v {
+        Some(v) => s.serialize_some(&tidy(*v)),
+        None => s.serialize_none(),
+    }
+}
+
 /// The settings that take part in the resolution cascade.
 ///
 /// Used for the `final:` block and as the shape the resolver works in. One

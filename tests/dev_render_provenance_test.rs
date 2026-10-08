@@ -99,9 +99,38 @@ fn scaffold_plain_screen(dir: &std::path::Path) {
     .unwrap();
 }
 
+/// `local/needs`: fails unless `params.greeting == "hi"`, naming what it got,
+/// so a test can see exactly which params reached the script.
+fn scaffold_needs_screen(dir: &std::path::Path) {
+    let screen_dir = dir.join("local").join("needs");
+    std::fs::create_dir_all(&screen_dir).unwrap();
+    std::fs::write(
+        screen_dir.join("meta.yaml"),
+        format!(
+            "title: Needs\ndescription: Params probe, for tests.\nbyonk: \"{}\"\nrefresh: 900\n",
+            byonk::models::compat::engine_compat_req()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        screen_dir.join("script.lua"),
+        "if params.greeting ~= \"hi\" then error(\"greeting was \" .. tostring(params.greeting)) end\nreturn { data = { width = layout.width, height = layout.height } }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        screen_dir.join("screen.svg"),
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
+  <rect x="0" y="0" width="{{ data.width }}" height="{{ data.height }}" fill="#FFFFFF"/>
+</svg>
+"##,
+    )
+    .unwrap();
+}
+
 fn app(dir: &std::path::Path) -> (TestApp, std::path::PathBuf) {
     scaffold_gradient_screen(dir);
     scaffold_plain_screen(dir);
+    scaffold_needs_screen(dir);
     let yaml = format!(
         "\
 admin:
@@ -122,6 +151,10 @@ devices:
     refresh: 600
     params:
       greeting: hi
+  porch:
+    screen: local/plain
+    final:
+      strength: 0.4
 ",
         dir.join("local").display()
     );
@@ -262,25 +295,114 @@ async fn a_draft_panel_with_a_wrong_length_calibration_is_rejected_in_the_report
 }
 
 #[tokio::test]
-async fn fields_the_config_cannot_hold_yet_are_refused() {
+async fn fields_the_cascade_cannot_carry_are_refused() {
     let dir = tempfile::tempdir().unwrap();
     let (app, _) = app(dir.path());
     for body in [
-        r#"{"screen":"local/plain","draft":{"final":{"dither":"atkinson"}}}"#,
-        r##"{"screen":"local/plain","device":"kitchen","draft":{"base":{"colors_actual":"#000000"}}}"##,
         r##"{"screen":"local/plain","override":{"colors":"#000000,#FFFFFF"}}"##,
         r#"{"screen":"local/plain","override":{"refresh":60}}"#,
         r#"{"screen":"local/plain","dither":"atkinson"}"#,
+        r#"{"screen":"local/plain","draft":{"nope":{}}}"#,
     ] {
         let r = app.post_json("/dev/api/render", &[AUTH], body).await;
         assert!(r.status.is_client_error(), "{body} → {}", r.status);
-        // A 405 would mean the route is missing, not that the body was refused.
         assert_ne!(
             r.status,
             axum::http::StatusCode::METHOD_NOT_ALLOWED,
             "{body}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_draft_final_replaces_the_configured_final_rung() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = app(dir.path());
+    // porch has final.strength 0.4. A draft final without strength removes it,
+    // and its own dither vetoes the screen's atkinson.
+    let r = app
+        .post_json(
+            "/dev/api/render",
+            &[AUTH],
+            r#"{"device":"porch","draft":{"final":{"dither":"stucki"}}}"#,
+        )
+        .await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+    let res = resolution(&r);
+    assert_eq!(res["dither"]["effective"], "stucki");
+    assert_eq!(res["dither"]["from"], "device_final");
+    assert!(
+        res["strength"]["rungs"].get("device_final").is_none(),
+        "the draft final rung replaced the configured one, strength included"
+    );
+}
+
+#[tokio::test]
+async fn without_a_draft_final_the_configured_final_rung_stays() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = app(dir.path());
+    let r = app
+        .post_json("/dev/api/render", &[AUTH], r#"{"device":"porch"}"#)
+        .await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+    assert_eq!(
+        resolution(&r)["strength"]["rungs"]["device_final"]["value"],
+        0.4
+    );
+}
+
+#[tokio::test]
+async fn a_draft_base_may_carry_colors_actual() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = app(dir.path());
+    let r = app
+        .post_json(
+            "/dev/api/render",
+            &[AUTH],
+            r##"{"device":"kitchen","draft":{"base":{"colors_actual":"#111111,#EEEEEE,#AA2222,#CCCC33,#2222AA,#22AA22"}}}"##,
+        )
+        .await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+    let res = resolution(&r);
+    assert_eq!(res["colors_actual"]["from"], "device_base");
+    assert_eq!(
+        res["colors_actual"]["rungs"]["panel"]["status"],
+        "outranked"
+    );
+}
+
+#[tokio::test]
+async fn draft_params_replace_the_device_params_and_simulated_ones_merge_on_top() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = app(dir.path());
+    // Configured params (greeting: hi) satisfy the probe.
+    let ok = app
+        .post_json(
+            "/dev/api/render",
+            &[AUTH],
+            r#"{"screen":"local/needs","device":"kitchen"}"#,
+        )
+        .await;
+    assert!(ok.status.is_success(), "{} {}", ok.status, ok.text());
+    // An empty draft removes them: the script sees nil.
+    let gone = app
+        .post_json(
+            "/dev/api/render",
+            &[AUTH],
+            r#"{"screen":"local/needs","device":"kitchen","draft":{"params":{}}}"#,
+        )
+        .await;
+    assert_eq!(gone.status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(gone.text().contains("greeting was nil"), "{}", gone.text());
+    // Simulated params still land on top of the draft.
+    let back = app
+        .post_json(
+            "/dev/api/render",
+            &[AUTH],
+            r#"{"screen":"local/needs","device":"kitchen","draft":{"params":{}},"simulated":{"params":{"greeting":"hi"}}}"#,
+        )
+        .await;
+    assert!(back.status.is_success(), "{} {}", back.status, back.text());
 }
 
 #[tokio::test]

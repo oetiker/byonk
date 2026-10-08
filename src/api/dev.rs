@@ -60,12 +60,18 @@ pub struct RenderRequest {
 }
 
 /// An uncommitted edit. Each present rung REPLACES the configured one, so a
-/// preview can show the effect of removing a value (plan ruling 2).
+/// preview can show the effect of removing a value (controller ruling R-B).
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RenderDraft {
     pub base: Option<CascadeValues>,
+    /// The device's `final:` rung, drafted.
+    #[serde(rename = "final")]
+    pub final_rung: Option<CascadeValues>,
     pub panel: Option<PanelDraft>,
+    /// Replaces the device's configured params; `simulated.params` still
+    /// merge on top (plan ruling P1-7).
+    pub params: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// The panel rung of a draft. Every field absent means the panel carries
@@ -102,16 +108,10 @@ pub struct ViewOptions {
     pub use_actual: Option<bool>,
 }
 
-/// Fields the cascade cannot carry until piece 3 (plan ruling 4).
-fn refused_until_cascade(req: &RenderRequest) -> Option<&'static str> {
-    if req
-        .draft
-        .base
-        .as_ref()
-        .is_some_and(|b| b.colors_actual.is_some())
-    {
-        return Some("draft.base.colors_actual: a device-level colors_actual is not supported yet");
-    }
+/// Override fields the cascade cannot carry on this path (controller ruling
+/// R-B): the script would be shown one palette and rendered with another,
+/// and nothing here consumes a refresh.
+fn refused_fields(req: &RenderRequest) -> Option<&'static str> {
     if req.over.colors.is_some() {
         return Some("override.colors is not supported: the script could not see it");
     }
@@ -547,7 +547,7 @@ pub async fn handle_render(
 ) -> Response {
     use crate::api::display;
 
-    if let Some(refusal) = refused_until_cascade(&req) {
+    if let Some(refusal) = refused_fields(&req) {
         return render_error(StatusCode::BAD_REQUEST, refusal, None);
     }
 
@@ -592,9 +592,12 @@ pub async fn handle_render(
         .base
         .clone()
         .unwrap_or_else(|| device.map(|d| d.base()).unwrap_or_default());
-    // The device's `final:` block. A draft that sets final fields is piece 2's
-    // `req.over`, not this rung.
-    let device_final_rung: CascadeValues = device.map(|d| d.device_final()).unwrap_or_default();
+    // The device's `final:` block, unless the draft replaces it.
+    let device_final_rung: CascadeValues = req
+        .draft
+        .final_rung
+        .clone()
+        .unwrap_or_else(|| device.map(|d| d.device_final()).unwrap_or_default());
     let panel_cfg = req
         .panel
         .as_deref()
@@ -616,10 +619,14 @@ pub async fn handle_render(
     // Determine dimensions from model or explicit values
     let (width, height) = display::resolve_preview_dimensions(&req.model, req.width, req.height);
 
-    // Device params, with the simulated ones on top.
-    let mut custom_params: HashMap<String, serde_json::Value> = device
-        .map(|d| yaml_params_to_json(&d.params))
-        .unwrap_or_default();
+    // The device's params (or the draft's, which replace them), with the
+    // simulated ones on top.
+    let mut custom_params: HashMap<String, serde_json::Value> = match &req.draft.params {
+        Some(p) => p.clone(),
+        None => device
+            .map(|d| yaml_params_to_json(&d.params))
+            .unwrap_or_default(),
+    };
     custom_params.extend(req.simulated.params.clone());
 
     // The model's default palette stands in for the firmware `Colors` header.

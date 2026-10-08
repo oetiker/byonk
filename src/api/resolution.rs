@@ -613,7 +613,10 @@ pub fn resolve_render(i: &RenderInputs) -> RenderResolution {
                 ORDER_TUNING,
                 accept_any,
             );
-            report.insert($key, r.report(|v| serde_json::json!(v)));
+            report.insert(
+                $key,
+                r.report(|v| serde_json::json!(crate::models::config::tidy(*v))),
+            );
             tuning.$($field).+ = r.configured().copied();
         }};
     }
@@ -1040,6 +1043,19 @@ mod tests {
             "flat panel default, not the atkinson block"
         );
         assert_eq!(r.report["strength"].from, Rung::Panel);
+    }
+
+    #[test]
+    fn a_float_setting_is_reported_without_f32_noise() {
+        let mut i = inputs();
+        i.device_base.tuning.strength = Some(0.4);
+        i.device_base.tuning.gamut.knee = Some(0.7);
+        let r = resolve_render(&i);
+        let json = serde_json::to_value(&r.report["strength"]).unwrap();
+        assert_eq!(json["effective"], 0.4, "the effective value");
+        assert_eq!(json["rungs"]["device_base"]["value"], 0.4, "the rung value");
+        let knee = serde_json::to_value(&r.report["gamut.knee"]).unwrap();
+        assert_eq!(knee["effective"], 0.7);
     }
 
     #[test]

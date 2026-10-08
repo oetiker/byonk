@@ -196,7 +196,7 @@ impl DeviceConfig {
 ///     max_error: 0.08
 ///     noise_scale: 4.0
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct PanelDitherConfig {
     pub defaults: DitherTuningValues,
     pub algorithms: HashMap<String, DitherTuningValues>,
@@ -213,6 +213,95 @@ impl PanelDitherConfig {
             }
         }
         self.defaults.clone()
+    }
+}
+
+impl PanelDitherConfig {
+    /// True when the block configures nothing at all. An algorithm entry
+    /// that sets nothing configures nothing, and is not written back either.
+    pub fn is_empty(&self) -> bool {
+        self.defaults.is_empty() && self.algorithms.values().all(DitherTuningValues::is_empty)
+    }
+}
+
+/// Write the set fields of one tuning block into a map. Shared by a panel
+/// block's flat defaults and each per-algorithm sub-map, so both serialise
+/// exactly as `PanelDitherConfig`'s `Deserialize` reads them. Every number
+/// goes through [`tidy`] (ruling P1-8), so a saved `0.8` reads `0.8` in
+/// config.yaml and compares equal on the next Save.
+fn write_tuning<M: serde::ser::SerializeMap>(
+    m: &mut M,
+    t: &DitherTuningValues,
+) -> Result<(), M::Error> {
+    if let Some(v) = t.max_error {
+        m.serialize_entry("max_error", &tidy(v))?;
+    }
+    if let Some(v) = t.noise_scale {
+        m.serialize_entry("noise_scale", &tidy(v))?;
+    }
+    if let Some(v) = t.chroma_clamp {
+        m.serialize_entry("chroma_clamp", &tidy(v))?;
+    }
+    if let Some(v) = t.strength {
+        m.serialize_entry("strength", &tidy(v))?;
+    }
+    if !t.gamut.is_empty() {
+        m.serialize_entry("gamut", &GamutOut(&t.gamut))?;
+    }
+    Ok(())
+}
+
+/// A gamut block without its unset fields (no `knee: null` in config.yaml).
+struct GamutOut<'a>(&'a GamutTuningValues);
+
+impl Serialize for GamutOut<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(None)?;
+        if let Some(v) = self.0.knee {
+            m.serialize_entry("knee", &tidy(v))?;
+        }
+        if let Some(v) = self.0.amount {
+            m.serialize_entry("amount", &tidy(v))?;
+        }
+        if let Some(v) = self.0.max_compression {
+            m.serialize_entry("max_compression", &tidy(v))?;
+        }
+        m.end()
+    }
+}
+
+/// One per-algorithm sub-map.
+struct TuningOut<'a>(&'a DitherTuningValues);
+
+impl Serialize for TuningOut<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(None)?;
+        write_tuning(&mut m, self.0)?;
+        m.end()
+    }
+}
+
+/// The flat form `Deserialize` reads: scalars and `gamut` are the defaults,
+/// every other key is an algorithm (sorted by name, empty ones skipped).
+/// `error_clamp` is never written back.
+impl Serialize for PanelDitherConfig {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(None)?;
+        write_tuning(&mut m, &self.defaults)?;
+        let mut names: Vec<&String> = self
+            .algorithms
+            .iter()
+            .filter(|(_, t)| !t.is_empty())
+            .map(|(name, _)| name)
+            .collect();
+        names.sort();
+        for name in names {
+            m.serialize_entry(name, &TuningOut(&self.algorithms[name]))?;
+        }
+        m.end()
     }
 }
 
@@ -1546,5 +1635,34 @@ gamut:
                 .unwrap();
         assert_eq!(pdc.defaults.max_error, Some(1.0));
         assert_eq!(pdc.algorithms["floyd-steinberg"].noise_scale, Some(0.6));
+    }
+
+    #[test]
+    fn panel_dither_config_serializes_to_the_flat_form_it_parses_from() {
+        let yaml =
+            "max_error: 0.5\nstrength: 0.8\ngamut:\n  knee: 0.6\natkinson:\n  noise_scale: 2.0\n";
+        let parsed: PanelDitherConfig = serde_yaml::from_str(yaml).unwrap();
+        let json = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "max_error": 0.5,
+                "strength": 0.8,
+                "gamut": {"knee": 0.6},
+                "atkinson": {"noise_scale": 2.0}
+            })
+        );
+        let back: PanelDitherConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(back, parsed);
+        // Ruling P1-8: no f32 representation noise reaches config.yaml.
+        let text = serde_yaml::to_string(&parsed).unwrap();
+        assert!(text.contains("strength: 0.8\n"), "{text}");
+    }
+
+    #[test]
+    fn an_empty_panel_dither_config_is_empty() {
+        assert!(PanelDitherConfig::default().is_empty());
+        let one: PanelDitherConfig = serde_yaml::from_str("stucki:\n  strength: 0.5\n").unwrap();
+        assert!(!one.is_empty());
     }
 }

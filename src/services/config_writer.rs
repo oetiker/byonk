@@ -135,19 +135,18 @@ fn indent_of(line: &str) -> usize {
     line.bytes().take_while(|b| *b == b' ').count()
 }
 
-/// Compute the byte range covering `<section>.<key>` *and only* its own block,
-/// starting at the key line and extending over the deeper-indented body
-/// lines that belong to it.
+/// Byte range of `path`'s key line plus the body lines that belong to it:
+/// every following line indented deeper than the key (comments included),
+/// and blank lines only when a deeper line follows them, so a blank line
+/// inside a block is part of it while blank lines after it are not.
 ///
-/// This is done manually instead of via `yamlpatch::Op::Remove` because
-/// tree-sitter attaches any following less-indented comment (e.g. a trailing
-/// top-level `# comment`) to the last block node, which would make `Op::Remove`
-/// delete that comment too. Scanning by indentation keeps such comments intact.
-fn block_range(yaml: &str, section: &str, key: &str) -> Result<(usize, usize), ConfigWriteError> {
+/// Scanned by indentation rather than with `Op::Remove`, because tree-sitter
+/// attaches a following less-indented comment (e.g. a trailing top-level
+/// `# comment`) to the last block node and would delete it too.
+fn path_range(yaml: &str, path: &[&str]) -> Result<(usize, usize), ConfigWriteError> {
     let doc = document(yaml)?;
-    let route = yamlpath::Route::default().with_key(section).with_key(key);
     let feature = doc
-        .query_pretty(&route)
+        .query_pretty(&route_for(path))
         .map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
     let key_byte = feature.location.byte_span.0;
 
@@ -155,18 +154,204 @@ fn block_range(yaml: &str, section: &str, key: &str) -> Result<(usize, usize), C
     let line_start = yaml[..key_byte].rfind('\n').map(|i| i + 1).unwrap_or(0);
     let key_indent = indent_of(&yaml[line_start..]);
 
-    // Walk forward, consuming lines that are more deeply indented than the key.
+    // Walk forward over the deeper-indented lines; `end` only advances past
+    // blank lines once a deeper line after them proves they are inside.
     let mut end = next_line_start(yaml, line_start);
-    while end < yaml.len() {
-        let line_end = next_line_start(yaml, end);
-        let line = &yaml[end..line_end];
-        if line.trim().is_empty() || indent_of(line) <= key_indent {
+    let mut scan = end;
+    while scan < yaml.len() {
+        let line_end = next_line_start(yaml, scan);
+        let line = &yaml[scan..line_end];
+        if line.trim().is_empty() {
+            scan = line_end;
+            continue;
+        }
+        if indent_of(line) <= key_indent {
             break;
         }
+        scan = line_end;
         end = line_end;
     }
 
     Ok((line_start, end))
+}
+
+/// The byte range of `<section>.<key>`'s own block; see [`path_range`].
+fn block_range(yaml: &str, section: &str, key: &str) -> Result<(usize, usize), ConfigWriteError> {
+    path_range(yaml, &[section, key])
+}
+
+fn parse(yaml: &str) -> Result<serde_yaml::Value, ConfigWriteError> {
+    serde_yaml::from_str(yaml).map_err(|e| ConfigWriteError::Patch(e.to_string()))
+}
+
+fn lookup<'a>(doc: &'a serde_yaml::Value, path: &[&str]) -> Option<&'a serde_yaml::Value> {
+    path.iter().try_fold(doc, |v, k| v.get(*k))
+}
+
+fn is_scalar(v: &serde_yaml::Value) -> bool {
+    !matches!(
+        v,
+        serde_yaml::Value::Mapping(_) | serde_yaml::Value::Sequence(_)
+    )
+}
+
+/// Does `path` carry its value on the key line (`dither: {}`, `x: 1`,
+/// `[a, b]`) rather than as an indented block (or nothing, `dither:`)?
+/// Asked of the parse tree, so a quoted key with a colon in it (`"AA:BB":`)
+/// or a trailing comment is not mistaken for an inline value.
+fn inline_value(yaml: &str, path: &[&str]) -> Result<bool, ConfigWriteError> {
+    let doc = document(yaml)?;
+    let value = doc
+        .query_exact(&route_for(path))
+        .map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
+    Ok(match value {
+        None => false,
+        Some(v) => !matches!(
+            v.kind(),
+            yamlpath::FeatureKind::BlockMapping | yamlpath::FeatureKind::BlockSequence
+        ),
+    })
+}
+
+/// `{key: value}` as block YAML, every line indented by `indent` spaces.
+/// Written as text because `yamlpatch`'s `Op::Add` mis-indents nested maps.
+fn block_text(
+    key: &str,
+    value: &serde_yaml::Value,
+    indent: usize,
+) -> Result<String, ConfigWriteError> {
+    let mut m = serde_yaml::Mapping::new();
+    m.insert(key.into(), value.clone());
+    let text = serde_yaml::to_string(&serde_yaml::Value::Mapping(m))
+        .map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
+    let pad = " ".repeat(indent);
+    Ok(text.lines().map(|l| format!("{pad}{l}\n")).collect())
+}
+
+/// Remove `path` and its body lines. An absent path leaves the text
+/// unchanged: removing what is not there is not an error for a whole-rung
+/// write.
+pub fn remove_path(yaml: &str, path: &[&str]) -> Result<String, ConfigWriteError> {
+    if lookup(&parse(yaml)?, path).is_none() {
+        return Ok(yaml.to_string());
+    }
+    let (start, end) = path_range(yaml, path)?;
+    let mut out = yaml.to_string();
+    out.replace_range(start..end, "");
+    Ok(out)
+}
+
+/// Set `path` to `value`, rewriting only the lines that key owns.
+///
+/// - an equal value: nothing is written (quoting and comments stay);
+/// - an existing scalar replaced by a scalar: in place, comment kept;
+/// - an existing key otherwise: its lines are replaced by a block at the
+///   same place and indentation;
+/// - an absent key: appended as the parent's last child, at the indentation
+///   the parent's children already use (parent indent + 2 when it has none).
+///   An inline parent (`dither: {}`) is first rewritten as a block.
+///
+/// The parent must exist ([`ConfigWriteError::NotFound`] otherwise); a
+/// top-level key's parent is the document, which always does.
+pub fn set_path(
+    yaml: &str,
+    path: &[&str],
+    value: &serde_yaml::Value,
+) -> Result<String, ConfigWriteError> {
+    assert!(!path.is_empty(), "set_path: path must not be empty");
+    let doc = parse(yaml)?;
+    let (parent, key) = path.split_at(path.len() - 1);
+    let key = key[0];
+
+    if let Some(existing) = lookup(&doc, path) {
+        if existing == value {
+            return Ok(yaml.to_string());
+        }
+        if is_scalar(existing) && is_scalar(value) && !existing.is_null() {
+            return replace_scalar(yaml, path, value.clone());
+        }
+        let (start, end) = path_range(yaml, path)?;
+        let text = block_text(key, value, indent_of(&yaml[start..]))?;
+        let mut out = yaml.to_string();
+        out.replace_range(start..end, &text);
+        return Ok(out);
+    }
+
+    if parent.is_empty() {
+        // A new top-level key: the document's last line.
+        let mut out = yaml.to_string();
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&block_text(key, value, 0)?);
+        return Ok(out);
+    }
+    let parent_value =
+        lookup(&doc, parent).ok_or_else(|| ConfigWriteError::NotFound(parent.join(".")))?;
+    if inline_value(yaml, parent)? {
+        let mut merged = parent_value.as_mapping().cloned().unwrap_or_default();
+        merged.insert(key.into(), value.clone());
+        return set_path(yaml, parent, &serde_yaml::Value::Mapping(merged));
+    }
+
+    let (start, end) = path_range(yaml, parent)?;
+    let parent_indent = indent_of(&yaml[start..]);
+    let child_indent = yaml[next_line_start(yaml, start)..end]
+        .lines()
+        .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+        .map(indent_of)
+        .unwrap_or(parent_indent + 2);
+    let mut text = block_text(key, value, child_indent)?;
+    if !yaml[..end].ends_with('\n') {
+        text.insert(0, '\n');
+    }
+    let mut out = yaml.to_string();
+    out.insert_str(end, &text);
+    Ok(out)
+}
+
+/// Make the mapping at `path` equal `target`, key by key: keys the target
+/// lacks are removed, changed values are set, nested mappings are synced
+/// recursively, and equal values are left exactly as written. An absent,
+/// null, inline or to-be-empty mapping is written whole by [`set_path`].
+pub fn sync_mapping(
+    yaml: &str,
+    path: &[&str],
+    target: &serde_yaml::Mapping,
+) -> Result<String, ConfigWriteError> {
+    let doc = parse(yaml)?;
+    let existing = match lookup(&doc, path) {
+        Some(serde_yaml::Value::Mapping(m)) if !target.is_empty() && !inline_value(yaml, path)? => {
+            m.clone()
+        }
+        _ => return set_path(yaml, path, &serde_yaml::Value::Mapping(target.clone())),
+    };
+    let key_of = |k: &serde_yaml::Value| -> Result<String, ConfigWriteError> {
+        k.as_str()
+            .map(str::to_string)
+            .ok_or_else(|| ConfigWriteError::Patch(format!("non-string key {k:?}")))
+    };
+    let mut out = yaml.to_string();
+    // Removals first, so an insert never lands next to a line about to go.
+    for k in existing.keys() {
+        if !target.contains_key(k) {
+            let k = key_of(k)?;
+            let child: Vec<&str> = path.iter().copied().chain([k.as_str()]).collect();
+            out = remove_path(&out, &child)?;
+        }
+    }
+    for (k, v) in target {
+        let ks = key_of(k)?;
+        let child: Vec<&str> = path.iter().copied().chain([ks.as_str()]).collect();
+        match (existing.get(k), v) {
+            (Some(old), new) if old == new => {}
+            (Some(serde_yaml::Value::Mapping(_)), serde_yaml::Value::Mapping(m)) => {
+                out = sync_mapping(&out, &child, m)?;
+            }
+            (_, new) => out = set_path(&out, &child, new)?,
+        }
+    }
+    Ok(out)
 }
 
 /// Remove `<section>.<key>` entirely. Returns [`ConfigWriteError::NotFound`] if
@@ -601,6 +786,269 @@ devices:
             v["devices"]["AA:BB"]["params"]["station"],
             serde_yaml::Value::from("Olten"),
             "params sub-map mis-nested:\n{out}"
+        );
+    }
+
+    const PANELS: &str = "\
+panels:
+    # first panel
+    e1004:
+        name: E1004   # inline
+        colors: '#000000,#FFFFFF'
+    og:
+        name: OG
+        dither:
+            max_error: 0.5   # tuned by hand
+            strength: 1.0
+";
+
+    #[test]
+    fn set_path_inserts_a_nested_mapping_at_the_parents_child_indent() {
+        let mut m = serde_yaml::Mapping::new();
+        m.insert("strength".into(), 0.8.into());
+        let out = set_path(
+            PANELS,
+            &["panels", "e1004", "dither"],
+            &serde_yaml::Value::Mapping(m),
+        )
+        .unwrap();
+        assert!(
+            out.contains("        dither:\n          strength: 0.8\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("# first panel")
+                && out.contains("# inline")
+                && out.contains("# tuned by hand")
+        );
+        let doc: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            doc["panels"]["e1004"]["dither"]["strength"].as_f64(),
+            Some(0.8)
+        );
+        assert_eq!(doc["panels"]["e1004"]["name"], "E1004");
+    }
+
+    #[test]
+    fn sync_mapping_touches_only_the_keys_that_change() {
+        let mut target = serde_yaml::Mapping::new();
+        target.insert("max_error".into(), 0.5.into()); // unchanged: its line and comment stay
+        let mut gamut = serde_yaml::Mapping::new();
+        gamut.insert("knee".into(), 0.6.into());
+        // A new nested block.
+        target.insert("gamut".into(), serde_yaml::Value::Mapping(gamut));
+        // `strength` absent from the target: removed.
+        let out = sync_mapping(PANELS, &["panels", "og", "dither"], &target).unwrap();
+        assert!(out.contains("max_error: 0.5   # tuned by hand"), "{out}");
+        assert!(!out.contains("strength"), "{out}");
+        let doc: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            doc["panels"]["og"]["dither"]["gamut"]["knee"].as_f64(),
+            Some(0.6)
+        );
+        assert_eq!(doc["panels"]["og"]["name"], "OG");
+    }
+
+    #[test]
+    fn set_path_rewrites_an_inline_flow_parent_as_a_block() {
+        let yaml = "panels:\n  og:\n    name: OG\n    dither: {}\n";
+        let out = set_path(yaml, &["panels", "og", "dither", "strength"], &0.8.into()).unwrap();
+        let doc: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            doc["panels"]["og"]["dither"]["strength"].as_f64(),
+            Some(0.8)
+        );
+        assert_eq!(doc["panels"]["og"]["name"], "OG");
+    }
+
+    #[test]
+    fn remove_path_of_an_absent_key_changes_nothing() {
+        assert_eq!(
+            remove_path(PANELS, &["panels", "e1004", "dither"]).unwrap(),
+            PANELS
+        );
+    }
+
+    #[test]
+    fn set_path_replaces_a_scalar_in_place_keeping_its_comment() {
+        let out = set_path(
+            PANELS,
+            &["panels", "og", "dither", "max_error"],
+            &0.7.into(),
+        )
+        .unwrap();
+        assert!(out.contains("max_error: 0.7   # tuned by hand"), "{out}");
+        assert_eq!(
+            out.replace("max_error: 0.7", "max_error: 0.5"),
+            PANELS,
+            "only the value changed"
+        );
+    }
+
+    #[test]
+    fn set_path_with_an_equal_value_leaves_the_text_alone() {
+        let quoted = "panels:\n  og:\n    colors: \"#000000,#FFFFFF\"  # dq\n";
+        let out = set_path(
+            quoted,
+            &["panels", "og", "colors"],
+            &"#000000,#FFFFFF".into(),
+        )
+        .unwrap();
+        assert_eq!(out, quoted);
+    }
+
+    #[test]
+    fn set_path_appends_to_the_last_block_of_a_file_without_a_final_newline() {
+        let yaml = "panels:\n  og:\n    name: OG\n    dither:\n      max_error: 0.5";
+        let out = set_path(yaml, &["panels", "og", "dither", "strength"], &0.8.into()).unwrap();
+        assert!(
+            out.ends_with("      max_error: 0.5\n      strength: 0.8\n"),
+            "{out}"
+        );
+        let doc: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            doc["panels"]["og"]["dither"]["max_error"].as_f64(),
+            Some(0.5)
+        );
+        assert_eq!(
+            doc["panels"]["og"]["dither"]["strength"].as_f64(),
+            Some(0.8)
+        );
+    }
+
+    #[test]
+    fn set_path_into_an_empty_block_parent_indents_one_level_deeper() {
+        let yaml =
+            "panels:\n  og:\n    name: OG\n    dither:   # nothing yet\n  next:\n    name: N\n";
+        let out = set_path(yaml, &["panels", "og", "dither", "strength"], &0.8.into()).unwrap();
+        assert_eq!(
+            out,
+            "panels:\n  og:\n    name: OG\n    dither:   # nothing yet\n      strength: 0.8\n  next:\n    name: N\n"
+        );
+    }
+
+    /// A blank line inside a block is part of it: removing the block must not
+    /// leave its tail behind, orphaned under the wrong parent.
+    #[test]
+    fn remove_path_takes_a_block_with_a_blank_line_inside_it_whole() {
+        let yaml = "\
+panels:
+  og:
+    name: OG
+    dither:
+      max_error: 0.5
+
+      atkinson:
+        noise_scale: 2.0
+
+  next:   # sibling
+    name: N
+";
+        let out = remove_path(yaml, &["panels", "og", "dither"]).unwrap();
+        assert_eq!(
+            out,
+            "panels:\n  og:\n    name: OG\n\n  next:   # sibling\n    name: N\n"
+        );
+    }
+
+    /// Appending a child lands after the block's last body line, not in the
+    /// middle of it at a blank line.
+    #[test]
+    fn set_path_appends_after_a_blank_line_inside_the_parent() {
+        let yaml = "\
+panels:
+  og:
+    name: OG
+
+    colors: '#000000,#FFFFFF'
+  next:
+    name: N
+";
+        let out = set_path(
+            yaml,
+            &["panels", "og", "colors_actual"],
+            &"#111111,#EEEEEE".into(),
+        )
+        .unwrap();
+        assert!(
+            out.contains(
+                "    colors: '#000000,#FFFFFF'\n    colors_actual: '#111111,#EEEEEE'\n  next:"
+            ),
+            "{out}"
+        );
+    }
+
+    /// A colon inside a quoted key is not an inline value: the block under it
+    /// must be extended in place, not rewritten (which would drop comments).
+    #[test]
+    fn set_path_under_a_quoted_key_with_a_colon_keeps_the_block() {
+        let yaml = "\
+devices:
+  \"AA:BB\":
+    screen: transit   # keep me
+";
+        let out = set_path(yaml, &["devices", "AA:BB", "panel"], &"og".into()).unwrap();
+        assert_eq!(
+            out,
+            "devices:\n  \"AA:BB\":\n    screen: transit   # keep me\n    panel: og\n"
+        );
+    }
+
+    #[test]
+    fn set_path_under_an_inline_top_level_section_rewrites_it_as_a_block() {
+        let yaml = "# head\npanels: {}   # none yet\nauth_mode: api_key\n";
+        let out = set_path(yaml, &["panels", "og"], &"x".into()).unwrap();
+        assert_eq!(out, "# head\npanels:\n  og: x\nauth_mode: api_key\n");
+    }
+
+    #[test]
+    fn set_path_of_an_absent_top_level_key_appends_it() {
+        let out = set_path("a: 1\n# tail\n", &["b"], &"x".into()).unwrap();
+        assert_eq!(out, "a: 1\n# tail\nb: x\n");
+    }
+
+    #[test]
+    fn set_path_with_a_missing_parent_is_not_found() {
+        assert!(matches!(
+            set_path(PANELS, &["panels", "nope", "dither"], &1.into()),
+            Err(ConfigWriteError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn sync_mapping_with_an_empty_target_leaves_an_empty_mapping_not_null() {
+        let out = sync_mapping(
+            PANELS,
+            &["panels", "og", "dither"],
+            &serde_yaml::Mapping::new(),
+        )
+        .unwrap();
+        let doc: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            doc["panels"]["og"]["dither"],
+            serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn sync_mapping_recurses_into_an_existing_nested_mapping() {
+        let yaml = "\
+og:
+  dither:
+    atkinson:   # per-algorithm
+      noise_scale: 2.0   # by eye
+      strength: 1.0
+";
+        let mut atk = serde_yaml::Mapping::new();
+        atk.insert("noise_scale".into(), 2.0.into());
+        atk.insert("max_error".into(), 0.4.into());
+        let mut target = serde_yaml::Mapping::new();
+        target.insert("atkinson".into(), serde_yaml::Value::Mapping(atk));
+        let out = sync_mapping(yaml, &["og", "dither"], &target).unwrap();
+        assert_eq!(
+            out,
+            "og:\n  dither:\n    atkinson:   # per-algorithm\n      noise_scale: 2.0   # by eye\n      max_error: 0.4\n"
         );
     }
 }

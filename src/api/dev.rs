@@ -394,43 +394,64 @@ pub async fn handle_resolve_mac(
     }
 }
 
-/// Request body for `POST /dev/api/panel-colors/{panel}/save`.
+/// Body of `POST /dev/api/panels/{panel}/save`: the panel rung, whole. An
+/// absent field is removed from the panel, because the draft replaced the
+/// rung (controller ruling R-B).
 #[derive(Debug, Deserialize)]
-pub struct PanelColorsRequest {
-    pub colors_actual: String,
+#[serde(deny_unknown_fields)]
+pub struct PanelRungWrite {
+    pub colors_actual: Option<String>,
+    pub dither: Option<PanelDitherConfig>,
 }
 
-/// Write a panel's tuned measured colours into `config.yaml`, durably.
-///
-/// This is stage 2 of colour tuning: stage 1 is the in-memory override above,
-/// which lets a calibration reach real hardware without becoming the
-/// configuration. Saving makes it the configuration and drops the override,
-/// because an override that merely restates the config is invisible weight.
+/// Write a panel's whole rung into `config.yaml`, durably (controller ruling
+/// R-D), in place, key by key: lines it does not change are not rewritten,
+/// so comments and the order of `panels:` survive (ruling C2). Then drop the
+/// panel's live override (P1-9): the config now carries the value, and an
+/// override that merely restates it is invisible weight.
 ///
 /// Deliberately NOT guarded by `require_writable_global`: `panels` is absent
-/// from the Home Assistant add-on Options schema, so nothing else owns it, and
-/// the sidebar dev UI is the main way this is used. See spec §5.
-pub async fn handle_save_panel_colors(
+/// from the Home Assistant add-on Options schema, so nothing else owns it.
+pub async fn handle_save_panel(
     State(state): State<AppState>,
     axum::extract::Path(panel): axum::extract::Path<String>,
-    Json(body): Json<PanelColorsRequest>,
+    Json(body): Json<PanelRungWrite>,
 ) -> Result<StatusCode, ApiError> {
+    use crate::services::config_writer::{remove_path, set_path, sync_mapping};
     require_known_panel(&state, &panel)?;
     let path = crate::api::config_persist::require_file_config(&state)?;
     let _guard = state.write_lock.lock().await;
 
-    let yaml = std::fs::read_to_string(&path)
+    let patch = |e: crate::services::config_writer::ConfigWriteError| {
+        ApiError::Internal(format!("patch config: {e}"))
+    };
+    let mut yaml = std::fs::read_to_string(&path)
         .map_err(|e| ApiError::Internal(format!("read config: {e}")))?;
-    let new_yaml = crate::services::config_writer::set_scalar(
-        &yaml,
-        &["panels", &panel, "colors_actual"],
-        serde_yaml::Value::from(body.colors_actual.as_str()),
-    )
-    .map_err(|e| ApiError::Internal(format!("patch config: {e}")))?;
 
-    crate::api::config_persist::persist(&state, &path, new_yaml)?;
+    let actual_path = ["panels", panel.as_str(), "colors_actual"];
+    yaml = match &body.colors_actual {
+        Some(c) => set_path(&yaml, &actual_path, &serde_yaml::Value::from(c.as_str())),
+        None => remove_path(&yaml, &actual_path),
+    }
+    .map_err(patch)?;
 
-    // The config now carries the value, so the override would only restate it.
+    let dither_path = ["panels", panel.as_str(), "dither"];
+    yaml = match body.dither.as_ref().filter(|d| !d.is_empty()) {
+        Some(d) => {
+            let serde_yaml::Value::Mapping(target) = serde_yaml::to_value(d)
+                .map_err(|e| ApiError::Internal(format!("serialize dither: {e}")))?
+            else {
+                return Err(ApiError::Internal(
+                    "dither did not serialize to a mapping".into(),
+                ));
+            };
+            sync_mapping(&yaml, &dither_path, &target)
+        }
+        None => remove_path(&yaml, &dither_path),
+    }
+    .map_err(patch)?;
+
+    crate::api::config_persist::persist(&state, &path, yaml)?;
     state.dev_overrides.panels.remove(&panel).await;
     Ok(StatusCode::OK)
 }
@@ -871,7 +892,7 @@ pub async fn handle_render(
     //    collide; a silent cross-device repaint when they do.
     //
     // Reaching real hardware is a separate, explicit act — `PUT
-    // /dev/api/panel-colors/{panel}` — so that a push is something the
+    // /dev/api/overrides/panels/{panel}` — so that a push is something the
     // operator does, not something a preview does to them. See
     // `docs/superpowers/specs/2026-10-04-render-resolution-cascade-design.md`
     // §5.1/§5.2, which is where the explicit routes for the dither and tuning
@@ -1009,7 +1030,7 @@ pub fn dev_router(state: &AppState) -> Router<AppState> {
             "/overrides/panels/{panel}",
             put(handle_put_panel_override).delete(handle_delete_panel_override),
         )
-        .route("/panel-colors/{panel}/save", post(handle_save_panel_colors))
+        .route("/panels/{panel}/save", post(handle_save_panel))
         .route(
             "/tuning-session/{device}",
             put(handle_start_tuning_session).delete(handle_end_tuning_session),

@@ -35,6 +35,11 @@ Rulings this plan makes where brief and spec are silent:
 - **Ruling (controller) C2 — panel Save never rebuilds the panel block.** `config.yaml` is the operator's hand-written document. Save writes `colors_actual` and the `dither` block **in place, key by key**: it creates `dither:` (and `gamut:` / an algorithm sub-map) under the panel when missing, sets each changed flat key, and removes each key the rung no longer has. Untouched lines — comments inside the panel, sibling panels, the order of `panels:` — are not rewritten. `yamlpatch`'s `Op::Add` mis-indents nested maps (`config_writer.rs:222-226`), so nested mappings are inserted by a new `config_writer` helper that writes the text itself at the child indentation the parent already uses. `upsert_panel` is not added.
 - **Ruling (controller) C3 — device Save is one atomic PATCH.** `apply_device_patch` accepts a `DeviceWrite` that both clears and sets: **clears apply to the existing entry first, then the sets merge over the result**, under the one write lock and one `persist`. A key both cleared and set in one request therefore ends up **set** (the set wins): `clear: ["final"]` + `final: {dither}` replaces the whole final rung with `{dither}`; `clear: ["params"]` + `params: {…}` replaces params wholesale. `clear` also accepts single gamut sub-fields: `gamut.knee`, `gamut.amount`, `gamut.max_compression` and `final.gamut.<sub>`. The unit test `a_final_field_cannot_be_set_and_cleared_in_one_request` (`write.rs:1424-1434`) is replaced by `a_final_field_set_and_cleared_in_one_request_ends_up_set`, because the refusal it pins is exactly what C3 removes; the MCP doc comment at `src/mcp/tools_device.rs:90` ("A field cannot be set and cleared in one request") is reworded. Every other admin-PATCH and MCP behaviour is unchanged.
 - **P1-8 (follows from C2) Float tidying.** `serde_yaml` turns an `f32` into an `f64` with representation noise (`0.8` → `0.800000011920929`). The panel `dither` block is serialised through `tidy(f32) -> f64` (shortest decimal of the `f32`), so a saved `0.8` reads `0.8` in the file and compares equal on the next Save, which then leaves that line untouched.
+- **Ruling (controller, pre-flight) PF1 — f32 noise is removed at the source, by one shared `tidy`.** `serde_json::json!(0.4f32)` serialises as `0.4000000059604645`, so a header or payload value would not compare `== 0.4`, and the ladder and the editor show these numbers to humans. `pub fn tidy(f32) -> f64` and `pub fn serialize_tidy_opt` live in `src/models/config.rs` (`crate::models::config::tidy`), defined in **Task 1** (the earliest task that needs it). They are used (a) by `resolution.rs` when it puts f32 values into the `X-Byonk-Resolution` payload (Task 1), (b) by `PanelDitherConfig`'s `Serialize` (Task 4, no local copy), and (c) as `serialize_with` on the f32 fields of `CascadeValues` and `GamutTuningValues`, so `DeviceInfo.base`/`final` carry `0.8` not `0.800000011920929` (Task 6). Tests that assert `== 0.4` / `0.9` / `0.1` are therefore correct as written. Task 1 pins that the header reports `0.4` for a `0.4` config value. Cost if wrong: the header changes number formatting (unreleased payload, no consumer yet).
+- **Ruling (controller, pre-flight) PF2 — Task 6 asserts `Some(0.8)`.** Follows from PF1: the payload carries the tidy value, so the test compares against `0.8_f64`, not `0.8_f32 as f64`.
+- **Ruling (controller, pre-flight) PF7 — the set+clear test is C3's.** The unit test is named `a_final_field_set_and_cleared_in_one_request_ends_up_set` and asserts the field ends up **set** (unit level); the integration tests stay; `apply_clear`'s doc comment ("Applied after the merge") is updated to the new order (Task 5).
+- **Ruling (controller, pre-flight) PF8 — no duplicated logic.** `refused_override_field` returns the **full error message** used by both override PUT routes (Tasks 2 and 3); Task 3's listing calls the same lazy-expiry code as `tuning_session_active` (one TTL implementation for all maps). Plan 2 Task 6 imports `devicePanel` from Task 5's `render-request.js`.
+- **Ruling (controller, pre-flight) PF9 — stale citations fixed.** `device_final_rung` is `dev.rs:597`, `custom_params` `:620`, `handle_render` `:544` (Task 1). The Plan 2 items of PF9 (the `NOT_PUSHABLE` comment cites ruling C1; the misnamed test describes `device_base`) are applied in Plan 2.
 - **P1-9 Saving clears the matching override** (panel Save → panel override, device Save → device override), as `handle_save_panel_colors` does today.
 - **P1-10 `DeviceInfo.dither` is removed**; it is `base.dither` now.
 
@@ -86,7 +91,9 @@ Rulings this plan makes where brief and spec are silent:
 ### Task 1: The draft wire format: `draft.final`, `draft.params`, device `colors_actual`
 
 **Files:**
-- Modify: `src/api/dev.rs` — `RenderDraft` (`dev.rs:62-69`), `refused_until_cascade` (`dev.rs:105-122`), `handle_render` (`dev.rs:539-` the rung assembly at `:582-591` and params at `:617-621`)
+- Modify: `src/api/dev.rs` — `RenderDraft` (`dev.rs:62-69`), `refused_until_cascade` (`dev.rs:105-122`), `handle_render` (`dev.rs:544-`: `device_final_rung` at `:597`, params at `:620`)
+- Modify: `src/models/config.rs` — the shared `tidy` helpers (ruling PF1)
+- Modify: `src/api/resolution.rs` — f32 values enter the `X-Byonk-Resolution` payload through `tidy`; one unit test
 - Test: `tests/dev_render_provenance_test.rs`
 
 **Interfaces:**
@@ -101,6 +108,7 @@ Rulings this plan makes where brief and spec are silent:
   }
   ```
   Still refused with 400: `override.colors`, `override.refresh`. Unknown keys: 422.
+- Produces (ruling PF1), used by Tasks 4 and 6: `pub fn tidy(v: f32) -> f64` and `pub fn serialize_tidy_opt<S: serde::Serializer>(v: &Option<f32>, s: S) -> Result<S::Ok, S::Error>` in `crate::models::config`. Every f32 in the resolution payload is `tidy(*v)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -268,12 +276,63 @@ async fn draft_params_replace_the_device_params_and_simulated_ones_merge_on_top(
 }
 ```
 
+In `src/api/resolution.rs`'s `mod tests` (next to `fallbacks_are_reported_but_not_handed_to_the_renderer`) add the unit test that pins the header's number formatting (ruling PF1). `0.4_f32` as a plain `json!` is `0.4000000059604645`:
+
+```rust
+    #[test]
+    fn a_float_setting_is_reported_without_f32_noise() {
+        let mut i = inputs();
+        i.device_base.tuning.strength = Some(0.4);
+        i.device_base.tuning.gamut.knee = Some(0.7);
+        let r = resolve_render(&i);
+        let json = serde_json::to_value(&r.report["strength"]).unwrap();
+        assert_eq!(json["effective"], 0.4, "the effective value");
+        assert_eq!(json["rungs"]["device_base"]["value"], 0.4, "the rung value");
+        let knee = serde_json::to_value(&r.report["gamut.knee"]).unwrap();
+        assert_eq!(knee["effective"], 0.7);
+    }
+```
+
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cargo test --test dev_render_provenance_test`
-Expected: `a_draft_final_replaces_the_configured_final_rung`, `a_draft_base_may_carry_colors_actual` and `draft_params_replace_…` FAIL (422 / 400 / success where 500 is expected).
+Run: `cargo test --test dev_render_provenance_test && cargo test --lib a_float_setting_is_reported_without_f32_noise`
+Expected: `a_draft_final_replaces_the_configured_final_rung`, `a_draft_base_may_carry_colors_actual`, `draft_params_replace_…` FAIL (422 / 400 / success where 500 is expected); `without_a_draft_final_the_configured_final_rung_stays` and `a_float_setting_is_reported_without_f32_noise` FAIL (`0.4000000059604645 != 0.4`).
 
 - [ ] **Step 3: Implement**
+
+In `src/models/config.rs`, directly above `CascadeValues`, add the shared helpers (ruling PF1; Tasks 4 and 6 use them, none defines its own):
+
+```rust
+/// An `f32` as the `f64` with the same shortest decimal, so `0.8` is written
+/// and reported as `0.8` and not `0.800000011920929`. The one place f32
+/// representation noise is removed (plan ruling PF1).
+pub fn tidy(v: f32) -> f64 {
+    v.to_string().parse().unwrap_or(v as f64)
+}
+
+/// `serialize_with` for an `Option<f32>` field: `None` stays `null`, `Some`
+/// goes through [`tidy`].
+pub fn serialize_tidy_opt<S: serde::Serializer>(
+    v: &Option<f32>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    match v {
+        Some(v) => s.serialize_some(&tidy(*v)),
+        None => s.serialize_none(),
+    }
+}
+```
+
+In `src/api/resolution.rs` make the `number!` macro report through `tidy` (the closure covers `effective` and every rung value):
+
+```rust
+            report.insert(
+                $key,
+                r.report(|v| serde_json::json!(crate::models::config::tidy(*v))),
+            );
+```
+
+(replacing `report.insert($key, r.report(|v| serde_json::json!(v)));`; the `refresh`, `dither` and colour reports carry no f32 and stay as they are).
 
 In `src/api/dev.rs` replace `RenderDraft`:
 
@@ -313,7 +372,7 @@ fn refused_fields(req: &RenderRequest) -> Option<&'static str> {
 
 and change the call at the top of `handle_render` to `if let Some(refusal) = refused_fields(&req) {`.
 
-In `handle_render` replace the `device_final_rung` binding (`dev.rs:585-588`) with:
+In `handle_render` replace the `device_final_rung` binding (`dev.rs:597`) with:
 
 ```rust
     // The device's `final:` block, unless the draft replaces it.
@@ -324,7 +383,7 @@ In `handle_render` replace the `device_final_rung` binding (`dev.rs:585-588`) wi
         .unwrap_or_else(|| device.map(|d| d.device_final()).unwrap_or_default());
 ```
 
-and the params block (`dev.rs:617-621`) with:
+and the params block (`dev.rs:620-623`) with:
 
 ```rust
     // The device's params (or the draft's, which replace them), with the
@@ -346,7 +405,7 @@ Expected: all PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/api/dev.rs tests/dev_render_provenance_test.rs
+git add src/api/dev.rs src/models/config.rs src/api/resolution.rs tests/dev_render_provenance_test.rs
 git commit -m "feat(dev): draft.final, draft.params and a device colors_actual in the dev render"
 ```
 
@@ -369,8 +428,9 @@ git commit -m "feat(dev): draft.final, draft.params and a device colors_actual i
   - `DevOverrides { panels: TimedMap<CascadeValues>, devices: TimedMap<CascadeValues>, tuning_sessions: … }`.
   - `DevOverrides::live_override(&self, device_key: Option<&str>, panel_key: Option<&str>) -> CascadeValues` (never carries `colors`/`refresh`).
   - `CascadeValues::or(&self, other: &CascadeValues) -> CascadeValues` (self wins, field by field).
+  - `pub fn ttl_left(touched: Instant) -> Option<Duration>`, `pub async fn live_tuning_sessions(&DevOverrides) -> Vec<(String, Duration)>` (ruling PF8; `tuning_session_active` keeps its signature).
   - Routes: `PUT /dev/api/overrides/panels/{panel}` body `CascadeValues` → 200 empty; 404 unknown panel; 400 with `colors` or `refresh` (ruling C1: `dither` is accepted).
-  - `fn refused_override_field(v: &CascadeValues) -> Option<&'static str>` — shared by the panel and device PUT routes (Task 3). `DELETE /dev/api/overrides/panels/{panel}` → 200 empty.
+  - `fn refused_override_field(v: &CascadeValues) -> Option<String>` — the **full 400 message** (ruling PF8), shared by the panel and device PUT routes (Task 3). `DELETE /dev/api/overrides/panels/{panel}` → 200 empty.
 
 - [ ] **Step 1: Rename the test file and point it at the new route**
 
@@ -615,13 +675,50 @@ In `src/api/admin/write.rs` `merge_final`, replace the `(Some(b), Some(e)) => So
 
 - [ ] **Step 4: Implement `TimedMap` and the new `DevOverrides`**
 
-In `src/server.rs` replace the `DevOverrides` struct and its doc comment with:
+In `src/server.rs` delete the existing `tuning_session_active` (`:68-79`; the version below replaces it, ruling PF8: one TTL rule for all maps), then replace the `DevOverrides` struct and its doc comment with:
 
 ```rust
 /// How long a dev override survives without being re-PUT. The same backstop
 /// as a tuning session: a closed tab must not leave a physical panel showing
 /// an uncommitted draft until byonk restarts (cascade spec §4.7).
 pub const OVERRIDE_TTL: Duration = TUNING_SESSION_TTL;
+
+/// Time left on something last touched at `touched`, or `None` once it has
+/// expired. The ONE TTL rule: `TimedMap`, `tuning_session_active` and
+/// `live_tuning_sessions` all decide expiry through it (ruling PF8).
+pub fn ttl_left(touched: Instant) -> Option<Duration> {
+    TUNING_SESSION_TTL
+        .checked_sub(touched.elapsed())
+        .filter(|left| !left.is_zero())
+}
+
+/// Is a tuning session live for `device_key`? Drops the entry if it has
+/// expired. (Replaces the inline `elapsed() < TUNING_SESSION_TTL` test.)
+pub async fn tuning_session_active(overrides: &DevOverrides, device_key: &str) -> bool {
+    let mut sessions = overrides.tuning_sessions.write().await;
+    match sessions.get(device_key).map(|touched| ttl_left(*touched)) {
+        Some(Some(_)) => true,
+        Some(None) => {
+            sessions.remove(device_key);
+            false
+        }
+        None => false,
+    }
+}
+
+/// Every live tuning session with its remaining lifetime, sorted by key;
+/// expired ones are dropped. Same rule as [`tuning_session_active`]
+/// (ruling PF8): the listing never re-implements expiry.
+pub async fn live_tuning_sessions(overrides: &DevOverrides) -> Vec<(String, Duration)> {
+    let mut sessions = overrides.tuning_sessions.write().await;
+    sessions.retain(|_, touched| ttl_left(*touched).is_some());
+    let mut out: Vec<_> = sessions
+        .iter()
+        .filter_map(|(k, touched)| ttl_left(*touched).map(|left| (k.clone(), left)))
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
 
 /// A string-keyed map whose entries expire [`OVERRIDE_TTL`] after their last
 /// insert. Expiry is lazy — every read drops what it finds stale — so there
@@ -659,9 +756,9 @@ impl<V: Clone> TimedMap<V> {
 
     pub async fn get(&self, key: &str) -> Option<V> {
         let mut map = self.inner.write().await;
-        match map.get(key) {
-            Some((v, t)) if t.elapsed() < OVERRIDE_TTL => Some(v.clone()),
-            Some(_) => {
+        match map.get(key).map(|(v, t)| (v.clone(), ttl_left(*t))) {
+            Some((v, Some(_))) => Some(v),
+            Some((_, None)) => {
                 map.remove(key);
                 None
             }
@@ -672,10 +769,10 @@ impl<V: Clone> TimedMap<V> {
     /// Every live entry with its remaining lifetime, sorted by key.
     pub async fn live(&self) -> Vec<(String, V, Duration)> {
         let mut map = self.inner.write().await;
-        map.retain(|_, (_, t)| t.elapsed() < OVERRIDE_TTL);
+        map.retain(|_, (_, t)| ttl_left(*t).is_some());
         let mut out: Vec<_> = map
             .iter()
-            .map(|(k, (v, t))| (k.clone(), v.clone(), OVERRIDE_TTL.saturating_sub(t.elapsed())))
+            .filter_map(|(k, (v, t))| ttl_left(*t).map(|left| (k.clone(), v.clone(), left)))
             .collect();
         out.sort_by(|a, b| a.0.cmp(&b.0));
         out
@@ -822,14 +919,20 @@ Replace `PanelColorsRequest`, `handle_set_panel_colors` and `handle_delete_panel
 /// show the script one palette and render another, and nothing on the
 /// override rung consumes `refresh`. Everything else -- `dither` included --
 /// is a legitimate draft value for both the panel and the device rung.
-fn refused_override_field(v: &CascadeValues) -> Option<&'static str> {
-    if v.colors.is_some() {
-        Some("colors")
+/// Returns the complete error message, so both PUT routes say the same thing
+/// (ruling PF8).
+fn refused_override_field(v: &CascadeValues) -> Option<String> {
+    let field = if v.colors.is_some() {
+        "colors"
     } else if v.refresh.is_some() {
-        Some("refresh")
+        "refresh"
     } else {
-        None
-    }
+        return None;
+    };
+    Some(format!(
+        "`{field}` cannot be overridden: an override carries colors_actual, dither, \
+         max_error, noise_scale, chroma_clamp, strength and gamut"
+    ))
 }
 
 /// `PUT /dev/api/overrides/panels/{panel}`: push a panel draft to every
@@ -842,11 +945,8 @@ pub async fn handle_put_panel_override(
     Json(body): Json<CascadeValues>,
 ) -> Result<StatusCode, ApiError> {
     require_known_panel(&state, &panel)?;
-    if let Some(field) = refused_override_field(&body) {
-        return Err(ApiError::BadRequest(format!(
-            "`{field}` cannot be overridden: an override carries colors_actual, dither, \
-             max_error, noise_scale, chroma_clamp, strength and gamut"
-        )));
+    if let Some(message) = refused_override_field(&body) {
+        return Err(ApiError::BadRequest(message));
     }
     state.dev_overrides.panels.insert(panel, body).await;
     Ok(StatusCode::OK)
@@ -896,7 +996,7 @@ git commit -m "feat(dev): timed panel-keyed cascade overrides, read as the overr
 - Test: `tests/dev_overrides_test.rs`
 
 **Interfaces:**
-- Consumes: `TimedMap`, `DevOverrides::live_override`, `AppConfig::resolve_device_key` (`config.rs:714`).
+- Consumes: `TimedMap`, `DevOverrides::live_override`, `live_tuning_sessions` and `refused_override_field` (Task 2, ruling PF8), `AppConfig::resolve_device_key` (`config.rs:714`).
 - Produces:
   - `PUT /dev/api/overrides/devices/{device}` body `CascadeValues` → 200 empty; 404 unknown device; 400 with `colors` or `refresh` (via `refused_override_field`, Task 2). Stored under the **config key** (`{device}` may be a MAC in any case or a registration code).
   - `DELETE /dev/api/overrides/devices/{device}` → 200 empty (resolves the key the same way; unknown → 200, idempotent).
@@ -1068,11 +1168,8 @@ pub async fn handle_put_device_override(
         .load()
         .resolve_device_key(&device, Some(&device))
         .ok_or(ApiError::NotFound)?;
-    if let Some(field) = refused_override_field(&body) {
-        return Err(ApiError::BadRequest(format!(
-            "`{field}` cannot be overridden: an override carries colors_actual, dither, \
-             max_error, noise_scale, chroma_clamp, strength and gamut"
-        )));
+    if let Some(message) = refused_override_field(&body) {
+        return Err(ApiError::BadRequest(message));
     }
     state.dev_overrides.devices.insert(key, body).await;
     Ok(StatusCode::OK)
@@ -1130,20 +1227,16 @@ pub async fn handle_list_overrides(State(state): State<AppState>) -> Json<Overri
     };
     let panels = to_live(o.panels.live().await);
     let devices = to_live(o.devices.live().await);
-    let mut tuning_sessions: Vec<LiveSession> = {
-        let mut sessions = o.tuning_sessions.write().await;
-        sessions.retain(|_, t| t.elapsed() < crate::server::TUNING_SESSION_TTL);
-        sessions
-            .iter()
-            .map(|(k, t)| LiveSession {
-                key: k.clone(),
-                expires_in_secs: crate::server::TUNING_SESSION_TTL
-                    .saturating_sub(t.elapsed())
-                    .as_secs(),
-            })
-            .collect()
-    };
-    tuning_sessions.sort_by(|a, b| a.key.cmp(&b.key));
+    // One TTL rule for every map (ruling PF8): `live_tuning_sessions` shares
+    // `ttl_left` with `tuning_session_active` and `TimedMap`.
+    let tuning_sessions: Vec<LiveSession> = crate::server::live_tuning_sessions(o)
+        .await
+        .into_iter()
+        .map(|(key, left)| LiveSession {
+            key,
+            expires_in_secs: left.as_secs(),
+        })
+        .collect();
     Json(OverridesResponse {
         panels,
         devices,
@@ -1186,7 +1279,7 @@ git commit -m "feat(dev): device-keyed overrides and a listing of everything liv
 
 **Interfaces:**
 - Produces:
-  - `impl Serialize for PanelDitherConfig` — the **flat** form the hand-written `Deserialize` reads: `max_error`, `noise_scale`, `chroma_clamp`, `strength` (only when set), `gamut` (only set sub-fields, omitted when empty), then each algorithm name → its own flat map. Every number goes through `tidy(f32) -> f64` (ruling P1-8). Round-trips through `Deserialize`.
+  - `impl Serialize for PanelDitherConfig` — the **flat** form the hand-written `Deserialize` reads: `max_error`, `noise_scale`, `chroma_clamp`, `strength` (only when set), `gamut` (only set sub-fields, omitted when empty), then each algorithm name → its own flat map. Every number goes through the shared `tidy(f32) -> f64` defined in Task 1 (rulings P1-8, PF1; this task adds no copy of it). Round-trips through `Deserialize`.
   - `PanelDitherConfig::is_empty(&self) -> bool`.
   - `config_writer::remove_path(yaml: &str, path: &[&str]) -> Result<String, ConfigWriteError>` — removes the key and its body lines; an absent path leaves the text unchanged.
   - `config_writer::set_path(yaml: &str, path: &[&str], value: &serde_yaml::Value) -> Result<String, ConfigWriteError>` — scalar over scalar: in place (`replace_scalar`); otherwise the key's own lines are replaced, or (absent key) inserted as the parent's last child, as text written at the parent's child indentation. The parent must exist.
@@ -1432,7 +1525,7 @@ Expected: compile errors (`Serialize`, `is_empty`, `set_path`, … missing) / 40
 
 - [ ] **Step 4: Implement `PanelDitherConfig` serialisation**
 
-In `src/models/config.rs` change `#[derive(Debug, Clone, Default)]` on `PanelDitherConfig` to `#[derive(Debug, Clone, Default, PartialEq)]` and add:
+In `src/models/config.rs` (`tidy` is already in this module from Task 1; do not define it again) change `#[derive(Debug, Clone, Default)]` on `PanelDitherConfig` to `#[derive(Debug, Clone, Default, PartialEq)]` and add:
 
 ```rust
 impl PanelDitherConfig {
@@ -1440,12 +1533,6 @@ impl PanelDitherConfig {
     pub fn is_empty(&self) -> bool {
         self.defaults.is_empty() && self.algorithms.is_empty()
     }
-}
-
-/// An `f32` as the `f64` with the same shortest decimal, so `0.8` is written
-/// as `0.8` and not `0.800000011920929` (plan ruling P1-8).
-fn tidy(v: f32) -> f64 {
-    v.to_string().parse().unwrap_or(v as f64)
 }
 
 /// Write the set fields of one tuning block into a map. Shared by a panel
@@ -2025,22 +2112,37 @@ async fn the_route_needs_a_dev_login() {
 In `src/api/admin/write.rs` `mod tests`, replace `a_final_field_cannot_be_set_and_cleared_in_one_request` — it pins exactly the refusal ruling C3 removes — with:
 
 ```rust
-    /// Ruling C3: setting and clearing one field in a request is no longer a
-    /// refusal; `apply_device_patch` clears first and sets second, so the set
-    /// wins. `resolve_clear` only validates names now.
+    /// Ruling C3 (named by ruling PF7): setting and clearing one field in a
+    /// request is no longer a refusal. `apply_device_patch` clears the existing
+    /// entry first and merges the sets second, so the set wins. This walks
+    /// those steps in that order and asserts the field ends up SET.
     #[test]
-    fn a_final_field_set_and_cleared_in_one_request_is_accepted() {
-        let body = DeviceWrite {
+    fn a_final_field_set_and_cleared_in_one_request_ends_up_set() {
+        let mut existing = DeviceWrite {
             final_rung: Some(CascadeValues {
-                dither: Some("atkinson".into()),
+                dither: Some("floyd-steinberg".into()),
+                strength: Some(0.4),
                 ..Default::default()
             }),
             ..device_write_for_test()
         };
-        assert_eq!(
-            resolve_clear(&with_clear(body, &["final.dither"])).unwrap(),
-            vec!["final.dither".to_string()]
+        let body = with_clear(
+            DeviceWrite {
+                final_rung: Some(CascadeValues {
+                    dither: Some("atkinson".into()),
+                    ..Default::default()
+                }),
+                ..device_write_for_test()
+            },
+            &["final.dither"],
         );
+        let clear = resolve_clear(&body).expect("set + clear is accepted");
+        assert_eq!(clear, vec!["final.dither".to_string()]);
+        apply_clear(&mut existing, &clear);
+        let merged = merge_final(body.final_rung.as_ref(), existing.final_rung.as_ref())
+            .expect("a final rung remains");
+        assert_eq!(merged.dither.as_deref(), Some("atkinson"), "the set wins");
+        assert_eq!(merged.strength, Some(0.4), "an uncleared sibling is kept");
     }
 
     #[test]
@@ -2111,7 +2213,7 @@ delete the whole `let also_set = …; if also_set { … }` block, and replace th
 
 3. `clear_cascade_field`: add an arm `sub if GAMUT_SUBFIELDS.contains(&sub) => clear_gamut_sub(&mut v.gamut, sub),` before the catch-all.
 
-4. `apply_clear`: add an arm before `dotted if dotted.starts_with("final.")`:
+4. `apply_clear`: it now runs on the existing entry BEFORE the merge, so replace its doc comment's last paragraph ("Applied after the merge, so a cleared field is not carried over from the existing entry; `device_block` then omits it, …") with: "Applied to the existing entry BEFORE the body's sets are merged over it (ruling C3), so a cleared field is not carried over, and a key that is also set in the same request ends up set. `device_block` omits a cleared field, and `unmanaged_device_keys` cannot put it back because every clearable key is managed." Then add an arm before `dotted if dotted.starts_with("final.")`:
 
 ```rust
             sub if GAMUT_SUBFIELDS.contains(&sub) => {
@@ -2213,6 +2315,7 @@ git commit -m "feat(dev): device Save as one atomic PATCH -- clear first, then s
 
 **Files:**
 - Modify: `src/api/dev.rs` — `DeviceInfo` (`:161-167`), `PanelInfo` (`:170-178`), `handle_screens` (`:282-305`)
+- Modify: `src/models/config.rs` — `serialize_with = "serialize_tidy_opt"` on the f32 fields of `CascadeValues` and `GamutTuningValues` (ruling PF1)
 - Create: `tests/dev_screens_payload_test.rs`
 
 **Interfaces:**
@@ -2271,6 +2374,9 @@ devices:
     panel: e1004
     name: Kitchen
     dither: floyd-steinberg
+    strength: 0.8
+    gamut:
+      knee: 0.7
     temperature_profile: a
     maximum_compatibility: true
     min_png_bytes: 102401
@@ -2298,6 +2404,9 @@ devices:
     assert_eq!(k["name"], "Kitchen");
     assert_eq!(k["params"]["greeting"], "hi");
     assert_eq!(k["base"]["dither"], "floyd-steinberg");
+    // Ruling PF1: the numbers reach the UI without f32 noise.
+    assert_eq!(k["base"]["strength"].as_f64(), Some(0.8));
+    assert_eq!(k["base"]["gamut"]["knee"].as_f64(), Some(0.7));
     assert_eq!(k["final"]["dither"], "atkinson");
     assert_eq!(k["temperature_profile"], "a");
     assert_eq!(k["maximum_compatibility"], true);
@@ -2313,7 +2422,7 @@ devices:
         .collect();
     assert_eq!(pids, ["e1004", "zeta"]);
     let p = &v["panels"][0];
-    assert_eq!(p["dither"]["strength"].as_f64(), Some(0.8_f32 as f64));
+    assert_eq!(p["dither"]["strength"].as_f64(), Some(0.8)); // ruling PF2: tidy, not 0.800000011920929
     assert_eq!(p["dither"]["atkinson"]["noise_scale"].as_f64(), Some(2.0));
     assert!(v["panels"][1]["dither"].is_null());
 }
@@ -2326,7 +2435,14 @@ Expected: FAIL (no `name`, unsorted, …).
 
 - [ ] **Step 3: Implement**
 
-Replace `DeviceInfo` and `PanelInfo` in `src/api/dev.rs`:
+In `src/models/config.rs` put `#[serde(serialize_with = "serialize_tidy_opt")]` (the Task 1 helper; no new `tidy`) on each `Option<f32>` field of `CascadeValues` (`max_error`, `noise_scale`, `chroma_clamp`, `strength`) and of `GamutTuningValues` (`knee`, `amount`, `max_compression`), e.g.:
+
+```rust
+    #[serde(serialize_with = "serialize_tidy_opt")]
+    pub strength: Option<f32>,
+```
+
+Deserialisation is untouched. This also tidies the YAML the admin write path emits for these structs, which is the same improvement P1-8 makes for the panel block (a rewritten `0.8` stays `0.8`). Then replace `DeviceInfo` and `PanelInfo` in `src/api/dev.rs`:
 
 ```rust
 /// A configured device: everything the dev UI's device editor shows.
@@ -2406,7 +2522,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/api/dev.rs tests/dev_screens_payload_test.rs
+git add src/api/dev.rs src/models/config.rs tests/dev_screens_payload_test.rs
 git commit -m "feat(dev): panel and device payloads carry every editable field"
 ```
 

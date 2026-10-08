@@ -34,6 +34,12 @@ Rulings this plan makes:
 - **P2-6 Mode b with a watched device renders as that device** (`device` + `panel` in the request, the subject panel winning), so the preview matches the display being watched; without one, no device is sent.
 - **P2-7 Draft-driven re-renders are debounced 300 ms**; subject, target and simulated-input changes render at once.
 - **P2-8 The editor remembers which screen it loaded** (`editor.ref`); `editor.validate/addFile/deleteFile` use it instead of `screens.selected`.
+- **Ruling (controller, pre-flight) PF3 — the journey harness grows with the modules.** Task 2's and Task 6's journey files import and reset only modules that exist at that task; Task 3 adds `resolution`'s import and reset to every journey file existing by then (`journey-finding-h`), Task 7 adds `configDraft`'s (`journey-finding-h`, `journey-subject-buffers`). The shared block below tags those lines. Each task's "all PASS" step is true at that task.
+- **Ruling (controller, pre-flight) PF4 — `ladder.test.js` cleans up.** It imports `cleanup` and runs `beforeEach(() => cleanup())` like the other render tests (this vitest setup has no auto-cleanup).
+- **Ruling (controller, pre-flight) PF5 — Push never shows what Save will not (amends P2-2).** `pushBody` skips a dirty base value whenever the field's EFFECTIVE final value (draft or config) is non-null, and `unpushable` reports it as "`<field>` (outranked by final)"; the Edit footer lists it with the other unpushable fields. A `configDraft` test pins it (Task 7).
+- **Ruling (controller, pre-flight) PF8 — no duplicated lookup.** Task 6's `LibraryPane` imports `devicePanel` from Task 5's `render-request.js` instead of writing the device→panel lookup again (Plan 1's PF8 covers the server side).
+- **Ruling (controller, pre-flight) PF9 — stale lines fixed.** `NOT_PUSHABLE`'s comment cites ruling C1 (not the non-existent "Plan 1 P1-2"); the Task 7 test misnamed "a changed final value is sent as a set" is renamed to describe `device_base` ("a changed base gamut value is sent as a set on the base rung, with no clear"). The Plan 1 citations of PF9 (`dev.rs` line numbers) are applied in Plan 1.
+- **Ruling (controller, pre-flight) PF10 — the panel journey changes a swatch.** Task 10's mode-b journey drives one `#swatch-hex` edit end to end (spec §9 "change a swatch"): hex edit → draft → render request → Push → Save.
 
 ## Global Constraints
 
@@ -80,7 +86,7 @@ Rulings this plan makes:
 
 ### Shared test harness (used by every journey below)
 
-Each journey file starts with this block (copy it; tasks are read independently):
+Each journey file starts with this block (copy it; tasks are read independently). **The block is the final form and grows with the modules (ruling PF3):** the two lines tagged `// [Task 3]` and the two tagged `// [Task 7]` exist only from those tasks on. A journey file created before then omits them; the task that creates the module adds its import and reset to every journey file existing by then (Task 3 → `journey-finding-h`; Task 7 → `journey-finding-h` and `journey-subject-buffers`). Every task's "all PASS" step is true at that task.
 
 ```js
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -94,8 +100,8 @@ import { layout } from "../src/lib/state/layout.svelte.js";
 import { auth } from "../src/lib/state/auth.svelte.js";
 import { theme } from "../src/lib/state/theme.svelte.js";
 import { subject } from "../src/lib/state/subject.svelte.js";
-import { resolution } from "../src/lib/state/resolution.svelte.js";
-import { configDraft } from "../src/lib/state/configDraft.svelte.js";
+import { resolution } from "../src/lib/state/resolution.svelte.js"; // [Task 3]
+import { configDraft } from "../src/lib/state/configDraft.svelte.js"; // [Task 7]
 import * as api from "../src/lib/api.js";
 
 const PANELS = [
@@ -138,7 +144,9 @@ beforeEach(() => {
   localStorage.clear();
   layout.reset(); theme.reset(); auth.reset(); editor.reset(); editor.files = [];
   simulate.reset(); simulate.error = null;
-  subject.reset(); resolution.reset(); configDraft.reset();
+  subject.reset();
+  resolution.reset(); // [Task 3]
+  configDraft.reset(); // [Task 7]
   screens.repos = []; screens.list = [];
   screens.meta = { devices: [], panels: [], dither_algorithms: [] };
   vi.spyOn(api, "listRepos").mockResolvedValue([{ handle: "local", writable: true }]);
@@ -339,7 +347,7 @@ describe("subject", () => {
 });
 ```
 
-`webui/test/journey-finding-h.test.js` (harness block from the top of this plan, then):
+`webui/test/journey-finding-h.test.js` (harness block from the top of this plan **without** the `// [Task 3]` and `// [Task 7]` lines, ruling PF3, then):
 
 ```js
 describe("Finding H: deleting the selected screen", () => {
@@ -679,12 +687,14 @@ In `PreviewPane.svelte` `renderNow()`: import `resolution, parseResolutionHeader
 
 and in the `catch`, after the superseded check: `resolution.fail(e.message, subject.key);`.
 
+Then extend the existing journey file (ruling PF3): in `webui/test/journey-finding-h.test.js` add the harness's `// [Task 3]` lines, `import { resolution } from "../src/lib/state/resolution.svelte.js";` after the `subject` import and `resolution.reset();` after `subject.reset();` in `beforeEach`.
+
 - [ ] **Step 4: Run** — `pnpm vitest run` → PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add webui/src/lib/state/resolution.svelte.js webui/src/lib/components/PreviewPane.svelte webui/test/resolution.test.js webui/test/preview.test.js
+git add webui/src/lib/state/resolution.svelte.js webui/src/lib/components/PreviewPane.svelte webui/test/resolution.test.js webui/test/preview.test.js webui/test/journey-finding-h.test.js
 git commit -m "feat(webui): the render's provenance lands in a shared store"
 ```
 
@@ -1351,7 +1361,7 @@ describe("LibraryPane subjects", () => {
 });
 ```
 
-`webui/test/journey-subject-buffers.test.js` (harness block, then):
+`webui/test/journey-subject-buffers.test.js` (harness block **with** the `// [Task 3]` lines and **without** the `// [Task 7]` ones, ruling PF3, then):
 
 ```js
 describe("spec §9: the buffer-survival journey", () => {
@@ -1388,6 +1398,7 @@ Start from `FilesPane.svelte` (`git mv webui/src/lib/components/FilesPane.svelte
 ```js
   import { onMount } from "svelte";
   import { subject } from "../state/subject.svelte.js";
+  import { devicePanel } from "../render-request.js"; // Task 5's lookup; not written twice (ruling PF8)
 
   // Which panel each device uses comes from the server: a device without
   // `panel:` resolves through the headers it polls with (spec §5).
@@ -1404,9 +1415,8 @@ Start from `FilesPane.svelte` (`git mv webui/src/lib/components/FilesPane.svelte
     return (screens.meta.panels ?? []).find((p) => p.id === id)?.name ?? id;
   }
   function devicePanelLabel(d) {
-    if (d.panel) return panelName(d.panel);
-    for (const [p, keys] of Object.entries(usage.panels ?? {})) if (keys.includes(d.id)) return panelName(p);
-    return "panel unknown";
+    const id = devicePanel({ meta: screens.meta, usage }, d.id);
+    return id ? panelName(id) : "panel unknown";
   }
   const rowClass = (on) =>
     "truncate px-2 py-0.5 text-left hover:bg-[var(--panel-bg)] " +
@@ -1540,7 +1550,18 @@ describe("configDraft", () => {
     configDraft.set("device", "kitchen", "device_base", "refresh", 60);
     configDraft.set("device", "kitchen", "device_base", "dither", null);
     expect(configDraft.pushBody("device", "kitchen")).toEqual({ strength: 0.7 });
-    expect(configDraft.unpushable("device", "kitchen").sort()).toEqual(["dither (removal)", "refresh"]);
+    expect(configDraft.unpushable("device", "kitchen").sort()).toEqual([
+      "dither (removal)", "refresh", "strength (outranked by final)",
+    ]);
+  });
+
+  it("push never shows what Save will not: a base value outranked by the effective final is left out (PF5)", () => {
+    // kitchen's configured final sets strength; nobody edited it.
+    screens.meta.devices[0].final = { strength: 0.4 };
+    configDraft.set("device", "kitchen", "device_base", "strength", 0.3);
+    configDraft.set("device", "kitchen", "device_base", "max_error", 0.5);
+    expect(configDraft.pushBody("device", "kitchen")).toEqual({ max_error: 0.5 });
+    expect(configDraft.unpushable("device", "kitchen")).toEqual(["strength (outranked by final)"]);
   });
 
   it("push sends the override, starts the watched device's session, and lists it as live", async () => {
@@ -1580,7 +1601,7 @@ describe("configDraft", () => {
     expect(configDraft.saveDeviceBody("kitchen")).toEqual({ clear: ["params"], params: { other: 1 } });
   });
 
-  it("a changed final value is sent as a set, with no clear", () => {
+  it("a changed base gamut value is sent as a set on the base rung, with no clear", () => {
     configDraft.set("device", "kitchen", "device_base", "gamut.amount", 0.7);
     expect(configDraft.saveDeviceBody("kitchen")).toEqual({ gamut: { amount: 0.7 } });
   });
@@ -1658,7 +1679,7 @@ export const SCHEMAS = {
   device: { rungs: ["device_base", "device_final"], fields: DEVICE_CASCADE_FIELDS, plain: DEVICE_PLAIN_FIELDS },
 };
 const NUMERIC = new Set([...NUMBER_FIELDS, "refresh", "min_png_bytes"]);
-/** A device override cannot carry these (Plan 1 P1-2). */
+/** A device override cannot carry these (ruling C1: an override takes `dither`, never `colors` or `refresh`; Plan 1 Tasks 2 and 3). */
 const NOT_PUSHABLE = new Set(["colors", "refresh"]);
 
 function norm(field, v) {
@@ -1814,7 +1835,13 @@ class ConfigDraft {
     };
   }
 
-  /** P2-1/P2-2: dirty, set, pushable values; a device's final over its base. */
+  /**
+   * P2-1/P2-2: dirty, set, pushable values; a device's final over its base.
+   * Ruling PF5: Push never shows what Save will not. A dirty base value is
+   * skipped whenever the field's EFFECTIVE final value (draft or config) is
+   * non-null, because Save leaves that final winning; `unpushable()` lists it
+   * as "outranked by final".
+   */
   pushBody(kind, id) {
     const cur = this.#current(kind, id);
     const flat = {};
@@ -1823,7 +1850,7 @@ class ConfigDraft {
       if (!rungs.includes(rung) || NOT_PUSHABLE.has(field)) continue;
       const v = cur.values[rung][field];
       if (v === null) continue;
-      if (rung === "device_base" && this.isDirty(kind, id, "device_final", field) && cur.values.device_final[field] !== null) continue;
+      if (rung === "device_base" && cur.values.device_final[field] !== null) continue;
       flat[field] = v;
     }
     return nest(flat);
@@ -1837,6 +1864,7 @@ class ConfigDraft {
       if (rung === null) out.add(field);
       else if (NOT_PUSHABLE.has(field)) out.add(field);
       else if (cur.values[rung][field] === null) out.add(`${field} (removal)`);
+      else if (rung === "device_base" && cur.values.device_final[field] !== null) out.add(`${field} (outranked by final)`);
     }
     return [...out];
   }
@@ -2047,14 +2075,16 @@ export const configDraft = new ConfigDraft();
   });
 ```
 
-`LibraryPane.svelte`: delete its local `usage` and `onMount`; read `configDraft.usage`. `AppShell.svelte`: after `screens.load();` add `configDraft.load();`.
+`LibraryPane.svelte`: delete its local `usage` and `onMount`; read `configDraft.usage` (so `devicePanelLabel` calls `devicePanel({ meta: screens.meta, usage: configDraft.usage }, d.id)`). `AppShell.svelte`: after `screens.load();` add `configDraft.load();`.
+
+Journey harness (ruling PF3): in `webui/test/journey-finding-h.test.js` and `webui/test/journey-subject-buffers.test.js` add the harness's `// [Task 7]` lines: `import { configDraft } from "../src/lib/state/configDraft.svelte.js";` after the `resolution` import and `configDraft.reset();` after `resolution.reset();` in `beforeEach`.
 
 - [ ] **Step 5: Run** — `pnpm vitest run` → PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add webui/src/lib/state/configDraft.svelte.js webui/src/lib/components/PreviewPane.svelte webui/src/lib/components/LibraryPane.svelte webui/src/lib/components/AppShell.svelte webui/test/configdraft.test.js
+git add webui/src/lib/state/configDraft.svelte.js webui/src/lib/components/PreviewPane.svelte webui/src/lib/components/LibraryPane.svelte webui/src/lib/components/AppShell.svelte webui/test/configdraft.test.js webui/test/journey-finding-h.test.js webui/test/journey-subject-buffers.test.js
 git commit -m "feat(webui): one schema-driven draft store for panels and devices"
 ```
 
@@ -2074,9 +2104,13 @@ git commit -m "feat(webui): one schema-driven draft store for panels and devices
 `webui/test/ladder.test.js`:
 
 ```js
-import { describe, it, expect } from "vitest";
-import { render, screen as dom } from "@testing-library/svelte";
+import { describe, it, expect, beforeEach } from "vitest";
+import { render, screen as dom, cleanup } from "@testing-library/svelte";
 import Ladder from "../src/lib/components/Ladder.svelte";
+
+// No auto-cleanup in this vitest setup (no globals): without it the loop below
+// would stack ladders and `getByTestId("effective")` would match several (PF4).
+beforeEach(() => cleanup());
 
 const ORDER = ["override", "device_final", "screen", "device_base", "panel", "fallback"];
 function report(from, rungs, effective = "v") {
@@ -2604,20 +2638,23 @@ describe("mode b: pick a panel, change a swatch value, Push, Save", () => {
     await fireEvent.change(watch);
     expect(session).not.toHaveBeenCalled(); // P2-3: choosing whom to watch writes nothing
 
-    const actual = document.querySelector("#cfg-panel-colors_actual");
-    actual.value = "#111111,#EEEEEE,#B03030,#D0C040,#3040A0,#00994D";
-    await fireEvent.input(actual);
-    await waitFor(() => expect(renders().at(-1).draft.panel.colors_actual)
-      .toBe("#111111,#EEEEEE,#B03030,#D0C040,#3040A0,#00994D"));
+    // Spec §9 "change a swatch" (ruling PF10): the first swatch of the measured
+    // colours is selected by default; edit its hex box, not the raw text field.
+    const CHANGED = "#111111,#E8E8E8,#B03030,#D0C040,#3040A0,#00994D";
+    const hex = await waitFor(() => document.querySelector("#swatch-hex"));
+    expect(hex.value.toLowerCase()).toBe("#101010");
+    hex.value = "#111111";
+    await fireEvent.input(hex);
+    await waitFor(() => expect(renders().at(-1).draft.panel.colors_actual).toBe(CHANGED));
+    expect(document.querySelector("#cfg-panel-colors_actual").value).toBe(CHANGED);
 
     await fireEvent.click(dom.getByRole("button", { name: "Push to panel" }));
-    await waitFor(() => expect(push).toHaveBeenCalledWith("e1004",
-      { colors_actual: "#111111,#EEEEEE,#B03030,#D0C040,#3040A0,#00994D" }));
+    await waitFor(() => expect(push).toHaveBeenCalledWith("e1004", { colors_actual: CHANGED }));
     expect(session).toHaveBeenCalledWith("kitchen");
 
     await fireEvent.click(dom.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(save).toHaveBeenCalledWith("e1004", {
-      colors_actual: "#111111,#EEEEEE,#B03030,#D0C040,#3040A0,#00994D", dither: { strength: 0.8 } }));
+      colors_actual: CHANGED, dither: { strength: 0.8 } }));
     expect(end).toHaveBeenCalledWith("kitchen");
   });
 

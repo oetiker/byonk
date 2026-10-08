@@ -426,3 +426,169 @@ async fn the_dev_render_shows_a_live_panel_override_on_the_override_rung() {
     assert_eq!(res["strength"]["from"], "override");
     assert_eq!(res["strength"]["rungs"]["override"]["value"], 0.25);
 }
+
+fn resolution_of(r: &common::app::TestResponse) -> serde_json::Value {
+    serde_json::from_str(r.headers["x-byonk-resolution"].to_str().unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn a_device_override_reaches_that_device_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _cfg) = app(dir.path());
+    let kitchen_key = app.register_device("kitchen").await;
+    let hallway_key = app.register_device("hallway").await;
+    let kitchen = display_headers("kitchen", &kitchen_key, "og", None);
+    let hallway = display_headers("hallway", &hallway_key, "og", None);
+    let kitchen_before = fetch_png(&app, &kitchen).await;
+    let hallway_before = fetch_png(&app, &hallway).await;
+
+    let r = app
+        .put_json(
+            "/dev/api/overrides/devices/kitchen",
+            &[AUTH],
+            r#"{"strength":0.0}"#,
+        )
+        .await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+
+    assert_ne!(kitchen_before, fetch_png(&app, &kitchen).await);
+    assert_eq!(
+        hallway_before,
+        fetch_png(&app, &hallway).await,
+        "a device override must not reach another device on the same panel"
+    );
+
+    app.delete("/dev/api/overrides/devices/kitchen", &[AUTH])
+        .await;
+    assert_eq!(kitchen_before, fetch_png(&app, &kitchen).await);
+}
+
+#[tokio::test]
+async fn device_override_beats_panel_override_field_by_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _cfg) = app(dir.path());
+    app.put_json(
+        "/dev/api/overrides/panels/e1004",
+        &[AUTH],
+        r#"{"strength":0.1,"max_error":0.5}"#,
+    )
+    .await;
+    app.put_json(
+        "/dev/api/overrides/devices/kitchen",
+        &[AUTH],
+        r#"{"strength":0.9}"#,
+    )
+    .await;
+
+    let k = app
+        .post_json("/dev/api/render", &[AUTH], r#"{"device":"kitchen"}"#)
+        .await;
+    let k = resolution_of(&k);
+    assert_eq!(k["strength"]["rungs"]["override"]["value"], 0.9);
+    assert_eq!(k["max_error"]["rungs"]["override"]["value"], 0.5);
+
+    let h = app
+        .post_json("/dev/api/render", &[AUTH], r#"{"device":"hallway"}"#)
+        .await;
+    assert_eq!(
+        resolution_of(&h)["strength"]["rungs"]["override"]["value"],
+        0.1
+    );
+}
+
+#[tokio::test]
+async fn a_device_override_refuses_colors_and_refresh_and_unknown_devices() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _cfg) = app(dir.path());
+    for (body, field) in [
+        (r##"{"colors":"#000000,#FFFFFF"}"##, "colors"),
+        (r#"{"refresh":60}"#, "refresh"),
+    ] {
+        let r = app
+            .put_json("/dev/api/overrides/devices/kitchen", &[AUTH], body)
+            .await;
+        assert_eq!(r.status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        // The device and panel routes share one message (ruling PF8).
+        assert!(
+            r.text().contains(&format!(
+                "`{field}` cannot be overridden: an override carries colors_actual, dither, \
+                 max_error, noise_scale, chroma_clamp, strength and gamut"
+            )),
+            "{}",
+            r.text()
+        );
+    }
+    let r = app
+        .put_json(
+            "/dev/api/overrides/devices/nosuchdevice",
+            &[AUTH],
+            r#"{"strength":1.0}"#,
+        )
+        .await;
+    assert_eq!(r.status, axum::http::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_device_override_is_listed_under_the_config_key_and_delete_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _cfg) = app(dir.path());
+    let yaml_upper = app
+        .put_json(
+            "/dev/api/overrides/devices/kitchen",
+            &[AUTH],
+            r#"{"strength":0.3}"#,
+        )
+        .await;
+    assert!(yaml_upper.status.is_success(), "{}", yaml_upper.text());
+    let v: serde_json::Value = app
+        .get_with_headers("/dev/api/overrides", &[AUTH])
+        .await
+        .json();
+    assert_eq!(v["devices"].as_array().unwrap().len(), 1);
+    assert_eq!(v["devices"][0]["key"], "kitchen");
+    let r = app
+        .delete("/dev/api/overrides/devices/never-heard-of-it", &[AUTH])
+        .await;
+    assert!(r.status.is_success(), "DELETE is idempotent");
+}
+
+#[tokio::test]
+async fn the_listing_shows_every_live_override_and_session_with_its_time_left() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _cfg) = app(dir.path());
+    app.put_json(
+        "/dev/api/overrides/panels/e1004",
+        &[AUTH],
+        r##"{"colors_actual":"#050505,#FAFAFA,#E01010,#101010,#1010E0,#10E010"}"##,
+    )
+    .await;
+    app.put_json(
+        "/dev/api/overrides/devices/kitchen",
+        &[AUTH],
+        r#"{"dither":"stucki"}"#,
+    )
+    .await;
+    app.put_json("/dev/api/tuning-session/kitchen", &[AUTH], "")
+        .await;
+
+    let r = app.get_with_headers("/dev/api/overrides", &[AUTH]).await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+    let v: serde_json::Value = r.json();
+    assert_eq!(v["panels"][0]["key"], "e1004");
+    assert_eq!(
+        v["panels"][0]["values"]["colors_actual"],
+        "#050505,#FAFAFA,#E01010,#101010,#1010E0,#10E010"
+    );
+    assert_eq!(v["devices"][0]["key"], "kitchen");
+    assert_eq!(v["devices"][0]["values"]["dither"], "stucki");
+    assert_eq!(v["tuning_sessions"][0]["key"], "kitchen");
+    let left = v["panels"][0]["expires_in_secs"].as_u64().unwrap();
+    assert!(left > 1790 && left <= 1800, "{left}");
+
+    app.delete("/dev/api/overrides/panels/e1004", &[AUTH]).await;
+    let v: serde_json::Value = app
+        .get_with_headers("/dev/api/overrides", &[AUTH])
+        .await
+        .json();
+    assert_eq!(v["panels"], serde_json::json!([]));
+}

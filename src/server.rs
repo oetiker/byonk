@@ -756,6 +756,28 @@ mod tuning_session_tests {
         assert!(tuning_session_active(&overrides, "kitchen").await);
         assert!(!overrides.tuning_sessions.read().await.is_empty());
     }
+
+    #[tokio::test]
+    async fn the_session_listing_is_sorted_and_drops_expired_sessions() {
+        let overrides = DevOverrides::default();
+        let stale = Instant::now()
+            .checked_sub(TUNING_SESSION_TTL + Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        {
+            let mut sessions = overrides.tuning_sessions.write().await;
+            sessions.insert("porch".to_string(), Instant::now());
+            sessions.insert("attic".to_string(), Instant::now());
+            sessions.insert("old".to_string(), stale);
+        }
+        let live = live_tuning_sessions(&overrides).await;
+        let keys: Vec<&str> = live.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["attic", "porch"]);
+        assert!(live.iter().all(|(_, left)| *left <= TUNING_SESSION_TTL));
+        assert!(
+            !overrides.tuning_sessions.read().await.contains_key("old"),
+            "the listing must drop what it finds stale"
+        );
+    }
 }
 
 #[cfg(test)]

@@ -481,6 +481,95 @@ pub async fn handle_delete_panel_override(
     StatusCode::OK
 }
 
+/// `PUT /dev/api/overrides/devices/{device}`: push a device draft as the
+/// override rung for that one device. Stored under the config key, so a MAC
+/// in another case or a registration code addresses the same entry.
+pub async fn handle_put_device_override(
+    State(state): State<AppState>,
+    axum::extract::Path(device): axum::extract::Path<String>,
+    Json(body): Json<CascadeValues>,
+) -> Result<StatusCode, ApiError> {
+    let key = state
+        .config
+        .load()
+        .resolve_device_key(&device, Some(&device))
+        .ok_or(ApiError::NotFound)?;
+    if let Some(message) = refused_override_field(&body) {
+        return Err(ApiError::BadRequest(message));
+    }
+    state.dev_overrides.devices.insert(key, body).await;
+    Ok(StatusCode::OK)
+}
+
+/// `DELETE /dev/api/overrides/devices/{device}`. Idempotent.
+pub async fn handle_delete_device_override(
+    State(state): State<AppState>,
+    axum::extract::Path(device): axum::extract::Path<String>,
+) -> StatusCode {
+    let key = state
+        .config
+        .load()
+        .resolve_device_key(&device, Some(&device))
+        .unwrap_or(device);
+    state.dev_overrides.devices.remove(&key).await;
+    StatusCode::OK
+}
+
+/// One live override in the listing.
+#[derive(Debug, Serialize)]
+pub struct LiveOverride {
+    pub key: String,
+    pub values: CascadeValues,
+    pub expires_in_secs: u64,
+}
+
+/// One live tuning session in the listing.
+#[derive(Debug, Serialize)]
+pub struct LiveSession {
+    pub key: String,
+    pub expires_in_secs: u64,
+}
+
+/// `GET /dev/api/overrides`.
+#[derive(Debug, Serialize)]
+pub struct OverridesResponse {
+    pub panels: Vec<LiveOverride>,
+    pub devices: Vec<LiveOverride>,
+    pub tuning_sessions: Vec<LiveSession>,
+}
+
+/// List everything the dev UI has made live, so a reloaded page can show a
+/// Push that is still reaching hardware (spec section 6).
+pub async fn handle_list_overrides(State(state): State<AppState>) -> Json<OverridesResponse> {
+    let o = &state.dev_overrides;
+    let to_live = |v: Vec<(String, CascadeValues, std::time::Duration)>| {
+        v.into_iter()
+            .map(|(key, values, left)| LiveOverride {
+                key,
+                values,
+                expires_in_secs: left.as_secs(),
+            })
+            .collect::<Vec<_>>()
+    };
+    let panels = to_live(o.panels.live().await);
+    let devices = to_live(o.devices.live().await);
+    // One TTL rule for every map (ruling PF8): `live_tuning_sessions` shares
+    // `ttl_left` with `tuning_session_active` and `TimedMap`.
+    let tuning_sessions: Vec<LiveSession> = crate::server::live_tuning_sessions(o)
+        .await
+        .into_iter()
+        .map(|(key, left)| LiveSession {
+            key,
+            expires_in_secs: left.as_secs(),
+        })
+        .collect();
+    Json(OverridesResponse {
+        panels,
+        devices,
+        tuning_sessions,
+    })
+}
+
 /// Guard: an override for a panel that does not exist could never be read
 /// back, because the lookup is by resolved panel key. Refuse it rather than
 /// storing it where nothing will find it.
@@ -899,6 +988,11 @@ pub fn dev_router(state: &AppState) -> Router<AppState> {
         .route("/events", get(handle_events))
         .route("/render", post(handle_render))
         .route("/resolve-mac", get(handle_resolve_mac))
+        .route("/overrides", get(handle_list_overrides))
+        .route(
+            "/overrides/devices/{device}",
+            put(handle_put_device_override).delete(handle_delete_device_override),
+        )
         .route(
             "/overrides/panels/{panel}",
             put(handle_put_panel_override).delete(handle_delete_panel_override),

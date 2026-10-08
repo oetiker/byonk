@@ -206,9 +206,9 @@ the panel-behaviour flags `temperature_profile`, `maximum_compatibility` and
 the device is named by the URL rather than by `mac`, and its screen field is
 `screen` rather than `screen_ref`.
 
-`colors_actual`, `gamut` and `final` are new in 0.20.0. `colors_actual` and
-`gamut` were configurable in `config.yaml` before, but no tool could reach
-them.
+`colors_actual`, `gamut` and `final` are new in 0.20.0. `gamut` was
+configurable in `config.yaml` before, but no tool could reach it; `colors_actual`
+on a device is new.
 
 **`final` is where a setting that a screen must not override goes.** Everything
 written directly on the device is a *default*: a screen that returns its own

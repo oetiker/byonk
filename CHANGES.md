@@ -210,9 +210,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drifted, rather than a profile of its own.
 - **`gamut` and `colors_actual` are now writable** through
   `POST`/`PATCH /api/admin/devices` and the MCP `configure_device` tool, as is
-  the whole `final:` block. `gamut` and `colors_actual` were configurable in
-  `config.yaml` all along, but no API or MCP client could reach them, so they
-  look new from the outside.
+  the whole `final:` block. `gamut` was already configurable in
+  `config.yaml`, but no API or MCP client could reach it. `colors_actual` on a
+  device is new in this release.
 
   A setting is removed with `clear`, which now takes **one dot**:
   `clear: ["dither"]` removes the device's default, `clear: ["final.dither"]`

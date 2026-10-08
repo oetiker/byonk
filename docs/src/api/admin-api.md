@@ -465,9 +465,9 @@ algorithm name is not an error anywhere further down the pipeline — the
 renderer falls back to `atkinson` — so without the check a typo would be
 invisible until you looked at the panel.
 
-`gamut` and `colors_actual` became writable here in 0.20.0. They were
-configurable in `config.yaml` before that, but no API or MCP client could
-reach them. The deprecated `error_clamp` key is still not writable; an existing
+`gamut` and `colors_actual` became writable here in 0.20.0. `gamut` was
+already configurable in `config.yaml`, but no API or MCP client could reach it;
+`colors_actual` on a device is new in 0.20.0. The deprecated `error_clamp` key is still not writable; an existing
 entry keeps it, because a write preserves every key it does not manage itself.
 
 **Responses**:

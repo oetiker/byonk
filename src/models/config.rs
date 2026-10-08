@@ -137,6 +137,26 @@ pub struct CascadeValues {
     pub gamut: GamutTuningValues,
 }
 
+impl CascadeValues {
+    /// Merge: `self` takes priority, `other` fills the gaps, field by field.
+    pub fn or(&self, other: &CascadeValues) -> CascadeValues {
+        CascadeValues {
+            colors: self.colors.clone().or_else(|| other.colors.clone()),
+            colors_actual: self
+                .colors_actual
+                .clone()
+                .or_else(|| other.colors_actual.clone()),
+            dither: self.dither.clone().or_else(|| other.dither.clone()),
+            max_error: self.max_error.or(other.max_error),
+            noise_scale: self.noise_scale.or(other.noise_scale),
+            chroma_clamp: self.chroma_clamp.or(other.chroma_clamp),
+            strength: self.strength.or(other.strength),
+            refresh: self.refresh.or(other.refresh),
+            gamut: self.gamut.or(&other.gamut),
+        }
+    }
+}
+
 impl DeviceConfig {
     /// The device's base rung as a `CascadeValues`.
     pub fn base(&self) -> CascadeValues {

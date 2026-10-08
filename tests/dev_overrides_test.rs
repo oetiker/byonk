@@ -1,6 +1,4 @@
-//! The dev colour override is keyed by PANEL, so every device using that
-//! panel profile sees it — which is the point: a calibration belongs to the
-//! hardware, not to one unit of it.
+//! Dev overrides: panel-keyed and device-keyed cascade values that /api/display reads as the override rung.
 
 mod common;
 
@@ -63,6 +61,24 @@ fn scaffold_swatch_screen(dir: &std::path::Path) {
 "##,
     )
     .unwrap();
+
+    // A screen that sets its own dither algorithm, for the override-beats-screen test.
+    let dithered = repo_dir.join("dithered");
+    std::fs::create_dir_all(&dithered).unwrap();
+    std::fs::write(
+        dithered.join("meta.yaml"),
+        format!(
+            "title: Dithered\ndescription: Swatch with its own dither algorithm, for tests.\nbyonk: \"{}\"\nrefresh: 3600\n",
+            byonk::models::compat::engine_compat_req()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        dithered.join("script.lua"),
+        "return { data = { width = layout.width, height = layout.height }, dither = \"atkinson\", refresh_rate = 3600 }\n",
+    )
+    .unwrap();
+    std::fs::copy(screen_dir.join("screen.svg"), dithered.join("screen.svg")).unwrap();
 }
 
 /// One panel (`e1004`) resolved by all three routes `resolve_panel` supports
@@ -105,6 +121,9 @@ devices:
   garage:
     screen: local/swatch
     panel: other
+  porch:
+    screen: local/dithered
+    panel: e1004
 ",
         dir.join("local").display()
     );
@@ -118,14 +137,14 @@ async fn put_and_delete_an_override_by_panel_id() {
 
     let r = app
         .put_json(
-            "/dev/api/panel-colors/e1004",
+            "/dev/api/overrides/panels/e1004",
             &[AUTH],
             r##"{"colors_actual":"#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00994D"}"##,
         )
         .await;
     assert!(r.status.is_success(), "PUT failed: {}", r.status);
 
-    let r = app.delete("/dev/api/panel-colors/e1004", &[AUTH]).await;
+    let r = app.delete("/dev/api/overrides/panels/e1004", &[AUTH]).await;
     assert!(r.status.is_success(), "DELETE failed: {}", r.status);
 }
 
@@ -136,7 +155,7 @@ async fn an_unknown_panel_is_rejected() {
 
     let r = app
         .put_json(
-            "/dev/api/panel-colors/nosuchpanel",
+            "/dev/api/overrides/panels/nosuchpanel",
             &[AUTH],
             r##"{"colors_actual":"#000000,#FFFFFF"}"##,
         )
@@ -238,7 +257,7 @@ async fn override_propagates_through_the_panel_and_only_the_panel() {
 
     let r = app
         .put_json(
-            "/dev/api/panel-colors/e1004",
+            "/dev/api/overrides/panels/e1004",
             &[AUTH],
             r##"{"colors_actual":"#050505,#FAFAFA,#E01010,#101010,#1010E0,#10E010"}"##,
         )
@@ -288,7 +307,7 @@ async fn override_propagates_through_the_panel_and_only_the_panel() {
         "a device resolving to a DIFFERENT panel must not see e1004's override"
     );
 
-    let r = app.delete("/dev/api/panel-colors/e1004", &[AUTH]).await;
+    let r = app.delete("/dev/api/overrides/panels/e1004", &[AUTH]).await;
     assert!(r.status.is_success(), "DELETE failed: {}", r.status);
 
     let kitchen_restored = fetch_png(&app, &kitchen_headers).await;
@@ -296,4 +315,114 @@ async fn override_propagates_through_the_panel_and_only_the_panel() {
         kitchen_before, kitchen_restored,
         "deleting the override should restore the panel's own colors_actual"
     );
+}
+
+#[tokio::test]
+async fn a_panel_override_carries_tuning_numbers_to_every_device_on_the_panel() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _cfg) = app(dir.path());
+    let kitchen_key = app.register_device("kitchen").await;
+    let garage_key = app.register_device("garage").await;
+    let kitchen = display_headers("kitchen", &kitchen_key, "og", None);
+    let garage = display_headers("garage", &garage_key, "og", None);
+    let kitchen_before = fetch_png(&app, &kitchen).await;
+    let garage_before = fetch_png(&app, &garage).await;
+
+    let r = app
+        .put_json(
+            "/dev/api/overrides/panels/e1004",
+            &[AUTH],
+            r#"{"strength":0.0}"#,
+        )
+        .await;
+    assert!(
+        r.status.is_success(),
+        "PUT failed: {} {}",
+        r.status,
+        r.text()
+    );
+
+    assert_ne!(
+        kitchen_before,
+        fetch_png(&app, &kitchen).await,
+        "a strength override on the panel must reach a device on it"
+    );
+    assert_eq!(
+        garage_before,
+        fetch_png(&app, &garage).await,
+        "and must not reach a device on another panel"
+    );
+}
+
+#[tokio::test]
+async fn a_panel_override_refuses_colors_and_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _cfg) = app(dir.path());
+    for body in [r##"{"colors":"#000000,#FFFFFF"}"##, r#"{"refresh":60}"#] {
+        let r = app
+            .put_json("/dev/api/overrides/panels/e1004", &[AUTH], body)
+            .await;
+        assert_eq!(r.status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+    }
+}
+
+/// Ruling C1: a pushed panel `dither` is the override rung, so it beats a
+/// screen that sets its own algorithm -- on the glass and in the report.
+#[tokio::test]
+async fn a_pushed_panel_dither_beats_the_screens_dither() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _cfg) = app(dir.path());
+    let porch_key = app.register_device("porch").await;
+    let porch = display_headers("porch", &porch_key, "og", None);
+    let before = fetch_png(&app, &porch).await;
+
+    let r = app
+        .put_json(
+            "/dev/api/overrides/panels/e1004",
+            &[AUTH],
+            r#"{"dither":"floyd-steinberg"}"#,
+        )
+        .await;
+    assert!(
+        r.status.is_success(),
+        "PUT failed: {} {}",
+        r.status,
+        r.text()
+    );
+
+    assert_ne!(
+        before,
+        fetch_png(&app, &porch).await,
+        "the pushed algorithm must replace the screen's atkinson on /api/display"
+    );
+    let r = app
+        .post_json("/dev/api/render", &[AUTH], r#"{"device":"porch"}"#)
+        .await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+    let res: serde_json::Value =
+        serde_json::from_str(r.headers["x-byonk-resolution"].to_str().unwrap()).unwrap();
+    assert_eq!(res["dither"]["effective"], "floyd-steinberg");
+    assert_eq!(res["dither"]["from"], "override");
+    assert_eq!(res["dither"]["rungs"]["screen"]["value"], "atkinson");
+    assert_eq!(res["dither"]["rungs"]["screen"]["status"], "outranked");
+}
+
+#[tokio::test]
+async fn the_dev_render_shows_a_live_panel_override_on_the_override_rung() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _cfg) = app(dir.path());
+    app.put_json(
+        "/dev/api/overrides/panels/e1004",
+        &[AUTH],
+        r#"{"strength":0.25}"#,
+    )
+    .await;
+    let r = app
+        .post_json("/dev/api/render", &[AUTH], r#"{"device":"kitchen"}"#)
+        .await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+    let res: serde_json::Value =
+        serde_json::from_str(r.headers["x-byonk-resolution"].to_str().unwrap()).unwrap();
+    assert_eq!(res["strength"]["from"], "override");
+    assert_eq!(res["strength"]["rungs"]["override"]["value"], 0.25);
 }

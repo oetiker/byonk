@@ -14,8 +14,8 @@ use super::resolution::{
 };
 use crate::error::ApiError;
 use crate::models::{
-    normalize_algorithm_name, verify_ed25519_signature, ApiKey, AppConfig, CascadeValues, Device,
-    DeviceId, DisplaySpec, DitherTuningValues, PanelConfig, PanelDitherConfig,
+    verify_ed25519_signature, ApiKey, AppConfig, CascadeValues, Device, DeviceId, DisplaySpec,
+    DitherTuningValues, PanelConfig, PanelDitherConfig,
 };
 use crate::server::{tuning_session_active, DevOverrides, TUNING_REFRESH_SECS};
 use crate::services::content_pipeline::ScriptResult;
@@ -80,9 +80,7 @@ pub fn parse_measured_color_list(items: &[String]) -> Vec<(u8, u8, u8)> {
 #[allow(clippy::too_many_arguments)]
 fn render_inputs_for<'a>(
     result: &ScriptResult,
-    override_colors_actual: Option<&[(u8, u8, u8)]>,
-    dev_dither: Option<&str>,
-    dev_tuning: Option<&DitherTuningValues>,
+    over: &CascadeValues,
     device_final: &CascadeValues,
     device_base: &CascadeValues,
     panel_colors: Option<&str>,
@@ -92,12 +90,7 @@ fn render_inputs_for<'a>(
     header_colors_actual: Option<&[(u8, u8, u8)]>,
 ) -> RenderInputs<'a> {
     RenderInputs {
-        over: RungSettings {
-            colors_actual: override_colors_actual.map(<[_]>::to_vec),
-            dither: dev_dither.map(normalize_algorithm_name),
-            tuning: dev_tuning.cloned().unwrap_or_default(),
-            ..Default::default()
-        },
+        over: RungSettings::from_cascade(over),
         device_final: RungSettings::from_cascade(device_final),
         // `refresh` stays `None`: it is resolved in content_pipeline, which is
         // the only place the script's return value is in hand (plan ruling 3).
@@ -725,13 +718,11 @@ pub async fn handle_display<R: DeviceRegistry>(
     // key, because a calibration belongs to the panel profile: every device
     // using that profile shares it. (2026-09-10 colour-tuning amendment.)
     let measured_colors_header = headers.get_str("Measured-Colors").map(|s| s.to_string());
-    let override_colors = if let Some(ref key) = panel_key {
-        dev_overrides.panel_colors.read().await.get(key).cloned()
-    } else {
-        None
-    };
-    let override_colors_parsed: Option<Vec<(u8, u8, u8)>> =
-        override_colors.as_deref().map(parse_colors_header);
+    // The override rung: live dev overrides, the device's over its panel's
+    // (plan ruling P1-3), each expiring 30 minutes after its last PUT.
+    let live_override: CascadeValues = dev_overrides
+        .live_override(device_entry_key.as_deref(), panel_key.as_deref())
+        .await;
     let panel_actual_parsed: Option<Vec<(u8, u8, u8)>> = panel
         .and_then(|p| p.colors_actual.as_deref())
         .map(parse_colors_header);
@@ -757,20 +748,7 @@ pub async fn handle_display<R: DeviceRegistry>(
     // Pre-script resolved palette for device context:
     // device_config_colors > panel_colors > firmware header > default
     // Matches the resolve_palette chain (minus script_colors, unknown until script runs)
-    // Dither: dev override (highest priority, set via dev UI) vs device config
-    let dev_dither_override = if let Some(ref key) = device_entry_key {
-        dev_overrides.dither.read().await.get(key).cloned()
-    } else {
-        None
-    };
     let device_config_dither = device_config.and_then(|dc| dc.dither.clone());
-
-    // Tuning override, handed to the render resolution further down.
-    let dev_tuning_override: Option<DitherTuningValues> = if let Some(ref key) = device_entry_key {
-        dev_overrides.tuning.read().await.get(key).cloned()
-    } else {
-        None
-    };
 
     // What the script sees as `device.*`, from the one shared resolution
     // (`override -> device final -> device base -> panel -> fallback`, the
@@ -783,8 +761,11 @@ pub async fn handle_display<R: DeviceRegistry>(
         .unwrap_or_default();
     let pre = resolve_pre_script(&PreScriptInputs {
         over: RungSettings {
-            dither: dev_dither_override.clone(),
-            colors_actual: override_colors_parsed.clone(),
+            dither: live_override.dither.clone(),
+            colors_actual: live_override
+                .colors_actual
+                .as_deref()
+                .map(parse_colors_header),
             ..Default::default()
         },
         device_final: RungSettings::from_cascade(&device_final_rung),
@@ -845,8 +826,7 @@ pub async fn handle_display<R: DeviceRegistry>(
     let dc_colors = device_config_colors;
     let dc_dither = device_config_dither;
     let dc_min_png_bytes = device_config.and_then(|dc| dc.min_png_bytes);
-    let dev_dither = dev_dither_override;
-    let dev_tuning = dev_tuning_override;
+    let live_over = live_override;
     let panel_dither_for_closure = panel_dither_config;
 
     // Run in spawn_blocking because Lua scripts use blocking HTTP requests
@@ -865,7 +845,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                         script_dither = ?result.script_dither,
                         dc_colors = ?dc_colors,
                         dc_dither = ?dc_dither,
-                        dev_dither = ?dev_dither,
+                        live_override = ?live_over,
                         panel_colors = ?panel_colors_for_chain,
                         header_colors = ?header_colors_for_chain,
                         measured_colors = ?pre.colors_actual.as_ref().map(|mc| colors_to_hex_strings(mc)),
@@ -876,9 +856,7 @@ pub async fn handle_display<R: DeviceRegistry>(
                     // place a binding is assigned to a rung.
                     let params = resolve_render(&render_inputs_for(
                         &result,
-                        override_colors_parsed.as_deref(),
-                        dev_dither.as_deref(),
-                        dev_tuning.as_ref(),
+                        &live_over,
                         &device_final_rung,
                         &device_base_rung,
                         panel_colors_for_chain.as_deref(),
@@ -1526,7 +1504,9 @@ panels:
         let over_actual = parse_colors_header("#020202,#FDFDFD");
         let panel_actual = parse_colors_header("#030303,#FCFCFC");
         let header_actual = parse_colors_header("#040404,#FBFBFB");
-        let dev_tuning = DitherTuningValues {
+        let over = CascadeValues {
+            colors_actual: Some("#020202,#FDFDFD".into()),
+            dither: Some("stucki".into()),
             max_error: Some(0.91),
             ..Default::default()
         };
@@ -1543,9 +1523,7 @@ panels:
         let fallback = parse_colors_header("#0A0A0A,#F0F0F0");
         let i = render_inputs_for(
             &result,
-            Some(&over_actual),
-            Some("stucki"),
-            Some(&dev_tuning),
+            &over,
             &device_final,
             &device_base,
             Some("#000002,#FFFFFD"),
@@ -1611,9 +1589,7 @@ panels:
         let panel_actual = parse_colors_header("#0A0A0A,#808080,#F5F5F5");
         let res = resolve_render(&render_inputs_for(
             &result,
-            None,
-            None,
-            None,
+            &CascadeValues::default(),
             &CascadeValues::default(),
             &CascadeValues::default(),
             None,
@@ -1653,9 +1629,7 @@ panels:
         };
         let params = resolve_render(&render_inputs_for(
             &result,
-            None,
-            None,
-            None,
+            &CascadeValues::default(),
             &CascadeValues::default(),
             &device_base,
             None,

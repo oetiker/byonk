@@ -602,17 +602,7 @@ fn merge_final(
         (None, None) => None,
         (Some(b), None) => Some(b.clone()),
         (None, Some(e)) => Some(e.clone()),
-        (Some(b), Some(e)) => Some(CascadeValues {
-            colors: b.colors.clone().or_else(|| e.colors.clone()),
-            colors_actual: b.colors_actual.clone().or_else(|| e.colors_actual.clone()),
-            dither: b.dither.clone().or_else(|| e.dither.clone()),
-            max_error: b.max_error.or(e.max_error),
-            noise_scale: b.noise_scale.or(e.noise_scale),
-            chroma_clamp: b.chroma_clamp.or(e.chroma_clamp),
-            strength: b.strength.or(e.strength),
-            refresh: b.refresh.or(e.refresh),
-            gamut: b.gamut.or(&e.gamut),
-        }),
+        (Some(b), Some(e)) => Some(b.or(e)),
     }
 }
 

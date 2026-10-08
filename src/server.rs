@@ -22,35 +22,12 @@ use tracing::{Level, Span};
 use crate::api;
 use crate::assets::AssetLoader;
 use crate::error::ApiError;
-use crate::models::{config::ScreenRepoRef, AppConfig, DitherTuningValues};
+use crate::models::{config::ScreenRepoRef, AppConfig, CascadeValues};
 use crate::services::screen_repo_cache::ScreenRepoCache;
 use crate::services::screen_repo_manager::ScreenRepoManager;
 use crate::services::{
     ContentCache, ContentPipeline, InMemoryRegistry, PreviewCache, RenderService, ScreenStore,
 };
-
-/// Runtime overrides set by the dev GUI and consumed by production handlers.
-///
-/// `panel_colors` is keyed by **panel config key** (the key from
-/// `config.panels`): a calibration belongs to the panel profile, so every
-/// device sharing that profile picks it up. `dither` and `tuning` stay keyed
-/// by **device config key** (the key from `config.devices`), so each device's
-/// dither tuning remains independent even when devices share a panel.
-#[derive(Clone, Default)]
-pub struct DevOverrides {
-    /// panel_config_key → overridden `colors_actual` string (from color-tuning popup).
-    pub panel_colors: Arc<RwLock<HashMap<String, String>>>,
-    /// device_config_key → dither algorithm string (from dither dropdown).
-    pub dither: Arc<RwLock<HashMap<String, String>>>,
-    /// device_config_key → dither tuning values.
-    pub tuning: Arc<RwLock<HashMap<String, DitherTuningValues>>>,
-    /// device_config_key → when the dev UI last touched this tuning session.
-    ///
-    /// Present and fresh ⇒ `/api/display` answers `TUNING_REFRESH_SECS` for
-    /// that device. Expiry is lazy (see `tuning_session_active`), so there is
-    /// no background task to schedule, leak or shut down.
-    pub tuning_sessions: Arc<RwLock<HashMap<String, Instant>>>,
-}
 
 /// Refresh rate answered to a device with a live tuning session, in seconds.
 ///
@@ -65,16 +42,147 @@ pub const TUNING_REFRESH_SECS: u32 = 60;
 /// must not be left repainting every minute until byonk restarts.
 pub const TUNING_SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 
-/// Is a tuning session live for `device_key`? Drops the entry if it has expired.
+/// How long a dev override survives without being re-PUT. The same backstop
+/// as a tuning session: a closed tab must not leave a physical panel showing
+/// an uncommitted draft until byonk restarts (cascade spec section 4.7).
+pub const OVERRIDE_TTL: Duration = TUNING_SESSION_TTL;
+
+/// Time left on something last touched at `touched`, or `None` once it has
+/// expired. The ONE TTL rule: `TimedMap`, `tuning_session_active` and
+/// `live_tuning_sessions` all decide expiry through it (ruling PF8).
+pub fn ttl_left(touched: Instant) -> Option<Duration> {
+    TUNING_SESSION_TTL
+        .checked_sub(touched.elapsed())
+        .filter(|left| !left.is_zero())
+}
+
+/// Is a tuning session live for `device_key`? Drops the entry if it has
+/// expired.
 pub async fn tuning_session_active(overrides: &DevOverrides, device_key: &str) -> bool {
     let mut sessions = overrides.tuning_sessions.write().await;
-    match sessions.get(device_key) {
-        Some(touched) if touched.elapsed() < TUNING_SESSION_TTL => true,
-        Some(_) => {
+    match sessions.get(device_key).map(|touched| ttl_left(*touched)) {
+        Some(Some(_)) => true,
+        Some(None) => {
             sessions.remove(device_key);
             false
         }
         None => false,
+    }
+}
+
+/// Every live tuning session with its remaining lifetime, sorted by key;
+/// expired ones are dropped. Same rule as [`tuning_session_active`]
+/// (ruling PF8): the listing never re-implements expiry.
+pub async fn live_tuning_sessions(overrides: &DevOverrides) -> Vec<(String, Duration)> {
+    let mut sessions = overrides.tuning_sessions.write().await;
+    sessions.retain(|_, touched| ttl_left(*touched).is_some());
+    let mut out: Vec<_> = sessions
+        .iter()
+        .filter_map(|(k, touched)| ttl_left(*touched).map(|left| (k.clone(), left)))
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// A string-keyed map whose entries expire [`OVERRIDE_TTL`] after their last
+/// insert. Expiry is lazy: every read drops what it finds stale, so there
+/// is no background task to schedule, leak or shut down.
+#[derive(Clone)]
+pub struct TimedMap<V> {
+    inner: Arc<RwLock<HashMap<String, (V, Instant)>>>,
+}
+
+impl<V> Default for TimedMap<V> {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+}
+
+impl<V: Clone> TimedMap<V> {
+    /// Insert or replace, and (re)start the clock.
+    pub async fn insert(&self, key: String, value: V) {
+        self.inner
+            .write()
+            .await
+            .insert(key, (value, Instant::now()));
+    }
+
+    #[cfg(test)]
+    async fn insert_at(&self, key: String, value: V, touched: Instant) {
+        self.inner.write().await.insert(key, (value, touched));
+    }
+
+    pub async fn remove(&self, key: &str) -> bool {
+        self.inner.write().await.remove(key).is_some()
+    }
+
+    pub async fn get(&self, key: &str) -> Option<V> {
+        let mut map = self.inner.write().await;
+        match map.get(key).map(|(v, t)| (v.clone(), ttl_left(*t))) {
+            Some((v, Some(_))) => Some(v),
+            Some((_, None)) => {
+                map.remove(key);
+                None
+            }
+            None => None,
+        }
+    }
+
+    /// Every live entry with its remaining lifetime, sorted by key.
+    pub async fn live(&self) -> Vec<(String, V, Duration)> {
+        let mut map = self.inner.write().await;
+        map.retain(|_, (_, t)| ttl_left(*t).is_some());
+        let mut out: Vec<_> = map
+            .iter()
+            .filter_map(|(k, (v, t))| ttl_left(*t).map(|left| (k.clone(), v.clone(), left)))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+}
+
+/// Runtime overrides set by the dev UI and consumed by production handlers.
+///
+/// `panels` is keyed by **panel config key**: a calibration belongs to the
+/// panel profile, so every device sharing it picks it up. `devices` is keyed
+/// by **device config key**. Both feed the cascade's `override` rung, the
+/// device's values over the panel's (plan ruling P1-3).
+#[derive(Clone, Default)]
+pub struct DevOverrides {
+    pub panels: TimedMap<CascadeValues>,
+    pub devices: TimedMap<CascadeValues>,
+    /// device_config_key -> when the dev UI last touched this tuning session.
+    ///
+    /// Present and fresh means `/api/display` answers `TUNING_REFRESH_SECS` for
+    /// that device. Expiry is lazy (see `tuning_session_active`).
+    pub tuning_sessions: Arc<RwLock<HashMap<String, Instant>>>,
+}
+
+impl DevOverrides {
+    /// The override rung for one device on one panel: the device's live
+    /// override field by field over its panel's. Never carries `colors` or
+    /// `refresh`; the PUT routes refuse both, and this guarantees it.
+    pub async fn live_override(
+        &self,
+        device_key: Option<&str>,
+        panel_key: Option<&str>,
+    ) -> CascadeValues {
+        let device = match device_key {
+            Some(k) => self.devices.get(k).await,
+            None => None,
+        }
+        .unwrap_or_default();
+        let panel = match panel_key {
+            Some(k) => self.panels.get(k).await,
+            None => None,
+        }
+        .unwrap_or_default();
+        let mut merged = device.or(&panel);
+        merged.colors = None;
+        merged.refresh = None;
+        merged
     }
 }
 
@@ -647,5 +755,77 @@ mod tuning_session_tests {
 
         assert!(tuning_session_active(&overrides, "kitchen").await);
         assert!(!overrides.tuning_sessions.read().await.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod timed_map_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_fresh_entry_is_returned_with_its_remaining_time() {
+        let m: TimedMap<u32> = TimedMap::default();
+        m.insert("a".into(), 7).await;
+        assert_eq!(m.get("a").await, Some(7));
+        let live = m.live().await;
+        assert_eq!(live.len(), 1);
+        assert!(live[0].2 > OVERRIDE_TTL - Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn a_stale_entry_is_dropped_on_read_not_merely_hidden() {
+        let m: TimedMap<u32> = TimedMap::default();
+        let stale = Instant::now()
+            .checked_sub(OVERRIDE_TTL + Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        m.insert_at("a".into(), 7, stale).await;
+        assert_eq!(m.get("a").await, None);
+        assert!(m.live().await.is_empty());
+        assert!(
+            m.inner.read().await.is_empty(),
+            "an expired override must be removed, or the map grows for the life of the process"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_re_put_touches_the_entry() {
+        let m: TimedMap<u32> = TimedMap::default();
+        let old = Instant::now()
+            .checked_sub(OVERRIDE_TTL - Duration::from_secs(2))
+            .unwrap_or_else(Instant::now);
+        m.insert_at("a".into(), 1, old).await;
+        m.insert("a".into(), 2).await;
+        let live = m.live().await;
+        assert_eq!(live[0].1, 2);
+        assert!(live[0].2 > OVERRIDE_TTL - Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn the_device_override_wins_field_by_field_over_the_panel_one() {
+        let o = DevOverrides::default();
+        o.panels
+            .insert(
+                "p".into(),
+                CascadeValues {
+                    strength: Some(0.1),
+                    max_error: Some(0.5),
+                    ..Default::default()
+                },
+            )
+            .await;
+        o.devices
+            .insert(
+                "d".into(),
+                CascadeValues {
+                    strength: Some(0.9),
+                    ..Default::default()
+                },
+            )
+            .await;
+        let v = o.live_override(Some("d"), Some("p")).await;
+        assert_eq!(v.strength, Some(0.9));
+        assert_eq!(v.max_error, Some(0.5));
+        assert_eq!(o.live_override(None, Some("p")).await.strength, Some(0.1));
+        assert_eq!(o.live_override(None, None).await, CascadeValues::default());
     }
 }

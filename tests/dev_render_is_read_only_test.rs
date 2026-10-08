@@ -9,7 +9,7 @@
 //! *cleared* an override someone had deliberately set.
 //!
 //! Pushing to real hardware is a separate, explicit act (`PUT
-//! /dev/api/panel-colors/{panel}`). Previewing is not it.
+//! /dev/api/overrides/panels/{panel}`). Previewing is not it.
 //!
 //! These tests are behavioural on purpose: `TestApp` exposes no `AppState`,
 //! and the thing worth pinning is not that a map stayed empty but that the
@@ -27,7 +27,7 @@ const AUTH: (&str, &str) = ("Authorization", "Bearer secret");
 /// Unmarked content is matched against the official palette regardless of
 /// tuning (`eink-dither`'s `RegionMap::model`), so a flat-colour screen would
 /// render identically under every algorithm and these tests would pass with
-/// the bug present. See the same note in `dev_panel_colors_test.rs`.
+/// the bug present. See the same note in `dev_overrides_test.rs`.
 fn scaffold_gradient_screen(dir: &std::path::Path) {
     let repo_dir = dir.join("local");
     std::fs::create_dir_all(&repo_dir).unwrap();

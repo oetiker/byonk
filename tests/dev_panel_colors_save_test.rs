@@ -97,7 +97,7 @@ async fn saving_clears_the_temporary_override() {
     let (app, _cfg) = TestApp::new_with_config_yaml(commented_config(), dir.path());
 
     app.put_json(
-        "/dev/api/panel-colors/e1004",
+        "/dev/api/overrides/panels/e1004",
         &[AUTH],
         &format!(r#"{{"colors_actual":"{TUNED}"}}"#),
     )
@@ -132,7 +132,7 @@ async fn saving_clears_the_temporary_override() {
 
     // Deleting the override must still succeed even though the config
     // already carries the value the override would have supplied.
-    let r = app.delete("/dev/api/panel-colors/e1004", &[AUTH]).await;
+    let r = app.delete("/dev/api/overrides/panels/e1004", &[AUTH]).await;
     assert!(r.status.is_success());
 
     let screens: serde_json::Value = app

@@ -394,34 +394,10 @@ pub async fn handle_resolve_mac(
     }
 }
 
-/// Request body for `PUT /dev/api/panel-colors/{panel}`.
+/// Request body for `POST /dev/api/panel-colors/{panel}/save`.
 #[derive(Debug, Deserialize)]
 pub struct PanelColorsRequest {
     pub colors_actual: String,
-}
-
-/// Set a temporary colour override for a panel profile (dev colour tuning).
-///
-/// Keyed by panel, not device: a calibration belongs to the panel profile, so
-/// every device using it picks the override up on its next poll. In memory
-/// only — `POST .../save` (below) is what makes a calibration durable.
-///
-/// Note: this does NOT refresh a tuning session. The override is keyed by
-/// panel and a session by device, and one panel may have several. The client
-/// re-PUTs its own session alongside each push (spec §3).
-pub async fn handle_set_panel_colors(
-    State(state): State<AppState>,
-    axum::extract::Path(panel): axum::extract::Path<String>,
-    Json(body): Json<PanelColorsRequest>,
-) -> Result<StatusCode, ApiError> {
-    require_known_panel(&state, &panel)?;
-    state
-        .dev_overrides
-        .panel_colors
-        .write()
-        .await
-        .insert(panel, body.colors_actual);
-    Ok(StatusCode::OK)
 }
 
 /// Write a panel's tuned measured colours into `config.yaml`, durably.
@@ -455,26 +431,53 @@ pub async fn handle_save_panel_colors(
     crate::api::config_persist::persist(&state, &path, new_yaml)?;
 
     // The config now carries the value, so the override would only restate it.
-    state
-        .dev_overrides
-        .panel_colors
-        .write()
-        .await
-        .remove(&panel);
+    state.dev_overrides.panels.remove(&panel).await;
     Ok(StatusCode::OK)
 }
 
-/// Remove a panel's temporary colour override, reverting to `config.yaml`.
-pub async fn handle_delete_panel_colors(
+/// The first field no dev override may carry (ruling C1): `colors` would
+/// show the script one palette and render another, and nothing on the
+/// override rung consumes `refresh`. Everything else -- `dither` included --
+/// is a legitimate draft value for both the panel and the device rung.
+/// Returns the complete error message, so both PUT routes say the same thing
+/// (ruling PF8).
+fn refused_override_field(v: &CascadeValues) -> Option<String> {
+    let field = if v.colors.is_some() {
+        "colors"
+    } else if v.refresh.is_some() {
+        "refresh"
+    } else {
+        return None;
+    };
+    Some(format!(
+        "`{field}` cannot be overridden: an override carries colors_actual, dither, \
+         max_error, noise_scale, chroma_clamp, strength and gamut"
+    ))
+}
+
+/// `PUT /dev/api/overrides/panels/{panel}`: push a panel draft to every
+/// device on that panel, as the cascade's override rung. In memory, expiring
+/// 30 minutes after the last PUT. Does NOT touch a tuning session: the client
+/// re-PUTs the watched device's session alongside each push.
+pub async fn handle_put_panel_override(
+    State(state): State<AppState>,
+    axum::extract::Path(panel): axum::extract::Path<String>,
+    Json(body): Json<CascadeValues>,
+) -> Result<StatusCode, ApiError> {
+    require_known_panel(&state, &panel)?;
+    if let Some(message) = refused_override_field(&body) {
+        return Err(ApiError::BadRequest(message));
+    }
+    state.dev_overrides.panels.insert(panel, body).await;
+    Ok(StatusCode::OK)
+}
+
+/// `DELETE /dev/api/overrides/panels/{panel}`. Idempotent.
+pub async fn handle_delete_panel_override(
     State(state): State<AppState>,
     axum::extract::Path(panel): axum::extract::Path<String>,
 ) -> StatusCode {
-    state
-        .dev_overrides
-        .panel_colors
-        .write()
-        .await
-        .remove(&panel);
+    state.dev_overrides.panels.remove(&panel).await;
     StatusCode::OK
 }
 
@@ -571,6 +574,11 @@ pub async fn handle_render(
         },
         None => None,
     };
+    // The config key the device is stored under: override maps are keyed by it.
+    let device_key: Option<String> = req
+        .device
+        .as_deref()
+        .and_then(|k| config.resolve_device_key(k, Some(k)));
     // A screen ref is a `handle/path` screen repo ref; validity is checked
     // when the pipeline resolves it below.
     let Some(screen_ref) = req
@@ -598,11 +606,20 @@ pub async fn handle_render(
         .final_rung
         .clone()
         .unwrap_or_else(|| device.map(|d| d.device_final()).unwrap_or_default());
-    let panel_cfg = req
+    let panel_key: Option<String> = req
         .panel
-        .as_deref()
-        .or(device.and_then(|d| d.panel.as_deref()))
-        .and_then(|name| config.get_panel(name));
+        .clone()
+        .or_else(|| device.and_then(|d| d.panel.clone()))
+        .filter(|k| config.get_panel(k).is_some());
+    let panel_cfg = panel_key.as_deref().and_then(|name| config.get_panel(name));
+    // The override rung: the request's own ad-hoc values over whatever a
+    // Push made live (plan ruling P1-4). Reading only: this handler writes
+    // no server state.
+    let live = state
+        .dev_overrides
+        .live_override(device_key.as_deref(), panel_key.as_deref())
+        .await;
+    let over: CascadeValues = req.over.or(&live);
     let (panel_colors, panel_colors_actual, panel_dither_config): (
         Option<String>,
         Option<String>,
@@ -641,9 +658,8 @@ pub async fn handle_render(
         .map(display::parse_colors_header);
     let pre = resolve_pre_script(&PreScriptInputs {
         over: RungSettings {
-            dither: req.over.dither.clone(),
-            colors_actual: req
-                .over
+            dither: over.dither.clone(),
+            colors_actual: over
                 .colors_actual
                 .as_deref()
                 .map(display::parse_colors_header),
@@ -764,7 +780,7 @@ pub async fn handle_render(
     // renderer is fed from that same resolution — the report and the pixels
     // cannot disagree.
     let res = resolve_render(&RenderInputs {
-        over: RungSettings::from_cascade(&req.over),
+        over: RungSettings::from_cascade(&over),
         device_final: RungSettings::from_cascade(&device_final_rung),
         screen: out.script,
         device_base: RungSettings::from_cascade(&device_rung),
@@ -884,8 +900,8 @@ pub fn dev_router(state: &AppState) -> Router<AppState> {
         .route("/render", post(handle_render))
         .route("/resolve-mac", get(handle_resolve_mac))
         .route(
-            "/panel-colors/{panel}",
-            put(handle_set_panel_colors).delete(handle_delete_panel_colors),
+            "/overrides/panels/{panel}",
+            put(handle_put_panel_override).delete(handle_delete_panel_override),
         )
         .route("/panel-colors/{panel}/save", post(handle_save_panel_colors))
         .route(

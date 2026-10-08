@@ -16,10 +16,13 @@ pub const RESERVED_DEFAULT_KEY: &str = "DEFAULT";
 #[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq, schemars::JsonSchema)]
 pub struct GamutTuningValues {
     /// Where compression begins, as a fraction of the reachable chroma limit.
+    #[serde(serialize_with = "serialize_tidy_opt")]
     pub knee: Option<f32>,
     /// 0 = no mapping, 1 = full. Only 1 guarantees in-gamut output.
+    #[serde(serialize_with = "serialize_tidy_opt")]
     pub amount: Option<f32>,
     /// Cap on the compression factor.
+    #[serde(serialize_with = "serialize_tidy_opt")]
     pub max_compression: Option<f32>,
 }
 
@@ -128,9 +131,13 @@ pub struct CascadeValues {
     pub colors: Option<String>,
     pub colors_actual: Option<String>,
     pub dither: Option<String>,
+    #[serde(serialize_with = "serialize_tidy_opt")]
     pub max_error: Option<f32>,
+    #[serde(serialize_with = "serialize_tidy_opt")]
     pub noise_scale: Option<f32>,
+    #[serde(serialize_with = "serialize_tidy_opt")]
     pub chroma_clamp: Option<f32>,
+    #[serde(serialize_with = "serialize_tidy_opt")]
     pub strength: Option<f32>,
     pub refresh: Option<u32>,
     #[serde(default)]

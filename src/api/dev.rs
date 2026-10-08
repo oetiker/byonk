@@ -157,16 +157,25 @@ pub struct ScreenInfo {
     pub default_refresh: u32,
 }
 
-/// Device info for the screens list
+/// A configured device: everything the dev UI's device editor shows.
 #[derive(Debug, Serialize)]
 pub struct DeviceInfo {
     pub id: String,
     pub screen: String,
     pub panel: Option<String>,
-    pub dither: Option<String>,
+    pub name: Option<String>,
+    pub params: HashMap<String, serde_json::Value>,
+    /// The base rung (what is written directly under the device).
+    pub base: CascadeValues,
+    /// The `final:` rung, the owner's veto.
+    #[serde(rename = "final")]
+    pub final_rung: Option<CascadeValues>,
+    pub temperature_profile: Option<String>,
+    pub maximum_compatibility: Option<bool>,
+    pub min_png_bytes: Option<u32>,
 }
 
-/// Panel info for the panels list
+/// A panel profile: everything the dev UI's panel editor shows.
 #[derive(Debug, Serialize)]
 pub struct PanelInfo {
     pub id: String,
@@ -175,6 +184,8 @@ pub struct PanelInfo {
     pub height: Option<u32>,
     pub colors: String,
     pub colors_actual: Option<String>,
+    /// The panel's dither block, in the flat form config.yaml uses.
+    pub dither: Option<PanelDitherConfig>,
 }
 
 /// The tuning values an algorithm renders with when nothing overrides them.
@@ -280,19 +291,26 @@ pub async fn handle_screens(State(state): State<AppState>) -> Json<ScreensRespon
     screens.sort_by(|a, b| a.name.cmp(&b.name));
 
     // Collect configured devices
-    let devices: Vec<DeviceInfo> = config
+    let mut devices: Vec<DeviceInfo> = config
         .devices
         .iter()
         .map(|(id, dev)| DeviceInfo {
             id: id.clone(),
             screen: dev.screen.clone(),
             panel: dev.panel.clone(),
-            dither: dev.dither.clone(),
+            name: dev.name.clone(),
+            params: yaml_params_to_json(&dev.params),
+            base: dev.base(),
+            final_rung: dev.final_rung.clone(),
+            temperature_profile: dev.temperature_profile.clone(),
+            maximum_compatibility: dev.maximum_compatibility,
+            min_png_bytes: dev.min_png_bytes,
         })
         .collect();
+    devices.sort_by(|a, b| a.id.cmp(&b.id));
 
     // Collect panel profiles
-    let panels: Vec<PanelInfo> = config
+    let mut panels: Vec<PanelInfo> = config
         .panels
         .iter()
         .map(|(id, panel)| PanelInfo {
@@ -302,8 +320,10 @@ pub async fn handle_screens(State(state): State<AppState>) -> Json<ScreensRespon
             height: panel.height,
             colors: panel.colors.clone(),
             colors_actual: panel.colors_actual.clone(),
+            dither: panel.dither.clone(),
         })
         .collect();
+    panels.sort_by(|a, b| a.id.cmp(&b.id));
 
     // The engine owns both the list and the numbers; this endpoint only
     // relays them.

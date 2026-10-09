@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/svelte";
-import FilesPane from "../src/lib/components/FilesPane.svelte";
+import LibraryPane from "../src/lib/components/LibraryPane.svelte";
 import { screens } from "../src/lib/state/screens.svelte.js";
 import { subject } from "../src/lib/state/subject.svelte.js";
 import * as api from "../src/lib/api.js";
@@ -15,6 +15,7 @@ beforeEach(async () => {
   // one test's selection or captured error can't leak into the next.
   subject.reset();
   screens.error = null;
+  vi.spyOn(api, "panelUsage").mockResolvedValue({ panels: {}, unseen: [] });
   vi.spyOn(api, "listRepos").mockResolvedValue([
     { handle: "local", writable: true },
     { handle: "byonk-builtin", writable: false },
@@ -28,11 +29,11 @@ beforeEach(async () => {
   await screens.refresh();
 });
 
-describe("FilesPane", () => {
+describe("LibraryPane", () => {
   it("disables Rename and Delete on a read-only screen, keeps Copy and New", async () => {
     // Spec §8.6.
     subject.select("screen", "byonk-builtin/b");
-    render(FilesPane);
+    render(LibraryPane);
     expect(screen.getByRole("button", { name: /rename/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /delete/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /copy/i })).toBeEnabled();
@@ -41,7 +42,7 @@ describe("FilesPane", () => {
 
   it("enables Rename and Delete on a writable screen", () => {
     subject.select("screen", "local/a");
-    render(FilesPane);
+    render(LibraryPane);
     expect(screen.getByRole("button", { name: /rename/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /delete/i })).toBeEnabled();
   });
@@ -49,7 +50,7 @@ describe("FilesPane", () => {
   it("selects the new screen after a successful create", async () => {
     vi.spyOn(window, "prompt").mockReturnValue("fresh");
     vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "local/fresh" });
-    render(FilesPane);
+    render(LibraryPane);
     await fireEvent.click(screen.getByRole("button", { name: /new/i }));
     await waitFor(() => expect(subject.screenRef).toBe("local/fresh"));
   });
@@ -58,7 +59,7 @@ describe("FilesPane", () => {
     vi.spyOn(window, "prompt").mockReturnValue("dup");
     vi.spyOn(api, "copyScreen").mockResolvedValue({ ref: "local/dup" });
     subject.select("screen", "byonk-builtin/b");
-    render(FilesPane);
+    render(LibraryPane);
     await fireEvent.click(screen.getByRole("button", { name: /copy/i }));
     await waitFor(() => expect(subject.screenRef).toBe("local/dup"));
   });
@@ -70,7 +71,7 @@ describe("FilesPane", () => {
     vi.spyOn(window, "prompt").mockReturnValue("renamed");
     vi.spyOn(api, "renameScreen").mockResolvedValue({ ref: "local/renamed" });
     subject.select("screen", "local/a");
-    render(FilesPane);
+    render(LibraryPane);
     await fireEvent.click(screen.getByRole("button", { name: /rename/i }));
     await waitFor(() => expect(subject.screenRef).toBe("local/renamed"));
   });
@@ -83,7 +84,7 @@ describe("FilesPane", () => {
     // for the break/restore transcript proving it fails without the catch.
     vi.spyOn(window, "prompt").mockReturnValue("boom");
     vi.spyOn(api, "createScreen").mockRejectedValue(new Error("409 Conflict: name taken"));
-    render(FilesPane);
+    render(LibraryPane);
     await fireEvent.click(screen.getByRole("button", { name: /new/i }));
     await waitFor(() => {
       expect(screens.error).toEqual({ op: "create", message: "409 Conflict: name taken" });
@@ -93,13 +94,13 @@ describe("FilesPane", () => {
   it("clears a stale error when the next operation starts", async () => {
     screens.error = { op: "create", message: "a previous failure" };
     vi.spyOn(window, "prompt").mockReturnValue(null); // user cancels the dialog
-    render(FilesPane);
+    render(LibraryPane);
     await fireEvent.click(screen.getByRole("button", { name: /new/i }));
     await waitFor(() => expect(screens.error).toBeNull());
   });
 });
 
-describe("FilesPane with more than one writable repo", () => {
+describe("LibraryPane with more than one writable repo", () => {
   // Finding G. The suite above seeds exactly ONE writable repo, so which one
   // gets picked is never observable there. A real install has at least two --
   // `local` and the seeded `examples` -- and /api/repos sorts them
@@ -110,7 +111,8 @@ describe("FilesPane with more than one writable repo", () => {
     vi.restoreAllMocks();
     subject.reset();
     screens.error = null;
-    vi.spyOn(api, "listRepos").mockResolvedValue([
+    vi.spyOn(api, "panelUsage").mockResolvedValue({ panels: {}, unseen: [] });
+  vi.spyOn(api, "listRepos").mockResolvedValue([
       { handle: "examples", writable: true },
       { handle: "local", writable: true },
       { handle: "byonk-builtin", writable: false },
@@ -127,7 +129,7 @@ describe("FilesPane with more than one writable repo", () => {
   it("creates a new screen in local, not in the alphabetically-first examples", async () => {
     vi.spyOn(window, "prompt").mockReturnValue("fresh");
     const create = vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "local/fresh" });
-    render(FilesPane);
+    render(LibraryPane);
     await fireEvent.click(screen.getByRole("button", { name: /new/i }));
     await waitFor(() => expect(create).toHaveBeenCalled());
     expect(create.mock.calls[0][0]).toBe("local");
@@ -137,7 +139,7 @@ describe("FilesPane with more than one writable repo", () => {
     vi.spyOn(window, "prompt").mockReturnValue("dup");
     const copy = vi.spyOn(api, "copyScreen").mockResolvedValue({ ref: "local/dup" });
     subject.select("screen", "byonk-builtin/b");
-    render(FilesPane);
+    render(LibraryPane);
     await fireEvent.click(screen.getByRole("button", { name: /copy/i }));
     await waitFor(() => expect(copy).toHaveBeenCalled());
     expect(copy.mock.calls[0][1]).toBe("local");
@@ -147,30 +149,72 @@ describe("FilesPane with more than one writable repo", () => {
     // `local` is registered from `screens_dir`, but a deployment that points
     // every repo elsewhere can leave it out. The default must degrade, not
     // break New entirely.
-    vi.spyOn(api, "listRepos").mockResolvedValue([
+    vi.spyOn(api, "panelUsage").mockResolvedValue({ panels: {}, unseen: [] });
+  vi.spyOn(api, "listRepos").mockResolvedValue([
       { handle: "examples", writable: true },
       { handle: "byonk-builtin", writable: false },
     ]);
     await screens.refresh();
     vi.spyOn(window, "prompt").mockReturnValue("fresh");
     const create = vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "examples/fresh" });
-    render(FilesPane);
+    render(LibraryPane);
     await fireEvent.click(screen.getByRole("button", { name: /new/i }));
     await waitFor(() => expect(create).toHaveBeenCalled());
     expect(create.mock.calls[0][0]).toBe("examples");
   });
 
   it("falls back to the first writable repo when local is read-only", async () => {
-    vi.spyOn(api, "listRepos").mockResolvedValue([
+    vi.spyOn(api, "panelUsage").mockResolvedValue({ panels: {}, unseen: [] });
+  vi.spyOn(api, "listRepos").mockResolvedValue([
       { handle: "examples", writable: true },
       { handle: "local", writable: false },
     ]);
     await screens.refresh();
     vi.spyOn(window, "prompt").mockReturnValue("fresh");
     const create = vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "examples/fresh" });
-    render(FilesPane);
+    render(LibraryPane);
     await fireEvent.click(screen.getByRole("button", { name: /new/i }));
     await waitFor(() => expect(create).toHaveBeenCalled());
     expect(create.mock.calls[0][0]).toBe("examples");
+  });
+});
+
+describe("LibraryPane subjects", () => {
+  const dom = screen;
+  beforeEach(() => {
+    cleanup();
+    screens.meta = {
+      panels: [{ id: "e1004", name: "reTerminal E1004" }],
+      devices: [{ id: "kitchen", name: "Kitchen", panel: "e1004" }, { id: "attic", name: null, panel: null }],
+      dither_algorithms: [],
+    };
+    vi.spyOn(api, "panelUsage").mockResolvedValue({ panels: { e1004: ["kitchen"] }, unseen: ["attic"] });
+  });
+
+  it("lists panels and devices and makes each the subject", async () => {
+    render(LibraryPane);
+    await fireEvent.click(dom.getByRole("button", { name: "reTerminal E1004" }));
+    expect(subject.key).toBe("panel:e1004");
+    await fireEvent.click(await dom.findByRole("button", { name: "Kitchen \u00b7 reTerminal E1004" }));
+    expect(subject.key).toBe("device:kitchen");
+    expect(dom.getByRole("button", { name: "Kitchen \u00b7 reTerminal E1004" }).getAttribute("aria-current")).toBe("true");
+  });
+
+  it("names a device's panel as the server resolves it, and says when it is unknown", async () => {
+    render(LibraryPane);
+    expect(await dom.findByRole("button", { name: "attic \u00b7 panel unknown" })).toBeTruthy();
+  });
+
+  it("resolves a device without an explicit panel through the server's usage", async () => {
+    screens.meta = { ...screens.meta, devices: [{ id: "attic", name: "Attic", panel: null }] };
+    api.panelUsage.mockResolvedValue({ panels: { e1004: ["attic"] }, unseen: [] });
+    render(LibraryPane);
+    expect(await dom.findByRole("button", { name: "Attic \u00b7 reTerminal E1004" })).toBeTruthy();
+  });
+
+  it("offers no create or delete for panels and devices", () => {
+    render(LibraryPane);
+    subject.select("panel", "e1004");
+    expect(dom.getByRole("button", { name: "Delete" }).disabled).toBe(true);
   });
 });

@@ -3,6 +3,8 @@
   import { subject } from "../state/subject.svelte.js";
   import { editor } from "../state/editor.svelte.js";
   import * as api from "../api.js";
+  import { onMount } from "svelte";
+  import { devicePanel } from "../render-request.js"; // the one device->panel lookup (ruling PF8)
   import { Button } from "$lib/ui/button/index.js";
 
   const canEdit = $derived(screens.writable(subject.screenRef));
@@ -52,6 +54,28 @@
     }
   }
 
+  // Which panel each device uses comes from the server: a device without
+  // `panel:` resolves through the headers it polls with (spec §5).
+  let usage = $state({ panels: {}, unseen: [] });
+  onMount(async () => {
+    try {
+      usage = await api.panelUsage();
+    } catch (e) {
+      screens.error = { op: "panel usage", message: e?.message ?? String(e) };
+    }
+  });
+
+  function panelName(id) {
+    return (screens.meta.panels ?? []).find((p) => p.id === id)?.name ?? id;
+  }
+  function devicePanelLabel(d) {
+    const id = devicePanel({ meta: screens.meta, usage }, d.id);
+    return id ? panelName(id) : "panel unknown";
+  }
+  const rowClass = (on) =>
+    "truncate px-2 py-0.5 text-left hover:bg-[var(--panel-bg)] " +
+    (on ? "bg-[var(--accent-color)] text-white" : "");
+
   function newScreen() {
     return run("create", async () => {
       const handle = defaultWritableHandle();
@@ -98,7 +122,7 @@
   }
 </script>
 
-<div class="flex flex-col text-xs">
+<div class="flex flex-col text-xs" role="region" aria-label="Library">
   <div class="flex gap-1 border-b border-[var(--border-color)] p-1">
     <Button type="button" size="xs" variant="outline" onclick={newScreen}>New</Button>
     <Button
@@ -118,17 +142,29 @@
     </Button>
   </div>
 
+  <h2 class="px-2 pt-2 text-[10px] font-medium uppercase text-[var(--text-muted)]">Screens</h2>
   {#each screens.grouped as g (g.handle)}
-    <div class="px-2 pt-2 font-mono text-[10px] uppercase text-[var(--text-muted)]">
+    <div class="px-2 pt-1 font-mono text-[10px] uppercase text-[var(--text-muted)]">
       {g.handle}{#if !g.writable}<span class="ml-1">read-only</span>{/if}
     </div>
     {#each g.screens as s (s.ref)}
-      <button
-        type="button"
-        class="truncate px-2 py-0.5 text-left hover:bg-[var(--panel-bg)]
-               {subject.is('screen', s.ref) ? 'bg-[var(--accent-color)] text-white' : ''}"
-        onclick={() => subject.select("screen", s.ref)}
-      >{s.label}</button>
+      <button type="button" class={rowClass(subject.is("screen", s.ref))}
+              aria-current={subject.is("screen", s.ref) ? "true" : undefined}
+              onclick={() => subject.select("screen", s.ref)}>{s.label}</button>
     {/each}
+  {/each}
+
+  <h2 class="px-2 pt-3 text-[10px] font-medium uppercase text-[var(--text-muted)]">Panels</h2>
+  {#each screens.meta.panels ?? [] as p (p.id)}
+    <button type="button" class={rowClass(subject.is("panel", p.id))}
+            aria-current={subject.is("panel", p.id) ? "true" : undefined}
+            onclick={() => subject.select("panel", p.id)}>{p.name}</button>
+  {/each}
+
+  <h2 class="px-2 pt-3 text-[10px] font-medium uppercase text-[var(--text-muted)]">Devices</h2>
+  {#each screens.meta.devices ?? [] as d (d.id)}
+    <button type="button" class={rowClass(subject.is("device", d.id))}
+            aria-current={subject.is("device", d.id) ? "true" : undefined}
+            onclick={() => subject.select("device", d.id)}>{d.name ?? d.id} · {devicePanelLabel(d)}</button>
   {/each}
 </div>

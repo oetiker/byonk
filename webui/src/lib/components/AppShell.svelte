@@ -14,7 +14,7 @@
   import * as api from "../api.js";
 
   // Placeholders until Tasks 6-10 fill them in.
-  import FilesPane from "./FilesPane.svelte";
+  import LibraryPane from "./LibraryPane.svelte";
   import EditPane from "./EditPane.svelte";
   import PreviewPane from "./PreviewPane.svelte";
   import SimulatedInputs from "./SimulatedInputs.svelte";
@@ -171,7 +171,7 @@
 
     {#if layout.isOpen("library")}
       <div class="w-56 shrink-0 overflow-auto border-r border-[var(--border-color)]">
-        <FilesPane />
+        <LibraryPane />
       </div>
     {/if}
 

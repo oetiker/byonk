@@ -83,6 +83,7 @@ beforeEach(() => {
   vi.spyOn(api, "whoami").mockResolvedValue({ user: "u", via: "cookie", can_logout: true });
   vi.spyOn(api, "listFiles").mockResolvedValue([{ name: "script.lua", size: 1, text: true }]);
   vi.spyOn(api, "readFile").mockResolvedValue({ text: "-- lua", etag: '"1"' });
+  vi.spyOn(api, "panelUsage").mockResolvedValue({ panels: {}, unseen: [] }); // the Library loads it; not a render fetch
 });
 
 afterEach(() => {

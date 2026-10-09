@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen as dom, cleanup, fireEvent, waitFor } from "@testing-library/svelte";
-import FilesPane from "../src/lib/components/FilesPane.svelte";
+import LibraryPane from "../src/lib/components/LibraryPane.svelte";
 import PreviewPane from "../src/lib/components/PreviewPane.svelte";
 import { screens } from "../src/lib/state/screens.svelte.js";
 import { subject } from "../src/lib/state/subject.svelte.js";
@@ -8,10 +8,10 @@ import { simulate } from "../src/lib/state/simulate.svelte.js";
 import * as api from "../src/lib/api.js";
 
 /**
- * The New-screen journey, across the FilesPane/PreviewPane seam.
+ * The New-screen journey, across the LibraryPane/PreviewPane seam.
  *
  * Every defect found on this branch so far lived BETWEEN two components that
- * each had a green suite of their own: FilesPane's tests assert the selection
+ * each had a green suite of their own: LibraryPane's tests assert the selection
  * moves, PreviewPane's assert it renders what is selected, and Finding J sat
  * in the gap -- the selection moved, the render fired, and the preview still
  * showed the previous screen because an older in-flight render answered last.
@@ -59,14 +59,14 @@ describe("New screen", () => {
 
     subject.select("screen", "local/a");
     render(PreviewPane);
-    render(FilesPane);
+    render(LibraryPane);
     const img = dom.getByRole("img", { name: /screen preview/i });
     await waitFor(() => expect(release["local/a"]).toBeTypeOf("function"));
     release["local/a"]();
     delete release["local/a"];
     await waitFor(() => expect(img.src).toBe("blob:local/a"));
 
-    // FilesPane still asks for the name with a native prompt() (R5 is open).
+    // LibraryPane still asks for the name with a native prompt() (R5 is open).
     vi.spyOn(window, "prompt").mockReturnValue("fresh");
     vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "local/fresh" });
     api.listScreens.mockResolvedValue({

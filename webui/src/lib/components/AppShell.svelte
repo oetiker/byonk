@@ -11,6 +11,7 @@
   import { screens } from "../state/screens.svelte.js";
   import { subject } from "../state/subject.svelte.js";
   import { configDraft } from "../state/configDraft.svelte.js";
+  import { resolution } from "../state/resolution.svelte.js";
   import { simulate } from "../state/simulate.svelte.js";
   import * as api from "../api.js";
 
@@ -70,6 +71,13 @@
       if (!ref || ref === editor.ref) return;
       editor.loadScreen(ref, { readOnly: !screens.writable(ref) });
     });
+  });
+
+  // A new subject's ladder starts at "no render yet", never at the old
+  // subject's rungs (spec §5).
+  $effect(() => {
+    subject.key;
+    untrack(() => resolution.reset());
   });
 
   let xSize = $state(layout.size("x"));

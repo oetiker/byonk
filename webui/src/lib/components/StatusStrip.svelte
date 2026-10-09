@@ -13,6 +13,8 @@
   import { screens } from "../state/screens.svelte.js";
   import { simulate } from "../state/simulate.svelte.js";
   import { auth } from "../state/auth.svelte.js";
+  import { configDraft } from "../state/configDraft.svelte.js";
+  import { Button } from "$lib/ui/button/index.js";
 
   // Ruling 66: restoring Logout (Task 13a) created a FIFTH error owner
   // (auth.error, from a failed whoami or a failed logout) and left it with
@@ -25,7 +27,10 @@
     !!editor.error ||
       !!screens.error ||
       !!simulate.error ||
-      !!auth.error,
+      !!auth.error ||
+      !!configDraft.error ||
+      configDraft.live.panels.length > 0 ||
+      configDraft.live.devices.length > 0,
   );
 </script>
 
@@ -58,6 +63,21 @@
       <div role="alert" class="text-[var(--danger-color)]">
         {auth.error.op}: {auth.error.message}
       </div>
+    {/if}
+    {#each configDraft.live.panels as o (o.key)}
+      <span role="status" class="flex items-center gap-2 text-[var(--danger-color)]">
+        ◉ Live on {o.key}
+        <Button type="button" size="xs" variant="ghost" onclick={() => configDraft.discardLive("panel", o.key)}>Discard</Button>
+      </span>
+    {/each}
+    {#each configDraft.live.devices as o (o.key)}
+      <span role="status" class="flex items-center gap-2 text-[var(--danger-color)]">
+        ◉ Live on {o.key}
+        <Button type="button" size="xs" variant="ghost" onclick={() => configDraft.discardLive("device", o.key)}>Discard</Button>
+      </span>
+    {/each}
+    {#if configDraft.error}
+      <div role="alert" class="text-[var(--danger-color)]">config {configDraft.error.op}: {configDraft.error.message}</div>
     {/if}
   </div>
 {/if}

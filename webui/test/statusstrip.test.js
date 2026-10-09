@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { render, cleanup, screen } from "@testing-library/svelte";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, cleanup, screen, fireEvent } from "@testing-library/svelte";
 import { tick } from "svelte";
 import AppShell from "../src/lib/components/AppShell.svelte";
 import StatusStrip from "../src/lib/components/StatusStrip.svelte";
@@ -9,6 +9,8 @@ import { screens } from "../src/lib/state/screens.svelte.js";
 import { subject } from "../src/lib/state/subject.svelte.js";
 import { simulate } from "../src/lib/state/simulate.svelte.js";
 import { auth } from "../src/lib/state/auth.svelte.js";
+import * as api from "../src/lib/api.js";
+import { configDraft } from "../src/lib/state/configDraft.svelte.js";
 
 // Ruling 49 (review finding 2): editor.error/screens.error/simulate.error/
 // tune.error and tune.pushed used to render only inside StatusBar, and
@@ -39,6 +41,12 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+});
+
+beforeEach(() => {
+  configDraft.reset();
+  vi.spyOn(api, "listOverrides").mockResolvedValue({ panels: [], devices: [], tuning_sessions: [] });
+  vi.spyOn(api, "panelUsage").mockResolvedValue({ panels: {}, unseen: [] });
 });
 
 function closeEditor() {
@@ -110,6 +118,7 @@ describe("StatusStrip", () => {
   beforeEach(() => {
     cleanup();
     editor.reset();
+    configDraft.reset();
     screens.error = null;
     simulate.error = null;
     });
@@ -170,5 +179,27 @@ describe("StatusStrip", () => {
     simulate.error = { op: "not-render", message: "whatever" };
     render(StatusStrip);
     expect(screen.getByText(/not-render: whatever/)).toBeTruthy();
+  });
+  it("lists a live override from before a reload, and its Discard clears it", async () => {
+    configDraft.live = { panels: [{ key: "e1004", values: {}, expires_in_secs: 100 }], devices: [], tuning_sessions: [] };
+    const discard = vi.spyOn(configDraft, "discardLive").mockResolvedValue();
+    render(StatusStrip);
+    expect(screen.getByRole("status").textContent).toContain("◉ Live on e1004");
+    await fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(discard).toHaveBeenCalledWith("panel", "e1004");
+  });
+
+  it("lists a live device override too", async () => {
+    configDraft.live = { panels: [], devices: [{ key: "kitchen", values: {}, expires_in_secs: 100 }], tuning_sessions: [] };
+    const discard = vi.spyOn(configDraft, "discardLive").mockResolvedValue();
+    render(StatusStrip);
+    await fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(discard).toHaveBeenCalledWith("device", "kitchen");
+  });
+
+  it("renders configDraft.error as its own surface", () => {
+    configDraft.error = { op: "save", message: "409 Conflict" };
+    render(StatusStrip);
+    expect(screen.getByRole("alert").textContent).toBe("config save: 409 Conflict");
   });
 });

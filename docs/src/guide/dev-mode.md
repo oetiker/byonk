@@ -516,9 +516,12 @@ than a redirect when you are not admitted.
 | `POST /dev/api/render` | Render a screen to PNG under simulated device context; the answer carries `X-Byonk-Resolution` (see [Rendering a preview](#rendering-a-preview)) |
 | `GET /dev/api/events` | Server-Sent Events stream for live reload |
 | `GET /dev/api/resolve-mac` | Resolve a MAC or registration code to that device's screen and params |
-| `PUT /dev/api/panel-colors/{panel}`, `DELETE /dev/api/panel-colors/{panel}` | Set and clear a panel's temporary measured-colour override |
-| `POST /dev/api/panel-colors/{panel}/save` | Write the override into `config.yaml` as that panel's `colors_actual`, then clear it |
-| `GET /dev/api/panel-usage` | Per panel, the devices that resolve to it (explicit `panel:`, or the Board/Model headers of their last poll); `unseen` lists devices without `panel:` that have not polled since byonk started |
+| `GET /dev/api/overrides` | Every live override and tuning session, with the seconds each has left |
+| `PUT /dev/api/overrides/panels/{panel}`, `DELETE …` | Push, and clear, a panel's temporary override: `colors_actual`, `dither`, the tuning numbers and `gamut`, applied to every device on that panel |
+| `PUT /dev/api/overrides/devices/{device}`, `DELETE …` | Push, and clear, one device's temporary override: everything but `colors` and `refresh` |
+| `POST /dev/api/panels/{panel}/save` | Write a panel's `colors_actual` and `dither` block into `config.yaml`, replacing both — in place, key by key, so comments and the order of panels survive — and clear its override. Save is whole-rung: a field the request omits is removed from `config.yaml` |
+| `PATCH /dev/api/devices/{key}` | Save a device: the same body and rules as `PATCH /api/admin/devices/{key}` — `clear` applies first, then the set fields, so one request can replace a value — then clear its override |
+| `GET /dev/api/panel-usage` | Which devices use each panel, and which have not been seen since byonk started |
 | `PUT /dev/api/tuning-session/{device}`, `DELETE /dev/api/tuning-session/{device}` | Start or refresh, and end, a device's faster tuning-refresh session (see [Tune: colour calibration](#tune-colour-calibration)) |
 | `GET /dev/api/whoami` | Who the server thinks you are, and whether you can log out |
 
@@ -537,6 +540,8 @@ preview only: it changes no server state and reaches no device.
   "height": 480,
   "draft": {
     "base": { "dither": "floyd-steinberg", "strength": 0.8 },
+    "final": { "dither": "atkinson" },
+    "params": { "greeting": "hi" },
     "panel": { "colors": "#000000,#FFFFFF", "colors_actual": "#101010,#E8E8E8", "dither": { "max_error": 1.0 } }
   },
   "override": { "dither": "atkinson" },
@@ -552,7 +557,9 @@ preview only: it changes no server state and reaches no device.
 | `panel` | A panel profile id. Replaces the device's own `panel`. |
 | `model` | `og` (default) or `x`. Gives the default size and the fallback palette. |
 | `width`, `height` | The render size, when it differs from the model's. |
-| `draft.base` | An unsaved device rung: the device's `colors`, `dither`, the tuning numbers, `gamut` and `refresh`. |
+| `draft.base` | An unsaved device base rung: `colors`, `colors_actual`, `dither`, the tuning numbers, `gamut` and `refresh`. |
+| `draft.final` | An unsaved `final:` rung, same fields. |
+| `draft.params` | Replaces the device's params; `simulated.params` are still merged on top. |
 | `draft.panel` | An unsaved panel rung: `colors`, `colors_actual` and the panel `dither` block. |
 | `override` | Ad-hoc values from the dev UI controls: `dither`, `colors_actual`, the tuning numbers and `gamut`. They are above every other rung, `colors_actual` included — a change in 0.20.0, where a script that returned its own measurement used to beat the override. |
 | `simulated` | What the device would report: battery voltage, RSSI, the clock, and params that are merged over the device's own. |
@@ -563,13 +570,30 @@ without `dither` removes the device's `dither` from the preview, so you can
 see what the device does without it. A field that the draft leaves out is
 absent, not inherited.
 
-Three fields are refused with `400`. `override.colors` is refused because the
-script would then have been shown a different palette from the one rendered;
-`override.refresh` because nothing on this path consumes it. And
-`draft.base.colors_actual` is still refused, even though a device may now carry
-its own `colors_actual` in `config.yaml` — this request cannot draft one yet.
-An unknown field, `draft.final` included, is refused with `422`, so a device's
-`final:` rung can be seen in the resolution report but not yet drafted here.
+Two fields are refused with `400`: `override.colors`, because the script would
+then have been shown a different palette from the one rendered, and
+`override.refresh`, because nothing on this path consumes it. An unknown
+field is refused with `422`.
+
+The `override` rung of a preview also carries whatever a Push made live — the
+device's override over its panel's, with the request's own `override` on top —
+so the resolution report shows a live Push as the winner it is on the glass.
+
+### Overrides
+
+A Push puts a draft on real hardware without writing `config.yaml`: it becomes
+the cascade's `override` rung for every device on that panel (a panel
+override) or for one device (a device override). When both exist, the
+device's values win field by field. Each override expires 30 minutes after it
+was last pushed, so a closed browser tab cannot leave a display showing an
+uncommitted draft; Discard clears it at once, and a restart clears all of
+them. Saving a panel or a device clears its override, since the configuration
+now says the same thing.
+
+A device without `panel:` is matched to a panel by the `Board` or `Model`
+header it polls with. Byonk remembers the last ones in memory, which is how
+`/dev/api/panel-usage` and a preview of that device know its panel; until the
+device has polled once since byonk started, it is reported as unseen.
 
 The answer carries an `X-Byonk-Resolution` header. It is one line of JSON
 that tells, for every render setting, which value won and why. Example for

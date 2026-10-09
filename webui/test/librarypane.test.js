@@ -1,10 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/svelte";
+import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/svelte";
+import { tick } from "svelte";
+import { editor } from "../src/lib/state/editor.svelte.js";
 import LibraryPane from "../src/lib/components/LibraryPane.svelte";
 import { screens } from "../src/lib/state/screens.svelte.js";
 import { subject } from "../src/lib/state/subject.svelte.js";
 import { configDraft } from "../src/lib/state/configDraft.svelte.js";
 import * as api from "../src/lib/api.js";
+
+async function answer(label, text) {
+  const form = await screen.findByRole("form", { name: label });
+  const input = within(form).getByRole("textbox");
+  await fireEvent.input(input, { target: { value: text } });
+  await fireEvent.keyDown(input, { key: "Enter" });
+}
 
 beforeEach(async () => {
   // No project-wide auto-cleanup is configured (see iconrail.test.js,
@@ -50,19 +59,19 @@ describe("LibraryPane", () => {
   });
 
   it("selects the new screen after a successful create", async () => {
-    vi.spyOn(window, "prompt").mockReturnValue("fresh");
     vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "local/fresh" });
     render(LibraryPane);
     await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await answer("New screen name", "fresh");
     await waitFor(() => expect(subject.screenRef).toBe("local/fresh"));
   });
 
   it("selects the copy after a successful copy", async () => {
-    vi.spyOn(window, "prompt").mockReturnValue("dup");
     vi.spyOn(api, "copyScreen").mockResolvedValue({ ref: "local/dup" });
     subject.select("screen", "byonk-builtin/b");
     render(LibraryPane);
     await fireEvent.click(screen.getByRole("button", { name: /copy/i }));
+    await answer("Copy to name", "dup");
     await waitFor(() => expect(subject.screenRef).toBe("local/dup"));
   });
 
@@ -70,11 +79,11 @@ describe("LibraryPane", () => {
     // This is the behaviour the rename-reselect deviation (task-6-report.md)
     // exists for: without it, `subject.screenRef` would stay pinned to the
     // pre-rename ref, which no longer names anything after the rename.
-    vi.spyOn(window, "prompt").mockReturnValue("renamed");
     vi.spyOn(api, "renameScreen").mockResolvedValue({ ref: "local/renamed" });
     subject.select("screen", "local/a");
     render(LibraryPane);
     await fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+    await answer("Rename to", "renamed");
     await waitFor(() => expect(subject.screenRef).toBe("local/renamed"));
   });
 
@@ -84,21 +93,154 @@ describe("LibraryPane", () => {
     // rejection with no user-visible trace -- the dialog just closed. This
     // is the regression guard; see task-6-report.md's fix-round-1 section
     // for the break/restore transcript proving it fails without the catch.
-    vi.spyOn(window, "prompt").mockReturnValue("boom");
     vi.spyOn(api, "createScreen").mockRejectedValue(new Error("409 Conflict: name taken"));
     render(LibraryPane);
     await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await answer("New screen name", "boom");
     await waitFor(() => {
       expect(screens.error).toEqual({ op: "create", message: "409 Conflict: name taken" });
     });
   });
 
-  it("clears a stale error when the next operation starts", async () => {
+  it("clears a stale error when the next operation is submitted", async () => {
     screens.error = { op: "create", message: "a previous failure" };
-    vi.spyOn(window, "prompt").mockReturnValue(null); // user cancels the dialog
+    vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "local/fresh" });
     render(LibraryPane);
     await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await answer("New screen name", "fresh");
     await waitFor(() => expect(screens.error).toBeNull());
+  });
+
+  it("New opens a name form with the focus in it; Escape closes it and creates nothing", async () => {
+    const create = vi.spyOn(api, "createScreen");
+    render(LibraryPane);
+    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    const form = await screen.findByRole("form", { name: "New screen name" });
+    await tick();
+    expect(document.activeElement).toBe(within(form).getByRole("textbox"));
+    await fireEvent.keyDown(within(form).getByRole("textbox"), { key: "Escape" });
+    expect(screen.queryByRole("form", { name: "New screen name" })).toBeNull();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("Rename starts from the screen's current name", async () => {
+    subject.select("screen", "local/a");
+    render(LibraryPane);
+    await fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+    const form = await screen.findByRole("form", { name: "Rename to" });
+    expect(within(form).getByRole("textbox").value).toBe("a");
+  });
+
+  it("Delete asks inline, names the screen, and deletes only on Delete", async () => {
+    const del = vi.spyOn(api, "deleteScreen").mockResolvedValue(undefined);
+    subject.select("screen", "local/a");
+    render(LibraryPane);
+    await fireEvent.click(screen.getByRole("button", { name: /delete/i }));
+    const form = await screen.findByRole("form", { name: "Confirm screen deletion" });
+    expect(form.textContent).toContain("Delete local/a? This cannot be undone.");
+    expect(del).not.toHaveBeenCalled();
+    await fireEvent.click(within(form).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(del).toHaveBeenCalledWith("local/a"));
+  });
+
+  it("Cancel on the delete form deletes nothing", async () => {
+    const del = vi.spyOn(api, "deleteScreen");
+    subject.select("screen", "local/a");
+    render(LibraryPane);
+    await fireEvent.click(screen.getByRole("button", { name: /delete/i }));
+    const form = await screen.findByRole("form", { name: "Confirm screen deletion" });
+    await fireEvent.click(within(form).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("form", { name: "Confirm screen deletion" })).toBeNull();
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it("a pending delete is dropped when the subject changes", async () => {
+    subject.select("screen", "local/a");
+    render(LibraryPane);
+    await fireEvent.click(screen.getByRole("button", { name: /delete/i }));
+    await screen.findByRole("form", { name: "Confirm screen deletion" });
+    subject.select("screen", "byonk-builtin/b");
+    await waitFor(() => expect(screen.queryByRole("form", { name: "Confirm screen deletion" })).toBeNull());
+  });
+
+  it("a failed create keeps the form open with the name", async () => {
+    vi.spyOn(api, "createScreen").mockRejectedValue(new Error("409 Conflict: name taken"));
+    render(LibraryPane);
+    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await answer("New screen name", "boom");
+    await waitFor(() => expect(screens.error).toEqual({ op: "create", message: "409 Conflict: name taken" }));
+    const form = screen.getByRole("form", { name: "New screen name" });
+    expect(within(form).getByRole("textbox").value).toBe("boom");
+  });
+
+  it("a successful create closes the form", async () => {
+    vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "local/fresh" });
+    render(LibraryPane);
+    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await answer("New screen name", "fresh");
+    await waitFor(() => expect(screen.queryByRole("form", { name: "New screen name" })).toBeNull());
+  });
+
+  describe("renaming a screen with unsaved edits", () => {
+    async function dirtyScreen() {
+      vi.spyOn(api, "listFiles").mockResolvedValue([{ name: "script.lua", size: 1, text: true }]);
+      vi.spyOn(api, "readFile").mockResolvedValue({ text: "-- lua", etag: '"1"' });
+      subject.select("screen", "local/a");
+      editor.reset();
+      await editor.loadScreen("local/a");
+      await editor.open("local/a", "script.lua");
+      editor.setText("-- edited");
+      expect(editor.active.dirty).toBe(true);
+    }
+
+    it("asks before renaming, and renames only when confirmed", async () => {
+      await dirtyScreen();
+      const rename = vi.spyOn(api, "renameScreen").mockResolvedValue({ ref: "local/renamed" });
+      render(LibraryPane);
+      await fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+      await answer("Rename to", "renamed");
+      const form = await screen.findByRole("form", { name: "Confirm rename with unsaved edits" });
+      expect(form.textContent).toContain("local/a has unsaved edits");
+      expect(rename).not.toHaveBeenCalled();
+      await fireEvent.click(within(form).getByRole("button", { name: "Rename anyway" }));
+      await waitFor(() => expect(rename).toHaveBeenCalledWith("local/a", "renamed"));
+      await waitFor(() => expect(subject.screenRef).toBe("local/renamed"));
+    });
+
+    it("Cancel renames nothing and keeps the edits", async () => {
+      await dirtyScreen();
+      const rename = vi.spyOn(api, "renameScreen");
+      render(LibraryPane);
+      await fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+      await answer("Rename to", "renamed");
+      const form = await screen.findByRole("form", { name: "Confirm rename with unsaved edits" });
+      await fireEvent.click(within(form).getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("form", { name: "Confirm rename with unsaved edits" })).toBeNull();
+      expect(rename).not.toHaveBeenCalled();
+      expect(editor.active.dirty).toBe(true);
+    });
+
+    it("renames straight away when nothing is unsaved", async () => {
+      editor.reset();
+      const rename = vi.spyOn(api, "renameScreen").mockResolvedValue({ ref: "local/renamed" });
+      subject.select("screen", "local/a");
+      render(LibraryPane);
+      await fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+      await answer("Rename to", "renamed");
+      await waitFor(() => expect(rename).toHaveBeenCalledWith("local/a", "renamed"));
+      expect(screen.queryByRole("form", { name: "Confirm rename with unsaved edits" })).toBeNull();
+    });
+  });
+
+  it("never opens a native dialog", async () => {
+    const prompt = vi.spyOn(window, "prompt");
+    const confirm = vi.spyOn(window, "confirm");
+    vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "local/fresh" });
+    render(LibraryPane);
+    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await answer("New screen name", "fresh");
+    expect(prompt).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
   });
 });
 
@@ -130,20 +272,20 @@ describe("LibraryPane with more than one writable repo", () => {
   });
 
   it("creates a new screen in local, not in the alphabetically-first examples", async () => {
-    vi.spyOn(window, "prompt").mockReturnValue("fresh");
     const create = vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "local/fresh" });
     render(LibraryPane);
     await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await answer("New screen name", "fresh");
     await waitFor(() => expect(create).toHaveBeenCalled());
     expect(create.mock.calls[0][0]).toBe("local");
   });
 
   it("copies into local, not into the alphabetically-first examples", async () => {
-    vi.spyOn(window, "prompt").mockReturnValue("dup");
     const copy = vi.spyOn(api, "copyScreen").mockResolvedValue({ ref: "local/dup" });
     subject.select("screen", "byonk-builtin/b");
     render(LibraryPane);
     await fireEvent.click(screen.getByRole("button", { name: /copy/i }));
+    await answer("Copy to name", "dup");
     await waitFor(() => expect(copy).toHaveBeenCalled());
     expect(copy.mock.calls[0][1]).toBe("local");
   });
@@ -158,10 +300,10 @@ describe("LibraryPane with more than one writable repo", () => {
       { handle: "byonk-builtin", writable: false },
     ]);
     await screens.refresh();
-    vi.spyOn(window, "prompt").mockReturnValue("fresh");
     const create = vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "examples/fresh" });
     render(LibraryPane);
     await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await answer("New screen name", "fresh");
     await waitFor(() => expect(create).toHaveBeenCalled());
     expect(create.mock.calls[0][0]).toBe("examples");
   });
@@ -173,10 +315,10 @@ describe("LibraryPane with more than one writable repo", () => {
       { handle: "local", writable: false },
     ]);
     await screens.refresh();
-    vi.spyOn(window, "prompt").mockReturnValue("fresh");
     const create = vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "examples/fresh" });
     render(LibraryPane);
     await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await answer("New screen name", "fresh");
     await waitFor(() => expect(create).toHaveBeenCalled());
     expect(create.mock.calls[0][0]).toBe("examples");
   });

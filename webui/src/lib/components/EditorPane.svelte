@@ -5,6 +5,8 @@
   import { createEditor } from "../codemirror.js";
   import StatusBar from "./StatusBar.svelte";
   import { Button } from "$lib/ui/button/index.js";
+  import InlineNameForm from "./InlineNameForm.svelte";
+  import InlineConfirm from "./InlineConfirm.svelte";
 
   // $state, not a plain `let`: `bind:this` and the assignment inside onMount
   // are both plain writes, and an $effect reading a plain `let` captures its
@@ -114,7 +116,7 @@
     if (cm) cm.setDiagnostics(editor.active?.issues ?? []);
   });
 
-  // --- add / delete a file (R5) -------------------------------------------
+  // --- add / delete a file -------------------------------------------
   //
   // The three files every screen must have. The server refuses to delete
   // them (`CORE_FILES`, src/api/dev_files.rs) and is the authority; this list
@@ -137,17 +139,42 @@
       : null,
   );
 
-  async function addFile() {
-    const name = prompt("New file name");
-    if (!name) return;
-    await editor.addFile(name.trim());
+  /**
+   * The open inline form, or null: `{ kind: "add" }` or
+   * `{ kind: "delete", name }`. The file name is captured when the form
+   * opens and submit acts on that, so the confirmation can never delete a
+   * different file than the one it names. Switching screens closes it.
+   */
+  let ask = $state(null);
+  let askRef = null;
+
+  function openForm(next) {
+    askRef = editor.ref;
+    ask = next;
   }
 
-  async function deleteFile() {
-    const name = deletableName;
-    if (!name) return;
-    if (!confirm(`Delete ${name}? This cannot be undone.`)) return;
+  $effect(() => {
+    if (ask && editor.ref !== askRef) ask = null;
+  });
+
+  function addFile() {
+    openForm({ kind: "add" });
+  }
+
+  function deleteFile() {
+    if (deletableName) openForm({ kind: "delete", name: deletableName });
+  }
+
+  async function submitAdd(name) {
+    await editor.addFile(name);
+    // A failure lands on `editor.error`; keep the form so the name can be fixed.
+    if (!editor.error) ask = null;
+  }
+
+  async function submitDelete() {
+    const name = ask.name;
     await editor.deleteFile(name);
+    if (!editor.error) ask = null;
   }
 </script>
 
@@ -230,19 +257,11 @@
       {/each}
     </div>
     <!--
-      Add and delete a file (R5, ruled 2026-09-15).
-      docs/src/guide/dev-mode.md has described both since the hand-written UI
-      and neither existed in the SPA: `api.deleteFile` had no caller at all.
-      The server side was already there (`PUT`/`DELETE /dev/api/file`), so
-      this is the client catching up with its own documentation.
+      Add and delete a file. Both ask inline, in a form under this toolbar
+      (InlineNameForm / InlineConfirm), the same interaction LibraryPane uses
+      for its screens -- no native prompt() or confirm().
 
-      `prompt()`/`confirm()`, matching FilesPane's New/Copy/Rename/Delete
-      rather than inventing a second interaction model for the same kind of
-      question. Whether all of them become inline forms is a separate,
-      unruled decision (R5's other half) -- when it is taken it should move
-      these together with FilesPane's, not leave the two halves different.
-
-      Both are gated on the screen being WRITABLE, the same rule FilesPane's
+      Both are gated on the screen being WRITABLE, the same rule LibraryPane's
       Rename/Delete use. Delete additionally refuses the three core files;
       the server refuses them too (`CORE_FILES`, src/api/dev_files.rs) and is
       the authority -- this only avoids offering an action that cannot work.
@@ -288,6 +307,16 @@
       Save
     </Button>
   </div>
+  {#if ask?.kind === "add"}
+    <InlineNameForm label="New file name" onsubmit={submitAdd} oncancel={() => (ask = null)} />
+  {:else if ask?.kind === "delete"}
+    <InlineConfirm
+      label="Confirm file deletion"
+      message={`Delete ${ask.name}? This cannot be undone.`}
+      onconfirm={submitDelete}
+      oncancel={() => (ask = null)}
+    />
+  {/if}
   <div bind:this={host} class="min-h-0 flex-1 overflow-auto"></div>
   <StatusBar />
 </div>

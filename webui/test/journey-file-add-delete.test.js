@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen as dom, cleanup, fireEvent, waitFor } from "@testing-library/svelte";
+import { render, screen as dom, cleanup, fireEvent, waitFor, within } from "@testing-library/svelte";
 import { tick } from "svelte";
 import AppShell from "../src/lib/components/AppShell.svelte";
 import { editor } from "../src/lib/state/editor.svelte.js";
@@ -66,8 +66,6 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  delete window.prompt;
-  delete window.confirm;
 });
 
 async function mountWithScreen(ref = "local/a") {
@@ -81,6 +79,18 @@ async function mountWithScreen(ref = "local/a") {
 const addButton = () => dom.getByRole("button", { name: "Add file" });
 const delButton = () => dom.getByRole("button", { name: "Delete file" });
 
+async function nameFile(name) {
+  const form = await dom.findByRole("form", { name: "New file name" });
+  const input = within(form).getByRole("textbox");
+  await fireEvent.input(input, { target: { value: name } });
+  await fireEvent.keyDown(input, { key: "Enter" });
+}
+async function confirmDelete(button = "Delete") {
+  const form = await dom.findByRole("form", { name: "Confirm file deletion" });
+  await fireEvent.click(within(form).getByRole("button", { name: button }));
+  return form;
+}
+
 describe("adding a file", () => {
   it("creates it, lists it and opens it", async () => {
     const write = vi.spyOn(api, "writeFile").mockImplementation(async (ref, name) => {
@@ -90,10 +100,10 @@ describe("adding a file", () => {
     api.readFile.mockImplementation(async (ref, name) =>
       name === "helper.lua" ? { text: "", etag: '"new"' } : { text: "-- lua", etag: '"1"' },
     );
-    window.prompt = () => "helper.lua";
 
     await mountWithScreen();
     await fireEvent.click(addButton());
+    await nameFile("helper.lua");
 
     // Created with a null etag, which api.js sends as `If-Match: *` -- byonk's
     // "create, and fail if it already exists".
@@ -111,11 +121,11 @@ describe("adding a file", () => {
     // docs/src/guide/dev-mode.md: "Creating a file that already exists is
     // reported rather than silently opening the existing one."
     vi.spyOn(api, "writeFile").mockRejectedValue(new api.ConflictError());
-    window.prompt = () => "script.lua";
 
     await mountWithScreen();
     const before = editor.active?.name;
     await fireEvent.click(addButton());
+    await nameFile("script.lua");
 
     await waitFor(() =>
       expect(editor.error).toEqual({ op: "add-file", message: "script.lua already exists" }),
@@ -124,16 +134,39 @@ describe("adding a file", () => {
     expect(editor.active?.name).toBe(before);
   });
 
-  it("a cancelled prompt does nothing at all", async () => {
+  it("Escape on the name form adds nothing", async () => {
     const write = vi.spyOn(api, "writeFile");
-    window.prompt = () => null;
 
     await mountWithScreen();
     await fireEvent.click(addButton());
+    const form = await dom.findByRole("form", { name: "New file name" });
+    await fireEvent.keyDown(within(form).getByRole("textbox"), { key: "Escape" });
     await tick();
 
     expect(write).not.toHaveBeenCalled();
     expect(editor.error).toBeNull();
+    expect(dom.queryByRole("form", { name: "New file name" })).toBeNull();
+  });
+
+  it("a name that already exists keeps the form open so the name can be corrected", async () => {
+    vi.spyOn(api, "writeFile").mockRejectedValue(new api.ConflictError());
+    await mountWithScreen();
+    await fireEvent.click(addButton());
+    await nameFile("script.lua");
+    await waitFor(() => expect(editor.error).toMatchObject({ op: "add-file" }));
+    const form = dom.getByRole("form", { name: "New file name" });
+    expect(within(form).getByRole("textbox").value).toBe("script.lua");
+  });
+
+  it("never opens a native dialog", async () => {
+    const prompt = vi.spyOn(window, "prompt");
+    const confirm = vi.spyOn(window, "confirm");
+    vi.spyOn(api, "writeFile").mockResolvedValue({ etag: '"n"' });
+    await mountWithScreen();
+    await fireEvent.click(addButton());
+    await nameFile("x.lua");
+    expect(prompt).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
   });
 
   it("is offered only for a writable screen", async () => {
@@ -151,13 +184,15 @@ describe("deleting a file", () => {
     const del = vi.spyOn(api, "deleteFile").mockImplementation(async (ref, name) => {
       listing = listing.filter((f) => f.name !== name);
     });
-    window.confirm = () => true;
 
     await mountWithScreen();
     await editor.open("local/a", "helper.lua");
     await waitFor(() => expect(editor.active?.name).toBe("helper.lua"));
 
     await fireEvent.click(delButton());
+    const form = await dom.findByRole("form", { name: "Confirm file deletion" });
+    expect(form.textContent).toContain("Delete helper.lua? This cannot be undone.");
+    await confirmDelete();
 
     await waitFor(() => expect(del).toHaveBeenCalledWith("local/a", "helper.lua"));
     await waitFor(() => expect(editor.files.map((f) => f.name)).not.toContain("helper.lua"));
@@ -166,19 +201,20 @@ describe("deleting a file", () => {
     expect(editor.active).toBeTruthy();
   });
 
-  it("a cancelled confirm deletes nothing", async () => {
+  it("Cancel on the confirmation deletes nothing", async () => {
     listing.push({ name: "helper.lua", size: 5, text: true });
     const del = vi.spyOn(api, "deleteFile");
-    window.confirm = () => false;
 
     await mountWithScreen();
     await editor.open("local/a", "helper.lua");
     await waitFor(() => expect(editor.active?.name).toBe("helper.lua"));
 
     await fireEvent.click(delButton());
+    await confirmDelete("Cancel");
     await tick();
 
     expect(del).not.toHaveBeenCalled();
+    expect(dom.queryByRole("form", { name: "Confirm file deletion" })).toBeNull();
     expect(editor.files.map((f) => f.name)).toContain("helper.lua");
   });
 
@@ -187,7 +223,6 @@ describe("deleting a file", () => {
   it.each(["meta.yaml", "script.lua", "screen.svg"])(
     "is not offered for the core file %s",
     async (name) => {
-      window.confirm = () => true;
       await mountWithScreen();
       await editor.open("local/a", name);
       await waitFor(() => expect(editor.active?.name).toBe(name));
@@ -208,13 +243,13 @@ describe("deleting a file", () => {
   it("a refused delete is reported and the file stays", async () => {
     listing.push({ name: "helper.lua", size: 5, text: true });
     vi.spyOn(api, "deleteFile").mockRejectedValue(new Error("422 Unprocessable"));
-    window.confirm = () => true;
 
     await mountWithScreen();
     await editor.open("local/a", "helper.lua");
     await waitFor(() => expect(editor.active?.name).toBe("helper.lua"));
 
     await fireEvent.click(delButton());
+    await confirmDelete();
 
     await waitFor(() => expect(editor.error).toMatchObject({ op: "delete-file" }));
     expect(dom.getByText(/delete-file: 422 Unprocessable/)).toBeTruthy();
@@ -229,7 +264,6 @@ describe("deleting a file", () => {
     vi.spyOn(api, "deleteFile").mockImplementation(async (ref, name) => {
       listing = listing.filter((f) => f.name !== name);
     });
-    window.confirm = () => true;
 
     await mountWithScreen();
     await waitFor(() => expect(editor.active?.name).toBe("script.lua"));
@@ -237,6 +271,7 @@ describe("deleting a file", () => {
 
     await editor.open("local/a", "helper.lua");
     await fireEvent.click(delButton());
+    await confirmDelete();
     await waitFor(() => expect(editor.files.map((f) => f.name)).not.toContain("helper.lua"));
 
     const lua = editor.tabs.find((t) => t.name === "script.lua");

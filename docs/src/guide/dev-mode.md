@@ -180,6 +180,14 @@ working on.
 | **Rename** | a writable repo | Moves the screen within its own repo. You are asked to confirm first if you have unsaved edits, because the rename would leave them unsavable. |
 | **Delete** | a writable repo | Removes the screen. |
 
+**New**, **Copy** and **Rename** ask for the name in a small form under the
+Library toolbar (**Copy** and **Rename** start from the current name);
+**Delete** asks you to confirm there too, and names the screen it would
+remove. When the screen has unsaved edits, **Rename** adds a second question —
+"Rename anyway?" — before it goes ahead. Enter confirms, Escape cancels. If the
+server refuses the name, the form stays open so you can correct it. The
+editor's **+** and **−** work the same way.
+
 The **+** next to the file tabs adds a file to the current screen, and **−**
 deletes the file you are currently looking at. Both need a writable repo.
 Creating a file that already exists is reported rather than silently opening

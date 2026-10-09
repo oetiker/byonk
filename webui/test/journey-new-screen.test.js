@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen as dom, cleanup, fireEvent, waitFor } from "@testing-library/svelte";
+import { render, screen as dom, cleanup, fireEvent, waitFor, within } from "@testing-library/svelte";
 import LibraryPane from "../src/lib/components/LibraryPane.svelte";
 import PreviewPane from "../src/lib/components/PreviewPane.svelte";
 import { screens } from "../src/lib/state/screens.svelte.js";
@@ -66,8 +66,6 @@ describe("New screen", () => {
     delete release["local/a"];
     await waitFor(() => expect(img.src).toBe("blob:local/a"));
 
-    // LibraryPane still asks for the name with a native prompt() (R5 is open).
-    vi.spyOn(window, "prompt").mockReturnValue("fresh");
     vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "local/fresh" });
     api.listScreens.mockResolvedValue({
       screens: [{ name: "local/a" }, { name: "local/fresh" }],
@@ -77,6 +75,10 @@ describe("New screen", () => {
     });
 
     await fireEvent.click(dom.getByRole("button", { name: /new/i }));
+    const form = await dom.findByRole("form", { name: "New screen name" });
+    const input = within(form).getByRole("textbox");
+    await fireEvent.input(input, { target: { value: "fresh" } });
+    await fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(subject.screenRef).toBe("local/fresh"));
     await waitFor(() => expect(release["local/fresh"]).toBeTypeOf("function"));
 

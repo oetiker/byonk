@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen as dom, cleanup, fireEvent, waitFor } from "@testing-library/svelte";
+import { render, screen as dom, cleanup, fireEvent, waitFor, within } from "@testing-library/svelte";
 import { tick } from "svelte";
 import AppShell from "../src/lib/components/AppShell.svelte";
 import { screens } from "../src/lib/state/screens.svelte.js";
@@ -84,7 +84,6 @@ describe("Finding H: deleting the selected screen", () => {
   it("leaves the editor and the preview empty", async () => {
     stubServer();
     vi.spyOn(api, "deleteScreen").mockResolvedValue(undefined);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     await mount();
     await fireEvent.click(dom.getByRole("button", { name: "a" }));
     await waitFor(() => expect(editor.active?.name).toBe("script.lua"));
@@ -92,6 +91,8 @@ describe("Finding H: deleting the selected screen", () => {
     await waitFor(() => expect(img().getAttribute("src")).toBeTruthy());
 
     await fireEvent.click(dom.getByRole("button", { name: "Delete" }));
+    const confirmForm = await dom.findByRole("form", { name: "Confirm screen deletion" });
+    await fireEvent.click(within(confirmForm).getByRole("button", { name: "Delete" }));
 
     await waitFor(() => expect(subject.kind).toBe(null));
     expect(editor.tabs).toHaveLength(0);

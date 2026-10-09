@@ -258,10 +258,15 @@ startup.
 ## The config editor
 
 Choosing a panel or a device in Library opens the config editor in Edit. It
-has one section per setting in the render cascade: `dither`, `colors`,
-`colors_actual`, the four tuning numbers (`max_error`, `noise_scale`,
-`chroma_clamp`, `strength`), `gamut` and, for devices, `refresh`. Each section
-has an input for each rung you are editing, and a ladder under them.
+has one section per setting in the render cascade. Each section has an input
+for each rung you are editing, and a ladder under them. Which sections you get
+depends on the subject:
+
+- A **panel** has `colors_actual` (with the swatch editor), the four tuning
+  numbers (`max_error`, `noise_scale`, `chroma_clamp`, `strength`) and the
+  `gamut` knobs. It has no algorithm picker and no `colors` section.
+- A **device** has all of those, plus `dither` (the algorithm), `colors` and
+  `refresh`.
 
 - A **panel** edits its own rung, `panels.<id>` in `config.yaml`.
 - A **device** edits its base rung and its `final:` rung. Above them are the
@@ -323,7 +328,8 @@ physical display. Their controls are in the [config editor](#the-config-editor).
 
 ### Dither Algorithm Selection
 
-The `dither` section lets you try all 9 algorithms on your content:
+A device's `dither` section lets you try all 9 algorithms on your content (a
+panel has no algorithm of its own):
 - `atkinson` (default) — Atkinson error diffusion (75% propagation)
 - `atkinson-hybrid` — Atkinson with hybrid propagation (100% achromatic / 75% chromatic)
 - `floyd-steinberg` — Floyd-Steinberg with blue noise jitter
@@ -432,29 +438,31 @@ what a real screen gets, not a tuning surface.
 1. **Pick the panel** you want to calibrate in Library.
 2. **Choose the calibration screen** in the Preview header (for example
    `byonk-builtin/calibration/color`) and set **watch on** to your device.
-3. **Adjust colours and tuning** in Edit — drag hue, saturation and lightness
-   of a swatch or type a hex value, and change the dither algorithm and
-   tuning numbers — while watching the ladder to see which values actually
-   count.
+3. **Adjust the measured colours** in Edit — drag hue, saturation and
+   lightness of a swatch or type a hex value — and the tuning numbers, while
+   watching the ladder to see which values actually count.
 4. **Push**, walk over, look at the device under its own light, and repeat.
    E-ink is reflective: a panel only shows the truth under the light it hangs
    in.
-5. **Save**, which writes the values into `config.yaml`:
+5. **Save**, which writes `colors_actual` and the tuning numbers into
+   `panels.<id>` in `config.yaml`.
+6. To choose the dither algorithm, pick the **device** in Library, set
+   `dither` there, and Save. That writes `devices.<key>`.
 
 ```yaml
 panels:
   my_panel:
     name: "My Panel"
     colors: "#000000,#FFFFFF,#FF0000,#FFFF00"
-    colors_actual: "#303030,#D0D0C8,#C04040,#D0D020"  # written by Save
+    colors_actual: "#303030,#D0D0C8,#C04040,#D0D020"  # written by the panel's Save
+    dither:
+      strength: 0.8    # written by the panel's Save
 
 devices:
   "ABCDE-FGHJK":
     screen: examples/gphoto
     panel: my_panel
-    dither: floyd-steinberg
-    max_error: 1.0    # written by Save
-    noise_scale: 0.5    # written by Save
+    dither: floyd-steinberg    # written by the device's Save
 ```
 
 Tuning values can also be set per-script in the Lua return table — see [Lua API](../api/lua-api.md#max_error-noise_scale-chroma_clamp-strength).

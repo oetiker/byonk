@@ -352,7 +352,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     something in a preview that it would never draw on the glass. All three
     pre-script paths agree now. This affects devices with no `final:` block.
   - **A caller's explicit measurement now outranks a script's own.** The dev
-    UI's Tune panel, `POST /dev/api/render`'s `override.colors_actual` and the
+    UI's panel editor (Push), `POST /dev/api/render`'s `override.colors_actual` and the
     MCP `render_screen` tool's `colors_actual` argument used to lose to a
     `colors_actual` returned by the screen, which left no way to preview a
     calibration against a screen that measures its own.

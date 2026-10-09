@@ -123,8 +123,8 @@ render-opts > `final.colors_actual` > **script** > device `colors_actual` >
 in that chain never fails the render — the offending layer is skipped with a
 warning and the next one down is tried.
 
-> **Changed in 0.20.0.** A caller's explicit measurement — the dev UI's Tune
-> panel, or the `render_screen` tool's `colors_actual` argument — now outranks
+> **Changed in 0.20.0.** A caller's explicit measurement — the dev UI's panel
+> editor (Push), or the `render_screen` tool's `colors_actual` argument — now outranks
 > a `colors_actual` returned by the script. It used to lose to it, which made
 > previewing a calibration impossible on any screen that measures its own.
 

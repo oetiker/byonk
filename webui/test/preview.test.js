@@ -471,4 +471,16 @@ describe("PreviewPane with the draft store (Task 7)", () => {
     expect(options()).toEqual(["", "kitchen"]);
     await waitFor(() => expect(subject.watchDevice).toBe(""));
   });
+
+  it("does not claim the screen sets its colours from a payload recorded for another subject", async () => {
+    spyRender();
+    resolution.record({ colors: { effective: "#000", from: "screen" } }, "screen:local/a");
+    subject.select("panel", "e1004");
+    render(PreviewPane);
+    expect(screen.queryByTestId("screen-in-charge")).toBeNull();
+    cleanup();
+    resolution.record({ colors: { effective: "#000", from: "screen" } }, "panel:e1004");
+    render(PreviewPane);
+    expect(screen.queryByTestId("screen-in-charge")).not.toBeNull();
+  });
 });

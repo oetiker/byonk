@@ -166,4 +166,13 @@ describe("configDraft", () => {
     configDraft.set("panel", "e1004", "panel", "strength", 0.5);
     expect(configDraft.revision).toBe(before + 1);
   });
+
+  it("a failed release is reported, not swallowed", async () => {
+    vi.spyOn(api, "pushDeviceOverride").mockResolvedValue(null);
+    vi.spyOn(api, "releaseDeviceOverride").mockRejectedValue(new Error("503 Unavailable"));
+    configDraft.set("device", "kitchen", "device_base", "strength", 0.3);
+    await configDraft.push("device", "kitchen");
+    await configDraft.release();
+    expect(configDraft.error).toEqual({ op: "release", message: "503 Unavailable" });
+  });
 });

@@ -355,8 +355,9 @@ class ConfigDraft {
     try {
       if (p.kind === "panel") await api.releasePanelOverride(p.id);
       else await api.releaseDeviceOverride(p.id);
-    } catch {
-      // Best effort; the strip still lists what is live, and the TTL ends it.
+    } catch (e) {
+      // A failed DELETE leaves the override live on hardware until its TTL.
+      this.error = { op: "release", message: e.message };
     }
     await this.#endSessionFor(p.kind, p.id);
     await this.refreshLive();

@@ -9,6 +9,7 @@
   import { editor } from "../state/editor.svelte.js";
   import { auth } from "../state/auth.svelte.js";
   import { screens } from "../state/screens.svelte.js";
+  import { subject } from "../state/subject.svelte.js";
   import * as api from "../api.js";
 
   // Placeholders until Tasks 6-10 fill them in.
@@ -56,18 +57,15 @@
   // at all. Task 14's browser walk found exactly that.
   screens.load();
 
-  // Task 1: selecting a screen (FilesPane, via `screens.select()`) is what
-  // is supposed to list its files and open one -- nothing did, because
-  // nothing ever called `editor.loadScreen()`. Read ONLY `screens.selected`
-  // as the reactive dependency; `screens.writable(ref)` reads `screens.repos`
-  // internally, and computing it (plus the `loadScreen()` call itself)
-  // inside `untrack` keeps this effect from re-running when `refresh()`
-  // replaces the repo/screen lists for an unrelated reason -- that must not
-  // reload the already-open screen and discard unsaved buffers via
-  // `loadScreen()`'s `reset()`.
+  // Spec §7's trap: switching subject must not discard open buffers.
+  // `loadScreen()` resets every buffer, so it runs only when the subject is
+  // a screen AND a different one than the editor holds. A detour to a panel
+  // or a device, and back, leaves the buffers alone. Reading only
+  // `subject.screenRef` keeps `screens.refresh()` from re-running this.
   $effect(() => {
-    const ref = screens.selected;
+    const ref = subject.screenRef;
     untrack(() => {
+      if (!ref || ref === editor.ref) return;
       editor.loadScreen(ref, { readOnly: !screens.writable(ref) });
     });
   });

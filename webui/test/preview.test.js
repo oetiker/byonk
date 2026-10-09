@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/svelte";
 import PreviewPane from "../src/lib/components/PreviewPane.svelte";
 import { screens } from "../src/lib/state/screens.svelte.js";
+import { subject } from "../src/lib/state/subject.svelte.js";
 import { simulate } from "../src/lib/state/simulate.svelte.js";
 
 beforeEach(() => {
@@ -14,7 +15,7 @@ beforeEach(() => {
   // `screens` and `simulate` are module singletons: reset the fields tests
   // below mutate so one test's selection, params or captured error can't
   // leak into the next (same reasoning as filespane.test.js).
-  screens.selected = null;
+  subject.reset();
   simulate.reset();
   simulate.error = null;
 });
@@ -56,7 +57,7 @@ describe("PreviewPane", () => {
     });
     const blob = new Blob(["fake-png-bytes"], { type: "image/png" });
     vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, blob: async () => blob });
-    screens.selected = "local/a";
+    subject.select("screen", "local/a");
 
     render(PreviewPane);
     // Wait for the mount-time $effect's renderNow() to finish and post the
@@ -150,7 +151,7 @@ describe("PreviewPane", () => {
 
     const blob = new Blob(["fake-png-bytes"], { type: "image/png" });
     vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, blob: async () => blob });
-    screens.selected = "local/a";
+    subject.select("screen", "local/a");
     await waitFor(() => expect(img.src).toMatch(/^blob:/));
 
     // Now that a render has landed, hovering shows the lens...
@@ -170,7 +171,7 @@ describe("PreviewPane", () => {
     // made from parameters they didn't write. The brief called it inside
     // an `$effect` with no try/catch, turning that throw into an unhandled
     // rejection -- the preview would just silently stop updating.
-    screens.selected = "local/a";
+    subject.select("screen", "local/a");
     simulate.params = "{not json";
 
     render(PreviewPane);
@@ -183,7 +184,7 @@ describe("PreviewPane", () => {
     // The brief's `if (!res.ok) return;` silently swallowed this, even
     // though the server sends a real message back on failure:
     // `RenderErrorResponse { error, details }` (src/api/dev.rs:157-161).
-    screens.selected = "local/a";
+    subject.select("screen", "local/a");
     vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: false,
       status: 400,
@@ -200,7 +201,7 @@ describe("PreviewPane", () => {
     simulate.error = { op: "render", message: "a previous failure" };
     const blob = new Blob(["fake-png-bytes"], { type: "image/png" });
     vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, blob: async () => blob });
-    screens.selected = "local/a";
+    subject.select("screen", "local/a");
 
     render(PreviewPane);
     await waitFor(() => expect(simulate.error).toBeNull());
@@ -240,13 +241,13 @@ describe("PreviewPane", () => {
       return { ok: true, blob: async () => blob };
     });
 
-    screens.selected = "local/slow";
+    subject.select("screen", "local/slow");
     render(PreviewPane);
     const img = screen.getByRole("img", { name: /screen preview/i });
     await waitFor(() => expect(release["local/slow"]).toBeTypeOf("function"));
 
     // Selection moves on while that first render is still in flight.
-    screens.selected = "local/fresh";
+    subject.select("screen", "local/fresh");
     await waitFor(() => expect(release["local/fresh"]).toBeTypeOf("function"));
 
     // The newly selected screen answers first...
@@ -270,10 +271,10 @@ describe("PreviewPane", () => {
       return { ok: true, blob: async () => new Blob([ref]) };
     });
 
-    screens.selected = "local/slow";
+    subject.select("screen", "local/slow");
     render(PreviewPane);
     await waitFor(() => expect(release["local/slow"]).toBeTypeOf("function"));
-    screens.selected = "local/fresh";
+    subject.select("screen", "local/fresh");
     await waitFor(() => expect(release["local/fresh"]).toBeTypeOf("function"));
 
     release["local/fresh"]();
@@ -286,7 +287,7 @@ describe("PreviewPane", () => {
   // --- Finding H: a cleared selection must clear the preview -------------
 
   it("clears the image, and tells the pop-out, when the selection is cleared", async () => {
-    // Finding H. Deleting the selected screen sets `screens.selected` to
+    // Finding H. Deleting the selected screen sets `subject.screenRef` to
     // null; the preview kept painting the deleted screen's last render, and
     // so did the pop-out that mirrors it.
     const posted = [];
@@ -298,13 +299,13 @@ describe("PreviewPane", () => {
       ok: true,
       blob: async () => new Blob(["png"], { type: "image/png" }),
     });
-    screens.selected = "local/a";
+    subject.select("screen", "local/a");
     render(PreviewPane);
     const img = screen.getByRole("img", { name: /screen preview/i });
     await waitFor(() => expect(img.getAttribute("src")).toMatch(/^blob:/));
 
     posted.length = 0;
-    screens.selected = null;
+    subject.reset();
     await waitFor(() => expect(img.getAttribute("src")).toBeNull());
     expect(posted).toEqual([{ clear: true }]);
 
@@ -322,12 +323,12 @@ describe("PreviewPane", () => {
       await new Promise((r) => (release = r));
       return { ok: true, blob: async () => new Blob(["png"]) };
     });
-    screens.selected = "local/a";
+    subject.select("screen", "local/a");
     render(PreviewPane);
     const img = screen.getByRole("img", { name: /screen preview/i });
     await waitFor(() => expect(release).toBeTypeOf("function"));
 
-    screens.selected = null;
+    subject.reset();
     await new Promise((r) => setTimeout(r, 0));
     release();
     await new Promise((r) => setTimeout(r, 20));

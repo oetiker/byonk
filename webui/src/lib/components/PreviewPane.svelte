@@ -3,6 +3,7 @@
   import * as api from "../api.js";
   import { simulate } from "../state/simulate.svelte.js";
   import { screens } from "../state/screens.svelte.js";
+  import { subject } from "../state/subject.svelte.js";
 
   let blobUrl = $state(null);
   let channel;
@@ -185,7 +186,7 @@
    * later success.
    */
   async function renderNow() {
-    const ref = screens.selected;
+    const ref = subject.screenRef;
     const seq = ++renderSeq;
     if (!ref) {
       // Nothing selected -- typically because the selected screen was just
@@ -227,7 +228,7 @@
   // Re-render whenever the screen or any simulate control changes. This is
   // what makes the pop-out follow a drawer change.
   $effect(() => {
-    screens.selected;
+    subject.screenRef;
     simulate.fields;
     renderNow();
   });

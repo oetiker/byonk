@@ -3,6 +3,7 @@ import { render, screen as dom, cleanup, fireEvent, waitFor } from "@testing-lib
 import AppShell from "../src/lib/components/AppShell.svelte";
 import { layout, PANELS } from "../src/lib/state/layout.svelte.js";
 import { screens } from "../src/lib/state/screens.svelte.js";
+import { subject } from "../src/lib/state/subject.svelte.js";
 import { editor } from "../src/lib/state/editor.svelte.js";
 import { auth } from "../src/lib/state/auth.svelte.js";
 import { theme } from "../src/lib/state/theme.svelte.js";
@@ -62,7 +63,7 @@ beforeEach(() => {
   auth.reset();
   editor.reset();
   editor.files = [];
-  screens.selected = null;
+  subject.reset();
   screens.repos = [];
   screens.list = [];
   screens.meta = { devices: [], panels: [], dither_algorithms: [] };
@@ -146,7 +147,7 @@ describe("icon rail toggles, through the app root", () => {
     // where `editor.setText()` is a deliberate no-op (editor.svelte.js:201).
     await waitFor(() => expect(screens.repos).toHaveLength(1));
 
-    screens.select("local/a");
+    subject.select("screen", "local/a");
     await waitFor(() => expect(editor.active?.name).toBe("script.lua"));
     expect(editor.active.readOnly).toBe(false);
 
@@ -157,7 +158,7 @@ describe("icon rail toggles, through the app root", () => {
     await fireEvent.click(railButton("editor"));
     await waitFor(() => expect(MARKER.editor()).toBeTruthy());
 
-    expect(screens.selected).toBe("local/a");
+    expect(subject.screenRef).toBe("local/a");
     expect(editor.active?.name).toBe("script.lua");
     expect(editor.active?.text).toBe("unsaved edit");
     // The tab strip was rebuilt from the listing, not left empty -- and it

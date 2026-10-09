@@ -42,6 +42,8 @@ function makeTab(ref, name, text, etag, readOnly) {
 }
 
 class Editor {
+  /** The screen `loadScreen()` last loaded -- what the tab strip, validate, add and delete act on (P2-8). */
+  ref = $state(null);
   tabs = $state([]);
   activeIndex = $state(-1);
 
@@ -116,6 +118,7 @@ class Editor {
   }
 
   reset() {
+    this.ref = null;
     this.tabs = [];
     this.activeIndex = -1;
     this.conflict = null;
@@ -170,6 +173,7 @@ class Editor {
    */
   async loadScreen(ref, { readOnly = false } = {}) {
     this.reset();
+    this.ref = ref ?? null;
     if (!ref) {
       this.files = [];
       return;
@@ -283,7 +287,7 @@ class Editor {
    * overwriting a dirty buffer's typing-time diagnostics with a verdict about
    * the saved text would show the user marks for text they can no longer see.
    */
-  async validate(ref = screens.selected) {
+  async validate(ref = this.ref) {
     if (!ref) return;
     const report = await api.validateScreen(ref);
     const issues = report?.issues ?? [];
@@ -322,7 +326,7 @@ class Editor {
    * a place a reload then moves it out of.
    */
   async addFile(name) {
-    const ref = screens.selected;
+    const ref = this.ref;
     if (!ref || !name) return;
     this.error = null;
     try {
@@ -346,7 +350,7 @@ class Editor {
    * authority, and the server's answer is reported if something asks anyway.
    */
   async deleteFile(name) {
-    const ref = screens.selected;
+    const ref = this.ref;
     if (!ref || !name) return;
     this.error = null;
     try {

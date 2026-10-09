@@ -3,6 +3,7 @@ import { render, screen as dom, cleanup, fireEvent, waitFor } from "@testing-lib
 import AppShell from "../src/lib/components/AppShell.svelte";
 import { layout, STORAGE_KEY } from "../src/lib/state/layout.svelte.js";
 import { screens } from "../src/lib/state/screens.svelte.js";
+import { subject } from "../src/lib/state/subject.svelte.js";
 import { editor } from "../src/lib/state/editor.svelte.js";
 import { auth } from "../src/lib/state/auth.svelte.js";
 import { theme } from "../src/lib/state/theme.svelte.js";
@@ -87,7 +88,7 @@ beforeEach(() => {
   auth.reset();
   editor.reset();
   editor.files = [];
-  screens.selected = null;
+  subject.reset();
   screens.repos = [];
   screens.list = [];
   screens.meta = { devices: [], panels: [], dither_algorithms: [] };

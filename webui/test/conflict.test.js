@@ -325,7 +325,7 @@ describe("AppShell's SSE wiring (Ruling 36 full path, Ruling 40)", () => {
     const es = FakeEventSource.instances.at(-1);
     expect(es).toBeTruthy();
     // Opened AFTER mount, not before: AppShell's own Task-1 effect calls
-    // `editor.loadScreen(screens.selected, ...)` on mount (screens.selected
+    // `editor.loadScreen(subject.screenRef, ...)` on mount (subject.screenRef
     // is null here, so it's a no-op past `reset()`) -- opening the tab
     // first and mounting second would have this mount's own `reset()` wipe
     // it right back out, which is not what this test is about.

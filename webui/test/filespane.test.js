@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/svelte";
 import FilesPane from "../src/lib/components/FilesPane.svelte";
 import { screens } from "../src/lib/state/screens.svelte.js";
+import { subject } from "../src/lib/state/subject.svelte.js";
 import * as api from "../src/lib/api.js";
 
 beforeEach(async () => {
@@ -12,7 +13,7 @@ beforeEach(async () => {
   vi.restoreAllMocks();
   // `screens` is a module singleton: reset the fields tests below mutate so
   // one test's selection or captured error can't leak into the next.
-  screens.selected = null;
+  subject.reset();
   screens.error = null;
   vi.spyOn(api, "listRepos").mockResolvedValue([
     { handle: "local", writable: true },
@@ -30,7 +31,7 @@ beforeEach(async () => {
 describe("FilesPane", () => {
   it("disables Rename and Delete on a read-only screen, keeps Copy and New", async () => {
     // Spec §8.6.
-    screens.select("byonk-builtin/b");
+    subject.select("screen", "byonk-builtin/b");
     render(FilesPane);
     expect(screen.getByRole("button", { name: /rename/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /delete/i })).toBeDisabled();
@@ -39,7 +40,7 @@ describe("FilesPane", () => {
   });
 
   it("enables Rename and Delete on a writable screen", () => {
-    screens.select("local/a");
+    subject.select("screen", "local/a");
     render(FilesPane);
     expect(screen.getByRole("button", { name: /rename/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /delete/i })).toBeEnabled();
@@ -50,28 +51,28 @@ describe("FilesPane", () => {
     vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "local/fresh" });
     render(FilesPane);
     await fireEvent.click(screen.getByRole("button", { name: /new/i }));
-    await waitFor(() => expect(screens.selected).toBe("local/fresh"));
+    await waitFor(() => expect(subject.screenRef).toBe("local/fresh"));
   });
 
   it("selects the copy after a successful copy", async () => {
     vi.spyOn(window, "prompt").mockReturnValue("dup");
     vi.spyOn(api, "copyScreen").mockResolvedValue({ ref: "local/dup" });
-    screens.select("byonk-builtin/b");
+    subject.select("screen", "byonk-builtin/b");
     render(FilesPane);
     await fireEvent.click(screen.getByRole("button", { name: /copy/i }));
-    await waitFor(() => expect(screens.selected).toBe("local/dup"));
+    await waitFor(() => expect(subject.screenRef).toBe("local/dup"));
   });
 
   it("selects the renamed screen after a successful rename", async () => {
     // This is the behaviour the rename-reselect deviation (task-6-report.md)
-    // exists for: without it, `screens.selected` would stay pinned to the
+    // exists for: without it, `subject.screenRef` would stay pinned to the
     // pre-rename ref, which no longer names anything after the rename.
     vi.spyOn(window, "prompt").mockReturnValue("renamed");
     vi.spyOn(api, "renameScreen").mockResolvedValue({ ref: "local/renamed" });
-    screens.select("local/a");
+    subject.select("screen", "local/a");
     render(FilesPane);
     await fireEvent.click(screen.getByRole("button", { name: /rename/i }));
-    await waitFor(() => expect(screens.selected).toBe("local/renamed"));
+    await waitFor(() => expect(subject.screenRef).toBe("local/renamed"));
   });
 
   it("captures a rejected create on screens.error instead of an unhandled rejection", async () => {
@@ -107,7 +108,7 @@ describe("FilesPane with more than one writable repo", () => {
   beforeEach(async () => {
     cleanup();
     vi.restoreAllMocks();
-    screens.selected = null;
+    subject.reset();
     screens.error = null;
     vi.spyOn(api, "listRepos").mockResolvedValue([
       { handle: "examples", writable: true },
@@ -135,7 +136,7 @@ describe("FilesPane with more than one writable repo", () => {
   it("copies into local, not into the alphabetically-first examples", async () => {
     vi.spyOn(window, "prompt").mockReturnValue("dup");
     const copy = vi.spyOn(api, "copyScreen").mockResolvedValue({ ref: "local/dup" });
-    screens.select("byonk-builtin/b");
+    subject.select("screen", "byonk-builtin/b");
     render(FilesPane);
     await fireEvent.click(screen.getByRole("button", { name: /copy/i }));
     await waitFor(() => expect(copy).toHaveBeenCalled());

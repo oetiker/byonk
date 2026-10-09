@@ -1,9 +1,11 @@
 <script>
   import { screens } from "../state/screens.svelte.js";
+  import { subject } from "../state/subject.svelte.js";
+  import { editor } from "../state/editor.svelte.js";
   import * as api from "../api.js";
   import { Button } from "$lib/ui/button/index.js";
 
-  const canEdit = $derived(screens.writable(screens.selected));
+  const canEdit = $derived(screens.writable(subject.screenRef));
 
   /**
    * Where New and Copy put a screen when the user is not asked.
@@ -57,7 +59,7 @@
       if (!handle || !name) return;
       const { ref } = await api.createScreen(handle, name);
       await screens.refresh();
-      screens.select(ref);
+      subject.select("screen", ref);
     });
   }
 
@@ -65,29 +67,32 @@
     return run("copy", async () => {
       const to = defaultWritableHandle();
       const name = prompt("Copy to name");
-      if (!to || !name || !screens.selected) return;
-      const { ref } = await api.copyScreen(screens.selected, to, name);
+      if (!to || !name || !subject.screenRef) return;
+      const { ref } = await api.copyScreen(subject.screenRef, to, name);
       await screens.refresh();
-      screens.select(ref);
+      subject.select("screen", ref);
     });
   }
 
   function renameScreen() {
     return run("rename", async () => {
       const name = prompt("Rename to");
-      if (!name || !screens.selected) return;
-      const { ref } = await api.renameScreen(screens.selected, name);
+      if (!name || !subject.screenRef) return;
+      const { ref } = await api.renameScreen(subject.screenRef, name);
       await screens.refresh();
-      screens.select(ref);
+      subject.select("screen", ref);
     });
   }
 
   function deleteScreen() {
     return run("delete", async () => {
-      if (!screens.selected) return;
-      if (!confirm(`Delete ${screens.selected}?`)) return;
-      await api.deleteScreen(screens.selected);
-      screens.select(null);
+      if (!subject.screenRef) return;
+      if (!confirm(`Delete ${subject.screenRef}?`)) return;
+      await api.deleteScreen(subject.screenRef);
+      // Finding H: the deleted screen's buffers and render must go too. The
+      // subject effect never reloads for "no screen", so drop them here.
+      subject.clear();
+      await editor.loadScreen(null);
       await screens.refresh();
     });
   }
@@ -101,7 +106,7 @@
       size="xs"
       variant="outline"
       onclick={copyScreen}
-      disabled={!screens.selected}
+      disabled={!subject.screenRef}
     >
       Copy
     </Button>
@@ -121,8 +126,8 @@
       <button
         type="button"
         class="truncate px-2 py-0.5 text-left hover:bg-[var(--panel-bg)]
-               {screens.selected === s.ref ? 'bg-[var(--accent-color)] text-white' : ''}"
-        onclick={() => screens.select(s.ref)}
+               {subject.is('screen', s.ref) ? 'bg-[var(--accent-color)] text-white' : ''}"
+        onclick={() => subject.select("screen", s.ref)}
       >{s.label}</button>
     {/each}
   {/each}

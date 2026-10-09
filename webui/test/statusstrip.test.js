@@ -6,6 +6,7 @@ import StatusStrip from "../src/lib/components/StatusStrip.svelte";
 import { layout } from "../src/lib/state/layout.svelte.js";
 import { editor } from "../src/lib/state/editor.svelte.js";
 import { screens } from "../src/lib/state/screens.svelte.js";
+import { subject } from "../src/lib/state/subject.svelte.js";
 import { simulate } from "../src/lib/state/simulate.svelte.js";
 import { tune } from "../src/lib/state/tune.svelte.js";
 import { auth } from "../src/lib/state/auth.svelte.js";
@@ -85,7 +86,7 @@ describe("the error/override strip is visible independent of the Editor panel", 
     render(AppShell);
     await tick();
     // Set AFTER mount, unlike the other three fields above: AppShell's own
-    // Task-1 effect calls `editor.loadScreen(screens.selected, ...)` on
+    // Task-1 effect calls `editor.loadScreen(subject.screenRef, ...)` on
     // mount, and `loadScreen()` starts with `editor.reset()` (screens.error/
     // simulate.error/auth.error live on other stores untouched by that
     // reset -- fix round 2 moved `loadScreen()`'s own `screens.error = null`

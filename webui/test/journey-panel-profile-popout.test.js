@@ -3,6 +3,7 @@ import { render, screen as dom, cleanup, fireEvent, waitFor } from "@testing-lib
 import { tick } from "svelte";
 import AppShell from "../src/lib/components/AppShell.svelte";
 import { screens } from "../src/lib/state/screens.svelte.js";
+import { subject } from "../src/lib/state/subject.svelte.js";
 import { simulate } from "../src/lib/state/simulate.svelte.js";
 import { editor } from "../src/lib/state/editor.svelte.js";
 import { layout } from "../src/lib/state/layout.svelte.js";
@@ -68,7 +69,7 @@ beforeEach(() => {
   editor.files = [];
   simulate.reset();
   simulate.error = null;
-  screens.selected = null;
+  subject.reset();
   screens.repos = [];
   screens.list = [];
   screens.meta = { devices: [], panels: [], dither_algorithms: [] };
@@ -96,8 +97,8 @@ function panelSelect() {
 async function mountWithScreen() {
   render(AppShell);
   await waitFor(() => expect(screens.repos).toHaveLength(1));
-  screens.select("local/a");
-  await waitFor(() => expect(screens.selected).toBe("local/a"));
+  subject.select("screen", "local/a");
+  await waitFor(() => expect(subject.screenRef).toBe("local/a"));
   await tick();
 }
 

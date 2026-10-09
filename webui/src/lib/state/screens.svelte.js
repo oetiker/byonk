@@ -1,7 +1,7 @@
 import * as api from "../api.js";
 
 /**
- * Repos, screens, and which one is selected.
+ * Repos, screens and their metadata. Which one is selected lives in `subject`.
  *
  * Grouping is done over the REPO list, not over the screen list. A writable
  * repo holding no screens is somewhere the user can create one, and it must
@@ -11,7 +11,6 @@ import * as api from "../api.js";
 class Screens {
   repos = $state([]);
   list = $state([]);
-  selected = $state(null);
   meta = $state({ devices: [], panels: [], dither_algorithms: [] });
 
   /**
@@ -38,10 +37,6 @@ class Screens {
     if (!ref) return false;
     const handle = ref.split("/", 1)[0];
     return this.repos.find((r) => r.handle === handle)?.writable === true;
-  }
-
-  select(ref) {
-    this.selected = ref;
   }
 
   /**

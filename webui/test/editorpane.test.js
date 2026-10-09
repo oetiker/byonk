@@ -4,6 +4,7 @@ import { flushSync } from "svelte";
 import * as api from "../src/lib/api.js";
 import { editor } from "../src/lib/state/editor.svelte.js";
 import { screens } from "../src/lib/state/screens.svelte.js";
+import { subject } from "../src/lib/state/subject.svelte.js";
 
 // EditorPane is tested against a mocked codemirror.js: component tests
 // cannot drive CodeMirror's real key handling in jsdom (that mechanism is
@@ -38,7 +39,7 @@ beforeEach(() => {
   lastOpts = null;
   editor.reset();
   editor.files = [];
-  screens.selected = null;
+  subject.reset();
   screens.repos = [];
 });
 
@@ -267,7 +268,7 @@ describe("EditorPane", () => {
 // listing-driven behaviours from task-1-brief.md Step 3/4.
 describe("EditorPane renders editor.files (Task 1)", () => {
   beforeEach(() => {
-    screens.selected = "local/a";
+    editor.ref = "local/a";
     screens.repos = [{ handle: "local", writable: true }];
   });
 

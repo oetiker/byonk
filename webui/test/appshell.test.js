@@ -4,6 +4,7 @@ import { tick } from "svelte";
 import AppShell from "../src/lib/components/AppShell.svelte";
 import { layout, STORAGE_KEY } from "../src/lib/state/layout.svelte.js";
 import { screens } from "../src/lib/state/screens.svelte.js";
+import { subject } from "../src/lib/state/subject.svelte.js";
 import { editor } from "../src/lib/state/editor.svelte.js";
 import * as api from "../src/lib/api.js";
 
@@ -39,7 +40,7 @@ beforeEach(() => {
   cleanup();
   localStorage.clear();
   layout.reset();
-  screens.selected = null;
+  subject.reset();
   editor.reset();
   editor.files = [];
 });
@@ -173,14 +174,14 @@ describe("AppShell initial data load", () => {
   });
 });
 
-describe("AppShell wires screens.selected to editor.loadScreen (Task 1, the journey test)", () => {
+describe("AppShell wires the subject to editor.loadScreen (Task 1, the journey test)", () => {
   // This is the point of the whole plan. The rewrite's own component tests
   // all passed while the app itself loaded nothing (see the boot-load test
   // above, and 32106892's report of the identical class of defect): every
   // one of them hand-fed the store it was testing in its own beforeEach.
   // This test does NOT call `screens.refresh()`, `editor.loadScreen()` or
   // `editor.open()` itself -- it mounts the real app root and drives it
-  // only through `screens.select()`, the same call FilesPane's click
+  // only through `subject.select()`, the same call FilesPane's click
   // handler makes, then asserts on data the app itself must have put there.
   it("lists a selected screen's files and opens script.lua, with no direct store call", async () => {
     vi.spyOn(api, "listRepos").mockResolvedValue([{ handle: "local", writable: true }]);
@@ -194,7 +195,7 @@ describe("AppShell wires screens.selected to editor.loadScreen (Task 1, the jour
 
     render(AppShell);
 
-    screens.select("local/a");
+    subject.select("screen", "local/a");
 
     await waitFor(() =>
       expect(editor.files.map((f) => f.name)).toEqual(["meta.yaml", "script.lua", "screen.svg"]),
@@ -221,13 +222,13 @@ describe("AppShell wires screens.selected to editor.loadScreen (Task 1, the jour
     vi.spyOn(api, "readFile").mockResolvedValue({ text: "-- lua", etag: '"1"' });
 
     render(AppShell);
-    screens.select("local/a");
+    subject.select("screen", "local/a");
     await waitFor(() => expect(editor.active?.name).toBe("script.lua"));
 
     editor.setText("unsaved edit"); // dirty the open buffer
     expect(listFilesSpy).toHaveBeenCalledTimes(1);
 
-    // Something unrelated to screens.selected replaces repos/list -- e.g. a
+    // Something unrelated to the subject replaces repos/list -- e.g. a
     // rename or delete elsewhere causing FilesPane to call screens.refresh().
     vi.spyOn(api, "listRepos").mockResolvedValue([
       { handle: "local", writable: true },
@@ -254,7 +255,7 @@ describe("AppShell wires screens.selected to editor.loadScreen (Task 1, the jour
     vi.spyOn(api, "readFile").mockResolvedValue({ text: "x", etag: '"1"' });
 
     render(AppShell);
-    screens.select("local/a");
+    subject.select("screen", "local/a");
     await waitFor(() => expect(editor.active?.ref).toBe("local/a"));
 
     // Stand-in for `es.onopen` having already fired -- jsdom has no
@@ -262,9 +263,32 @@ describe("AppShell wires screens.selected to editor.loadScreen (Task 1, the jour
     // live-connection state StatusBar's "watch: connected" reflects.
     editor.watchConnected = true;
 
-    screens.select("local/b");
+    subject.select("screen", "local/b");
     await waitFor(() => expect(editor.active?.ref).toBe("local/b"));
 
     expect(editor.watchConnected).toBe(true);
+  });
+
+  it("selecting a panel does not reload the editor, and coming back to the same screen does not either", async () => {
+    const listFiles = vi.spyOn(api, "listFiles").mockResolvedValue([{ name: "script.lua", size: 1, text: true }]);
+    render(AppShell);
+    subject.select("screen", "local/a");
+    await waitFor(() => expect(editor.active?.name).toBe("script.lua"));
+    editor.setText("dirty");
+    subject.select("panel", "e1004");
+    await tick();
+    subject.select("screen", "local/a");
+    await tick();
+    expect(listFiles).toHaveBeenCalledTimes(1);
+    expect(editor.active.text).toBe("dirty");
+    expect(editor.active.dirty).toBe(true);
+  });
+
+  it("a subject switch away from screens leaves screens.error alone (R7)", async () => {
+    render(AppShell);
+    screens.error = { op: "files", message: "boom" };
+    subject.select("device", "kitchen");
+    await tick();
+    expect(screens.error).toEqual({ op: "files", message: "boom" });
   });
 });

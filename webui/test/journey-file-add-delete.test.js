@@ -4,6 +4,7 @@ import { tick } from "svelte";
 import AppShell from "../src/lib/components/AppShell.svelte";
 import { editor } from "../src/lib/state/editor.svelte.js";
 import { screens } from "../src/lib/state/screens.svelte.js";
+import { subject } from "../src/lib/state/subject.svelte.js";
 import { layout } from "../src/lib/state/layout.svelte.js";
 import { auth } from "../src/lib/state/auth.svelte.js";
 import { theme } from "../src/lib/state/theme.svelte.js";
@@ -40,7 +41,7 @@ beforeEach(() => {
   auth.reset();
   editor.reset();
   editor.files = [];
-  screens.selected = null;
+  subject.reset();
   screens.repos = [];
   screens.list = [];
   screens.error = null;
@@ -72,7 +73,7 @@ afterEach(() => {
 async function mountWithScreen(ref = "local/a") {
   render(AppShell);
   await waitFor(() => expect(screens.repos).toHaveLength(2));
-  screens.select(ref);
+  subject.select("screen", ref);
   await waitFor(() => expect(editor.files).toHaveLength(listing.length));
   await tick();
 }
@@ -139,7 +140,7 @@ describe("adding a file", () => {
     await mountWithScreen("byonk-builtin/b");
     expect(addButton()).toBeDisabled();
 
-    screens.select("local/a");
+    subject.select("screen", "local/a");
     await waitFor(() => expect(addButton()).not.toBeDisabled());
   });
 });
@@ -368,7 +369,7 @@ describe("the post-save green tick", () => {
     await fireEvent.click(dom.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(dom.getByLabelText("script.lua is valid")).toBeTruthy());
 
-    screens.select("byonk-builtin/b");
+    subject.select("screen", "byonk-builtin/b");
     await waitFor(() => expect(editor.report).toBeNull());
     expect(dom.queryByLabelText(/is valid/)).toBeNull();
   });

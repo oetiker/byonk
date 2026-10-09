@@ -122,7 +122,7 @@
   const CORE_FILES = ["meta.yaml", "script.lua", "screen.svg"];
 
   const canEdit = $derived(
-    !!screens.selected && screens.writable(screens.selected),
+    !!editor.ref && screens.writable(editor.ref),
   );
 
   /**
@@ -184,8 +184,8 @@
             <button
               type="button"
               onclick={() =>
-                editor.open(screens.selected, f.name, {
-                  readOnly: !screens.writable(screens.selected),
+                editor.open(editor.ref, f.name, {
+                  readOnly: !screens.writable(editor.ref),
                 })}
             >
               {f.name}

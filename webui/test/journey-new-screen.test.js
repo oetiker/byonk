@@ -3,6 +3,7 @@ import { render, screen as dom, cleanup, fireEvent, waitFor } from "@testing-lib
 import FilesPane from "../src/lib/components/FilesPane.svelte";
 import PreviewPane from "../src/lib/components/PreviewPane.svelte";
 import { screens } from "../src/lib/state/screens.svelte.js";
+import { subject } from "../src/lib/state/subject.svelte.js";
 import { simulate } from "../src/lib/state/simulate.svelte.js";
 import * as api from "../src/lib/api.js";
 
@@ -20,7 +21,7 @@ import * as api from "../src/lib/api.js";
 beforeEach(async () => {
   cleanup();
   vi.restoreAllMocks();
-  screens.selected = null;
+  subject.reset();
   screens.error = null;
   simulate.reset();
   simulate.error = null;
@@ -56,7 +57,7 @@ describe("New screen", () => {
       return { ok: true, blob: async () => blob };
     });
 
-    screens.select("local/a");
+    subject.select("screen", "local/a");
     render(PreviewPane);
     render(FilesPane);
     const img = dom.getByRole("img", { name: /screen preview/i });
@@ -76,7 +77,7 @@ describe("New screen", () => {
     });
 
     await fireEvent.click(dom.getByRole("button", { name: /new/i }));
-    await waitFor(() => expect(screens.selected).toBe("local/fresh"));
+    await waitFor(() => expect(subject.screenRef).toBe("local/fresh"));
     await waitFor(() => expect(release["local/fresh"]).toBeTypeOf("function"));
 
     // The starter answers first, the screen it replaced answers second.

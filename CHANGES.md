@@ -82,19 +82,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### New
 
 - **A screen editor in the browser.** The dev UI is no longer just a preview:
-  it is a full editor behind an icon rail of five toggleable panels — Files,
-  Editor, Tune, Preview and Simulate — so you can hide anything you are not
-  using and give the space to what you are. Every combination is allowed, a
-  hidden panel comes back at the size it had, and splitter positions are
-  remembered between visits.
+  it is a full editor with three panels behind an icon rail — Library, Edit
+  and Preview — so you can hide anything you are not using and give the space
+  to what you are. Every combination is allowed, a hidden panel comes back at
+  the size it had, and splitter positions are remembered between visits.
 
-  Files lists every screen you can reach; Editor opens its files as tabs and
-  saves your work; Preview renders it through the same pipeline the device
-  uses and updates as you work, so a mistake in `script.lua`, `screen.svg` or
-  `meta.yaml` shows up as a render error right next to the code, not after
-  you ship it. Editor also checks the file you're typing in on its own,
-  marking the line of any problem in the gutter shortly after you stop —
-  you don't have to save or wait for a render to see it.
+  Everything revolves around one subject, which you choose in Library: a
+  screen, a panel profile or a device. Edit changes it and Preview shows it.
+  For a screen, Edit opens its files as tabs and saves your work; Preview
+  renders it through the same pipeline the device uses and updates as you
+  work, so a mistake in `script.lua`, `screen.svg` or `meta.yaml` shows up as
+  a render error right next to the code, not after you ship it. Edit also
+  checks the file you're typing in on its own, marking the line of any problem
+  in the gutter shortly after you stop — you don't have to save or wait for a
+  render to see it.
 
   You can create a screen from a starter, copy any screen — including the
   built-in ones and anything fetched from git — into a repo you can write to,
@@ -111,16 +112,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stay read-only, so the way to customize one is **Copy** — the same
   fork-to-edit that previously meant copying directories in a shell.
 
-  **Tune, the fifth panel, calibrates a panel's measured colours against the
-  physical device.** Pick a device, drag hue/saturation/lightness or type a
-  hex value against its swatches, then **Push to panel** to see the result on
-  the device itself, under the light it actually hangs in — e-ink is
-  reflective, so a calibration judged from a screenshot is a guess. Push is a
-  button, not automatic: it wakes a battery-powered device into a refresh
-  cycle, so nothing repaints until you ask it to. Once it looks right, **Save
-  to config** writes it into `config.yaml`; until you do, it is only a
-  temporary preview on that device, and closing the panel or discarding
-  clears it.
+  **Panels and devices are edited the same way.** Pick a panel profile or a
+  device in Library and Edit shows one section per render setting, each with
+  a ladder that lists every place the setting can come from, which one wins
+  and why — including a value that was outranked or rejected, with the
+  reason. Drag hue, saturation and lightness or type a hex value against a
+  panel's swatches, then **Push** to see the result on the physical device,
+  under the light it actually hangs in — e-ink is reflective, so a calibration
+  judged from a screenshot is a guess. Push is a button, not automatic: it
+  wakes a battery-powered device into a refresh cycle, so nothing repaints
+  until you ask it to, and it reverts on its own within 30 minutes. Once it
+  looks right, **Save** writes it into `config.yaml`; **Discard** reverts the
+  draft and clears the temporary override.
 
 - **A pop-out preview window.** The preview opens in a window of its own, with
   **Fit** and **100%** zoom, and follows the editor as you work — useful on a

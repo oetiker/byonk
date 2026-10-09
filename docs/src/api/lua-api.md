@@ -1394,7 +1394,7 @@ a warning is written to the script log. On the authoring path this is visible in
 A script that returns `colors_actual` takes the screen rung of the cascade: it wins over the
 device's own `colors_actual`, the panel's calibration and the firmware's measured header, and
 loses to the device's `final.colors_actual` and to a caller's explicit measurement — the dev
-UI's Tune panel, `/dev/api/render`'s `override.colors_actual`, or the `render_screen` MCP
+UI's panel editor (Push), `/dev/api/render`'s `override.colors_actual`, or the `render_screen` MCP
 tool's `colors_actual` argument. **This changed in 0.20.0**; the script used to win over those
 too, which left no way to preview a calibration against a screen that measures its own.
 The winning source isn't rendered anywhere in the dev UI, but it is visible

@@ -68,7 +68,7 @@ edit made this way takes effect only after you restart the app.
 
 Per-device screen mappings are best managed through the Byonk integration,
 which writes live with no restart needed; manual edits to the `devices:`
-section of `config.yaml` also work, but only take effect after a restart.
+section of `config.yaml` also work, but only take effect after a restart. A key byonk does not know stops the app from starting; the log names the device and the key.
 
 ## Screen editor
 

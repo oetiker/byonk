@@ -30,9 +30,15 @@ pub fn persist(state: &AppState, path: &std::path::Path, new_yaml: String) -> Re
         if let Some(prev) = previous {
             let _ = std::fs::write(path, prev);
         }
-        return Err(ApiError::Internal(format!(
-            "reload failed, rolled back: {e}"
-        )));
+        let msg = format!("reload failed, rolled back: {e}");
+        // The owner's hand-edited file holds a key byonk refuses: their file is
+        // wrong, not byonk.
+        if e.downcast_ref::<crate::models::config::UnknownDeviceKey>()
+            .is_some()
+        {
+            return Err(ApiError::BadRequest(msg));
+        }
+        return Err(ApiError::Internal(msg));
     }
     Ok(())
 }

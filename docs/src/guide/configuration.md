@@ -71,6 +71,8 @@ Each device entry maps a MAC address to a screen:
 | `maximum_compatibility` | No | Ask the device to force a full refresh on every update. No effect on a TRMNL X. See [Ghosting](#ghosting). |
 | `min_png_bytes` | No | Pad the served image up to this many bytes. Only useful on a TRMNL X; see [Ghosting](#ghosting). |
 
+These are the only keys a device entry accepts (plus the retired `error_clamp`, which is still read and reported). Anything else — a typo such as `dithr:`, or a key from another tool — stops byonk at startup with a message naming the device and the key, for example `Invalid config.yaml: devices.kitchen: unknown field `dithr``. The same holds inside a device's `gamut:` block and inside `final:` (including `final.gamut`).
+
 ### Ghosting
 
 A faint image staying visible under the current one has **two different
@@ -600,8 +602,8 @@ devices:
 `colors_actual`, `dither`, `max_error`, `noise_scale`, `chroma_clamp`,
 `strength`, `refresh` and `gamut` — and nothing else: an unrecognised key
 there is a startup error naming the field, so a typo cannot silently do
-nothing. (The base rung stays tolerant of keys it does not know, because a
-device entry carries settings that are not part of the cascade at all.)
+nothing. The settings written directly under a device are just as strict; see
+[Devices Section](#devices-section).
 
 `final.refresh` is the one way to hold a battery-powered display to an interval
 the owner chooses: it replaces whatever the screen asked for, in either

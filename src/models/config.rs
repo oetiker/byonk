@@ -26,6 +26,26 @@ pub struct GamutTuningValues {
     pub max_compression: Option<f32>,
 }
 
+/// Deserialize a `gamut:` block that refuses unknown keys. Used for the
+/// device's own `gamut:` and for the cascade rungs (`final.gamut`, JSON API
+/// bodies); `GamutTuningValues` itself stays tolerant because panel tuning
+/// shares it.
+fn strict_gamut<'de, D: serde::Deserializer<'de>>(d: D) -> Result<GamutTuningValues, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Strict {
+        knee: Option<f32>,
+        amount: Option<f32>,
+        max_compression: Option<f32>,
+    }
+    let s = Strict::deserialize(d)?;
+    Ok(GamutTuningValues {
+        knee: s.knee,
+        amount: s.amount,
+        max_compression: s.max_compression,
+    })
+}
+
 impl GamutTuningValues {
     /// Merge: self takes priority, other fills gaps.
     pub fn or(&self, other: &GamutTuningValues) -> GamutTuningValues {
@@ -140,7 +160,7 @@ pub struct CascadeValues {
     #[serde(serialize_with = "serialize_tidy_opt")]
     pub strength: Option<f32>,
     pub refresh: Option<u32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "strict_gamut")]
     pub gamut: GamutTuningValues,
 }
 
@@ -535,6 +555,7 @@ pub struct PanelConfig {
 
 /// Configuration for a specific device
 #[derive(Debug, Deserialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
 pub struct DeviceConfig {
     /// Which screen to display
     pub screen: String,
@@ -580,7 +601,7 @@ pub struct DeviceConfig {
     pub strength: Option<f32>,
 
     /// Optional gamut mapping overrides for continuous-tone regions
-    #[serde(default)]
+    #[serde(default, deserialize_with = "strict_gamut")]
     pub gamut: GamutTuningValues,
 
     /// Optional per-device refresh override in seconds (0/absent = use Lua/screen default)
@@ -658,7 +679,7 @@ pub struct DeviceConfig {
     /// [`DeviceConfig::device_final`], which saves every call site an
     /// `unwrap_or_default`.
     ///
-    /// Strict, unlike the base rung: `CascadeValues` carries
+    /// Strict, like the base rung: `CascadeValues` carries
     /// `deny_unknown_fields`, so `final: {screen: …}` fails at startup with
     /// the field named rather than being silently dropped (spec §3).
     #[serde(rename = "final", default)]
@@ -705,6 +726,12 @@ impl Default for RegistrationConfig {
     }
 }
 
+/// A device entry in config.yaml holds a key byonk does not know. Typed so
+/// the write path can answer 400 (the owner's file is wrong) rather than 500.
+#[derive(Debug, thiserror::Error)]
+#[error("Invalid config.yaml: {0}")]
+pub struct UnknownDeviceKey(pub String);
+
 impl AppConfig {
     /// Load configuration from AssetLoader (embedded or external).
     ///
@@ -716,8 +743,14 @@ impl AppConfig {
             .read_config_string()
             .map_err(|e| anyhow::anyhow!("Failed to read config: {e}"))?;
 
-        let config: Self = serde_yaml::from_str(&content)
-            .map_err(|e| anyhow::anyhow!("Invalid config.yaml: {e}"))?;
+        let config: Self = serde_yaml::from_str(&content).map_err(|e| {
+            let msg = e.to_string();
+            if msg.starts_with("devices.") && msg.contains(": unknown field `") {
+                anyhow::Error::new(UnknownDeviceKey(msg))
+            } else {
+                anyhow::anyhow!("Invalid config.yaml: {e}")
+            }
+        })?;
 
         config.validate().map_err(|e| anyhow::anyhow!(e))?;
 
@@ -1582,15 +1615,75 @@ final:
         );
     }
 
-    /// The base rung keeps today's tolerant behaviour. Making it strict is a
-    /// separate, larger decision about every existing config.yaml (spec §3).
+    /// A typo on a device used to do nothing and say nothing. It is a startup
+    /// error now, naming the device and the key (owner ruling E4).
     #[test]
-    fn an_unknown_key_on_the_base_rung_is_still_tolerated() {
-        let yaml = r#"
+    fn an_unknown_key_on_the_base_rung_is_refused_by_name() {
+        let yaml = "devices:\n  kitchen:\n    screen: local/hello\n    dithr: atkinson\n";
+        let err = serde_yaml::from_str::<AppConfig>(yaml)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("devices.kitchen"), "{err}");
+        assert!(err.contains("unknown field `dithr`"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_key_in_a_device_gamut_block_is_refused_by_name() {
+        let yaml = "devices:\n  kitchen:\n    screen: local/hello\n    gamut:\n      kne: 0.5\n";
+        let err = serde_yaml::from_str::<AppConfig>(yaml)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("devices.kitchen"), "{err}");
+        assert!(err.contains("unknown field `kne`"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_key_in_final_gamut_is_refused_by_name() {
+        let yaml = "devices:\n  kitchen:\n    screen: local/hello\n    final:\n      gamut:\n        kne: 0.5\n";
+        let err = serde_yaml::from_str::<AppConfig>(yaml)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("devices.kitchen"), "{err}");
+        assert!(err.contains("unknown field `kne`"), "{err}");
+    }
+
+    #[test]
+    fn a_merge_key_on_a_device_is_reported_not_silently_ignored() {
+        let yaml = "base: &b {dither: atkinson}\ndevices:\n  kitchen:\n    <<: *b\n    screen: local/hello\n";
+        let err = serde_yaml::from_str::<AppConfig>(yaml)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("devices.kitchen") && err.contains("`<<`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn every_documented_device_key_still_parses() {
+        let yaml = "\
 screen: local/hello
-some_future_key: 42
-"#;
-        serde_yaml::from_str::<DeviceConfig>(yaml).expect("base rung stays tolerant");
+params: {a: 1}
+colors: '#000000,#FFFFFF'
+colors_actual: '#101010,#EFEFEF'
+dither: atkinson
+panel: og
+max_error: 1.0
+error_clamp: 0.2
+noise_scale: 0.5
+chroma_clamp: 0.1
+strength: 0.8
+gamut: {knee: 0.6, amount: 1.0, max_compression: 0.3}
+refresh: 600
+name: Kitchen
+temperature_profile: a
+maximum_compatibility: true
+min_png_bytes: 102401
+final: {dither: stucki}
+";
+        let dc: DeviceConfig = serde_yaml::from_str(yaml).expect("every documented key parses");
+        assert_eq!(dc.gamut.knee, Some(0.6));
+        assert_eq!(dc.deprecated_error_clamp, Some(0.2));
     }
 
     #[test]

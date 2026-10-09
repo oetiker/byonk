@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **A key byonk does not recognise in a device entry now stops byonk from starting.** Device entries in `config.yaml` used to ignore any key they did not know, so a typo such as `dithr: atkinson` or `strenght: 0.8` changed nothing and said nothing: the display simply kept its old look. Byonk now refuses to start and names the device and the key, for example `Invalid config.yaml: devices.kitchen: unknown field `dithr``. The same applies inside a device's `gamut:` block and inside `final:`'s `gamut:` block. A YAML merge key (`<<:`) inside a device entry was never applied and is now reported the same way.
+
+  If you edit `config.yaml` by hand while byonk is running, the next change made through the dev UI, the admin API or Home Assistant is refused with that message (HTTP 400), and your file is left exactly as you wrote it until the key is fixed.
+
+  **Before upgrading,** compare your device entries against the list under *Devices Section* in the configuration guide. `error_clamp` is still accepted, still ignored, and still reported as deprecated.
+
 - **`byonk dev` is gone. The dev UI is part of `byonk serve` now, and it needs
   a login.** Dev mode used to be a second way to start the server: `byonk dev`
   brought up the device simulator alongside everything else, and anyone who

@@ -264,7 +264,11 @@
       <button type="button" aria-expanded={isOpen(key)}
               class="flex w-full shrink-0 items-center gap-1 bg-[var(--panel-bg)] px-1.5 py-1 text-left text-[11px] font-bold uppercase tracking-wide hover:bg-[var(--border-color)]"
               onclick={() => toggleSection(key)}>
-        <span aria-hidden="true" class="w-3 text-center">{isOpen(key) ? "▾" : "▸"}</span>{label}
+        <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round"
+             class="size-4 shrink-0 transition-transform {isOpen(key) ? 'rotate-90' : ''}">
+          <path d="M6 3.5 10.5 8 6 12.5" />
+        </svg>{label}
       </button>
       {#if isOpen(key)}
         <div class="min-h-0 flex-1 overflow-auto pb-1">{@render body()}</div>

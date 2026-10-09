@@ -480,3 +480,24 @@ describe("LibraryPane accordion sections", () => {
     expect(sec.className).toMatch(/min-h-6/);
   });
 });
+
+describe("LibraryPane headings and chevrons", () => {
+  const header = (name) => screen.getByRole("button", { name: new RegExp(name, "i") });
+
+  it("draws a 16px chevron that rotates when the section is open", async () => {
+    render(LibraryPane);
+    const chev = () => header("Screens").querySelector("svg");
+    expect(chev()).toBeTruthy();
+    expect(chev().getAttribute("aria-hidden")).toBe("true");
+    expect(chev().getAttribute("class")).toMatch(/\bsize-4\b/);
+    expect(chev().getAttribute("class")).toMatch(/\brotate-90\b/);
+    await fireEvent.click(header("Screens"));
+    expect(chev().getAttribute("class")).not.toMatch(/\brotate-90\b/);
+  });
+
+  it("keeps the section minimum equal to the header height (24px)", () => {
+    render(LibraryPane);
+    expect(header("Screens").className).toMatch(/\bpy-1\b/);
+    expect(header("Screens").closest("section").className).toMatch(/min-h-6/);
+  });
+});

@@ -46,6 +46,16 @@ fn strict_gamut<'de, D: serde::Deserializer<'de>>(d: D) -> Result<GamutTuningVal
     })
 }
 
+/// [`strict_gamut`] for an optional field (a JSON body's `gamut`): absent or
+/// `null` is `None`, a present block refuses unknown keys.
+pub(crate) fn strict_gamut_opt<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<GamutTuningValues>, D::Error> {
+    #[derive(Deserialize)]
+    struct Strict(#[serde(deserialize_with = "strict_gamut")] GamutTuningValues);
+    Ok(Option::<Strict>::deserialize(d)?.map(|s| s.0))
+}
+
 impl GamutTuningValues {
     /// Merge: self takes priority, other fills gaps.
     pub fn or(&self, other: &GamutTuningValues) -> GamutTuningValues {

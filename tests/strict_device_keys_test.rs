@@ -112,3 +112,45 @@ async fn a_json_body_with_an_unknown_gamut_key_is_rejected() {
     assert!(r.status.is_client_error(), "{} {}", r.status, r.text());
     assert!(r.text().contains("kne"), "{}", r.text());
 }
+
+/// A device write body is as strict as the device entry it writes: an
+/// unknown key, at the top or inside `gamut`, is refused instead of being
+/// dropped, on the admin and the dev route alike. Refused with `422`, the
+/// status every JSON body that does not fit its type gets, `final`'s
+/// unknown keys included.
+#[tokio::test]
+async fn a_device_write_with_an_unknown_key_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, config_path) = TestApp::new_with_config_yaml(VALID, dir.path());
+    for route in ["/api/admin/devices/kitchen", "/dev/api/devices/kitchen"] {
+        for (body, key) in [
+            (r#"{"dithr":"atkinson"}"#, "dithr"),
+            (r#"{"gamut":{"kne":0.5}}"#, "kne"),
+            (r#"{"final":{"gamut":{"kne":0.5}}}"#, "kne"),
+        ] {
+            let r = app.patch_json(route, &[AUTH], body).await;
+            assert_eq!(
+                r.status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{route} {body}: {}",
+                r.text()
+            );
+            assert!(r.text().contains(key), "{route} {body}: {}", r.text());
+        }
+    }
+    assert_eq!(std::fs::read_to_string(&config_path).unwrap(), VALID);
+
+    let r = app
+        .patch_json(
+            "/api/admin/devices/kitchen",
+            &[AUTH],
+            r#"{"dither":"atkinson","gamut":{"knee":0.5}}"#,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let file = std::fs::read_to_string(&config_path).unwrap();
+    assert!(
+        file.contains("dither: atkinson") && file.contains("knee: 0.5"),
+        "{file}"
+    );
+}

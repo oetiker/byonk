@@ -27,7 +27,11 @@ use super::require_admin;
 // struct itself rather than against a hand-kept list. They change nothing at
 // runtime (`ToSchema` would need a schema for every nested type, including
 // `serde_yaml::Value`).
+//
+// Strict like the device entry it writes (owner ruling E4): an unknown key,
+// at the top or inside `gamut`, is a 400, never a silently dropped setting.
 #[derive(Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeviceWrite {
     pub key: Option<String>, // required for POST, ignored for PATCH (taken from URL)
     pub screen: Option<String>,
@@ -44,6 +48,7 @@ pub struct DeviceWrite {
     /// neither `DeviceWrite` nor `MANAGED_DEVICE_KEYS`, so it could be
     /// hand-edited into config.yaml and nothing could set it. That is the
     /// silent-overwrite trap, and this field was the proof it bites.
+    #[serde(default, deserialize_with = "crate::models::config::strict_gamut_opt")]
     pub gamut: Option<GamutTuningValues>,
     /// The final rung -- the owner's veto. Merged **field by field**, like
     /// every other rung: setting `final.dither` must not wipe

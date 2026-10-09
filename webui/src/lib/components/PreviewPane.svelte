@@ -5,6 +5,52 @@
   import { screens } from "../state/screens.svelte.js";
   import { subject } from "../state/subject.svelte.js";
   import { resolution, parseResolutionHeader } from "../state/resolution.svelte.js";
+  import { buildRenderRequest, previewSize } from "../render-request.js";
+  import { Button } from "$lib/ui/button/index.js";
+
+  // Until Task 7 the draft comes from config as-is; Task 7 swaps in configDraft.
+  const metaDraft = {
+    panelWire(id) {
+      const p = (screens.meta.panels ?? []).find((x) => x.id === id);
+      return p ? { colors: p.colors, colors_actual: p.colors_actual ?? undefined, dither: p.dither ?? undefined } : {};
+    },
+    deviceWire(id) {
+      const d = (screens.meta.devices ?? []).find((x) => x.id === id);
+      return { screen: d?.screen, params: d?.params ?? {}, base: d?.base ?? {}, final: d?.final ?? {} };
+    },
+  };
+  const usage = { panels: {}, unseen: [] };
+
+  const size = $derived(previewSize({ subject, meta: screens.meta, usage }));
+
+  const selectClass =
+    "h-7 min-w-0 rounded-lg border border-input bg-transparent px-2 text-xs text-foreground";
+  const targetValue = $derived(subject.target ? `${subject.target.kind}:${subject.target.id}` : "");
+  function onTarget(e) {
+    const v = e.currentTarget.value;
+    if (!v) {
+      subject.target = null;
+      return;
+    }
+    const i = v.indexOf(":");
+    subject.target = { kind: v.slice(0, i), id: v.slice(i + 1) };
+  }
+  const asLabel = $derived(
+    subject.kind === "screen" ? (subject.target ? subject.target.id : "default") : subject.id,
+  );
+  const shownScreen = $derived(
+    subject.kind === "screen"
+      ? subject.id
+      : subject.kind === "panel"
+        ? subject.borrowedScreen
+        : (screens.meta.devices ?? []).find((d) => d.id === subject.id)?.screen,
+  );
+  const title = $derived(subject.kind ? `${shownScreen ?? "?"} as ${asLabel}` : "nothing selected");
+  // Spec §4: a screen can win colors outright, so switching hardware may change only the size.
+  const screenInCharge = $derived(
+    resolution.setting("colors")?.from === "screen" ||
+      resolution.setting("colors_actual")?.from === "screen",
+  );
 
   let blobUrl = $state(null);
   let channel;
@@ -53,7 +99,7 @@
   // request and the response are always the same size, and a second,
   // decode-time correction would be dead code here.
   let frameClass = $derived(
-    simulate.size.width > 1000 || simulate.size.height > 1000 ? "x" : "og",
+    size.width > 1000 || size.height > 1000 ? "x" : "og",
   );
 
   // --- 1:1 pixel lens -------------------------------------------------------
@@ -149,7 +195,7 @@
   // apart from each other again the way they did when this component
   // shipped posting `{blob}` instead.
   function postFrame() {
-    channel?.postMessage({ url: blobUrl, width: simulate.size.width, height: simulate.size.height });
+    channel?.postMessage({ url: blobUrl, width: size.width, height: size.height });
   }
 
   onMount(() => {
@@ -187,9 +233,16 @@
    * later success.
    */
   async function renderNow() {
-    const ref = subject.screenRef;
     const seq = ++renderSeq;
-    if (!ref) {
+    let req;
+    try {
+      req = buildRenderRequest({ subject, draft: metaDraft, simulate, meta: screens.meta, usage });
+    } catch (e) {
+      simulate.error = { op: "render", message: e.message };
+      resolution.fail(e.message, subject.key);
+      return;
+    }
+    if (!req) {
       // Nothing selected -- typically because the selected screen was just
       // deleted. Drop its last render here and in the pop-out, rather than
       // keep painting a screen that no longer exists (Finding H). Bumping
@@ -208,7 +261,7 @@
     simulate.error = null;
 
     try {
-      const res = await api.renderPreview(simulate.request(ref));
+      const res = await api.renderPreview(req.body);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         const message = body?.details
@@ -238,8 +291,12 @@
   // Re-render whenever the screen or any simulate control changes. This is
   // what makes the pop-out follow a drawer change.
   $effect(() => {
-    subject.screenRef;
+    subject.key;
+    subject.target;
+    subject.borrowedScreen;
+    subject.watchDevice;
     simulate.fields;
+    screens.meta;
     renderNow();
   });
 
@@ -252,9 +309,38 @@
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col">
-  <div class="flex items-center gap-2 border-b border-[var(--border-color)] px-2 py-1 text-xs">
-    <span class="font-mono">{simulate.size.width} × {simulate.size.height}</span>
-    <button type="button" class="ml-auto" onclick={popOut}>Pop out</button>
+  <div class="flex min-w-0 flex-wrap items-center gap-2 border-b border-[var(--border-color)] px-2 py-1 text-xs">
+    <span data-testid="preview-title" class="truncate font-mono">{title}</span>
+    <span data-testid="preview-size" class="font-mono">{size.width} × {size.height}</span>
+    {#if subject.kind === "screen"}
+      <label for="preview-target" class="sr-only">Render as</label>
+      <select id="preview-target" class={selectClass} value={targetValue} onchange={onTarget}>
+        <option value="">default 800×480</option>
+        <optgroup label="Panels">
+          {#each screens.meta.panels ?? [] as p (p.id)}<option value={`panel:${p.id}`}>{p.name}</option>{/each}
+        </optgroup>
+        <optgroup label="Devices">
+          {#each screens.meta.devices ?? [] as d (d.id)}<option value={`device:${d.id}`}>{d.name ?? d.id}</option>{/each}
+        </optgroup>
+      </select>
+    {:else if subject.kind === "panel"}
+      <label for="preview-screen" class="sr-only">Screen</label>
+      <select id="preview-screen" class={selectClass} bind:value={subject.borrowedScreen}>
+        {#each screens.list as s (s.ref)}<option value={s.ref}>{s.ref}</option>{/each}
+      </select>
+      <label for="preview-watch">watch on</label>
+      <select id="preview-watch" class={selectClass} bind:value={subject.watchDevice}>
+        <option value="">no device</option>
+        {#each screens.meta.devices ?? [] as d (d.id)}<option value={d.id}>{d.name ?? d.id}</option>{/each}
+      </select>
+    {/if}
+    {#if screenInCharge}
+      <span data-testid="screen-in-charge" class="text-[var(--text-muted)]">the screen sets its own colours</span>
+    {/if}
+    <label class="ml-auto flex items-center gap-1">
+      <input type="checkbox" bind:checked={simulate.use_actual} /> show measured inks
+    </label>
+    <Button type="button" size="xs" variant="outline" onclick={popOut}>Pop out</Button>
   </div>
   <div class="flex min-h-0 flex-1 items-center justify-center p-4">
     <div class={`device-frame ${frameClass} flex items-center justify-center rounded-xl bg-[var(--panel-bg)] p-6`}>
@@ -273,6 +359,11 @@
       </div>
     </div>
   </div>
+  <button type="button" class="flex items-center gap-2 border-t border-[var(--border-color)] px-2 py-1 text-xs"
+          aria-expanded={simulate.expanded} onclick={() => (simulate.expanded = !simulate.expanded)}>
+    {simulate.expanded ? "▾" : "▸"} Simulated inputs
+    {#if simulate.pending}<span data-testid="sim-badge" class="text-[var(--danger-color)]">not saved</span>{/if}
+  </button>
 </div>
 
 {#if lensVisible}

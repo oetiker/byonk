@@ -74,8 +74,8 @@ describe("PreviewPane", () => {
     // shape, on the render broadcast itself first...
     expect(posted[0]).toEqual({
       url: expect.stringMatching(/^blob:/),
-      width: simulate.size.width,
-      height: simulate.size.height,
+      width: 800,
+      height: 480,
     });
     posted.length = 0;
 
@@ -86,8 +86,8 @@ describe("PreviewPane", () => {
     expect(posted).toEqual([
       {
         url: expect.stringMatching(/^blob:/),
-        width: simulate.size.width,
-        height: simulate.size.height,
+        width: 800,
+        height: 480,
       },
     ]);
   });
@@ -123,7 +123,7 @@ describe("PreviewPane", () => {
       dither_algorithms: [],
       panels: [{ id: "trmnl_x", width: 1872, height: 1404 }],
     };
-    simulate.panel = "trmnl_x";
+    subject.select("panel", "trmnl_x");
     const { container } = render(PreviewPane);
     const frame = container.querySelector(".device-frame");
     expect(frame.classList.contains("x")).toBe(true);
@@ -169,7 +169,7 @@ describe("PreviewPane", () => {
   // --- Controller Ruling 41: renderNow() must catch, not swallow --------
 
   it("captures an invalid-JSON render failure on simulate.error", async () => {
-    // `simulate.url()` deliberately THROWS on invalid params JSON (Task 8
+    // `simulate.simulated()` deliberately THROWS on invalid params JSON (Task 8
     // rule (e), simulate.svelte.js) so the user is never shown a render
     // made from parameters they didn't write. The brief called it inside
     // an `$effect` with no try/catch, turning that throw into an unhandled
@@ -359,5 +359,28 @@ describe("PreviewPane", () => {
     render(PreviewPane);
     await waitFor(() => expect(resolution.state).toBe("failed"));
     expect(resolution.failure).toBe("Render error: boom");
+  });
+
+  it("mode b renders the borrowed calibration screen on the subject panel, and as the watched device", async () => {
+    screens.meta = {
+      devices: [{ id: "kitchen", panel: "x", screen: "local/k" }],
+      dither_algorithms: [],
+      panels: [{ id: "x", name: "X", width: 1600, height: 1200 }],
+    };
+    const bodies = [];
+    vi.spyOn(api, "renderPreview").mockImplementation(async (b) => {
+      bodies.push(b);
+      return { ok: true, headers: { get: () => null }, blob: async () => new Blob(["png"]) };
+    });
+    subject.select("panel", "x");
+    render(PreviewPane);
+    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
+    expect(bodies.at(-1)).toMatchObject({ screen: "byonk-builtin/calibration/tone", panel: "x" });
+    expect(bodies.at(-1).device).toBeUndefined();
+    expect(bodies.at(-1).override).toBeUndefined();
+
+    subject.watchDevice = "kitchen";
+    await waitFor(() => expect(bodies.at(-1).device).toBe("kitchen"));
+    expect(bodies.at(-1).panel).toBe("x");
   });
 });

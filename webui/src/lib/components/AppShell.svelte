@@ -10,13 +10,14 @@
   import { auth } from "../state/auth.svelte.js";
   import { screens } from "../state/screens.svelte.js";
   import { subject } from "../state/subject.svelte.js";
+  import { simulate } from "../state/simulate.svelte.js";
   import * as api from "../api.js";
 
   // Placeholders until Tasks 6-10 fill them in.
   import FilesPane from "./FilesPane.svelte";
   import EditPane from "./EditPane.svelte";
   import PreviewPane from "./PreviewPane.svelte";
-  import SimulateControls from "./SimulateControls.svelte";
+  import SimulatedInputs from "./SimulatedInputs.svelte";
 
   // Restore persisted panel visibility/sizes synchronously here, not from
   // onMount as the brief's code block has it. This app is never
@@ -180,9 +181,9 @@
       {/snippet}
       {#snippet b()}
         {#if layout.isOpen("preview")}
-          <SplitPane axis="y" bind:size={ySize} open={true}>
+          <SplitPane axis="y" bind:size={ySize} open={simulate.expanded}>
             {#snippet a()}<PreviewPane />{/snippet}
-            {#snippet b()}<SimulateControls />{/snippet}
+            {#snippet b()}<SimulatedInputs />{/snippet}
           </SplitPane>
         {/if}
       {/snippet}

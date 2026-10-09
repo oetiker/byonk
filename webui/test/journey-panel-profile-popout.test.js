@@ -89,9 +89,9 @@ afterEach(() => {
   cleanup();
 });
 
-/** The Panel Profile select in SimulateControls, by its own label. */
+/** The Preview header's "render as" select. */
 function panelSelect() {
-  return document.querySelector("#sim-panel");
+  return document.querySelector("#preview-target");
 }
 
 async function mountWithScreen() {
@@ -108,7 +108,7 @@ describe("a Panel Profile change, all the way to the pop-out", () => {
     const sel = panelSelect();
     expect(sel).toBeTruthy();
     const values = [...sel.options].map((o) => o.value);
-    for (const p of PANELS_META) expect(values).toContain(p.id);
+    for (const p of PANELS_META) expect(values).toContain(`panel:${p.id}`);
   });
 
   it("changing the panel re-renders at the new size and tells the pop-out the new size too", async () => {
@@ -122,7 +122,7 @@ describe("a Panel Profile change, all the way to the pop-out", () => {
 
     const before = posted.length;
     const sel = panelSelect();
-    sel.value = "x";
+    sel.value = "panel:x";
     await fireEvent.change(sel);
 
     // A fresh render went out, and it asked for the new panel's size.
@@ -141,13 +141,14 @@ describe("a Panel Profile change, all the way to the pop-out", () => {
     stubRenders();
     await mountWithScreen();
 
-    expect(dom.getByText("800 × 480")).toBeTruthy();
+    const sizeText = () => document.querySelector('[data-testid="preview-size"]').textContent;
+    expect(sizeText()).toBe("800 × 480");
 
     const sel = panelSelect();
-    sel.value = "x";
+    sel.value = "panel:x";
     await fireEvent.change(sel);
 
-    await waitFor(() => expect(dom.getByText("1600 × 1200")).toBeTruthy());
+    await waitFor(() => expect(sizeText()).toBe("1600 × 1200"));
   });
 
   // The device frame is chosen from the REQUESTED size (>1000px on either
@@ -162,11 +163,11 @@ describe("a Panel Profile change, all the way to the pop-out", () => {
     expect(frame().className).toContain("og");
 
     const sel = panelSelect();
-    sel.value = "x";
+    sel.value = "panel:x";
     await fireEvent.change(sel);
     await waitFor(() => expect(frame().className).toContain("x"));
 
-    sel.value = "og";
+    sel.value = "panel:og";
     await fireEvent.change(sel);
     await waitFor(() => expect(frame().className).toContain("og"));
   });
@@ -179,7 +180,7 @@ describe("a Panel Profile change, all the way to the pop-out", () => {
     await mountWithScreen();
 
     const sel = panelSelect();
-    sel.value = "x";
+    sel.value = "panel:x";
     await fireEvent.change(sel);
     await waitFor(() => expect(posted.at(-1)).toMatchObject({ width: 1600, height: 1200 }));
 
@@ -232,7 +233,7 @@ describe("a Panel Profile change, all the way to the pop-out", () => {
     expect(posted).toHaveLength(0); // the first render has not answered yet
 
     const sel = panelSelect();
-    sel.value = "x";
+    sel.value = "panel:x";
     await fireEvent.change(sel);
     await waitFor(() => expect(call).toBeGreaterThan(1));
 
@@ -260,7 +261,7 @@ describe("a Panel Profile change, all the way to the pop-out", () => {
     await mountWithScreen();
 
     const sel = panelSelect();
-    sel.value = "x";
+    sel.value = "panel:x";
     await fireEvent.change(sel);
     await tick();
 

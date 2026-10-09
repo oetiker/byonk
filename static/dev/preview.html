@@ -95,24 +95,45 @@ body {
   box-shadow: 0 0 0 1px var(--border-color);
 }
 
-/* Fit: the image can never exceed the stage, so it is safe to centre it. */
+/* Fit: the largest size that fits the stage, UP as well as down, aspect
+   ratio kept. The stage is a size container, so cqw/cqh are its content box;
+   the page script publishes the image's width/height ratio as --ar. Sizing
+   the <img> element itself (rather than object-fit: contain inside a larger
+   box) keeps the element box equal to the drawn pixels, which is what
+   lens.js measures with getBoundingClientRect(). With an explicit width and
+   height:auto the height follows the intrinsic ratio. Scaling down smooths;
+   scaling up is pixelated (class set by the page script) so the dither
+   pattern stays crisp. */
 .preview-stage.fit {
+  container-type: size;
   display: grid;
   place-items: center;
 }
 
 .preview-stage.fit img {
-  max-width: 100%;
-  max-height: 100%;
+  width: min(100cqw, calc(100cqh * var(--ar, 1)));
+  height: auto;
 }
 
-/* 100%: the image usually overflows, and every centring mechanism (flex or
-   grid centring, auto margins, text-align) pushes the overflow past the
+.preview-stage.fit img.upscaled {
+  image-rendering: pixelated;
+}
+
+/* 100%: the image is shown at its own pixel size. Centring it must not cost
+   scrollability: grid/flex `center` alignment pushes overflow past the
    scroll container's start edge, where it cannot be scrolled back into
-   view. So it anchors top-left, the way an image viewer at 1:1 does. On a
+   view. Auto margins on a flex item do not: they centre the item while it
+   is smaller than the stage and collapse to zero once it overflows, so a
+   large render anchors top-left and every part of it stays scrollable. On a
    HiDPI screen the browser still upscales by the device pixel ratio;
    `pixelated` keeps the dither pattern crisp through that. */
+.preview-stage.full {
+  display: flex;
+}
+
 .preview-stage.full img {
+  flex: none;
+  margin: auto;
   image-rendering: pixelated;
 }
 
@@ -187,11 +208,21 @@ body {
   const sizeEl = document.getElementById("preview-size");
   const stage = document.getElementById("preview-stage");
 
-  // Fit scales the render down to the window; 100% shows it at its own pixel
-  // size and lets the stage scroll.
+  // Fit scales the render to the largest size the window allows (up as well
+  // as down); 100% shows it at its own pixel size, centred when smaller than
+  // the window and scrollable when larger. Fit sizing is CSS driven by --ar
+  // (the image's width/height ratio); this only keeps --ar current and marks
+  // an upscaled image so it is drawn pixelated.
+  function syncFit() {
+    if (!img.naturalWidth || !img.naturalHeight) return;
+    img.style.setProperty("--ar", String(img.naturalWidth / img.naturalHeight));
+    img.classList.toggle("upscaled", img.clientWidth > img.naturalWidth);
+  }
   document.querySelectorAll("input[name=zoom]").forEach((r) => {
-    r.addEventListener("change", () => { stage.className = "preview-stage " + r.value; });
+    r.addEventListener("change", () => { stage.className = "preview-stage " + r.value; syncFit(); });
   });
+  img.addEventListener("load", syncFit);
+  window.addEventListener("resize", syncFit);
 
   // --- colour scheme --------------------------------------------------
   //

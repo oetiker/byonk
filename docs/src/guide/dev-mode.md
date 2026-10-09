@@ -100,7 +100,12 @@ write to is labelled "read-only" next to its handle; you can still open any
 of its screens and read every file, and **Copy** one into a repo you can
 write to — but its files open read-only. **New**, **Copy**, **Rename** and
 **Delete** work on screens; see [New, Copy, Rename,
-Delete](#new-copy-rename-delete).
+Delete](#new-copy-rename-delete). Screens, Panels and Devices are collapsible
+sections, as in the VS Code explorer: click a section heading (or press
+Enter or Space on it) to fold it. All three headings stay visible, open
+sections share the height and scroll on their own, and the browser remembers
+which ones you folded. Selecting a subject elsewhere opens the section it
+lives in.
 
 **Edit.** The header names the subject. For a screen it is the file editor:
 one tab per file, with `meta.yaml`, `script.lua` and `screen.svg` first and
@@ -121,10 +126,10 @@ as which hardware, and at which size. The controls depend on the subject:
   official palette.
 - **Pop out** opens the preview in its own window, see [Preview and
   pop-out](#preview-and-pop-out).
-- **Simulated inputs** is a row under the image that opens the device context
-  the preview renders under: battery, WiFi, the clock, and custom params
-  (not when the subject is a device, which brings its own params). While
-  anything is set, it carries a "not saved" badge.
+- **Simulated inputs** sit under the image, always visible: the device
+  context the preview renders under — battery, WiFi, the clock, and custom
+  params (not when the subject is a device, which brings its own params).
+  The block scrolls when the window is short.
 
 The Preview panel never writes anything. Choosing a device to watch, a screen
 to borrow or a simulated battery level changes what you see and nothing else.
@@ -236,7 +241,10 @@ Render time is shown in the preview header and logged in the console.
 
 **Pop out** opens the preview in its own window with **Fit** and **100%** zoom
 — useful on a second monitor, or for looking at a 1872×1404 TRMNL X render at
-its real size. The pop-out renders nothing itself: the editor window hands it
+its real size. **Fit** scales the image to the largest size that fits the
+window, enlarging it as well as shrinking it; **100%** shows it pixel for
+pixel, centred when it is smaller than the window and scrollable when it is
+larger. The pop-out renders nothing itself: the editor window hands it
 each finished image, so it follows the editor live and goes quiet when the
 editor window closes. It follows the editor's colour scheme too.
 
@@ -303,6 +311,10 @@ use this panel") and, when some have not checked in yet, how many "(2 not seen
 since byonk started)".
 
 ### Push, Save, Discard
+
+The buttons sit in a bar at the top of the config editor, like the screen
+editor's toolbar, with the count of unsaved changes beside them. The form
+scrolls underneath it.
 
 Your edits are a draft. The draft survives a trip to another subject and
 back, and Preview renders it as you type.

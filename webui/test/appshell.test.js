@@ -54,6 +54,8 @@ describe("AppShell", () => {
     render(AppShell);
     expect(screen.getByTestId("simulated-inputs")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Simulated inputs/ })).toBeNull();
+    // Class contract: the inputs span the width of their (flex) pane.
+    expect(screen.getByTestId("simulated-inputs").className.split(/\s+/)).toContain("w-full");
   });
 
   it("applies a persisted split size on first paint, not only after mount", () => {

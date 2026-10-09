@@ -41,7 +41,7 @@
      it sits in (SplitPane's second pane) has a fixed height and clips its
      overflow, so without a height of its own the block was cut off at the
      bottom instead of scrolling. -->
-<div class="flex h-full flex-col gap-3 overflow-auto min-h-0 p-3 text-sm" data-testid="simulated-inputs">
+<div class="flex h-full w-full min-w-0 flex-col gap-3 overflow-auto min-h-0 p-3 text-sm" data-testid="simulated-inputs">
   {#if simulate.pending}
     <span data-testid="sim-badge" class="text-xs text-[var(--danger-color)]">not saved</span>
   {/if}

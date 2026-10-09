@@ -172,3 +172,18 @@ describe("SplitPane", () => {
     expect(hostReleaseSpy).not.toHaveBeenCalled();
   });
 });
+
+describe("SplitPane second pane layout contract", () => {
+  beforeEach(() => cleanup());
+  afterEach(() => cleanup());
+
+  // jsdom has no layout. A nested flex child (the inner SplitPane's flex-1
+  // root) only fills the second pane if that pane is itself a flex
+  // container, the way the first pane already is.
+  it("makes the second pane a flex container so a flex-1 child fills it", () => {
+    render(Harness);
+    const wrapper = screen.getByText("right").parentElement;
+    expect(wrapper.className.split(/\s+/)).toContain("flex");
+  });
+});
+

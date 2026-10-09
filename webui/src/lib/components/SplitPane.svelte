@@ -162,7 +162,7 @@
       onkeydown={key}
     ></div>
     <div
-      class="min-h-0 min-w-0 shrink-0 overflow-hidden"
+      class="flex min-h-0 min-w-0 shrink-0 overflow-hidden"
       style={axis === "x" ? `width:${size}px` : `height:${size}px`}
     >
       {@render b()}

@@ -255,7 +255,8 @@ Render a screen directly to PNG (useful for testing):
 |--------|-------------|
 | `-m, --mac` | Device MAC address (required) |
 | `-o, --output` | Output PNG file path (required) |
-| `-d, --device` | Device type: "og" (800x480) or "x" (1872x1404); also matched against panel `match:` like a reported Model |
+| `-d, --device` | Device type: "og" (800x480) or "x" (1872x1404). The CLI has no live device report, so this also stands in for the reported Model: a panel whose `match:` equals it is used for a device without `panel:` |
+| `--board` | The Board string a real device would report (e.g. `trmnl_x`), matched against panel `match:` ahead of the Model. Together with `--device` it lets `byonk render` pick the same panel `/api/display` does |
 | `-b, --battery` | Battery voltage for testing (e.g., 4.12) |
 | `-r, --rssi` | WiFi signal strength for testing (e.g., -67) |
 | `-f, --firmware` | Firmware version string for testing |

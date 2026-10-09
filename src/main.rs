@@ -34,11 +34,19 @@ enum Commands {
         output: PathBuf,
 
         /// Fallback render size when no panel resolves: "og" (800x480) or
-        /// "x" (1872x1404). Also matched like a device's reported Model: a
-        /// panel whose `match:` equals it is used for a device without
-        /// `panel:`. A resolved panel renders at its own dimensions.
+        /// "x" (1872x1404). The CLI has no live device report, so this also
+        /// stands in for the reported Model: a panel whose `match:` equals it
+        /// is used for a device without `panel:`. A resolved panel renders at
+        /// its own dimensions.
         #[arg(short, long, default_value = "og")]
         device: String,
+
+        /// The Board string a real device would report (e.g. "trmnl_x").
+        /// The CLI has no live device report, so this stands in for it: a
+        /// panel whose `match:` equals it is used for a device without
+        /// `panel:`, ahead of the Model given by `--device`.
+        #[arg(long)]
+        board: Option<String>,
 
         /// Battery voltage (e.g., 4.12)
         #[arg(short, long)]
@@ -138,6 +146,7 @@ async fn main() -> anyhow::Result<()> {
             mac,
             output,
             device,
+            board,
             battery,
             rssi,
             firmware,
@@ -148,6 +157,7 @@ async fn main() -> anyhow::Result<()> {
             &mac,
             &output,
             &device,
+            board.as_deref(),
             battery,
             rssi,
             firmware,
@@ -203,6 +213,7 @@ fn run_render_command(
     mac: &str,
     output: &PathBuf,
     device_type: &str,
+    board: Option<&str>,
     battery: Option<f32>,
     rssi: Option<i32>,
     firmware: Option<String>,
@@ -263,7 +274,7 @@ fn run_render_command(
             .and_then(|code| config.get_device_config_for_code(code))
     });
     let dc_colors = device_config.and_then(|dc| dc.colors.clone());
-    let panel = byonk::api::resolution::cli_panel_for(&config, device_config, device_type);
+    let panel = byonk::api::resolution::cli_panel_for(&config, device_config, board, device_type);
     let panel_colors = panel.map(|p| p.colors.clone());
 
     // The panel is part of that same chain: it knows its own dimensions, and
@@ -959,6 +970,28 @@ async fn run_server() -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use byonk::assets::AssetLoader;
+
+    /// `byonk render --board trmnl_x` reaches the panel lookup as the Board.
+    #[test]
+    fn render_board_flag_picks_the_matching_panel() {
+        let cli = Cli::try_parse_from([
+            "byonk", "render", "-m", "AA:BB", "-o", "out.png", "--device", "x", "--board",
+            "trmnl_x",
+        ])
+        .unwrap();
+        let Some(Commands::Render { device, board, .. }) = cli.command else {
+            panic!("expected the render command");
+        };
+        let config: byonk::models::AppConfig = serde_yaml::from_str(
+            "panels:\n  trmnl_x: {name: X, match: trmnl_x, colors: '#000000,#FFFFFF'}\ndevices:\n  'AA:BB': {screen: local/a}\n",
+        )
+        .unwrap();
+        let dc = config.get_device_config("AA:BB");
+        let hit = byonk::api::resolution::cli_panel_for(&config, dc, board.as_deref(), &device);
+        assert_eq!(hit.map(|p| p.name.as_str()), Some("X"));
+        // Without the flag the Model "x" matches nothing.
+        assert!(byonk::api::resolution::cli_panel_for(&config, dc, None, &device).is_none());
+    }
 
     /// Minimal screen-repo source: `ScriptResult` carries an `Arc` of one, and
     /// the wiring test needs a result, not a repo.

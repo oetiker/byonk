@@ -368,11 +368,13 @@ impl RungSettings {
 
 /// The panel `byonk render` uses for a device.
 ///
-/// The CLI has no sighting (separate process), so `--device` stands in for the Model
-/// header: a panel whose `match:` equals it is picked, as /api/display would.
+/// The CLI has no live device report (separate process), so `--board` and
+/// `--device` stand in for the Board and Model headers: the same ladder as
+/// /api/display -- explicit `panel:`, then Board, then Model.
 pub fn cli_panel_for<'a>(
     config: &'a crate::models::AppConfig,
     device_config: Option<&crate::models::DeviceConfig>,
+    board: Option<&str>,
     model: &str,
 ) -> Option<&'a crate::models::config::PanelConfig> {
     use crate::api::display::{device_panel_key, resolve_panel};
@@ -381,12 +383,12 @@ pub fn cli_panel_for<'a>(
     let key = match device_config {
         Some(dc) => {
             let sighting = Sighting {
-                board: None,
+                board: board.map(str::to_string),
                 model: model.to_string(),
             };
             device_panel_key(config, dc, Some(&sighting))
         }
-        None => resolve_panel(config, None, None, model).1,
+        None => resolve_panel(config, None, board, model).1,
     };
     key.and_then(|k| config.get_panel(&k))
 }
@@ -833,25 +835,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_cli_reads_device_as_the_reported_model() {
+    fn the_cli_walks_the_server_ladder_with_board_and_model() {
         let config: crate::models::AppConfig = serde_yaml::from_str(
             "\
 panels:
-  e1004: {name: E, match: e1004, colors: '#000000,#FFFFFF'}
+  boardp: {name: B, match: trmnl_x, colors: '#000000,#FFFFFF'}
+  modelp: {name: M, match: e1004, colors: '#000000,#FFFFFF'}
+  pinned: {name: P, colors: '#000000,#FFFFFF'}
 devices:
   office: {screen: local/a}
+  fixed: {screen: local/a, panel: pinned}
 ",
         )
         .unwrap();
+        let name = |p: Option<&crate::models::config::PanelConfig>| p.map(|p| p.name.clone());
         let office = config.get_device_config("office");
+        // board only
         assert_eq!(
-            cli_panel_for(&config, office, "e1004").map(|p| p.name.as_str()),
-            Some("E")
+            name(cli_panel_for(&config, office, Some("trmnl_x"), "og")).as_deref(),
+            Some("B")
         );
-        assert!(cli_panel_for(&config, office, "og").is_none());
+        // model only
         assert_eq!(
-            cli_panel_for(&config, None, "e1004").map(|p| p.name.as_str()),
-            Some("E")
+            name(cli_panel_for(&config, office, None, "e1004")).as_deref(),
+            Some("M")
+        );
+        // both: the Board wins
+        assert_eq!(
+            name(cli_panel_for(&config, office, Some("trmnl_x"), "e1004")).as_deref(),
+            Some("B")
+        );
+        // neither matches
+        assert!(cli_panel_for(&config, office, Some("nope"), "og").is_none());
+        // no device config: still the ladder
+        assert_eq!(
+            name(cli_panel_for(&config, None, Some("trmnl_x"), "og")).as_deref(),
+            Some("B")
+        );
+        // explicit `panel:` beats a Board that names another panel
+        let fixed = config.get_device_config("fixed");
+        assert_eq!(
+            name(cli_panel_for(&config, fixed, Some("trmnl_x"), "e1004")).as_deref(),
+            Some("P")
         );
     }
 

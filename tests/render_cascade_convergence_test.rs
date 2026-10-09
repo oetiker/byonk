@@ -439,7 +439,7 @@ impl Fixture {
     async fn via_cli(&self, device: &str, model: &str) -> ExpectedParams {
         let config = self.state.config.load_full();
         let device_config = config.get_device_config(device);
-        let panel = byonk::api::resolution::cli_panel_for(&config, device_config, model);
+        let panel = byonk::api::resolution::cli_panel_for(&config, device_config, None, model);
         let pipeline = self.state.content_pipeline.clone();
         // `None` for the device context: the CLI builds one, but this
         // fixture's script reads nothing from `device`, and

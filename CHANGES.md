@@ -391,7 +391,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Home Assistant's device preview and `byonk render` now use the panel a device reports.** A device without `panel:` whose Board or Model matches a panel profile was rendered with that panel on the glass and in the dev UI, but the admin preview Home Assistant shows and `byonk render --mac` ignored the match and drew it with the model's default palette. Both now pick the same panel; for `byonk render`, `--device` is matched the way a reported Model is.
+- **Home Assistant's device preview and `byonk render` now use the panel a
+  device reports.** A device without `panel:` whose Board or Model matches a
+  panel profile was rendered with that panel on the glass and in the dev UI,
+  but the admin preview Home Assistant shows and `byonk render --mac` ignored
+  the match and drew it with the model's default palette. The preview now
+  picks the same panel. `byonk render` has no live device report, so the new
+  `--board` option and `--device` stand in for the Board and Model a device
+  would report (for example `--board trmnl_x`), and are matched the same way.
 
 - **Saving a device no longer rewrites its whole entry in `config.yaml`.**
   A device saved from the dev UI, the admin API or Home Assistant used to be

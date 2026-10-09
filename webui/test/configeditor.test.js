@@ -169,4 +169,44 @@ describe("ConfigEditor, device schema", () => {
     await waitFor(() => expect(save).toHaveBeenCalled());
     expect(save.mock.calls[0][1].maximum_compatibility).toBe(false);
   });
+
+  // A half-typed number ("-" on the way to "-0.5", "1e") is no number: the
+  // browser reports it as `validity.badInput` with an empty `value`, which
+  // must not read as "remove this setting".
+  async function typeBad(sel, raw) {
+    const el = document.querySelector(sel);
+    Object.defineProperty(el, "validity", { configurable: true, value: { badInput: true } });
+    el.value = raw;
+    await fireEvent.input(el);
+    return el;
+  }
+
+  it("an unparsable number disables Save and is never sent as a removal", async () => {
+    screens.meta.devices[0].base = { strength: 0.5 };
+    screens.meta.devices[0].min_png_bytes = 200000;
+    const save = vi.spyOn(api, "saveDevice").mockResolvedValue({});
+    render(ConfigEditor);
+    const name = document.querySelector("#cfg-plain-name");
+    name.value = "Kitchen 2";
+    await fireEvent.input(name);
+    const btn = dom.getByRole("button", { name: "Save" });
+    expect(btn.disabled).toBe(false);
+
+    for (const sel of ["#cfg-device_base-strength", "#cfg-plain-min_png_bytes"]) {
+      const el = await typeBad(sel, "-");
+      expect(dom.getByRole("alert").textContent).toMatch(/not a number/);
+      expect(btn.disabled).toBe(true);
+      await fireEvent.click(btn);
+      expect(save).not.toHaveBeenCalled();
+      // Finishing the number makes it valid again.
+      Object.defineProperty(el, "validity", { configurable: true, value: { badInput: false } });
+      el.value = sel.includes("strength") ? "0.25" : "300000";
+      await fireEvent.input(el);
+      expect(dom.queryByRole("alert")).toBeNull();
+      expect(btn.disabled).toBe(false);
+    }
+    // The raw text reaches the store too (the jsdom path): still no clear.
+    configDraft.set("device", "kitchen", "device_final", "strength", "-");
+    expect(configDraft.saveDeviceBody("kitchen").clear).toBeUndefined();
+  });
 });

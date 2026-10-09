@@ -24,11 +24,15 @@ const NUMERIC = new Set([...NUMBER_FIELDS, "refresh", "min_png_bytes"]);
 /** A device override cannot carry these (ruling C1: an override takes `dither`, never `colors` or `refresh`; Plan 1 Tasks 2 and 3). */
 const NOT_PUSHABLE = new Set(["colors", "refresh"]);
 
+/** `norm()` of a number field holding no number ("-", "1e", NaN): not a removal. */
+const INVALID = Symbol("invalid");
+
 function norm(field, v) {
+  if (typeof v === "number" && !Number.isFinite(v)) return INVALID;
   if (v === "" || v === undefined || v === null) return null;
   if (NUMERIC.has(field)) {
     const n = Number(v);
-    return Number.isFinite(n) ? n : null;
+    return Number.isFinite(n) ? n : INVALID;
   }
   return typeof v === "string" ? v.trim() || null : v;
 }
@@ -117,14 +121,40 @@ class ConfigDraft {
   value(kind, id, rung, field) {
     return this.#current(kind, id).values[rung]?.[field] ?? null;
   }
+  /**
+   * An unparsable number keeps the field's previous value and marks it
+   * invalid (Save is refused while any field is): sending it as `null` would
+   * remove the setting from config.yaml.
+   */
   set(kind, id, rung, field, v) {
-    this.#edit(kind, id, (e) => (e.values[rung][field] = norm(field, v)));
+    const n = norm(field, v);
+    this.#edit(kind, id, (e) => {
+      if (this.#mark(e, `${rung}.${field}`, n)) e.values[rung][field] = n;
+    });
   }
   plainValue(kind, id, field) {
     return this.#current(kind, id).plain[field] ?? null;
   }
   setPlain(kind, id, field, v) {
-    this.#edit(kind, id, (e) => (e.plain[field] = field === "params" ? v : norm(field, v)));
+    const n = field === "params" ? v : norm(field, v);
+    this.#edit(kind, id, (e) => {
+      if (this.#mark(e, `plain.${field}`, n)) e.plain[field] = n;
+    });
+  }
+  /** Record whether `n` is valid under `key`; true when it may be stored. */
+  #mark(entry, key, n) {
+    const invalid = { ...(entry.invalid ?? {}) };
+    if (n === INVALID) invalid[key] = true;
+    else delete invalid[key];
+    entry.invalid = invalid;
+    return n !== INVALID;
+  }
+  /** The fields holding text that is no number, as `field (rung)` labels. */
+  invalid(kind, id) {
+    return Object.keys(this.#current(kind, id).invalid ?? {}).map((k) => {
+      const [rung, field] = [k.slice(0, k.indexOf(".")), k.slice(k.indexOf(".") + 1)];
+      return rung === "plain" ? field : `${field} (${rung.replace("_", " ")})`;
+    });
   }
 
   dirty(kind, id) {

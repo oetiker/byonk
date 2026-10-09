@@ -37,18 +37,24 @@
   const ladderState = $derived(ownsResolution ? resolution.state : "none");
   // A device must keep its screen: an emptied one would be sent as clear:["screen"], which the server rejects.
   const screenMissing = $derived(kind === "device" && !plain("screen"));
-  const canSave = $derived(dirtyCount > 0 && !screenMissing);
+  // A number field holding no number keeps its old value in the draft; Save
+  // and Push wait until it is finished, so it can never travel as a removal.
+  const invalid = $derived((configDraft.revision, configDraft.invalid(kind, id)));
+  const canSave = $derived(dirtyCount > 0 && !screenMissing && invalid.length === 0);
 
   const cid = (rung, field) => `cfg-${rung}-${field.replaceAll(".", "-")}`;
   const val = (rung, field) => (configDraft.revision, configDraft.value(kind, id, rung, field));
   const plain = (field) => (configDraft.revision, configDraft.plainValue(kind, id, field));
 
+  // A browser reports a half-typed number ("-", "1e") as `badInput` with an
+  // empty `value`; NaN tells the store it is no number rather than a removal.
+  const read = (t) => (t.validity?.badInput ? NaN : t.value);
   function onField(rung, field, e) {
-    configDraft.set(kind, id, rung, field, e.currentTarget.value);
+    configDraft.set(kind, id, rung, field, read(e.currentTarget));
   }
   function onPlain(field, e) {
     const t = e.currentTarget;
-    let v = t.value;
+    let v = read(t);
     if (field === "maximum_compatibility") v = v === "" ? null : v === "true";
     configDraft.setPlain(kind, id, field, v);
   }
@@ -139,7 +145,10 @@
 
   <footer class="sticky bottom-0 flex flex-wrap items-center gap-2 border-t border-[var(--border-color)] bg-[var(--bg-color)] py-2">
     <span>● {dirtyCount} unsaved</span>
-    <Button type="button" disabled={Object.keys(pushBody).length === 0} onclick={push}>
+    {#if invalid.length}
+      <span role="alert" class="text-xs text-[var(--danger-color)]">not a number: {invalid.join(", ")} — finish or clear it to Save.</span>
+    {/if}
+    <Button type="button" disabled={Object.keys(pushBody).length === 0 || invalid.length > 0} onclick={push}>
       {kind === "panel" ? "Push to panel" : "Push to device"}
     </Button>
     <Button type="button" variant="outline" disabled={!canSave} onclick={() => canSave && configDraft.save(kind, id)}>Save</Button>

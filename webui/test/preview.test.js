@@ -466,6 +466,57 @@ describe("PreviewPane render-in-progress indicator", () => {
     await waitFor(() => expect(label()).toBeNull());
   });
 
+  it("stays visible without a gap when a newer request supersedes a visible one", async () => {
+    const first = deferred();
+    const second = deferred();
+    const spy = vi.spyOn(api, "renderPreview");
+    spy.mockReturnValueOnce(first.promise).mockReturnValue(second.promise);
+    render(PreviewPane);
+    await waitFor(() => expect(label()).not.toBeNull(), { timeout: 1000 });
+    // Sample the DOM on every mutation: a gap of any length is a blink.
+    let gaps = 0;
+    const mo = new MutationObserver(() => {
+      if (label() === null) gaps++;
+    });
+    mo.observe(region(), { childList: true, subtree: true, attributes: true });
+    subject.select("screen", "local/b");
+    await waitFor(() => expect(spy.mock.calls.length).toBeGreaterThanOrEqual(2));
+    await wait(400); // longer than the 250 ms delay
+    expect(gaps).toBe(0);
+    expect(label()).not.toBeNull();
+    first.resolve(okResponse());
+    second.resolve(okResponse());
+    await waitFor(() => expect(label()).toBeNull());
+    mo.disconnect();
+  });
+
+  it("stays visible across back-to-back renders where the next starts just after the last ends", async () => {
+    const ds = [];
+    vi.spyOn(api, "renderPreview").mockImplementation(() => {
+      const d = deferred();
+      ds.push(d);
+      return d.promise;
+    });
+    render(PreviewPane);
+    await waitFor(() => expect(label()).not.toBeNull(), { timeout: 1000 });
+    let gaps = 0;
+    const mo = new MutationObserver(() => {
+      if (label() === null) gaps++;
+    });
+    mo.observe(region(), { childList: true, subtree: true, attributes: true });
+    // The latest render ends and a new one starts moments later (a burst of
+    // renders is one slow wait to the user, not one per request).
+    ds.forEach((d) => d.resolve(okResponse()));
+    await wait(40);
+    subject.select("screen", "local/b");
+    await wait(400);
+    expect(gaps).toBe(0);
+    expect(label()).not.toBeNull();
+    ds.forEach((d) => d.resolve(okResponse()));
+    await waitFor(() => expect(label()).toBeNull());
+    mo.disconnect();
+  });
+
   it("shows in the empty frame when there is no previous image", async () => {
     vi.spyOn(api, "renderPreview").mockReturnValue(deferred().promise);
     render(PreviewPane);

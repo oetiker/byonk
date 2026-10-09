@@ -92,10 +92,23 @@
   // so fast renders do not flicker, and only the LATEST request may clear it
   // (same `renderSeq` ordering as Finding J): a superseded response resolving
   // late must not hide the indicator of the render still in flight.
+  //
+  // Once visible it must not blink: a burst of renders (one request ends,
+  // the next starts a moment later) is one wait to the user. Hiding is
+  // therefore deferred by BUSY_LINGER_MS, and a request starting inside that
+  // window keeps the indicator up. Only the first show of a burst is delayed.
   const BUSY_DELAY_MS = 250;
+  const BUSY_LINGER_MS = 150;
   let busy = $state(false);
   let busyTimer = null;
+  let lingerTimer = null;
   function startBusy() {
+    if (lingerTimer) {
+      // Still showing from the previous request: keep it, do not restart the delay.
+      clearTimeout(lingerTimer);
+      lingerTimer = null;
+      return;
+    }
     if (busy || busyTimer) return; // already showing, or already counting down
     busyTimer = setTimeout(() => {
       busyTimer = null;
@@ -105,7 +118,11 @@
   function endBusy() {
     clearTimeout(busyTimer);
     busyTimer = null;
-    busy = false;
+    if (!busy || lingerTimer) return; // never shown (or already hiding)
+    lingerTimer = setTimeout(() => {
+      lingerTimer = null;
+      busy = false;
+    }, BUSY_LINGER_MS);
   }
 
   // --- device frame -------------------------------------------------------
@@ -231,7 +248,10 @@
     channel?.postMessage({ url: blobUrl, width: size.width, height: size.height });
   }
 
-  onDestroy(() => clearTimeout(busyTimer));
+  onDestroy(() => {
+    clearTimeout(busyTimer);
+    clearTimeout(lingerTimer);
+  });
 
   onMount(() => {
     channel = new BroadcastChannel("byonk-preview");

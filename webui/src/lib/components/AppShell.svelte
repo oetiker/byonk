@@ -10,6 +10,7 @@
   import { auth } from "../state/auth.svelte.js";
   import { screens } from "../state/screens.svelte.js";
   import { subject } from "../state/subject.svelte.js";
+  import { configDraft } from "../state/configDraft.svelte.js";
   import { simulate } from "../state/simulate.svelte.js";
   import * as api from "../api.js";
 
@@ -56,6 +57,7 @@
   // empty repo list hides every screen -- there is then no way to open one
   // at all. Task 14's browser walk found exactly that.
   screens.load();
+  configDraft.load();
 
   // Spec §7's trap: switching subject must not discard open buffers.
   // `loadScreen()` resets every buffer, so it runs only when the subject is

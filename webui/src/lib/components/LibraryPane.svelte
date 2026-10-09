@@ -2,8 +2,8 @@
   import { screens } from "../state/screens.svelte.js";
   import { subject } from "../state/subject.svelte.js";
   import { editor } from "../state/editor.svelte.js";
+  import { configDraft } from "../state/configDraft.svelte.js";
   import * as api from "../api.js";
-  import { onMount } from "svelte";
   import { devicePanel } from "../render-request.js"; // the one device->panel lookup (ruling PF8)
   import { Button } from "$lib/ui/button/index.js";
 
@@ -54,22 +54,11 @@
     }
   }
 
-  // Which panel each device uses comes from the server: a device without
-  // `panel:` resolves through the headers it polls with (spec §5).
-  let usage = $state({ panels: {}, unseen: [] });
-  onMount(async () => {
-    try {
-      usage = await api.panelUsage();
-    } catch (e) {
-      screens.error = { op: "panel usage", message: e?.message ?? String(e) };
-    }
-  });
-
   function panelName(id) {
     return (screens.meta.panels ?? []).find((p) => p.id === id)?.name ?? id;
   }
   function devicePanelLabel(d) {
-    const id = devicePanel({ meta: screens.meta, usage }, d.id);
+    const id = devicePanel({ meta: screens.meta, usage: configDraft.usage }, d.id);
     return id ? panelName(id) : "panel unknown";
   }
   const rowClass = (on) =>

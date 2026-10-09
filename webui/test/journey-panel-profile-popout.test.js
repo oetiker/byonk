@@ -9,6 +9,7 @@ import { editor } from "../src/lib/state/editor.svelte.js";
 import { layout } from "../src/lib/state/layout.svelte.js";
 import { auth } from "../src/lib/state/auth.svelte.js";
 import { theme } from "../src/lib/state/theme.svelte.js";
+import { configDraft } from "../src/lib/state/configDraft.svelte.js";
 import * as api from "../src/lib/api.js";
 
 /**
@@ -70,6 +71,7 @@ beforeEach(() => {
   simulate.reset();
   simulate.error = null;
   subject.reset();
+  configDraft.reset();
   screens.repos = [];
   screens.list = [];
   screens.meta = { devices: [], panels: [], dither_algorithms: [] };
@@ -83,7 +85,8 @@ beforeEach(() => {
   vi.spyOn(api, "whoami").mockResolvedValue({ user: "u", via: "cookie", can_logout: true });
   vi.spyOn(api, "listFiles").mockResolvedValue([{ name: "script.lua", size: 1, text: true }]);
   vi.spyOn(api, "readFile").mockResolvedValue({ text: "-- lua", etag: '"1"' });
-  vi.spyOn(api, "panelUsage").mockResolvedValue({ panels: {}, unseen: [] }); // the Library loads it; not a render fetch
+  vi.spyOn(api, "panelUsage").mockResolvedValue({ panels: {}, unseen: [] }); // configDraft.load() fetches it; not a render fetch
+  vi.spyOn(api, "listOverrides").mockResolvedValue({ panels: [], devices: [], tuning_sessions: [] }); // likewise
 });
 
 afterEach(() => {

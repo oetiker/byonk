@@ -4,24 +4,21 @@
   import { simulate } from "../state/simulate.svelte.js";
   import { screens } from "../state/screens.svelte.js";
   import { subject } from "../state/subject.svelte.js";
+  import { configDraft } from "../state/configDraft.svelte.js";
   import { resolution, parseResolutionHeader } from "../state/resolution.svelte.js";
-  import { buildRenderRequest, previewSize } from "../render-request.js";
+  import { buildRenderRequest, previewSize, devicePanel } from "../render-request.js";
   import { Button } from "$lib/ui/button/index.js";
 
-  // Until Task 7 the draft comes from config as-is; Task 7 swaps in configDraft.
-  const metaDraft = {
-    panelWire(id) {
-      const p = (screens.meta.panels ?? []).find((x) => x.id === id);
-      return p ? { colors: p.colors, colors_actual: p.colors_actual ?? undefined, dither: p.dither ?? undefined } : {};
-    },
-    deviceWire(id) {
-      const d = (screens.meta.devices ?? []).find((x) => x.id === id);
-      return { screen: d?.screen, params: d?.params ?? {}, base: d?.base ?? {}, final: d?.final ?? {} };
-    },
+  // The render effect must not track the draft: a draft edit is debounced
+  // (P2-7) and driven by `configDraft.revision`, while a subject, target or
+  // simulated-input change renders at once. Reading the draft untracked keeps
+  // the two paths apart; `usage` stays tracked, a new sighting changes the size.
+  const draft = {
+    panelWire: (id) => untrack(() => configDraft.panelWire(id)),
+    deviceWire: (id) => untrack(() => configDraft.deviceWire(id)),
   };
-  const usage = { panels: {}, unseen: [] };
 
-  const size = $derived(previewSize({ subject, meta: screens.meta, usage }));
+  const size = $derived(previewSize({ subject, meta: screens.meta, usage: configDraft.usage }));
 
   const selectClass =
     "h-7 min-w-0 rounded-lg border border-input bg-transparent px-2 text-xs text-foreground";
@@ -236,7 +233,7 @@
     const seq = ++renderSeq;
     let req;
     try {
-      req = buildRenderRequest({ subject, draft: metaDraft, simulate, meta: screens.meta, usage });
+      req = buildRenderRequest({ subject, draft, simulate, meta: screens.meta, usage: configDraft.usage });
     } catch (e) {
       simulate.error = { op: "render", message: e.message };
       resolution.fail(e.message, subject.key);
@@ -300,6 +297,34 @@
     renderNow();
   });
 
+  // P2-7: draft edits render after the user pauses; nothing else waits.
+  const DRAFT_RENDER_DEBOUNCE_MS = 300;
+  let lastRevision = configDraft.revision;
+  $effect(() => {
+    const rev = configDraft.revision;
+    if (rev === lastRevision) return;
+    const id = setTimeout(() => {
+      lastRevision = rev;
+      renderNow();
+    }, DRAFT_RENDER_DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  });
+
+  // "Watch on" offers the devices that use this panel, as the server resolves
+  // them (explicit `panel:` or sighting); a watched device that does not is dropped.
+  const watchable = $derived(
+    subject.kind === "panel"
+      ? (screens.meta.devices ?? []).filter(
+          (d) => devicePanel({ meta: screens.meta, usage: configDraft.usage }, d.id) === subject.id,
+        )
+      : [],
+  );
+  $effect(() => {
+    if (subject.kind === "panel" && subject.watchDevice && !watchable.some((d) => d.id === subject.watchDevice)) {
+      subject.watchDevice = "";
+    }
+  });
+
   function popOut() {
     // Relative, and named. Both were proven under HA Ingress on 2026-09-09:
     // a root-absolute or origin-absolute URL leaves the HA iframe, and an
@@ -331,7 +356,7 @@
       <label for="preview-watch">watch on</label>
       <select id="preview-watch" class={selectClass} bind:value={subject.watchDevice}>
         <option value="">no device</option>
-        {#each screens.meta.devices ?? [] as d (d.id)}<option value={d.id}>{d.name ?? d.id}</option>{/each}
+        {#each watchable as d (d.id)}<option value={d.id}>{d.name ?? d.id}</option>{/each}
       </select>
     {/if}
     {#if screenInCharge}

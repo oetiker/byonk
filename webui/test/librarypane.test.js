@@ -3,6 +3,7 @@ import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/sv
 import LibraryPane from "../src/lib/components/LibraryPane.svelte";
 import { screens } from "../src/lib/state/screens.svelte.js";
 import { subject } from "../src/lib/state/subject.svelte.js";
+import { configDraft } from "../src/lib/state/configDraft.svelte.js";
 import * as api from "../src/lib/api.js";
 
 beforeEach(async () => {
@@ -14,6 +15,7 @@ beforeEach(async () => {
   // `screens` is a module singleton: reset the fields tests below mutate so
   // one test's selection or captured error can't leak into the next.
   subject.reset();
+  configDraft.reset();
   screens.error = null;
   vi.spyOn(api, "panelUsage").mockResolvedValue({ panels: {}, unseen: [] });
   vi.spyOn(api, "listRepos").mockResolvedValue([
@@ -110,6 +112,7 @@ describe("LibraryPane with more than one writable repo", () => {
     cleanup();
     vi.restoreAllMocks();
     subject.reset();
+    configDraft.reset();
     screens.error = null;
     vi.spyOn(api, "panelUsage").mockResolvedValue({ panels: {}, unseen: [] });
   vi.spyOn(api, "listRepos").mockResolvedValue([
@@ -188,7 +191,7 @@ describe("LibraryPane subjects", () => {
       devices: [{ id: "kitchen", name: "Kitchen", panel: "e1004" }, { id: "attic", name: null, panel: null }],
       dither_algorithms: [],
     };
-    vi.spyOn(api, "panelUsage").mockResolvedValue({ panels: { e1004: ["kitchen"] }, unseen: ["attic"] });
+    configDraft.usage = { panels: { e1004: ["kitchen"] }, unseen: ["attic"] };
   });
 
   it("lists panels and devices and makes each the subject", async () => {
@@ -207,9 +210,19 @@ describe("LibraryPane subjects", () => {
 
   it("resolves a device without an explicit panel through the server's usage", async () => {
     screens.meta = { ...screens.meta, devices: [{ id: "attic", name: "Attic", panel: null }] };
-    api.panelUsage.mockResolvedValue({ panels: { e1004: ["attic"] }, unseen: [] });
+    configDraft.usage = { panels: { e1004: ["attic"] }, unseen: [] };
     render(LibraryPane);
     expect(await dom.findByRole("button", { name: "Attic \u00b7 reTerminal E1004" })).toBeTruthy();
+  });
+
+  it("does not fetch usage itself; configDraft owns it and its failure never lands on screens.error", async () => {
+    const usage = vi.spyOn(api, "panelUsage").mockRejectedValue(new Error("500"));
+    render(LibraryPane);
+    await Promise.resolve();
+    expect(usage).not.toHaveBeenCalled();
+    await configDraft.loadUsage();
+    expect(screens.error).toBe(null);
+    expect(configDraft.error.op).toBe("panel usage");
   });
 
   it("offers no create or delete for panels and devices", () => {

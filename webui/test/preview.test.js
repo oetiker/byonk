@@ -5,6 +5,7 @@ import { screens } from "../src/lib/state/screens.svelte.js";
 import { subject } from "../src/lib/state/subject.svelte.js";
 import { simulate } from "../src/lib/state/simulate.svelte.js";
 import { resolution } from "../src/lib/state/resolution.svelte.js";
+import { configDraft } from "../src/lib/state/configDraft.svelte.js";
 import * as api from "../src/lib/api.js";
 
 beforeEach(() => {
@@ -19,6 +20,7 @@ beforeEach(() => {
   // leak into the next (same reasoning as filespane.test.js).
   subject.reset();
   resolution.reset();
+  configDraft.reset();
   simulate.reset();
   simulate.error = null;
 });
@@ -382,5 +384,91 @@ describe("PreviewPane", () => {
     subject.watchDevice = "kitchen";
     await waitFor(() => expect(bodies.at(-1).device).toBe("kitchen"));
     expect(bodies.at(-1).panel).toBe("x");
+  });
+});
+
+describe("PreviewPane with the draft store (Task 7)", () => {
+  const META = {
+    panels: [
+      { id: "e1004", name: "E1004", width: 800, height: 480, colors: "#000000,#FFFFFF", colors_actual: null, dither: null },
+      { id: "x", name: "X", width: 1600, height: 1200, colors: "#000000,#FFFFFF", colors_actual: null, dither: null },
+    ],
+    devices: [
+      { id: "kitchen", name: "Kitchen", screen: "local/a", panel: "e1004", params: {}, base: {}, final: null },
+      { id: "attic", name: "Attic", screen: "local/a", panel: null, params: {}, base: {}, final: null },
+    ],
+    dither_algorithms: [],
+  };
+
+  function spyRender() {
+    return vi.spyOn(api, "renderPreview").mockResolvedValue({
+      ok: true,
+      headers: { get: () => null },
+      blob: async () => new Blob(["png"], { type: "image/png" }),
+    });
+  }
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  beforeEach(() => {
+    cleanup();
+    screens.meta = structuredClone(META);
+    configDraft.reset();
+  });
+
+  it("a draft edit re-renders only after the debounce", async () => {
+    const r = spyRender();
+    subject.select("panel", "e1004");
+    render(PreviewPane);
+    await waitFor(() => expect(r).toHaveBeenCalledTimes(1));
+    configDraft.set("panel", "e1004", "panel", "strength", 0.5);
+    await wait(100);
+    expect(r).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(r).toHaveBeenCalledTimes(2), { timeout: 1500 });
+    expect(r.mock.calls[1][0].draft.panel.dither).toEqual({ strength: 0.5 });
+  });
+
+  it("a burst of draft edits renders once", async () => {
+    const r = spyRender();
+    subject.select("panel", "e1004");
+    render(PreviewPane);
+    await waitFor(() => expect(r).toHaveBeenCalledTimes(1));
+    configDraft.set("panel", "e1004", "panel", "strength", 0.4);
+    await wait(50);
+    configDraft.set("panel", "e1004", "panel", "strength", 0.6);
+    await waitFor(() => expect(r).toHaveBeenCalledTimes(2), { timeout: 1500 });
+    await wait(450);
+    expect(r).toHaveBeenCalledTimes(2);
+    expect(r.mock.calls[1][0].draft.panel.dither).toEqual({ strength: 0.6 });
+  });
+
+  it("a subject switch renders at once, without waiting for the debounce", async () => {
+    const r = spyRender();
+    subject.select("panel", "e1004");
+    render(PreviewPane);
+    await waitFor(() => expect(r).toHaveBeenCalledTimes(1));
+    subject.select("panel", "x");
+    await waitFor(() => expect(r).toHaveBeenCalledTimes(2), { timeout: 150 });
+    expect(r.mock.calls[1][0].panel).toBe("x");
+  });
+
+  it("a device without an explicit panel renders at the size of the panel it was sighted on", async () => {
+    const r = spyRender();
+    configDraft.usage = { panels: { x: ["attic"] }, unseen: [] };
+    subject.select("device", "attic");
+    render(PreviewPane);
+    await waitFor(() => expect(r).toHaveBeenCalled());
+    expect(r.mock.calls[0][0]).toMatchObject({ device: "attic", width: 1600, height: 1200 });
+    expect(screen.getByTestId("preview-size").textContent).toContain("1600");
+  });
+
+  it("lists only the devices that use the panel under 'watch on', and drops a watched device that does not", async () => {
+    spyRender();
+    configDraft.usage = { panels: { e1004: ["kitchen"], x: ["attic"] }, unseen: [] };
+    subject.watchDevice = "attic";
+    subject.select("panel", "e1004");
+    render(PreviewPane);
+    const options = () => [...screen.getByLabelText("watch on").querySelectorAll("option")].map((o) => o.value);
+    expect(options()).toEqual(["", "kitchen"]);
+    await waitFor(() => expect(subject.watchDevice).toBe(""));
   });
 });

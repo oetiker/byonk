@@ -51,6 +51,16 @@
         resolution.setting("colors_actual")?.from === "screen"),
   );
 
+  // The server draws in measured colours only when some resolve for this
+  // render (`resolve_use_actual`); otherwise the checkbox cannot change a
+  // single pixel. Say so instead of leaving a toggle that appears dead.
+  // Only a payload that belongs to the current subject can say it.
+  const noMeasured = $derived(
+    resolution.subjectKey === subject.key &&
+      resolution.payload != null &&
+      !resolution.setting("colors_actual")?.effective,
+  );
+
   let blobUrl = $state(null);
   let channel;
 
@@ -400,8 +410,9 @@
     {#if screenInCharge}
       <span data-testid="screen-in-charge" class="text-[var(--text-muted)]">the screen sets its own colours</span>
     {/if}
-    <label class="ml-auto flex items-center gap-1">
-      <input type="checkbox" bind:checked={simulate.use_actual} /> show measured inks
+    <label class="ml-auto flex items-center gap-1 {noMeasured ? 'opacity-50' : ''}"
+           title={noMeasured ? "No measured colours resolve for this render, so there is nothing to show. Pick a panel or device with colors_actual." : undefined}>
+      <input type="checkbox" bind:checked={simulate.use_actual} disabled={noMeasured} /> show measured inks
     </label>
     <Button type="button" size="xs" variant="outline" onclick={popOut}>Pop out</Button>
   </div>

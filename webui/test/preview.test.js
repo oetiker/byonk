@@ -571,3 +571,42 @@ describe("PreviewPane with the draft store (Task 7)", () => {
     expect(screen.queryByTestId("screen-in-charge")).not.toBeNull();
   });
 });
+
+describe("PreviewPane measured inks", () => {
+  const blob = new Blob(["png"], { type: "image/png" });
+  const answerWith = (actual) =>
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      blob: async () => blob,
+      headers: { get: () => JSON.stringify({ colors_actual: { effective: actual, from: "fallback", rungs: {} } }) },
+    });
+  const box = () => screen.getByRole("checkbox", { name: /measured inks/i });
+
+  it("toggling 'show measured inks' issues a new render carrying the new use_actual", async () => {
+    const fetchSpy = answerWith("#111,#eee");
+    subject.select("screen", "local/a");
+    render(PreviewPane);
+    const bodies = () => fetchSpy.mock.calls.map(([, init]) => JSON.parse(init.body).view.use_actual);
+    await waitFor(() => expect(bodies()).toEqual([true]));
+    await fireEvent.click(box());
+    await waitFor(() => expect(bodies()).toEqual([true, false]));
+    await fireEvent.click(box());
+    await waitFor(() => expect(bodies()).toEqual([true, false, true]));
+  });
+
+  it("is disabled, and says why, when no measured colours resolve (the toggle could not change the picture)", async () => {
+    answerWith(null);
+    subject.select("screen", "local/a");
+    render(PreviewPane);
+    await waitFor(() => expect(box().disabled).toBe(true));
+    expect(box().closest("label").getAttribute("title")).toMatch(/no measured colours/i);
+  });
+
+  it("stays enabled when measured colours resolve", async () => {
+    answerWith("#111,#eee");
+    subject.select("screen", "local/a");
+    render(PreviewPane);
+    await waitFor(() => expect(resolution.payload).not.toBe(null));
+    expect(box().disabled).toBe(false);
+  });
+});

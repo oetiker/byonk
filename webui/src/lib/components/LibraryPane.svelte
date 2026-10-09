@@ -278,7 +278,7 @@
 
   {#snippet screensBody()}
     {#each screens.grouped as g (g.handle)}
-      <div class="shrink-0 px-2 pt-1 font-mono text-[10px] uppercase text-[var(--text-muted)]">
+      <div class="mx-2 mt-3 shrink-0 cursor-default select-none border-b border-[var(--border-color)] pb-0.5 font-mono text-[10px] uppercase text-[var(--text-muted)] first:mt-1">
         {g.handle}{#if !g.writable}<span class="ml-1">read-only</span>{/if}
       </div>
       {#each g.screens as s (s.ref)}

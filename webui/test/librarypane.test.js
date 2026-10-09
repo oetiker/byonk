@@ -500,4 +500,17 @@ describe("LibraryPane headings and chevrons", () => {
     expect(header("Screens").className).toMatch(/\bpy-1\b/);
     expect(header("Screens").closest("section").className).toMatch(/min-h-6/);
   });
+
+  it("sub-group labels are headings: spaced, ruled below, not selectable, not interactive", () => {
+    render(LibraryPane);
+    const label = screen.getByText("local");
+    const cls = label.className.split(/\s+/);
+    expect(cls).toContain("select-none");
+    expect(cls).toContain("cursor-default");
+    expect(cls).toContain("border-b");
+    expect(cls.some((c) => /^pt-[2-9]/.test(c) || /^mt-/.test(c))).toBe(true);
+    expect(label.tagName).not.toBe("BUTTON");
+    expect(label.getAttribute("tabindex")).toBe(null);
+    expect(cls.join(" ")).not.toMatch(/hover:/);
+  });
 });

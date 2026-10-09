@@ -33,6 +33,18 @@ describe("ConfigEditor, panel schema", () => {
     expect(dom.getByText("(2 not seen since byonk started)")).toBeTruthy();
   });
 
+  it("puts the action bar above the form, outside the scrolling body", () => {
+    render(ConfigEditor);
+    const bar = dom.getByTestId("config-actions");
+    const body = dom.getByTestId("config-body");
+    const save = dom.getByRole("button", { name: "Save" });
+    expect(bar.contains(save)).toBe(true);
+    expect(bar.contains(dom.getByText("● 0 unsaved"))).toBe(true);
+    expect(body.contains(save)).toBe(false);
+    expect(bar.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(dom.queryByRole("contentinfo")).toBeNull();
+  });
+
   it("uses the singular for one device", () => {
     configDraft.usage = { panels: { e1004: ["kitchen"] }, unseen: [] };
     render(ConfigEditor);

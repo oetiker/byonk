@@ -69,7 +69,23 @@
   });
 </script>
 
-<div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto p-3 text-sm" data-testid="config-editor">
+<div class="flex min-h-0 min-w-0 flex-1 flex-col text-sm" data-testid="config-editor">
+  <div data-testid="config-actions" role="toolbar" aria-label="Actions"
+       class="flex min-w-0 shrink-0 flex-wrap items-center gap-2 border-b border-[var(--border-color)] bg-[var(--bg-color)] px-2 py-0.5 text-xs">
+    <span>● {dirtyCount} unsaved</span>
+    {#if invalid.length}
+      <span role="alert" class="text-xs text-[var(--danger-color)]">not a number: {invalid.join(", ")} — finish or clear it to Save.</span>
+    {/if}
+    <Button type="button" size="xs" disabled={Object.keys(pushBody).length === 0 || invalid.length > 0} onclick={push}>
+      {kind === "panel" ? "Push to panel" : "Push to device"}
+    </Button>
+    <Button type="button" size="xs" variant="outline" disabled={!canSave} onclick={() => canSave && configDraft.save(kind, id)}>Save</Button>
+    <Button type="button" size="xs" variant="ghost" disabled={dirtyCount === 0 && !live} onclick={() => configDraft.discard(kind, id)}>Discard</Button>
+    {#if unpushable.length}
+      <span class="text-xs text-[var(--text-muted)]">applies on Save only: {unpushable.join(", ")}</span>
+    {/if}
+  </div>
+  <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto p-3" data-testid="config-body">
   <h2 class="font-medium">Edit — {kind} {displayName}</h2>
 
   {#if kind === "panel"}
@@ -143,18 +159,5 @@
     </section>
   {/each}
 
-  <footer class="sticky bottom-0 flex flex-wrap items-center gap-2 border-t border-[var(--border-color)] bg-[var(--bg-color)] py-2">
-    <span>● {dirtyCount} unsaved</span>
-    {#if invalid.length}
-      <span role="alert" class="text-xs text-[var(--danger-color)]">not a number: {invalid.join(", ")} — finish or clear it to Save.</span>
-    {/if}
-    <Button type="button" disabled={Object.keys(pushBody).length === 0 || invalid.length > 0} onclick={push}>
-      {kind === "panel" ? "Push to panel" : "Push to device"}
-    </Button>
-    <Button type="button" variant="outline" disabled={!canSave} onclick={() => canSave && configDraft.save(kind, id)}>Save</Button>
-    <Button type="button" variant="ghost" disabled={dirtyCount === 0 && !live} onclick={() => configDraft.discard(kind, id)}>Discard</Button>
-    {#if unpushable.length}
-      <span class="text-xs text-[var(--text-muted)]">applies on Save only: {unpushable.join(", ")}</span>
-    {/if}
-  </footer>
+  </div>
 </div>

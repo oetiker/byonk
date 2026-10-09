@@ -143,6 +143,16 @@ impl<V: Clone> TimedMap<V> {
     }
 }
 
+/// What a configured device last told byonk about its hardware. Kept so the
+/// dev UI can be told which devices resolve to a panel through `match:` --
+/// the headers are only known at poll time (controller ruling R-F). In
+/// memory only: a restart forgets it, and the UI says so.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sighting {
+    pub board: Option<String>,
+    pub model: String,
+}
+
 /// Runtime overrides set by the dev UI and consumed by production handlers.
 ///
 /// `panels` is keyed by **panel config key**: a calibration belongs to the
@@ -151,6 +161,9 @@ impl<V: Clone> TimedMap<V> {
 /// device's values over the panel's (plan ruling P1-3).
 #[derive(Clone, Default)]
 pub struct DevOverrides {
+    /// device_config_key -> the Board/Model headers of its last poll. Not an
+    /// override: dev-UI bookkeeping `/api/display` feeds.
+    pub sightings: Arc<RwLock<HashMap<String, Sighting>>>,
     pub panels: TimedMap<CascadeValues>,
     pub devices: TimedMap<CascadeValues>,
     /// device_config_key -> when the dev UI last touched this tuning session.

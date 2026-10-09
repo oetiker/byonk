@@ -768,11 +768,25 @@ pub async fn handle_render(
         .final_rung
         .clone()
         .unwrap_or_else(|| device.map(|d| d.device_final()).unwrap_or_default());
-    let panel_key: Option<String> = req
-        .panel
-        .clone()
-        .or_else(|| device.and_then(|d| d.panel.clone()))
-        .filter(|k| config.get_panel(k).is_some());
+    // Explicit request panel, else the panel `/api/display` would resolve for
+    // this device -- remembered Board/Model included (plan ruling P1-6).
+    let panel_key: Option<String> = match req.panel.clone() {
+        Some(p) => Some(p),
+        None => match device_key
+            .as_deref()
+            .and_then(|k| config.devices.get(k).map(|d| (k, d)))
+        {
+            Some((k, d)) => {
+                let sightings = state.dev_overrides.sightings.read().await;
+                match display::resolve_device_panel(&config, d, sightings.get(k)) {
+                    display::PanelResolution::Panel(p) => Some(p),
+                    _ => None,
+                }
+            }
+            None => None,
+        },
+    }
+    .filter(|k| config.get_panel(k).is_some());
     let panel_cfg = panel_key.as_deref().and_then(|name| config.get_panel(name));
     // The override rung: the request's own ad-hoc values over whatever a
     // Push made live (plan ruling P1-4). Reading only: this handler writes
@@ -1045,6 +1059,40 @@ fn log_render_warnings(report: &Resolution, req: &RenderRequest) {
     }
 }
 
+/// `GET /dev/api/panel-usage`.
+#[derive(Debug, Serialize)]
+pub struct PanelUsageResponse {
+    /// Every configured panel -> the device keys resolving to it.
+    pub panels: std::collections::BTreeMap<String, Vec<String>>,
+    /// Devices without `panel:` that have not polled since byonk started.
+    pub unseen: Vec<String>,
+}
+
+/// Which devices use which panel, as `/api/display` would resolve them.
+pub async fn handle_panel_usage(State(state): State<AppState>) -> Json<PanelUsageResponse> {
+    use crate::api::display::{resolve_device_panel, PanelResolution};
+    let config = state.config.load();
+    let sightings = state.dev_overrides.sightings.read().await;
+    let mut panels: std::collections::BTreeMap<String, Vec<String>> = config
+        .panels
+        .keys()
+        .map(|k| (k.clone(), Vec::new()))
+        .collect();
+    let mut unseen = Vec::new();
+    for (key, device) in &config.devices {
+        match resolve_device_panel(&config, device, sightings.get(key)) {
+            PanelResolution::Panel(p) => panels.entry(p).or_default().push(key.clone()),
+            PanelResolution::Unseen => unseen.push(key.clone()),
+            PanelResolution::NoPanel => {}
+        }
+    }
+    for list in panels.values_mut() {
+        list.sort();
+    }
+    unseen.sort();
+    Json(PanelUsageResponse { panels, unseen })
+}
+
 /// Everything under `/dev`. Protected routes get `require_dev` as a route
 /// layer; `/login` and `/logout` stay open. The hand-written UI's login page
 /// used to need an open `/dev.css` route alongside them (so it could style
@@ -1062,6 +1110,7 @@ pub fn dev_router(state: &AppState) -> Router<AppState> {
         .route("/render", post(handle_render))
         .route("/resolve-mac", get(handle_resolve_mac))
         .route("/overrides", get(handle_list_overrides))
+        .route("/panel-usage", get(handle_panel_usage))
         .route(
             "/overrides/devices/{device}",
             put(handle_put_device_override).delete(handle_delete_device_override),

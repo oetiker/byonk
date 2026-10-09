@@ -518,6 +518,7 @@ than a redirect when you are not admitted.
 | `GET /dev/api/resolve-mac` | Resolve a MAC or registration code to that device's screen and params |
 | `PUT /dev/api/panel-colors/{panel}`, `DELETE /dev/api/panel-colors/{panel}` | Set and clear a panel's temporary measured-colour override |
 | `POST /dev/api/panel-colors/{panel}/save` | Write the override into `config.yaml` as that panel's `colors_actual`, then clear it |
+| `GET /dev/api/panel-usage` | Per panel, the devices that resolve to it (explicit `panel:`, or the Board/Model headers of their last poll); `unseen` lists devices without `panel:` that have not polled since byonk started |
 | `PUT /dev/api/tuning-session/{device}`, `DELETE /dev/api/tuning-session/{device}` | Start or refresh, and end, a device's faster tuning-refresh session (see [Tune: colour calibration](#tune-colour-calibration)) |
 | `GET /dev/api/whoami` | Who the server thinks you are, and whether you can log out |
 

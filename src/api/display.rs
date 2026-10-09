@@ -365,6 +365,35 @@ pub fn resolve_panel<'a>(
     (None, None, None)
 }
 
+/// Where a configured device's panel comes from without the device in hand.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PanelResolution {
+    /// The panel config key.
+    Panel(String),
+    /// Resolvable, and it resolves to no panel.
+    NoPanel,
+    /// No explicit `panel:` and not seen polling since byonk started.
+    Unseen,
+}
+
+/// The panel `/api/display` would pick for `device`: its explicit `panel:`,
+/// else the Board header and then the Model header of its last poll.
+pub fn resolve_device_panel(
+    config: &AppConfig,
+    device: &crate::models::DeviceConfig,
+    sighting: Option<&crate::server::Sighting>,
+) -> PanelResolution {
+    let (board, model) = match (&device.panel, sighting) {
+        (Some(_), _) => (None, ""),
+        (None, Some(s)) => (s.board.as_deref(), s.model.as_str()),
+        (None, None) => return PanelResolution::Unseen,
+    };
+    match resolve_panel(config, device.panel.as_deref(), board, model).1 {
+        Some(key) => PanelResolution::Panel(key),
+        None => PanelResolution::NoPanel,
+    }
+}
+
 /// Get display content for a device
 ///
 /// Returns JSON with an image_url that the device should fetch separately.
@@ -703,6 +732,23 @@ pub async fn handle_display<R: DeviceRegistry>(
             }
         }
     };
+    // Remember what this configured device is, so the dev UI can tell which
+    // devices resolve to a panel via Board/Model. Read first: the common case
+    // (nothing changed) then never takes the write lock on the poll path.
+    if let Some(ref key) = device_entry_key {
+        let sighting = crate::server::Sighting {
+            board: board_header.clone(),
+            model: model_str.to_string(),
+        };
+        let unchanged = dev_overrides.sightings.read().await.get(key) == Some(&sighting);
+        if !unchanged {
+            dev_overrides
+                .sightings
+                .write()
+                .await
+                .insert(key.clone(), sighting);
+        }
+    }
     let device_config_panel = device_config.and_then(|dc| dc.panel.clone());
     let device_config_colors = device_config.and_then(|dc| dc.colors.clone());
 

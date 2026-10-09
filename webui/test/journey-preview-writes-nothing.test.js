@@ -91,7 +91,6 @@ describe("spec §2 rule 2: the Preview panel never writes anything", () => {
     await fireEvent.click(dom.getByRole("button", { name: "a" }));
     const t = document.querySelector("#preview-target");
     t.value = "panel:x"; await fireEvent.change(t);
-    await fireEvent.click(dom.getByRole("button", { name: /Simulated inputs/ }));
     const b = await waitFor(() => document.querySelector("#sim-battery"));
     b.value = "3.7"; await fireEvent.input(b);
 

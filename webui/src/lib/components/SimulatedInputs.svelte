@@ -37,8 +37,11 @@
 </script>
 
 <!-- Spec §1: this block scrolls inside whatever height it is given, and
-     never overlaps the render. -->
-<div class="flex flex-col gap-3 overflow-auto min-h-0 p-3 text-sm" data-testid="simulated-inputs">
+     never overlaps the render. `h-full` is what makes that true: the slot
+     it sits in (SplitPane's second pane) has a fixed height and clips its
+     overflow, so without a height of its own the block was cut off at the
+     bottom instead of scrolling. -->
+<div class="flex h-full flex-col gap-3 overflow-auto min-h-0 p-3 text-sm" data-testid="simulated-inputs">
   <div class="flex flex-col gap-1.5">
     <Label for="sim-battery">Battery (V)</Label>
     <Input

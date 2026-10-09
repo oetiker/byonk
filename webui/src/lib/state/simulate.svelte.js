@@ -10,7 +10,6 @@ const DEFAULTS = {
   timestamp: "",
   timeLocked: false,
   params: "{}",
-  expanded: false,
 };
 
 /** "" (untouched text field), null (cleared number field) or undefined. */
@@ -27,8 +26,6 @@ class Simulate {
   timestamp = $state(DEFAULTS.timestamp);
   timeLocked = $state(DEFAULTS.timeLocked);
   params = $state(DEFAULTS.params);
-  /** Whether the Simulated inputs drawer is open. */
-  expanded = $state(DEFAULTS.expanded);
 
   reset() {
     for (const [k, v] of Object.entries(DEFAULTS)) this[k] = v;

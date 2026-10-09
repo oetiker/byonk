@@ -386,11 +386,6 @@
       </div>
     </div>
   </div>
-  <button type="button" class="flex items-center gap-2 border-t border-[var(--border-color)] px-2 py-1 text-xs"
-          aria-expanded={simulate.expanded} onclick={() => (simulate.expanded = !simulate.expanded)}>
-    {simulate.expanded ? "▾" : "▸"} Simulated inputs
-    {#if simulate.pending}<span data-testid="sim-badge" class="text-[var(--danger-color)]">not saved</span>{/if}
-  </button>
 </div>
 
 {#if lensVisible}

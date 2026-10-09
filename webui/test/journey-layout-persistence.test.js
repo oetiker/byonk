@@ -90,9 +90,7 @@ beforeEach(() => {
   editor.reset();
   editor.files = [];
   subject.reset();
-  // The y split holds the Simulated inputs drawer; it only exists while open.
   simulate.reset();
-  simulate.expanded = true;
   screens.repos = [];
   screens.list = [];
   screens.meta = { devices: [], panels: [], dither_algorithms: [] };

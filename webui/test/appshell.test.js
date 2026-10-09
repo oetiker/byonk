@@ -50,6 +50,12 @@ afterEach(() => {
 });
 
 describe("AppShell", () => {
+  it("always shows the simulated inputs under the preview, with no toggle", () => {
+    render(AppShell);
+    expect(screen.getByTestId("simulated-inputs")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Simulated inputs/ })).toBeNull();
+  });
+
   it("applies a persisted split size on first paint, not only after mount", () => {
     localStorage.setItem(
       STORAGE_KEY,

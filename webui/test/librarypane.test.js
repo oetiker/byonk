@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { editor } from "../src/lib/state/editor.svelte.js";
@@ -14,6 +14,11 @@ async function answer(label, text) {
   await fireEvent.input(input, { target: { value: text } });
   await fireEvent.keyDown(input, { key: "Enter" });
 }
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 beforeEach(async () => {
   localStorage.clear();
@@ -453,5 +458,25 @@ describe("LibraryPane accordion sections", () => {
     subject.select("screen", "local/a");
     await tick();
     expect(header("Screens")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  // jsdom has no layout, so the squashed-rows defect (rows shrinking inside a
+  // height-limited flex column) is guarded by its class contract: the scrolling
+  // body must not be a flex container, and rows must keep their natural height.
+  it("keeps rows at natural height: scrolling body is not a flex column, rows are blocks", () => {
+    render(LibraryPane);
+    const row = screen.getByRole("button", { name: "a" });
+    const body = row.closest("div.overflow-auto");
+    expect(body).toBeTruthy();
+    expect(body.className.split(/\s+/)).not.toContain("flex");
+    expect(row.className).toMatch(/\bblock\b/);
+    expect(row.className).toMatch(/\bshrink-0\b/);
+  });
+
+  it("clips an expanded section and gives it a header-height minimum", () => {
+    render(LibraryPane);
+    const sec = header("Screens").closest("section");
+    expect(sec.className).toMatch(/overflow-hidden/);
+    expect(sec.className).toMatch(/min-h-6/);
   });
 });

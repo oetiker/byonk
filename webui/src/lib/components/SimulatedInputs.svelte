@@ -42,6 +42,9 @@
      overflow, so without a height of its own the block was cut off at the
      bottom instead of scrolling. -->
 <div class="flex h-full flex-col gap-3 overflow-auto min-h-0 p-3 text-sm" data-testid="simulated-inputs">
+  {#if simulate.pending}
+    <span data-testid="sim-badge" class="text-xs text-[var(--danger-color)]">not saved</span>
+  {/if}
   <div class="flex flex-col gap-1.5">
     <Label for="sim-battery">Battery (V)</Label>
     <Input

@@ -288,7 +288,7 @@
   }
 
   // Re-render whenever the screen or any simulate control changes. This is
-  // what makes the pop-out follow a drawer change.
+  // what makes the pop-out follow a simulated-input change.
   $effect(() => {
     subject.key;
     subject.target;

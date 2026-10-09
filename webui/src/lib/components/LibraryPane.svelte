@@ -131,7 +131,7 @@
     return id ? panelName(id) : "panel unknown";
   }
   const rowClass = (on) =>
-    "truncate px-2 py-0.5 text-left hover:bg-[var(--panel-bg)] " +
+    "block w-full shrink-0 truncate px-2 py-0.5 text-left hover:bg-[var(--panel-bg)] " +
     (on ? "bg-[var(--accent-color)] text-white" : "");
 
   function newScreen() {
@@ -259,7 +259,7 @@
   {#snippet section(key, label, body)}
     <!-- Expanded sections share the pane height (flex-1 on a zero basis) and
          scroll on their own; a collapsed one shrinks to its header. -->
-    <section class="flex min-h-0 flex-col border-t border-[var(--border-color)] {isOpen(key) ? 'flex-1 basis-0' : 'shrink-0'}"
+    <section class="flex flex-col border-t border-[var(--border-color)] {isOpen(key) ? 'min-h-6 flex-1 basis-0 overflow-hidden' : 'shrink-0'}"
              aria-label={label}>
       <button type="button" aria-expanded={isOpen(key)}
               class="flex w-full shrink-0 items-center gap-1 bg-[var(--panel-bg)] px-1.5 py-1 text-left text-[11px] font-bold uppercase tracking-wide hover:bg-[var(--border-color)]"
@@ -267,14 +267,14 @@
         <span aria-hidden="true" class="w-3 text-center">{isOpen(key) ? "▾" : "▸"}</span>{label}
       </button>
       {#if isOpen(key)}
-        <div class="flex min-h-0 flex-1 flex-col overflow-auto pb-1">{@render body()}</div>
+        <div class="min-h-0 flex-1 overflow-auto pb-1">{@render body()}</div>
       {/if}
     </section>
   {/snippet}
 
   {#snippet screensBody()}
     {#each screens.grouped as g (g.handle)}
-      <div class="px-2 pt-1 font-mono text-[10px] uppercase text-[var(--text-muted)]">
+      <div class="shrink-0 px-2 pt-1 font-mono text-[10px] uppercase text-[var(--text-muted)]">
         {g.handle}{#if !g.writable}<span class="ml-1">read-only</span>{/if}
       </div>
       {#each g.screens as s (s.ref)}

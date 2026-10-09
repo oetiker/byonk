@@ -340,7 +340,7 @@ async fn the_old_panel_colors_save_route_is_gone() {
 }
 
 /// A flow-style panel (`og: {…}`) survives a Save that removes or changes a
-/// key inside it: the panel is rewritten as a block, never dropped.
+/// key inside it: the panel stays a flow mapping, never dropped.
 #[tokio::test]
 async fn saving_a_flow_style_panel_keeps_the_panel() {
     const FLOW: &str = "\

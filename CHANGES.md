@@ -391,6 +391,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Saving a device no longer rewrites its whole entry in `config.yaml`.**
+  A device saved from the dev UI, the admin API or Home Assistant used to be
+  moved to the top of `devices:` and rewritten from scratch: comments inside
+  it were dropped, the comment above it was left behind on the wrong device,
+  and a one-line `{…}` entry became a block. Byonk now edits the entry where
+  it is and changes only the settings you changed, like panel Save already
+  did. A new device is added at the end of `devices:`.
+
 - **Looking at a preview no longer re-tunes the display you are previewing.**
   When the dev editor's preview had a device selected, the render request wrote
   its dither algorithm and its tuning numbers into the server's override table

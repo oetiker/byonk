@@ -380,8 +380,7 @@ fn clear_cascade_field(v: &mut CascadeValues, field: &str) {
 /// Applied to the existing entry BEFORE the body's sets are merged over it
 /// (ruling C3), so a cleared field is not carried over, and a key that is also
 /// set in the same request ends up set. `device_block` omits a cleared field,
-/// and `unmanaged_device_keys` cannot put it back because every clearable key
-/// is managed.
+/// and [`touched_keys`] names it, so the write removes it from the entry.
 fn apply_clear(merged: &mut DeviceWrite, clear: &[String]) {
     for name in clear {
         match name.as_str() {
@@ -420,9 +419,9 @@ fn apply_clear(merged: &mut DeviceWrite, clear: &[String]) {
     }
 }
 
-/// Build the YAML mapping for a device block from the provided fields.
-/// The device keys `device_block` writes for itself. Anything else found in an
-/// existing entry is carried across verbatim by [`unmanaged_device_keys`].
+/// The device keys `device_block` writes for itself, and so the keys a patch
+/// can touch ([`touched_keys`]). Anything else in an existing entry is never
+/// read or written by a patch, so it stays exactly as written.
 ///
 /// Kept as a list rather than derived from `DeviceWrite`'s fields because the
 /// mapping is not one-to-one: `key` is the entry name, not a key inside it.
@@ -448,7 +447,8 @@ const MANAGED_DEVICE_KEYS: [&str; 17] = [
 
 /// The settings `clear` accepts: every managed key except `screen`, which a
 /// device must always have. `error_clamp` is deliberately absent — it is not
-/// managed, so it is preserved verbatim and keeps reporting its deprecation.
+/// managed, so a patch never touches it and it keeps reporting its
+/// deprecation.
 ///
 /// A test asserts this stays exactly `MANAGED_DEVICE_KEYS` minus `screen`, so
 /// a field added to one list cannot go missing from the other.
@@ -471,31 +471,26 @@ const CLEARABLE_DEVICE_KEYS: [&str; 16] = [
     "final",
 ];
 
-/// Every key of an existing device entry that this writer does not model.
+/// The device keys this PATCH addresses: every [`MANAGED_DEVICE_KEYS`] entry
+/// the body sets (non-null when serialised; `final_rung` serialises as
+/// `final`), plus the first segment of every `clear` name (`gamut.knee` ->
+/// `gamut`, `final.dither` -> `final`).
 ///
-/// `upsert_device` replaces the whole block, so without this a patch deletes
-/// every setting `DeviceWrite` happens not to carry — `temperature_profile`,
-/// `maximum_compatibility`, `min_png_bytes` and the dither tuning knobs among
-/// them. That failure is silent and only shows up on the glass hours later,
-/// which is exactly how it was found. Preserving by exclusion rather than by
-/// enumeration means a field added to `DeviceConfig` tomorrow survives without
-/// anyone remembering to come back here.
-fn unmanaged_device_keys(yaml: &str, key: &str) -> serde_yaml::Mapping {
-    let mut out = serde_yaml::Mapping::new();
-    let Ok(root) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
-        return out;
-    };
-    let Some(block) = root
-        .get("devices")
-        .and_then(|d| d.get(key))
-        .and_then(|d| d.as_mapping())
-    else {
-        return out;
-    };
-    for (k, v) in block {
-        let managed = k.as_str().is_some_and(|s| MANAGED_DEVICE_KEYS.contains(&s));
-        if !managed {
-            out.insert(k.clone(), v.clone());
+/// Only these keys are written back, so a patch leaves every other line of
+/// the entry exactly as the user wrote it: `strength: 1` is not respelled
+/// `1.0`, and keys byonk does not model (`error_clamp`, `<<:`) stay put.
+fn touched_keys(body: &DeviceWrite) -> Vec<&'static str> {
+    let set = serde_yaml::to_value(body).unwrap_or_default();
+    let mut out: Vec<&'static str> = MANAGED_DEVICE_KEYS
+        .iter()
+        .copied()
+        .filter(|k| set.get(*k).is_some_and(|v| !v.is_null()))
+        .collect();
+    for name in body.clear.iter().flatten() {
+        let first = name.split('.').next().unwrap_or(name);
+        let key = MANAGED_DEVICE_KEYS.iter().copied().find(|k| *k == first);
+        if let Some(k) = key.filter(|k| !out.contains(k)) {
+            out.push(k);
         }
     }
     out
@@ -738,6 +733,7 @@ pub async fn apply_device_patch(
     let path = require_file_config(state)?;
     validate_device_settings(state, &body)?;
     let clear = resolve_clear(&body)?;
+    let keys = touched_keys(&body);
     let _guard = state.write_lock.lock().await;
 
     // Must already exist.
@@ -799,8 +795,8 @@ pub async fn apply_device_patch(
 
     // Every managed key needs a line here. A key listed in
     // `MANAGED_DEVICE_KEYS` but missing from this merge is *deleted* by any
-    // patch that omits it — `unmanaged_device_keys` no longer protects it —
-    // and the loss is silent until it shows up on the glass.
+    // patch that sets or clears it, and the loss is silent until it shows up
+    // on the glass.
     let merged = DeviceWrite {
         key: Some(key.to_string()),
         screen: Some(screen.clone()),
@@ -837,14 +833,18 @@ pub async fn apply_device_patch(
         .asset_loader
         .read_config_string()
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let mut block = device_block(&merged, &screen);
-    // Carry across everything this writer does not model, so a screen
-    // assignment cannot quietly strip the device's other settings.
-    for (k, v) in unmanaged_device_keys(&yaml, key) {
-        block.insert(k, v);
-    }
-    let new_yaml = config_writer::upsert_device(&yaml, key, &block)
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    // Only the keys this request names are written, in place: the entry
+    // keeps its position, its comments and every other line.
+    let block = device_block(&merged, &screen);
+    let new_yaml = match config_writer::update_device(&yaml, key, &block, &keys) {
+        Ok(y) => y,
+        // Known to the config but absent from the text: written as a new entry.
+        Err(config_writer::ConfigWriteError::NotFound(_)) => {
+            config_writer::upsert_device(&yaml, key, &block)
+                .map_err(|e| ApiError::Internal(e.to_string()))?
+        }
+        Err(e) => return Err(ApiError::Internal(e.to_string())),
+    };
     persist(state, &path, new_yaml)?;
 
     Ok(serde_json::json!({ "key": key, "screen": screen }))
@@ -1185,48 +1185,6 @@ mod tests {
         state
     }
 
-    const DEVICE_YAML: &str = "\
-devices:
-  \"1C:DB:D4:66:5B:50\":
-    screen: local/gradient-lab
-    panel: trmnl_x
-    dither: floyd-steinberg
-    temperature_profile: a
-    maximum_compatibility: true
-    min_png_bytes: 102401
-    max_error: 0.8
-    error_clamp: 0.2
-    gamut:
-      knee: 0.7
-    params:
-      station: Olten
-";
-
-    /// The bug this guards against cost a live panel its anti-ghosting
-    /// settings: `upsert_device` replaces the whole block, so assigning a
-    /// screen silently deleted every key `DeviceWrite` does not carry. It
-    /// failed on the glass, not in a log.
-    ///
-    /// `temperature_profile`, `min_png_bytes` and the dither knobs used to be
-    /// guarded here. They are managed fields now, kept by the patch merge
-    /// instead — `test_patch_preserves_every_tuning_knob` in
-    /// `tests/admin_write_test.rs` is what proves they still survive, end to
-    /// end. What is left for this door is the deprecated key: `error_clamp`,
-    /// whose whole job is to stay on disk and keep reporting itself.
-    #[test]
-    fn unmanaged_device_keys_are_preserved() {
-        let kept = unmanaged_device_keys(DEVICE_YAML, "1C:DB:D4:66:5B:50");
-        assert!(
-            kept.contains_key(serde_yaml::Value::from("error_clamp")),
-            "error_clamp must survive a device patch, kept: {kept:?}"
-        );
-        assert_eq!(
-            kept.get(serde_yaml::Value::from("error_clamp")),
-            Some(&serde_yaml::Value::from(0.2)),
-            "value must carry across unchanged, not just the key"
-        );
-    }
-
     /// `clear` and the managed-key list are two halves of one contract: a key
     /// the writer sets must also be a key the caller can unset, or a setting
     /// becomes a one-way door. `screen` is the sole exception, because a
@@ -1245,20 +1203,6 @@ devices:
             expected, actual,
             "CLEARABLE_DEVICE_KEYS must be MANAGED_DEVICE_KEYS minus `screen`"
         );
-    }
-
-    /// Keys the writer sets itself must NOT come back through the side door,
-    /// or a patch clearing `name` or `refresh` would be undone by its own
-    /// preservation step.
-    #[test]
-    fn managed_device_keys_are_not_preserved() {
-        let kept = unmanaged_device_keys(DEVICE_YAML, "1C:DB:D4:66:5B:50");
-        for key in MANAGED_DEVICE_KEYS {
-            assert!(
-                !kept.contains_key(serde_yaml::Value::from(key)),
-                "{key} is written by device_block and must not be carried over"
-            );
-        }
     }
 
     fn device_write_for_test() -> DeviceWrite {
@@ -1288,19 +1232,6 @@ devices:
     fn with_clear(mut w: DeviceWrite, names: &[&str]) -> DeviceWrite {
         w.clear = Some(names.iter().map(|n| n.to_string()).collect());
         w
-    }
-
-    /// The failure is silent: the response is 200 and the config keeps the
-    /// OLD final block.
-    #[test]
-    fn a_patch_setting_final_survives_unmanaged_device_keys() {
-        let yaml = "devices:\n  AA:\n    screen: local/a\n    final:\n      dither: stucki\n";
-        let kept = unmanaged_device_keys(yaml, "AA");
-        assert!(
-            !kept.contains_key(serde_yaml::Value::from("final")),
-            "`final` must be MANAGED, or every patch that sets it is silently \
-             overwritten by the block already in the file"
-        );
     }
 
     /// Field by field, like every other rung: setting `final.dither` must not
@@ -1607,12 +1538,23 @@ devices:
     }
 
     #[test]
-    fn unmanaged_device_keys_tolerates_missing_device_and_bad_yaml() {
-        // Preservation is best-effort: it must never be the thing that fails
-        // a write.
-        assert!(unmanaged_device_keys(DEVICE_YAML, "NO:SUCH:MAC").is_empty());
-        assert!(unmanaged_device_keys("::: not yaml :::", "1C:DB:D4:66:5B:50").is_empty());
-        assert!(unmanaged_device_keys("", "1C:DB:D4:66:5B:50").is_empty());
+    fn touched_keys_are_the_set_fields_and_the_cleared_names() {
+        let w = DeviceWrite {
+            name: Some("K".into()),
+            final_rung: Some(CascadeValues {
+                strength: Some(0.5),
+                ..Default::default()
+            }),
+            clear: Some(vec![
+                "dither".into(),
+                "gamut.knee".into(),
+                "final.refresh".into(),
+            ]),
+            ..Default::default()
+        };
+        let mut got = touched_keys(&w);
+        got.sort_unstable();
+        assert_eq!(got, vec!["dither", "final", "gamut", "name"]);
     }
 
     #[test]

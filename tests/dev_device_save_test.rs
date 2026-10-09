@@ -222,3 +222,102 @@ async fn the_route_needs_a_dev_login() {
         .await;
     assert_eq!(r.status, axum::http::StatusCode::UNAUTHORIZED);
 }
+
+const COMMENTED: &str = "\
+admin:
+  token: secret
+devices:
+  # the hall display, first on purpose
+  hall:
+    screen: byonk-builtin/default
+  # the kitchen display
+  kitchen:
+    screen: byonk-builtin/default   # what it shows
+    dither: floyd-steinberg   # a default
+    # hand-tuned on 2026-10-01
+    strength: 1
+    error_clamp: 0.2
+    final: {dither: atkinson}
+  office: {screen: byonk-builtin/default, name: Office}   # flow style
+# end of devices
+";
+
+/// The whole file, byte for byte: the entry stays where it is, every comment
+/// stays on its line, and untouched keys keep their spelling (`strength: 1`).
+#[tokio::test]
+async fn device_save_edits_the_entry_in_place_and_keeps_every_comment() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, config_path) = TestApp::new_with_config_yaml(COMMENTED, dir.path());
+    let r = app
+        .patch_json(
+            "/dev/api/devices/kitchen",
+            &[AUTH],
+            r#"{"clear":["dither"],"name":"Kitchen","final":{"strength":0.5}}"#,
+        )
+        .await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+    assert_eq!(
+        std::fs::read_to_string(&config_path).unwrap(),
+        "\
+admin:
+  token: secret
+devices:
+  # the hall display, first on purpose
+  hall:
+    screen: byonk-builtin/default
+  # the kitchen display
+  kitchen:
+    screen: byonk-builtin/default   # what it shows
+    # hand-tuned on 2026-10-01
+    strength: 1
+    error_clamp: 0.2
+    final: {dither: atkinson, strength: 0.5}
+    name: Kitchen
+  office: {screen: byonk-builtin/default, name: Office}   # flow style
+# end of devices
+"
+    );
+}
+
+#[tokio::test]
+async fn the_admin_patch_keeps_a_flow_device_in_flow_style() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, config_path) = TestApp::new_with_config_yaml(COMMENTED, dir.path());
+    let r = app
+        .patch_json(
+            "/api/admin/devices/office",
+            &[AUTH],
+            r#"{"name":"Front office"}"#,
+        )
+        .await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+    assert_eq!(
+        std::fs::read_to_string(&config_path).unwrap(),
+        COMMENTED.replace(
+            "  office: {screen: byonk-builtin/default, name: Office}   # flow style",
+            "  office: {screen: byonk-builtin/default, name: \"Front office\"}   # flow style"
+        )
+    );
+}
+
+/// Ruling C3 still holds in place: clear first, then set.
+#[tokio::test]
+async fn clear_then_set_of_the_same_key_still_ends_up_set_and_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, config_path) = TestApp::new_with_config_yaml(COMMENTED, dir.path());
+    let r = app
+        .patch_json(
+            "/dev/api/devices/kitchen",
+            &[AUTH],
+            r#"{"clear":["dither"],"dither":"stucki"}"#,
+        )
+        .await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+    assert_eq!(
+        std::fs::read_to_string(&config_path).unwrap(),
+        COMMENTED.replace(
+            "    dither: floyd-steinberg   # a default\n",
+            "    dither: stucki   # a default\n"
+        )
+    );
+}

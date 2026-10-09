@@ -27,7 +27,41 @@ const ROUTES = {
   "PUT api/tuning-session/{device}": "startTuningSession",
   "DELETE api/tuning-session/{device}": "endTuningSession",
   "POST api/render": "renderPreview",
+  "GET api/screens": "listScreens",
+  "GET api/events": "eventsUrl",
+  "GET api/whoami": "whoami",
+  "GET api/repos": "listRepos",
+  "GET api/files": "listFiles",
+  "GET api/file": "readFile",
+  "PUT api/file": "writeFile",
+  "DELETE api/file": "deleteFile",
+  "POST api/screen": "createScreen",
+  "DELETE api/screen": "deleteScreen",
+  "POST api/screen/copy": "copyScreen",
+  "POST api/screen/rename": "renameScreen",
+  "POST api/screen/validate": "validateScreen",
+  "POST api/screen/check": "checkFile",
 };
+
+// Routes the router registers that the SPA deliberately does not call.
+// Every entry needs a reason.
+const ALLOWED_UNCALLED = {
+  "/resolve-mac": "server-only since before this work: scripted use, documented in dev-mode.md",
+  "/": "the dev page itself, served as the document, not called through api.js",
+  "/app.js": "the SPA bundle, loaded by index.html",
+  "/app.css": "the SPA stylesheet, loaded by index.html",
+  "/lens.js": "static script loaded by the preview page, not an API",
+  "/preview.html": "static preview page loaded in the iframe, not an API",
+};
+
+/** Every `.route("<path>"` in a Rust source (the path may follow a newline). */
+function routePaths(file) {
+  const text = readFileSync(join(__dirname, "../../src/api", file), "utf8");
+  const paths = [...text.matchAll(/\.route\(\s*"([^"]+)"/g)].map((m) => m[1]);
+  // A router refactor must not turn this sweep into a silent no-op.
+  expect(paths.length, `no .route("...") found in src/api/${file}`).toBeGreaterThan(0);
+  return paths;
+}
 
 describe("no orphan APIs", () => {
   const src = sources(join(__dirname, "../src/lib")).join("\n");
@@ -41,6 +75,13 @@ describe("no orphan APIs", () => {
   it("the tuning-session calls are consumed by app code (configDraft push/release)", () => {
     expect(src).toMatch(/api\.startTuningSession\b/);
     expect(src).toMatch(/api\.endTuningSession\b/);
+  });
+
+  it("every route the server registers is mapped to an export or explicitly allowed", () => {
+    const mapped = new Set(Object.keys(ROUTES).map((k) => "/" + k.split(" ")[1].replace(/^api\//, "")));
+    const registered = [...routePaths("dev.rs"), ...routePaths("dev_files.rs")];
+    const unmapped = registered.filter((p) => !mapped.has(p) && !(p in ALLOWED_UNCALLED));
+    expect(unmapped, `server routes with no api.js export: ${unmapped.join(", ")}`).toEqual([]);
   });
 
   it("every api.js export has a consumer in the app", () => {

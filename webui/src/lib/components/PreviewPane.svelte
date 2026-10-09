@@ -1,5 +1,5 @@
 <script>
-  import { onMount, untrack } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import * as api from "../api.js";
   import { simulate } from "../state/simulate.svelte.js";
   import { screens } from "../state/screens.svelte.js";
@@ -73,6 +73,30 @@
    * the SELECTION rather than the network.
    */
   let renderSeq = 0;
+
+  // --- render-in-progress indicator ---------------------------------------
+  //
+  // A slow render (a screen that fetches real data can take seconds) would
+  // otherwise leave the previous picture under the NEW title with no sign
+  // that anything is happening. The label appears only after a short delay
+  // so fast renders do not flicker, and only the LATEST request may clear it
+  // (same `renderSeq` ordering as Finding J): a superseded response resolving
+  // late must not hide the indicator of the render still in flight.
+  const BUSY_DELAY_MS = 250;
+  let busy = $state(false);
+  let busyTimer = null;
+  function startBusy() {
+    if (busy || busyTimer) return; // already showing, or already counting down
+    busyTimer = setTimeout(() => {
+      busyTimer = null;
+      busy = true;
+    }, BUSY_DELAY_MS);
+  }
+  function endBusy() {
+    clearTimeout(busyTimer);
+    busyTimer = null;
+    busy = false;
+  }
 
   // --- device frame -------------------------------------------------------
   //
@@ -197,6 +221,8 @@
     channel?.postMessage({ url: blobUrl, width: size.width, height: size.height });
   }
 
+  onDestroy(() => clearTimeout(busyTimer));
+
   onMount(() => {
     channel = new BroadcastChannel("byonk-preview");
     // A reloaded pop-out says hello; answer with the current render so it
@@ -233,6 +259,15 @@
    */
   async function renderNow() {
     const seq = ++renderSeq;
+    try {
+      await renderCurrent(seq);
+    } finally {
+      // Only the latest request decides; a stale one leaves the indicator alone.
+      if (seq === renderSeq) endBusy();
+    }
+  }
+
+  async function renderCurrent(seq) {
     let req;
     try {
       req = buildRenderRequest({ subject, draft, simulate, meta: screens.meta, usage: configDraft.usage });
@@ -258,6 +293,7 @@
       return;
     }
     simulate.error = null;
+    startBusy();
 
     try {
       const res = await api.renderPreview(req.body);
@@ -369,7 +405,8 @@
     </label>
     <Button type="button" size="xs" variant="outline" onclick={popOut}>Pop out</Button>
   </div>
-  <div class="flex min-h-0 flex-1 items-center justify-center p-4">
+  <div data-testid="preview-region" aria-busy={busy ? "true" : "false"}
+       class="relative flex min-h-0 flex-1 items-center justify-center p-4">
     <div class={`device-frame ${frameClass} flex items-center justify-center rounded-xl bg-[var(--panel-bg)] p-6`}>
       <div class="device-bezel rounded-lg bg-[var(--border-color)] p-3">
         <div class="screen-well overflow-hidden rounded-sm bg-[var(--bg-color)]">
@@ -377,7 +414,7 @@
             bind:this={imgEl}
             alt="Screen preview"
             src={blobUrl}
-            class={`max-h-full max-w-full object-contain ${frameClass === "og" ? "[image-rendering:pixelated]" : ""}`}
+            class={`max-h-full max-w-full object-contain transition-opacity ${busy ? "opacity-50" : ""} ${frameClass === "og" ? "[image-rendering:pixelated]" : ""}`}
             onmouseenter={showLens}
             onmouseleave={hideLens}
             onmousemove={moveLens}
@@ -385,6 +422,13 @@
         </div>
       </div>
     </div>
+    {#if busy}
+      <div role="status"
+           class="pointer-events-none absolute left-1/2 top-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-md border border-[var(--border-color)] bg-[var(--panel-bg)] px-3 py-1.5 text-xs text-[var(--text-color)] shadow">
+        <span aria-hidden="true" class="render-spinner inline-block h-3.5 w-3.5 rounded-full border-2 border-[var(--border-color)] border-t-[var(--accent-color)]"></span>
+        Rendering…
+      </div>
+    {/if}
   </div>
 </div>
 
@@ -396,3 +440,19 @@
     <canvas bind:this={lensCanvasEl} width="200" height="200" class="block"></canvas>
   </div>
 {/if}
+
+<style>
+  .render-spinner {
+    animation: render-spin 0.8s linear infinite;
+  }
+  @keyframes render-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .render-spinner {
+      animation: none;
+    }
+  }
+</style>

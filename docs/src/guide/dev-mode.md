@@ -237,7 +237,9 @@ The preview re-renders whenever you save, whenever the file watcher reports a
 change, and whenever you move a control in the work area. A change to a config
 editor field renders after a short pause (about 0.3 seconds), so it does not
 re-render on every keystroke; choosing a different subject renders at once.
-Render time is shown in the preview header and logged in the console.
+Render time is shown in the preview header and logged in the console. While a
+render takes longer than a moment, the picture dims and a "Rendering…" label
+appears over it, so a slow screen never looks like a stale one.
 
 **Pop out** opens the preview in its own window with **Fit** and **100%** zoom
 — useful on a second monitor, or for looking at a 1872×1404 TRMNL X render at

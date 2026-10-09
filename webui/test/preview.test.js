@@ -387,6 +387,93 @@ describe("PreviewPane", () => {
   });
 });
 
+describe("PreviewPane render-in-progress indicator", () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const okResponse = () => ({ ok: true, headers: { get: () => null }, blob: async () => new Blob(["png"]) });
+  // A render the test settles by hand.
+  function deferred() {
+    let resolve, reject;
+    const promise = new Promise((res, rej) => ((resolve = res), (reject = rej)));
+    return { promise, resolve, reject };
+  }
+  const region = () => screen.getByTestId("preview-region");
+  const label = () => screen.queryByRole("status");
+
+  beforeEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    subject.reset();
+    screens.meta = { devices: [], dither_algorithms: [], panels: [] };
+    configDraft.reset();
+    simulate.reset();
+    simulate.error = null;
+    subject.select("screen", "local/a");
+  });
+
+  it("stays absent for a render that finishes under the delay", async () => {
+    vi.spyOn(api, "renderPreview").mockImplementation(async () => {
+      await wait(30);
+      return okResponse();
+    });
+    render(PreviewPane);
+    await wait(100);
+    expect(label()).toBeNull();
+    expect(region().getAttribute("aria-busy")).not.toBe("true");
+    await wait(300);
+    expect(label()).toBeNull();
+  });
+
+  it("shows after the delay while pending, and clears on resolve", async () => {
+    const d = deferred();
+    vi.spyOn(api, "renderPreview").mockReturnValue(d.promise);
+    render(PreviewPane);
+    await wait(100);
+    expect(label()).toBeNull();
+    await waitFor(() => expect(label()).not.toBeNull(), { timeout: 1000 });
+    expect(label().textContent).toMatch(/Rendering/);
+    expect(region().getAttribute("aria-busy")).toBe("true");
+    d.resolve(okResponse());
+    await waitFor(() => expect(label()).toBeNull());
+    expect(region().getAttribute("aria-busy")).not.toBe("true");
+  });
+
+  it("clears when the render fails", async () => {
+    const d = deferred();
+    vi.spyOn(api, "renderPreview").mockReturnValue(d.promise);
+    render(PreviewPane);
+    await waitFor(() => expect(label()).not.toBeNull(), { timeout: 1000 });
+    d.reject(new Error("boom"));
+    await waitFor(() => expect(label()).toBeNull());
+    expect(region().getAttribute("aria-busy")).not.toBe("true");
+  });
+
+  it("a stale response does not clear the indicator of a newer request", async () => {
+    const first = deferred();
+    const second = deferred();
+    const spy = vi.spyOn(api, "renderPreview");
+    // Re-selecting may start more than one follow-up render; all of them share `second`.
+    spy.mockReturnValueOnce(first.promise).mockReturnValue(second.promise);
+    render(PreviewPane);
+    await wait(10);
+    subject.select("screen", "local/b");
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(label()).not.toBeNull(), { timeout: 1000 });
+    first.resolve(okResponse());
+    await wait(50);
+    expect(label()).not.toBeNull();
+    expect(region().getAttribute("aria-busy")).toBe("true");
+    second.resolve(okResponse());
+    await waitFor(() => expect(label()).toBeNull());
+  });
+
+  it("shows in the empty frame when there is no previous image", async () => {
+    vi.spyOn(api, "renderPreview").mockReturnValue(deferred().promise);
+    render(PreviewPane);
+    await waitFor(() => expect(label()).not.toBeNull(), { timeout: 1000 });
+    expect(screen.getByRole("img", { name: /screen preview/i }).getAttribute("src")).toBeNull();
+  });
+});
+
 describe("PreviewPane with the draft store (Task 7)", () => {
   const META = {
     panels: [

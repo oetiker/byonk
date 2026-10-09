@@ -13,8 +13,7 @@ import { screens } from "./screens.svelte.js";
  *       `screen` is NOT sent: the preview shows the device's own screen.
  *   (b) `width`/`height` are never user fields: they come from the chosen
  *       panel's profile (`size`, below), falling back to 800x480.
- *   (c) `use_actual` and the tune working copy's `colors_actual` travel
- *       only when a panel is chosen. The panel's configured `colors_actual`
+ *   (c) `use_actual` travels only when a panel is chosen. The panel's configured `colors_actual`
  *       does not travel: the server resolves it on the panel rung.
  *   (d) `timestamp` is Unix seconds and travels only while `timeLocked` --
  *       a live clock needs no override, and sending one would pin every
@@ -65,7 +64,6 @@ const DEFAULTS = {
   timestamp: "",
   timeLocked: false,
   params: "{}",
-  colors_actual_override: null,
 };
 
 /**
@@ -116,18 +114,6 @@ class Simulate {
   timeLocked = $state(DEFAULTS.timeLocked);
   params = $state(DEFAULTS.params);
 
-  /**
-   * A live colour-tuning working copy, or `null`.
-   *
-   * `{panel, colors}` -- the panel it belongs to, and the comma-separated
-   * `colors_actual` string. Written by the `tune` store, read only by `request()`
-   * below. It lives here rather than on `tune` because `tune` imports this
-   * module for its default panel, and the reverse import would close a cycle
-   * between two rune modules that both evaluate at page load. Same reasoning
-   * as `error` (Ruling 43).
-   */
-  colors_actual_override = $state(DEFAULTS.colors_actual_override);
-
   reset() {
     this.mac = DEFAULTS.mac;
     this.panel = DEFAULTS.panel;
@@ -142,7 +128,6 @@ class Simulate {
     this.timestamp = DEFAULTS.timestamp;
     this.timeLocked = DEFAULTS.timeLocked;
     this.params = DEFAULTS.params;
-    this.colors_actual_override = DEFAULTS.colors_actual_override;
   }
 
   /** A snapshot of every drawer field, keyed by its old query name. */
@@ -232,13 +217,6 @@ class Simulate {
     if (this.panel) {
       body.panel = this.panel;
       body.view = { use_actual: !!this.use_actual };
-      // A live tuning working copy is an override, but only for the panel it
-      // belongs to -- otherwise switching panels mid-calibration would render
-      // the new panel with the old panel's colours.
-      const ov = this.colors_actual_override;
-      if (ov && ov.panel === this.panel) {
-        override.colors_actual = ov.colors;
-      }
     }
 
     // (f) A tunable travels only when it differs from the SELECTED

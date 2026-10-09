@@ -1,23 +1,11 @@
 <script>
-  import { Files, Code, Palette, Monitor, SlidersHorizontal, LogOut } from "@lucide/svelte";
+  import { Library, Code, Monitor, LogOut } from "@lucide/svelte";
   import { layout, PANELS } from "../state/layout.svelte.js";
   import { auth } from "../state/auth.svelte.js";
   import ThemeSwitch from "./ThemeSwitch.svelte";
 
-  const ICONS = {
-    files: Files,
-    editor: Code,
-    tune: Palette,
-    preview: Monitor,
-    simulate: SlidersHorizontal,
-  };
-  const LABELS = {
-    files: "Files",
-    editor: "Editor",
-    tune: "Tune",
-    preview: "Preview",
-    simulate: "Simulate",
-  };
+  const ICONS = { library: Library, editor: Code, preview: Monitor };
+  const LABELS = { library: "Library", editor: "Edit", preview: "Preview" };
 </script>
 
 <div

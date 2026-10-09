@@ -18,7 +18,7 @@ describe("api", () => {
     // Coverage table: each entry specifies a function, how to call it,
     // the exact expected URL and HTTP method, and optionally a custom
     // response. `expectedMethod` matters as much as `expectedUrl` --
-    // `setPanelOverride`/`clearPanelOverride` share a URL and differ only by
+    // `pushPanelOverride`/`releasePanelOverride` share a URL and differ only by
     // verb (PUT vs DELETE), so a URL-only check can't tell a push from a
     // discard, or catch the two being swapped outright.
     const urlCoverage = [
@@ -109,24 +109,6 @@ describe("api", () => {
         responseBody: '{"ok":true,"issues":[]}',
       },
       {
-        name: "setPanelOverride",
-        call: () => api.setPanelOverride("e1004", "#101010,#E8E8E8"),
-        expectedUrl: "api/panel-colors/e1004",
-        expectedMethod: "PUT",
-      },
-      {
-        name: "clearPanelOverride",
-        call: () => api.clearPanelOverride("e1004"),
-        expectedUrl: "api/panel-colors/e1004",
-        expectedMethod: "DELETE",
-      },
-      {
-        name: "savePanelColors",
-        call: () => api.savePanelColors("e1004", "#101010,#E8E8E8"),
-        expectedUrl: "api/panel-colors/e1004/save",
-        expectedMethod: "POST",
-      },
-      {
         name: "startTuningSession",
         call: () => api.startTuningSession("kitchen"),
         expectedUrl: "api/tuning-session/kitchen",
@@ -202,7 +184,7 @@ describe("api", () => {
         expect(result).toBe(entry.expectedUrl);
       } else {
         // HTTP requests: await and verify the URL AND the method. URL alone
-        // can't tell `setPanelOverride` (PUT) from `clearPanelOverride`
+        // can't tell `pushPanelOverride` (PUT) from `releasePanelOverride`
         // (DELETE) -- they share a URL and differ only by verb.
         await result;
         const [calledUrl, calledInit] = globalThis.fetch.mock.calls.at(-1);
@@ -319,7 +301,7 @@ describe("api", () => {
     await expect(api.checkFile("local/test", "script.lua", "x")).rejects.toThrow();
   });
 
-  it("tolerates the empty 200 body savePanelColors' handler actually returns", async () => {
+  it("tolerates the empty 200 body the panel-save handler returns", async () => {
     // Regression test: handle_save_panel_colors (src/api/dev.rs) returns
     // Result<StatusCode, ApiError> -> Ok(StatusCode::OK), i.e. 200 with an
     // EMPTY body. post() used to hand that straight to res.json(), which
@@ -330,6 +312,6 @@ describe("api", () => {
     // a fabricated '{}' from the mock factory, a body the real server never
     // sends.
     mockFetch(async () => new Response(null, { status: 200 }));
-    await expect(api.savePanelColors("e1004", "#101010,#E8E8E8")).resolves.toBeNull();
+    await expect(api.savePanel("e1004", {})).resolves.toBeNull();
   });
 });

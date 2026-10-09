@@ -54,7 +54,7 @@ describe("AppShell", () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        panels: { files: true, editor: true, preview: true, simulate: true },
+        panels: { library: true, editor: true, preview: true },
         sizes: { x: 555, y: 260 },
       }),
     );
@@ -113,29 +113,9 @@ describe("AppShell", () => {
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
 
-  it("mounts TunePane only while the tune panel is open", async () => {
-    layout.reset();
+  it("the Edit panel asks for a subject when there is none", async () => {
     render(AppShell);
-    expect(screen.queryByTestId("tune-pane")).toBeNull();
-
-    layout.toggle("tune");
-    await tick();
-    expect(screen.getByTestId("tune-pane")).toBeTruthy();
-  });
-
-  it("keeps the horizontal splitter alive when only tune is open on the right", async () => {
-    layout.reset();
-    for (const p of ["preview", "simulate"]) if (layout.isOpen(p)) layout.toggle(p);
-    layout.toggle("tune");
-    // The brief's code block for this test never calls render(AppShell),
-    // which means screen has nothing mounted and the assertion below would
-    // fail unconditionally -- true even with a correct implementation. Add
-    // the render call, consistent with every other test in this file.
-    render(AppShell);
-    await tick();
-    // The splitter separates the editor from everything to its right; tune
-    // being the only thing there is still something there.
-    expect(screen.getByRole("separator", { name: /vertical|horizontal|resize/i })).toBeTruthy();
+    expect(await screen.findByText("Pick a screen, panel or device in the Library.")).toBeTruthy();
   });
 });
 

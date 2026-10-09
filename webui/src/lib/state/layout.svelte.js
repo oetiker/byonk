@@ -3,11 +3,11 @@
 // "Together" is the point: a panel that reopens at a default size instead of
 // the size it had reads as a bug, so one record carries both (spec §1).
 
-export const PANELS = ["files", "editor", "tune", "preview", "simulate"];
+export const PANELS = ["library", "editor", "preview"];
 export const STORAGE_KEY = "byonk.layout.v1";
 
 const DEFAULTS = {
-  panels: { files: true, editor: true, tune: false, preview: true, simulate: true },
+  panels: { library: true, editor: true, preview: true },
   sizes: { x: 420, y: 260 },
 };
 

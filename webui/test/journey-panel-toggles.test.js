@@ -10,7 +10,7 @@ import { theme } from "../src/lib/state/theme.svelte.js";
 import * as api from "../src/lib/api.js";
 
 /**
- * The icon rail's five toggles, driven through the real app root.
+ * The icon rail's three toggles, driven through the real app root.
  *
  * `iconrail.test.js` mounts IconRail alone and asserts `aria-pressed` and the
  * `layout` store; `appshell.test.js` mounts AppShell and drives `layout`
@@ -24,32 +24,24 @@ import * as api from "../src/lib/api.js";
  *
  * Each pane is identified by something it alone renders, not by a test id
  * added for the occasion:
- *   files    -- the "New" button in its toolbar
+ *   library  -- the "New" button in its toolbar
  *   editor   -- its `role="tablist"` tab strip
- *   tune     -- `data-testid="tune-pane"` (already present)
  *   preview  -- the `alt="Screen preview"` image
- *   simulate -- the `#sim-device` select
- *
- * Simulate is matched by id, NOT by its "Device" label: TunePane carries a
- * "Device" label of its own (`#tune-device`), so a label query reports the
- * simulate pane as mounted whenever tune is open. That ambiguity showed up
- * here as a failure in the aria-pressed test below and is worth naming --
- * an accessible name that is unique within one pane need not be unique
- * within the shell.
  */
 const MARKER = {
-  files: () => dom.queryByRole("button", { name: "New" }),
+  library: () => dom.queryByRole("button", { name: "New" }),
   editor: () => dom.queryByRole("tablist"),
-  tune: () => dom.queryByTestId("tune-pane"),
   preview: () => dom.queryByAltText("Screen preview"),
-  simulate: () => document.querySelector("#sim-device"),
 };
+
+/** Rail button accessible names, by panel. */
+const LABEL = { library: "Library", editor: "Edit", preview: "Preview" };
 
 /** The rail button for a panel, by the accessible name IconRail gives it. */
 function railButton(panel) {
   const rail = dom.getByRole("toolbar", { name: /panels/i });
   return dom.getByRole("button", {
-    name: new RegExp(`^${panel}$`, "i"),
+    name: LABEL[panel],
     container: rail,
   });
 }
@@ -84,12 +76,14 @@ afterEach(() => {
 });
 
 describe("icon rail toggles, through the app root", () => {
-  // The four panels open by default. Clicking each must take its pane away
+  // The three panels open by default. Clicking each must take its pane away
   // and a second click must bring it back -- a toggle that only worked one
   // way would still flip `aria-pressed` and still pass iconrail.test.js.
-  for (const panel of ["files", "editor", "preview", "simulate"]) {
+  for (const panel of ["library", "editor", "preview"]) {
     it(`${panel}: one click unmounts its pane, a second brings it back`, async () => {
-      render(AppShell);
+      // The Edit panel mounts the editor only for a screen subject.
+    subject.select("screen", "local/a");
+    render(AppShell);
       await waitFor(() => expect(MARKER[panel]()).toBeTruthy());
 
       await fireEvent.click(railButton(panel));
@@ -100,26 +94,14 @@ describe("icon rail toggles, through the app root", () => {
     });
   }
 
-  // Tune is the one panel that starts closed, so it exercises the opposite
-  // order -- and it is the newest pane, added by the colour-tuning work after
-  // the other four had already shipped.
-  it("tune: starts closed, one click mounts it, a second takes it away", async () => {
-    render(AppShell);
-    expect(MARKER.tune()).toBeNull();
-
-    await fireEvent.click(railButton("tune"));
-    await waitFor(() => expect(MARKER.tune()).toBeTruthy());
-
-    await fireEvent.click(railButton("tune"));
-    await waitFor(() => expect(MARKER.tune()).toBeNull());
-  });
-
   // Ruling 49: every legal panel combination must stay usable, and the rail
-  // is the only chrome no toggle can unmount. Closing all five leaves the
+  // is the only chrome no toggle can unmount. Closing all three leaves the
   // user with the rail alone -- and therefore with a way back.
-  it("with all five closed, the rail survives and can reopen any of them", async () => {
+  it("with all three closed, the rail survives and can reopen any of them", async () => {
+    // The Edit panel mounts the editor only for a screen subject.
+    subject.select("screen", "local/a");
     render(AppShell);
-    await waitFor(() => expect(MARKER.files()).toBeTruthy());
+    await waitFor(() => expect(MARKER.library()).toBeTruthy());
 
     for (const p of PANELS) {
       if (layout.isOpen(p)) await fireEvent.click(railButton(p));
@@ -174,8 +156,10 @@ describe("icon rail toggles, through the app root", () => {
   // disagree: `aria-pressed` reads `layout`, the pane reads `layout`, and a
   // pane guarded on the wrong key would leave the button lit over nothing.
   it("aria-pressed agrees with what is actually mounted, for every panel", async () => {
+    // The Edit panel mounts the editor only for a screen subject.
+    subject.select("screen", "local/a");
     render(AppShell);
-    await waitFor(() => expect(MARKER.files()).toBeTruthy());
+    await waitFor(() => expect(MARKER.library()).toBeTruthy());
 
     for (const p of PANELS) {
       const pressed = railButton(p).getAttribute("aria-pressed") === "true";
@@ -187,7 +171,7 @@ describe("icon rail toggles, through the app root", () => {
     // And again after flipping every one of them, so the agreement is not an
     // accident of the default layout.
     for (const p of PANELS) await fireEvent.click(railButton(p));
-    await waitFor(() => expect(MARKER.tune()).toBeTruthy());
+    await waitFor(() => expect(MARKER.library()).toBeNull());
 
     for (const p of PANELS) {
       const pressed = railButton(p).getAttribute("aria-pressed") === "true";
@@ -202,11 +186,10 @@ describe("icon rail toggles, through the app root", () => {
   // the layout a user arranges is gone on the next load.
   it("a toggle persists, so the arrangement survives a reload", async () => {
     render(AppShell);
-    await waitFor(() => expect(MARKER.files()).toBeTruthy());
+    await waitFor(() => expect(MARKER.library()).toBeTruthy());
 
-    await fireEvent.click(railButton("files"));
-    await fireEvent.click(railButton("tune"));
-    await waitFor(() => expect(MARKER.tune()).toBeTruthy());
+    await fireEvent.click(railButton("library"));
+    await waitFor(() => expect(MARKER.library()).toBeNull());
 
     // Re-mount from scratch, as a reload would: drop the DOM, wipe the
     // in-memory store, and let AppShell's own `layout.load()` restore it.
@@ -214,10 +197,10 @@ describe("icon rail toggles, through the app root", () => {
     layout.reset();
     render(AppShell);
 
-    await waitFor(() => expect(MARKER.tune()).toBeTruthy());
-    expect(MARKER.files()).toBeNull();
-    expect(railButton("files")).toHaveAttribute("aria-pressed", "false");
-    expect(railButton("tune")).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() => expect(MARKER.preview()).toBeTruthy());
+    expect(MARKER.library()).toBeNull();
+    expect(railButton("library")).toHaveAttribute("aria-pressed", "false");
+    expect(railButton("preview")).toHaveAttribute("aria-pressed", "true");
   });
 });
 

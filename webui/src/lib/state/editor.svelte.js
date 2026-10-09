@@ -69,7 +69,7 @@ class Editor {
    * PreconditionRequiredError (428, missing/invalid If-Match) must land
    * somewhere visible instead of becoming an unhandled rejection (Ruling
    * 39). `StatusBar` renders it, the same split `screens.error` /
-   * `simulate.error` / `tune.error` already use.
+   * `simulate.error` already use.
    */
   error = $state(null);
 

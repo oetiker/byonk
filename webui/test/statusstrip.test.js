@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { render, cleanup, screen } from "@testing-library/svelte";
-import { flushSync, tick } from "svelte";
+import { tick } from "svelte";
 import AppShell from "../src/lib/components/AppShell.svelte";
 import StatusStrip from "../src/lib/components/StatusStrip.svelte";
 import { layout } from "../src/lib/state/layout.svelte.js";
@@ -8,7 +8,6 @@ import { editor } from "../src/lib/state/editor.svelte.js";
 import { screens } from "../src/lib/state/screens.svelte.js";
 import { subject } from "../src/lib/state/subject.svelte.js";
 import { simulate } from "../src/lib/state/simulate.svelte.js";
-import { tune } from "../src/lib/state/tune.svelte.js";
 import { auth } from "../src/lib/state/auth.svelte.js";
 
 // Ruling 49 (review finding 2): editor.error/screens.error/simulate.error/
@@ -35,7 +34,6 @@ beforeEach(() => {
   editor.reset();
   screens.error = null;
   simulate.error = null;
-  tune.reset();
   auth.reset();
 });
 
@@ -49,34 +47,6 @@ function closeEditor() {
 }
 
 describe("the error/override strip is visible independent of the Editor panel", () => {
-  it("shows a live tune.pushed override, naming its panel, with the Editor panel CLOSED", async () => {
-    closeEditor();
-    tune.panel = "e1004";
-    tune.pushed = true;
-
-    render(AppShell);
-    await tick();
-
-    // Confirm the Editor really is closed -- EditorPane is the only thing
-    // that renders role="tablist" -- so a pass here can't be explained by
-    // the Editor having mounted anyway.
-    expect(screen.queryByRole("tablist")).toBeNull();
-
-    expect(screen.getByText(/override live on e1004/)).toBeTruthy();
-  });
-
-  it("shows a live tune.error with the Editor panel CLOSED", async () => {
-    closeEditor();
-    tune.error = { op: "push", message: "server unreachable" };
-
-    render(AppShell);
-    await tick();
-
-    expect(screen.queryByRole("tablist")).toBeNull();
-    expect(screen.getByText(/push/)).toBeTruthy();
-    expect(screen.getByText(/server unreachable/)).toBeTruthy();
-  });
-
   it("shows editor.error and screens.error and simulate.error and auth.error with the Editor panel CLOSED, none clobbering another", async () => {
     closeEditor();
     screens.error = { op: "delete", message: "screens-msg" };
@@ -142,8 +112,7 @@ describe("StatusStrip", () => {
     editor.reset();
     screens.error = null;
     simulate.error = null;
-    tune.reset();
-  });
+    });
 
   afterEach(() => {
     cleanup();
@@ -154,11 +123,10 @@ describe("StatusStrip", () => {
     expect(container.textContent.trim()).toBe("");
   });
 
-  it("renders all five error surfaces at once, none clobbering another", () => {
+  it("renders all four error surfaces at once, none clobbering another", () => {
     editor.error = { op: "save", message: "save-msg" };
     screens.error = { op: "delete", message: "screens-msg" };
     simulate.error = { op: "render", message: "simulate-msg" };
-    tune.error = { op: "save", message: "tune-msg" };
     auth.error = { op: "logout", message: "auth-msg" };
 
     render(StatusStrip);
@@ -166,7 +134,6 @@ describe("StatusStrip", () => {
     expect(screen.getByText(/save-msg/)).toBeTruthy();
     expect(screen.getByText(/screens-msg/)).toBeTruthy();
     expect(screen.getByText(/simulate-msg/)).toBeTruthy();
-    expect(screen.getByText(/tune-msg/)).toBeTruthy();
     expect(screen.getByText(/auth-msg/)).toBeTruthy();
   });
 
@@ -203,33 +170,5 @@ describe("StatusStrip", () => {
     simulate.error = { op: "not-render", message: "whatever" };
     render(StatusStrip);
     expect(screen.getByText(/not-render: whatever/)).toBeTruthy();
-  });
-
-  it("warns when a panel colour override is live, naming the panel (spec §8)", () => {
-    tune.panel = "e1004";
-    tune.pushed = true;
-
-    render(StatusStrip);
-
-    expect(screen.getByText(/override live on e1004/)).toBeTruthy();
-  });
-
-  it("shows no override warning when nothing is pushed", () => {
-    tune.pushed = false;
-    render(StatusStrip);
-    expect(screen.queryByText(/override live/)).toBeNull();
-  });
-
-  it("appears and disappears reactively as tune.pushed changes", () => {
-    render(StatusStrip);
-    expect(screen.queryByRole("status")).toBeNull();
-
-    tune.pushed = true;
-    flushSync();
-    expect(screen.queryByRole("status")).not.toBeNull();
-
-    tune.pushed = false;
-    flushSync();
-    expect(screen.queryByRole("status")).toBeNull();
   });
 });

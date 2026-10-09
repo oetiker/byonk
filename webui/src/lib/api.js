@@ -100,8 +100,8 @@ async function post(url, body) {
   // The rule, not a list of today's endpoints: a handler may answer with a
   // body or without one, so read the text and only parse when there is
   // something to parse. An earlier version enumerated the endpoints instead
-  // and asserted they "all return 200 with JSON"; `savePanelColors` was added
-  // later, its handler returns a bare `Ok(StatusCode::OK)` with an empty body,
+  // and asserted they "all return 200 with JSON"; `savePanel`'s handler
+  // returns a bare `Ok(StatusCode::OK)` with an empty body,
   // and `res.json()` rejected on every successful save. `put()` and `del()`
   // below already work this way -- all three verbs now obey one rule.
   const text = await res.text();
@@ -173,17 +173,10 @@ async function del(url) {
 
 /**
  * Colour tuning (`docs/superpowers/specs/2026-09-10-dev-ui-color-tuning-design.md`
- * §7). Note the asymmetry: the override and the save are keyed by **panel**
- * (a calibration belongs to the panel profile, shared by every device using
- * it); the tuning session is keyed by **device** (only a device can be
- * standing in front of, and polls). Mixing the two keys is the defect Task
- * 9b's fix round eliminated -- keep it apart here too.
+ * §7). The tuning session is keyed by **device** (only a device can be
+ * standing in front of, and polls); panel overrides and saves are keyed by
+ * panel (see `pushPanelOverride` / `savePanel` below).
  */
-export const setPanelOverride = (panel, colors_actual) =>
-  put(`api/panel-colors/${encodeURIComponent(panel)}`, { colors_actual });
-export const clearPanelOverride = (panel) => del(`api/panel-colors/${encodeURIComponent(panel)}`);
-export const savePanelColors = (panel, colors_actual) =>
-  post(`api/panel-colors/${encodeURIComponent(panel)}/save`, { colors_actual });
 export const startTuningSession = (device) =>
   put(`api/tuning-session/${encodeURIComponent(device)}`);
 export const endTuningSession = (device) => del(`api/tuning-session/${encodeURIComponent(device)}`);

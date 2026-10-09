@@ -19,7 +19,7 @@ class Auth {
 
   /**
    * The last failed whoami/logout call, or null. Shape matches every other
-   * store's captured error (`screens.error`, `simulate.error`, `tune.error`
+   * store's captured error (`screens.error`, `simulate.error`, `configDraft.error`
    * -- `{op, message}`), kept observable here even though nothing renders it
    * yet: a silently-failing Logout button would be strictly worse than the
    * missing control this task fixes (Ruling 39's reasoning).

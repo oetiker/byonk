@@ -30,19 +30,21 @@ beforeEach(() => {
 describe("IconRail", () => {
   it("offers one labelled toggle per panel", () => {
     render(IconRail);
-    for (const p of PANELS) {
-      expect(screen.getByRole("button", { name: new RegExp(p, "i") })).toBeInTheDocument();
-    }
+    const toggles = screen
+      .getAllByRole("button")
+      .filter((el) => el.hasAttribute("aria-pressed"));
+    expect(toggles.map((el) => el.getAttribute("aria-label"))).toEqual(["Library", "Edit", "Preview"]);
+    expect(PANELS).toHaveLength(3);
   });
 
   it("reports each panel's state through aria-pressed", async () => {
     render(IconRail);
-    const files = screen.getByRole("button", { name: /files/i });
-    expect(files).toHaveAttribute("aria-pressed", "true");
+    const lib = screen.getByRole("button", { name: /library/i });
+    expect(lib).toHaveAttribute("aria-pressed", "true");
 
-    await fireEvent.click(files);
-    expect(layout.isOpen("files")).toBe(false);
-    expect(files).toHaveAttribute("aria-pressed", "false");
+    await fireEvent.click(lib);
+    expect(layout.isOpen("library")).toBe(false);
+    expect(lib).toHaveAttribute("aria-pressed", "false");
   });
 
   it("carries no badge or count -- the status bar reports those", () => {
@@ -50,28 +52,6 @@ describe("IconRail", () => {
     // Spec §1: "The toggle state is the only thing the icon carries."
     const rail = screen.getByRole("toolbar", { name: /panels/i });
     expect(rail.textContent.replace(/\s/g, "")).toBe("");
-  });
-
-  it("shows one toggle per panel, including tune", () => {
-    render(IconRail);
-    // Scoped to `aria-pressed`, not "every button in the rail": Task 11
-    // added the theme switch as a 6th button here (Ruling 52), and it is
-    // not a panel toggle -- it carries `aria-haspopup`, never
-    // `aria-pressed`.
-    const panelToggles = screen
-      .getAllByRole("button")
-      .filter((el) => el.hasAttribute("aria-pressed"));
-    expect(panelToggles).toHaveLength(5);
-    expect(screen.getByLabelText("Tune")).toBeTruthy();
-  });
-
-  it("toggles tune", async () => {
-    layout.reset();
-    render(IconRail);
-    const btn = screen.getByLabelText("Tune");
-    expect(btn.getAttribute("aria-pressed")).toBe("false");
-    await fireEvent.click(btn);
-    expect(btn.getAttribute("aria-pressed")).toBe("true");
   });
 
   // Ruling 52: the brief creates ThemeSwitch.svelte but never mounts it.

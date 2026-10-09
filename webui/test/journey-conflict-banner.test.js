@@ -255,8 +255,8 @@ describe("resolving the conflict by clicking the banner", () => {
     await waitFor(() => expect(banner()).toBeTruthy());
 
     const rail = dom.getByRole("toolbar", { name: /panels/i });
-    for (const p of ["files", "editor", "preview", "simulate"]) {
-      await fireEvent.click(dom.getByRole("button", { name: new RegExp(`^${p}$`, "i"), container: rail }));
+    for (const p of ["Library", "Edit", "Preview"]) {
+      await fireEvent.click(dom.getByRole("button", { name: p, container: rail }));
     }
     await tick();
 

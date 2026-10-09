@@ -194,12 +194,12 @@ describe("splitter drag, persisted across a reload", () => {
     await waitFor(() => expect(JSON.parse(localStorage.getItem(STORAGE_KEY)).sizes.x).toBe(300));
 
     const rail = dom.getByRole("toolbar", { name: /panels/i });
-    const filesBtn = dom.getByRole("button", { name: /^files$/i, container: rail });
-    await fireEvent.click(filesBtn);
+    const libraryBtn = dom.getByRole("button", { name: /^library$/i, container: rail });
+    await fireEvent.click(libraryBtn);
 
     await waitFor(() => {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-      expect(saved.panels.files).toBe(false);
+      expect(saved.panels.library).toBe(false);
       expect(saved.sizes.x).toBe(300);
     });
 

@@ -206,48 +206,4 @@ describe("simulate store", () => {
     const b = simulate.request("local/hello");
     expect(Object.hasOwn(b.override, "strength")).toBe(false);
   });
-
-  // --- colors_actual_override: the tune store's working copy --------------
-
-  it("prefers a matching colors_actual_override in the render query", () => {
-    screens.meta = {
-      devices: [],
-      dither_algorithms: [],
-      panels: [{ id: "e1004", name: "E1004", width: 800, height: 480, colors: "#000,#FFF", colors_actual: "#101010,#E8E8E8" }],
-    };
-    simulate.panel = "e1004";
-    simulate.use_actual = true;
-    simulate.colors_actual_override = { panel: "e1004", colors: "#111111,#EEEEEE" };
-    const b = simulate.request("local/a");
-    expect(b.override.colors_actual).toBe("#111111,#EEEEEE");
-  });
-
-  it("ignores an override that names a different panel", () => {
-    screens.meta = {
-      devices: [],
-      dither_algorithms: [],
-      panels: [{ id: "e1004", name: "E1004", width: 800, height: 480, colors: "#000,#FFF", colors_actual: "#101010,#E8E8E8" }],
-    };
-    simulate.panel = "e1004";
-    simulate.use_actual = true;
-    simulate.colors_actual_override = { panel: "og", colors: "#111111,#EEEEEE" };
-    const b = simulate.request("local/a");
-    // The panel actually selected keeps its own configured colours, which the
-    // server reads from the panel rung: nothing is overridden.
-    expect(b.override.colors_actual).toBeUndefined();
-  });
-
-  it("falls back to the configured colors once the override is cleared", () => {
-    screens.meta = {
-      devices: [],
-      dither_algorithms: [],
-      panels: [{ id: "e1004", name: "E1004", width: 800, height: 480, colors: "#000,#FFF", colors_actual: "#101010,#E8E8E8" }],
-    };
-    simulate.panel = "e1004";
-    simulate.use_actual = true;
-    simulate.colors_actual_override = { panel: "e1004", colors: "#111111,#EEEEEE" };
-    simulate.colors_actual_override = null;
-    const b = simulate.request("local/a");
-    expect(b.override.colors_actual).toBeUndefined();
-  });
 });

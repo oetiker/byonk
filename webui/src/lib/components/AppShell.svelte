@@ -14,8 +14,7 @@
 
   // Placeholders until Tasks 6-10 fill them in.
   import FilesPane from "./FilesPane.svelte";
-  import EditorPane from "./EditorPane.svelte";
-  import TunePane from "./TunePane.svelte";
+  import EditPane from "./EditPane.svelte";
   import PreviewPane from "./PreviewPane.svelte";
   import SimulateControls from "./SimulateControls.svelte";
 
@@ -169,46 +168,23 @@
   <div class="flex min-h-0 flex-1">
     <IconRail />
 
-    {#if layout.isOpen("files")}
+    {#if layout.isOpen("library")}
       <div class="w-56 shrink-0 overflow-auto border-r border-[var(--border-color)]">
         <FilesPane />
       </div>
     {/if}
 
-    <SplitPane
-      axis="x"
-      bind:size={xSize}
-      open={layout.isOpen("preview") || layout.isOpen("simulate") || layout.isOpen("tune")}
-    >
+    <SplitPane axis="x" bind:size={xSize} open={layout.isOpen("preview")}>
       {#snippet a()}
-        {#if layout.isOpen("editor")}
-          <EditorPane />
-        {/if}
+        {#if layout.isOpen("editor")}<EditPane />{/if}
       {/snippet}
-
       {#snippet b()}
-        <div class="flex min-h-0 min-w-0 flex-1">
-          {#if layout.isOpen("tune")}
-            <div
-              class="w-64 shrink-0 overflow-auto border-r border-[var(--border-color)]"
-            >
-              <TunePane />
-            </div>
-          {/if}
-
-          <SplitPane
-            axis="y"
-            bind:size={ySize}
-            open={layout.isOpen("preview") && layout.isOpen("simulate")}
-          >
-            {#snippet a()}
-              {#if layout.isOpen("preview")}<PreviewPane />{/if}
-            {/snippet}
-            {#snippet b()}
-              {#if layout.isOpen("simulate")}<SimulateControls />{/if}
-            {/snippet}
+        {#if layout.isOpen("preview")}
+          <SplitPane axis="y" bind:size={ySize} open={true}>
+            {#snippet a()}<PreviewPane />{/snippet}
+            {#snippet b()}<SimulateControls />{/snippet}
           </SplitPane>
-        </div>
+        {/if}
       {/snippet}
     </SplitPane>
   </div>

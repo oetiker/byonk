@@ -1,15 +1,10 @@
 <script>
-  // The error/override surface no panel toggle can hide (review finding 2,
-  // "Ruling 49"). StatusBar's own validity/cursor/watch trio stays inside
-  // EditorPane per spec §1's table -- unchanged -- but the four captured
-  // error fields and `tune.pushed` used to live there too, and StatusBar
-  // only exists while the Editor panel is open. That silently hid all five
-  // whenever the Editor was closed, which directly contradicts
-  // docs/superpowers/specs/2026-09-10-dev-ui-color-tuning-design.md §8: "An
-  // active override must be visible from outside the Tune panel... StatusBar
-  // shows that an override is live and for which panel." Mounted by
-  // AppShell above the panel row, next to ConflictBanner, outside every
-  // `layout.isOpen(...)` gate.
+  // The error surface no panel toggle can hide (review finding 2, "Ruling
+  // 49"). StatusBar's own validity/cursor/watch trio stays inside EditorPane
+  // per spec §1's table, but the captured error fields cannot live there:
+  // StatusBar only exists while the Edit panel is open, so they would go dark
+  // whenever it was closed. Mounted by AppShell above the panel row, next to
+  // ConflictBanner, outside every `layout.isOpen(...)` gate.
   //
   // Renders nothing at all -- not even an empty bar -- when there is
   // nothing to report: height is the scarce dimension in this layout (spec
@@ -17,7 +12,6 @@
   import { editor } from "../state/editor.svelte.js";
   import { screens } from "../state/screens.svelte.js";
   import { simulate } from "../state/simulate.svelte.js";
-  import { tune } from "../state/tune.svelte.js";
   import { auth } from "../state/auth.svelte.js";
 
   // Ruling 66: restoring Logout (Task 13a) created a FIFTH error owner
@@ -31,8 +25,6 @@
     !!editor.error ||
       !!screens.error ||
       !!simulate.error ||
-      !!tune.error ||
-      tune.pushed ||
       !!auth.error,
   );
 </script>
@@ -42,11 +34,6 @@
     class="flex flex-col gap-0.5 border-b border-[var(--border-color)]
            bg-[var(--panel-bg)] px-2 py-1 font-mono text-xs text-[var(--text-color)]"
   >
-    {#if tune.pushed}
-      <span role="status" class="text-[var(--danger-color)]">
-        ⚠ override live on {tune.panel || "?"}
-      </span>
-    {/if}
     {#if editor.error}
       <!-- `{op}:`, not a hard-coded "save:". `editor.error` is raised by four
            different operations (save, reload, overwrite, watch-reload --
@@ -65,11 +52,6 @@
     {#if simulate.error}
       <div role="alert" class="text-[var(--danger-color)]">
         {simulate.error.op}: {simulate.error.message}
-      </div>
-    {/if}
-    {#if tune.error}
-      <div role="alert" class="text-[var(--danger-color)]">
-        tune {tune.error.op}: {tune.error.message}
       </div>
     {/if}
     {#if auth.error}

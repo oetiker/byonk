@@ -161,6 +161,9 @@
       onpointerdown={start}
       onkeydown={key}
     ></div>
+    <!-- `flex`, like pane `a`: a flex-1 child (a nested SplitPane root)
+         only fills this pane if the pane is a flex container; as a block it
+         sat at content height and left dead space below. -->
     <div
       class="flex min-h-0 min-w-0 shrink-0 overflow-hidden"
       style={axis === "x" ? `width:${size}px` : `height:${size}px`}

@@ -36,12 +36,9 @@
   }
 </script>
 
-<!-- Spec §1: this block scrolls inside whatever height it is given, and
-     never overlaps the render. `h-full` is what makes that true: the slot
-     it sits in (SplitPane's second pane) has a fixed height and clips its
-     overflow, so without a height of its own the block was cut off at the
-     bottom instead of scrolling. -->
-<div class="flex h-full w-full min-w-0 flex-col gap-3 overflow-auto min-h-0 p-3 text-sm" data-testid="simulated-inputs">
+<!-- Spec §1: shown in full at its natural height; AppShell wraps it in a
+     capped, scrolling box for windows too short for both it and the render. -->
+<div class="flex w-full min-w-0 flex-col gap-3 p-3 text-sm" data-testid="simulated-inputs">
   {#if simulate.pending}
     <span data-testid="sim-badge" class="text-xs text-[var(--danger-color)]">not saved</span>
   {/if}

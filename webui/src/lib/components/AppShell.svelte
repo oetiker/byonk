@@ -24,11 +24,11 @@
   // onMount as the brief's code block has it. This app is never
   // server-rendered (main.js mounts straight into the DOM), so
   // localStorage is available at setup time, and calling load() here --
-  // before `xSize`/`ySize` below read layout.size() -- matters: onMount
+  // before `xSize` below read layout.size() -- matters: onMount
   // fires only after the component's first render has already captured
   // those $state initial values from layout's pre-load defaults. Since
   // layout.load() replaces layout's internal state object outright rather
-  // than mutating the one xSize/ySize snapshotted from, deferring it to
+  // than mutating the one xSize snapshotted from, deferring it to
   // onMount would mean a persisted split size is silently ignored on every
   // page load -- exactly the "reopens at a default size" bug spec §1 (and
   // layout.svelte.js's own header comment) calls out. Panel open/closed
@@ -80,17 +80,16 @@
   });
 
   let xSize = $state(layout.size("x"));
-  let ySize = $state(layout.size("y"));
 
-  // Ruling 12: SplitPane's `bind:size` updates xSize/ySize live on every
+  // Ruling 12: SplitPane's `bind:size` updates xSize live on every
   // pointermove during a drag -- that binding lives inside SplitPane
   // itself and must stay synchronous, or the drag looks laggy. Wiring that
   // straight into `layout.setSize()`, which calls `save()` (a synchronous
   // `localStorage.setItem`), would serialise the whole layout and hit disk
   // once per animation frame for the length of the drag.
   //
-  // Debounce only the persisted write, trailing-edge: each time xSize/
-  // ySize changes, schedule a write of the CURRENT value after a short
+  // Debounce only the persisted write, trailing-edge: each time xSize
+  // changes, schedule a write of the CURRENT value after a short
   // delay. Svelte re-runs an $effect by first calling the cleanup returned
   // by its previous run, so a value that changes again before the timer
   // fires cancels the stale write for free -- only the last value in a
@@ -101,7 +100,7 @@
   // AppShell is the application root and is never unmounted in normal use.
   //
   // Skip the write entirely when the bound value already matches what
-  // `layout` holds (true at mount, since xSize/ySize above were just read
+  // `layout` holds (true at mount, since xSize above was just read
   // from it) -- otherwise every page load re-persists the exact value it
   // just loaded, 200ms later, for no visible effect. `layout.size(axis)`
   // is itself reactive ($state under the hood), so once the scheduled
@@ -113,13 +112,6 @@
     const value = xSize;
     if (value === layout.size("x")) return;
     const id = setTimeout(() => layout.setSize("x", value), PERSIST_DEBOUNCE_MS);
-    return () => clearTimeout(id);
-  });
-
-  $effect(() => {
-    const value = ySize;
-    if (value === layout.size("y")) return;
-    const id = setTimeout(() => layout.setSize("y", value), PERSIST_DEBOUNCE_MS);
     return () => clearTimeout(id);
   });
 
@@ -190,10 +182,15 @@
       {/snippet}
       {#snippet b()}
         {#if layout.isOpen("preview")}
-          <SplitPane axis="y" bind:size={ySize}>
-            {#snippet a()}<PreviewPane />{/snippet}
-            {#snippet b()}<SimulatedInputs />{/snippet}
-          </SplitPane>
+          <!-- The preview takes the height the inputs leave; the inputs take
+               their natural height, capped at half the column so a short
+               window scrolls them rather than squeezing the render away. -->
+          <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+            <PreviewPane />
+            <div class="max-h-[50%] shrink-0 overflow-auto border-t border-[var(--border-color)]">
+              <SimulatedInputs />
+            </div>
+          </div>
         {/if}
       {/snippet}
     </SplitPane>

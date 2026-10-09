@@ -40,7 +40,7 @@ describe("layout store", () => {
 
   it("persists open state and sizes together", () => {
     layout.toggle("preview");
-    layout.setSize("y", 220);
+    layout.setSize("x", 640);
     layout.save();
 
     layout.reset();
@@ -48,7 +48,14 @@ describe("layout store", () => {
 
     layout.load();
     expect(layout.isOpen("preview")).toBe(false);
-    expect(layout.size("y")).toBe(220);
+    expect(layout.size("x")).toBe(640);
+  });
+
+  it("ignores an old stored y size from the retired preview/inputs divider", () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ panels: {}, sizes: { x: 500, y: 200 } }));
+    layout.load();
+    expect(layout.size("x")).toBe(500);
+    expect(layout.size("y")).toBeUndefined();
   });
 
   it("survives corrupt stored state rather than throwing", () => {

@@ -15,20 +15,20 @@ import * as api from "../src/lib/api.js";
 // exercised by any test the brief specifies (only iconrail.test.js is
 // required). These tests pin the two deviations this implementation makes
 // from that code block:
-//   1. layout.load() must run before xSize/ySize are read, not in onMount,
+//   1. layout.load() must run before xSize is read, not in onMount,
 //      or a persisted split size is silently dropped on first paint.
 //   2. the persisted write (layout.setSize -> save -> localStorage) must be
 //      debounced, not fired synchronously on every bound-size change
 //      (Ruling 12).
 //   3. review fix round 1, finding 2: mounting with no interaction at all
-//      must not schedule a write either -- xSize/ySize start out equal to
+//      must not schedule a write either -- xSize starts out equal to
 //      what `layout` already holds (they were just read from it), so
 //      persisting them again 200ms later would re-save the exact value
 //      just loaded, for no visible effect, on every single page load.
 
 function findVerticalSeparator() {
   // The outer (axis="x") SplitPane's separator is aria-orientation=
-  // "vertical" per SplitPane.svelte; the inner axis="y" one is
+  // "vertical" per SplitPane.svelte; the (retired) inner axis="y" one was
   // "horizontal". Both share the same aria-label ("Resize panel"), so
   // disambiguate by orientation rather than by accessible name.
   return screen
@@ -54,8 +54,9 @@ describe("AppShell", () => {
     render(AppShell);
     expect(screen.getByTestId("simulated-inputs")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Simulated inputs/ })).toBeNull();
-    // Class contract: the inputs span the width of their (flex) pane.
-    expect(screen.getByTestId("simulated-inputs").className.split(/\s+/)).toContain("w-full");
+    // Class contract: natural height in a capped, scrolling, non-shrinking box.
+    const box = screen.getByTestId("simulated-inputs").parentElement.className.split(/\s+/);
+    expect(box).toEqual(expect.arrayContaining(["shrink-0", "overflow-auto", "max-h-[50%]"]));
   });
 
   it("applies a persisted split size on first paint, not only after mount", () => {
@@ -63,7 +64,7 @@ describe("AppShell", () => {
       STORAGE_KEY,
       JSON.stringify({
         panels: { library: true, editor: true, preview: true },
-        sizes: { x: 555, y: 260 },
+        sizes: { x: 555 },
       }),
     );
 

@@ -8,7 +8,7 @@ export const STORAGE_KEY = "byonk.layout.v1";
 
 const DEFAULTS = {
   panels: { library: true, editor: true, preview: true },
-  sizes: { x: 420, y: 260 },
+  sizes: { x: 420 },
 };
 
 function fresh() {
@@ -67,7 +67,8 @@ class Layout {
       for (const p of PANELS) {
         if (typeof parsed?.panels?.[p] === "boolean") next.panels[p] = parsed.panels[p];
       }
-      for (const a of ["x", "y"]) {
+      // Only "x" exists; an old stored "y" (the retired preview/inputs divider) is ignored.
+      for (const a of ["x"]) {
         if (Number.isFinite(parsed?.sizes?.[a])) next.sizes[a] = parsed.sizes[a];
       }
       this.#s = next;

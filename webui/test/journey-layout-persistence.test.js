@@ -142,47 +142,23 @@ describe("splitter drag, persisted across a reload", () => {
     expect(Number(separator("vertical").getAttribute("aria-valuenow"))).toBe(300);
   });
 
-  it("a dragged y splitter still holds its size after the app is remounted", async () => {
+  it("has no horizontal splitter: the inputs sit under the preview at natural height", () => {
     render(AppShell);
-
-    const sep = separator("horizontal");
-    expect(sep).toBeTruthy();
-    expect(Number(sep.getAttribute("aria-valuenow"))).toBe(260); // the default
-
-    // axis="y" derives from `rect.bottom - clientY`: 800 - 600 = 200.
-    await drag(sep, { clientY: 600 });
-    await waitFor(() =>
-      expect(Number(separator("horizontal").getAttribute("aria-valuenow"))).toBe(200),
-    );
-    await waitFor(() => expect(JSON.parse(localStorage.getItem(STORAGE_KEY)).sizes.y).toBe(200));
-
-    cleanup();
-    layout.reset();
-    render(AppShell);
-
-    expect(Number(separator("horizontal").getAttribute("aria-valuenow"))).toBe(200);
+    expect(separator("horizontal")).toBeUndefined();
+    expect(dom.getByTestId("simulated-inputs")).toBeTruthy();
   });
 
-  // The two axes have independent debounced effects writing into ONE
-  // persisted record. A write that serialised the whole record from a stale
-  // snapshot would let the later axis silently undo the earlier one.
-  it("dragging both axes persists both, not just the last one", async () => {
-    render(AppShell);
-
-    await drag(separator("vertical"), { clientX: 700 });
-    await drag(separator("horizontal"), { clientY: 600 });
-
-    await waitFor(() => {
-      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-      expect(saved.sizes).toEqual({ x: 300, y: 200 });
-    });
-
-    cleanup();
+  it("tolerates an old stored y size and never writes one back", async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      panels: { library: true, editor: true, preview: true },
+      sizes: { x: 300, y: 200 },
+    }));
     layout.reset();
     render(AppShell);
-
     expect(Number(separator("vertical").getAttribute("aria-valuenow"))).toBe(300);
-    expect(Number(separator("horizontal").getAttribute("aria-valuenow"))).toBe(200);
+    await drag(separator("vertical"), { clientX: 650 });
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(STORAGE_KEY)).sizes.x).toBe(350));
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)).sizes.y).toBeUndefined();
   });
 
   // Sizes and panel visibility share one record on purpose (layout.svelte.js

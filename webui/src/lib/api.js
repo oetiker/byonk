@@ -153,6 +153,17 @@ async function put(url, body) {
   return text ? JSON.parse(text) : null;
 }
 
+async function patch(url, body) {
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw await fail(res);
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
 async function del(url) {
   const res = await fetch(url, { method: "DELETE" });
   if (!res.ok) throw await fail(res);
@@ -176,6 +187,26 @@ export const savePanelColors = (panel, colors_actual) =>
 export const startTuningSession = (device) =>
   put(`api/tuning-session/${encodeURIComponent(device)}`);
 export const endTuningSession = (device) => del(`api/tuning-session/${encodeURIComponent(device)}`);
+
+const enc = encodeURIComponent;
+
+/**
+ * Dev overrides (Plan 1 Tasks 2-3): a Push puts dirty draft values on the
+ * cascade's override rung for every device on a panel, or for one device.
+ * Each expires 30 minutes after its last PUT.
+ */
+export const listOverrides = () => json("api/overrides");
+export const pushPanelOverride = (panel, values) => put(`api/overrides/panels/${enc(panel)}`, values);
+export const releasePanelOverride = (panel) => del(`api/overrides/panels/${enc(panel)}`);
+export const pushDeviceOverride = (device, values) => put(`api/overrides/devices/${enc(device)}`, values);
+export const releaseDeviceOverride = (device) => del(`api/overrides/devices/${enc(device)}`);
+
+/** Save a panel's whole rung (`colors_actual` + `dither`); absent = removed. */
+export const savePanel = (panel, rung) => post(`api/panels/${enc(panel)}/save`, rung);
+/** Save a device: the admin PATCH body (`DeviceWrite`), behind the dev login. */
+export const saveDevice = (key, body) => patch(`api/devices/${enc(key)}`, body);
+/** Which devices use which panel, as the server resolves them. */
+export const panelUsage = () => json("api/panel-usage");
 
 /**
  * POST a preview render (see docs/src/guide/dev-mode.md, "Rendering a

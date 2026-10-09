@@ -161,6 +161,20 @@ describe("api", () => {
         expectedUrl: "logout",
         expectedMethod: "POST",
       },
+      { name: "listOverrides", call: () => api.listOverrides(), expectedUrl: "api/overrides", expectedMethod: "GET" },
+      { name: "pushPanelOverride", call: () => api.pushPanelOverride("e1004", { strength: 0.5 }),
+        expectedUrl: "api/overrides/panels/e1004", expectedMethod: "PUT" },
+      { name: "releasePanelOverride", call: () => api.releasePanelOverride("e1004"),
+        expectedUrl: "api/overrides/panels/e1004", expectedMethod: "DELETE" },
+      { name: "pushDeviceOverride", call: () => api.pushDeviceOverride("AA:BB", { dither: "stucki" }),
+        expectedUrl: "api/overrides/devices/AA%3ABB", expectedMethod: "PUT" },
+      { name: "releaseDeviceOverride", call: () => api.releaseDeviceOverride("AA:BB"),
+        expectedUrl: "api/overrides/devices/AA%3ABB", expectedMethod: "DELETE" },
+      { name: "savePanel", call: () => api.savePanel("e1004", { colors_actual: "#000000,#FFFFFF" }),
+        expectedUrl: "api/panels/e1004/save", expectedMethod: "POST" },
+      { name: "saveDevice", call: () => api.saveDevice("kitchen", { name: "K" }),
+        expectedUrl: "api/devices/kitchen", expectedMethod: "PATCH", responseBody: '{"key":"kitchen","screen":"local/a"}' },
+      { name: "panelUsage", call: () => api.panelUsage(), expectedUrl: "api/panel-usage", expectedMethod: "GET" },
     ];
 
     // Mock factory: store the current entry so the mock can respond accordingly
@@ -218,6 +232,20 @@ describe("api", () => {
         ? `Uncovered exports: ${uncovered.join(", ")}. Add them to urlCoverage.`
         : ""
     ).toEqual([]);
+  });
+
+  it("sends a device Save as a JSON PATCH and a push as a JSON PUT", async () => {
+    mockFetch(async () => new Response('{"key":"kitchen","screen":"local/a"}', { status: 200 }));
+    await api.saveDevice("kitchen", { final: { dither: "atkinson" } });
+    let [, init] = globalThis.fetch.mock.calls.at(-1);
+    expect(init.method).toBe("PATCH");
+    expect(init.headers["Content-Type"]).toBe("application/json");
+    expect(JSON.parse(init.body)).toEqual({ final: { dither: "atkinson" } });
+
+    mockFetch(async () => new Response(null, { status: 200 }));
+    await expect(api.pushPanelOverride("e1004", { strength: 0.5 })).resolves.toBeNull();
+    [, init] = globalThis.fetch.mock.calls.at(-1);
+    expect(JSON.parse(init.body)).toEqual({ strength: 0.5 });
   });
 
   it("returns the etag alongside the text when reading a file", async () => {

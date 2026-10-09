@@ -4,6 +4,7 @@
   import { simulate } from "../state/simulate.svelte.js";
   import { screens } from "../state/screens.svelte.js";
   import { subject } from "../state/subject.svelte.js";
+  import { resolution, parseResolutionHeader } from "../state/resolution.svelte.js";
 
   let blobUrl = $state(null);
   let channel;
@@ -196,6 +197,7 @@
       // Untracked: the re-render effect below calls this synchronously, and
       // must depend on the selection and the controls, not on `blobUrl`.
       untrack(() => {
+        resolution.reset();
         if (!blobUrl) return;
         URL.revokeObjectURL(blobUrl);
         blobUrl = null;
@@ -216,11 +218,19 @@
       }
       const blob = await res.blob();
       if (seq !== renderSeq) return; // superseded -- see `renderSeq`
+      let payload;
+      try {
+        payload = parseResolutionHeader(res.headers?.get?.("X-Byonk-Resolution") ?? null);
+      } catch {
+        throw new Error("the render's X-Byonk-Resolution header is not valid JSON");
+      }
+      resolution.record(payload, subject.key);
       if (blobUrl) URL.revokeObjectURL(blobUrl);
       blobUrl = URL.createObjectURL(blob);
       postFrame();
     } catch (e) {
       if (seq !== renderSeq) return; // a superseded render's failure is not news
+      resolution.fail(e.message, subject.key);
       simulate.error = { op: "render", message: e.message };
     }
   }

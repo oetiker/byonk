@@ -9,6 +9,7 @@ import { layout } from "../src/lib/state/layout.svelte.js";
 import { auth } from "../src/lib/state/auth.svelte.js";
 import { theme } from "../src/lib/state/theme.svelte.js";
 import { subject } from "../src/lib/state/subject.svelte.js";
+import { resolution } from "../src/lib/state/resolution.svelte.js";
 import * as api from "../src/lib/api.js";
 
 const PANELS = [
@@ -52,6 +53,7 @@ beforeEach(() => {
   layout.reset(); theme.reset(); auth.reset(); editor.reset(); editor.files = [];
   simulate.reset(); simulate.error = null;
   subject.reset();
+  resolution.reset();
   screens.repos = []; screens.list = [];
   screens.meta = { devices: [], panels: [], dither_algorithms: [] };
   vi.spyOn(api, "listRepos").mockResolvedValue([{ handle: "local", writable: true }]);

@@ -4,6 +4,8 @@ import PreviewPane from "../src/lib/components/PreviewPane.svelte";
 import { screens } from "../src/lib/state/screens.svelte.js";
 import { subject } from "../src/lib/state/subject.svelte.js";
 import { simulate } from "../src/lib/state/simulate.svelte.js";
+import { resolution } from "../src/lib/state/resolution.svelte.js";
+import * as api from "../src/lib/api.js";
 
 beforeEach(() => {
   // No project-wide auto-cleanup is configured (see filespane.test.js,
@@ -16,6 +18,7 @@ beforeEach(() => {
   // below mutate so one test's selection, params or captured error can't
   // leak into the next (same reasoning as filespane.test.js).
   subject.reset();
+  resolution.reset();
   simulate.reset();
   simulate.error = null;
 });
@@ -333,5 +336,28 @@ describe("PreviewPane", () => {
     release();
     await new Promise((r) => setTimeout(r, 20));
     expect(img.getAttribute("src")).toBeNull();
+  });
+  it("writes a successful render's X-Byonk-Resolution into the shared store", async () => {
+    vi.spyOn(api, "renderPreview").mockResolvedValue({
+      ok: true,
+      headers: { get: () => '{"dither":{"effective":"atkinson","from":"screen","order":[],"rungs":{}}}' },
+      blob: async () => new Blob(["png"]),
+    });
+    subject.select("screen", "local/a");
+    render(PreviewPane);
+    await waitFor(() => expect(resolution.state).toBe("ok"));
+    expect(resolution.setting("dither").from).toBe("screen");
+    expect(resolution.subjectKey).toBe("screen:local/a");
+  });
+
+  it("a failed render marks the store failed, with the server's message", async () => {
+    vi.spyOn(api, "renderPreview").mockResolvedValue({
+      ok: false, status: 500, statusText: "x",
+      json: async () => ({ error: "Render error", details: "boom" }),
+    });
+    subject.select("screen", "local/a");
+    render(PreviewPane);
+    await waitFor(() => expect(resolution.state).toBe("failed"));
+    expect(resolution.failure).toBe("Render error: boom");
   });
 });

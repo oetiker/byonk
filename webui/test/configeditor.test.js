@@ -30,7 +30,7 @@ describe("ConfigEditor, panel schema", () => {
     render(ConfigEditor);
     expect(dom.getByRole("heading", { name: /panel reTerminal E1004/ })).toBeTruthy();
     expect(dom.getByText("⚠ 3 devices use this panel")).toBeTruthy();
-    expect(dom.getByText("(2 not seen since byonk started)")).toBeTruthy();
+    expect(dom.getByText("2 more devices have not polled since byonk started, so their panel is not known yet.")).toBeTruthy();
   });
 
   it("puts the action bar above the form, outside the scrolling body", () => {
@@ -49,7 +49,13 @@ describe("ConfigEditor, panel schema", () => {
     configDraft.usage = { panels: { e1004: ["kitchen"] }, unseen: [] };
     render(ConfigEditor);
     expect(dom.getByText("⚠ 1 device uses this panel")).toBeTruthy();
-    expect(dom.queryByText(/not seen since byonk started/)).toBeNull();
+    expect(dom.queryByText(/not polled since byonk started|not known yet/)).toBeNull();
+  });
+
+  it("uses the singular for one device with an unknown panel", () => {
+    configDraft.usage = { panels: { e1004: ["kitchen"] }, unseen: ["attic"] };
+    render(ConfigEditor);
+    expect(dom.getByText("1 more device has not polled since byonk started, so its panel is not known yet.")).toBeTruthy();
   });
 
   it("an edit marks one unsaved change and enables Push and Save", async () => {

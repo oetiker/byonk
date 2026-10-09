@@ -90,7 +90,7 @@
 
   {#if kind === "panel"}
     <p class="text-xs">{users === 1 ? "⚠ 1 device uses this panel" : `⚠ ${users} devices use this panel`}</p>
-    {#if unseen > 0}<p class="text-xs text-[var(--text-muted)]">({unseen} not seen since byonk started)</p>{/if}
+    {#if unseen > 0}<p class="text-xs text-[var(--text-muted)]">{unseen === 1 ? "1 more device has not polled since byonk started, so its panel is not known yet." : `${unseen} more devices have not polled since byonk started, so their panel is not known yet.`}</p>{/if}
   {/if}
 
   {#if live}

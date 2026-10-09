@@ -307,8 +307,9 @@ reason, and with Preview closed it says "From the last render — Preview is
 closed".
 
 The panel editor also tells you how many devices use the panel ("⚠ 3 devices
-use this panel") and, when some have not checked in yet, how many "(2 not seen
-since byonk started)".
+use this panel") and, when some configured devices have not polled yet, how many
+("2 more devices have not polled since byonk started, so their panel is not known
+yet."). Those devices are not counted as users: their panel is simply not known.
 
 ### Push, Save, Discard
 

@@ -5,9 +5,55 @@
   import { configDraft } from "../state/configDraft.svelte.js";
   import * as api from "../api.js";
   import { devicePanel } from "../render-request.js"; // the one device->panel lookup (ruling PF8)
+  import { untrack } from "svelte";
   import { Button } from "$lib/ui/button/index.js";
   import InlineNameForm from "./InlineNameForm.svelte";
   import InlineConfirm from "./InlineConfirm.svelte";
+
+  // --- accordion sections (VS Code explorer style) -----------------------
+  // Which sections are collapsed is a per-viewer convenience kept in
+  // localStorage; every access is guarded because storage can be blocked
+  // (private window, cleared site data) and the pane must work without it.
+  const COLLAPSED_KEY = "byonk.library.collapsed.v1";
+  const SECTIONS = ["screen", "panel", "device"];
+
+  function loadCollapsed() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]");
+      return Array.isArray(raw) ? raw.filter((k) => SECTIONS.includes(k)) : [];
+    } catch {
+      return [];
+    }
+  }
+  let collapsed = $state(loadCollapsed());
+
+  function persistCollapsed() {
+    try {
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify($state.snapshot(collapsed)));
+    } catch {
+      /* storage blocked: the choice lasts for this page only */
+    }
+  }
+  const isOpen = (key) => !collapsed.includes(key);
+  function toggleSection(key) {
+    collapsed = isOpen(key) ? [...collapsed, key] : collapsed.filter((k) => k !== key);
+    persistCollapsed();
+  }
+
+  // A newly selected subject must not sit hidden in a collapsed section the
+  // user did not just close: expand the section that holds it. Reads only
+  // the subject; the write is untracked so a manual toggle is never undone.
+  $effect(() => {
+    const kind = subject.kind;
+    const id = subject.id;
+    if (!id) return;
+    untrack(() => {
+      if (!isOpen(kind) && SECTIONS.includes(kind)) {
+        collapsed = collapsed.filter((k) => k !== kind);
+        persistCollapsed();
+      }
+    });
+  });
 
   const canEdit = $derived(screens.writable(subject.screenRef));
 
@@ -167,8 +213,8 @@
   }
 </script>
 
-<div class="flex flex-col text-xs" role="region" aria-label="Library">
-  <div class="flex gap-1 border-b border-[var(--border-color)] p-1">
+<div class="flex min-h-0 flex-1 flex-col text-xs" role="region" aria-label="Library">
+  <div class="flex shrink-0 gap-1 border-b border-[var(--border-color)] p-1">
     <Button type="button" size="xs" variant="outline" onclick={newScreen}>New</Button>
     <Button
       type="button"
@@ -210,29 +256,52 @@
     />
   {/if}
 
-  <h2 class="px-2 pt-2 text-[10px] font-medium uppercase text-[var(--text-muted)]">Screens</h2>
-  {#each screens.grouped as g (g.handle)}
-    <div class="px-2 pt-1 font-mono text-[10px] uppercase text-[var(--text-muted)]">
-      {g.handle}{#if !g.writable}<span class="ml-1">read-only</span>{/if}
-    </div>
-    {#each g.screens as s (s.ref)}
-      <button type="button" class={rowClass(subject.is("screen", s.ref))}
-              aria-current={subject.is("screen", s.ref) ? "true" : undefined}
-              onclick={() => subject.select("screen", s.ref)}>{s.label}</button>
+  {#snippet section(key, label, body)}
+    <!-- Expanded sections share the pane height (flex-1 on a zero basis) and
+         scroll on their own; a collapsed one shrinks to its header. -->
+    <section class="flex min-h-0 flex-col border-t border-[var(--border-color)] {isOpen(key) ? 'flex-1 basis-0' : 'shrink-0'}"
+             aria-label={label}>
+      <button type="button" aria-expanded={isOpen(key)}
+              class="flex w-full shrink-0 items-center gap-1 bg-[var(--panel-bg)] px-1.5 py-1 text-left text-[11px] font-bold uppercase tracking-wide hover:bg-[var(--border-color)]"
+              onclick={() => toggleSection(key)}>
+        <span aria-hidden="true" class="w-3 text-center">{isOpen(key) ? "▾" : "▸"}</span>{label}
+      </button>
+      {#if isOpen(key)}
+        <div class="flex min-h-0 flex-1 flex-col overflow-auto pb-1">{@render body()}</div>
+      {/if}
+    </section>
+  {/snippet}
+
+  {#snippet screensBody()}
+    {#each screens.grouped as g (g.handle)}
+      <div class="px-2 pt-1 font-mono text-[10px] uppercase text-[var(--text-muted)]">
+        {g.handle}{#if !g.writable}<span class="ml-1">read-only</span>{/if}
+      </div>
+      {#each g.screens as s (s.ref)}
+        <button type="button" class={rowClass(subject.is("screen", s.ref))}
+                aria-current={subject.is("screen", s.ref) ? "true" : undefined}
+                onclick={() => subject.select("screen", s.ref)}>{s.label}</button>
+      {/each}
     {/each}
-  {/each}
+  {/snippet}
 
-  <h2 class="px-2 pt-3 text-[10px] font-medium uppercase text-[var(--text-muted)]">Panels</h2>
-  {#each screens.meta.panels ?? [] as p (p.id)}
-    <button type="button" class={rowClass(subject.is("panel", p.id))}
-            aria-current={subject.is("panel", p.id) ? "true" : undefined}
-            onclick={() => subject.select("panel", p.id)}>{p.name}</button>
-  {/each}
+  {#snippet panelsBody()}
+    {#each screens.meta.panels ?? [] as p (p.id)}
+      <button type="button" class={rowClass(subject.is("panel", p.id))}
+              aria-current={subject.is("panel", p.id) ? "true" : undefined}
+              onclick={() => subject.select("panel", p.id)}>{p.name}</button>
+    {/each}
+  {/snippet}
 
-  <h2 class="px-2 pt-3 text-[10px] font-medium uppercase text-[var(--text-muted)]">Devices</h2>
-  {#each screens.meta.devices ?? [] as d (d.id)}
-    <button type="button" class={rowClass(subject.is("device", d.id))}
-            aria-current={subject.is("device", d.id) ? "true" : undefined}
-            onclick={() => subject.select("device", d.id)}>{d.name ?? d.id} · {devicePanelLabel(d)}</button>
-  {/each}
+  {#snippet devicesBody()}
+    {#each screens.meta.devices ?? [] as d (d.id)}
+      <button type="button" class={rowClass(subject.is("device", d.id))}
+              aria-current={subject.is("device", d.id) ? "true" : undefined}
+              onclick={() => subject.select("device", d.id)}>{d.name ?? d.id} · {devicePanelLabel(d)}</button>
+    {/each}
+  {/snippet}
+
+  {@render section("screen", "Screens", screensBody)}
+  {@render section("panel", "Panels", panelsBody)}
+  {@render section("device", "Devices", devicesBody)}
 </div>

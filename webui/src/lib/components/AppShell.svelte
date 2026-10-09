@@ -12,7 +12,6 @@
   import { subject } from "../state/subject.svelte.js";
   import { configDraft } from "../state/configDraft.svelte.js";
   import { resolution } from "../state/resolution.svelte.js";
-  import { simulate } from "../state/simulate.svelte.js";
   import * as api from "../api.js";
 
   // Placeholders until Tasks 6-10 fill them in.
@@ -180,7 +179,7 @@
     <IconRail />
 
     {#if layout.isOpen("library")}
-      <div class="w-56 shrink-0 overflow-auto border-r border-[var(--border-color)]">
+      <div class="flex w-56 shrink-0 flex-col overflow-hidden border-r border-[var(--border-color)]">
         <LibraryPane />
       </div>
     {/if}
@@ -191,7 +190,7 @@
       {/snippet}
       {#snippet b()}
         {#if layout.isOpen("preview")}
-          <SplitPane axis="y" bind:size={ySize} open={simulate.expanded}>
+          <SplitPane axis="y" bind:size={ySize}>
             {#snippet a()}<PreviewPane />{/snippet}
             {#snippet b()}<SimulatedInputs />{/snippet}
           </SplitPane>

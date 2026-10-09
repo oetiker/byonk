@@ -16,6 +16,7 @@ async function answer(label, text) {
 }
 
 beforeEach(async () => {
+  localStorage.clear();
   // No project-wide auto-cleanup is configured (see iconrail.test.js,
   // splitpane.test.js) -- without this, the second test's render leaves the
   // first test's DOM in place and getByRole matches more than one element.
@@ -394,5 +395,63 @@ describe("LibraryPane subjects", () => {
     render(LibraryPane);
     subject.select("panel", "e1004");
     expect(dom.getByRole("button", { name: "Delete" }).disabled).toBe(true);
+  });
+});
+
+describe("LibraryPane accordion sections", () => {
+  const header = (name) => screen.getByRole("button", { name: new RegExp(name, "i") });
+
+  it("renders Screens, Panels and Devices as expanded disclosure buttons", () => {
+    render(LibraryPane);
+    for (const n of ["Screens", "Panels", "Devices"]) {
+      expect(header(n)).toHaveAttribute("aria-expanded", "true");
+    }
+    expect(screen.getByRole("button", { name: "a" })).toBeTruthy();
+  });
+
+  it("toggling a header hides and shows only its list, and keeps the others visible", async () => {
+    render(LibraryPane);
+    await fireEvent.click(header("Screens"));
+    expect(header("Screens")).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "a" })).toBeNull();
+    expect(header("Panels")).toBeTruthy();
+    expect(header("Devices")).toBeTruthy();
+    await fireEvent.click(header("Screens"));
+    expect(header("Screens")).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "a" })).toBeTruthy();
+  });
+
+  it("keeps the New/Copy/Rename/Delete toolbar and inline forms while a section is collapsed", async () => {
+    render(LibraryPane);
+    await fireEvent.click(header("Screens"));
+    await fireEvent.click(screen.getByRole("button", { name: "New" }));
+    expect(await screen.findByRole("form", { name: "New screen name" })).toBeTruthy();
+  });
+
+  it("remembers collapsed sections per viewer", async () => {
+    render(LibraryPane);
+    await fireEvent.click(header("Panels"));
+    cleanup();
+    render(LibraryPane);
+    expect(header("Panels")).toHaveAttribute("aria-expanded", "false");
+    expect(header("Screens")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("still works when localStorage throws", async () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("blocked"); });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
+    render(LibraryPane);
+    expect(header("Devices")).toHaveAttribute("aria-expanded", "true");
+    await fireEvent.click(header("Devices"));
+    expect(header("Devices")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("expands the section holding a newly selected subject", async () => {
+    render(LibraryPane);
+    await fireEvent.click(header("Screens"));
+    expect(header("Screens")).toHaveAttribute("aria-expanded", "false");
+    subject.select("screen", "local/a");
+    await tick();
+    expect(header("Screens")).toHaveAttribute("aria-expanded", "true");
   });
 });

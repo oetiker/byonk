@@ -295,7 +295,8 @@ fn flow_replace(
 }
 
 /// Add `key: value` as the last pair of the one-line flow mapping spanning
-/// `parent` (`{a: 1}` becomes `{a: 1, key: value}`).
+/// `parent` (`{a: 1}` becomes `{a: 1, key: value}`). A legal trailing comma
+/// (`{a: 1,}`) is used as the separator instead of being doubled.
 fn flow_add(
     yaml: &str,
     parent: (usize, usize),
@@ -303,10 +304,96 @@ fn flow_add(
     value: &serde_yaml::Value,
 ) -> Result<String, ConfigWriteError> {
     let close = parent.1 - 1; // the `}`
-    let at = yaml[parent.0..close].trim_end().len() + parent.0;
+    let before = yaml[parent.0..close].trim_end();
+    let at = parent.0 + before.len();
+    let sep = if before.ends_with(',') { " " } else { ", " };
     let mut out = yaml.to_string();
-    out.insert_str(at, &format!(", {}: {}", flow_key(key)?, flow_value(value)?));
+    out.insert_str(
+        at,
+        &format!("{sep}{}: {}", flow_key(key)?, flow_value(value)?),
+    );
     Ok(out)
+}
+
+/// The length of the shortest prefix of `path` whose value is written as an
+/// alias (`d: *base`), if any. Such a value has no lines or braces of its own
+/// to edit in place; see [`write_whole`].
+fn aliased_prefix(yaml: &str, path: &[&str]) -> Result<Option<usize>, ConfigWriteError> {
+    // Read after the key: `query_exact` resolves an alias to the anchored
+    // node, so its span points at the anchor, not at `*name`.
+    let doc = document(yaml)?;
+    for n in 1..=path.len() {
+        let Ok(key) = doc.query_key_only(&route_for(&path[..n])) else {
+            return Ok(None);
+        };
+        let after = yaml[key.location.byte_span.1..].trim_start_matches([' ', '\t']);
+        let value = after
+            .strip_prefix(':')
+            .unwrap_or(after)
+            .trim_start_matches([' ', '\t']);
+        if value.starts_with('*') {
+            return Ok(Some(n));
+        }
+    }
+    Ok(None)
+}
+
+/// Replace `path`'s lines with `value` written as a block at the same place
+/// and indentation. An alias written there is replaced by `value`, which the
+/// callers build from the alias's resolved contents; the anchor it pointed at
+/// is left alone.
+fn write_whole(
+    yaml: &str,
+    path: &[&str],
+    value: &serde_yaml::Value,
+) -> Result<String, ConfigWriteError> {
+    let (start, end) = path_range(yaml, path)?;
+    let text = block_text(path[path.len() - 1], value, indent_of(&yaml[start..]))?;
+    let mut out = yaml.to_string();
+    out.replace_range(start..end, &text);
+    Ok(out)
+}
+
+/// `root` with `sub` set to `value` (`Some`) or removed (`None`), creating
+/// mappings along the way.
+fn with_change(
+    root: &serde_yaml::Value,
+    sub: &[&str],
+    value: Option<&serde_yaml::Value>,
+) -> serde_yaml::Value {
+    let Some((first, rest)) = sub.split_first() else {
+        return value.cloned().unwrap_or(serde_yaml::Value::Null);
+    };
+    let mut m = root.as_mapping().cloned().unwrap_or_default();
+    if rest.is_empty() {
+        match value {
+            Some(v) => {
+                m.insert((*first).into(), v.clone());
+            }
+            None => {
+                m.shift_remove(*first);
+            }
+        }
+    } else {
+        let child = m.get(*first).cloned().unwrap_or(serde_yaml::Value::Null);
+        m.insert((*first).into(), with_change(&child, rest, value));
+    }
+    serde_yaml::Value::Mapping(m)
+}
+
+/// Apply a set (`Some`) or removal (`None`) of `path` that runs through an
+/// alias written at `path[..n]`: the alias becomes a block holding its
+/// resolved contents with the change applied.
+fn change_through_alias(
+    yaml: &str,
+    doc: &serde_yaml::Value,
+    path: &[&str],
+    n: usize,
+    value: Option<&serde_yaml::Value>,
+) -> Result<String, ConfigWriteError> {
+    let at = &path[..n];
+    let resolved = lookup(doc, at).cloned().unwrap_or(serde_yaml::Value::Null);
+    write_whole(yaml, at, &with_change(&resolved, &path[n..], value))
 }
 
 /// Remove the pair `path` from its one-line flow mapping, with the comma that
@@ -394,6 +481,9 @@ pub fn remove_path(yaml: &str, path: &[&str]) -> Result<String, ConfigWriteError
     if lookup(&doc, path).is_none() {
         return Ok(yaml.to_string());
     }
+    if let Some(n) = aliased_prefix(yaml, path)?.filter(|n| *n < path.len()) {
+        return change_through_alias(yaml, &doc, path, n, None);
+    }
     if parent_is_inline(yaml, path)? {
         let parent = &path[..path.len() - 1];
         if one_line_flow_mapping(yaml, parent)?.is_some() {
@@ -438,10 +528,16 @@ pub fn set_path(
     let (parent, key) = path.split_at(path.len() - 1);
     let key = key[0];
 
+    if lookup(&doc, path).is_some_and(|existing| same(existing, value)) {
+        return Ok(yaml.to_string());
+    }
+    // Through or at an alias (`d: *base`): it has no lines of its own, so it
+    // is rewritten as a block holding its resolved contents plus the change.
+    if let Some(n) = aliased_prefix(yaml, path)? {
+        return change_through_alias(yaml, &doc, path, n, Some(value));
+    }
+
     if let Some(existing) = lookup(&doc, path) {
-        if same(existing, value) {
-            return Ok(yaml.to_string());
-        }
         if one_line_flow_mapping(yaml, parent)?.is_some() {
             if let Some(out) = flow_replace(yaml, path, value)? {
                 return Ok(out);
@@ -457,11 +553,7 @@ pub fn set_path(
         if is_scalar(existing) && is_scalar(value) && !existing.is_null() {
             return replace_scalar(yaml, path, value.clone());
         }
-        let (start, end) = path_range(yaml, path)?;
-        let text = block_text(key, value, indent_of(&yaml[start..]))?;
-        let mut out = yaml.to_string();
-        out.replace_range(start..end, &text);
-        return Ok(out);
+        return write_whole(yaml, path, value);
     }
 
     if parent.is_empty() {
@@ -512,6 +604,10 @@ pub fn sync_mapping(
     target: &serde_yaml::Mapping,
 ) -> Result<String, ConfigWriteError> {
     let doc = parse(yaml)?;
+    if aliased_prefix(yaml, path)?.is_some() {
+        // An alias has nothing to edit key by key: written whole.
+        return set_path(yaml, path, &serde_yaml::Value::Mapping(target.clone()));
+    }
     let flow = !target.is_empty() && one_line_flow_mapping(yaml, path)?.is_some();
     let existing = match lookup(&doc, path) {
         Some(serde_yaml::Value::Mapping(m))
@@ -733,7 +829,8 @@ pub fn remove_device(yaml: &str, key: &str) -> Result<String, ConfigWriteError> 
     remove_from_section(yaml, "devices", "device", key)
 }
 
-/// Add a new device or make an existing one equal `block`.
+/// Add a new device or make an existing one equal `block`. On an existing
+/// entry this is a whole-entry sync: keys `block` lacks are removed.
 ///
 /// A new device is appended as the last child of `devices:` (the section is
 /// created if absent; `devices: {}` and a null `devices:` become a block). An
@@ -1627,5 +1724,86 @@ devices:
             out,
             FLOW_PANEL.replace(", colors_actual: '#111111,#EEEEEE'}", "}")
         );
+    }
+
+    /// A trailing comma inside a flow mapping is legal YAML: an added pair
+    /// takes its place rather than doubling it, and a removal keeps it valid.
+    #[test]
+    fn a_flow_device_with_a_trailing_comma_takes_an_add_and_a_remove() {
+        let yaml = "devices:\n  d: {screen: a, panel: b,}   # c\n";
+        let out = update_device(yaml, "d", &map(&[("name", "N".into())]), &["name"]).unwrap();
+        assert_eq!(out, "devices:\n  d: {screen: a, panel: b, name: N}   # c\n");
+        let out = update_device(yaml, "d", &serde_yaml::Mapping::new(), &["panel"]).unwrap();
+        assert_eq!(out, "devices:\n  d: {screen: a, }   # c\n");
+    }
+
+    #[test]
+    fn a_flow_panel_with_a_trailing_comma_takes_an_add_and_a_remove() {
+        let yaml = "panels:\n  og: {name: OG, colors: x,}\n";
+        let out = set_path(yaml, &["panels", "og", "colors_actual"], &"y".into()).unwrap();
+        assert_eq!(
+            out,
+            "panels:\n  og: {name: OG, colors: x, colors_actual: y}\n"
+        );
+        let out = remove_path(yaml, &["panels", "og", "colors"]).unwrap();
+        assert_eq!(out, "panels:\n  og: {name: OG, }\n");
+    }
+
+    const ALIASED: &str = "\
+base: &cc
+  screen: a
+  dither: atkinson
+devices:
+  d: *cc   # shares base
+  f:
+    screen: b
+";
+
+    /// An aliased entry (`d: *cc`) has no lines of its own to edit: it is
+    /// rewritten as a block holding the resolved values plus the change,
+    /// and the anchor it pointed at is left alone.
+    #[test]
+    fn an_aliased_device_is_rewritten_as_a_block_with_the_change() {
+        let out = update_device(ALIASED, "d", &map(&[("name", "N".into())]), &["name"]).unwrap();
+        assert_eq!(
+            out,
+            ALIASED.replace(
+                "  d: *cc   # shares base\n",
+                "  d:\n    screen: a\n    dither: atkinson\n    name: N\n"
+            )
+        );
+        let out = update_device(ALIASED, "d", &serde_yaml::Mapping::new(), &["dither"]).unwrap();
+        assert_eq!(
+            out,
+            ALIASED.replace("  d: *cc   # shares base\n", "  d:\n    screen: a\n")
+        );
+        let out = upsert_device(ALIASED, "d", &map(&[("screen", "z".into())])).unwrap();
+        assert_eq!(
+            out,
+            ALIASED.replace("  d: *cc   # shares base\n", "  d:\n    screen: z\n")
+        );
+        // A quoted MAC key, as devices usually have.
+        let mac = ALIASED.replace("  d: *cc", "  \"AA:BB\": *cc");
+        let out = update_device(&mac, "AA:BB", &map(&[("name", "N".into())]), &["name"]).unwrap();
+        assert_eq!(
+            out,
+            ALIASED.replace(
+                "  d: *cc   # shares base\n",
+                "  AA:BB:\n    screen: a\n    dither: atkinson\n    name: N\n"
+            )
+        );
+        assert_eq!(parse(&out).unwrap()["devices"]["AA:BB"]["name"], "N");
+    }
+
+    #[test]
+    fn an_aliased_panel_is_rewritten_as_a_block_with_the_change() {
+        let yaml = "x: &p\n  name: OG\npanels:\n  og: *p\n";
+        let out = set_path(yaml, &["panels", "og", "colors_actual"], &"y".into()).unwrap();
+        assert_eq!(
+            out,
+            "x: &p\n  name: OG\npanels:\n  og:\n    name: OG\n    colors_actual: y\n"
+        );
+        let out = remove_path(yaml, &["panels", "og", "name"]).unwrap();
+        assert_eq!(out, "x: &p\n  name: OG\npanels:\n  og: {}\n");
     }
 }

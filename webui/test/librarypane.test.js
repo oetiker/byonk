@@ -173,6 +173,29 @@ describe("LibraryPane", () => {
     expect(within(form).getByRole("textbox").value).toBe("boom");
   });
 
+  it("New and Copy with no writable repo say so on screens.error and call nothing", async () => {
+    vi.spyOn(api, "listRepos").mockResolvedValue([{ handle: "byonk-builtin", writable: false }]);
+    await screens.refresh();
+    const create = vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "x/y" });
+    const copy = vi.spyOn(api, "copyScreen").mockResolvedValue({ ref: "x/y" });
+    render(LibraryPane);
+    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await answer("New screen name", "fresh");
+    await waitFor(() => expect(screens.error?.op).toBe("create"));
+    expect(screens.error.message).toMatch(/no writable screen repo/i);
+    expect(create).not.toHaveBeenCalled();
+
+    cleanup();
+    screens.error = null;
+    subject.select("screen", "byonk-builtin/b");
+    render(LibraryPane);
+    await fireEvent.click(screen.getByRole("button", { name: /copy/i }));
+    await answer("Copy to name", "dup");
+    await waitFor(() => expect(screens.error?.op).toBe("copy"));
+    expect(screens.error.message).toMatch(/no writable screen repo/i);
+    expect(copy).not.toHaveBeenCalled();
+  });
+
   it("a successful create closes the form", async () => {
     vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "local/fresh" });
     render(LibraryPane);

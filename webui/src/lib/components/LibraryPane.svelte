@@ -102,9 +102,16 @@
   }
   const closeForm = () => (ask = null);
 
+  // Without a writable repo there is nowhere to put a screen; say so rather
+  // than leave the form open with nothing happening.
+  const NO_WRITABLE = "no writable screen repo to put the screen in";
+
   async function submitNew(name) {
     const handle = defaultWritableHandle();
-    if (!handle) return;
+    if (!handle) {
+      screens.error = { op: "create", message: NO_WRITABLE };
+      return;
+    }
     const ok = await run("create", async () => {
       const { ref } = await api.createScreen(handle, name);
       await screens.refresh();
@@ -116,7 +123,10 @@
   async function submitCopy(name) {
     const to = defaultWritableHandle();
     const from = ask.ref;
-    if (!to) return;
+    if (!to) {
+      screens.error = { op: "copy", message: NO_WRITABLE };
+      return;
+    }
     const ok = await run("copy", async () => {
       const { ref } = await api.copyScreen(from, to, name);
       await screens.refresh();

@@ -146,7 +146,9 @@ fn indent_of(line: &str) -> usize {
 /// 0 included) belong to the entry only when more of its body follows them;
 /// a run of them that is followed by a line at or left of the key's
 /// indentation (or by the end of the file) belongs to what comes next, so a
-/// comment above the next sibling stays with that sibling.
+/// comment above the next sibling stays with that sibling. A multi-line flow
+/// value is the key's through the end of the line its `}`/`]` closes on,
+/// wherever that bracket is indented.
 ///
 /// Scanned by indentation rather than with `Op::Remove`, because tree-sitter
 /// attaches a following less-indented comment (e.g. a trailing top-level
@@ -182,6 +184,16 @@ fn path_range(yaml: &str, path: &[&str]) -> Result<(usize, usize), ConfigWriteEr
         }
         scan = line_end;
         end = line_end;
+    }
+    // A multi-line flow value may close (`}` or `]`) on a line at the key's
+    // own indentation, which the scan above stops before. Its text is the
+    // key's all the same: run to the end of the line the value closes on.
+    // Only for a value that ends in a flow bracket, because a block node's
+    // span can reach into a following comment the scan rightly leaves out.
+    let value_end = feature.location.byte_span.1;
+    let value_text = yaml[key_byte..value_end].trim_end();
+    if value_end > end && (value_text.ends_with('}') || value_text.ends_with(']')) {
+        end = next_line_start(yaml, value_end);
     }
     Ok((line_start, end))
 }
@@ -1805,5 +1817,53 @@ devices:
         );
         let out = remove_path(yaml, &["panels", "og", "name"]).unwrap();
         assert_eq!(out, "x: &p\n  name: OG\npanels:\n  og: {}\n");
+    }
+
+    /// The three shapes of a multi-line flow mapping whose `}` sits on a line
+    /// of its own, plus one with a comment after that `}`.
+    const CLOSING_ON_OWN_LINE: [&str; 4] = [
+        "{screen: a,\n    panel: b\n  }\n",
+        "{screen: a, panel: b,\n  }\n",
+        "{screen: a,\n    panel: b,\n  }\n",
+        "{screen: a,\n    panel: b\n  }   # closing\n",
+    ];
+
+    /// A multi-line flow entry is rewritten as a block, and every line of
+    /// the old flow text goes, the closing `}` (and a comment after it) too.
+    #[test]
+    fn a_multi_line_flow_device_is_rewritten_whole_on_add_and_remove() {
+        for shape in CLOSING_ON_OWN_LINE {
+            let yaml = format!("devices:\n  k: {shape}  z:\n    screen: q\n# tail\n");
+            let out = update_device(&yaml, "k", &map(&[("name", "N".into())]), &["name"]).unwrap();
+            assert_eq!(
+                out,
+                "devices:\n  k:\n    screen: a\n    panel: b\n    name: N\n  z:\n    screen: q\n# tail\n",
+                "{shape:?}"
+            );
+            let out = update_device(&yaml, "k", &serde_yaml::Mapping::new(), &["panel"]).unwrap();
+            assert_eq!(
+                out, "devices:\n  k:\n    screen: a\n  z:\n    screen: q\n# tail\n",
+                "{shape:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_multi_line_flow_panel_is_rewritten_whole_on_add_and_remove() {
+        for shape in CLOSING_ON_OWN_LINE {
+            let shape = shape.replace("screen", "name").replace("panel", "colors");
+            let yaml = format!("panels:\n  og: {shape}  e:\n    name: E\n");
+            let out = set_path(&yaml, &["panels", "og", "colors_actual"], &"y".into()).unwrap();
+            assert_eq!(
+                out,
+                "panels:\n  og:\n    name: a\n    colors: b\n    colors_actual: y\n  e:\n    name: E\n",
+                "{shape:?}"
+            );
+            let out = remove_path(&yaml, &["panels", "og", "colors"]).unwrap();
+            assert_eq!(
+                out, "panels:\n  og:\n    name: a\n  e:\n    name: E\n",
+                "{shape:?}"
+            );
+        }
     }
 }

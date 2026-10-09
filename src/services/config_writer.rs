@@ -139,10 +139,17 @@ fn indent_of(line: &str) -> usize {
     line.bytes().take_while(|b| *b == b' ').count()
 }
 
+/// Does `trimmed` (a line without its indentation) start a block sequence
+/// item (`- a`, or a bare `-`)?
+fn is_item_line(trimmed: &str) -> bool {
+    trimmed == "-" || trimmed.starts_with("- ") || trimmed.starts_with("-\t")
+}
+
 /// Byte range of `path`'s key line plus the body lines that belong to it.
 ///
 /// Ownership rule: every following non-comment line indented deeper than
-/// the key is body. Blank lines and comment lines (at any indentation, column
+/// the key is body, and so are the `- ` lines of a block sequence written at
+/// the key's own indentation (compact style). Blank lines and comment lines (at any indentation, column
 /// 0 included) belong to the entry only when more of its body follows them;
 /// a run of them that is followed by a line at or left of the key's
 /// indentation (or by the end of the file) belongs to what comes next, so a
@@ -166,6 +173,13 @@ fn path_range(yaml: &str, path: &[&str]) -> Result<(usize, usize), ConfigWriteEr
     // Start of the key line.
     let line_start = yaml[..key_byte].rfind('\n').map(|i| i + 1).unwrap_or(0);
     let key_indent = indent_of(&yaml[line_start..]);
+    // A block sequence may sit at the key's own indentation (compact style,
+    // `items:` over `- a`), as `serde_yaml` writes it: its `- ` lines are the
+    // key's body too.
+    let compact_items = matches!(
+        doc.query_exact(&route_for(path)),
+        Ok(Some(v)) if v.kind() == yamlpath::FeatureKind::BlockSequence
+    );
 
     // `end` only advances past blank and comment lines once a deeper body
     // line after them proves they are inside.
@@ -179,7 +193,9 @@ fn path_range(yaml: &str, path: &[&str]) -> Result<(usize, usize), ConfigWriteEr
             scan = line_end;
             continue;
         }
-        if indent_of(line) <= key_indent {
+        let indent = indent_of(line);
+        let item = compact_items && indent == key_indent && is_item_line(trimmed);
+        if indent <= key_indent && !item {
             break;
         }
         scan = line_end;
@@ -1865,5 +1881,126 @@ devices:
                 "{shape:?}"
             );
         }
+    }
+
+    fn seq(items: &[&str]) -> serde_yaml::Value {
+        serde_yaml::Value::Sequence(items.iter().map(|s| (*s).into()).collect())
+    }
+
+    /// A block sequence written with its `- item` lines at the key's own
+    /// indentation (compact style, the style `serde_yaml` and so
+    /// `upsert_device` write) belongs to its key: a change replaces every
+    /// item, a removal takes every item along.
+    const COMPACT_LIST: &str = "\
+devices:
+  k:
+    screen: a
+    params:
+      items:
+      - a
+      - b
+      # above the sibling
+      size: 3
+  z:
+    screen: q
+";
+
+    #[test]
+    fn a_compact_list_param_is_replaced_whole() {
+        let params = map(&[("items", seq(&["a", "b", "c"])), ("size", 3.into())]);
+        let out = update_device(
+            COMPACT_LIST,
+            "k",
+            &map(&[("params", params.into())]),
+            &["params"],
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            "devices:\n  k:\n    screen: a\n    params:\n      items:\n      - a\n      - b\n      - c\n      # above the sibling\n      size: 3\n  z:\n    screen: q\n"
+        );
+    }
+
+    #[test]
+    fn a_compact_list_param_is_removed_whole() {
+        let params = map(&[("size", 3.into())]);
+        let out = update_device(
+            COMPACT_LIST,
+            "k",
+            &map(&[("params", params.into())]),
+            &["params"],
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            "devices:\n  k:\n    screen: a\n    params:\n      # above the sibling\n      size: 3\n  z:\n    screen: q\n"
+        );
+    }
+
+    #[test]
+    fn a_compact_list_as_the_last_key_of_an_entry_stops_at_the_next_entry() {
+        let yaml = "devices:\n  k:\n    tags:\n    - a\n    - b\n  z:\n    screen: q\n";
+        let out = remove_path(yaml, &["devices", "k", "tags"]).unwrap();
+        assert_eq!(out, "devices:\n  k:\n  z:\n    screen: q\n");
+        let out = set_path(yaml, &["devices", "k", "tags"], &seq(&["c"])).unwrap();
+        assert_eq!(
+            out,
+            "devices:\n  k:\n    tags:\n    - c\n  z:\n    screen: q\n"
+        );
+    }
+
+    /// The round trip the dev UI and the admin API make: `upsert_device`
+    /// writes a list param in compact style, a later Save edits it.
+    #[test]
+    fn a_list_param_written_by_upsert_device_can_be_changed_and_removed() {
+        let entry = |items: &[&str]| {
+            map(&[
+                ("screen", "local/a".into()),
+                ("params", map(&[("items", seq(items))]).into()),
+            ])
+        };
+        let yaml = "devices:\n  z:\n    screen: q\n# tail\n";
+        let written = upsert_device(yaml, "k", &entry(&["a", "b"])).unwrap();
+        assert!(
+            written.contains("      items:\n      - a\n      - b\n"),
+            "{written}"
+        );
+
+        let changed = update_device(&written, "k", &entry(&["a", "b", "c"]), &["params"]).unwrap();
+        let parsed = parse(&changed).unwrap();
+        assert_eq!(
+            lookup(&parsed, &["devices", "k", "params", "items"]),
+            Some(&seq(&["a", "b", "c"])),
+            "{changed}"
+        );
+        assert_eq!(changed.matches("- a").count(), 1, "{changed}");
+
+        let no_params = map(&[("screen", "local/a".into()), ("params", map(&[]).into())]);
+        let removed = update_device(&written, "k", &no_params, &["params"]).unwrap();
+        let parsed = parse(&removed).unwrap();
+        assert_eq!(
+            lookup(&parsed, &["devices", "k"]),
+            Some(&serde_yaml::Value::Mapping(no_params)),
+            "{removed}"
+        );
+        assert!(!removed.contains("- a"), "{removed}");
+        assert!(removed.ends_with("# tail\n"), "{removed}");
+    }
+
+    #[test]
+    fn an_indented_list_param_is_still_replaced_and_removed_whole() {
+        let yaml = "devices:\n  k:\n    tags:\n      - a\n      - b\n    screen: s\n";
+        let out = set_path(yaml, &["devices", "k", "tags"], &seq(&["c"])).unwrap();
+        assert_eq!(out, "devices:\n  k:\n    tags:\n    - c\n    screen: s\n");
+        let out = remove_path(yaml, &["devices", "k", "tags"]).unwrap();
+        assert_eq!(out, "devices:\n  k:\n    screen: s\n");
+    }
+
+    #[test]
+    fn a_compact_list_of_mappings_is_removed_whole() {
+        let yaml =
+            "devices:\n  k:\n    rows:\n    - name: x\n      v: 1\n    - name: y\n    size: 3\n";
+        let out = remove_path(yaml, &["devices", "k", "rows"]).unwrap();
+        assert_eq!(out, "devices:\n  k:\n    size: 3\n");
     }
 }

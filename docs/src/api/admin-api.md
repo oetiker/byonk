@@ -475,8 +475,9 @@ entry keeps it, because a write preserves every key it does not manage itself.
 | Status | Meaning |
 |--------|---------|
 | `200` | Created — `{"key": "AA:BB:CC:DD:EE:FF", "screen": "examples/swiss-departure-board"}` |
-| `400` | Validation error (missing `key`/`screen`, unknown screen, param type mismatch, out-of-range value) |
+| `400` | Validation error (missing `key`/`screen`, unknown screen, param type mismatch, out-of-range value), or `config.yaml` holds a key byonk does not know (a hand edit) — the message names the device and the key, and the file is left untouched |
 | `409` | Device key already exists, or config is embedded/read-only (`set CONFIG_FILE` env var) |
+| `422` | The body names a field byonk does not know, at the top or inside `gamut`/`final` (for example `dithr`) |
 
 ---
 
@@ -539,9 +540,10 @@ cascade settings; `clear: ["final.screen"]` is a `400`, for the same reason
 | Status | Meaning |
 |--------|---------|
 | `200` | Updated — `{"key": "AA:BB:CC:DD:EE:FF", "screen": "examples/swiss-departure-board"}` |
-| `400` | Validation error |
+| `400` | Validation error, or `config.yaml` holds a key byonk does not know (see `POST`) |
 | `404` | No device with that key |
 | `409` | Config is embedded/read-only |
+| `422` | The body names a field byonk does not know (see `POST`) |
 
 ---
 
@@ -575,7 +577,7 @@ cached preview.
 
 Both of the device's cascade rungs apply — its own settings and its `final:`
 vetoes — and its script is shown the same pre-resolved `device.dither` it is
-shown on the real device. Up to 0.20.0 this preview rendered with the device's
+shown on the real device. Before 0.20.0 this preview rendered with the device's
 numbers but told the script the panel's, so a screen that branched on
 `device.dither.max_error` could draw something here that it would not draw on
 the glass. The cache key covers both rungs, so changing a veto invalidates it.
@@ -587,7 +589,7 @@ the glass. The cache key covers both rungs, so changing a veto invalidates it.
 | `force` | Present in any form (`?force`, `?force=1`) — re-render instead of serving the cached copy |
 | `dither` | `off`/`0`/`false`/`no` returns the screen *before* dithering: the full-colour rasterization, with no palette restriction. Anything else, or absent, keeps the dithered render the panel receives |
 | `measured` | `off`/`0`/`false`/`no` draws the palette in the **spec** colors byonk sends to the panel, instead of the **measured** colors a calibration says it really produces. No effect when `dither` is off — an undithered render has no palette to map |
-| `resolution` | Present in any form (`?resolution`, `?resolution=1`) — add the `X-Byonk-Resolution` header, naming for every render setting which rung won and what each other rung held. New in 0.20.0; it used to be available on the dev render only |
+| `resolution` | Present in any form (`?resolution`, `?resolution=1`) — add the `X-Byonk-Resolution` header, naming for every render setting which rung won and what each other rung held. New in 0.20.0 |
 
 Only an explicit no turns an option off; `dither=on`, `dither=1` and `dither=true`
 all keep it on.

@@ -347,10 +347,12 @@ Or per-script by returning `colors` in the Lua result table (see [Lua API: color
 
 ### Dithering Mode
 
-Byonk supports two dithering modes via the `dither` option:
+The `dither` option picks the error-diffusion algorithm, for example:
 
-- **`graphics`** (default) — Blue noise ordered dithering, best for UI content
-- **`photo`** — Atkinson error diffusion, best for photographs
+- **`atkinson`** (default) — a good general-purpose choice, crisp on UI content
+- **`floyd-steinberg`** — smooth gradients, best for photographs
+
+The full list is under [Dither Algorithms](../guide/configuration.md#dither-algorithms).
 
 Set per-device in `config.yaml` or per-script in the Lua return table (see [Lua API: dither](../api/lua-api.md#dither) and [Content Pipeline: Dither Algorithms](../concepts/content-pipeline.md#dither-algorithms)).
 

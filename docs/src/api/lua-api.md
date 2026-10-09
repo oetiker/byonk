@@ -179,8 +179,11 @@ return {
 > byonk accepts aliases and spelling variants — `jjn` for
 > `jarvis-judice-ninke`, `Floyd_Steinberg` for `floyd-steinberg` — and
 > normalises them internally. The name handed to your script is the raw one,
-> so compare it with care: lowercase it and swap `_` for `-` before matching,
-> or branch on the tuning numbers instead.
+> so compare it with care: lowercase it, swap `_` for `-`, and map the
+> remaining aliases — `floydsteinberg`, `atkinsonhybrid`, `jjn`,
+> `sierratworow`, `sierralite`, and `sierra-light`/`sierralight` (all three
+> mean `sierra-lite`) — before matching, or branch on the tuning numbers
+> instead.
 
 ### layout
 

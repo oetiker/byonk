@@ -55,6 +55,7 @@ Each device entry maps a MAC address to a screen:
 | Property | Required | Description |
 |----------|----------|-------------|
 | `screen` | Yes | Qualified `handle/path` reference of the screen to display |
+| `name` | No | A friendly name for the device, shown in the dev UI and Home Assistant |
 | `params` | No | Key-value pairs passed to the Lua script |
 | `colors` | No | Override display palette (comma-separated hex RGB, e.g. `"#000000,#FFFFFF,#FF0000"`) |
 | `colors_actual` | No | **This one display's** measured colors, comma-separated hex RGB and index-parallel to `colors`. Overrides the panel profile's calibration, for the one panel that drifted. |
@@ -71,7 +72,9 @@ Each device entry maps a MAC address to a screen:
 | `maximum_compatibility` | No | Ask the device to force a full refresh on every update. No effect on a TRMNL X. See [Ghosting](#ghosting). |
 | `min_png_bytes` | No | Pad the served image up to this many bytes. Only useful on a TRMNL X; see [Ghosting](#ghosting). |
 
-These are the only keys a device entry accepts (plus the retired `error_clamp`, which is still read and reported). Anything else — a typo such as `dithr:`, or a key from another tool — stops byonk at startup with a message naming the device and the key, for example `Invalid config.yaml: devices.kitchen: unknown field `dithr``. The same holds inside a device's `gamut:` block and inside `final:` (including `final.gamut`).
+These are the only keys a device entry accepts (plus the retired `error_clamp`, which is still read and reported). Anything else — a typo such as `dithr:`, or a key from another tool — stops byonk at startup with a message naming the device and the key, for example ``Invalid config.yaml: devices.kitchen: unknown field `dithr` ``. The same holds inside a device's `gamut:` block and inside `final:` (including `final.gamut`). A YAML merge key (`<<:`) inside a device entry is an error as well: it was never applied.
+
+If such a key reaches the file while byonk is running (a hand edit), byonk keeps running on the configuration it loaded, and every change made through the dev UI, the admin API or Home Assistant is refused with HTTP 400 and the same message, leaving your file untouched, until the key is fixed. A write whose own body carries an unknown key is refused with HTTP 422.
 
 ### Ghosting
 

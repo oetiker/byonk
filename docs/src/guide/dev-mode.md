@@ -582,7 +582,7 @@ preview only: it changes no server state and reaches no device.
 | `screen` | The screen to render. Required when `device` is not given. |
 | `device` | A MAC, device config key or registration code. Every render setting and the params come from this device. Without `screen`, the device's own screen is rendered; with it, `screen` is rendered as this device. |
 | `panel` | A panel profile id. Replaces the device's own `panel`. |
-| `model` | `og` (default) or `x`. Gives the default size and the fallback palette. |
+| `model` | `og` or `x`. Gives the default size and the fallback palette. Without it, a `device` render takes the model that device last reported (as the Home Assistant preview does), and anything else takes `og`. |
 | `width`, `height` | The render size, when it differs from the model's. |
 | `draft.base` | An unsaved device base rung: `colors`, `colors_actual`, `dither`, the tuning numbers, `gamut` and `refresh`. |
 | `draft.final` | An unsaved `final:` rung, same fields. |
@@ -647,7 +647,7 @@ are `colors`, `colors_actual`, `dither`, `max_error`, `noise_scale`,
 | `rejected` | This rung has a value that cannot be used. A `reason` tells why — for example a `colors_actual` with a different number of entries than the palette. The next rung is tried. |
 | (missing) | This rung has no value. `order` names every rung; a rung that is not in `rungs` is absent. Absent rungs are left out to keep the header small. |
 
-`order` is the precedence byonk uses, highest first, and since 0.20.0 it is
+`order` is the precedence byonk uses, highest first, and it is
 **the same for every setting**: `override` > `device_final` > `screen` >
 `device_base` > `panel` > `fallback`. All five render paths — the device, this
 dev render, the authoring render, the CLI and the admin device preview —

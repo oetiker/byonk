@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
-- **A key byonk does not recognise in a device entry now stops byonk from starting.** Device entries in `config.yaml` used to ignore any key they did not know, so a typo such as `dithr: atkinson` or `strenght: 0.8` changed nothing and said nothing: the display simply kept its old look. Byonk now refuses to start and names the device and the key, for example `Invalid config.yaml: devices.kitchen: unknown field `dithr``. The same applies inside a device's `gamut:` block and inside `final:`'s `gamut:` block. A YAML merge key (`<<:`) inside a device entry was never applied and is now reported the same way.
+- **A key byonk does not recognise in a device entry now stops byonk from starting.** Device entries in `config.yaml` used to ignore any key they did not know, so a typo such as `dithr: atkinson` or `strenght: 0.8` changed nothing and said nothing: the display simply kept its old look. Byonk now refuses to start and names the device and the key, for example ``Invalid config.yaml: devices.kitchen: unknown field `dithr` ``. The same applies inside a device's `gamut:` block and inside `final:`'s `gamut:` block. A YAML merge key (`<<:`) inside a device entry was never applied and is now reported the same way.
 
-  If you edit `config.yaml` by hand while byonk is running, the next change made through the dev UI, the admin API or Home Assistant is refused with that message (HTTP 400), and your file is left exactly as you wrote it until the key is fixed.
+  If you edit `config.yaml` by hand while byonk is running, the next change made through the dev UI, the admin API or Home Assistant is refused with that message (HTTP 400), and your file is left exactly as you wrote it until the key is fixed. A write whose own body names a key byonk does not know — `{"dithr": "atkinson"}`, or an unknown name inside `gamut` — is refused too (HTTP 422) instead of being silently dropped.
 
   **Before upgrading,** compare your device entries against the list under *Devices Section* in the configuration guide. `error_clamp` is still accepted, still ignored, and still reported as deprecated.
 
@@ -204,9 +204,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It accepts exactly `colors`, `colors_actual`, `dither`, `max_error`,
   `noise_scale`, `chroma_clamp`, `strength`, `refresh` and `gamut`, and nothing
   else: an unrecognised key under `final:` stops the server at startup with the
-  field named, so a typo there cannot silently do nothing. (A device's own keys
-  stay tolerant of names byonk does not know, because a device entry carries
-  settings that have nothing to do with rendering.)
+  field named, so a typo there cannot silently do nothing — as does an
+  unrecognised key anywhere else in a device entry (see *Breaking* above).
 
   `final.colors` reaches the error screen too, so the one picture whose job is
   to be legible is drawn in the inks the owner chose.
@@ -372,8 +371,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   One wart to know about: `device.dither.algorithm` is the string as
   configured, not a canonical one. Byonk accepts aliases and spelling variants
   everywhere else and normalises them internally, but a script that configures
-  `Floyd_Steinberg` is shown `Floyd_Steinberg`. Lowercase it and swap `_` for
-  `-` before matching, or branch on the tuning numbers instead.
+  `Floyd_Steinberg` is shown `Floyd_Steinberg`. Lowercase it, swap `_` for
+  `-`, and map the remaining aliases (`floydsteinberg`, `atkinsonhybrid`,
+  `jjn`, `sierratworow`, `sierralite`, and `sierra-light`/`sierralight` for
+  `sierra-lite`) before matching, or branch on the tuning numbers instead.
 
 - **A screen's `refresh_rate` still wins over a device's `refresh`, but no
   longer in silence.** This one keeps its precedence: only the script knows

@@ -121,10 +121,16 @@ pub async fn device_preview(
 
     // A panel profile may state the geometry; otherwise the model's default
     // applies, exactly as it does for an authoring render.
-    let panel = device_config
-        .panel
-        .as_deref()
-        .and_then(|name| config.get_panel(name));
+    // The panel `/api/display` would pick: the device's `panel:`, else the
+    // Board or Model of its last poll (the same sightings the dev render reads).
+    let config_key = config.resolve_device_key(&key, registration_code.as_deref());
+    let sighting = match &config_key {
+        Some(k) => state.dev_overrides.sightings.read().await.get(k).cloned(),
+        None => None,
+    };
+    let panel_key =
+        crate::api::display::device_panel_key(&config, device_config, sighting.as_ref());
+    let panel = panel_key.as_deref().and_then(|name| config.get_panel(name));
 
     // View options. These change only how the preview is *drawn* — none of
     // them is written back to the device, so toggling one never alters what
@@ -136,7 +142,7 @@ pub async fn device_preview(
         model: model.clone(),
         width: panel.and_then(|p| p.width),
         height: panel.and_then(|p| p.height),
-        panel: device_config.panel.clone(),
+        panel: panel_key.clone(),
         params: device_config.params.clone(),
         device: Some(device_preview_for(device_config, &key, seen.as_ref())),
         // Undithered means the pre-dither, full-colour PNG, which the
@@ -281,6 +287,8 @@ fn fingerprint(device_config: &DeviceConfig, model: &str, opts: &RenderOpts) -> 
     hasher.update([0]);
     hasher.update(format!("{:?}x{:?}", opts.width, opts.height).as_bytes());
     hasher.update([0]);
+    // `opts.panel` is the *resolved* panel key (explicit `panel:` or the
+    // sighted Board/Model), so a new sighting is a new fingerprint.
     hasher.update(format!("{:?}", opts.panel).as_bytes());
     hasher.update([0]);
     hasher.update(format!("{:?}", device_config.colors).as_bytes());

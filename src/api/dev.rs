@@ -778,10 +778,7 @@ pub async fn handle_render(
         {
             Some((k, d)) => {
                 let sightings = state.dev_overrides.sightings.read().await;
-                match display::resolve_device_panel(&config, d, sightings.get(k)) {
-                    display::PanelResolution::Panel(p) => Some(p),
-                    _ => None,
-                }
+                display::device_panel_key(&config, d, sightings.get(k))
             }
             None => None,
         },

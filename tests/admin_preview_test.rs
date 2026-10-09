@@ -497,3 +497,90 @@ async fn the_requested_header_stays_inside_its_budget_for_sixteen_entry_palettes
     // -- so the dev endpoint's headroom does not transfer.
     assert!(len < 3584, "X-Byonk-Resolution is {len} bytes");
 }
+
+/// Sighting poll as `/api/display` sees it: records the Board and Model the
+/// admin preview later reads.
+async fn poll(app: &TestApp, id: &str, model: &str, board: Option<&str>) {
+    let key = app.register_device(id).await;
+    let mut h: Vec<(&str, String)> = common::fixtures::display_headers(id, &key);
+    h.retain(|(k, _)| *k != "Model");
+    h.push(("Model", model.to_string()));
+    if let Some(b) = board {
+        h.push(("Board", b.to_string()));
+    }
+    let r = app
+        .get_with_headers("/api/display", &common::fixtures::as_str_pairs(&h))
+        .await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+}
+
+/// PNG width and height from the IHDR chunk.
+fn png_size(resp: &common::app::TestResponse) -> (u32, u32) {
+    let b = &resp.body;
+    (
+        u32::from_be_bytes(b[16..20].try_into().unwrap()),
+        u32::from_be_bytes(b[20..24].try_into().unwrap()),
+    )
+}
+
+#[tokio::test]
+async fn a_new_sighting_re_renders_the_preview_with_the_sighted_panel() {
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = "\
+admin:
+  token: secret
+panels:
+  e1004:
+    name: reTerminal E1004
+    match: e1004
+    width: 640
+    height: 400
+    colors: '#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00'
+  pinned:
+    name: Pinned
+    width: 320
+    height: 200
+    colors: '#000000,#FFFFFF'
+devices:
+  office:
+    screen: byonk-builtin/default
+  fixed:
+    screen: byonk-builtin/default
+    panel: pinned
+";
+    let (app, _) = TestApp::new_with_config_yaml(yaml, dir.path());
+    let from = |r: &common::app::TestResponse| -> serde_json::Value {
+        let h: serde_json::Value =
+            serde_json::from_str(r.headers["x-byonk-resolution"].to_str().unwrap()).unwrap();
+        h["colors"]["from"].clone()
+    };
+    let url = "/api/admin/devices/office/preview?resolution=1";
+    // Seen, but with a Board no panel matches; the Model stays "og" throughout,
+    // so only the sighting's Board can change the fingerprint.
+    poll(&app, "office", "og", Some("no-such-board")).await;
+    let first = app.get_with_headers(url, &[AUTH]).await;
+    assert_eq!(cache_state(&first), "miss");
+    assert_eq!(from(&first), "fallback");
+    assert_eq!(png_size(&first), (800, 480));
+    assert_eq!(
+        cache_state(&app.get_with_headers(url, &[AUTH]).await),
+        "hit"
+    );
+
+    poll(&app, "office", "og", Some("e1004")).await;
+    let third = app.get_with_headers(url, &[AUTH]).await;
+    assert_eq!(
+        cache_state(&third),
+        "miss",
+        "a new sighting must not re-serve the old panel's render"
+    );
+    assert_eq!(from(&third), "panel");
+    assert_eq!(png_size(&third), (640, 400));
+
+    // An explicit `panel:` outranks whatever the device reported.
+    poll(&app, "fixed", "og", Some("e1004")).await;
+    let fixed = app
+        .get_with_headers("/api/admin/devices/fixed/preview?resolution=1", &[AUTH])
+        .await;
+    assert_eq!(png_size(&fixed), (320, 200));
+}

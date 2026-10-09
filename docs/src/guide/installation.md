@@ -255,7 +255,7 @@ Render a screen directly to PNG (useful for testing):
 |--------|-------------|
 | `-m, --mac` | Device MAC address (required) |
 | `-o, --output` | Output PNG file path (required) |
-| `-d, --device` | Device type: "og" (800x480) or "x" (1872x1404) |
+| `-d, --device` | Device type: "og" (800x480) or "x" (1872x1404); also matched against panel `match:` like a reported Model |
 | `-b, --battery` | Battery voltage for testing (e.g., 4.12) |
 | `-r, --rssi` | WiFi signal strength for testing (e.g., -67) |
 | `-f, --firmware` | Firmware version string for testing |

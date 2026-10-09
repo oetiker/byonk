@@ -394,6 +394,20 @@ pub fn resolve_device_panel(
     }
 }
 
+/// The config key of the panel a configured device renders with when no request
+/// headers are in hand: its `panel:`, else the Board then the Model of `sighting`.
+/// Every path without live headers asks this, so they agree with `/api/display`.
+pub fn device_panel_key(
+    config: &AppConfig,
+    device: &crate::models::DeviceConfig,
+    sighting: Option<&crate::server::Sighting>,
+) -> Option<String> {
+    match resolve_device_panel(config, device, sighting) {
+        PanelResolution::Panel(key) => Some(key),
+        _ => None,
+    }
+}
+
 /// Get display content for a device
 ///
 /// Returns JSON with an image_url that the device should fetch separately.
@@ -1320,6 +1334,43 @@ pub struct DisplayJsonResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_panel_key_is_panel_then_board_then_model() {
+        let config: AppConfig = serde_yaml::from_str(
+            "\
+panels:
+  e1004: {name: E, match: e1004, colors: '#000000,#FFFFFF'}
+  og: {name: OG, colors: '#000000,#FFFFFF'}
+devices:
+  pinned: {screen: local/a, panel: og}
+  free: {screen: local/a}
+",
+        )
+        .unwrap();
+        let s = |board: Option<&str>, model: &str| crate::server::Sighting {
+            board: board.map(str::to_string),
+            model: model.into(),
+        };
+        let d = |k: &str| config.devices.get(k).unwrap();
+        assert_eq!(
+            device_panel_key(&config, d("pinned"), Some(&s(Some("e1004"), "e1004"))).as_deref(),
+            Some("og")
+        );
+        assert_eq!(
+            device_panel_key(&config, d("free"), Some(&s(Some("e1004"), "og"))).as_deref(),
+            Some("e1004")
+        );
+        assert_eq!(
+            device_panel_key(&config, d("free"), Some(&s(None, "e1004"))).as_deref(),
+            Some("e1004")
+        );
+        assert_eq!(
+            device_panel_key(&config, d("free"), Some(&s(None, "og"))),
+            None
+        );
+        assert_eq!(device_panel_key(&config, d("free"), None), None);
+    }
 
     #[test]
     fn resolve_panel_reports_the_config_key_in_every_branch() {

@@ -11,12 +11,17 @@
 //! CLI and the admin preview have no override by design, so it is not a
 //! convergence dimension and nothing here exercises it.
 //!
-//! It carries TWO devices, because one cannot contest every ordering. A
+//! It carries THREE devices, because one cannot contest every ordering. A
 //! device whose `final.dither` vetoes the script masks the screen-versus-base
 //! ordering entirely — reverse `ORDER_DITHER` and a one-device fixture stays
 //! green, which is exactly the release's one behaviour change going
 //! unobserved. So the second device states a bare `dither:` default and no
 //! `final:` block, and the screen must outrank it.
+//!
+//! The third names no `panel:` at all and reports a Model the panel's
+//! `match:` names. Every other device pins its panel, so a path that only
+//! reads `panel:` agrees with the rest on them; the sighted device is the
+//! one a `panel:`-only lookup gets wrong.
 //!
 //! **Every `via_*` drives its path's own entry point** — the axum handler,
 //! `ScreenStore::render`, or (for the CLI, whose `run_render_command` lives in
@@ -48,6 +53,9 @@ const DEVICE_VETO: &str = "AA:BB:CC:DD:EE:FF";
 /// The device that states a bare `dither:` default the screen outranks —
 /// the release's one behaviour change.
 const DEVICE_DEFAULT: &str = "BB:CC:DD:EE:FF:AA";
+/// A device with no `panel:` that reports a Model the panel's `match:` names.
+const DEVICE_SIGHTED: &str = "CC:DD:EE:FF:AA:BB";
+const SIGHTED_MODEL: &str = "cascade-model";
 const SCREEN: &str = "local/cascade";
 const PANEL: &str = "trmnl_x";
 
@@ -77,6 +85,7 @@ screen_repos:
 panels:
   {PANEL}:
     name: TRMNL X
+    match: {SIGHTED_MODEL}
     colors: '{PANEL_COLORS}'
     colors_actual: '{PANEL_COLORS_ACTUAL}'
     dither:
@@ -104,6 +113,12 @@ devices:
     strength: 0.4           # base rung
     gamut:
       amount: 0.6           # a DIFFERENT gamut field, on the same rung
+  '{DEVICE_SIGHTED}':
+    screen: {SCREEN}
+    dither: sierra          # no `panel:` -- the panel comes from the Model it reports
+    strength: 0.4
+    gamut:
+      amount: 0.6
 ",
         repo = dir.join("local").display(),
     )
@@ -318,9 +333,11 @@ impl Fixture {
     /// not with its resolution, so the settings are read out of the cache
     /// entry the handler stored: those are the values `/api/image/{hash}.png`
     /// dithers with, i.e. the ones that reach the glass.
-    async fn via_api_display(&self, device: &str) -> ExpectedParams {
+    async fn via_api_display(&self, device: &str, model: &str) -> ExpectedParams {
         let api_key = self.app.register_device(device).await;
-        let headers = common::fixtures::display_headers(device, &api_key);
+        let mut headers = common::fixtures::display_headers(device, &api_key);
+        headers.retain(|(k, _)| *k != "Model");
+        headers.push(("Model", model.to_string()));
         let r = self
             .app
             .get_with_headers("/api/display", &common::fixtures::as_str_pairs(&headers))
@@ -369,9 +386,19 @@ impl Fixture {
         let dc = config
             .get_device_config(device)
             .expect("the fixture's device");
+        // The admin preview's lookup: the sighting the poll recorded.
+        let sighting = self
+            .state
+            .dev_overrides
+            .sightings
+            .read()
+            .await
+            .get(device)
+            .cloned();
+        let panel = byonk::api::display::device_panel_key(&config, dc, sighting.as_ref());
         let opts = RenderOpts {
             model: "og".to_string(),
-            panel: dc.panel.clone(),
+            panel,
             params: dc.params.clone(),
             device: Some(DevicePreview {
                 mac: device.to_string(),
@@ -409,12 +436,10 @@ impl Fixture {
     /// `cli_render_inputs_for` it calls, with the arguments it derives
     /// (device config by MAC, the panel that device names, and the `og`
     /// model's default palette for a run with no `--colors`).
-    async fn via_cli(&self, device: &str) -> ExpectedParams {
+    async fn via_cli(&self, device: &str, model: &str) -> ExpectedParams {
         let config = self.state.config.load_full();
         let device_config = config.get_device_config(device);
-        let panel = device_config
-            .and_then(|d| d.panel.as_deref())
-            .and_then(|name| config.get_panel(name));
+        let panel = byonk::api::resolution::cli_panel_for(&config, device_config, model);
         let pipeline = self.state.content_pipeline.clone();
         // `None` for the device context: the CLI builds one, but this
         // fixture's script reads nothing from `device`, and
@@ -468,22 +493,32 @@ impl Fixture {
 async fn all_five_render_paths_resolve_identically() {
     let fx = Fixture::new();
 
-    for (case, device, want) in [
+    for (case, device, model, want) in [
         (
             "final.dither vetoes the script",
             DEVICE_VETO,
+            "og",
             expected_veto(),
         ),
         (
             "the screen outranks the device's default",
             DEVICE_DEFAULT,
+            "og",
+            expected_screen_wins(),
+        ),
+        (
+            "a device without `panel:` renders with the panel its Model matched",
+            DEVICE_SIGHTED,
+            SIGHTED_MODEL,
             expected_screen_wins(),
         ),
     ] {
-        let display = fx.via_api_display(device).await;
+        // `/api/display` runs first: it records the sighting the dev render
+        // and the admin preview then read.
+        let display = fx.via_api_display(device, model).await;
         let dev = fx.via_dev_render(device).await;
         let store = fx.via_screen_store(device).await;
-        let cli = fx.via_cli(device).await;
+        let cli = fx.via_cli(device, model).await;
         let admin = fx.via_admin_preview(device).await;
 
         for (name, got) in [

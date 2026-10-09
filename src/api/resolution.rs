@@ -366,6 +366,31 @@ impl RungSettings {
     }
 }
 
+/// The panel `byonk render` uses for a device.
+///
+/// The CLI has no sighting (separate process), so `--device` stands in for the Model
+/// header: a panel whose `match:` equals it is picked, as /api/display would.
+pub fn cli_panel_for<'a>(
+    config: &'a crate::models::AppConfig,
+    device_config: Option<&crate::models::DeviceConfig>,
+    model: &str,
+) -> Option<&'a crate::models::config::PanelConfig> {
+    use crate::api::display::{device_panel_key, resolve_panel};
+    use crate::server::Sighting;
+
+    let key = match device_config {
+        Some(dc) => {
+            let sighting = Sighting {
+                board: None,
+                model: model.to_string(),
+            };
+            device_panel_key(config, dc, Some(&sighting))
+        }
+        None => resolve_panel(config, None, None, model).1,
+    };
+    key.and_then(|k| config.get_panel(&k))
+}
+
 /// The `byonk render` CLI's binding-to-rung mapping (spec §2).
 ///
 /// Lives here rather than in `main.rs` because the binary crate is
@@ -806,6 +831,29 @@ pub fn resolve_pre_script(i: &PreScriptInputs) -> PreScriptContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cli_reads_device_as_the_reported_model() {
+        let config: crate::models::AppConfig = serde_yaml::from_str(
+            "\
+panels:
+  e1004: {name: E, match: e1004, colors: '#000000,#FFFFFF'}
+devices:
+  office: {screen: local/a}
+",
+        )
+        .unwrap();
+        let office = config.get_device_config("office");
+        assert_eq!(
+            cli_panel_for(&config, office, "e1004").map(|p| p.name.as_str()),
+            Some("E")
+        );
+        assert!(cli_panel_for(&config, office, "og").is_none());
+        assert_eq!(
+            cli_panel_for(&config, None, "e1004").map(|p| p.name.as_str()),
+            Some("E")
+        );
+    }
 
     fn ladder(
         over: Option<i32>,

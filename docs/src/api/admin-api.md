@@ -569,6 +569,10 @@ screen that reads `device.mac` or `device.battery_voltage` sees the real values.
 A device that has never checked in reports no telemetry rather than placeholder
 values.
 
+A device without `panel:` uses the panel its last poll's Board or Model matched
+since byonk started, as `/api/display` does, and a new match re-renders the
+cached preview.
+
 Both of the device's cascade rungs apply — its own settings and its `final:`
 vetoes — and its script is shown the same pre-resolved `device.dither` it is
 shown on the real device. Up to 0.20.0 this preview rendered with the device's

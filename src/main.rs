@@ -33,9 +33,10 @@ enum Commands {
         #[arg(short, long)]
         output: PathBuf,
 
-        /// Fallback render size when the device has no configured panel:
-        /// "og" (800x480) or "x" (1872x1404). A device whose `panel:` is set
-        /// renders at that panel's own dimensions and ignores this.
+        /// Fallback render size when no panel resolves: "og" (800x480) or
+        /// "x" (1872x1404). Also matched like a device's reported Model: a
+        /// panel whose `match:` equals it is used for a device without
+        /// `panel:`. A resolved panel renders at its own dimensions.
         #[arg(short, long, default_value = "og")]
         device: String,
 
@@ -262,8 +263,7 @@ fn run_render_command(
             .and_then(|code| config.get_device_config_for_code(code))
     });
     let dc_colors = device_config.and_then(|dc| dc.colors.clone());
-    let dc_panel = device_config.and_then(|dc| dc.panel.clone());
-    let panel = dc_panel.as_deref().and_then(|name| config.get_panel(name));
+    let panel = byonk::api::resolution::cli_panel_for(&config, device_config, device_type);
     let panel_colors = panel.map(|p| p.colors.clone());
 
     // The panel is part of that same chain: it knows its own dimensions, and

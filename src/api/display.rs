@@ -408,6 +408,31 @@ pub fn device_panel_key(
     }
 }
 
+/// The model a render path without live headers assumes for the device
+/// stored under `config_key`: the `Model` the device last reported to the
+/// registry (on setup or a poll), else `"og"`. The admin preview and the dev
+/// render both ask this, so a device that has not been sighted since it was
+/// configured previews at the same size and fallback palette on both.
+pub async fn registry_model(
+    registry: &crate::services::InMemoryRegistry,
+    config: &AppConfig,
+    config_key: &str,
+) -> String {
+    use crate::services::DeviceRegistry;
+    let devices = registry.list_all().await.unwrap_or_default();
+    devices
+        .into_iter()
+        .find(|d| {
+            let code = d.api_key.registration_code();
+            config
+                .resolve_device_key(&d.device_id.to_string(), Some(&code))
+                .as_deref()
+                == Some(config_key)
+        })
+        .map(|d| d.model)
+        .unwrap_or_else(|| "og".to_string())
+}
+
 /// Get display content for a device
 ///
 /// Returns JSON with an image_url that the device should fetch separately.

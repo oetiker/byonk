@@ -4,10 +4,19 @@
 // and it is the Edit panel's (spec §2 rule 2).
 
 export const DEFAULT_SIZE = { width: 800, height: 480 };
+/** The server's `resolve_preview_dimensions`: a model's size when no panel states one. */
+const MODEL_SIZE = { x: { width: 1872, height: 1404 } };
 
-function sizeOf(meta, panelId) {
+function sizeOf(meta, panelId, model) {
   const p = (meta.panels ?? []).find((x) => x.id === panelId);
-  return p && p.width && p.height ? { width: p.width, height: p.height } : DEFAULT_SIZE;
+  if (p && p.width && p.height) return { width: p.width, height: p.height };
+  return MODEL_SIZE[model] ?? DEFAULT_SIZE;
+}
+
+/** A device's panel size, else the size of the model it last reported (`DeviceInfo.model`). */
+function deviceSize({ meta, usage }, deviceId) {
+  const d = (meta.devices ?? []).find((x) => x.id === deviceId);
+  return sizeOf(meta, devicePanel({ meta, usage }, deviceId), d?.model);
 }
 
 /** The device's explicit panel, else the panel the server says it resolves to. */
@@ -25,13 +34,13 @@ export function previewSize({ subject, meta, usage }) {
     case "screen": {
       const t = subject.target;
       if (t?.kind === "panel") return sizeOf(meta, t.id);
-      if (t?.kind === "device") return sizeOf(meta, devicePanel({ meta, usage }, t.id));
+      if (t?.kind === "device") return deviceSize({ meta, usage }, t.id);
       return DEFAULT_SIZE;
     }
     case "panel":
       return sizeOf(meta, subject.id);
     case "device":
-      return sizeOf(meta, devicePanel({ meta, usage }, subject.id));
+      return deviceSize({ meta, usage }, subject.id);
     default:
       return DEFAULT_SIZE;
   }

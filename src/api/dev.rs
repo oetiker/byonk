@@ -41,9 +41,10 @@ pub struct RenderRequest {
     pub device: Option<String>,
     /// Panel profile id; beats the device's own `panel`.
     pub panel: Option<String>,
-    /// Device model: "og" or "x"
-    #[serde(default = "default_model")]
-    pub model: String,
+    /// Device model: "og" or "x". Absent: the model the registry has for
+    /// `device` (its last `Model` header), else "og" -- what the admin
+    /// preview assumes too.
+    pub model: Option<String>,
     /// Display width (overrides model default)
     pub width: Option<u32>,
     /// Display height (overrides model default)
@@ -131,10 +132,6 @@ fn yaml_params_to_json(
         .collect()
 }
 
-fn default_model() -> String {
-    "og".to_string()
-}
-
 /// Query parameters for /dev/resolve-mac
 #[derive(Debug, Deserialize)]
 pub struct ResolveMacQuery {
@@ -173,6 +170,9 @@ pub struct DeviceInfo {
     pub temperature_profile: Option<String>,
     pub maximum_compatibility: Option<bool>,
     pub min_png_bytes: Option<u32>,
+    /// The model a preview assumes for this device when no panel gives its
+    /// geometry: what the device last reported (registry), else "og".
+    pub model: String,
 }
 
 /// A panel profile: everything the dev UI's panel editor shows.
@@ -291,10 +291,10 @@ pub async fn handle_screens(State(state): State<AppState>) -> Json<ScreensRespon
     screens.sort_by(|a, b| a.name.cmp(&b.name));
 
     // Collect configured devices
-    let mut devices: Vec<DeviceInfo> = config
-        .devices
-        .iter()
-        .map(|(id, dev)| DeviceInfo {
+    let mut devices: Vec<DeviceInfo> = Vec::with_capacity(config.devices.len());
+    for (id, dev) in config.devices.iter() {
+        let model = crate::api::display::registry_model(&state.registry, &config, id).await;
+        devices.push(DeviceInfo {
             id: id.clone(),
             screen: dev.screen.clone(),
             panel: dev.panel.clone(),
@@ -305,8 +305,9 @@ pub async fn handle_screens(State(state): State<AppState>) -> Json<ScreensRespon
             temperature_profile: dev.temperature_profile.clone(),
             maximum_compatibility: dev.maximum_compatibility,
             min_png_bytes: dev.min_png_bytes,
-        })
-        .collect();
+            model,
+        });
+    }
     devices.sort_by(|a, b| a.id.cmp(&b.id));
 
     // Collect panel profiles
@@ -806,8 +807,13 @@ pub async fn handle_render(
         ),
     };
 
+    let model = match (&req.model, &device_key) {
+        (Some(m), _) => m.clone(),
+        (None, Some(k)) => display::registry_model(&state.registry, &config, k).await,
+        (None, None) => "og".to_string(),
+    };
     // Determine dimensions from model or explicit values
-    let (width, height) = display::resolve_preview_dimensions(&req.model, req.width, req.height);
+    let (width, height) = display::resolve_preview_dimensions(&model, req.width, req.height);
 
     // The device's params (or the draft's, which replace them), with the
     // simulated ones on top.
@@ -820,7 +826,7 @@ pub async fn handle_render(
     custom_params.extend(req.simulated.params.clone());
 
     // The model's default palette stands in for the firmware `Colors` header.
-    let query_palette: Vec<(u8, u8, u8)> = display::resolve_query_palette(&req.model, None);
+    let query_palette: Vec<(u8, u8, u8)> = display::resolve_query_palette(&model, None);
 
     // ---- Pre-script device context: what the script sees as `device.*`,
     // from the one shared resolution (`override -> device final -> device
@@ -859,7 +865,7 @@ pub async fn handle_render(
             .unwrap_or_else(|| "dev-simulator".to_string()),
         battery_voltage: Some(req.simulated.battery_voltage.unwrap_or(4.2)),
         rssi: Some(req.simulated.rssi.unwrap_or(-50)),
-        model: Some(req.model.clone()),
+        model: Some(model.clone()),
         firmware_version: Some("dev".to_string()),
         width: Some(width),
         height: Some(height),

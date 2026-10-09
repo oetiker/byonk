@@ -114,16 +114,16 @@ pub async fn device_preview(
         // that renders blank.
         .ok_or(ApiError::NotFound)?;
 
-    let model = seen
-        .as_ref()
-        .map(|d| d.model.clone())
-        .unwrap_or_else(|| "og".to_string());
-
     // A panel profile may state the geometry; otherwise the model's default
     // applies, exactly as it does for an authoring render.
     // The panel `/api/display` would pick: the device's `panel:`, else the
     // Board or Model of its last poll (the same sightings the dev render reads).
     let config_key = config.resolve_device_key(&key, registration_code.as_deref());
+    // The registry's model, the same lookup the dev render makes.
+    let model = match &config_key {
+        Some(k) => crate::api::display::registry_model(&state.registry, &config, k).await,
+        None => "og".to_string(),
+    };
     let sighting = match &config_key {
         Some(k) => state.dev_overrides.sightings.read().await.get(k).cloned(),
         None => None,

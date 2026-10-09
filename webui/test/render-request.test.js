@@ -79,3 +79,26 @@ describe("previewSize", () => {
     expect(previewSize({ subject: { kind: null }, meta, usage })).toEqual(DEFAULT_SIZE);
   });
 });
+
+describe("previewSize of a device without panel geometry", () => {
+  // The server's `resolve_preview_dimensions`: no panel geometry means the
+  // model's own size, the model being what the device last reported.
+  const m = {
+    panels: [{ id: "bare", width: null, height: null }],
+    devices: [
+      { id: "tx", panel: null, screen: "local/o", model: "x" },
+      { id: "txbare", panel: "bare", screen: "local/o", model: "x" },
+      { id: "og", panel: null, screen: "local/o", model: "og" },
+    ],
+  };
+  const none = { panels: {}, unseen: [] };
+  it("takes the model's size, as the server and the admin preview do", () => {
+    const X = { width: 1872, height: 1404 };
+    expect(previewSize({ subject: { kind: "device", id: "tx" }, meta: m, usage: none })).toEqual(X);
+    expect(previewSize({ subject: { kind: "device", id: "txbare" }, meta: m, usage: none })).toEqual(X);
+    expect(previewSize({ subject: { kind: "screen", id: "local/a", target: { kind: "device", id: "tx" } }, meta: m, usage: none })).toEqual(X);
+    expect(previewSize({ subject: { kind: "device", id: "og" }, meta: m, usage: none })).toEqual(DEFAULT_SIZE);
+    const r = buildRenderRequest({ subject: { kind: "device", id: "tx" }, draft, simulate: sim(), meta: m, usage: none });
+    expect(r.body).toMatchObject(X);
+  });
+});

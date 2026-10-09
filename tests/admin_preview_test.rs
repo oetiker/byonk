@@ -584,3 +584,62 @@ devices:
         .await;
     assert_eq!(png_size(&fixed), (320, 200));
 }
+
+/// A configured device with no `panel:` that has registered but not polled
+/// since it was configured (so no sighting): the dev device preview and the
+/// admin preview both take its model from the registry, so a TRMNL X previews
+/// at the X's size and with the X's palette on both, not as an `og`.
+#[tokio::test]
+async fn the_dev_device_preview_takes_the_registry_model_like_the_admin_preview() {
+    let dir = tempfile::tempdir().unwrap();
+    let mac = "AA:BB:CC:00:11:22";
+    let yaml = format!(
+        "admin:\n  token: secret\ndevices:\n  '{mac}':\n    screen: byonk-builtin/default\n"
+    );
+    let (app, _) = TestApp::new_with_config_yaml(&yaml, dir.path());
+    let r = app
+        .get_with_headers(
+            "/api/setup",
+            &[("ID", mac), ("FW-Version", "1.0.0"), ("Model", "x")],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+
+    let colors = |r: &common::app::TestResponse| -> serde_json::Value {
+        let h: serde_json::Value =
+            serde_json::from_str(r.headers["x-byonk-resolution"].to_str().unwrap()).unwrap();
+        h["colors"]["value"].clone()
+    };
+    let admin = app
+        .get_with_headers(
+            &format!("/api/admin/devices/{mac}/preview?resolution=1"),
+            &[AUTH],
+        )
+        .await;
+    assert!(admin.status.is_success(), "{}", admin.text());
+    assert_eq!(png_size(&admin), (1872, 1404));
+
+    let dev = app
+        .post_json(
+            "/dev/api/render",
+            &[AUTH],
+            &format!(r#"{{"device":"{mac}"}}"#),
+        )
+        .await;
+    assert!(dev.status.is_success(), "{}", dev.text());
+    assert_eq!(png_size(&dev), png_size(&admin));
+    assert_eq!(colors(&dev), colors(&admin));
+
+    // The dev UI sizes its request from the model it is told about.
+    let meta: serde_json::Value = app
+        .get_with_headers("/dev/api/screens", &[AUTH])
+        .await
+        .json();
+    let device = meta["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["id"] == mac)
+        .unwrap();
+    assert_eq!(device["model"], "x", "{device}");
+}

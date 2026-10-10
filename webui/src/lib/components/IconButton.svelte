@@ -3,6 +3,7 @@
   // (docs/dev-ui-design.md §5: tooltip + aria-label, not title=).
   import { Button } from "$lib/ui/button/index.js";
   import * as Tooltip from "$lib/ui/tooltip/index.js";
+  import { mergeProps } from "bits-ui";
 
   let { icon: Icon, label, tip = label, size = "icon-sm", variant = "ghost", ...rest } = $props();
 </script>
@@ -12,7 +13,9 @@
 <Tooltip.Root>
   <Tooltip.Trigger>
     {#snippet child({ props })}
-      <Button {...props} type="button" {size} {variant} aria-label={label} {...rest}>
+      <!-- mergeProps chains handlers: a caller's onclick runs after the trigger's own
+           (which closes the tooltip) instead of replacing it. -->
+      <Button {...mergeProps(props, { type: "button", size, variant, "aria-label": label }, rest)}>
         <Icon aria-hidden="true" />
       </Button>
     {/snippet}

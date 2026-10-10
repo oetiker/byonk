@@ -8,6 +8,7 @@
   // compact form loses nothing for a screen reader or a hovering pointer.
   import { Button } from "$lib/ui/button/index.js";
   import * as Tooltip from "$lib/ui/tooltip/index.js";
+  import { mergeProps } from "bits-ui";
 
   let { icon: Icon = null, label, short = null, tip = label, variant = "outline", class: className = "", ...rest } = $props();
   const iconOnly = $derived(!short && Icon);
@@ -17,14 +18,16 @@
 <Tooltip.Root>
   <Tooltip.Trigger>
     {#snippet child({ props })}
+      <!-- mergeProps chains handlers: a caller's onclick runs after the trigger's own
+           (which closes the tooltip) instead of replacing it. -->
       <Button
-        {...props}
-        type="button"
-        size="sm"
-        {variant}
-        aria-label={label}
-        class="{iconOnly ? '@max-[22rem]:size-7 @max-[22rem]:px-0' : ''} {className}"
-        {...rest}
+        {...mergeProps(props, {
+          type: "button",
+          size: "sm",
+          variant,
+          "aria-label": label,
+          class: `${iconOnly ? "@max-[22rem]:size-7 @max-[22rem]:px-0" : ""} ${className}`,
+        }, rest)}
       >
         {#if iconOnly}
           <Icon aria-hidden="true" class="hidden @max-[22rem]:block" />

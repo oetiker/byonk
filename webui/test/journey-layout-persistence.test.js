@@ -194,6 +194,50 @@ describe("pane resize, persisted across a reload", () => {
     expect(layout.isOpen("library")).toBe(false);
   });
 
+  // Fix round 1, finding 1. PaneForge collapses a pane by handing its room
+  // to a NEIGHBOUR; with Edit closed first, closing Preview gave its space to
+  // the closed Edit ([18, 82, 0]) -- and the next Library drag then saw
+  // Edit > 0 and popped it open.
+  it("with Edit and Preview closed, Library fills the row and dragging it reopens nothing", async () => {
+    render(AppShell);
+    const rail = dom.getByRole("toolbar", { name: /panels/i });
+    const btn = (name) => dom.getByRole("button", { name, container: rail });
+    const paneSize = (id) => {
+      const m = /flex:\s*([\d.]+)/.exec(document.querySelector(`[data-pane-id="${id}"]`).getAttribute("style"));
+      return Number(m[1]);
+    };
+
+    await fireEvent.click(btn("Edit"));
+    await fireEvent.click(btn("Preview"));
+    await waitFor(() => expect(paneSize("preview")).toBe(0));
+    expect(paneSize("editor")).toBe(0);
+    expect(paneSize("library")).toBe(100);
+
+    await drag(handle("library"), -100);
+    await fireEvent.keyDown(handle("library"), { key: "ArrowLeft" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(btn("Edit")).toHaveAttribute("aria-pressed", "false");
+    expect(btn("Preview")).toHaveAttribute("aria-pressed", "false");
+    expect(layout.isOpen("editor")).toBe(false);
+    expect(layout.isOpen("preview")).toBe(false);
+    expect(dom.queryByRole("tablist")).toBeNull();
+  });
+
+  it("reopening Library after all three were closed gives it the whole row", async () => {
+    render(AppShell);
+    const rail = dom.getByRole("toolbar", { name: /panels/i });
+    const btn = (name) => dom.getByRole("button", { name, container: rail });
+    for (const n of ["Library", "Edit", "Preview"]) await fireEvent.click(btn(n));
+    await fireEvent.click(btn("Library"));
+    await waitFor(() =>
+      expect(document.querySelector('[data-pane-id="library"]').getAttribute("style")).toMatch(/flex:\s*100\b/),
+    );
+    expect(document.querySelector('[data-pane-id="editor"]')).toHaveAttribute("data-collapsed");
+    expect(document.querySelector('[data-pane-id="preview"]')).toHaveAttribute("data-collapsed");
+    expect(layout.isOpen("editor")).toBe(false);
+  });
+
   // The layout is a convenience; losing it must never break the editor.
   it("survives storage being unavailable -- the resize still works, it just is not remembered", async () => {
     const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {

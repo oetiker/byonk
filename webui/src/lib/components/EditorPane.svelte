@@ -4,9 +4,9 @@
   import { screens } from "../state/screens.svelte.js";
   import { createEditor } from "../codemirror.js";
   import StatusBar from "./StatusBar.svelte";
-  import { Button } from "$lib/ui/button/index.js";
-  import { Plus, Minus, X, Circle, TriangleAlert, Check } from "@lucide/svelte";
+  import { Plus, Minus, X, Circle, TriangleAlert, Check, Save } from "@lucide/svelte";
   import PaneHeader from "./PaneHeader.svelte";
+  import HeaderAction from "./HeaderAction.svelte";
   import PaneToolbar from "./PaneToolbar.svelte";
   import IconButton from "./IconButton.svelte";
   import InlineNameForm from "./InlineNameForm.svelte";
@@ -231,15 +231,12 @@
         same rule the old UI's toolbar Save button used (dev.js: "enabled
         whenever any buffer is dirty").
       -->
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
+      <HeaderAction
+        icon={Save}
+        label="Save"
         disabled={!editor.active || editor.active.readOnly || !editor.active.dirty}
         onclick={() => editor.trySave()}
-      >
-        Save
-      </Button>
+      />
     {/snippet}
   </PaneHeader>
   <PaneToolbar flush>

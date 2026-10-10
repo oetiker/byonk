@@ -525,3 +525,27 @@ describe("LibraryPane headings and chevrons", () => {
     expect(cls.join(" ")).not.toMatch(/hover:/);
   });
 });
+
+describe("LibraryPane narrow header (fix round 1, finding 2)", () => {
+  it("folds the four actions into a More-actions menu below 14rem, by container query", () => {
+    render(LibraryPane);
+    const header = screen.getByRole("region", { name: "Library" }).querySelector('[data-slot="pane-header"]');
+    expect(header.className).toMatch(/@container/);
+    expect(screen.getByTestId("library-actions").className).toMatch(/@max-\[14rem\]:hidden/);
+    const menu = screen.getByTestId("library-actions-menu").className.split(/\s+/);
+    expect(menu).toEqual(expect.arrayContaining(["hidden", "@max-[14rem]:flex"]));
+  });
+
+  it("the menu offers the same four actions, under the same names and gates", async () => {
+    render(LibraryPane); // no subject: Copy, Rename, Delete disabled
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    // bits-ui opens a DropdownMenu on pointerdown (a click would open and shut it).
+    await fireEvent.pointerDown(trigger, { button: 0, pointerType: "mouse" });
+    const item = async (name) => screen.findByRole("menuitem", { name });
+    expect(await item("New")).not.toHaveAttribute("data-disabled");
+    for (const n of ["Copy", "Rename", "Delete"]) expect(await item(n)).toHaveAttribute("data-disabled");
+
+    await fireEvent.click(await item("New"));
+    expect(await screen.findByRole("form", { name: "New screen name" })).toBeTruthy();
+  });
+});

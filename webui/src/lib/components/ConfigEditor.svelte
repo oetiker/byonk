@@ -7,14 +7,14 @@
   import { screens } from "../state/screens.svelte.js";
   import Ladder from "./Ladder.svelte";
   import SwatchEditor from "./SwatchEditor.svelte";
-  import { Button } from "$lib/ui/button/index.js";
   import { Input } from "$lib/ui/input/index.js";
   import * as Field from "$lib/ui/field/index.js";
   import { NativeSelect } from "$lib/ui/native-select/index.js";
   import { Textarea } from "$lib/ui/textarea/index.js";
   import { Alert } from "$lib/ui/alert/index.js";
-  import { Circle } from "@lucide/svelte";
+  import { Circle, Save, Undo2 } from "@lucide/svelte";
   import PaneHeader from "./PaneHeader.svelte";
+  import HeaderAction from "./HeaderAction.svelte";
 
   const RUNG_LABEL = { panel: "panel", device_base: "device base", device_final: "device final" };
   const STEP = { max_error: 0.05, noise_scale: 0.5, chroma_clamp: 0.05, strength: 0.05,
@@ -73,16 +73,22 @@
 <div class="flex min-h-0 min-w-0 flex-1 flex-col text-sm" data-testid="config-editor">
   {#snippet subjectName()}
     <span data-testid="edit-subject" class="truncate font-mono text-foreground">{kind} {displayName}</span>
+    <!-- In a narrow header (below 22rem, see HeaderAction) the word goes
+         and the dot + count stay, so the subject keeps room. -->
     <span class="inline-flex shrink-0 items-center gap-1 text-muted-foreground">
-      <Circle class="size-2 fill-current" aria-hidden="true" />{dirtyCount} unsaved
+      <Circle class="size-2 fill-current" aria-hidden="true" /><span class="@max-[22rem]:sr-only">{dirtyCount} unsaved</span><span aria-hidden="true" class="hidden @max-[22rem]:inline">{dirtyCount}</span>
     </span>
   {/snippet}
   {#snippet headerActions()}
-    <Button type="button" size="sm" variant="ghost" disabled={dirtyCount === 0 && !live} onclick={() => configDraft.discard(kind, id)}>Discard</Button>
-    <Button type="button" size="sm" variant="outline" disabled={!canSave} onclick={() => canSave && configDraft.save(kind, id)}>Save</Button>
-    <Button type="button" size="sm" disabled={Object.keys(pushBody).length === 0 || invalid.length > 0} onclick={push}>
-      {kind === "panel" ? "Push to panel" : "Push to device"}
-    </Button>
+    <HeaderAction icon={Undo2} label="Discard" variant="ghost" disabled={dirtyCount === 0 && !live} onclick={() => configDraft.discard(kind, id)} />
+    <HeaderAction icon={Save} label="Save" disabled={!canSave} onclick={() => canSave && configDraft.save(kind, id)} />
+    <HeaderAction
+      label={kind === "panel" ? "Push to panel" : "Push to device"}
+      short="Push"
+      variant="default"
+      disabled={Object.keys(pushBody).length === 0 || invalid.length > 0}
+      onclick={push}
+    />
   {/snippet}
   <PaneHeader data-testid="config-actions" role="toolbar" aria-label="Actions"
               title="Edit" subject={subjectName} actions={headerActions} />

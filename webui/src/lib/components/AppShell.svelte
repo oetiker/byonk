@@ -90,23 +90,36 @@
 
   /** Bound Pane instances, by panel name: each exposes collapse()/expand(). */
   let panes = $state({});
+  /** The bound PaneGroup: getLayout()/setLayout(). */
+  let group = $state();
   /** True once PaneForge has computed the group's first layout. */
   let ready = $state(false);
   /** Set while sync() drives the panes, so its own layout changes are not
    *  mistaken for the user dragging a pane open or shut. */
   let syncing = false;
+  /** The layout as of the last change we saw, to tell a pane crossing 0. */
+  let prevSizes = [];
 
-  // Make the panes match `layout`. Expand before collapsing: PaneForge can
-  // only collapse a pane by giving its space to a neighbour, so with every
-  // panel closed the last one stays expanded (and empty); opening another
-  // must then expand that one first so the stale one can give up its room.
+  // Make the panes match `layout`. Expand before collapsing, then hand any
+  // room a closed pane still holds to the open ones: PaneForge collapses a
+  // pane only by giving its space to a NEIGHBOUR, and when that neighbour is
+  // itself closed (Edit then Preview closed -> [18, 82, 0]) the space stays
+  // with a pane that shows nothing.
   function sync() {
     syncing = true;
     try {
       for (const p of PANELS) if (layout.isOpen(p)) panes[p]?.expand();
       for (const p of PANELS) if (!layout.isOpen(p)) panes[p]?.collapse();
+      const sizes = group?.getLayout() ?? [];
+      const open = PANELS.map((p) => layout.isOpen(p));
+      const stale = sizes.some((s, i) => !open[i] && s > 0);
+      const openTotal = sizes.reduce((sum, s, i) => (open[i] ? sum + s : sum), 0);
+      if (stale && openTotal > 0) {
+        group.setLayout(sizes.map((s, i) => (open[i] ? (s / openTotal) * 100 : 0)));
+      }
     } finally {
       syncing = false;
+      prevSizes = group?.getLayout() ?? prevSizes;
     }
   }
 
@@ -118,15 +131,24 @@
 
   // The group's layout changed. The first call is PaneForge's initial
   // layout (restored from storage, or the defaults); after that, a change
-  // sync() did not cause is the user dragging a handle -- if that collapsed
-  // a pane to 0 or pulled a collapsed one open, the rail follows.
+  // sync() did not cause is the user dragging a handle. A pane the drag
+  // collapses (crosses from >0 to 0) is closed, so the rail follows. A
+  // drag never OPENS a pane: next to a collapsed pane PaneForge turns any
+  // shrink into growing that neighbour (with only Library open, narrowing
+  // it would pop Edit open), so a closed pane that gained room is put back
+  // by sync() -- only the rail reopens panels.
   function onLayoutChange(sizes) {
+    const prev = prevSizes;
+    prevSizes = sizes;
     if (!ready) {
       ready = true;
       return;
     }
     if (syncing) return;
-    PANELS.forEach((p, i) => layout.setOpen(p, sizes[i] > 0));
+    PANELS.forEach((p, i) => {
+      if (prev[i] > 0 && sizes[i] === 0) layout.setOpen(p, false);
+    });
+    if (PANELS.some((p, i) => !layout.isOpen(p) && sizes[i] > 0)) sync();
   }
 
   // Live-reload watcher (spec §8.5, Task 10). `handle_events` (src/api/
@@ -187,6 +209,7 @@
     <Resizable.PaneGroup
       direction="horizontal"
       autoSaveId="byonk.panes.v1"
+      bind:this={group}
       {onLayoutChange}
       class="min-h-0 min-w-0 flex-1"
     >

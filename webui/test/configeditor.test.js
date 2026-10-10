@@ -67,6 +67,27 @@ describe("ConfigEditor, panel schema", () => {
     expect(dom.getByText("1 more device has not polled since byonk started, so its panel is not known yet.")).toBeTruthy();
   });
 
+  // Fix round 1, finding 3: below 22rem (the header is a size container)
+  // Discard and Save go icon-only and Push shortens, so the subject keeps
+  // room. jsdom has no container queries, so this pins the class contract;
+  // the accessible names stay the full labels in both forms.
+  it("compacts the header actions by container query, keeping their full names", () => {
+    render(ConfigEditor);
+    const header = dom.getByTestId("config-actions");
+    expect(header.className).toMatch(/@container/);
+    for (const name of ["Discard", "Save"]) {
+      const btn = dom.getByRole("button", { name });
+      expect(btn.querySelector("svg").getAttribute("class")).toMatch(/hidden @max-\[22rem\]:block/);
+      expect(btn.querySelector("span").className).toMatch(/@max-\[22rem\]:hidden/);
+    }
+    const push = dom.getByRole("button", { name: "Push to panel" });
+    const [long, short] = push.querySelectorAll("span");
+    expect(long.textContent).toBe("Push to panel");
+    expect(long.className).toMatch(/@max-\[22rem\]:hidden/);
+    expect(short.textContent).toBe("Push");
+    expect(short.className).toMatch(/hidden @max-\[22rem\]:inline/);
+  });
+
   it("an edit marks one unsaved change and enables Push and Save", async () => {
     render(ConfigEditor);
     expect(dom.getByRole("button", { name: "Save" }).disabled).toBe(true);

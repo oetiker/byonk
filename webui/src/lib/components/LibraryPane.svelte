@@ -6,7 +6,9 @@
   import * as api from "../api.js";
   import { devicePanel } from "../render-request.js"; // the one device->panel lookup (ruling PF8)
   import { untrack } from "svelte";
-  import { FilePlus, Copy, Pencil, Trash2 } from "@lucide/svelte";
+  import { FilePlus, Copy, Pencil, Trash2, Ellipsis } from "@lucide/svelte";
+  import * as DropdownMenu from "$lib/ui/dropdown-menu/index.js";
+  import { Button } from "$lib/ui/button/index.js";
   import PaneHeader from "./PaneHeader.svelte";
   import IconButton from "./IconButton.svelte";
   import InlineNameForm from "./InlineNameForm.svelte";
@@ -222,10 +224,34 @@
 <div class="flex min-h-0 min-w-0 flex-1 flex-col text-xs" role="region" aria-label="Library">
   <PaneHeader title="Library">
     {#snippet actions()}
-      <IconButton icon={FilePlus} label="New" tip="New screen" onclick={newScreen} />
-      <IconButton icon={Copy} label="Copy" tip="Copy screen" onclick={copyScreen} disabled={!subject.screenRef} />
-      <IconButton icon={Pencil} label="Rename" tip="Rename screen" onclick={renameScreen} disabled={!canEdit} />
-      <IconButton icon={Trash2} label="Delete" tip="Delete screen" onclick={deleteScreen} disabled={!canEdit} />
+      <!-- Wide header: four icon buttons. Below 14rem (title + four buttons
+           no longer fit; at 1024 px the pane is ~177 px, at its 12% minimum
+           in an 800 px window ~136 px) they fold into one "More actions"
+           menu. Both forms are in the DOM; the container query only hides
+           one, so without CSS (jsdom) the wide buttons stay reachable. -->
+      <div data-testid="library-actions" class="flex items-center gap-1 @max-[14rem]:hidden">
+        <IconButton icon={FilePlus} label="New" tip="New screen" onclick={newScreen} />
+        <IconButton icon={Copy} label="Copy" tip="Copy screen" onclick={copyScreen} disabled={!subject.screenRef} />
+        <IconButton icon={Pencil} label="Rename" tip="Rename screen" onclick={renameScreen} disabled={!canEdit} />
+        <IconButton icon={Trash2} label="Delete" tip="Delete screen" onclick={deleteScreen} disabled={!canEdit} />
+      </div>
+      <div data-testid="library-actions-menu" class="hidden @max-[14rem]:flex">
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger>
+            {#snippet child({ props })}
+              <Button {...props} type="button" size="icon-sm" variant="ghost" aria-label="More actions">
+                <Ellipsis aria-hidden="true" />
+              </Button>
+            {/snippet}
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content align="end">
+            <DropdownMenu.Item aria-label="New" onSelect={newScreen}><FilePlus aria-hidden="true" />New screen</DropdownMenu.Item>
+            <DropdownMenu.Item aria-label="Copy" disabled={!subject.screenRef} onSelect={copyScreen}><Copy aria-hidden="true" />Copy screen</DropdownMenu.Item>
+            <DropdownMenu.Item aria-label="Rename" disabled={!canEdit} onSelect={renameScreen}><Pencil aria-hidden="true" />Rename screen</DropdownMenu.Item>
+            <DropdownMenu.Item aria-label="Delete" variant="destructive" disabled={!canEdit} onSelect={deleteScreen}><Trash2 aria-hidden="true" />Delete screen</DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Root>
+      </div>
     {/snippet}
   </PaneHeader>
 

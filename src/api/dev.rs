@@ -477,6 +477,107 @@ pub async fn handle_save_panel(
     Ok(StatusCode::OK)
 }
 
+/// `POST /dev/api/panels` body: a new panel's id and the two fields a panel
+/// cannot do without. `match`, `width` and `height` are edited in
+/// config.yaml (U5 ruling R2).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelCreate {
+    pub id: String,
+    pub name: String,
+    pub colors: String,
+}
+
+/// Create `panels.<id>` in `config.yaml` with `name` and `colors`, in place:
+/// the rest of the file, comments and order included, is not rewritten.
+/// Creates the `panels:` key when the file has none. 409 when the id is
+/// taken.
+///
+/// Not guarded by `require_writable_global`, for the reason
+/// `handle_save_panel` gives: nothing else owns `panels`.
+pub async fn handle_create_panel(
+    State(state): State<AppState>,
+    Json(body): Json<PanelCreate>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    use crate::services::config_writer::set_path;
+    let id = body.id.trim();
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(ApiError::BadRequest(
+            "panel id must be letters, digits, `_` or `-`".into(),
+        ));
+    }
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("panel name must not be empty".into()));
+    }
+    let colors = body.colors.trim();
+    crate::api::admin::write::validate_colors(colors, "colors")?;
+
+    let path = crate::api::config_persist::require_file_config(&state)?;
+    let _guard = state.write_lock.lock().await;
+    if state.config.load().get_panel(id).is_some() {
+        return Err(ApiError::Conflict(format!("panel `{id}` already exists")));
+    }
+
+    let yaml = std::fs::read_to_string(&path)
+        .map_err(|e| ApiError::Internal(format!("read config: {e}")))?;
+    let mut block = serde_yaml::Mapping::new();
+    block.insert("name".into(), name.into());
+    block.insert("colors".into(), colors.into());
+    let block = serde_yaml::Value::Mapping(block);
+
+    // `set_path` needs the parent to exist. A `panels:` that is absent or
+    // null (`panels:` with nothing below) is written whole.
+    let has_panels_mapping = serde_yaml::from_str::<serde_yaml::Value>(&yaml)
+        .ok()
+        .and_then(|doc| doc.get("panels").map(serde_yaml::Value::is_mapping))
+        .unwrap_or(false);
+    let yaml = if has_panels_mapping {
+        set_path(&yaml, &["panels", id], &block)
+    } else {
+        let mut panels = serde_yaml::Mapping::new();
+        panels.insert(id.into(), block);
+        set_path(&yaml, &["panels"], &serde_yaml::Value::Mapping(panels))
+    }
+    .map_err(|e| ApiError::Internal(format!("patch config: {e}")))?;
+
+    crate::api::config_persist::persist(&state, &path, yaml)?;
+    Ok(Json(serde_json::json!({ "id": id })))
+}
+
+/// `POST /dev/api/devices`: add a device entry. The same write as the admin
+/// `POST /api/admin/devices` and the MCP tool -- `apply_device_add`, with its
+/// duplicate, screen, params and read-only-config guards.
+pub async fn handle_create_device(
+    State(state): State<AppState>,
+    Json(body): Json<crate::api::admin::write::DeviceWrite>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Same order as the admin route: a read-only config answers 409 before
+    // a missing key is reported.
+    crate::api::config_persist::require_file_config(&state)?;
+    let key = body
+        .key
+        .clone()
+        .ok_or_else(|| ApiError::BadRequest("`key` is required".into()))?;
+    Ok(Json(
+        crate::api::admin::write::apply_device_add(&state, &key, body).await?,
+    ))
+}
+
+/// `GET /dev/api/pending-devices`: devices seen but not configured, the same
+/// list as the admin `GET /api/admin/pending`.
+pub async fn handle_pending_devices(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<crate::api::admin::read::PendingDevice>>, ApiError> {
+    Ok(Json(
+        crate::api::admin::read::pending_devices(&state).await?,
+    ))
+}
+
 /// The first field no dev override may carry (ruling C1): `colors` would
 /// show the script one palette and render another, and nothing on the
 /// override rung consumes `refresh`. Everything else -- `dither` included --
@@ -1122,8 +1223,11 @@ pub fn dev_router(state: &AppState) -> Router<AppState> {
             "/overrides/panels/{panel}",
             put(handle_put_panel_override).delete(handle_delete_panel_override),
         )
+        .route("/panels", post(handle_create_panel))
         .route("/panels/{panel}/save", post(handle_save_panel))
+        .route("/devices", post(handle_create_device))
         .route("/devices/{key}", patch(handle_save_device))
+        .route("/pending-devices", get(handle_pending_devices))
         .route(
             "/tuning-session/{device}",
             put(handle_start_tuning_session).delete(handle_end_tuning_session),

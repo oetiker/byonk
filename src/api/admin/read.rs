@@ -28,7 +28,13 @@ pub async fn pending(
     headers: HeaderMap,
 ) -> Result<Json<Vec<PendingDevice>>, ApiError> {
     require_admin(&state, &headers)?;
+    Ok(Json(pending_devices(&state).await?))
+}
 
+/// Devices the registry has seen that no `devices:` entry configures yet.
+/// Shared by the admin `GET /api/admin/pending` and the dev UI's
+/// `GET /dev/api/pending-devices`, so there is one place this is decided.
+pub async fn pending_devices(state: &AppState) -> Result<Vec<PendingDevice>, ApiError> {
     let config = state.config.load();
     let mut out = Vec::new();
     for d in state.registry.list_all().await? {
@@ -45,7 +51,7 @@ pub async fn pending(
             last_seen: d.last_seen.to_rfc3339(),
         });
     }
-    Ok(Json(out))
+    Ok(out)
 }
 
 /// Build the non-secret config view: the raw config file with `admin.token`

@@ -274,7 +274,7 @@ fn validate_gamut(g: &GamutTuningValues, name: &str) -> Result<(), ApiError> {
 /// palette with `filter_map`, so it drops the entries it cannot read and
 /// carries on with a shorter palette. That is the right behaviour for a header
 /// arriving from a device and the wrong one for a value being written to disk.
-fn validate_colors(colors: &str, key: &str) -> Result<(), ApiError> {
+pub(crate) fn validate_colors(colors: &str, key: &str) -> Result<(), ApiError> {
     let entries: Vec<&str> = colors.split(',').map(str::trim).collect();
     for entry in &entries {
         let hex = entry.strip_prefix('#').unwrap_or(entry);

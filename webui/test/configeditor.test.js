@@ -45,6 +45,15 @@ describe("ConfigEditor, panel schema", () => {
     expect(dom.queryByRole("contentinfo")).toBeNull();
   });
 
+  it("clips the header subject so secondary text never reaches the actions", () => {
+    render(ConfigEditor);
+    const subjectSlot = document.querySelector('[data-slot="pane-header-subject"]');
+    expect(subjectSlot.className).toMatch(/\boverflow-hidden\b/);
+    expect(subjectSlot.className).toMatch(/\bmin-w-0\b/);
+    expect(dom.getByTestId("edit-subject").className).toMatch(/\btruncate\b/);
+    expect(dom.queryByTestId("config-messages")).toBeNull();
+  });
+
   it("uses the singular for one device", () => {
     configDraft.usage = { panels: { e1004: ["kitchen"] }, unseen: [] };
     render(ConfigEditor);
@@ -143,7 +152,10 @@ describe("ConfigEditor, device schema", () => {
     const r = document.querySelector("#cfg-device_base-refresh");
     r.value = "60";
     await fireEvent.input(r);
-    expect(dom.getByText(/applies on Save only: refresh/)).toBeTruthy();
+    const note = dom.getByText(/applies on Save only: refresh/);
+    // A fixed row under the header, never inside the scrolling body.
+    expect(dom.getByTestId("config-messages").contains(note)).toBe(true);
+    expect(dom.getByTestId("config-body").contains(note)).toBe(false);
     expect(dom.getByRole("button", { name: "Push to device" }).disabled).toBe(true);
   });
 
@@ -213,6 +225,8 @@ describe("ConfigEditor, device schema", () => {
     for (const sel of ["#cfg-device_base-strength", "#cfg-plain-min_png_bytes"]) {
       const el = await typeBad(sel, "-");
       expect(dom.getByRole("alert").textContent).toMatch(/not a number/);
+      expect(dom.getByTestId("config-messages").contains(dom.getByRole("alert"))).toBe(true);
+      expect(dom.getByTestId("config-body").contains(dom.getByRole("alert"))).toBe(false);
       expect(btn.disabled).toBe(true);
       await fireEvent.click(btn);
       expect(save).not.toHaveBeenCalled();

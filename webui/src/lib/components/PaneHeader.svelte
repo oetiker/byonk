@@ -12,6 +12,6 @@
   {...rest}
 >
   <span class="shrink-0 font-semibold uppercase tracking-wide text-muted-foreground">{title}</span>
-  <div class="flex min-w-0 flex-1 items-center gap-2">{@render subject?.()}</div>
+  <div data-slot="pane-header-subject" class="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">{@render subject?.()}</div>
   <div class="flex shrink-0 items-center gap-1">{@render actions?.()}</div>
 </header>

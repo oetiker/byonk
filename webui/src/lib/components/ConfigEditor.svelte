@@ -87,14 +87,18 @@
   {/snippet}
   <PaneHeader data-testid="config-actions" role="toolbar" aria-label="Actions"
               title="Edit" subject={subjectName} actions={headerActions} />
+  {#if invalid.length || unpushable.length}
+    <!-- Fixed row under the header (not in the scrolling body): the Save/Push blockers stay visible. -->
+    <div data-testid="config-messages" class="flex shrink-0 flex-col gap-0.5 border-b border-border px-2 py-1 text-xs">
+      {#if invalid.length}
+        <p role="alert" class="text-destructive">not a number: {invalid.join(", ")} — finish or clear it to Save.</p>
+      {/if}
+      {#if unpushable.length}
+        <p class="text-muted-foreground">applies on Save only: {unpushable.join(", ")}</p>
+      {/if}
+    </div>
+  {/if}
   <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto p-3" data-testid="config-body">
-  {#if invalid.length}
-    <p role="alert" class="text-xs text-destructive">not a number: {invalid.join(", ")} — finish or clear it to Save.</p>
-  {/if}
-  {#if unpushable.length}
-    <p class="text-xs text-muted-foreground">applies on Save only: {unpushable.join(", ")}</p>
-  {/if}
-
   {#if kind === "panel"}
     <p class="text-xs">{users === 1 ? "⚠ 1 device uses this panel" : `⚠ ${users} devices use this panel`}</p>
     {#if unseen > 0}<p class="text-xs text-muted-foreground">{unseen === 1 ? "1 more device has not polled since byonk started, so its panel is not known yet." : `${unseen} more devices have not polled since byonk started, so their panel is not known yet.`}</p>{/if}

@@ -6,7 +6,9 @@
   import * as api from "../api.js";
   import { devicePanel } from "../render-request.js"; // the one device->panel lookup (ruling PF8)
   import { untrack } from "svelte";
-  import { Button } from "$lib/ui/button/index.js";
+  import { FilePlus, Copy, Pencil, Trash2 } from "@lucide/svelte";
+  import PaneHeader from "./PaneHeader.svelte";
+  import IconButton from "./IconButton.svelte";
   import InlineNameForm from "./InlineNameForm.svelte";
   import InlineConfirm from "./InlineConfirm.svelte";
 
@@ -132,7 +134,7 @@
   }
   const rowClass = (on) =>
     "block w-full shrink-0 truncate px-2 py-0.5 text-left hover:bg-muted " +
-    (on ? "bg-primary text-white" : "");
+    (on ? "bg-primary text-primary-foreground" : "");
 
   function newScreen() {
     ask = { kind: "new" };
@@ -213,25 +215,15 @@
   }
 </script>
 
-<div class="flex min-h-0 flex-1 flex-col text-xs" role="region" aria-label="Library">
-  <div class="flex shrink-0 gap-1 border-b border-border p-1">
-    <Button type="button" size="xs" variant="outline" onclick={newScreen}>New</Button>
-    <Button
-      type="button"
-      size="xs"
-      variant="outline"
-      onclick={copyScreen}
-      disabled={!subject.screenRef}
-    >
-      Copy
-    </Button>
-    <Button type="button" size="xs" variant="outline" onclick={renameScreen} disabled={!canEdit}>
-      Rename
-    </Button>
-    <Button type="button" size="xs" variant="outline" onclick={deleteScreen} disabled={!canEdit}>
-      Delete
-    </Button>
-  </div>
+<div class="flex min-h-0 min-w-0 flex-1 flex-col text-xs" role="region" aria-label="Library">
+  <PaneHeader title="Library">
+    {#snippet actions()}
+      <IconButton icon={FilePlus} label="New" tip="New screen" onclick={newScreen} />
+      <IconButton icon={Copy} label="Copy" tip="Copy screen" onclick={copyScreen} disabled={!subject.screenRef} />
+      <IconButton icon={Pencil} label="Rename" tip="Rename screen" onclick={renameScreen} disabled={!canEdit} />
+      <IconButton icon={Trash2} label="Delete" tip="Delete screen" onclick={deleteScreen} disabled={!canEdit} />
+    {/snippet}
+  </PaneHeader>
 
   {#if ask?.kind === "new"}
     <InlineNameForm label="New screen name" onsubmit={submitNew} oncancel={closeForm} />

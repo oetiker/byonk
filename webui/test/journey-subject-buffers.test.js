@@ -76,7 +76,7 @@ describe("spec §9: the buffer-survival journey", () => {
     await mount();
     await fireEvent.click(dom.getByRole("button", { name: "a" }));
     await waitFor(() => expect(editor.active?.name).toBe("script.lua"));
-    await fireEvent.click(dom.getByRole("button", { name: "screen.svg" }));
+    await fireEvent.click(dom.getByRole("tab", { name: "screen.svg" }));
     await waitFor(() => expect(editor.tabs).toHaveLength(2));
     editor.setText("-- edited");
     expect(editor.active.dirty).toBe(true);

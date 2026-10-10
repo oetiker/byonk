@@ -5,6 +5,10 @@
   import { createEditor } from "../codemirror.js";
   import StatusBar from "./StatusBar.svelte";
   import { Button } from "$lib/ui/button/index.js";
+  import { Plus, Minus, X, Circle, TriangleAlert, Check } from "@lucide/svelte";
+  import PaneHeader from "./PaneHeader.svelte";
+  import PaneToolbar from "./PaneToolbar.svelte";
+  import IconButton from "./IconButton.svelte";
   import InlineNameForm from "./InlineNameForm.svelte";
   import InlineConfirm from "./InlineConfirm.svelte";
 
@@ -190,8 +194,56 @@
      test and the earlier walk. With `min-w-0` the pane takes the slot's width
      and CodeMirror scrolls inside its own `overflow-auto` host, as intended. -->
 <div class="flex min-h-0 min-w-0 flex-1 flex-col">
-  <div class="flex min-w-0 items-center border-b border-border text-xs">
-    <div role="tablist" class="flex min-w-0 flex-1 overflow-x-auto">
+  <PaneHeader title="Edit">
+    {#snippet subject()}
+      <span data-testid="edit-subject" class="truncate font-mono text-foreground" title={editor.ref}>{editor.ref}</span>
+    {/snippet}
+    {#snippet actions()}
+      <!--
+        Add and delete a file. Both ask inline, in a form under this header
+        (InlineNameForm / InlineConfirm), the same interaction LibraryPane uses
+        for its screens -- no native prompt() or confirm().
+
+        Both are gated on the screen being WRITABLE, the same rule LibraryPane's
+        Rename/Delete use. Delete additionally refuses the three core files;
+        the server refuses them too (`CORE_FILES`, src/api/dev_files.rs) and is
+        the authority -- this only avoids offering an action that cannot work.
+      -->
+      <IconButton
+        icon={Plus}
+        label="Add file"
+        tip="Add a file to this screen"
+        variant="outline"
+        disabled={!canEdit}
+        onclick={addFile}
+      />
+      <IconButton
+        icon={Minus}
+        label="Delete file"
+        tip={deletableName ? `Delete ${deletableName}` : "Select a deletable file"}
+        variant="outline"
+        disabled={!deletableName}
+        onclick={deleteFile}
+      />
+      <!--
+        The keybinding is invisible unless you already know it's there
+        (Ruling 38). Enabled exactly when there is something worth saving --
+        same rule the old UI's toolbar Save button used (dev.js: "enabled
+        whenever any buffer is dirty").
+      -->
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={!editor.active || editor.active.readOnly || !editor.active.dirty}
+        onclick={() => editor.trySave()}
+      >
+        Save
+      </Button>
+    {/snippet}
+  </PaneHeader>
+  <PaneToolbar flush>
+    <div role="tablist" aria-label="Files" class="flex h-full min-w-0 flex-1 overflow-x-auto">
       <!--
         Iterates `editor.files` (the SCREEN's listing), not `editor.tabs`
         (loaded buffers) -- Task 1. One tab strip entry per file that
@@ -199,17 +251,20 @@
         (`text: false`, e.g. a rendered PNG) has nothing a text buffer could
         show, so it renders as a disabled, non-interactive entry instead of
         a `role="tab"` button.
+
+        The name button is the `role="tab"` element (focusable); the wrapper
+        only groups it with its markers and close button, which a tab trigger
+        cannot host.
       -->
       {#each editor.files as f (f.name)}
         {@const t = editor.tabs.find((x) => x.name === f.name)}
         {#if f.text}
-          <div
-            role="tab"
-            aria-selected={t != null && t === editor.active}
-            class="flex items-center gap-1 border-r border-border px-2 py-1"
-          >
+          <div role="presentation" class="flex shrink-0 items-center gap-1 border-r border-border px-2">
             <button
               type="button"
+              role="tab"
+              aria-selected={t != null && t === editor.active}
+              class="whitespace-nowrap"
               onclick={() =>
                 editor.open(editor.ref, f.name, {
                   readOnly: !screens.writable(editor.ref),
@@ -219,8 +274,8 @@
             </button>
             <!-- Dirty/issues follow the LOADED buffer, not the listing entry: a
                  file that has never been opened has neither. -->
-            {#if t?.dirty}<span aria-label="unsaved changes">●</span>{/if}
-            {#if t?.issues.length}<span aria-label="has errors" class="text-destructive">▲</span>{/if}
+            {#if t?.dirty}<span role="img" aria-label="unsaved changes"><Circle class="size-2 fill-current" aria-hidden="true" /></span>{/if}
+            {#if t?.issues.length}<span role="img" aria-label="has errors" class="text-destructive"><TriangleAlert class="size-3.5" aria-hidden="true" /></span>{/if}
             <!-- Spec :326, "one green tick per clean file". This one DOES
                  follow the listing rather than a loaded buffer: `validate`
                  examines every file on disk, so a file that was never opened
@@ -231,7 +286,7 @@
                  happened. Suppressed while a buffer is dirty: the verdict
                  describes the saved text, not what is on screen. -->
             {#if editor.clean.has(f.name) && !t?.dirty}
-              <span aria-label={`${f.name} is valid`} class="text-success">✓</span>
+              <span role="img" aria-label={`${f.name} is valid`} class="text-success"><Check class="size-3.5" aria-hidden="true" /></span>
             {/if}
             {#if t}
               <!-- Closes the BUFFER only -- `editor.close()` never touches `files`,
@@ -239,74 +294,25 @@
               <button
                 type="button"
                 aria-label={`Close ${f.name}`}
+                class="inline-flex size-4 items-center justify-center rounded-sm hover:bg-muted"
                 onclick={() => editor.close(editor.tabs.indexOf(t))}
               >
-                ×
+                <X class="size-3" aria-hidden="true" />
               </button>
             {/if}
           </div>
         {:else}
           <div
             aria-disabled="true"
-            class="flex cursor-not-allowed items-center gap-1 border-r
-                   border-border px-2 py-1 text-muted-foreground opacity-60"
+            class="flex shrink-0 cursor-not-allowed items-center gap-1 border-r
+                   border-border px-2 text-muted-foreground opacity-60"
           >
             {f.name} ({f.size})
           </div>
         {/if}
       {/each}
     </div>
-    <!--
-      Add and delete a file. Both ask inline, in a form under this toolbar
-      (InlineNameForm / InlineConfirm), the same interaction LibraryPane uses
-      for its screens -- no native prompt() or confirm().
-
-      Both are gated on the screen being WRITABLE, the same rule LibraryPane's
-      Rename/Delete use. Delete additionally refuses the three core files;
-      the server refuses them too (`CORE_FILES`, src/api/dev_files.rs) and is
-      the authority -- this only avoids offering an action that cannot work.
-    -->
-    <Button
-      type="button"
-      size="icon-xs"
-      variant="outline"
-      aria-label="Add file"
-      title="Add a file to this screen"
-      class="mx-0.5"
-      disabled={!canEdit}
-      onclick={addFile}
-    >
-      +
-    </Button>
-    <Button
-      type="button"
-      size="icon-xs"
-      variant="outline"
-      aria-label="Delete file"
-      title={deletableName ? `Delete ${deletableName}` : "Select a deletable file"}
-      class="mx-0.5"
-      disabled={!deletableName}
-      onclick={deleteFile}
-    >
-      −
-    </Button>
-    <!--
-      The keybinding above is invisible unless you already know it's there
-      (Ruling 38). Enabled exactly when there is something worth saving --
-      same rule the old UI's toolbar Save button used (dev.js: "enabled
-      whenever any buffer is dirty").
-    -->
-    <Button
-      type="button"
-      size="xs"
-      variant="outline"
-      class="mx-1"
-      disabled={!editor.active || editor.active.readOnly || !editor.active.dirty}
-      onclick={() => editor.trySave()}
-    >
-      Save
-    </Button>
-  </div>
+  </PaneToolbar>
   {#if ask?.kind === "add"}
     <InlineNameForm label="New file name" onsubmit={submitAdd} oncancel={() => (ask = null)} />
   {:else if ask?.kind === "delete"}

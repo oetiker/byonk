@@ -15,6 +15,7 @@
   // review finding 2 (fix round 2) moved them to `StatusStrip`, mounted by
   // `AppShell` above the panel row where no panel toggle can remove it.
   import { editor } from "../state/editor.svelte.js";
+  import { Check, X } from "@lucide/svelte";
 
   function languageOf(name = "") {
     if (name.endsWith(".lua")) return "lua";
@@ -28,16 +29,16 @@
 </script>
 
 <div
-  class="flex flex-wrap items-center gap-3 border-t border-border
-         bg-muted px-2 py-1 font-mono text-xs text-foreground"
+  class="flex h-(--status-h) shrink-0 items-center gap-3 overflow-hidden whitespace-nowrap border-t border-border
+         bg-muted px-2 font-mono text-xs text-foreground"
 >
   {#if !t}
     <span class="text-muted-foreground">no file open</span>
   {:else if issues.length === 0}
-    <span class="text-success">✓ valid</span>
+    <span class="inline-flex items-center gap-1 text-success"><Check class="size-3.5" aria-hidden="true" />valid</span>
   {:else}
-    <span class="text-destructive">
-      ✖ {issues.length} issue{issues.length === 1 ? "" : "s"}
+    <span class="inline-flex items-center gap-1 text-destructive">
+      <X class="size-3.5" aria-hidden="true" />{issues.length} issue{issues.length === 1 ? "" : "s"}
     </span>
   {/if}
 

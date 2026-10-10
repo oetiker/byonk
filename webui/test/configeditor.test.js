@@ -28,7 +28,7 @@ describe("ConfigEditor, panel schema", () => {
 
   it("names its subject and warns how many devices it reaches", () => {
     render(ConfigEditor);
-    expect(dom.getByRole("heading", { name: /panel reTerminal E1004/ })).toBeTruthy();
+    expect(dom.getByText("panel reTerminal E1004")).toBeTruthy();
     expect(dom.getByText("⚠ 3 devices use this panel")).toBeTruthy();
     expect(dom.getByText("2 more devices have not polled since byonk started, so their panel is not known yet.")).toBeTruthy();
   });
@@ -39,7 +39,7 @@ describe("ConfigEditor, panel schema", () => {
     const body = dom.getByTestId("config-body");
     const save = dom.getByRole("button", { name: "Save" });
     expect(bar.contains(save)).toBe(true);
-    expect(bar.contains(dom.getByText("● 0 unsaved"))).toBe(true);
+    expect(bar.contains(dom.getByText("0 unsaved"))).toBe(true);
     expect(body.contains(save)).toBe(false);
     expect(bar.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(dom.queryByRole("contentinfo")).toBeNull();
@@ -64,7 +64,7 @@ describe("ConfigEditor, panel schema", () => {
     const strength = document.querySelector("#cfg-panel-strength");
     strength.value = "0.5";
     await fireEvent.input(strength);
-    expect(dom.getByText("● 1 unsaved")).toBeTruthy();
+    expect(dom.getByText("1 unsaved")).toBeTruthy();
     expect(dom.getByRole("button", { name: "Push to panel" }).disabled).toBe(false);
     expect(dom.getByRole("button", { name: "Save" }).disabled).toBe(false);
   });
@@ -77,7 +77,7 @@ describe("ConfigEditor, panel schema", () => {
     const ca = document.querySelector("#cfg-panel-colors_actual");
     ca.value = "";
     await fireEvent.input(ca);
-    expect(dom.getByText("● 1 unsaved")).toBeTruthy();
+    expect(dom.getByText("1 unsaved")).toBeTruthy();
     expect(dom.getByRole("button", { name: "Push to panel" }).disabled).toBe(true);
     await fireEvent.click(dom.getByRole("button", { name: "Push to panel" }));
     expect(push).not.toHaveBeenCalled();

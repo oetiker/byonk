@@ -10,6 +10,8 @@
   import { Button } from "$lib/ui/button/index.js";
   import { Input } from "$lib/ui/input/index.js";
   import { Label } from "$lib/ui/label/index.js";
+  import { Circle } from "@lucide/svelte";
+  import PaneHeader from "./PaneHeader.svelte";
 
   const selectClass =
     "h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 text-sm " +
@@ -70,23 +72,28 @@
 </script>
 
 <div class="flex min-h-0 min-w-0 flex-1 flex-col text-sm" data-testid="config-editor">
-  <div data-testid="config-actions" role="toolbar" aria-label="Actions"
-       class="flex min-w-0 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-background px-2 py-0.5 text-xs">
-    <span>● {dirtyCount} unsaved</span>
-    {#if invalid.length}
-      <span role="alert" class="text-xs text-destructive">not a number: {invalid.join(", ")} — finish or clear it to Save.</span>
-    {/if}
-    <Button type="button" size="xs" disabled={Object.keys(pushBody).length === 0 || invalid.length > 0} onclick={push}>
+  {#snippet subjectName()}
+    <span data-testid="edit-subject" class="truncate font-mono text-foreground">{kind} {displayName}</span>
+    <span class="inline-flex shrink-0 items-center gap-1 text-muted-foreground">
+      <Circle class="size-2 fill-current" aria-hidden="true" />{dirtyCount} unsaved
+    </span>
+  {/snippet}
+  {#snippet headerActions()}
+    <Button type="button" size="sm" variant="ghost" disabled={dirtyCount === 0 && !live} onclick={() => configDraft.discard(kind, id)}>Discard</Button>
+    <Button type="button" size="sm" variant="outline" disabled={!canSave} onclick={() => canSave && configDraft.save(kind, id)}>Save</Button>
+    <Button type="button" size="sm" disabled={Object.keys(pushBody).length === 0 || invalid.length > 0} onclick={push}>
       {kind === "panel" ? "Push to panel" : "Push to device"}
     </Button>
-    <Button type="button" size="xs" variant="outline" disabled={!canSave} onclick={() => canSave && configDraft.save(kind, id)}>Save</Button>
-    <Button type="button" size="xs" variant="ghost" disabled={dirtyCount === 0 && !live} onclick={() => configDraft.discard(kind, id)}>Discard</Button>
-    {#if unpushable.length}
-      <span class="text-xs text-muted-foreground">applies on Save only: {unpushable.join(", ")}</span>
-    {/if}
-  </div>
+  {/snippet}
+  <PaneHeader data-testid="config-actions" role="toolbar" aria-label="Actions"
+              title="Edit" subject={subjectName} actions={headerActions} />
   <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto p-3" data-testid="config-body">
-  <h2 class="font-medium">Edit — {kind} {displayName}</h2>
+  {#if invalid.length}
+    <p role="alert" class="text-xs text-destructive">not a number: {invalid.join(", ")} — finish or clear it to Save.</p>
+  {/if}
+  {#if unpushable.length}
+    <p class="text-xs text-muted-foreground">applies on Save only: {unpushable.join(", ")}</p>
+  {/if}
 
   {#if kind === "panel"}
     <p class="text-xs">{users === 1 ? "⚠ 1 device uses this panel" : `⚠ ${users} devices use this panel`}</p>

@@ -30,7 +30,7 @@ describe("StatusBar", () => {
     render(StatusBar);
     flushSync();
 
-    expect(screen.getByText("✓ valid")).toBeTruthy();
+    expect(screen.getByText("valid")).toBeTruthy();
     expect(screen.getByText("lua 3:22")).toBeTruthy();
   });
 
@@ -44,7 +44,7 @@ describe("StatusBar", () => {
     render(StatusBar);
     flushSync();
 
-    expect(screen.queryByText("✓ valid")).toBeNull();
+    expect(screen.queryByText("valid")).toBeNull();
     expect(screen.getByText(/1 issue/)).toBeTruthy();
   });
 

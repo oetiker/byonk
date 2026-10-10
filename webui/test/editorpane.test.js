@@ -296,7 +296,7 @@ describe("EditorPane renders editor.files (Task 1)", () => {
     const { getByRole } = render(EditorPane);
     flushSync();
 
-    await fireEvent.click(getByRole("button", { name: "script.lua" }));
+    await fireEvent.click(getByRole("tab", { name: "script.lua" }));
     flushSync();
 
     expect(editor.active?.name).toBe("script.lua");
@@ -311,7 +311,7 @@ describe("EditorPane renders editor.files (Task 1)", () => {
     flushSync();
     expect(queryByLabelText("unsaved changes")).toBeNull(); // listed, never opened
 
-    await fireEvent.click(getByRole("button", { name: "script.lua" }));
+    await fireEvent.click(getByRole("tab", { name: "script.lua" }));
     flushSync();
     expect(queryByLabelText("unsaved changes")).toBeNull(); // opened, clean
 

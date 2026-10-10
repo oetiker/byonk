@@ -9,6 +9,9 @@
   import { resolution, parseResolutionHeader } from "../state/resolution.svelte.js";
   import { buildRenderRequest, previewSize, devicePanel } from "../render-request.js";
   import { Button } from "$lib/ui/button/index.js";
+  import { SquareArrowOutUpRight } from "@lucide/svelte";
+  import PaneHeader from "./PaneHeader.svelte";
+  import PaneToolbar from "./PaneToolbar.svelte";
 
   // The render effect must not track the draft: a draft edit is debounced
   // (P2-7) and driven by `configDraft.revision`, while a subject, target or
@@ -22,7 +25,7 @@
   const size = $derived(previewSize({ subject, meta: screens.meta, usage: configDraft.usage }));
 
   const selectClass =
-    "h-7 min-w-0 rounded-lg border border-input bg-transparent px-2 text-xs text-foreground";
+    "h-6 min-w-0 rounded-lg border border-input bg-transparent px-2 text-xs text-foreground";
   const targetValue = $derived(subject.target ? `${subject.target.kind}:${subject.target.id}` : "");
   function onTarget(e) {
     const v = e.currentTarget.value;
@@ -478,10 +481,18 @@
   }
 </script>
 
-<div class="flex min-h-0 flex-1 flex-col">
-  <div class="flex min-w-0 flex-wrap items-center gap-2 border-b border-border px-2 py-1 text-xs">
-    <span data-testid="preview-title" class="truncate font-mono">{title}</span>
-    <span data-testid="preview-size" class="font-mono">{size.width} × {size.height}</span>
+<div class="flex min-h-0 min-w-0 flex-1 flex-col">
+  {#snippet subjectInfo()}
+    <span data-testid="preview-title" class="min-w-0 truncate font-mono text-foreground">{title}</span>
+    <span data-testid="preview-size" class="shrink-0 font-mono text-muted-foreground">{size.width} × {size.height}</span>
+  {/snippet}
+  {#snippet headerActions()}
+    <Button type="button" size="sm" variant="outline" onclick={popOut}>
+      <SquareArrowOutUpRight aria-hidden="true" />Pop out
+    </Button>
+  {/snippet}
+  <PaneHeader title="Preview" subject={subjectInfo} actions={headerActions} />
+  <PaneToolbar>
     {#if subject.kind === "screen"}
       <label for="preview-target" class="sr-only">Render as</label>
       <select id="preview-target" class={selectClass} value={targetValue} onchange={onTarget}>
@@ -498,21 +509,20 @@
       <select id="preview-screen" class={selectClass} bind:value={subject.borrowedScreen}>
         {#each screens.list as s (s.ref)}<option value={s.ref}>{s.ref}</option>{/each}
       </select>
-      <label for="preview-watch">watch on</label>
+      <label for="preview-watch" class="shrink-0 whitespace-nowrap">watch on</label>
       <select id="preview-watch" class={selectClass} bind:value={subject.watchDevice}>
         <option value="">no device</option>
         {#each watchable as d (d.id)}<option value={d.id}>{d.name ?? d.id}</option>{/each}
       </select>
     {/if}
     {#if screenInCharge}
-      <span data-testid="screen-in-charge" class="text-muted-foreground">the screen sets its own colours</span>
+      <span data-testid="screen-in-charge" class="min-w-0 truncate text-muted-foreground">the screen sets its own colours</span>
     {/if}
-    <label class="ml-auto flex items-center gap-1 {noMeasured ? 'opacity-50' : ''}"
+    <label class="ml-auto flex shrink-0 items-center gap-1 whitespace-nowrap {noMeasured ? 'opacity-50' : ''}"
            title={noMeasured ? "No measured colours resolve for this render, so there is nothing to show. Pick a panel or device with colors_actual." : undefined}>
       <input type="checkbox" bind:checked={simulate.use_actual} disabled={noMeasured} /> show measured inks
     </label>
-    <Button type="button" size="xs" variant="outline" onclick={popOut}>Pop out</Button>
-  </div>
+  </PaneToolbar>
   <div data-testid="preview-region" aria-busy={busy ? "true" : "false"}
        class="relative flex min-h-0 flex-1 items-center justify-center p-4">
     <div class={`device-frame ${frameClass} flex items-center justify-center rounded-xl bg-muted p-6`}>

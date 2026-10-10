@@ -1,11 +1,12 @@
 // Which panels are open, persisted.
 //
 // The pane SIZES are not kept here: AppShell's Resizable group persists them
-// itself (PaneForge `autoSaveId`, in percent), including the size a collapsed
-// pane returns to when it is reopened -- a panel that reopens at a default
-// size instead of the size it had reads as a bug (spec §1). This record only
-// says which of the three are open; AppShell collapses and expands the panes
-// to match it.
+// itself (PaneForge `autoSaveId`, in percent). Closed panes are not rendered
+// at all (nothing collapses), and PaneForge keeps one saved layout per set of
+// open panes, so a panel that reopens does so at the size it had in that
+// combination -- a default size instead reads as a bug (spec §1). See
+// AppShell.svelte for the mechanism. This record only says which of the
+// three are open.
 
 export const PANELS = ["library", "editor", "preview"];
 export const STORAGE_KEY = "byonk.layout.v1";

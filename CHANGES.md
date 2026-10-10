@@ -103,6 +103,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the gutter shortly after you stop — you don't have to save or wait for a
   render to see it.
 
+  Preview renders once per change and only when something that affects the
+  picture changed: at once for a new subject, target or the measured-inks
+  view, after a short pause while you type a simulated input or a config
+  value, and once when you save or the file watcher reports an edit.
+
   You can create a screen from a starter, copy any screen — including the
   built-in ones and anything fetched from git — into a repo you can write to,
   rename it, and delete it. Every file in a screen is editable, not just the

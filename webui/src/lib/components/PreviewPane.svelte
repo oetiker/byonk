@@ -5,6 +5,7 @@
   import { screens } from "../state/screens.svelte.js";
   import { subject } from "../state/subject.svelte.js";
   import { configDraft } from "../state/configDraft.svelte.js";
+  import { editor } from "../state/editor.svelte.js";
   import { resolution, parseResolutionHeader } from "../state/resolution.svelte.js";
   import { buildRenderRequest, previewSize, devicePanel } from "../render-request.js";
   import { Button } from "$lib/ui/button/index.js";
@@ -249,6 +250,7 @@
   }
 
   onDestroy(() => {
+    clearTimeout(pendingRender);
     clearTimeout(busyTimer);
     clearTimeout(lingerTimer);
   });
@@ -266,6 +268,44 @@
     };
     return () => channel?.close();
   });
+
+  // --- one render per change (Task U4) --------------------------------------
+  //
+  // Every request runs the screen's Lua and a full render on the server, so
+  // the preview sends exactly one per user-visible change and none for a
+  // change that leaves the request as it was. Three effects feed ONE
+  // scheduler, and the scheduler drops a request identical to the last one
+  // sent (`lastBody`):
+  //
+  //  - `immediateKey`: the subject, its target and the hardware it resolves
+  //    on, and the inks view. Renders at once.
+  //  - `debouncedKey`: typed simulated inputs and draft edits (P2-7). Renders
+  //    after the user pauses, not once per keystroke.
+  //  - `editor.diskRevision`: a save or a watcher event. The request does not
+  //    change when a file does, so this one renders even when identical.
+  //
+  // The effects track only their key. Everything a render reads or writes
+  // (`busy`, `blobUrl`, `simulate.error`, `resolution`) stays untracked:
+  // before this, `startBusy()` read `busy` inside the render effect, so the
+  // indicator flipping on (250 ms) and off again (linger) each started
+  // another render -- a render slower than 250 ms re-rendered for ever, two
+  // requests per cycle.
+  const RENDER_DEBOUNCE_MS = 300;
+  let lastBody = null; // JSON body of the last request sent, null after none/failure to build
+  let pendingRender = null;
+
+  function scheduleRender(delay, { force = false } = {}) {
+    clearTimeout(pendingRender);
+    pendingRender = null;
+    if (delay === 0) {
+      untrack(() => renderNow({ force }));
+      return;
+    }
+    pendingRender = setTimeout(() => {
+      pendingRender = null;
+      renderNow({ force });
+    }, delay);
+  }
 
   /**
    * Render the current screen with the current simulate controls.
@@ -287,23 +327,30 @@
    * reasoning as `FilesPane`'s `run()`, so a stale failure can't outlive a
    * later success.
    */
-  async function renderNow() {
-    const seq = ++renderSeq;
-    try {
-      await renderCurrent(seq);
-    } finally {
-      // Only the latest request decides; a stale one leaves the indicator alone.
-      if (seq === renderSeq) endBusy();
-    }
-  }
-
-  async function renderCurrent(seq) {
+  function renderNow({ force = false } = {}) {
     let req;
+    let buildError = null;
     try {
       req = buildRenderRequest({ subject, draft, simulate, meta: screens.meta, usage: configDraft.usage });
     } catch (e) {
-      simulate.error = { op: "render", message: e.message };
-      resolution.fail(e.message, subject.key);
+      buildError = e;
+    }
+    const body = req ? JSON.stringify(req.body) : null;
+    // An identical request must not supersede the one already in flight
+    // for it: decide before `renderSeq` moves.
+    if (!force && body !== null && body === lastBody) return;
+    lastBody = body;
+    const seq = ++renderSeq;
+    return renderCurrent(seq, req, buildError).finally(() => {
+      // Only the latest request decides; a stale one leaves the indicator alone.
+      if (seq === renderSeq) endBusy();
+    });
+  }
+
+  async function renderCurrent(seq, req, buildError) {
+    if (buildError) {
+      simulate.error = { op: "render", message: buildError.message };
+      resolution.fail(buildError.message, subject.key);
       return;
     }
     if (!req) {
@@ -311,8 +358,8 @@
       // deleted. Drop its last render here and in the pop-out, rather than
       // keep painting a screen that no longer exists (Finding H). Bumping
       // `renderSeq` above also drops a render still in flight for it.
-      // Untracked: the re-render effect below calls this synchronously, and
-      // must depend on the selection and the controls, not on `blobUrl`.
+      // Untracked: an effect calls this synchronously (via `scheduleRender`),
+      // and must depend on its key, not on `blobUrl`.
       untrack(() => {
         resolution.reset();
         if (!blobUrl) return;
@@ -353,29 +400,50 @@
     }
   }
 
-  // Re-render whenever the screen or any simulate control changes. This is
-  // what makes the pop-out follow a simulated-input change.
+  // A stand-in for `simulate` that reports no typed inputs: the immediate
+  // key must not move per keystroke, and must not throw on half-typed params.
+  const viewOnly = {
+    get use_actual() {
+      return simulate.use_actual;
+    },
+    simulated: () => ({}),
+  };
+  const immediateKey = $derived(
+    JSON.stringify(
+      buildRenderRequest({ subject, draft, simulate: viewOnly, meta: screens.meta, usage: configDraft.usage })?.body ??
+        null,
+    ),
+  );
+  const debouncedKey = $derived(
+    JSON.stringify([
+      simulate.battery_voltage,
+      simulate.rssi,
+      simulate.timeLocked,
+      simulate.timestamp,
+      simulate.params,
+      configDraft.revision,
+    ]),
+  );
+
   $effect(() => {
-    subject.key;
-    subject.target;
-    subject.borrowedScreen;
-    subject.watchDevice;
-    simulate.fields;
-    screens.meta;
-    renderNow();
+    immediateKey;
+    scheduleRender(0);
   });
 
-  // P2-7: draft edits render after the user pauses; nothing else waits.
-  const DRAFT_RENDER_DEBOUNCE_MS = 300;
-  let lastRevision = configDraft.revision;
+  let lastDebouncedKey = untrack(() => debouncedKey);
   $effect(() => {
-    const rev = configDraft.revision;
-    if (rev === lastRevision) return;
-    const id = setTimeout(() => {
-      lastRevision = rev;
-      renderNow();
-    }, DRAFT_RENDER_DEBOUNCE_MS);
-    return () => clearTimeout(id);
+    const key = debouncedKey;
+    if (key === lastDebouncedKey) return;
+    lastDebouncedKey = key;
+    scheduleRender(RENDER_DEBOUNCE_MS);
+  });
+
+  let lastDiskRevision = untrack(() => editor.diskRevision);
+  $effect(() => {
+    const rev = editor.diskRevision;
+    if (rev === lastDiskRevision) return;
+    lastDiskRevision = rev;
+    scheduleRender(0, { force: true });
   });
 
   // "Watch on" offers the devices that use this panel, as the server resolves

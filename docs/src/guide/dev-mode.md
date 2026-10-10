@@ -234,9 +234,15 @@ both.
 ## Preview and pop-out
 
 The preview re-renders whenever you save, whenever the file watcher reports a
-change, and whenever you move a control in the work area. A change to a config
-editor field renders after a short pause (about 0.3 seconds), so it does not
-re-render on every keystroke; choosing a different subject renders at once.
+change, and whenever you change something in the work area that affects the
+picture. Choosing a different subject, a different "Render as" target or
+toggling **show measured inks** renders at once. Typing in a simulated input
+(battery, WiFi, time, custom parameters) or a config editor field renders
+after a short pause (about 0.3 seconds), so it does not re-render on every
+keystroke. Each change costs exactly one render, and a change that leaves the
+request as it was (re-selecting the subject already shown, say) costs none —
+which matters for a screen that fetches remote data on every render. Your own
+save is not rendered a second time when the watcher reports it back.
 Render time is shown in the preview header and logged in the console. While a
 render takes longer than a moment, the picture dims and a "Rendering…" label
 appears over it, so a slow screen never looks like a stale one.

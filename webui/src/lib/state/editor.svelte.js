@@ -1,6 +1,9 @@
 import * as api from "../api.js";
 import { screens } from "./screens.svelte.js";
 
+/** How long after its own write the page ignores the watcher reporting it. */
+const OWN_WRITE_ECHO_MS = 2000;
+
 /**
  * Open files and their buffers.
  *
@@ -87,6 +90,22 @@ class Editor {
   // hard-wired "watching" indicator is worse than none, because it asserts
   // a guarantee the page cannot make.
   watchConnected = $state(false);
+
+  /**
+   * Bumped whenever a screen file changed on disk: our own save, or the
+   * watcher reporting an edit made elsewhere. The preview re-renders on it,
+   * because a file change leaves the render request byte-identical and
+   * nothing else would tell it (Task U4).
+   */
+  diskRevision = $state(0);
+
+  /** basename -> when this page last wrote it; see `onWatchEvent`. */
+  #ownWrites = new Map();
+
+  #wrote(name) {
+    this.#ownWrites.set(name, Date.now());
+    this.diskRevision += 1;
+  }
 
   /**
    * The last whole-screen `validate` result, or `null` when none has run for
@@ -266,6 +285,7 @@ class Editor {
     const { etag } = await api.writeFile(t.ref, t.name, t.text, t.etag);
     t.etag = etag;
     t.saved = t.text;
+    this.#wrote(t.name);
   }
 
   /**
@@ -472,6 +492,15 @@ class Editor {
    * path) is deliberately out of scope for this branch.
    */
   async onWatchEvent(names) {
+    // The server's watcher also reports this page's own writes, a few
+    // hundred ms later (it batches every 200 ms). The save already bumped
+    // `diskRevision`; counting its echo again would render twice. A name
+    // written here within OWN_WRITE_ECHO_MS is taken to be that echo -- an
+    // outside edit of the same file inside that window is missed, and the
+    // next change renders it.
+    const now = Date.now();
+    const outside = (names ?? []).filter((n) => !(now - (this.#ownWrites.get(n) ?? -Infinity) < OWN_WRITE_ECHO_MS));
+    if (outside.length) this.diskRevision += 1;
     const pending = [];
     for (const name of names ?? []) {
       for (const t of this.tabs) {
@@ -522,6 +551,7 @@ class Editor {
       const res = await api.writeFile(c.ref, c.name, t.text, etag);
       t.etag = res.etag;
       t.saved = t.text;
+      this.#wrote(c.name);
       // Same guard as resolveReload() above, same reason: a different
       // file's fresh conflict can arrive from the watcher while the
       // readFile/writeFile round trip above is in flight, and must not be

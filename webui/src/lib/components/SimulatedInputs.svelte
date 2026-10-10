@@ -75,7 +75,7 @@
   {#if subject.kind !== "device"}
     <div class="flex flex-col gap-1.5">
       <Label for="sim-params">Custom Parameters (JSON)</Label>
-      <Textarea id="sim-params" class="min-h-20 resize-y font-mono" bind:value={simulate.params} />
+      <Textarea id="sim-params" class="max-h-40 min-h-20 resize-y overflow-auto font-mono" bind:value={simulate.params} />
     </div>
   {/if}
 </div>

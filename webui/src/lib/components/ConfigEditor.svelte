@@ -126,7 +126,7 @@
         </Field.Field>
         <Field.Field>
           <Field.Label for="cfg-plain-params">Params (JSON)</Field.Label>
-          <Textarea id="cfg-plain-params" class="min-h-20 font-mono"
+          <Textarea id="cfg-plain-params" class="max-h-40 min-h-20 overflow-auto font-mono"
                     value={plain("params")} oninput={(e) => onPlain("params", e)} />
         </Field.Field>
         <Field.Field>

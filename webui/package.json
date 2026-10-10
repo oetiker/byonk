@@ -24,6 +24,7 @@
     "@lucide/svelte": "1.42.0",
     "bits-ui": "2.19.0",
     "clsx": "2.1.1",
+    "paneforge": "1.0.2",
     "tailwind-merge": "3.6.0",
     "tailwind-variants": "3.3.1"
   },

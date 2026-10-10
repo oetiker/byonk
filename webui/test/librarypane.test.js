@@ -54,7 +54,7 @@ describe("LibraryPane", () => {
     expect(screen.getByRole("button", { name: /rename/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /delete/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /copy/i })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /new/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "New" })).toBeEnabled();
   });
 
   it("enables Rename and Delete on a writable screen", () => {
@@ -67,7 +67,7 @@ describe("LibraryPane", () => {
   it("selects the new screen after a successful create", async () => {
     vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "local/fresh" });
     render(LibraryPane);
-    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await fireEvent.click(screen.getByRole("button", { name: "New" }));
     await answer("New screen name", "fresh");
     await waitFor(() => expect(subject.screenRef).toBe("local/fresh"));
   });
@@ -101,7 +101,7 @@ describe("LibraryPane", () => {
     // for the break/restore transcript proving it fails without the catch.
     vi.spyOn(api, "createScreen").mockRejectedValue(new Error("409 Conflict: name taken"));
     render(LibraryPane);
-    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await fireEvent.click(screen.getByRole("button", { name: "New" }));
     await answer("New screen name", "boom");
     await waitFor(() => {
       expect(screens.error).toEqual({ op: "create", message: "409 Conflict: name taken" });
@@ -112,7 +112,7 @@ describe("LibraryPane", () => {
     screens.error = { op: "create", message: "a previous failure" };
     vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "local/fresh" });
     render(LibraryPane);
-    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await fireEvent.click(screen.getByRole("button", { name: "New" }));
     await answer("New screen name", "fresh");
     await waitFor(() => expect(screens.error).toBeNull());
   });
@@ -120,7 +120,7 @@ describe("LibraryPane", () => {
   it("New opens a name form with the focus in it; Escape closes it and creates nothing", async () => {
     const create = vi.spyOn(api, "createScreen");
     render(LibraryPane);
-    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await fireEvent.click(screen.getByRole("button", { name: "New" }));
     const form = await screen.findByRole("form", { name: "New screen name" });
     await tick();
     expect(document.activeElement).toBe(within(form).getByRole("textbox"));
@@ -172,7 +172,7 @@ describe("LibraryPane", () => {
   it("a failed create keeps the form open with the name", async () => {
     vi.spyOn(api, "createScreen").mockRejectedValue(new Error("409 Conflict: name taken"));
     render(LibraryPane);
-    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await fireEvent.click(screen.getByRole("button", { name: "New" }));
     await answer("New screen name", "boom");
     await waitFor(() => expect(screens.error).toEqual({ op: "create", message: "409 Conflict: name taken" }));
     const form = screen.getByRole("form", { name: "New screen name" });
@@ -185,7 +185,7 @@ describe("LibraryPane", () => {
     const create = vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "x/y" });
     const copy = vi.spyOn(api, "copyScreen").mockResolvedValue({ ref: "x/y" });
     render(LibraryPane);
-    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await fireEvent.click(screen.getByRole("button", { name: "New" }));
     await answer("New screen name", "fresh");
     await waitFor(() => expect(screens.error?.op).toBe("create"));
     expect(screens.error.message).toMatch(/no writable screen repo/i);
@@ -205,7 +205,7 @@ describe("LibraryPane", () => {
   it("a successful create closes the form", async () => {
     vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "local/fresh" });
     render(LibraryPane);
-    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await fireEvent.click(screen.getByRole("button", { name: "New" }));
     await answer("New screen name", "fresh");
     await waitFor(() => expect(screen.queryByRole("form", { name: "New screen name" })).toBeNull());
   });
@@ -266,7 +266,7 @@ describe("LibraryPane", () => {
     const confirm = vi.spyOn(window, "confirm");
     vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "local/fresh" });
     render(LibraryPane);
-    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await fireEvent.click(screen.getByRole("button", { name: "New" }));
     await answer("New screen name", "fresh");
     expect(prompt).not.toHaveBeenCalled();
     expect(confirm).not.toHaveBeenCalled();
@@ -303,7 +303,7 @@ describe("LibraryPane with more than one writable repo", () => {
   it("creates a new screen in local, not in the alphabetically-first examples", async () => {
     const create = vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "local/fresh" });
     render(LibraryPane);
-    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await fireEvent.click(screen.getByRole("button", { name: "New" }));
     await answer("New screen name", "fresh");
     await waitFor(() => expect(create).toHaveBeenCalled());
     expect(create.mock.calls[0][0]).toBe("local");
@@ -331,7 +331,7 @@ describe("LibraryPane with more than one writable repo", () => {
     await screens.refresh();
     const create = vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "examples/fresh" });
     render(LibraryPane);
-    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await fireEvent.click(screen.getByRole("button", { name: "New" }));
     await answer("New screen name", "fresh");
     await waitFor(() => expect(create).toHaveBeenCalled());
     expect(create.mock.calls[0][0]).toBe("examples");
@@ -346,7 +346,7 @@ describe("LibraryPane with more than one writable repo", () => {
     await screens.refresh();
     const create = vi.spyOn(api, "createScreen").mockResolvedValue({ ref: "examples/fresh" });
     render(LibraryPane);
-    await fireEvent.click(screen.getByRole("button", { name: /new/i }));
+    await fireEvent.click(screen.getByRole("button", { name: "New" }));
     await answer("New screen name", "fresh");
     await waitFor(() => expect(create).toHaveBeenCalled());
     expect(create.mock.calls[0][0]).toBe("examples");
@@ -396,7 +396,7 @@ describe("LibraryPane subjects", () => {
     expect(configDraft.error.op).toBe("panel usage");
   });
 
-  it("offers no create or delete for panels and devices", () => {
+  it("offers no delete for panels and devices (U5 ruling R3)", () => {
     render(LibraryPane);
     subject.select("panel", "e1004");
     expect(dom.getByRole("button", { name: "Delete" }).disabled).toBe(true);
@@ -552,5 +552,175 @@ describe("LibraryPane narrow header (fix round 1, finding 2)", () => {
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
     await new Promise((r) => setTimeout(r, 50));
     expect(document.activeElement).toBe(within(form).getByRole("textbox"));
+  });
+});
+
+describe("LibraryPane: create a panel and a device (U5)", () => {
+  const dom = screen;
+  const PANELS = [
+    { id: "e1004", name: "reTerminal E1004", colors: "#000000,#FFFFFF,#FF0000" },
+  ];
+  const PENDING = [
+    { mac: "11:22:33:44:55:66", registration_code: "ABCDE12345", model: "og", firmware_version: "1.0", last_seen: "x" },
+  ];
+  const toggle = (name) => dom.getByRole("button", { name: new RegExp(`^${name}$`, "i") });
+  const field = (form, name) => within(form).getByRole(name === "Screen" ? "combobox" : "textbox", { name });
+
+  beforeEach(() => {
+    cleanup();
+    screens.meta = { panels: PANELS, devices: [], dither_algorithms: [] };
+  });
+
+  it("puts a labelled + button beside the Panels and Devices toggles, never inside them", () => {
+    render(LibraryPane);
+    for (const [label, section] of [["New panel", "Panels"], ["New device", "Devices"]]) {
+      const plus = dom.getByRole("button", { name: label });
+      expect(plus.closest("button[aria-expanded]")).toBeNull();
+      // Same header row as the toggle, and the toggle stays a real disclosure.
+      const t = toggle(section);
+      expect(t).toHaveAttribute("aria-expanded", "true");
+      expect(plus.parentElement.contains(t) || t.parentElement.contains(plus)).toBe(true);
+      expect(t.parentElement.className).toMatch(/\bh-\(--section-h\)/);
+    }
+    expect(dom.queryByRole("button", { name: "New screen" })).toBeNull();
+  });
+
+  it("+ on a collapsed section expands it and opens the form", async () => {
+    render(LibraryPane);
+    await fireEvent.click(toggle("Panels"));
+    expect(toggle("Panels")).toHaveAttribute("aria-expanded", "false");
+    await fireEvent.click(dom.getByRole("button", { name: "New panel" }));
+    expect(toggle("Panels")).toHaveAttribute("aria-expanded", "true");
+    expect(await dom.findByRole("form", { name: "New panel" })).toBeTruthy();
+  });
+
+  it("the panel form focuses Id and prefills Colors with #000000,#FFFFFF without a panel subject", async () => {
+    render(LibraryPane);
+    await fireEvent.click(dom.getByRole("button", { name: "New panel" }));
+    const form = await dom.findByRole("form", { name: "New panel" });
+    expect(field(form, "Colors").value).toBe("#000000,#FFFFFF");
+    expect(document.activeElement).toBe(field(form, "Id"));
+  });
+
+  it("the panel form prefills Colors from the panel that is the subject", async () => {
+    subject.select("panel", "e1004");
+    render(LibraryPane);
+    await fireEvent.click(dom.getByRole("button", { name: "New panel" }));
+    const form = await dom.findByRole("form", { name: "New panel" });
+    expect(field(form, "Colors").value).toBe("#000000,#FFFFFF,#FF0000");
+  });
+
+  it("submitting a panel creates it, refreshes, selects it and closes the form", async () => {
+    const create = vi.spyOn(api, "createPanel").mockResolvedValue({ id: "bw" });
+    const refresh = vi.spyOn(screens, "refresh").mockResolvedValue();
+    render(LibraryPane);
+    await fireEvent.click(dom.getByRole("button", { name: "New panel" }));
+    const form = await dom.findByRole("form", { name: "New panel" });
+    await fireEvent.input(field(form, "Id"), { target: { value: " bw " } });
+    await fireEvent.input(field(form, "Name"), { target: { value: "BW" } });
+    await fireEvent.keyDown(field(form, "Name"), { key: "Enter" });
+    await waitFor(() => expect(subject.key).toBe("panel:bw"));
+    expect(create).toHaveBeenCalledWith({ id: "bw", name: "BW", colors: "#000000,#FFFFFF" });
+    expect(refresh).toHaveBeenCalled();
+    await waitFor(() => expect(dom.queryByRole("form", { name: "New panel" })).toBeNull());
+  });
+
+  it("a failed panel create keeps the form open with its values and reports on screens.error", async () => {
+    vi.spyOn(api, "createPanel").mockRejectedValue(new Error("409 Conflict: panel `e1004` already exists"));
+    render(LibraryPane);
+    await fireEvent.click(dom.getByRole("button", { name: "New panel" }));
+    const form = await dom.findByRole("form", { name: "New panel" });
+    await fireEvent.input(field(form, "Id"), { target: { value: "e1004" } });
+    await fireEvent.input(field(form, "Name"), { target: { value: "Dup" } });
+    await fireEvent.click(within(form).getByRole("button", { name: "OK" }));
+    await waitFor(() => expect(screens.error?.message).toMatch(/409/));
+    const still = dom.getByRole("form", { name: "New panel" });
+    expect(field(still, "Id").value).toBe("e1004");
+    expect(field(still, "Name").value).toBe("Dup");
+    expect(subject.kind).not.toBe("panel");
+  });
+
+  it("Escape closes the panel form and creates nothing", async () => {
+    const create = vi.spyOn(api, "createPanel");
+    render(LibraryPane);
+    await fireEvent.click(dom.getByRole("button", { name: "New panel" }));
+    const form = await dom.findByRole("form", { name: "New panel" });
+    await fireEvent.keyDown(field(form, "Id"), { key: "Escape" });
+    expect(dom.queryByRole("form", { name: "New panel" })).toBeNull();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("the device form lists pending devices; clicking one fills Key with its MAC", async () => {
+    vi.spyOn(api, "listPendingDevices").mockResolvedValue(PENDING);
+    render(LibraryPane);
+    await fireEvent.click(dom.getByRole("button", { name: "New device" }));
+    const form = await dom.findByRole("form", { name: "New device" });
+    expect(document.activeElement).toBe(field(form, "Key"));
+    const pick = await within(form).findByRole("button", { name: "11:22:33:44:55:66 · og" });
+    await fireEvent.click(pick);
+    expect(field(form, "Key").value).toBe("11:22:33:44:55:66");
+  });
+
+  it("a failed pending fetch just shows no list", async () => {
+    vi.spyOn(api, "listPendingDevices").mockRejectedValue(new Error("500"));
+    render(LibraryPane);
+    await fireEvent.click(dom.getByRole("button", { name: "New device" }));
+    const form = await dom.findByRole("form", { name: "New device" });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(within(form).queryAllByRole("button").map((b) => b.textContent.trim())).toEqual(["OK", "Cancel"]);
+    expect(screens.error).toBe(null);
+  });
+
+  it("the device Screen defaults to the subject's screen, else the first screen", async () => {
+    vi.spyOn(api, "listPendingDevices").mockResolvedValue([]);
+    render(LibraryPane);
+    await fireEvent.click(dom.getByRole("button", { name: "New device" }));
+    let form = await dom.findByRole("form", { name: "New device" });
+    expect(field(form, "Screen").value).toBe("local/a");
+    await fireEvent.keyDown(field(form, "Key"), { key: "Escape" });
+
+    subject.select("screen", "byonk-builtin/b");
+    await tick();
+    await fireEvent.click(dom.getByRole("button", { name: "New device" }));
+    form = await dom.findByRole("form", { name: "New device" });
+    expect(field(form, "Screen").value).toBe("byonk-builtin/b");
+  });
+
+  it("submitting a device creates it with key, screen and name, then selects it", async () => {
+    vi.spyOn(api, "listPendingDevices").mockResolvedValue([]);
+    const create = vi.spyOn(api, "createDevice").mockResolvedValue({ key: "hall", screen: "local/a" });
+    vi.spyOn(screens, "refresh").mockResolvedValue();
+    render(LibraryPane);
+    await fireEvent.click(dom.getByRole("button", { name: "New device" }));
+    const form = await dom.findByRole("form", { name: "New device" });
+    await fireEvent.input(field(form, "Key"), { target: { value: "hall" } });
+    await fireEvent.input(field(form, "Name"), { target: { value: "Hall" } });
+    await fireEvent.keyDown(field(form, "Key"), { key: "Enter" });
+    await waitFor(() => expect(subject.key).toBe("device:hall"));
+    expect(create).toHaveBeenCalledWith({ key: "hall", screen: "local/a", name: "Hall" });
+  });
+
+  it("leaves out an empty device name", async () => {
+    vi.spyOn(api, "listPendingDevices").mockResolvedValue([]);
+    const create = vi.spyOn(api, "createDevice").mockResolvedValue({ key: "hall", screen: "local/a" });
+    vi.spyOn(screens, "refresh").mockResolvedValue();
+    render(LibraryPane);
+    await fireEvent.click(dom.getByRole("button", { name: "New device" }));
+    const form = await dom.findByRole("form", { name: "New device" });
+    await fireEvent.input(field(form, "Key"), { target: { value: "hall" } });
+    await fireEvent.keyDown(field(form, "Key"), { key: "Enter" });
+    await waitFor(() => expect(create).toHaveBeenCalledWith({ key: "hall", screen: "local/a" }));
+  });
+
+  it("the folded menu offers New panel and New device", async () => {
+    vi.spyOn(api, "listPendingDevices").mockResolvedValue([]);
+    render(LibraryPane);
+    const trigger = dom.getByRole("button", { name: "More actions" });
+    await fireEvent.pointerDown(trigger, { button: 0, pointerType: "mouse" });
+    await fireEvent.click(await dom.findByRole("menuitem", { name: "New panel" }));
+    expect(await dom.findByRole("form", { name: "New panel" })).toBeTruthy();
+    await fireEvent.pointerDown(dom.getByRole("button", { name: "More actions" }), { button: 0, pointerType: "mouse" });
+    await fireEvent.click(await dom.findByRole("menuitem", { name: "New device" }));
+    expect(await dom.findByRole("form", { name: "New device" })).toBeTruthy();
   });
 });

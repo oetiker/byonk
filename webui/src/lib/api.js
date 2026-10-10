@@ -201,6 +201,13 @@ export const saveDevice = (key, body) => patch(`api/devices/${enc(key)}`, body);
 /** Which devices use which panel, as the server resolves them. */
 export const panelUsage = () => json("api/panel-usage");
 
+/** Create `panels.<id>` with `{ id, name, colors }`; 409 when the id is taken. */
+export const createPanel = (body) => post("api/panels", body);
+/** Add a device: the admin POST body (`DeviceWrite`, with `key`); 409 on a duplicate. */
+export const createDevice = (body) => post("api/devices", body);
+/** Devices byonk has seen that no `devices:` entry configures yet. */
+export const listPendingDevices = () => json("api/pending-devices");
+
 /**
  * POST a preview render (see docs/src/guide/dev-mode.md, "Rendering a
  * preview"). Relative, for HA Ingress. Returns the raw `Response`, so the

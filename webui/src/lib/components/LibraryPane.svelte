@@ -6,12 +6,15 @@
   import * as api from "../api.js";
   import { devicePanel } from "../render-request.js"; // the one device->panel lookup (ruling PF8)
   import { untrack } from "svelte";
-  import { FilePlus, Copy, Pencil, Trash2, Ellipsis } from "@lucide/svelte";
+  import { FilePlus, Copy, Pencil, Trash2, Ellipsis, Plus } from "@lucide/svelte";
   import * as DropdownMenu from "$lib/ui/dropdown-menu/index.js";
   import { Button } from "$lib/ui/button/index.js";
+  import { Input } from "$lib/ui/input/index.js";
+  import { NativeSelect } from "$lib/ui/native-select/index.js";
   import PaneHeader from "./PaneHeader.svelte";
   import IconButton from "./IconButton.svelte";
   import InlineNameForm from "./InlineNameForm.svelte";
+  import InlineFieldsForm from "./InlineFieldsForm.svelte";
   import InlineConfirm from "./InlineConfirm.svelte";
 
   // --- accordion sections (VS Code explorer style) -----------------------
@@ -117,6 +120,8 @@
    *   { kind: "new" }
    *   { kind: "copy" | "rename" | "delete", ref }
    *   { kind: "rename-confirm", ref, name }   unsaved edits, name already given
+   *   { kind: "new-panel", id, name, colors }  the fields are the form's state,
+   *   { kind: "new-device", key, screen, name } so a failure keeps them as typed
    */
   let ask = $state(null);
 
@@ -155,6 +160,62 @@
     if (subject.screenRef) ask = { kind: "delete", ref: subject.screenRef };
   }
   const closeForm = () => (ask = null);
+
+  // --- create a panel / a device (U5) -------------------------------------
+  // The "+" in a section header opens its form inside that section, so the
+  // section must be open to show it.
+  function expandSection(key) {
+    if (!isOpen(key)) toggleSection(key);
+  }
+
+  const DEFAULT_PANEL_COLORS = "#000000,#FFFFFF";
+  function newPanel() {
+    const current = subject.kind === "panel"
+      ? (screens.meta.panels ?? []).find((p) => p.id === subject.id)
+      : null;
+    expandSection("panel");
+    ask = { kind: "new-panel", id: "", name: "", colors: current?.colors ?? DEFAULT_PANEL_COLORS };
+  }
+
+  /** Seen-but-unconfigured devices, offered as one-click Key fillers. */
+  let pending = $state([]);
+  function newDevice() {
+    expandSection("device");
+    ask = { kind: "new-device", key: "", screen: subject.screenRef ?? screens.list[0]?.ref ?? "", name: "" };
+    pending = [];
+    // A failed fetch only means no suggestions; the form works without them.
+    api.listPendingDevices().then(
+      (list) => (pending = Array.isArray(list) ? list : []),
+      () => (pending = []),
+    );
+  }
+
+  const panelReady = $derived(
+    ask?.kind === "new-panel" && ask.id.trim() !== "" && ask.name.trim() !== "" && ask.colors.trim() !== "",
+  );
+  const deviceReady = $derived(ask?.kind === "new-device" && ask.key.trim() !== "" && ask.screen !== "");
+
+  async function submitPanel() {
+    const body = { id: ask.id.trim(), name: ask.name.trim(), colors: ask.colors.trim() };
+    const ok = await run("create panel", async () => {
+      const { id } = await api.createPanel(body);
+      await screens.refresh();
+      subject.select("panel", id ?? body.id);
+    });
+    if (ok) ask = null;
+  }
+
+  async function submitDevice() {
+    const body = { key: ask.key.trim(), screen: ask.screen };
+    const name = ask.name.trim();
+    if (name) body.name = name;
+    const ok = await run("create device", async () => {
+      const { key } = await api.createDevice(body);
+      await screens.refresh();
+      subject.select("device", key ?? body.key);
+    });
+    if (ok) ask = null;
+  }
 
   // Without a writable repo there is nowhere to put a screen; say so rather
   // than leave the form open with nothing happening.
@@ -252,6 +313,9 @@
             <DropdownMenu.Item aria-label="Copy" disabled={!subject.screenRef} onSelect={copyScreen}><Copy aria-hidden="true" />Copy screen</DropdownMenu.Item>
             <DropdownMenu.Item aria-label="Rename" disabled={!canEdit} onSelect={renameScreen}><Pencil aria-hidden="true" />Rename screen</DropdownMenu.Item>
             <DropdownMenu.Item aria-label="Delete" variant="destructive" disabled={!canEdit} onSelect={deleteScreen}><Trash2 aria-hidden="true" />Delete screen</DropdownMenu.Item>
+            <DropdownMenu.Separator />
+            <DropdownMenu.Item onSelect={newPanel}><Plus aria-hidden="true" />New panel</DropdownMenu.Item>
+            <DropdownMenu.Item onSelect={newDevice}><Plus aria-hidden="true" />New device</DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Root>
       </div>
@@ -281,24 +345,78 @@
     />
   {/if}
 
-  {#snippet section(key, label, body)}
+  {#snippet section(key, label, body, add, form)}
     <!-- Expanded sections share the pane height (flex-1 on a zero basis) and
          scroll on their own; a collapsed one shrinks to its header. -->
     <section class="flex flex-col border-t border-border {isOpen(key) ? 'min-h-(--section-h) flex-1 basis-0 overflow-hidden' : 'shrink-0'}"
              aria-label={label}>
-      <button type="button" aria-expanded={isOpen(key)}
-              class="flex h-(--section-h) w-full shrink-0 items-center gap-1 bg-muted px-1.5 text-left text-xs font-bold uppercase tracking-wide hover:bg-accent"
-              onclick={() => toggleSection(key)}>
-        <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round"
-             class="size-4 shrink-0 transition-transform {isOpen(key) ? 'rotate-90' : ''}">
-          <path d="M6 3.5 10.5 8 6 12.5" />
-        </svg>{label}
-      </button>
+      <!-- The header row holds the disclosure toggle and, beside it (never
+           inside it: a button may not nest a button), the section's "+". -->
+      <div class="flex h-(--section-h) shrink-0 items-center bg-muted">
+        <button type="button" aria-expanded={isOpen(key)}
+                class="flex h-(--section-h) min-w-0 flex-1 items-center gap-1 px-1.5 text-left text-xs font-bold uppercase tracking-wide hover:bg-accent"
+                onclick={() => toggleSection(key)}>
+          <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round"
+               class="size-4 shrink-0 transition-transform {isOpen(key) ? 'rotate-90' : ''}">
+            <path d="M6 3.5 10.5 8 6 12.5" />
+          </svg><span class="truncate">{label}</span>
+        </button>
+        {#if add}
+          <IconButton icon={Plus} label={add.label} size="icon-xs" class="shrink-0" onclick={add.onclick} />
+        {/if}
+      </div>
       {#if isOpen(key)}
+        {@render form?.()}
         <div class="min-h-0 flex-1 overflow-auto pb-1">{@render body()}</div>
       {/if}
     </section>
+  {/snippet}
+
+  <!-- A label beside its control, at the form's text size. -->
+  {#snippet fieldRow(name, control)}
+    <div class="flex min-w-0 items-center gap-1.5">
+      <span class="w-12 shrink-0 text-muted-foreground" aria-hidden="true">{name}</span>
+      <div class="min-w-0 flex-1">{@render control()}</div>
+    </div>
+  {/snippet}
+
+  {#snippet panelForm()}
+    {#if ask?.kind === "new-panel"}
+      <InlineFieldsForm label="New panel" canSubmit={panelReady} onsubmit={submitPanel} oncancel={closeForm}>
+        {#snippet idInput()}<Input bind:value={ask.id} aria-label="Id" placeholder="my-panel" class="h-6 font-mono text-xs" />{/snippet}
+        {#snippet nameInput()}<Input bind:value={ask.name} aria-label="Name" class="h-6 text-xs" />{/snippet}
+        {#snippet colorsInput()}<Input bind:value={ask.colors} aria-label="Colors" class="h-6 font-mono text-xs" />{/snippet}
+        {@render fieldRow("Id", idInput)}
+        {@render fieldRow("Name", nameInput)}
+        {@render fieldRow("Colors", colorsInput)}
+      </InlineFieldsForm>
+    {/if}
+  {/snippet}
+
+  {#snippet deviceForm()}
+    {#if ask?.kind === "new-device"}
+      <InlineFieldsForm label="New device" canSubmit={deviceReady} onsubmit={submitDevice} oncancel={closeForm}>
+        {#if pending.length}
+          <div class="flex min-w-0 flex-col items-start gap-1" role="group" aria-label="Seen, not configured">
+            {#each pending as p (p.mac)}
+              <Button type="button" size="xs" variant="ghost" class="max-w-full truncate font-mono"
+                      onclick={() => (ask.key = p.mac)}>{p.mac} · {p.model}</Button>
+            {/each}
+          </div>
+        {/if}
+        {#snippet keyInput()}<Input bind:value={ask.key} aria-label="Key" placeholder="MAC or registration code" class="h-6 font-mono text-xs" />{/snippet}
+        {#snippet screenInput()}
+          <NativeSelect bind:value={ask.screen} aria-label="Screen" size="xs" class="w-full">
+            {#each screens.list as s (s.ref)}<option value={s.ref}>{s.ref}</option>{/each}
+          </NativeSelect>
+        {/snippet}
+        {#snippet nameInput()}<Input bind:value={ask.name} aria-label="Name" placeholder="optional" class="h-6 text-xs" />{/snippet}
+        {@render fieldRow("Key", keyInput)}
+        {@render fieldRow("Screen", screenInput)}
+        {@render fieldRow("Name", nameInput)}
+      </InlineFieldsForm>
+    {/if}
   {/snippet}
 
   {#snippet screensBody()}
@@ -331,6 +449,6 @@
   {/snippet}
 
   {@render section("screen", "Screens", screensBody)}
-  {@render section("panel", "Panels", panelsBody)}
-  {@render section("device", "Devices", devicesBody)}
+  {@render section("panel", "Panels", panelsBody, { label: "New panel", onclick: newPanel }, panelForm)}
+  {@render section("device", "Devices", devicesBody, { label: "New device", onclick: newDevice }, deviceForm)}
 </div>

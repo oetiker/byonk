@@ -157,6 +157,12 @@ describe("api", () => {
       { name: "saveDevice", call: () => api.saveDevice("kitchen", { name: "K" }),
         expectedUrl: "api/devices/kitchen", expectedMethod: "PATCH", responseBody: '{"key":"kitchen","screen":"local/a"}' },
       { name: "panelUsage", call: () => api.panelUsage(), expectedUrl: "api/panel-usage", expectedMethod: "GET" },
+      { name: "createPanel", call: () => api.createPanel({ id: "bw", name: "BW", colors: "#000000,#FFFFFF" }),
+        expectedUrl: "api/panels", expectedMethod: "POST", responseBody: '{"id":"bw"}' },
+      { name: "createDevice", call: () => api.createDevice({ key: "hall", screen: "local/a" }),
+        expectedUrl: "api/devices", expectedMethod: "POST", responseBody: '{"key":"hall","screen":"local/a"}' },
+      { name: "listPendingDevices", call: () => api.listPendingDevices(),
+        expectedUrl: "api/pending-devices", expectedMethod: "GET", responseBody: "[]" },
     ];
 
     // Mock factory: store the current entry so the mock can respond accordingly

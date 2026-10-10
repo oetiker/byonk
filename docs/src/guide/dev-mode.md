@@ -110,6 +110,26 @@ sections share the height and scroll on their own, and the browser remembers
 which ones you folded. Selecting a subject elsewhere opens the section it
 lives in.
 
+The **+** at the right of the **Panels** and **Devices** headings adds one
+(in a narrow Library they are also in the **More actions** menu, ⋯, as **New panel** and
+**New device**). The form opens inside that section:
+
+- **New panel** asks for an **Id** (letters, digits, `_` and `-`), a
+  **Name** and the **Colors** — the comma-separated `#RRGGBB` palette, at
+  least two entries. Colors starts from the panel you have selected, or
+  `#000000,#FFFFFF`. The panel is added to `panels:` in `config.yaml`; the
+  rest of the file, comments included, is left as it was. Its `match`,
+  `width` and `height` are edited in `config.yaml`; until it has a `match`,
+  only devices that name it with `panel:` use it.
+- **New device** asks for its **Key** (a MAC address or a registration
+  code), a **Screen** (the selected screen, or the first one) and an optional
+  **Name**. Devices byonk has seen but that have no entry in `config.yaml`
+  are listed above the fields as `MAC · model`; click one to use its MAC.
+
+Enter creates, Escape cancels. An id or key that already exists is refused
+and the form stays open so you can change it. The new panel or device
+becomes the subject right away.
+
 **Edit.** The header names the subject. For a screen it is the file editor:
 one tab per file, with `meta.yaml`, `script.lua` and `screen.svg` first and
 everything else after them alphabetically. **Save** and Cmd/Ctrl-S write the

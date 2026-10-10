@@ -74,7 +74,7 @@ describe("New screen", () => {
       dither_algorithms: [],
     });
 
-    await fireEvent.click(dom.getByRole("button", { name: /new/i }));
+    await fireEvent.click(dom.getByRole("button", { name: "New" }));
     const form = await dom.findByRole("form", { name: "New screen name" });
     const input = within(form).getByRole("textbox");
     await fireEvent.input(input, { target: { value: "fresh" } });

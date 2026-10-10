@@ -6,14 +6,6 @@
 
 /* The density scale of spec §2, decided once here rather than per component.
    Dense and cramped are neighbours; this is the guard. */
-@import "tailwindcss";
-@import "tw-animate-css";
-@import "shadcn-svelte/tailwind.css";
-
-@custom-variant dark (&:is(.dark *));
-
-/* The density scale of spec §2, decided once here rather than per component.
-   Dense and cramped are neighbours; this is the guard. */
 @theme {
   /* The nova preset (Task 5 Step 1) ships with Geist as its display font,
      loaded via @fontsource-variable/geist. Dropped rather than self-hosted:

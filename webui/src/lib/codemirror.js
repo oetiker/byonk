@@ -66,28 +66,28 @@ function chromeSpec() {
       border: "none",
       borderRight: "1px solid var(--border)",
     },
-    ".cm-activeLine": { backgroundColor: "var(--active-line-bg)" },
+    ".cm-activeLine": { backgroundColor: "var(--accent)" },
     ".cm-activeLineGutter": {
-      backgroundColor: "var(--active-line-bg)",
+      backgroundColor: "var(--accent)",
       color: "var(--foreground)",
     },
     // @codemirror/lint ships the error marker as a fixed-colour SVG in a
     // `content:` url. `content: normal` drops that replaced content so the
-    // marker can be drawn from --error-color instead.
+    // marker can be drawn from --destructive instead.
     ".cm-lint-marker-error": {
       content: "normal",
       width: "0.8em",
       height: "0.8em",
       margin: "0.1em",
       borderRadius: "50%",
-      backgroundColor: "var(--error-color)",
+      backgroundColor: "var(--destructive)",
     },
     ".cm-tooltip": {
       backgroundColor: "var(--muted)",
       color: "var(--foreground)",
       border: "1px solid var(--border)",
     },
-    ".cm-diagnostic-error": { borderLeftColor: "var(--error-color)" },
+    ".cm-diagnostic-error": { borderLeftColor: "var(--destructive)" },
     // The search panel (Mod-F, from searchKeymap).
     ".cm-panels": {
       backgroundColor: "var(--muted)",
@@ -103,7 +103,7 @@ const darkTheme = EditorView.theme(chromeSpec(), { dark: true });
 // for a white page and is correct on --background's light value. The dark scheme
 // gets its own, because that stock style is a light-page palette -- its
 // comment colour (#940, a dark orange-brown) is close to unreadable on navy.
-// Every colour below was checked against the dark --background (#1a1a2e) and
+// Every colour below was checked against the dark --background (#0f1622) and
 // clears 4.5:1; the lowest is `invalid` at 6.2:1.
 const darkHighlightStyle = HighlightStyle.define([
   { tag: t.comment, color: "#93a4c4", fontStyle: "italic" },

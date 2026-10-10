@@ -133,6 +133,57 @@ describe("PreviewPane issues one render per change", () => {
   });
 });
 
+describe("PreviewPane fix round 1", () => {
+  beforeEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    resetStores();
+  });
+  afterEach(() => cleanup());
+
+  it("mode c with invalid device params: toggling inks reports the error instead of throwing", async () => {
+    const r = slowRender();
+    const errors = [];
+    const onError = (e) => errors.push(e);
+    window.addEventListener("error", onError);
+    try {
+      subject.select("device", "kitchen");
+      render(PreviewPane);
+      await waitFor(() => expect(r.spy).toHaveBeenCalledTimes(1));
+      configDraft.setPlain("device", "kitchen", "params", "{");
+      await waitFor(() => expect(simulate.error?.message).toMatch(/Invalid JSON in the device's params/));
+      simulate.error = null;
+
+      await fireEvent.click(dom.getByRole("checkbox", { name: /measured inks/i }));
+      await waitFor(() => expect(simulate.error?.message).toMatch(/Invalid JSON in the device's params/));
+      expect(r.spy).toHaveBeenCalledTimes(1);
+      expect(errors).toEqual([]);
+    } finally {
+      window.removeEventListener("error", onError);
+    }
+  });
+
+  it("an unchanged request is retried after the previous render failed", async () => {
+    let fail = true;
+    const spy = vi.spyOn(api, "renderPreview").mockImplementation(async () =>
+      fail
+        ? { ok: false, status: 500, statusText: "x", json: async () => ({ error: "boom" }) }
+        : { ok: true, headers: { get: () => null }, blob: async () => new Blob(["png"]) },
+    );
+    subject.select("screen", "local/a");
+    render(PreviewPane);
+    await waitFor(() => expect(simulate.error?.message).toBe("boom"));
+    fail = false;
+    // Type a value and take it back within the pause: the request that
+    // follows is byte-identical to the one that failed. It must go out.
+    simulate.battery_voltage = "4";
+    await tick();
+    simulate.battery_voltage = "";
+    await waitFor(() => expect(simulate.error).toBe(null));
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+});
+
 // --- through AppShell: saving and the file watcher --------------------------
 
 class FakeEventSource {

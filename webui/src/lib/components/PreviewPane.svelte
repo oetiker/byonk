@@ -110,7 +110,9 @@
       lingerTimer = null;
       return;
     }
-    if (busy || busyTimer) return; // already showing, or already counting down
+    // Untracked so no caller inside an effect can depend on the indicator:
+    // that dependency re-rendered on every show and hide (Task U4).
+    if (untrack(() => busy) || busyTimer) return; // already showing, or already counting down
     busyTimer = setTimeout(() => {
       busyTimer = null;
       busy = true;
@@ -395,6 +397,7 @@
       postFrame();
     } catch (e) {
       if (seq !== renderSeq) return; // a superseded render's failure is not news
+      lastBody = null; // a failed request is not "already shown": the same one may retry
       resolution.fail(e.message, subject.key);
       simulate.error = { op: "render", message: e.message };
     }
@@ -408,12 +411,18 @@
     },
     simulated: () => ({}),
   };
-  const immediateKey = $derived(
-    JSON.stringify(
-      buildRenderRequest({ subject, draft, simulate: viewOnly, meta: screens.meta, usage: configDraft.usage })?.body ??
-        null,
-    ),
-  );
+  // Total: a draft that cannot be built (mode c's device params, invalid
+  // JSON) must not throw out of a derived an effect reads (Ruling 41). The
+  // sentinel still moves the key, and `renderNow` rebuilds the request and
+  // reports the failure on `simulate.error` the normal way.
+  const immediateKey = $derived.by(() => {
+    try {
+      const req = buildRenderRequest({ subject, draft, simulate: viewOnly, meta: screens.meta, usage: configDraft.usage });
+      return JSON.stringify(req?.body ?? null);
+    } catch (e) {
+      return JSON.stringify({ unbuildable: e.message, subject: subject.key, use_actual: simulate.use_actual });
+    }
+  });
   const debouncedKey = $derived(
     JSON.stringify([
       simulate.battery_voltage,

@@ -132,9 +132,13 @@
     const id = devicePanel({ meta: screens.meta, usage: configDraft.usage }, d.id);
     return id ? panelName(id) : "panel unknown";
   }
+  // Sidebar tokens, like the rail: the selection is a quiet accent row, not
+  // a primary-coloured bar, and hover is a lighter step of the same accent.
   const rowClass = (on) =>
-    "block w-full shrink-0 truncate px-2 py-0.5 text-left hover:bg-muted " +
-    (on ? "bg-primary text-primary-foreground" : "");
+    "block h-(--row-h) w-full shrink-0 truncate px-2 text-left " +
+    (on
+      ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+      : "hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground");
 
   function newScreen() {
     ask = { kind: "new" };
@@ -251,10 +255,10 @@
   {#snippet section(key, label, body)}
     <!-- Expanded sections share the pane height (flex-1 on a zero basis) and
          scroll on their own; a collapsed one shrinks to its header. -->
-    <section class="flex flex-col border-t border-border {isOpen(key) ? 'min-h-6 flex-1 basis-0 overflow-hidden' : 'shrink-0'}"
+    <section class="flex flex-col border-t border-border {isOpen(key) ? 'min-h-(--section-h) flex-1 basis-0 overflow-hidden' : 'shrink-0'}"
              aria-label={label}>
       <button type="button" aria-expanded={isOpen(key)}
-              class="flex w-full shrink-0 items-center gap-1 bg-muted px-1.5 py-1 text-left text-xs font-bold uppercase tracking-wide hover:bg-accent"
+              class="flex h-(--section-h) w-full shrink-0 items-center gap-1 bg-muted px-1.5 text-left text-xs font-bold uppercase tracking-wide hover:bg-accent"
               onclick={() => toggleSection(key)}>
         <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round" stroke-linejoin="round"

@@ -22,8 +22,8 @@ afterEach(() => {
 
 beforeEach(async () => {
   localStorage.clear();
-  // No project-wide auto-cleanup is configured (see iconrail.test.js,
-  // splitpane.test.js) -- without this, the second test's render leaves the
+  // No project-wide auto-cleanup is configured (see iconrail.test.js)
+  // -- without this, the second test's render leaves the
   // first test's DOM in place and getByRole matches more than one element.
   cleanup();
   vi.restoreAllMocks();
@@ -477,7 +477,7 @@ describe("LibraryPane accordion sections", () => {
     render(LibraryPane);
     const sec = header("Screens").closest("section");
     expect(sec.className).toMatch(/overflow-hidden/);
-    expect(sec.className).toMatch(/min-h-6/);
+    expect(sec.className).toMatch(/min-h-\(--section-h\)/);
   });
 });
 
@@ -495,10 +495,21 @@ describe("LibraryPane headings and chevrons", () => {
     expect(chev().getAttribute("class")).not.toMatch(/\brotate-90\b/);
   });
 
-  it("keeps the section minimum equal to the header height (24px)", () => {
+  it("keeps the section minimum equal to the header height (one token)", () => {
     render(LibraryPane);
-    expect(header("Screens").className).toMatch(/\bpy-1\b/);
-    expect(header("Screens").closest("section").className).toMatch(/min-h-6/);
+    expect(header("Screens").className).toMatch(/\bh-\(--section-h\)/);
+    expect(header("Screens").closest("section").className).toMatch(/min-h-\(--section-h\)/);
+  });
+
+  it("rows are row-token high; the selected one is the quiet sidebar accent", () => {
+    subject.select("screen", "local/a");
+    render(LibraryPane);
+    const rows = screen.getAllByRole("button").filter((b) => b.className.includes("h-(--row-h)"));
+    expect(rows.length).toBeGreaterThan(0);
+    const current = rows.find((b) => b.getAttribute("aria-current") === "true");
+    expect(current.className).toMatch(/\bbg-sidebar-accent\b/);
+    expect(current.className).toMatch(/\btext-sidebar-accent-foreground\b/);
+    expect(current.className).not.toMatch(/\bbg-primary\b/);
   });
 
   it("sub-group labels are headings: spaced, ruled below, not selectable, not interactive", () => {

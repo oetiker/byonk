@@ -15,6 +15,10 @@
   import { auth } from "../state/auth.svelte.js";
   import { configDraft } from "../state/configDraft.svelte.js";
   import { Button } from "$lib/ui/button/index.js";
+  import { Alert } from "$lib/ui/alert/index.js";
+
+  // One 24px line per message (tokens, not py-*); Alert supplies role and colour.
+  const line = "flex min-h-6 items-center gap-2 rounded-none border-0 bg-transparent p-0 text-xs";
 
   // Ruling 66: restoring Logout (Task 13a) created a FIFTH error owner
   // (auth.error, from a failed whoami or a failed logout) and left it with
@@ -45,39 +49,31 @@
            editor.svelte.js), and labelling every one of them "save" told the
            user a save had failed when none had been attempted. The other four
            surfaces below already render their own `op`. -->
-      <div role="alert" class="text-destructive">
-        {editor.error.op}: {editor.error.message}
-      </div>
+      <Alert variant="destructive" class={line}>{editor.error.op}: {editor.error.message}</Alert>
     {/if}
     {#if screens.error}
-      <div role="alert" class="text-destructive">
-        {screens.error.op}: {screens.error.message}
-      </div>
+      <Alert variant="destructive" class={line}>{screens.error.op}: {screens.error.message}</Alert>
     {/if}
     {#if simulate.error}
-      <div role="alert" class="text-destructive">
-        {simulate.error.op}: {simulate.error.message}
-      </div>
+      <Alert variant="destructive" class={line}>{simulate.error.op}: {simulate.error.message}</Alert>
     {/if}
     {#if auth.error}
-      <div role="alert" class="text-destructive">
-        {auth.error.op}: {auth.error.message}
-      </div>
+      <Alert variant="destructive" class={line}>{auth.error.op}: {auth.error.message}</Alert>
     {/if}
     {#each configDraft.live.panels as o (o.key)}
-      <span role="status" class="flex items-center gap-2 text-destructive">
+      <Alert variant="destructive" role="status" class={line}>
         ◉ Live on {o.key}
         <Button type="button" size="xs" variant="ghost" onclick={() => configDraft.discardLive("panel", o.key)}>Discard</Button>
-      </span>
+      </Alert>
     {/each}
     {#each configDraft.live.devices as o (o.key)}
-      <span role="status" class="flex items-center gap-2 text-destructive">
+      <Alert variant="destructive" role="status" class={line}>
         ◉ Live on {o.key}
         <Button type="button" size="xs" variant="ghost" onclick={() => configDraft.discardLive("device", o.key)}>Discard</Button>
-      </span>
+      </Alert>
     {/each}
     {#if configDraft.error}
-      <div role="alert" class="text-destructive">config {configDraft.error.op}: {configDraft.error.message}</div>
+      <Alert variant="destructive" class={line}>config {configDraft.error.op}: {configDraft.error.message}</Alert>
     {/if}
   </div>
 {/if}

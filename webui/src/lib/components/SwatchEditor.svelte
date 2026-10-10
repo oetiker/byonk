@@ -5,6 +5,7 @@
   import { hexToHsl, hslToHex } from "../utils/color.js";
   import { Label } from "$lib/ui/label/index.js";
   import { Input } from "$lib/ui/input/index.js";
+  import { Slider } from "$lib/ui/slider/index.js";
 
   let { value = "", baseline = "", onchange } = $props();
 
@@ -22,9 +23,9 @@
     next[i] = hex;
     onchange?.(next.join(","));
   }
-  const onHue = (e) => setColor(selected, hslToHex(Number(e.currentTarget.value), hsl.s, hsl.l));
-  const onSat = (e) => setColor(selected, hslToHex(hsl.h, Number(e.currentTarget.value), hsl.l));
-  const onLight = (e) => setColor(selected, hslToHex(hsl.h, hsl.s, Number(e.currentTarget.value)));
+  const onHue = (v) => setColor(selected, hslToHex(v, hsl.s, hsl.l));
+  const onSat = (v) => setColor(selected, hslToHex(hsl.h, v, hsl.l));
+  const onLight = (v) => setColor(selected, hslToHex(hsl.h, hsl.s, v));
 
   // Kept apart from `selectedHex` so a half-typed hex is not clobbered by the
   // canonical value; re-synced when the value or the selection changes.
@@ -56,12 +57,12 @@
         ></button>
       {/each}
     </div>
-    <Label for="swatch-hue">Hue</Label>
-    <input id="swatch-hue" type="range" min="0" max="360" value={hsl.h} oninput={onHue} />
-    <Label for="swatch-sat">Saturation</Label>
-    <input id="swatch-sat" type="range" min="0" max="100" value={hsl.s} oninput={onSat} />
-    <Label for="swatch-light">Lightness</Label>
-    <input id="swatch-light" type="range" min="0" max="100" value={hsl.l} oninput={onLight} />
+    <Label>Hue</Label>
+    <Slider type="single" id="swatch-hue" aria-label="Hue" min={0} max={360} value={hsl.h} onValueChange={onHue} />
+    <Label>Saturation</Label>
+    <Slider type="single" id="swatch-sat" aria-label="Saturation" min={0} max={100} value={hsl.s} onValueChange={onSat} />
+    <Label>Lightness</Label>
+    <Slider type="single" id="swatch-light" aria-label="Lightness" min={0} max={100} value={hsl.l} onValueChange={onLight} />
     <Label for="swatch-hex">Hex</Label>
     <Input id="swatch-hex" bind:value={hexDraft} oninput={onHexInput} />
     <div class="flex items-center gap-2 text-xs">

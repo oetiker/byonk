@@ -9,6 +9,9 @@
   import { resolution, parseResolutionHeader } from "../state/resolution.svelte.js";
   import { buildRenderRequest, previewSize, devicePanel } from "../render-request.js";
   import { Button } from "$lib/ui/button/index.js";
+  import { NativeSelect } from "$lib/ui/native-select/index.js";
+  import { Checkbox } from "$lib/ui/checkbox/index.js";
+  import { Spinner } from "$lib/ui/spinner/index.js";
   import { SquareArrowOutUpRight } from "@lucide/svelte";
   import PaneHeader from "./PaneHeader.svelte";
   import PaneToolbar from "./PaneToolbar.svelte";
@@ -24,8 +27,6 @@
 
   const size = $derived(previewSize({ subject, meta: screens.meta, usage: configDraft.usage }));
 
-  const selectClass =
-    "h-6 min-w-0 rounded-lg border border-input bg-transparent px-2 text-xs text-foreground";
   const targetValue = $derived(subject.target ? `${subject.target.kind}:${subject.target.id}` : "");
   function onTarget(e) {
     const v = e.currentTarget.value;
@@ -495,7 +496,7 @@
   <PaneToolbar>
     {#if subject.kind === "screen"}
       <label for="preview-target" class="sr-only">Render as</label>
-      <select id="preview-target" class={selectClass} value={targetValue} onchange={onTarget}>
+      <NativeSelect id="preview-target" size="xs" class="min-w-0" value={targetValue} onchange={onTarget}>
         <option value="">default 800×480</option>
         <optgroup label="Panels">
           {#each screens.meta.panels ?? [] as p (p.id)}<option value={`panel:${p.id}`}>{p.name}</option>{/each}
@@ -503,24 +504,24 @@
         <optgroup label="Devices">
           {#each screens.meta.devices ?? [] as d (d.id)}<option value={`device:${d.id}`}>{d.name ?? d.id}</option>{/each}
         </optgroup>
-      </select>
+      </NativeSelect>
     {:else if subject.kind === "panel"}
       <label for="preview-screen" class="sr-only">Screen</label>
-      <select id="preview-screen" class={selectClass} bind:value={subject.borrowedScreen}>
+      <NativeSelect id="preview-screen" size="xs" class="min-w-0" bind:value={subject.borrowedScreen}>
         {#each screens.list as s (s.ref)}<option value={s.ref}>{s.ref}</option>{/each}
-      </select>
+      </NativeSelect>
       <label for="preview-watch" class="shrink-0 whitespace-nowrap">watch on</label>
-      <select id="preview-watch" class={selectClass} bind:value={subject.watchDevice}>
+      <NativeSelect id="preview-watch" size="xs" class="min-w-0" bind:value={subject.watchDevice}>
         <option value="">no device</option>
         {#each watchable as d (d.id)}<option value={d.id}>{d.name ?? d.id}</option>{/each}
-      </select>
+      </NativeSelect>
     {/if}
     {#if screenInCharge}
       <span data-testid="screen-in-charge" class="min-w-0 truncate text-muted-foreground">the screen sets its own colours</span>
     {/if}
     <label class="ml-auto flex shrink-0 items-center gap-1 whitespace-nowrap {noMeasured ? 'opacity-50' : ''}"
            title={noMeasured ? "No measured colours resolve for this render, so there is nothing to show. Pick a panel or device with colors_actual." : undefined}>
-      <input type="checkbox" bind:checked={simulate.use_actual} disabled={noMeasured} /> show measured inks
+      <Checkbox bind:checked={simulate.use_actual} disabled={noMeasured} /> show measured inks
     </label>
   </PaneToolbar>
   <div data-testid="preview-region" aria-busy={busy ? "true" : "false"}
@@ -543,7 +544,7 @@
     {#if busy}
       <div role="status"
            class="pointer-events-none absolute left-1/2 top-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-md border border-border bg-muted px-3 py-1.5 text-xs text-foreground shadow">
-        <span aria-hidden="true" class="render-spinner inline-block h-3.5 w-3.5 rounded-full border-2 border-border border-t-primary"></span>
+        <Spinner aria-hidden="true" role="presentation" class="size-3.5 text-primary motion-reduce:animate-none" />
         Rendering…
       </div>
     {/if}
@@ -559,18 +560,3 @@
   </div>
 {/if}
 
-<style>
-  .render-spinner {
-    animation: render-spin 0.8s linear infinite;
-  }
-  @keyframes render-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .render-spinner {
-      animation: none;
-    }
-  }
-</style>

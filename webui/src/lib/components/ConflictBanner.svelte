@@ -5,21 +5,22 @@
   // the four toggleable panels, so AppShell mounts it above the panel row
   // rather than gating it on any layout state.
   import { editor } from "../state/editor.svelte.js";
+  import { Alert } from "$lib/ui/alert/index.js";
+  import { Button } from "$lib/ui/button/index.js";
 
   const c = $derived(editor.conflict);
 </script>
 
 {#if c}
-  <div
-    role="alert"
-    class="flex items-center gap-2 border-b border-destructive
-           bg-muted px-2 py-1 text-xs"
+  <Alert
+    variant="destructive"
+    class="flex h-(--pane-toolbar-h) shrink-0 items-center gap-2 rounded-none border-0 border-b border-destructive bg-muted px-2 py-0 text-xs"
   >
-    <span>
+    <span class="text-foreground">
       <span class="font-mono">{c.name}</span>
       changed on disk{c.source === "save" ? " while you were editing" : ""}.
     </span>
-    <button type="button" onclick={() => editor.resolveReload()}>Reload</button>
-    <button type="button" onclick={() => editor.resolveOverwrite()}>Overwrite</button>
-  </div>
+    <Button type="button" size="xs" variant="outline" onclick={() => editor.resolveReload()}>Reload</Button>
+    <Button type="button" size="xs" variant="outline" onclick={() => editor.resolveOverwrite()}>Overwrite</Button>
+  </Alert>
 {/if}

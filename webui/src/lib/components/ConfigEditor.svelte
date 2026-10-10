@@ -9,14 +9,13 @@
   import SwatchEditor from "./SwatchEditor.svelte";
   import { Button } from "$lib/ui/button/index.js";
   import { Input } from "$lib/ui/input/index.js";
-  import { Label } from "$lib/ui/label/index.js";
+  import * as Field from "$lib/ui/field/index.js";
+  import { NativeSelect } from "$lib/ui/native-select/index.js";
+  import { Textarea } from "$lib/ui/textarea/index.js";
+  import { Alert } from "$lib/ui/alert/index.js";
   import { Circle } from "@lucide/svelte";
   import PaneHeader from "./PaneHeader.svelte";
 
-  const selectClass =
-    "h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 text-sm " +
-    "text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 " +
-    "focus-visible:ring-ring/50 dark:bg-input/30";
   const RUNG_LABEL = { panel: "panel", device_base: "device base", device_final: "device final" };
   const STEP = { max_error: 0.05, noise_scale: 0.5, chroma_clamp: 0.05, strength: 0.05,
                  "gamut.knee": 0.05, "gamut.amount": 0.05, "gamut.max_compression": 0.1, refresh: 60 };
@@ -91,7 +90,7 @@
     <!-- Fixed row under the header (not in the scrolling body): the Save/Push blockers stay visible. -->
     <div data-testid="config-messages" class="flex shrink-0 flex-col gap-0.5 border-b border-border px-2 py-1 text-xs">
       {#if invalid.length}
-        <p role="alert" class="text-destructive">not a number: {invalid.join(", ")} — finish or clear it to Save.</p>
+        <Field.Error class="text-xs">not a number: {invalid.join(", ")} — finish or clear it to Save.</Field.Error>
       {/if}
       {#if unpushable.length}
         <p class="text-muted-foreground">applies on Save only: {unpushable.join(", ")}</p>
@@ -105,53 +104,69 @@
   {/if}
 
   {#if live}
-    <div role="status" class="my-2 rounded border border-destructive p-2 text-xs">
+    <Alert variant="destructive" role="status" class="my-2 text-xs">
       <p>◉ Live on {displayName} — the real {kind === "panel" ? "panel" : "display"} is showing this draft.</p>
       <p>It reverts on its own within 30 minutes, or on Discard.</p>
-    </div>
+    </Alert>
   {/if}
 
   {#if kind === "device"}
-    <section class="flex flex-col gap-2 py-2" aria-label="Device">
-      <Label for="cfg-plain-screen">Screen</Label>
-      <select id="cfg-plain-screen" class={selectClass} value={plain("screen")} onchange={(e) => onPlain("screen", e)}>
-        {#each screens.list as s (s.ref)}<option value={s.ref}>{s.ref}</option>{/each}
-      </select>
-      {#if screenMissing}<p role="alert" class="text-xs text-destructive">A device needs a screen — pick one to enable Save.</p>{/if}
-      <Label for="cfg-plain-name">Name</Label>
-      <Input id="cfg-plain-name" value={plain("name") ?? ""} oninput={(e) => onPlain("name", e)} />
-      <Label for="cfg-plain-params">Params (JSON)</Label>
-      <textarea id="cfg-plain-params" class={selectClass + " h-20 py-1.5 font-mono"}
-                value={plain("params")} oninput={(e) => onPlain("params", e)}></textarea>
-      <Label for="cfg-plain-temperature_profile">Temperature profile</Label>
-      <select id="cfg-plain-temperature_profile" class={selectClass} value={plain("temperature_profile") ?? ""}
-              onchange={(e) => onPlain("temperature_profile", e)}>
-        <option value="">(unset)</option><option value="default">default</option>
-        <option value="a">a</option><option value="b">b</option>
-      </select>
-      <Label for="cfg-plain-maximum_compatibility">Maximum compatibility</Label>
-      <select id="cfg-plain-maximum_compatibility" class={selectClass}
-              value={plain("maximum_compatibility") === null ? "" : String(plain("maximum_compatibility"))}
-              onchange={(e) => onPlain("maximum_compatibility", e)}>
-        <option value="">(unset)</option><option value="true">on</option><option value="false">off</option>
-      </select>
-      <Label for="cfg-plain-min_png_bytes">Minimum PNG bytes</Label>
-      <Input id="cfg-plain-min_png_bytes" type="number" min="0" value={plain("min_png_bytes") ?? ""}
-             oninput={(e) => onPlain("min_png_bytes", e)} />
+    <section class="py-2" aria-label="Device">
+      <Field.Group class="gap-3">
+        <Field.Field>
+          <Field.Label for="cfg-plain-screen">Screen</Field.Label>
+          <NativeSelect id="cfg-plain-screen" value={plain("screen")} onchange={(e) => onPlain("screen", e)}>
+            {#each screens.list as s (s.ref)}<option value={s.ref}>{s.ref}</option>{/each}
+          </NativeSelect>
+          {#if screenMissing}<Field.Error class="text-xs">A device needs a screen — pick one to enable Save.</Field.Error>{/if}
+        </Field.Field>
+        <Field.Field>
+          <Field.Label for="cfg-plain-name">Name</Field.Label>
+          <Input id="cfg-plain-name" value={plain("name") ?? ""} oninput={(e) => onPlain("name", e)} />
+        </Field.Field>
+        <Field.Field>
+          <Field.Label for="cfg-plain-params">Params (JSON)</Field.Label>
+          <Textarea id="cfg-plain-params" class="min-h-20 font-mono"
+                    value={plain("params")} oninput={(e) => onPlain("params", e)} />
+        </Field.Field>
+        <Field.Field>
+          <Field.Label for="cfg-plain-temperature_profile">Temperature profile</Field.Label>
+          <NativeSelect id="cfg-plain-temperature_profile" value={plain("temperature_profile") ?? ""}
+                        onchange={(e) => onPlain("temperature_profile", e)}>
+            <option value="">(unset)</option><option value="default">default</option>
+            <option value="a">a</option><option value="b">b</option>
+          </NativeSelect>
+        </Field.Field>
+        <Field.Field>
+          <Field.Label for="cfg-plain-maximum_compatibility">Maximum compatibility</Field.Label>
+          <NativeSelect id="cfg-plain-maximum_compatibility"
+                        value={plain("maximum_compatibility") === null ? "" : String(plain("maximum_compatibility"))}
+                        onchange={(e) => onPlain("maximum_compatibility", e)}>
+            <option value="">(unset)</option><option value="true">on</option><option value="false">off</option>
+          </NativeSelect>
+        </Field.Field>
+        <Field.Field>
+          <Field.Label for="cfg-plain-min_png_bytes">Minimum PNG bytes</Field.Label>
+          <Input id="cfg-plain-min_png_bytes" type="number" min="0" value={plain("min_png_bytes") ?? ""}
+                 oninput={(e) => onPlain("min_png_bytes", e)} />
+        </Field.Field>
+      </Field.Group>
     </section>
   {/if}
 
   {#each schema.fields as field (field)}
     <section class="flex flex-col gap-1 border-t border-border py-2" aria-label={field}>
       <h3 class="font-mono text-xs">{field}</h3>
+      <Field.Group class="gap-2">
       {#each schema.rungs as rung (rung)}
-        <Label for={cid(rung, field)}>{field} ({RUNG_LABEL[rung]})</Label>
+        <Field.Field>
+        <Field.Label for={cid(rung, field)}>{field} ({RUNG_LABEL[rung]})</Field.Label>
         {#if field === "dither"}
-          <select id={cid(rung, field)} class={selectClass} value={val(rung, field) ?? ""}
-                  onchange={(e) => onField(rung, field, e)}>
+          <NativeSelect id={cid(rung, field)} value={val(rung, field) ?? ""}
+                        onchange={(e) => onField(rung, field, e)}>
             <option value="">— (none)</option>
             {#each screens.meta.dither_algorithms ?? [] as a (a.name)}<option value={a.name}>{a.name}</option>{/each}
-          </select>
+          </NativeSelect>
         {:else if field === "colors_actual" && kind === "panel"}
           <Input id={cid(rung, field)} value={val(rung, field) ?? ""} oninput={(e) => onField(rung, field, e)} />
           <SwatchEditor value={val(rung, field) ?? info?.colors ?? ""}
@@ -163,7 +178,9 @@
           <Input id={cid(rung, field)} type="number" step={STEP[field]} value={val(rung, field) ?? ""}
                  oninput={(e) => onField(rung, field, e)} />
         {/if}
+        </Field.Field>
       {/each}
+      </Field.Group>
       <Ladder setting={field} editing={schema.rungs} state={ladderState} failure={ownsResolution ? resolution.failure : null}
               stale={!layout.isOpen("preview")}
               report={ladderState === "ok" ? resolution.setting(field) : null} />

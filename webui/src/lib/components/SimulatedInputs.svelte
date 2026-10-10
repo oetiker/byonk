@@ -3,11 +3,9 @@
   import { subject } from "../state/subject.svelte.js";
   import { Label } from "$lib/ui/label/index.js";
   import { Input } from "$lib/ui/input/index.js";
-
-  const selectClass =
-    "h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 text-sm " +
-    "text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 " +
-    "focus-visible:ring-ring/50 dark:bg-input/30";
+  import { Textarea } from "$lib/ui/textarea/index.js";
+  import IconButton from "./IconButton.svelte";
+  import { X } from "@lucide/svelte";
 
   // --- Current Time: a live clock that locks the moment it is edited -----
 
@@ -67,22 +65,9 @@
       </span>
     </Label>
     <div class="flex items-center gap-1">
-      <input
-        id="sim-time"
-        type="datetime-local"
-        class={selectClass}
-        bind:value={timeInput}
-        onchange={onTimeChange}
-      />
+      <Input id="sim-time" type="datetime-local" bind:value={timeInput} onchange={onTimeChange} />
       {#if simulate.timeLocked}
-        <button
-          type="button"
-          class="h-8 shrink-0 rounded-lg border border-input px-2 text-sm"
-          title="Reset to live time"
-          onclick={resetTime}
-        >
-          &times;
-        </button>
+        <IconButton icon={X} label="Reset to live time" onclick={resetTime} variant="outline" class="shrink-0" />
       {/if}
     </div>
   </div>
@@ -90,11 +75,7 @@
   {#if subject.kind !== "device"}
     <div class="flex flex-col gap-1.5">
       <Label for="sim-params">Custom Parameters (JSON)</Label>
-      <textarea
-        id="sim-params"
-        class={selectClass + " h-20 resize-y py-1.5 font-mono"}
-        bind:value={simulate.params}
-      ></textarea>
+      <Textarea id="sim-params" class="min-h-20 resize-y font-mono" bind:value={simulate.params} />
     </div>
   {/if}
 </div>

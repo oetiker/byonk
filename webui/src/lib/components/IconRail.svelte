@@ -2,6 +2,7 @@
   import { Library, Code, Monitor, LogOut } from "@lucide/svelte";
   import { layout, PANELS } from "../state/layout.svelte.js";
   import { auth } from "../state/auth.svelte.js";
+  import IconButton from "./IconButton.svelte";
   import ThemeSwitch from "./ThemeSwitch.svelte";
 
   const ICONS = { library: Library, editor: Code, preview: Monitor };
@@ -17,19 +18,13 @@
 >
   {#each PANELS as p (p)}
     {@const Icon = ICONS[p]}
-    <button
-      type="button"
+    <IconButton
+      icon={Icon}
+      label={LABELS[p]}
       aria-pressed={layout.isOpen(p)}
-      aria-label={LABELS[p]}
-      title={LABELS[p]}
       onclick={() => layout.toggle(p)}
-      class="flex h-8 w-8 items-center justify-center rounded
-             text-muted-foreground hover:bg-background
-             aria-pressed:bg-background
-             aria-pressed:text-primary"
-    >
-      <Icon size={16} aria-hidden="true" />
-    </button>
+      class="text-muted-foreground hover:bg-background aria-pressed:bg-background aria-pressed:text-primary"
+    />
   {/each}
 
   <!-- Ruling 52 (theme switch) / Ruling 63 (logout): both grouped with the
@@ -44,17 +39,13 @@
            spec docs/superpowers/specs/2026-09-07-dev-mode-editor-design.md:360
            and Task 14 Step 3 item 3 both require that no Logout control
            renders at all in that case, not merely an inert one. -->
-      <button
-        type="button"
-        aria-label="Logout"
-        title={auth.user ? `Logout (${auth.user})` : "Logout"}
+      <IconButton
+        icon={LogOut}
+        label="Logout"
+        tip={auth.user ? `Logout (${auth.user})` : "Logout"}
         onclick={() => auth.logout()}
-        class="flex h-8 w-8 items-center justify-center rounded
-               text-muted-foreground hover:bg-background
-               hover:text-destructive"
-      >
-        <LogOut size={16} aria-hidden="true" />
-      </button>
+        class="text-muted-foreground hover:bg-background hover:text-destructive"
+      />
     {/if}
     <ThemeSwitch />
   </div>

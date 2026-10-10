@@ -37,7 +37,7 @@
 
 <form
   aria-label={label}
-  class="flex min-w-0 items-center gap-1 border-b border-[var(--border-color)] p-1 text-xs"
+  class="flex min-w-0 items-center gap-1 border-b border-border p-1 text-xs"
   {onkeydown}
   onsubmit={(e) => {
     e.preventDefault();

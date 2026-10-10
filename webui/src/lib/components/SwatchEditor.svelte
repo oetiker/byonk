@@ -51,7 +51,7 @@
           title={c}
           class="h-6 w-6 rounded border-2"
           style:background-color={c}
-          style:border-color={selected === i ? "var(--ring)" : "var(--border-color)"}
+          style:border-color={selected === i ? "var(--ring)" : "var(--border)"}
           onclick={() => (selected = i)}
         ></button>
       {/each}
@@ -65,11 +65,11 @@
     <Label for="swatch-hex">Hex</Label>
     <Input id="swatch-hex" bind:value={hexDraft} oninput={onHexInput} />
     <div class="flex items-center gap-2 text-xs">
-      <span class="text-[var(--text-muted)]">Original</span>
-      <span class="h-5 w-5 rounded border border-[var(--border-color)]" style:background-color={original[selected]}></span>
+      <span class="text-muted-foreground">Original</span>
+      <span class="h-5 w-5 rounded border border-border" style:background-color={original[selected]}></span>
       <span>{original[selected] ?? ""}</span>
-      <span class="text-[var(--text-muted)]">Live</span>
-      <span class="h-5 w-5 rounded border border-[var(--border-color)]" style:background-color={colors[selected]}></span>
+      <span class="text-muted-foreground">Live</span>
+      <span class="h-5 w-5 rounded border border-border" style:background-color={colors[selected]}></span>
       <span>{colors[selected]}</span>
     </div>
   </div>

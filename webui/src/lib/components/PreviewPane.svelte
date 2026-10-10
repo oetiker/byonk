@@ -479,7 +479,7 @@
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col">
-  <div class="flex min-w-0 flex-wrap items-center gap-2 border-b border-[var(--border-color)] px-2 py-1 text-xs">
+  <div class="flex min-w-0 flex-wrap items-center gap-2 border-b border-border px-2 py-1 text-xs">
     <span data-testid="preview-title" class="truncate font-mono">{title}</span>
     <span data-testid="preview-size" class="font-mono">{size.width} × {size.height}</span>
     {#if subject.kind === "screen"}
@@ -505,7 +505,7 @@
       </select>
     {/if}
     {#if screenInCharge}
-      <span data-testid="screen-in-charge" class="text-[var(--text-muted)]">the screen sets its own colours</span>
+      <span data-testid="screen-in-charge" class="text-muted-foreground">the screen sets its own colours</span>
     {/if}
     <label class="ml-auto flex items-center gap-1 {noMeasured ? 'opacity-50' : ''}"
            title={noMeasured ? "No measured colours resolve for this render, so there is nothing to show. Pick a panel or device with colors_actual." : undefined}>
@@ -515,9 +515,9 @@
   </div>
   <div data-testid="preview-region" aria-busy={busy ? "true" : "false"}
        class="relative flex min-h-0 flex-1 items-center justify-center p-4">
-    <div class={`device-frame ${frameClass} flex items-center justify-center rounded-xl bg-[var(--panel-bg)] p-6`}>
-      <div class="device-bezel rounded-lg bg-[var(--border-color)] p-3">
-        <div class="screen-well overflow-hidden rounded-sm bg-[var(--bg-color)]">
+    <div class={`device-frame ${frameClass} flex items-center justify-center rounded-xl bg-muted p-6`}>
+      <div class="device-bezel rounded-lg bg-border p-3">
+        <div class="screen-well overflow-hidden rounded-sm bg-background">
           <img
             bind:this={imgEl}
             alt="Screen preview"
@@ -532,8 +532,8 @@
     </div>
     {#if busy}
       <div role="status"
-           class="pointer-events-none absolute left-1/2 top-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-md border border-[var(--border-color)] bg-[var(--panel-bg)] px-3 py-1.5 text-xs text-[var(--text-color)] shadow">
-        <span aria-hidden="true" class="render-spinner inline-block h-3.5 w-3.5 rounded-full border-2 border-[var(--border-color)] border-t-[var(--accent-color)]"></span>
+           class="pointer-events-none absolute left-1/2 top-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-md border border-border bg-muted px-3 py-1.5 text-xs text-foreground shadow">
+        <span aria-hidden="true" class="render-spinner inline-block h-3.5 w-3.5 rounded-full border-2 border-border border-t-primary"></span>
         Rendering…
       </div>
     {/if}
@@ -542,7 +542,7 @@
 
 {#if lensVisible}
   <div
-    class="lens pointer-events-none fixed z-50 h-[200px] w-[200px] overflow-hidden rounded-full border-2 border-[var(--accent-color)] bg-[var(--bg-color)] shadow-lg"
+    class="lens pointer-events-none fixed z-50 h-[200px] w-[200px] overflow-hidden rounded-full border-2 border-primary bg-background shadow-lg"
     style={`left:${lensX}px; top:${lensY}px;`}
   >
     <canvas bind:this={lensCanvasEl} width="200" height="200" class="block"></canvas>

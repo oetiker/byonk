@@ -131,8 +131,8 @@
     return id ? panelName(id) : "panel unknown";
   }
   const rowClass = (on) =>
-    "block w-full shrink-0 truncate px-2 py-0.5 text-left hover:bg-[var(--panel-bg)] " +
-    (on ? "bg-[var(--accent-color)] text-white" : "");
+    "block w-full shrink-0 truncate px-2 py-0.5 text-left hover:bg-muted " +
+    (on ? "bg-primary text-white" : "");
 
   function newScreen() {
     ask = { kind: "new" };
@@ -214,7 +214,7 @@
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col text-xs" role="region" aria-label="Library">
-  <div class="flex shrink-0 gap-1 border-b border-[var(--border-color)] p-1">
+  <div class="flex shrink-0 gap-1 border-b border-border p-1">
     <Button type="button" size="xs" variant="outline" onclick={newScreen}>New</Button>
     <Button
       type="button"
@@ -259,10 +259,10 @@
   {#snippet section(key, label, body)}
     <!-- Expanded sections share the pane height (flex-1 on a zero basis) and
          scroll on their own; a collapsed one shrinks to its header. -->
-    <section class="flex flex-col border-t border-[var(--border-color)] {isOpen(key) ? 'min-h-6 flex-1 basis-0 overflow-hidden' : 'shrink-0'}"
+    <section class="flex flex-col border-t border-border {isOpen(key) ? 'min-h-6 flex-1 basis-0 overflow-hidden' : 'shrink-0'}"
              aria-label={label}>
       <button type="button" aria-expanded={isOpen(key)}
-              class="flex w-full shrink-0 items-center gap-1 bg-[var(--panel-bg)] px-1.5 py-1 text-left text-[11px] font-bold uppercase tracking-wide hover:bg-[var(--border-color)]"
+              class="flex w-full shrink-0 items-center gap-1 bg-muted px-1.5 py-1 text-left text-xs font-bold uppercase tracking-wide hover:bg-accent"
               onclick={() => toggleSection(key)}>
         <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round" stroke-linejoin="round"
@@ -278,7 +278,7 @@
 
   {#snippet screensBody()}
     {#each screens.grouped as g (g.handle)}
-      <div class="mx-2 mt-3 shrink-0 cursor-default select-none border-b border-[var(--border-color)] pb-0.5 font-mono text-[10px] uppercase text-[var(--text-muted)] first:mt-1">
+      <div class="mx-2 mt-3 shrink-0 cursor-default select-none border-b border-border pb-0.5 font-mono text-xs uppercase text-muted-foreground first:mt-1">
         {g.handle}{#if !g.writable}<span class="ml-1">read-only</span>{/if}
       </div>
       {#each g.screens as s (s.ref)}

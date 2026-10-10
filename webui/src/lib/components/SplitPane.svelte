@@ -155,9 +155,9 @@
       aria-valuenow={size}
       aria-valuemin={min}
       aria-valuemax={maxSize}
-      class="shrink-0 bg-[var(--border-color)] hover:bg-[var(--accent-color)]
+      class="shrink-0 bg-border hover:bg-primary
              {axis === 'x' ? 'w-px cursor-col-resize' : 'h-px cursor-row-resize'}
-             {dragging ? 'bg-[var(--accent-color)]' : ''}"
+             {dragging ? 'bg-primary' : ''}"
       onpointerdown={start}
       onkeydown={key}
     ></div>

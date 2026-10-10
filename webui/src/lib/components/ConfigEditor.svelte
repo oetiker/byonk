@@ -71,10 +71,10 @@
 
 <div class="flex min-h-0 min-w-0 flex-1 flex-col text-sm" data-testid="config-editor">
   <div data-testid="config-actions" role="toolbar" aria-label="Actions"
-       class="flex min-w-0 shrink-0 flex-wrap items-center gap-2 border-b border-[var(--border-color)] bg-[var(--bg-color)] px-2 py-0.5 text-xs">
+       class="flex min-w-0 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-background px-2 py-0.5 text-xs">
     <span>● {dirtyCount} unsaved</span>
     {#if invalid.length}
-      <span role="alert" class="text-xs text-[var(--danger-color)]">not a number: {invalid.join(", ")} — finish or clear it to Save.</span>
+      <span role="alert" class="text-xs text-destructive">not a number: {invalid.join(", ")} — finish or clear it to Save.</span>
     {/if}
     <Button type="button" size="xs" disabled={Object.keys(pushBody).length === 0 || invalid.length > 0} onclick={push}>
       {kind === "panel" ? "Push to panel" : "Push to device"}
@@ -82,7 +82,7 @@
     <Button type="button" size="xs" variant="outline" disabled={!canSave} onclick={() => canSave && configDraft.save(kind, id)}>Save</Button>
     <Button type="button" size="xs" variant="ghost" disabled={dirtyCount === 0 && !live} onclick={() => configDraft.discard(kind, id)}>Discard</Button>
     {#if unpushable.length}
-      <span class="text-xs text-[var(--text-muted)]">applies on Save only: {unpushable.join(", ")}</span>
+      <span class="text-xs text-muted-foreground">applies on Save only: {unpushable.join(", ")}</span>
     {/if}
   </div>
   <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto p-3" data-testid="config-body">
@@ -90,11 +90,11 @@
 
   {#if kind === "panel"}
     <p class="text-xs">{users === 1 ? "⚠ 1 device uses this panel" : `⚠ ${users} devices use this panel`}</p>
-    {#if unseen > 0}<p class="text-xs text-[var(--text-muted)]">{unseen === 1 ? "1 more device has not polled since byonk started, so its panel is not known yet." : `${unseen} more devices have not polled since byonk started, so their panel is not known yet.`}</p>{/if}
+    {#if unseen > 0}<p class="text-xs text-muted-foreground">{unseen === 1 ? "1 more device has not polled since byonk started, so its panel is not known yet." : `${unseen} more devices have not polled since byonk started, so their panel is not known yet.`}</p>{/if}
   {/if}
 
   {#if live}
-    <div role="status" class="my-2 rounded border border-[var(--danger-color)] p-2 text-xs">
+    <div role="status" class="my-2 rounded border border-destructive p-2 text-xs">
       <p>◉ Live on {displayName} — the real {kind === "panel" ? "panel" : "display"} is showing this draft.</p>
       <p>It reverts on its own within 30 minutes, or on Discard.</p>
     </div>
@@ -106,7 +106,7 @@
       <select id="cfg-plain-screen" class={selectClass} value={plain("screen")} onchange={(e) => onPlain("screen", e)}>
         {#each screens.list as s (s.ref)}<option value={s.ref}>{s.ref}</option>{/each}
       </select>
-      {#if screenMissing}<p role="alert" class="text-xs text-[var(--danger-color)]">A device needs a screen — pick one to enable Save.</p>{/if}
+      {#if screenMissing}<p role="alert" class="text-xs text-destructive">A device needs a screen — pick one to enable Save.</p>{/if}
       <Label for="cfg-plain-name">Name</Label>
       <Input id="cfg-plain-name" value={plain("name") ?? ""} oninput={(e) => onPlain("name", e)} />
       <Label for="cfg-plain-params">Params (JSON)</Label>
@@ -131,7 +131,7 @@
   {/if}
 
   {#each schema.fields as field (field)}
-    <section class="flex flex-col gap-1 border-t border-[var(--border-color)] py-2" aria-label={field}>
+    <section class="flex flex-col gap-1 border-t border-border py-2" aria-label={field}>
       <h3 class="font-mono text-xs">{field}</h3>
       {#each schema.rungs as rung (rung)}
         <Label for={cid(rung, field)}>{field} ({RUNG_LABEL[rung]})</Label>

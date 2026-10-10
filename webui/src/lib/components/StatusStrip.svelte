@@ -36,8 +36,8 @@
 
 {#if hasAnything}
   <div
-    class="flex flex-col gap-0.5 border-b border-[var(--border-color)]
-           bg-[var(--panel-bg)] px-2 py-1 font-mono text-xs text-[var(--text-color)]"
+    class="flex flex-col gap-0.5 border-b border-border
+           bg-muted px-2 py-1 font-mono text-xs text-foreground"
   >
     {#if editor.error}
       <!-- `{op}:`, not a hard-coded "save:". `editor.error` is raised by four
@@ -45,39 +45,39 @@
            editor.svelte.js), and labelling every one of them "save" told the
            user a save had failed when none had been attempted. The other four
            surfaces below already render their own `op`. -->
-      <div role="alert" class="text-[var(--danger-color)]">
+      <div role="alert" class="text-destructive">
         {editor.error.op}: {editor.error.message}
       </div>
     {/if}
     {#if screens.error}
-      <div role="alert" class="text-[var(--danger-color)]">
+      <div role="alert" class="text-destructive">
         {screens.error.op}: {screens.error.message}
       </div>
     {/if}
     {#if simulate.error}
-      <div role="alert" class="text-[var(--danger-color)]">
+      <div role="alert" class="text-destructive">
         {simulate.error.op}: {simulate.error.message}
       </div>
     {/if}
     {#if auth.error}
-      <div role="alert" class="text-[var(--danger-color)]">
+      <div role="alert" class="text-destructive">
         {auth.error.op}: {auth.error.message}
       </div>
     {/if}
     {#each configDraft.live.panels as o (o.key)}
-      <span role="status" class="flex items-center gap-2 text-[var(--danger-color)]">
+      <span role="status" class="flex items-center gap-2 text-destructive">
         ◉ Live on {o.key}
         <Button type="button" size="xs" variant="ghost" onclick={() => configDraft.discardLive("panel", o.key)}>Discard</Button>
       </span>
     {/each}
     {#each configDraft.live.devices as o (o.key)}
-      <span role="status" class="flex items-center gap-2 text-[var(--danger-color)]">
+      <span role="status" class="flex items-center gap-2 text-destructive">
         ◉ Live on {o.key}
         <Button type="button" size="xs" variant="ghost" onclick={() => configDraft.discardLive("device", o.key)}>Discard</Button>
       </span>
     {/each}
     {#if configDraft.error}
-      <div role="alert" class="text-[var(--danger-color)]">config {configDraft.error.op}: {configDraft.error.message}</div>
+      <div role="alert" class="text-destructive">config {configDraft.error.op}: {configDraft.error.message}</div>
     {/if}
   </div>
 {/if}

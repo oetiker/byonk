@@ -12,6 +12,6 @@
   {:else if subject.kind === "panel" || subject.kind === "device"}
     {#key subject.key}<ConfigEditor />{/key}
   {:else}
-    <p class="p-3 text-sm text-[var(--text-muted)]">Pick a screen, panel or device in the Library.</p>
+    <p class="p-3 text-sm text-muted-foreground">Pick a screen, panel or device in the Library.</p>
   {/if}
 </div>

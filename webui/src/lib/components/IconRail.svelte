@@ -13,7 +13,7 @@
   aria-label="Panels"
   aria-orientation="vertical"
   class="flex w-10 shrink-0 flex-col items-center gap-1 border-r
-         border-[var(--border-color)] bg-[var(--panel-bg)] py-2"
+         border-border bg-muted py-2"
 >
   {#each PANELS as p (p)}
     {@const Icon = ICONS[p]}
@@ -24,9 +24,9 @@
       title={LABELS[p]}
       onclick={() => layout.toggle(p)}
       class="flex h-8 w-8 items-center justify-center rounded
-             text-[var(--text-muted)] hover:bg-[var(--bg-color)]
-             aria-pressed:bg-[var(--bg-color)]
-             aria-pressed:text-[var(--accent-color)]"
+             text-muted-foreground hover:bg-background
+             aria-pressed:bg-background
+             aria-pressed:text-primary"
     >
       <Icon size={16} aria-hidden="true" />
     </button>
@@ -50,8 +50,8 @@
         title={auth.user ? `Logout (${auth.user})` : "Logout"}
         onclick={() => auth.logout()}
         class="flex h-8 w-8 items-center justify-center rounded
-               text-[var(--text-muted)] hover:bg-[var(--bg-color)]
-               hover:text-[var(--danger-color)]"
+               text-muted-foreground hover:bg-background
+               hover:text-destructive"
       >
         <LogOut size={16} aria-hidden="true" />
       </button>

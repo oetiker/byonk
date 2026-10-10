@@ -28,15 +28,15 @@
 </script>
 
 <div
-  class="flex flex-wrap items-center gap-3 border-t border-[var(--border-color)]
-         bg-[var(--panel-bg)] px-2 py-1 font-mono text-xs text-[var(--text-color)]"
+  class="flex flex-wrap items-center gap-3 border-t border-border
+         bg-muted px-2 py-1 font-mono text-xs text-foreground"
 >
   {#if !t}
-    <span class="text-[var(--text-muted)]">no file open</span>
+    <span class="text-muted-foreground">no file open</span>
   {:else if issues.length === 0}
-    <span class="text-[var(--ok-color)]">✓ valid</span>
+    <span class="text-success">✓ valid</span>
   {:else}
-    <span class="text-[var(--danger-color)]">
+    <span class="text-destructive">
       ✖ {issues.length} issue{issues.length === 1 ? "" : "s"}
     </span>
   {/if}
@@ -45,7 +45,7 @@
     <span>{languageOf(t.name)} {editor.cursorLine}:{editor.cursorCol}</span>
   {/if}
 
-  <span class={editor.watchConnected ? "text-[var(--ok-color)]" : "text-[var(--text-muted)]"}>
+  <span class={editor.watchConnected ? "text-success" : "text-muted-foreground"}>
     watch: {editor.watchConnected ? "connected" : "disconnected"}
   </span>
 </div>

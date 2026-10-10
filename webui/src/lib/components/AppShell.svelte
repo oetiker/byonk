@@ -164,14 +164,14 @@
   });
 </script>
 
-<div class="flex h-full flex-col bg-[var(--bg-color)] text-[var(--text-color)]">
+<div class="flex h-full flex-col bg-background text-foreground">
   <ConflictBanner />
   <StatusStrip />
   <div class="flex min-h-0 flex-1">
     <IconRail />
 
     {#if layout.isOpen("library")}
-      <div class="flex w-56 shrink-0 flex-col overflow-hidden border-r border-[var(--border-color)]">
+      <div class="flex w-56 shrink-0 flex-col overflow-hidden border-r border-border">
         <LibraryPane />
       </div>
     {/if}
@@ -187,7 +187,7 @@
                window scrolls them rather than squeezing the render away. -->
           <div class="flex min-h-0 min-w-0 flex-1 flex-col">
             <PreviewPane />
-            <div class="max-h-[50%] shrink-0 overflow-auto border-t border-[var(--border-color)]">
+            <div class="max-h-[50%] shrink-0 overflow-auto border-t border-border">
               <SimulatedInputs />
             </div>
           </div>

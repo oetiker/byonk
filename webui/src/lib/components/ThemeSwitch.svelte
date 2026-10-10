@@ -23,10 +23,10 @@
   <Select.Trigger
     aria-label={`Theme: ${LABELS[theme.mode]}`}
     class="h-8 w-9 gap-0.5 justify-center rounded border-0 py-0 pr-0 pl-0
-           bg-transparent text-[var(--text-muted)] [&_svg]:size-3.5
-           hover:bg-[var(--bg-color)] hover:text-[var(--text-color)]
-           data-[state=open]:bg-[var(--bg-color)]
-           data-[state=open]:text-[var(--accent-color)]"
+           bg-transparent text-muted-foreground [&_svg]:size-3.5
+           hover:bg-background hover:text-foreground
+           data-[state=open]:bg-background
+           data-[state=open]:text-primary"
   >
     <Icon aria-hidden="true" />
   </Select.Trigger>

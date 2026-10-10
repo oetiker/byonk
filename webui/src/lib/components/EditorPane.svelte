@@ -190,7 +190,7 @@
      test and the earlier walk. With `min-w-0` the pane takes the slot's width
      and CodeMirror scrolls inside its own `overflow-auto` host, as intended. -->
 <div class="flex min-h-0 min-w-0 flex-1 flex-col">
-  <div class="flex min-w-0 items-center border-b border-[var(--border-color)] text-xs">
+  <div class="flex min-w-0 items-center border-b border-border text-xs">
     <div role="tablist" class="flex min-w-0 flex-1 overflow-x-auto">
       <!--
         Iterates `editor.files` (the SCREEN's listing), not `editor.tabs`
@@ -206,7 +206,7 @@
           <div
             role="tab"
             aria-selected={t != null && t === editor.active}
-            class="flex items-center gap-1 border-r border-[var(--border-color)] px-2 py-1"
+            class="flex items-center gap-1 border-r border-border px-2 py-1"
           >
             <button
               type="button"
@@ -220,7 +220,7 @@
             <!-- Dirty/issues follow the LOADED buffer, not the listing entry: a
                  file that has never been opened has neither. -->
             {#if t?.dirty}<span aria-label="unsaved changes">●</span>{/if}
-            {#if t?.issues.length}<span aria-label="has errors" class="text-[var(--danger-color)]">▲</span>{/if}
+            {#if t?.issues.length}<span aria-label="has errors" class="text-destructive">▲</span>{/if}
             <!-- Spec :326, "one green tick per clean file". This one DOES
                  follow the listing rather than a loaded buffer: `validate`
                  examines every file on disk, so a file that was never opened
@@ -231,7 +231,7 @@
                  happened. Suppressed while a buffer is dirty: the verdict
                  describes the saved text, not what is on screen. -->
             {#if editor.clean.has(f.name) && !t?.dirty}
-              <span aria-label={`${f.name} is valid`} class="text-[var(--ok-color)]">✓</span>
+              <span aria-label={`${f.name} is valid`} class="text-success">✓</span>
             {/if}
             {#if t}
               <!-- Closes the BUFFER only -- `editor.close()` never touches `files`,
@@ -249,7 +249,7 @@
           <div
             aria-disabled="true"
             class="flex cursor-not-allowed items-center gap-1 border-r
-                   border-[var(--border-color)] px-2 py-1 text-[var(--text-muted)] opacity-60"
+                   border-border px-2 py-1 text-muted-foreground opacity-60"
           >
             {f.name} ({f.size})
           </div>

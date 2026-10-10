@@ -31,11 +31,11 @@
 
 <section class="flex flex-col gap-0.5 text-xs" data-testid={`ladder-${setting}`} aria-label={`${setting} ladder`}>
   {#if state === "none"}
-    <p class="text-[var(--text-muted)]">No render yet.</p>
+    <p class="text-muted-foreground">No render yet.</p>
   {:else if state === "failed"}
-    <p role="alert" class="text-[var(--danger-color)]">Last render failed: {failure}</p>
+    <p role="alert" class="text-destructive">Last render failed: {failure}</p>
   {:else}
-    {#if stale}<p class="text-[var(--text-muted)]">From the last render — Preview is closed.</p>{/if}
+    {#if stale}<p class="text-muted-foreground">From the last render — Preview is closed.</p>{/if}
     <ol class="flex flex-col font-mono">
       {#each order as rung (rung)}
         {@const r = report?.rungs?.[rung]}
@@ -44,7 +44,7 @@
           <span>{editing.includes(rung) ? "●" : ""}</span>
           <span>{LABEL[rung]}</span>
           <span class="truncate" title={fmt(r?.value)}>{fmt(r?.value)}</span>
-          <span class="text-[var(--text-muted)]">
+          <span class="text-muted-foreground">
             {#if r?.status === "winner"}← wins{:else if r?.status === "rejected"}rejected{:else if r?.status === "outranked"}outranked{/if}
             {#if editing.includes(rung)} ← editing{/if}
           </span>
@@ -52,6 +52,6 @@
       {/each}
       <li data-testid="effective">▶ effective {fmt(report?.effective)} from {LABEL[report?.from] ?? "—"}</li>
     </ol>
-    {#each notes as n (n)}<p role="status" class="text-[var(--danger-color)]">{n}</p>{/each}
+    {#each notes as n (n)}<p role="status" class="text-destructive">{n}</p>{/each}
   {/if}
 </section>

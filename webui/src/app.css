@@ -6,6 +6,14 @@
 
 /* The density scale of spec §2, decided once here rather than per component.
    Dense and cramped are neighbours; this is the guard. */
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn-svelte/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* The density scale of spec §2, decided once here rather than per component.
+   Dense and cramped are neighbours; this is the guard. */
 @theme {
   /* The nova preset (Task 5 Step 1) ships with Geist as its display font,
      loaded via @fontsource-variable/geist. Dropped rather than self-hosted:
@@ -19,9 +27,17 @@
   --font-sans: ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --text-xs: 0.6875rem;
+  --text-xs--line-height: 1rem;
   --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.25rem;
   --text-base: 0.875rem;
+  --text-base--line-height: 1.25rem;
   --spacing: 0.25rem;
+}
+
+/* Colours and radii map the :root variables into utilities; `inline` makes the
+   utilities resolve var(--x) at use site so .dark overrides take effect. */
+@theme inline {
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -53,6 +69,9 @@
   --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
+  --color-success: var(--success);
+  --color-selection: var(--selection);
+  --color-match: var(--match);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -62,104 +81,90 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-/* Light is the default; dark keeps byonk's navy identity (settled, do not
-   relitigate). `.dark` is set on <html> by the theme store in Task 11 for an
-   explicit choice, and by the prefers-color-scheme block for "system". */
+/* Row heights: one token per row kind (docs/dev-ui-design.md section 1.2).
+   Heights are set, not derived from padding. Consumed as h-(--pane-header-h). */
 :root {
-  --bg-color: #ffffff;
-  --panel-bg: #f6f7f9;
-  --border-color: #d8dce3;
-  --text-color: #1a1d23;
-  --text-muted: #5a6472;
-  --accent-color: #1e5aa8;
-  --selection-bg: #cfe0f7;
-  --match-bg: #e3ecfa;
-  --danger-color: #b3261e;
-  --ok-color: #1a7f45;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --pane-header-h: calc(var(--spacing) * 9);
+  --pane-toolbar-h: calc(var(--spacing) * 8);
+  --section-h: calc(var(--spacing) * 6);
+  --row-h: calc(var(--spacing) * 6);
+  --status-h: calc(var(--spacing) * 6);
+}
+
+/* byonk's palette written into the shadcn variables (one token system).
+   Light is the default; dark keeps byonk's navy identity (settled, do not
+   relitigate). `.dark` is set on <html> by the theme store. */
+:root {
+  --background: #ffffff;
+  --foreground: #1a1d23;
+  --card: #ffffff;
+  --card-foreground: #1a1d23;
+  --popover: #ffffff;
+  --popover-foreground: #1a1d23;
+  --primary: #1e5aa8;
+  --primary-foreground: #ffffff;
+  --secondary: #f6f7f9;
+  --secondary-foreground: #1a1d23;
+  --muted: #f6f7f9;
+  --muted-foreground: #5a6472;
+  --accent: #e6e9ef;
+  --accent-foreground: #1a1d23;
+  --destructive: #b3261e;
+  --success: #1a7f45;
+  --border: #d8dce3;
+  --input: #d8dce3;
+  --ring: #1e5aa8;
+  --selection: #cfe0f7;
+  --match: #e3ecfa;
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar: #f6f7f9;
+  --sidebar-foreground: #1a1d23;
+  --sidebar-primary: #1e5aa8;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e6e9ef;
+  --sidebar-accent-foreground: #1a1d23;
+  --sidebar-border: #d8dce3;
+  --sidebar-ring: #1e5aa8;
 }
 
 .dark {
-  --bg-color: #0f1622;
-  --panel-bg: #172030;
-  --border-color: #27354a;
-  --text-color: #dbe3ef;
-  --text-muted: #8896aa;
-  --accent-color: #5b9bf5;
-  --selection-bg: #24405f;
-  --match-bg: #1d324a;
-  --danger-color: #f2837c;
-  --ok-color: #56c98a;
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: #0f1622;
+  --foreground: #dbe3ef;
+  --card: #172030;
+  --card-foreground: #dbe3ef;
+  --popover: #172030;
+  --popover-foreground: #dbe3ef;
+  --primary: #5b9bf5;
+  --primary-foreground: #0f1622;
+  --secondary: #172030;
+  --secondary-foreground: #dbe3ef;
+  --muted: #172030;
+  --muted-foreground: #8896aa;
+  --accent: #1f2c42;
+  --accent-foreground: #dbe3ef;
+  --destructive: #f2837c;
+  --success: #56c98a;
+  --border: #27354a;
+  --input: #27354a;
+  --ring: #5b9bf5;
+  --selection: #24405f;
+  --match: #1d324a;
+  --sidebar: #172030;
+  --sidebar-foreground: #dbe3ef;
+  --sidebar-primary: #5b9bf5;
+  --sidebar-primary-foreground: #0f1622;
+  --sidebar-accent: #1f2c42;
+  --sidebar-accent-foreground: #dbe3ef;
+  --sidebar-border: #27354a;
+  --sidebar-ring: #5b9bf5;
 }
 
 html, body, #app { height: 100%; }
-body {
-  margin: 0;
-  background: var(--bg-color);
-  color: var(--text-color);
-}
 
 @layer base {
 	* {

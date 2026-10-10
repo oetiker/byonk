@@ -44,32 +44,32 @@ function languageFor(name) {
 function chromeSpec() {
   return {
     "&": {
-      color: "var(--text-color)",
-      backgroundColor: "var(--bg-color)",
+      color: "var(--foreground)",
+      backgroundColor: "var(--background)",
     },
-    ".cm-content": { caretColor: "var(--accent-color)" },
-    "&.cm-focused .cm-cursor": { borderLeftColor: "var(--accent-color)" },
+    ".cm-content": { caretColor: "var(--primary)" },
+    "&.cm-focused .cm-cursor": { borderLeftColor: "var(--primary)" },
     // All three selectors are needed: CodeMirror draws its own selection
     // layer when focused, keeps a dimmed one when not, and falls back to the
     // native ::selection where the layer is disabled.
     "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
-      backgroundColor: "var(--selection-bg)",
+      backgroundColor: "var(--selection)",
     },
-    ".cm-selectionMatch": { backgroundColor: "var(--match-bg)" },
+    ".cm-selectionMatch": { backgroundColor: "var(--match)" },
     "&.cm-focused .cm-matchingBracket": {
-      backgroundColor: "var(--match-bg)",
-      outline: "1px solid var(--accent-color)",
+      backgroundColor: "var(--match)",
+      outline: "1px solid var(--primary)",
     },
     ".cm-gutters": {
-      backgroundColor: "var(--panel-bg)",
-      color: "var(--text-muted)",
+      backgroundColor: "var(--muted)",
+      color: "var(--muted-foreground)",
       border: "none",
-      borderRight: "1px solid var(--border-color)",
+      borderRight: "1px solid var(--border)",
     },
     ".cm-activeLine": { backgroundColor: "var(--active-line-bg)" },
     ".cm-activeLineGutter": {
       backgroundColor: "var(--active-line-bg)",
-      color: "var(--text-color)",
+      color: "var(--foreground)",
     },
     // @codemirror/lint ships the error marker as a fixed-colour SVG in a
     // `content:` url. `content: normal` drops that replaced content so the
@@ -83,15 +83,15 @@ function chromeSpec() {
       backgroundColor: "var(--error-color)",
     },
     ".cm-tooltip": {
-      backgroundColor: "var(--panel-bg)",
-      color: "var(--text-color)",
-      border: "1px solid var(--border-color)",
+      backgroundColor: "var(--muted)",
+      color: "var(--foreground)",
+      border: "1px solid var(--border)",
     },
     ".cm-diagnostic-error": { borderLeftColor: "var(--error-color)" },
     // The search panel (Mod-F, from searchKeymap).
     ".cm-panels": {
-      backgroundColor: "var(--panel-bg)",
-      color: "var(--text-color)",
+      backgroundColor: "var(--muted)",
+      color: "var(--foreground)",
     },
   };
 }
@@ -100,10 +100,10 @@ const lightTheme = EditorView.theme(chromeSpec(), { dark: false });
 const darkTheme = EditorView.theme(chromeSpec(), { dark: true });
 
 // The light scheme keeps CodeMirror's stock highlight style: it was designed
-// for a white page and is correct on --bg-color's light value. The dark scheme
+// for a white page and is correct on --background's light value. The dark scheme
 // gets its own, because that stock style is a light-page palette -- its
 // comment colour (#940, a dark orange-brown) is close to unreadable on navy.
-// Every colour below was checked against the dark --bg-color (#1a1a2e) and
+// Every colour below was checked against the dark --background (#1a1a2e) and
 // clears 4.5:1; the lowest is `invalid` at 6.2:1.
 const darkHighlightStyle = HighlightStyle.define([
   { tag: t.comment, color: "#93a4c4", fontStyle: "italic" },

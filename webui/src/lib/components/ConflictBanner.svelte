@@ -12,8 +12,8 @@
 {#if c}
   <div
     role="alert"
-    class="flex items-center gap-2 border-b border-[var(--danger-color)]
-           bg-[var(--panel-bg)] px-2 py-1 text-xs"
+    class="flex items-center gap-2 border-b border-destructive
+           bg-muted px-2 py-1 text-xs"
   >
     <span>
       <span class="font-mono">{c.name}</span>

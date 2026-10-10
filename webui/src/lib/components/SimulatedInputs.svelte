@@ -40,7 +40,7 @@
      capped, scrolling box for windows too short for both it and the render. -->
 <div class="flex w-full min-w-0 flex-col gap-3 p-3 text-sm" data-testid="simulated-inputs">
   {#if simulate.pending}
-    <span data-testid="sim-badge" class="text-xs text-[var(--danger-color)]">not saved</span>
+    <span data-testid="sim-badge" class="text-xs text-destructive">not saved</span>
   {/if}
   <div class="flex flex-col gap-1.5">
     <Label for="sim-battery">Battery (V)</Label>
@@ -62,7 +62,7 @@
   <div class="flex flex-col gap-1.5">
     <Label for="sim-time">
       Current Time
-      <span class="text-xs text-[var(--text-muted)]">
+      <span class="text-xs text-muted-foreground">
         {simulate.timeLocked ? "frozen" : "live"}
       </span>
     </Label>

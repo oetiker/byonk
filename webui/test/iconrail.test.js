@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // directly; that package is only a transitive dependency here (pulled in by
 // @testing-library/svelte), and pnpm's strict node-linker refuses to
 // resolve it as a direct import (phantom-dependency protection). Every
-// other test in this suite (see splitpane.test.js) already imports
+// other test in this suite already imports
 // `fireEvent` from @testing-library/svelte, which re-exports it -- follow
 // that convention instead of adding a new direct dependency for one name.
 import { render, screen, fireEvent, cleanup } from "@testing-library/svelte";
@@ -15,8 +15,8 @@ import { auth } from "../src/lib/state/auth.svelte.js";
 beforeEach(() => {
   // The brief's beforeEach resets localStorage and the layout store but
   // does not unmount the previous test's render (@testing-library/svelte
-  // has no project-wide auto-cleanup configured here -- see
-  // splitpane.test.js, which calls cleanup() itself for the same reason).
+  // has no project-wide auto-cleanup configured here -- every other
+  // suite calls cleanup() itself for the same reason).
   // Without it, each `render(IconRail)` call across this file's three
   // tests leaves the prior mount's DOM in place, so "getByRole" queries
   // in later tests match multiple stale + fresh elements.

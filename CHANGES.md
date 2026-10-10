@@ -91,7 +91,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it is a full editor with three panels behind an icon rail — Library, Edit
   and Preview — so you can hide anything you are not using and give the space
   to what you are. Every combination is allowed, a hidden panel comes back at
-  the size it had, and splitter positions are remembered between visits.
+  the size it had, and all three panels — Library included — can be resized
+  by dragging (or, with the keyboard, arrowing) the dividers between them.
+  Their sizes are proportions of the window, so a narrower window shrinks
+  every panel instead of squeezing Edit away, and they are remembered between
+  visits.
 
   Everything revolves around one subject, which you choose in Library: a
   screen, a panel profile or a device. Edit changes it and Preview shows it.

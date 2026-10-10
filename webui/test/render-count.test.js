@@ -264,4 +264,19 @@ describe("saving and the file watcher re-render the preview once", () => {
     await wait(3 * RENDER_MS);
     expect(r.spy.mock.calls.length - before).toBe(1);
   });
+
+  // L4: the panes are a Resizable group now. Resizing the preview's column,
+  // or collapsing and expanding a neighbour, changes no request field.
+  it("resizing panes and toggling the Library pane render nothing", async () => {
+    const r = await mountOnScreen();
+    const before = r.spy.mock.calls.length;
+    const editHandle = dom.getAllByRole("separator").find((el) => el.getAttribute("aria-controls") === "editor");
+    await fireEvent.keyDown(editHandle, { key: "ArrowLeft" });
+    await fireEvent.keyDown(editHandle, { key: "ArrowRight" });
+    const rail = dom.getByRole("toolbar", { name: /panels/i });
+    await fireEvent.click(dom.getByRole("button", { name: "Library", container: rail }));
+    await fireEvent.click(dom.getByRole("button", { name: "Library", container: rail }));
+    await wait(3 * RENDER_MS);
+    expect(r.spy.mock.calls.length - before).toBe(0);
+  });
 });

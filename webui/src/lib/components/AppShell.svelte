@@ -1,10 +1,10 @@
 <script>
   import { onMount, untrack } from "svelte";
   import IconRail from "./IconRail.svelte";
-  import SplitPane from "./SplitPane.svelte";
+  import * as Resizable from "$lib/ui/resizable/index.js";
   import ConflictBanner from "./ConflictBanner.svelte";
   import StatusStrip from "./StatusStrip.svelte";
-  import { layout } from "../state/layout.svelte.js";
+  import { layout, PANELS } from "../state/layout.svelte.js";
   import { theme } from "../state/theme.svelte.js";
   import { editor } from "../state/editor.svelte.js";
   import { auth } from "../state/auth.svelte.js";
@@ -20,20 +20,12 @@
   import PreviewPane from "./PreviewPane.svelte";
   import SimulatedInputs from "./SimulatedInputs.svelte";
 
-  // Restore persisted panel visibility/sizes synchronously here, not from
-  // onMount as the brief's code block has it. This app is never
-  // server-rendered (main.js mounts straight into the DOM), so
-  // localStorage is available at setup time, and calling load() here --
-  // before `xSize` below read layout.size() -- matters: onMount
-  // fires only after the component's first render has already captured
-  // those $state initial values from layout's pre-load defaults. Since
-  // layout.load() replaces layout's internal state object outright rather
-  // than mutating the one xSize snapshotted from, deferring it to
-  // onMount would mean a persisted split size is silently ignored on every
-  // page load -- exactly the "reopens at a default size" bug spec §1 (and
-  // layout.svelte.js's own header comment) calls out. Panel open/closed
-  // state doesn't have this problem below because `layout.isOpen(...)` is
-  // read live from the template, never snapshotted into local state.
+  // Restore which panels are open synchronously here, not from onMount.
+  // This app is never server-rendered (main.js mounts straight into the
+  // DOM), so localStorage is available at setup time, and loading before
+  // the first render means a closed panel's content is never mounted for a
+  // frame only to be torn down again. (Pane sizes are PaneForge's; see the
+  // Resizable section below.)
   layout.load();
   // Same reasoning as layout.load() above: read synchronously here, before
   // ThemeSwitch (mounted inside IconRail) reads `theme.mode` for its first
@@ -79,41 +71,63 @@
     untrack(() => resolution.reset());
   });
 
-  let xSize = $state(layout.size("x"));
+  // --- Resizable panes (Library | Edit | Preview) ----------------------
+  // PaneForge sizes the panes in PERCENT and persists them itself under
+  // `paneforge:<autoSaveId>` (debounced), including the size each collapsed
+  // pane returns to. Percent keeps every pane above its minSize at any window
+  // width; the px preview column this replaced squeezed the Edit pane to
+  // 16 px at an 800 px window.
+  //
+  // Which panes are OPEN stays in `layout` (the rail and ConfigEditor read
+  // it). A closed pane is collapsed to 0 rather than removed from the group,
+  // so it reopens at the size it had; its CONTENT is unmounted while closed
+  // so a hidden editor or preview does no work.
+  const SIZES = {
+    library: { defaultSize: 18, minSize: 12 },
+    editor: { defaultSize: 42, minSize: 25 },
+    preview: { defaultSize: 40, minSize: 25 },
+  };
 
-  // Ruling 12: SplitPane's `bind:size` updates xSize live on every
-  // pointermove during a drag -- that binding lives inside SplitPane
-  // itself and must stay synchronous, or the drag looks laggy. Wiring that
-  // straight into `layout.setSize()`, which calls `save()` (a synchronous
-  // `localStorage.setItem`), would serialise the whole layout and hit disk
-  // once per animation frame for the length of the drag.
-  //
-  // Debounce only the persisted write, trailing-edge: each time xSize
-  // changes, schedule a write of the CURRENT value after a short
-  // delay. Svelte re-runs an $effect by first calling the cleanup returned
-  // by its previous run, so a value that changes again before the timer
-  // fires cancels the stale write for free -- only the last value in a
-  // burst of changes ever reaches localStorage, once movement settles.
-  // Trade-off: a drag that ends by unmounting the component within the
-  // debounce window (e.g. mid-drag reload) loses that last write, same as
-  // any other unsaved-changes-on-unmount gap; acceptable here since
-  // AppShell is the application root and is never unmounted in normal use.
-  //
-  // Skip the write entirely when the bound value already matches what
-  // `layout` holds (true at mount, since xSize above was just read
-  // from it) -- otherwise every page load re-persists the exact value it
-  // just loaded, 200ms later, for no visible effect. `layout.size(axis)`
-  // is itself reactive ($state under the hood), so once the scheduled
-  // write below does fire and updates it, this effect re-runs, finds the
-  // two values equal again, and quiesces without scheduling a next one.
-  const PERSIST_DEBOUNCE_MS = 200;
+  /** Bound Pane instances, by panel name: each exposes collapse()/expand(). */
+  let panes = $state({});
+  /** True once PaneForge has computed the group's first layout. */
+  let ready = $state(false);
+  /** Set while sync() drives the panes, so its own layout changes are not
+   *  mistaken for the user dragging a pane open or shut. */
+  let syncing = false;
+
+  // Make the panes match `layout`. Expand before collapsing: PaneForge can
+  // only collapse a pane by giving its space to a neighbour, so with every
+  // panel closed the last one stays expanded (and empty); opening another
+  // must then expand that one first so the stale one can give up its room.
+  function sync() {
+    syncing = true;
+    try {
+      for (const p of PANELS) if (layout.isOpen(p)) panes[p]?.expand();
+      for (const p of PANELS) if (!layout.isOpen(p)) panes[p]?.collapse();
+    } finally {
+      syncing = false;
+    }
+  }
 
   $effect(() => {
-    const value = xSize;
-    if (value === layout.size("x")) return;
-    const id = setTimeout(() => layout.setSize("x", value), PERSIST_DEBOUNCE_MS);
-    return () => clearTimeout(id);
+    if (!ready) return;
+    for (const p of PANELS) layout.isOpen(p);
+    untrack(sync);
   });
+
+  // The group's layout changed. The first call is PaneForge's initial
+  // layout (restored from storage, or the defaults); after that, a change
+  // sync() did not cause is the user dragging a handle -- if that collapsed
+  // a pane to 0 or pulled a collapsed one open, the rail follows.
+  function onLayoutChange(sizes) {
+    if (!ready) {
+      ready = true;
+      return;
+    }
+    if (syncing) return;
+    PANELS.forEach((p, i) => layout.setOpen(p, sizes[i] > 0));
+  }
 
   // Live-reload watcher (spec §8.5, Task 10). `handle_events` (src/api/
   // dev.rs) emits a JSON array of bare basenames on a `file-change` event
@@ -170,29 +184,52 @@
   <div class="flex min-h-0 flex-1">
     <IconRail />
 
-    {#if layout.isOpen("library")}
-      <div class="flex w-56 shrink-0 flex-col overflow-hidden border-r border-border">
-        <LibraryPane />
-      </div>
-    {/if}
-
-    <SplitPane axis="x" bind:size={xSize} open={layout.isOpen("preview")}>
-      {#snippet a()}
+    <Resizable.PaneGroup
+      direction="horizontal"
+      autoSaveId="byonk.panes.v1"
+      {onLayoutChange}
+      class="min-h-0 min-w-0 flex-1"
+    >
+      <Resizable.Pane
+        id="library"
+        bind:this={panes.library}
+        collapsible
+        collapsedSize={0}
+        {...SIZES.library}
+        class="flex min-h-0 min-w-0 flex-col overflow-hidden bg-sidebar text-sidebar-foreground"
+      >
+        {#if layout.isOpen("library")}<LibraryPane />{/if}
+      </Resizable.Pane>
+      <Resizable.Handle withHandle aria-label="Resize Library" class="hover:bg-primary data-active:bg-primary" />
+      <Resizable.Pane
+        id="editor"
+        bind:this={panes.editor}
+        collapsible
+        collapsedSize={0}
+        {...SIZES.editor}
+        class="flex min-h-0 min-w-0 overflow-hidden"
+      >
         {#if layout.isOpen("editor")}<EditPane />{/if}
-      {/snippet}
-      {#snippet b()}
+      </Resizable.Pane>
+      <Resizable.Handle withHandle aria-label="Resize Edit and Preview" class="hover:bg-primary data-active:bg-primary" />
+      <Resizable.Pane
+        id="preview"
+        bind:this={panes.preview}
+        collapsible
+        collapsedSize={0}
+        {...SIZES.preview}
+        class="flex min-h-0 min-w-0 flex-col overflow-hidden"
+      >
         {#if layout.isOpen("preview")}
           <!-- The preview takes the height the inputs leave; the inputs take
                their natural height, capped at half the column so a short
                window scrolls them rather than squeezing the render away. -->
-          <div class="flex min-h-0 min-w-0 flex-1 flex-col">
-            <PreviewPane />
-            <div class="max-h-[50%] shrink-0 overflow-auto border-t border-border">
-              <SimulatedInputs />
-            </div>
+          <PreviewPane />
+          <div class="flex max-h-[50%] shrink-0 flex-col border-t border-border">
+            <SimulatedInputs />
           </div>
         {/if}
-      {/snippet}
-    </SplitPane>
+      </Resizable.Pane>
+    </Resizable.PaneGroup>
   </div>
 </div>

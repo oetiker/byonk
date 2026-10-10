@@ -85,8 +85,11 @@ Assistant, on `http://<host>:3000/dev/`.
 An icon rail on the left carries one toggle button per panel: **Library**,
 **Edit** and **Preview**. Click an icon to show or hide that panel — every
 combination is allowed, including all three hidden at once. A panel you hide
-comes back at the size it had, and the splitters between open panels keep
-their position, both remembered between visits (the theme control described in
+comes back at the size it had. Drag the divider between two open panels to
+resize them (or focus it and use the arrow keys); sizes are proportions of the
+window, so every panel keeps a usable width when the window narrows. Dragging
+a panel all the way shut hides it, just like its rail button. Panel sizes and
+which panels are shown are remembered between visits (the theme control described in
 [Colour scheme](#colour-scheme), and Logout when a cookie session is open,
 both live at the foot of the same rail).
 
@@ -129,7 +132,10 @@ as which hardware, and at which size. The controls depend on the subject:
 - **Simulated inputs** sit under the image, always visible: the device
   context the preview renders under — battery, WiFi, the clock, and custom
   params (not when the subject is a device, which brings its own params).
-  The block scrolls when the window is short.
+  The block has its own **Simulated inputs** heading, which shows "not saved"
+  once you set a value a real device would not report (these values only
+  ever reach the preview, never a device or `config.yaml`), and its fields scroll
+  under that heading when the window is short.
 
 The Preview panel never writes anything. Choosing a device to watch, a screen
 to borrow or a simulated battery level changes what you see and nothing else.

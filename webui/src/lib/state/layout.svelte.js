@@ -1,14 +1,17 @@
-// Panel visibility and splitter sizes, persisted together.
+// Which panels are open, persisted.
 //
-// "Together" is the point: a panel that reopens at a default size instead of
-// the size it had reads as a bug, so one record carries both (spec §1).
+// The pane SIZES are not kept here: AppShell's Resizable group persists them
+// itself (PaneForge `autoSaveId`, in percent), including the size a collapsed
+// pane returns to when it is reopened -- a panel that reopens at a default
+// size instead of the size it had reads as a bug (spec §1). This record only
+// says which of the three are open; AppShell collapses and expands the panes
+// to match it.
 
 export const PANELS = ["library", "editor", "preview"];
 export const STORAGE_KEY = "byonk.layout.v1";
 
 const DEFAULTS = {
   panels: { library: true, editor: true, preview: true },
-  sizes: { x: 420 },
 };
 
 function fresh() {
@@ -27,16 +30,12 @@ class Layout {
   }
 
   toggle(name) {
-    this.#s.panels[name] = !this.#s.panels[name];
-    this.save();
+    this.setOpen(name, !this.isOpen(name));
   }
 
-  size(axis) {
-    return this.#s.sizes[axis];
-  }
-
-  setSize(axis, px) {
-    this.#s.sizes[axis] = px;
+  setOpen(name, open) {
+    if (this.isOpen(name) === open) return;
+    this.#s.panels[name] = open;
     this.save();
   }
 
@@ -67,10 +66,8 @@ class Layout {
       for (const p of PANELS) {
         if (typeof parsed?.panels?.[p] === "boolean") next.panels[p] = parsed.panels[p];
       }
-      // Only "x" exists; an old stored "y" (the retired preview/inputs divider) is ignored.
-      for (const a of ["x"]) {
-        if (Number.isFinite(parsed?.sizes?.[a])) next.sizes[a] = parsed.sizes[a];
-      }
+      // Older records also carried px splitter sizes (`sizes.x`, `sizes.y`);
+      // sizes are percent and PaneForge's now, so those are ignored.
       this.#s = next;
     } catch {
       // Corrupt stored state is not worth a broken page. Keep the defaults.

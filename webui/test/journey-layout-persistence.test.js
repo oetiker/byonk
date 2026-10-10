@@ -11,71 +11,49 @@ import { theme } from "../src/lib/state/theme.svelte.js";
 import * as api from "../src/lib/api.js";
 
 /**
- * Dragging a splitter and finding the same layout after a reload.
+ * Resizing a pane and finding the same layout after a reload.
  *
- * The two halves are each already covered, separately and by neither's
- * counterpart: `splitpane.test.js` drives a real pointer drag against a
- * standalone harness and asserts `aria-valuenow`, and `appshell.test.js`
- * drives the persistence with ARROW KEYS. Nothing has ever dragged a
- * splitter in the real shell and then reloaded -- which is the only thing a
- * user actually does, and it crosses the SplitPane/AppShell/layout seam
- * where this branch's defects have all lived.
- *
- * Both axes matter and they are separate effects with separate debounce
- * timers, so both are exercised: x separates the editor from the right-hand
- * column, y separates preview from simulate.
+ * The panes are a PaneForge Resizable group (Library | Edit | Preview),
+ * sized in percent and persisted by PaneForge itself under
+ * `paneforge:<autoSaveId>`. Which panels are open is persisted separately by
+ * `layout`. This file drives both through the real shell -- a pointer drag
+ * on a handle, the rail -- and then remounts, which is the only thing a user
+ * actually does, and it crosses the AppShell/PaneForge/layout seam.
  */
+const PANES_KEY = "paneforge:byonk.panes.v1";
+
 /**
- * A measurable extent for the SplitPane hosts ONLY.
+ * A measurable extent for the pane GROUP only.
  *
- * SplitPane reads `host.getBoundingClientRect()` to derive the dragged size
- * (`rect.right - clientX` on x, `rect.bottom - clientY` on y), and jsdom
- * reports every element as 0x0, so the drag has to be given a container to
- * measure against. Stubbing `Element.prototype` wholesale is what
- * `splitpane.test.js` does, but it can't be done here: this file mounts the
+ * PaneForge turns a drag into percent by dividing the pointer offset by the
+ * group element's width, and jsdom reports every element as 0x0. Stubbing
+ * `Element.prototype` wholesale cannot be done here: this file mounts the
  * whole shell, and a non-zero rect makes CodeMirror attempt a real text
- * measurement in its rAF callback, which throws out of jsdom
- * (`textRange(...).getClientRects is not a function`) as an unhandled
- * exception rather than a test failure.
- *
- * So the stub is scoped to the hosts by shape -- a SplitPane host is the one
- * element with a separator as a direct child -- and everything else keeps
- * jsdom's own answer.
+ * measurement in its rAF callback, which throws out of jsdom as an
+ * unhandled exception rather than a test failure. So the stub is scoped to
+ * the group element by its data attribute.
  */
-function stubHostRect({ width = 1000, height = 800 } = {}) {
+function stubGroupRect({ width = 1000, height = 800 } = {}) {
   const real = Element.prototype.getBoundingClientRect;
   return vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function () {
-    if (!this.querySelector?.(':scope > [role="separator"]')) return real.call(this);
-    return {
-      width,
-      height,
-      top: 0,
-      left: 0,
-      right: width,
-      bottom: height,
-      x: 0,
-      y: 0,
-      toJSON() {},
-    };
+    if (!this.hasAttribute?.("data-pane-group")) return real.call(this);
+    return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0, toJSON() {} };
   });
 }
 
-/**
- * SplitPane gives both separators the same accessible name ("Resize panel"),
- * so they are told apart by orientation: the outer axis="x" one is
- * "vertical", the inner axis="y" one "horizontal".
- */
-function separator(orientation) {
-  return dom
-    .getAllByRole("separator")
-    .find((el) => el.getAttribute("aria-orientation") === orientation);
+/** The handle that resizes a pane: left of Edit for "library", right of Edit for "editor". */
+function handle(pane) {
+  return dom.getAllByRole("separator").find((el) => el.getAttribute("aria-controls") === pane);
 }
+const sizeOf = (pane) => Number(handle(pane).getAttribute("aria-valuenow"));
+const saved = () => JSON.parse(localStorage.getItem(PANES_KEY) ?? "null");
+const savedLayout = () => Object.values(saved() ?? {})[0]?.layout;
 
-/** One complete pointer drag, as a real user performs it. */
-async function drag(el, { clientX = 0, clientY = 0 }) {
-  await fireEvent.pointerDown(el, { pointerId: 1, clientX: 0, clientY: 0 });
-  await fireEvent.pointerMove(window, { pointerId: 1, clientX, clientY });
-  await fireEvent.pointerUp(window, { pointerId: 1 });
+/** One complete pointer drag of `dx` px on a 1000px group, as a user performs it. */
+async function drag(el, dx) {
+  await fireEvent.mouseDown(el, { clientX: 500, clientY: 10 });
+  await fireEvent.mouseMove(document.body, { clientX: 500 + dx, clientY: 10 });
+  await fireEvent.mouseUp(window, { clientX: 500 + dx, clientY: 10 });
 }
 
 let rectSpy;
@@ -102,7 +80,7 @@ beforeEach(() => {
     dither_algorithms: [],
   });
   vi.spyOn(api, "whoami").mockResolvedValue({ user: "u", via: "cookie", can_logout: true });
-  rectSpy = stubHostRect();
+  rectSpy = stubGroupRect();
 });
 
 afterEach(() => {
@@ -111,113 +89,132 @@ afterEach(() => {
   cleanup();
 });
 
-describe("splitter drag, persisted across a reload", () => {
-  it("a dragged x splitter still holds its size after the app is remounted", async () => {
+describe("pane resize, persisted across a reload", () => {
+  it("starts at the percent defaults: Library 18, Edit 42, Preview 40", () => {
+    render(AppShell);
+    expect(sizeOf("library")).toBe(18);
+    expect(sizeOf("editor")).toBe(42);
+  });
+
+  it("a dragged handle still holds its size after the app is remounted", async () => {
     render(AppShell);
 
-    const sep = separator("vertical");
-    expect(sep).toBeTruthy();
-    expect(Number(sep.getAttribute("aria-valuenow"))).toBe(420); // the default
+    // -100px of a 1000px group: Edit loses 10 points to Preview.
+    await drag(handle("editor"), -100);
+    await waitFor(() => expect(sizeOf("editor")).toBe(32));
+    await waitFor(() => expect(savedLayout()).toEqual([18, 32, 50]));
 
-    // axis="x" derives the size from `rect.right - clientX`, so 1000 - 700
-    // is a 300px right-hand column -- inside the bounds, not clamped, which
-    // is what makes the exact value below meaningful.
-    await drag(sep, { clientX: 700 });
-    await waitFor(() => expect(Number(separator("vertical").getAttribute("aria-valuenow"))).toBe(300));
-
-    // The write is debounced by 200ms (Ruling 12), so it has NOT landed yet.
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null")?.sizes?.x).not.toBe(300);
-    await waitFor(() =>
-      expect(JSON.parse(localStorage.getItem(STORAGE_KEY)).sizes.x).toBe(300),
-    );
-
-    // Reload: drop the DOM and the in-memory store, then let AppShell's own
-    // `layout.load()` restore from storage. The size must be right on the
-    // FIRST paint -- a value applied only after mount shows the default for
-    // a frame and reads as the layout having been forgotten.
+    // Reload: drop the DOM and the in-memory store, then remount.
     cleanup();
     layout.reset();
     render(AppShell);
 
-    expect(Number(separator("vertical").getAttribute("aria-valuenow"))).toBe(300);
+    await waitFor(() => expect(sizeOf("editor")).toBe(32));
+    expect(sizeOf("library")).toBe(18);
+  });
+
+  it("Library is resizable too, and never below its 12% minimum", async () => {
+    render(AppShell);
+    await drag(handle("library"), 50);
+    await waitFor(() => expect(sizeOf("library")).toBe(23));
+    // Back past the minimum but not far enough to collapse: clamps at 12.
+    await drag(handle("library"), -150);
+    await waitFor(() => expect(sizeOf("library")).toBe(12));
+  });
+
+  it("the handles are keyboard-resizable and carry a visible grip", async () => {
+    render(AppShell);
+    const h = handle("editor");
+    expect(h).toHaveAttribute("tabindex", "0");
+    expect(h.querySelector("div")).toBeTruthy(); // withHandle's grip
+    await fireEvent.keyDown(h, { key: "ArrowRight" });
+    await waitFor(() => expect(sizeOf("editor")).toBe(52));
   });
 
   it("has no horizontal splitter: the inputs sit under the preview at natural height", () => {
     render(AppShell);
-    expect(separator("horizontal")).toBeUndefined();
+    for (const sep of dom.getAllByRole("separator")) {
+      expect(sep.getAttribute("data-direction")).toBe("horizontal");
+    }
     expect(dom.getByTestId("simulated-inputs")).toBeTruthy();
   });
 
-  it("tolerates an old stored y size and never writes one back", async () => {
+  it("ignores the px sizes an older layout record carried and never writes them back", async () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       panels: { library: true, editor: true, preview: true },
       sizes: { x: 300, y: 200 },
     }));
     layout.reset();
     render(AppShell);
-    expect(Number(separator("vertical").getAttribute("aria-valuenow"))).toBe(300);
-    await drag(separator("vertical"), { clientX: 650 });
-    await waitFor(() => expect(JSON.parse(localStorage.getItem(STORAGE_KEY)).sizes.x).toBe(350));
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)).sizes.y).toBeUndefined();
+    expect(sizeOf("editor")).toBe(42);
+    await fireEvent.click(dom.getByRole("button", { name: /^library$/i, container: dom.getByRole("toolbar", { name: /panels/i }) }));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(STORAGE_KEY)).panels.library).toBe(false));
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)).sizes).toBeUndefined();
   });
 
-  // Sizes and panel visibility share one record on purpose (layout.svelte.js
-  // header: "a panel that reopens at a default size instead of the size it
-  // had reads as a bug"). Closing a panel after a drag must not drop the
-  // dragged size, and the size must come back with the panel.
-  it("closing a panel after a drag keeps the dragged size, and reopening restores it", async () => {
+  // A closed panel reopens at the size it had, in this session and after a
+  // reload (layout.svelte.js header: "a panel that reopens at a default size
+  // instead of the size it had reads as a bug").
+  it("closing a panel after a resize keeps its size, and reopening restores it", async () => {
     render(AppShell);
 
-    await drag(separator("vertical"), { clientX: 700 });
-    await waitFor(() => expect(JSON.parse(localStorage.getItem(STORAGE_KEY)).sizes.x).toBe(300));
+    await drag(handle("library"), 70); // Library 18 -> 25
+    await waitFor(() => expect(sizeOf("library")).toBe(25));
 
     const rail = dom.getByRole("toolbar", { name: /panels/i });
-    const libraryBtn = dom.getByRole("button", { name: /^library$/i, container: rail });
-    await fireEvent.click(libraryBtn);
-
-    await waitFor(() => {
-      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-      expect(saved.panels.library).toBe(false);
-      expect(saved.sizes.x).toBe(300);
-    });
+    const libraryBtn = () => dom.getByRole("button", { name: /^library$/i, container: rail });
+    await fireEvent.click(libraryBtn());
+    await waitFor(() => expect(sizeOf("library")).toBe(0));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(STORAGE_KEY)).panels.library).toBe(false));
+    await waitFor(() => expect(savedLayout()?.[0]).toBe(0));
 
     cleanup();
     layout.reset();
     render(AppShell);
 
     expect(dom.queryByRole("button", { name: "New" })).toBeNull();
-    expect(Number(separator("vertical").getAttribute("aria-valuenow"))).toBe(300);
+    await waitFor(() => expect(sizeOf("library")).toBe(0));
+
+    await fireEvent.click(libraryBtn());
+    await waitFor(() => expect(sizeOf("library")).toBe(25));
+    expect(dom.getByRole("button", { name: "New" })).toBeTruthy();
   });
 
-  // The layout is a convenience; losing it must never break the editor
-  // (layout.svelte.js's own catch blocks say so). A denied or full storage
-  // has to leave a working, draggable app behind.
-  it("survives storage being unavailable -- the drag still works, it just is not remembered", async () => {
-    const setItem = vi
-      .spyOn(Storage.prototype, "setItem")
-      .mockImplementation(() => {
-        throw new Error("QuotaExceededError");
-      });
+  // Dragging a collapsible pane shut is the same act as the rail toggle, so
+  // the rail must follow -- otherwise it shows a pressed button over a pane
+  // that is not there.
+  it("dragging a pane shut turns its rail button off", async () => {
+    render(AppShell);
+    const rail = dom.getByRole("toolbar", { name: /panels/i });
+    await drag(handle("library"), -170); // below half its 12% minimum: collapses
+    await waitFor(() => expect(sizeOf("library")).toBe(0));
+    await waitFor(() =>
+      expect(dom.getByRole("button", { name: /^library$/i, container: rail })).toHaveAttribute("aria-pressed", "false"),
+    );
+    expect(layout.isOpen("library")).toBe(false);
+  });
+
+  // The layout is a convenience; losing it must never break the editor.
+  it("survives storage being unavailable -- the resize still works, it just is not remembered", async () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("QuotaExceededError");
+    });
 
     render(AppShell);
-    await drag(separator("vertical"), { clientX: 700 });
-
-    await waitFor(() =>
-      expect(Number(separator("vertical").getAttribute("aria-valuenow"))).toBe(300),
-    );
+    await drag(handle("editor"), -100);
+    await waitFor(() => expect(sizeOf("editor")).toBe(32));
     await waitFor(() => expect(setItem).toHaveBeenCalled());
-    // Still interactive afterwards: the throw was swallowed, not propagated
-    // out of the effect.
     expect(dom.getByRole("toolbar", { name: /panels/i })).toBeTruthy();
   });
 
   // Corrupt stored state must not take the page down with it.
-  it("falls back to the defaults when the stored record is corrupt", () => {
+  it("falls back to the defaults when the stored records are corrupt", () => {
     localStorage.setItem(STORAGE_KEY, "{not json");
+    localStorage.setItem(PANES_KEY, "{not json");
 
     render(AppShell);
 
-    expect(Number(separator("vertical").getAttribute("aria-valuenow"))).toBe(420);
+    expect(sizeOf("editor")).toBe(42);
     expect(dom.getByRole("button", { name: "New" })).toBeTruthy();
   });
 });

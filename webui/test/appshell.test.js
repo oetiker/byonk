@@ -8,32 +8,14 @@ import { subject } from "../src/lib/state/subject.svelte.js";
 import { editor } from "../src/lib/state/editor.svelte.js";
 import * as api from "../src/lib/api.js";
 
-// The brief's own AppShell code block (task-5-brief.md Step 5) restores
-// persisted layout from `onMount(() => layout.load())` and then wires
-// `bind:size` straight into an `$effect` that calls `layout.setSize()` on
-// every change. Both are load-bearing for the shell and neither is
-// exercised by any test the brief specifies (only iconrail.test.js is
-// required). These tests pin the two deviations this implementation makes
-// from that code block:
-//   1. layout.load() must run before xSize is read, not in onMount,
-//      or a persisted split size is silently dropped on first paint.
-//   2. the persisted write (layout.setSize -> save -> localStorage) must be
-//      debounced, not fired synchronously on every bound-size change
-//      (Ruling 12).
-//   3. review fix round 1, finding 2: mounting with no interaction at all
-//      must not schedule a write either -- xSize starts out equal to
-//      what `layout` already holds (they were just read from it), so
-//      persisting them again 200ms later would re-save the exact value
-//      just loaded, for no visible effect, on every single page load.
+// Pane sizes are PaneForge's (percent, `autoSaveId`); open/closed state is
+// `layout`'s. These pin the shell-level contract of both: the persisted
+// layout applies on mount, PaneForge debounces its own writes, and a plain
+// page load does not re-write byonk's layout record.
+const PANES_KEY = "paneforge:byonk.panes.v1";
 
-function findVerticalSeparator() {
-  // The outer (axis="x") SplitPane's separator is aria-orientation=
-  // "vertical" per SplitPane.svelte; the (retired) inner axis="y" one was
-  // "horizontal". Both share the same aria-label ("Resize panel"), so
-  // disambiguate by orientation rather than by accessible name.
-  return screen
-    .getAllByRole("separator")
-    .find((el) => el.getAttribute("aria-orientation") === "vertical");
+function editHandle() {
+  return screen.getAllByRole("separator").find((el) => el.getAttribute("aria-controls") === "editor");
 }
 
 beforeEach(() => {
@@ -54,72 +36,62 @@ describe("AppShell", () => {
     render(AppShell);
     expect(screen.getByTestId("simulated-inputs")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Simulated inputs/ })).toBeNull();
-    // Class contract: natural height in a capped, scrolling, non-shrinking box.
+    // Class contract: natural height in a box capped at half the column that
+    // does not shrink; the body under the fixed header is the scroller.
     const box = screen.getByTestId("simulated-inputs").parentElement.className.split(/\s+/);
-    expect(box).toEqual(expect.arrayContaining(["shrink-0", "overflow-auto", "max-h-[50%]"]));
+    expect(box).toEqual(expect.arrayContaining(["shrink-0", "max-h-[50%]"]));
+    const body = screen.getByTestId("simulated-inputs-body").className.split(/\s+/);
+    expect(body).toEqual(expect.arrayContaining(["min-h-0", "overflow-auto"]));
   });
 
-  it("applies a persisted split size on first paint, not only after mount", () => {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        panels: { library: true, editor: true, preview: true },
-        sizes: { x: 555 },
-      }),
-    );
+  it("gives the simulated inputs a section-height header titled 'Simulated inputs'", () => {
+    render(AppShell);
+    const region = screen.getByRole("region", { name: "Simulated inputs" });
+    const heading = screen.getByRole("heading", { name: "Simulated inputs" });
+    expect(region.contains(heading)).toBe(true);
+    expect(heading.parentElement.className).toMatch(/\bh-\(--section-h\)/);
+    expect(heading.parentElement.className).toMatch(/\bshrink-0\b/);
+  });
+
+  it("applies a persisted pane layout on mount", async () => {
+    render(AppShell);
+    await fireEvent.keyDown(editHandle(), { key: "ArrowLeft" }); // 42 -> 32
+    await waitFor(() => expect(localStorage.getItem(PANES_KEY)).toContain("[18,32,50]"));
+    cleanup();
+    layout.reset();
 
     render(AppShell);
-
-    const separator = findVerticalSeparator();
-    expect(separator).toHaveAttribute("aria-valuenow", "555");
+    await tick();
+    expect(editHandle()).toHaveAttribute("aria-valuenow", "32");
   });
 
-  it("debounces the persisted write instead of saving on every bound-size change", async () => {
+  it("writes the pane layout once a burst of resizes settles, not once per step", async () => {
     vi.useFakeTimers();
-    // Spy on layout.setSize() rather than Storage.prototype.setItem: the y
-    // axis has its own, independent debounced effect that also settles at
-    // the same 200ms mark from mount, so a raw localStorage.setItem count
-    // would conflate the two axes. setSize("x", ...) call count isolates
-    // the property this test is actually about.
-    const setSizeSpy = vi.spyOn(layout, "setSize");
-
     render(AppShell);
-    const separator = findVerticalSeparator();
+    await vi.advanceTimersByTimeAsync(200); // let the mount-time write settle
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
 
-    // Fire several rapid changes, as a pointermove-driven drag would.
-    for (let i = 0; i < 5; i++) {
-      await fireEvent.keyDown(separator, { key: "ArrowLeft" }); // -12 each
+    for (const key of ["ArrowLeft", "ArrowRight", "ArrowLeft"]) {
+      await fireEvent.keyDown(editHandle(), { key }); // 42 -> 32 -> 42 -> 32
     }
-
-    // No persisted write yet -- not even the mount-time effect's own first
-    // scheduled write has fired, because no fake timer has been advanced.
-    // Each subsequent change cancels the previous pending write, so only
-    // one write is ever queued at a time.
-    expect(setSizeSpy).not.toHaveBeenCalled();
-    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+    const paneWrites = () => setItem.mock.calls.filter(([k]) => k === PANES_KEY);
+    expect(paneWrites()).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(200);
-
-    // Exactly one write reaches the store for the x axis, carrying the
-    // settled value -- not one per keystroke.
-    const xCalls = setSizeSpy.mock.calls.filter(([axis]) => axis === "x");
-    expect(xCalls).toEqual([["x", 360]]);
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)).sizes.x).toBe(360);
+    expect(paneWrites()).toHaveLength(1);
+    expect(paneWrites()[0][1]).toContain("[18,32,50]"); // the settled layout
   });
 
-  it("does not persist on mount when nothing has changed since load", async () => {
-    // Review fix round 1, finding 2. No drag, no keypress -- just mount and
-    // let the debounce window fully elapse for both axes.
+  it("does not re-write the layout record on mount when nothing has changed", async () => {
+    // Review fix round 1, finding 2, carried over: a plain page load must
+    // not re-persist the open/closed record it just loaded.
     vi.useFakeTimers();
-    const setSizeSpy = vi.spyOn(layout, "setSize");
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
 
     render(AppShell);
     await vi.advanceTimersByTimeAsync(200);
 
-    expect(setSizeSpy).not.toHaveBeenCalled();
-    // save() is layout's own localStorage.setItem; confirm no write at the
-    // storage level too, not just that our spy on setSize saw nothing.
-    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+    expect(setItem.mock.calls.filter(([k]) => k === STORAGE_KEY)).toHaveLength(0);
   });
 
   it("the Edit panel asks for a subject when there is none", async () => {

@@ -87,8 +87,8 @@ An icon rail on the left carries one toggle button per panel: **Library**,
 combination is allowed, including all three hidden at once. A panel you hide
 comes back at the size it had. Drag the divider between two open panels to
 resize them (or focus it and use the arrow keys); sizes are proportions of the
-window, so every panel keeps a usable width when the window narrows. Dragging
-a panel all the way shut hides it, just like its rail button. Panel sizes and
+window, so every panel keeps a usable width when the window narrows; a drag
+stops at a panel's minimum width, and only the rail hides a panel. Panel sizes and
 which panels are shown are remembered between visits (the theme control described in
 [Colour scheme](#colour-scheme), and Logout when a cookie session is open,
 both live at the foot of the same rail).

@@ -4,7 +4,7 @@
   import * as Resizable from "$lib/ui/resizable/index.js";
   import ConflictBanner from "./ConflictBanner.svelte";
   import StatusStrip from "./StatusStrip.svelte";
-  import { layout, PANELS } from "../state/layout.svelte.js";
+  import { layout } from "../state/layout.svelte.js";
   import { theme } from "../state/theme.svelte.js";
   import { editor } from "../state/editor.svelte.js";
   import { auth } from "../state/auth.svelte.js";
@@ -73,83 +73,23 @@
 
   // --- Resizable panes (Library | Edit | Preview) ----------------------
   // PaneForge sizes the panes in PERCENT and persists them itself under
-  // `paneforge:<autoSaveId>` (debounced), including the size each collapsed
-  // pane returns to. Percent keeps every pane above its minSize at any window
-  // width; the px preview column this replaced squeezed the Edit pane to
-  // 16 px at an 800 px window.
+  // `paneforge:<autoSaveId>` (debounced). Percent keeps every pane above its
+  // minSize at any window width; the px preview column this replaced
+  // squeezed the Edit pane to 16 px at an 800 px window.
   //
-  // Which panes are OPEN stays in `layout` (the rail and ConfigEditor read
-  // it). A closed pane is collapsed to 0 rather than removed from the group,
-  // so it reopens at the size it had; its CONTENT is unmounted while closed
-  // so a hidden editor or preview does no work.
+  // Which panes are open is `layout`'s alone (the rail and ConfigEditor read
+  // it): a closed pane is not rendered at all, so it can never sit in the
+  // group at 0 width while its rail button says open. Each pane keeps a
+  // stable `id` and `order`, and PaneForge stores one layout per set of
+  // rendered panes, so a panel reopens at the size it had in that
+  // arrangement (or the defaults, rescaled, the first time). Panes are not
+  // `collapsible`: only the rail opens and closes them; a drag stops at the
+  // pane's minimum.
   const SIZES = {
-    library: { defaultSize: 18, minSize: 12 },
-    editor: { defaultSize: 42, minSize: 25 },
-    preview: { defaultSize: 40, minSize: 25 },
+    library: { defaultSize: 18, minSize: 12, order: 1 },
+    editor: { defaultSize: 42, minSize: 25, order: 2 },
+    preview: { defaultSize: 40, minSize: 25, order: 3 },
   };
-
-  /** Bound Pane instances, by panel name: each exposes collapse()/expand(). */
-  let panes = $state({});
-  /** The bound PaneGroup: getLayout()/setLayout(). */
-  let group = $state();
-  /** True once PaneForge has computed the group's first layout. */
-  let ready = $state(false);
-  /** Set while sync() drives the panes, so its own layout changes are not
-   *  mistaken for the user dragging a pane open or shut. */
-  let syncing = false;
-  /** The layout as of the last change we saw, to tell a pane crossing 0. */
-  let prevSizes = [];
-
-  // Make the panes match `layout`. Expand before collapsing, then hand any
-  // room a closed pane still holds to the open ones: PaneForge collapses a
-  // pane only by giving its space to a NEIGHBOUR, and when that neighbour is
-  // itself closed (Edit then Preview closed -> [18, 82, 0]) the space stays
-  // with a pane that shows nothing.
-  function sync() {
-    syncing = true;
-    try {
-      for (const p of PANELS) if (layout.isOpen(p)) panes[p]?.expand();
-      for (const p of PANELS) if (!layout.isOpen(p)) panes[p]?.collapse();
-      const sizes = group?.getLayout() ?? [];
-      const open = PANELS.map((p) => layout.isOpen(p));
-      const stale = sizes.some((s, i) => !open[i] && s > 0);
-      const openTotal = sizes.reduce((sum, s, i) => (open[i] ? sum + s : sum), 0);
-      if (stale && openTotal > 0) {
-        group.setLayout(sizes.map((s, i) => (open[i] ? (s / openTotal) * 100 : 0)));
-      }
-    } finally {
-      syncing = false;
-      prevSizes = group?.getLayout() ?? prevSizes;
-    }
-  }
-
-  $effect(() => {
-    if (!ready) return;
-    for (const p of PANELS) layout.isOpen(p);
-    untrack(sync);
-  });
-
-  // The group's layout changed. The first call is PaneForge's initial
-  // layout (restored from storage, or the defaults); after that, a change
-  // sync() did not cause is the user dragging a handle. A pane the drag
-  // collapses (crosses from >0 to 0) is closed, so the rail follows. A
-  // drag never OPENS a pane: next to a collapsed pane PaneForge turns any
-  // shrink into growing that neighbour (with only Library open, narrowing
-  // it would pop Edit open), so a closed pane that gained room is put back
-  // by sync() -- only the rail reopens panels.
-  function onLayoutChange(sizes) {
-    const prev = prevSizes;
-    prevSizes = sizes;
-    if (!ready) {
-      ready = true;
-      return;
-    }
-    if (syncing) return;
-    PANELS.forEach((p, i) => {
-      if (prev[i] > 0 && sizes[i] === 0) layout.setOpen(p, false);
-    });
-    if (PANELS.some((p, i) => !layout.isOpen(p) && sizes[i] > 0)) sync();
-  }
 
   // Live-reload watcher (spec §8.5, Task 10). `handle_events` (src/api/
   // dev.rs) emits a JSON array of bare basenames on a `file-change` event
@@ -208,42 +148,31 @@
 
     <Resizable.PaneGroup
       direction="horizontal"
-      autoSaveId="byonk.panes.v1"
-      bind:this={group}
-      {onLayoutChange}
+      autoSaveId="byonk.panes.v2"
       class="min-h-0 min-w-0 flex-1"
     >
-      <Resizable.Pane
-        id="library"
-        bind:this={panes.library}
-        collapsible
-        collapsedSize={0}
-        {...SIZES.library}
-        class="flex min-h-0 min-w-0 flex-col overflow-hidden bg-sidebar text-sidebar-foreground"
-      >
-        {#if layout.isOpen("library")}<LibraryPane />{/if}
-      </Resizable.Pane>
-      <Resizable.Handle withHandle aria-label="Resize Library" class="hover:bg-primary data-active:bg-primary" />
-      <Resizable.Pane
-        id="editor"
-        bind:this={panes.editor}
-        collapsible
-        collapsedSize={0}
-        {...SIZES.editor}
-        class="flex min-h-0 min-w-0 overflow-hidden"
-      >
-        {#if layout.isOpen("editor")}<EditPane />{/if}
-      </Resizable.Pane>
-      <Resizable.Handle withHandle aria-label="Resize Edit and Preview" class="hover:bg-primary data-active:bg-primary" />
-      <Resizable.Pane
-        id="preview"
-        bind:this={panes.preview}
-        collapsible
-        collapsedSize={0}
-        {...SIZES.preview}
-        class="flex min-h-0 min-w-0 flex-col overflow-hidden"
-      >
+      {#if layout.isOpen("library")}
+        <Resizable.Pane
+          id="library"
+          {...SIZES.library}
+          class="flex min-h-0 min-w-0 flex-col overflow-hidden bg-sidebar text-sidebar-foreground"
+        >
+          <LibraryPane />
+        </Resizable.Pane>
+        {#if layout.isOpen("editor") || layout.isOpen("preview")}
+          <Resizable.Handle withHandle aria-label="Resize Library" class="hover:bg-primary data-active:bg-primary" />
+        {/if}
+      {/if}
+      {#if layout.isOpen("editor")}
+        <Resizable.Pane id="editor" {...SIZES.editor} class="flex min-h-0 min-w-0 overflow-hidden">
+          <EditPane />
+        </Resizable.Pane>
         {#if layout.isOpen("preview")}
+          <Resizable.Handle withHandle aria-label="Resize Edit and Preview" class="hover:bg-primary data-active:bg-primary" />
+        {/if}
+      {/if}
+      {#if layout.isOpen("preview")}
+        <Resizable.Pane id="preview" {...SIZES.preview} class="flex min-h-0 min-w-0 flex-col overflow-hidden">
           <!-- The preview takes the height the inputs leave; the inputs take
                their natural height, capped at half the column so a short
                window scrolls them rather than squeezing the render away. -->
@@ -251,8 +180,8 @@
           <div class="flex max-h-[50%] shrink-0 flex-col border-t border-border">
             <SimulatedInputs />
           </div>
-        {/if}
-      </Resizable.Pane>
+        </Resizable.Pane>
+      {/if}
     </Resizable.PaneGroup>
   </div>
 </div>

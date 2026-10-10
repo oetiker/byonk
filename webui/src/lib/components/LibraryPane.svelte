@@ -244,7 +244,10 @@
               </Button>
             {/snippet}
           </DropdownMenu.Trigger>
-          <DropdownMenu.Content align="end">
+          <!-- Every item opens an inline form that focuses its own field or
+               button; the menu must not pull focus back to its trigger as
+               it closes. -->
+          <DropdownMenu.Content align="end" onCloseAutoFocus={(e) => e.preventDefault()}>
             <DropdownMenu.Item aria-label="New" onSelect={newScreen}><FilePlus aria-hidden="true" />New screen</DropdownMenu.Item>
             <DropdownMenu.Item aria-label="Copy" disabled={!subject.screenRef} onSelect={copyScreen}><Copy aria-hidden="true" />Copy screen</DropdownMenu.Item>
             <DropdownMenu.Item aria-label="Rename" disabled={!canEdit} onSelect={renameScreen}><Pencil aria-hidden="true" />Rename screen</DropdownMenu.Item>

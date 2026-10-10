@@ -8,11 +8,6 @@
 		class: className,
 		...restProps
 	} = $props();
-
-	// byonk: expose the group's layout API through the wrapper, so a
-	// `bind:this` on Resizable.PaneGroup can read and set the layout.
-	export const getLayout = () => paneGroup?.getLayout() ?? [];
-	export const setLayout = (layout) => paneGroup?.setLayout(layout);
 </script>
 
 <ResizablePrimitive.PaneGroup

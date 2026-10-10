@@ -12,7 +12,7 @@ import * as api from "../src/lib/api.js";
 // `layout`'s. These pin the shell-level contract of both: the persisted
 // layout applies on mount, PaneForge debounces its own writes, and a plain
 // page load does not re-write byonk's layout record.
-const PANES_KEY = "paneforge:byonk.panes.v1";
+const PANES_KEY = "paneforge:byonk.panes.v2";
 
 function editHandle() {
   return screen.getAllByRole("separator").find((el) => el.getAttribute("aria-controls") === "editor");

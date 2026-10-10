@@ -21,7 +21,7 @@ import * as api from "../src/lib/api.js";
  *
  * So this file never touches `layout` to change what is shown. It clicks the
  * button a user would click and then looks for the pane's own markup (and,
- * since the panes are a Resizable group, that the pane itself collapses).
+ * since the panes are a Resizable group, that the pane itself leaves it).
  *
  * Each pane is identified by something it alone renders, not by a test id
  * added for the occasion:
@@ -87,18 +87,18 @@ describe("icon rail toggles, through the app root", () => {
     render(AppShell);
       await waitFor(() => expect(MARKER[panel]()).toBeTruthy());
 
-      // The pane is collapsed in the Resizable group, not left as an empty
+      // A closed pane leaves the Resizable group entirely, not an empty
       // column: its neighbours take the room.
       const pane = () => document.querySelector(`[data-pane-id="${panel}"]`);
-      expect(pane()).toHaveAttribute("data-expanded");
+      expect(pane()).toBeTruthy();
 
       await fireEvent.click(railButton(panel));
       await waitFor(() => expect(MARKER[panel]()).toBeNull());
-      await waitFor(() => expect(pane()).toHaveAttribute("data-collapsed"));
+      expect(pane()).toBeNull();
 
       await fireEvent.click(railButton(panel));
       await waitFor(() => expect(MARKER[panel]()).toBeTruthy());
-      await waitFor(() => expect(pane()).toHaveAttribute("data-expanded"));
+      expect(pane()).toBeTruthy();
     });
   }
 

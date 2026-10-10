@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen as dom, cleanup, fireEvent, waitFor } from "@testing-library/svelte";
+import { tick } from "svelte";
 import AppShell from "../src/lib/components/AppShell.svelte";
 import { layout, STORAGE_KEY } from "../src/lib/state/layout.svelte.js";
 import { screens } from "../src/lib/state/screens.svelte.js";
@@ -20,7 +21,7 @@ import * as api from "../src/lib/api.js";
  * on a handle, the rail -- and then remounts, which is the only thing a user
  * actually does, and it crosses the AppShell/PaneForge/layout seam.
  */
-const PANES_KEY = "paneforge:byonk.panes.v1";
+const PANES_KEY = "paneforge:byonk.panes.v2";
 
 /**
  * A measurable extent for the pane GROUP only.
@@ -48,6 +49,22 @@ function handle(pane) {
 const sizeOf = (pane) => Number(handle(pane).getAttribute("aria-valuenow"));
 const saved = () => JSON.parse(localStorage.getItem(PANES_KEY) ?? "null");
 const savedLayout = () => Object.values(saved() ?? {})[0]?.layout;
+
+const paneEl = (id) => document.querySelector(`[data-pane-id="${id}"]`);
+/** The pane's flex-grow, i.e. its percent of the row (jsdom computes no widths). */
+const flexOf = (id) => Number(/flex:\s*([\d.]+)/.exec(paneEl(id).getAttribute("style"))[1]);
+const LABELS = { library: "Library", editor: "Edit", preview: "Preview" };
+function railButton(name) {
+  return dom.getByRole("button", { name, container: dom.getByRole("toolbar", { name: /panels/i }) });
+}
+/** For every pane: rail pressed <=> pane rendered with a size above 0. */
+function expectRailMatchesPanes() {
+  for (const [id, label] of Object.entries(LABELS)) {
+    const pressed = railButton(label).getAttribute("aria-pressed") === "true";
+    const shown = !!paneEl(id) && flexOf(id) > 0;
+    expect(shown, `${id}: aria-pressed=${pressed}, rendered>0=${shown}`).toBe(pressed);
+  }
+}
 
 /** One complete pointer drag of `dx` px on a 1000px group, as a user performs it. */
 async function drag(el, dx) {
@@ -160,82 +177,106 @@ describe("pane resize, persisted across a reload", () => {
 
     await drag(handle("library"), 70); // Library 18 -> 25
     await waitFor(() => expect(sizeOf("library")).toBe(25));
+    await new Promise((r) => setTimeout(r, 150)); // PaneForge's debounced save
 
-    const rail = dom.getByRole("toolbar", { name: /panels/i });
-    const libraryBtn = () => dom.getByRole("button", { name: /^library$/i, container: rail });
-    await fireEvent.click(libraryBtn());
-    await waitFor(() => expect(sizeOf("library")).toBe(0));
-    await waitFor(() => expect(JSON.parse(localStorage.getItem(STORAGE_KEY)).panels.library).toBe(false));
-    await waitFor(() => expect(savedLayout()?.[0]).toBe(0));
+    await fireEvent.click(railButton("Library"));
+    await waitFor(() => expect(paneEl("library")).toBeNull());
+    expectRailMatchesPanes();
 
     cleanup();
     layout.reset();
     render(AppShell);
 
     expect(dom.queryByRole("button", { name: "New" })).toBeNull();
-    await waitFor(() => expect(sizeOf("library")).toBe(0));
+    expect(paneEl("library")).toBeNull();
 
-    await fireEvent.click(libraryBtn());
+    await fireEvent.click(railButton("Library"));
     await waitFor(() => expect(sizeOf("library")).toBe(25));
     expect(dom.getByRole("button", { name: "New" })).toBeTruthy();
+    expectRailMatchesPanes();
   });
 
-  // Dragging a collapsible pane shut is the same act as the rail toggle, so
-  // the rail must follow -- otherwise it shows a pressed button over a pane
-  // that is not there.
-  it("dragging a pane shut turns its rail button off", async () => {
+  // Panes are not collapsible: only the rail opens and closes them, and a
+  // drag stops at the pane's minimum -- a pane never sits at 0 under a
+  // pressed rail button.
+  it("a drag past the minimum stops there; the pane stays open", async () => {
     render(AppShell);
-    const rail = dom.getByRole("toolbar", { name: /panels/i });
-    await drag(handle("library"), -170); // below half its 12% minimum: collapses
-    await waitFor(() => expect(sizeOf("library")).toBe(0));
-    await waitFor(() =>
-      expect(dom.getByRole("button", { name: /^library$/i, container: rail })).toHaveAttribute("aria-pressed", "false"),
-    );
-    expect(layout.isOpen("library")).toBe(false);
+    await drag(handle("library"), -170);
+    await waitFor(() => expect(sizeOf("library")).toBe(12));
+    expect(layout.isOpen("library")).toBe(true);
+    expectRailMatchesPanes();
   });
 
-  // Fix round 1, finding 1. PaneForge collapses a pane by handing its room
-  // to a NEIGHBOUR; with Edit closed first, closing Preview gave its space to
-  // the closed Edit ([18, 82, 0]) -- and the next Library drag then saw
-  // Edit > 0 and popped it open.
-  it("with Edit and Preview closed, Library fills the row and dragging it reopens nothing", async () => {
+  // Fix round 1, finding 1 (kept). With only Library open there is nothing
+  // to resize against: no handle, Library fills the row, nothing reopens.
+  it("with Edit and Preview closed, Library fills the row and nothing reopens", async () => {
     render(AppShell);
-    const rail = dom.getByRole("toolbar", { name: /panels/i });
-    const btn = (name) => dom.getByRole("button", { name, container: rail });
-    const paneSize = (id) => {
-      const m = /flex:\s*([\d.]+)/.exec(document.querySelector(`[data-pane-id="${id}"]`).getAttribute("style"));
-      return Number(m[1]);
-    };
-
-    await fireEvent.click(btn("Edit"));
-    await fireEvent.click(btn("Preview"));
-    await waitFor(() => expect(paneSize("preview")).toBe(0));
-    expect(paneSize("editor")).toBe(0);
-    expect(paneSize("library")).toBe(100);
-
-    await drag(handle("library"), -100);
-    await fireEvent.keyDown(handle("library"), { key: "ArrowLeft" });
+    await fireEvent.click(railButton("Edit"));
+    await fireEvent.click(railButton("Preview"));
+    await waitFor(() => expect(paneEl("preview")).toBeNull());
+    // The only pane in the group: it fills the row (PaneForge styles a lone
+    // pane flex 1, not 100).
+    expect(document.querySelectorAll("[data-pane]")).toHaveLength(1);
+    expect(flexOf("library")).toBeGreaterThan(0);
+    expect(dom.queryAllByRole("separator")).toHaveLength(0);
     await new Promise((r) => setTimeout(r, 50));
-
-    expect(btn("Edit")).toHaveAttribute("aria-pressed", "false");
-    expect(btn("Preview")).toHaveAttribute("aria-pressed", "false");
-    expect(layout.isOpen("editor")).toBe(false);
-    expect(layout.isOpen("preview")).toBe(false);
+    expect(railButton("Edit")).toHaveAttribute("aria-pressed", "false");
+    expect(railButton("Preview")).toHaveAttribute("aria-pressed", "false");
     expect(dom.queryByRole("tablist")).toBeNull();
+    expectRailMatchesPanes();
   });
 
   it("reopening Library after all three were closed gives it the whole row", async () => {
     render(AppShell);
-    const rail = dom.getByRole("toolbar", { name: /panels/i });
-    const btn = (name) => dom.getByRole("button", { name, container: rail });
-    for (const n of ["Library", "Edit", "Preview"]) await fireEvent.click(btn(n));
-    await fireEvent.click(btn("Library"));
-    await waitFor(() =>
-      expect(document.querySelector('[data-pane-id="library"]').getAttribute("style")).toMatch(/flex:\s*100\b/),
-    );
-    expect(document.querySelector('[data-pane-id="editor"]')).toHaveAttribute("data-collapsed");
-    expect(document.querySelector('[data-pane-id="preview"]')).toHaveAttribute("data-collapsed");
-    expect(layout.isOpen("editor")).toBe(false);
+    for (const n of ["Library", "Edit", "Preview"]) await fireEvent.click(railButton(n));
+    expect(document.querySelectorAll("[data-pane]")).toHaveLength(0);
+    await fireEvent.click(railButton("Library"));
+    await waitFor(() => expect(document.querySelectorAll("[data-pane]")).toHaveLength(1));
+    expect(flexOf("library")).toBeGreaterThan(0);
+    expectRailMatchesPanes();
+  });
+
+  // Fix round 2, finding 2: Library stays resizable with Edit closed.
+  it("Library is resizable with Edit closed, and Edit stays closed", async () => {
+    render(AppShell);
+    await fireEvent.click(railButton("Edit"));
+    await waitFor(() => expect(paneEl("editor")).toBeNull());
+    const before = sizeOf("library");
+    await drag(handle("library"), 100); // +10 points
+    await waitFor(() => expect(sizeOf("library")).toBeCloseTo(before + 10, 0));
+    expect(railButton("Edit")).toHaveAttribute("aria-pressed", "false");
+    expectRailMatchesPanes();
+  });
+
+  // Fix round 2, finding 1, Repro A: arrow Edit down hard, then toggle.
+  it("Repro A: arrowing Edit to its limit and toggling never leaves a pressed pane at 0", async () => {
+    render(AppShell);
+    for (let i = 0; i < 5; i++) await fireEvent.keyDown(handle("editor"), { key: "ArrowLeft" });
+    await waitFor(() => expect(sizeOf("editor")).toBe(25));
+    expectRailMatchesPanes();
+    for (const n of ["Edit", "Edit", "Library", "Library"]) {
+      await fireEvent.click(railButton(n));
+      await tick();
+      expectRailMatchesPanes();
+    }
+  });
+
+  // Fix round 2, finding 1, Repro B: the browser's step log, then a reload.
+  it("Repro B: any toggle order keeps rail and panes in step, across a reload", async () => {
+    render(AppShell);
+    await fireEvent.click(railButton("Edit"));
+    await fireEvent.click(railButton("Preview")); // Library only
+    for (const n of ["Edit", "Edit", "Preview", "Edit", "Preview", "Edit", "Preview", "Edit"]) {
+      await fireEvent.click(railButton(n));
+      await tick();
+      expectRailMatchesPanes();
+    }
+    await new Promise((r) => setTimeout(r, 150));
+    cleanup();
+    layout.reset();
+    render(AppShell);
+    await tick();
+    expectRailMatchesPanes();
   });
 
   // The layout is a convenience; losing it must never break the editor.

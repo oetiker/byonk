@@ -546,6 +546,11 @@ describe("LibraryPane narrow header (fix round 1, finding 2)", () => {
     for (const n of ["Copy", "Rename", "Delete"]) expect(await item(n)).toHaveAttribute("data-disabled");
 
     await fireEvent.click(await item("New"));
-    expect(await screen.findByRole("form", { name: "New screen name" })).toBeTruthy();
+    const form = await screen.findByRole("form", { name: "New screen name" });
+    // Fix round 2, finding 4: the menu closing must not pull focus back to
+    // its trigger -- the name field keeps it.
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(document.activeElement).toBe(within(form).getByRole("textbox"));
   });
 });

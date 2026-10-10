@@ -16,7 +16,8 @@
   class="@container flex h-(--pane-header-h) min-w-0 shrink-0 items-center gap-2 border-b border-border px-2 text-xs"
   {...rest}
 >
-  <span class="shrink-0 font-semibold uppercase tracking-wide text-muted-foreground">{title}</span>
+  <!-- The title truncates before any action clips; actions never shrink. -->
+  <span class="min-w-0 truncate font-semibold uppercase tracking-wide text-muted-foreground">{title}</span>
   <div data-slot="pane-header-subject" class="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">{@render subject?.()}</div>
   <div class="flex shrink-0 items-center gap-1">{@render actions?.()}</div>
 </header>

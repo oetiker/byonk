@@ -87,14 +87,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
-- **Add a panel or a device from the dev UI.** The Panels and Devices
-  headings in Library each have a **+**. A new panel asks for an id, a name
-  and its colours (starting from the panel you are looking at, or black and
-  white) and is written to `config.yaml` with your comments left in place. A
-  new device asks for its MAC or registration code, a screen and an optional
-  name; devices byonk has already seen but nobody has configured are offered
-  as one-click suggestions. The new entry is selected straight away.
-
 - **A screen editor in the browser.** The dev UI is no longer just a preview:
   it is a full editor with three panels behind an icon rail — Library, Edit
   and Preview — so you can hide anything you are not using and give the space
@@ -107,6 +99,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Everything revolves around one subject, which you choose in Library: a
   screen, a panel profile or a device. Edit changes it and Preview shows it.
+  The **+** on the Panels and Devices headings adds a panel (id, name,
+  colours) or a device (MAC or registration code, screen, optional name;
+  devices byonk has seen but nobody has configured are offered as
+  suggestions), written to `config.yaml` with your comments kept.
   For a screen, Edit opens its files as tabs and saves your work; Preview
   renders it through the same pipeline the device uses and updates as you
   work, so a mistake in `script.lua`, `screen.svg` or `meta.yaml` shows up as

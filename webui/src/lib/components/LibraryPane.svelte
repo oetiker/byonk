@@ -367,8 +367,9 @@
         {/if}
       </div>
       {#if isOpen(key)}
-        {@render form?.()}
-        <div class="min-h-0 flex-1 overflow-auto pb-1">{@render body()}</div>
+        <!-- The form scrolls with the list: in a short window its OK/Cancel
+             row stays reachable instead of being clipped by the section. -->
+        <div class="min-h-0 flex-1 overflow-auto pb-1">{@render form?.()}{@render body()}</div>
       {/if}
     </section>
   {/snippet}

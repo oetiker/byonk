@@ -724,3 +724,14 @@ describe("LibraryPane: create a panel and a device (U5)", () => {
     expect(await dom.findByRole("form", { name: "New device" })).toBeTruthy();
   });
 });
+
+describe("LibraryPane new panel/device form placement", () => {
+  it("sits inside the section's scrolling body, so OK/Cancel stay reachable in a short window", async () => {
+    render(LibraryPane);
+    await fireEvent.click(screen.getByRole("button", { name: "New panel" }));
+    const form = await screen.findByRole("form", { name: "New panel" });
+    const scroller = form.closest(".overflow-auto");
+    expect(scroller).not.toBeNull();
+    expect(scroller.closest("section")).toBe(form.closest("section"));
+  });
+});

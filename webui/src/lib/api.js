@@ -194,14 +194,25 @@ export const releasePanelOverride = (panel) => del(`api/overrides/panels/${enc(p
 export const pushDeviceOverride = (device, values) => put(`api/overrides/devices/${enc(device)}`, values);
 export const releaseDeviceOverride = (device) => del(`api/overrides/devices/${enc(device)}`);
 
-/** Save a panel's whole rung (`colors_actual` + `dither`); absent = removed. */
+/**
+ * Save a whole panel: `{id?, name, match?, width?, height?, colors,
+ * colors_actual?, dither?}`; an absent optional field is removed, an `id`
+ * other than `panel` renames it (409 when taken). Answers `{id}`.
+ */
 export const savePanel = (panel, rung) => post(`api/panels/${enc(panel)}/save`, rung);
-/** Save a device: the admin PATCH body (`DeviceWrite`), behind the dev login. */
+/** Delete `panels.<panel>`; 409 while a device names it. */
+export const deletePanel = (panel) => del(`api/panels/${enc(panel)}`);
+/**
+ * Save a device: the admin PATCH body (`DeviceWrite`), behind the dev login.
+ * A `key` other than `key` renames the device. Answers `{key, screen}`.
+ */
 export const saveDevice = (key, body) => patch(`api/devices/${enc(key)}`, body);
+/** Delete `devices.<key>`; 409 for DEFAULT. */
+export const deleteDevice = (key) => del(`api/devices/${enc(key)}`);
 /** Which devices use which panel, as the server resolves them. */
 export const panelUsage = () => json("api/panel-usage");
 
-/** Create `panels.<id>` with `{ id, name, colors }`; 409 when the id is taken. */
+/** Create `panels.<id>` with `{ id, name, colors, width?, height? }`; 409 when the id is taken. */
 export const createPanel = (body) => post("api/panels", body);
 /** Add a device: the admin POST body (`DeviceWrite`, with `key`); 409 on a duplicate. */
 export const createDevice = (body) => post("api/devices", body);

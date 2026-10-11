@@ -1,13 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { configDraft } from "../src/lib/state/configDraft.svelte.js";
 import { screens } from "../src/lib/state/screens.svelte.js";
+import { subject } from "../src/lib/state/subject.svelte.js";
 import * as api from "../src/lib/api.js";
 
 beforeEach(() => {
   vi.restoreAllMocks();
   configDraft.reset();
+  subject.reset();
   screens.meta = {
-    panels: [{ id: "e1004", colors: "#000000,#FFFFFF", colors_actual: "#101010,#E8E8E8",
+    panels: [{ id: "e1004", name: "reTerminal E1004", match: "reterminal_e1004", width: 1600, height: 1200,
+               colors: "#000000,#FFFFFF", colors_actual: "#101010,#E8E8E8",
                dither: { strength: 0.8, gamut: { knee: 0.6 }, atkinson: { noise_scale: 2 } } }],
     devices: [{ id: "kitchen", screen: "local/a", panel: "e1004", name: "Kitchen", params: { g: "hi" },
                 base: { dither: "floyd-steinberg", gamut: { knee: 0.5, amount: 0.9 } }, final: null,
@@ -82,6 +85,8 @@ describe("configDraft", () => {
     await configDraft.push("panel", "e1004", { watchDevice: "kitchen" });
     await configDraft.save("panel", "e1004");
     expect(save).toHaveBeenCalledWith("e1004", {
+      id: "e1004", name: "reTerminal E1004", match: "reterminal_e1004", width: 1600, height: 1200,
+      colors: "#000000,#FFFFFF",
       dither: { strength: 0.8, gamut: { knee: 0.6 }, atkinson: { noise_scale: 2 } },
     });
     expect(end).toHaveBeenCalledWith("kitchen");
@@ -174,5 +179,108 @@ describe("configDraft", () => {
     await configDraft.push("device", "kitchen");
     await configDraft.release();
     expect(configDraft.error).toEqual({ op: "release", message: "503 Unavailable" });
+  });
+});
+
+describe("configDraft identity (U7)", () => {
+  it("a panel's identity starts from meta, match included, and edits mark it dirty", () => {
+    expect(configDraft.plainValue("panel", "e1004", "id")).toBe("e1004");
+    expect(configDraft.plainValue("panel", "e1004", "name")).toBe("reTerminal E1004");
+    expect(configDraft.plainValue("panel", "e1004", "match")).toBe("reterminal_e1004");
+    expect(configDraft.plainValue("panel", "e1004", "width")).toBe(1600);
+    expect(configDraft.plainValue("panel", "e1004", "colors")).toBe("#000000,#FFFFFF");
+    configDraft.setPlain("panel", "e1004", "width", "800");
+    expect(configDraft.plainValue("panel", "e1004", "width")).toBe(800);
+    expect(configDraft.dirty("panel", "e1004")).toEqual([{ rung: null, field: "width" }]);
+  });
+
+  it("an identity edit does not touch the render revision, a tuning edit does", () => {
+    const rev = configDraft.revision;
+    const ver = configDraft.version;
+    configDraft.setPlain("panel", "e1004", "name", "Renamed");
+    configDraft.setPlain("device", "kitchen", "key", "pantry");
+    configDraft.setPlain("device", "kitchen", "panel", "og");
+    configDraft.setPlain("device", "kitchen", "name", "Pantry");
+    expect(configDraft.revision).toBe(rev);
+    expect(configDraft.version).toBe(ver + 4);
+    configDraft.set("panel", "e1004", "panel", "strength", 0.5);
+    expect(configDraft.revision).toBe(rev + 1);
+  });
+
+  it("identity is not part of the render draft until saved", () => {
+    configDraft.setPlain("panel", "e1004", "colors", "#000000,#FFFFFF,#FF0000");
+    expect(configDraft.panelWire("e1004").colors).toBe("#000000,#FFFFFF");
+  });
+
+  it("identity edits apply on Save only and never travel in a Push", () => {
+    configDraft.setPlain("panel", "e1004", "name", "Renamed");
+    configDraft.set("panel", "e1004", "panel", "strength", 0.5);
+    expect(configDraft.pushBody("panel", "e1004")).toEqual({ strength: 0.5 });
+    expect(configDraft.unpushable("panel", "e1004")).toEqual(["name"]);
+  });
+
+  it("panel Save sends the whole panel; a cleared optional field is left out (= removed)", async () => {
+    const save = vi.spyOn(api, "savePanel").mockResolvedValue({ id: "e1004" });
+    configDraft.setPlain("panel", "e1004", "match", "");
+    configDraft.setPlain("panel", "e1004", "height", "");
+    configDraft.setPlain("panel", "e1004", "name", " Big ");
+    await configDraft.save("panel", "e1004");
+    expect(save).toHaveBeenCalledWith("e1004", {
+      id: "e1004", name: "Big", width: 1600, colors: "#000000,#FFFFFF", colors_actual: "#101010,#E8E8E8",
+      dither: { strength: 0.8, gamut: { knee: 0.6 }, atkinson: { noise_scale: 2 } },
+    });
+  });
+
+  it("a panel Save with a changed Id re-selects the subject under the new id and leaves no draft", async () => {
+    subject.select("panel", "e1004");
+    vi.spyOn(screens, "refresh").mockImplementation(async () => {
+      screens.meta = { ...screens.meta, panels: [{ ...screens.meta.panels[0], id: "big" }] };
+    });
+    const save = vi.spyOn(api, "savePanel").mockResolvedValue({ id: "big" });
+    configDraft.setPlain("panel", "e1004", "id", "big");
+    await configDraft.save("panel", "e1004");
+    expect(save.mock.calls[0][0]).toBe("e1004");
+    expect(save.mock.calls[0][1].id).toBe("big");
+    expect(subject.key).toBe("panel:big");
+    expect(configDraft.dirtyCount("panel", "big")).toBe(0);
+    expect(configDraft.drafts).toEqual({});
+  });
+
+  it("a 409 keeps the draft and records the server message for that subject", async () => {
+    subject.select("panel", "e1004");
+    vi.spyOn(api, "savePanel").mockRejectedValue(new Error("409 Conflict: panel `og` already exists"));
+    configDraft.setPlain("panel", "e1004", "id", "og");
+    await configDraft.save("panel", "e1004");
+    expect(configDraft.plainValue("panel", "e1004", "id")).toBe("og");
+    expect(configDraft.dirtyCount("panel", "e1004")).toBe(1);
+    expect(configDraft.saveError("panel", "e1004")).toBe("409 Conflict: panel `og` already exists");
+    expect(configDraft.saveError("device", "kitchen")).toBe(null);
+    expect(subject.key).toBe("panel:e1004");
+  });
+
+  it("a device's key and panel start from meta and Save sends them in the one PATCH", async () => {
+    expect(configDraft.plainValue("device", "kitchen", "key")).toBe("kitchen");
+    expect(configDraft.plainValue("device", "kitchen", "panel")).toBe("e1004");
+    subject.select("device", "kitchen");
+    const save = vi.spyOn(api, "saveDevice").mockResolvedValue({ key: "pantry", screen: "local/a" });
+    configDraft.setPlain("device", "kitchen", "key", "pantry");
+    configDraft.setPlain("device", "kitchen", "panel", "");
+    await configDraft.save("device", "kitchen");
+    expect(save).toHaveBeenCalledWith("kitchen", { key: "pantry", clear: ["panel"] });
+    expect(subject.key).toBe("device:pantry");
+  });
+
+  it("a device panel choice is set by id", () => {
+    configDraft.setPlain("device", "kitchen", "panel", "og");
+    expect(configDraft.saveDeviceBody("kitchen")).toEqual({ panel: "og" });
+  });
+
+  it("names the identity fields Save needs and does not have", () => {
+    expect(configDraft.missing("panel", "e1004")).toEqual([]);
+    configDraft.setPlain("panel", "e1004", "name", "");
+    configDraft.setPlain("panel", "e1004", "id", " ");
+    expect(configDraft.missing("panel", "e1004")).toEqual(["id", "name"]);
+    configDraft.setPlain("device", "kitchen", "key", "");
+    expect(configDraft.missing("device", "kitchen")).toEqual(["key"]);
   });
 });

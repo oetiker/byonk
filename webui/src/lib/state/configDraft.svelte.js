@@ -6,6 +6,7 @@
 
 import * as api from "../api.js";
 import { screens } from "./screens.svelte.js";
+import { subject } from "./subject.svelte.js";
 
 export const NUMBER_FIELDS = [
   "max_error", "noise_scale", "chroma_clamp", "strength",
@@ -13,14 +14,29 @@ export const NUMBER_FIELDS = [
 ];
 export const PANEL_FIELDS = ["colors_actual", ...NUMBER_FIELDS];
 export const DEVICE_CASCADE_FIELDS = ["colors", "colors_actual", "dither", ...NUMBER_FIELDS, "refresh"];
+/** The Details block (U7): what names an entry, edited on Save only. */
+export const PANEL_IDENTITY_FIELDS = ["id", "name", "match", "width", "height", "colors"];
+export const DEVICE_IDENTITY_FIELDS = ["key", "name", "screen", "panel"];
 export const DEVICE_PLAIN_FIELDS = [
-  "screen", "name", "params", "temperature_profile", "maximum_compatibility", "min_png_bytes",
+  ...DEVICE_IDENTITY_FIELDS, "params", "temperature_profile", "maximum_compatibility", "min_png_bytes",
 ];
 export const SCHEMAS = {
-  panel: { rungs: ["panel"], fields: PANEL_FIELDS, plain: [] },
-  device: { rungs: ["device_base", "device_final"], fields: DEVICE_CASCADE_FIELDS, plain: DEVICE_PLAIN_FIELDS },
+  panel: { rungs: ["panel"], fields: PANEL_FIELDS, plain: PANEL_IDENTITY_FIELDS, identity: PANEL_IDENTITY_FIELDS },
+  device: { rungs: ["device_base", "device_final"], fields: DEVICE_CASCADE_FIELDS, plain: DEVICE_PLAIN_FIELDS,
+            identity: DEVICE_IDENTITY_FIELDS },
 };
-const NUMERIC = new Set([...NUMBER_FIELDS, "refresh", "min_png_bytes"]);
+const NUMERIC = new Set([...NUMBER_FIELDS, "refresh", "min_png_bytes", "width", "height"]);
+/**
+ * Plain fields the preview does not read: identity is not part of the render
+ * draft until saved, so typing in them must not re-render. A device's
+ * `screen` is the exception: mode c renders the draft's screen.
+ */
+const NOT_RENDERED = {
+  panel: new Set(PANEL_IDENTITY_FIELDS),
+  device: new Set(["key", "name", "panel"]),
+};
+/** Identity Save cannot do without (the device's screen has its own message). */
+const REQUIRED = { panel: ["id", "name", "colors"], device: ["key"] };
 /** A device override cannot carry these (ruling C1: an override takes `dither`, never `colors` or `refresh`; Plan 1 Tasks 2 and 3). */
 const NOT_PUSHABLE = new Set(["colors", "refresh"]);
 
@@ -74,8 +90,10 @@ class ConfigDraft {
   error = $state(null);
   live = $state({ panels: [], devices: [], tuning_sessions: [] });
   usage = $state({ panels: {}, unseen: [] });
-  /** Bumped on every draft edit; the Preview re-renders on it (P2-7). */
+  /** Bumped on every draft edit the render reads; the Preview re-renders on it (P2-7). */
   revision = $state(0);
+  /** Bumped on EVERY draft edit, identity included; the editor's views follow it. */
+  version = $state(0);
 
   #info(kind, id) {
     const list = kind === "panel" ? screens.meta.panels : screens.meta.devices;
@@ -87,7 +105,14 @@ class ConfigDraft {
     if (kind === "panel") {
       return {
         values: { panel: { colors_actual: info?.colors_actual ?? null, ...flatten(info?.dither, NUMBER_FIELDS) } },
-        plain: {},
+        plain: {
+          id: info?.id ?? id,
+          name: info?.name ?? null,
+          match: info?.match ?? null,
+          width: info?.width ?? null,
+          height: info?.height ?? null,
+          colors: info?.colors ?? null,
+        },
       };
     }
     return {
@@ -96,8 +121,10 @@ class ConfigDraft {
         device_final: flatten(info?.final, DEVICE_CASCADE_FIELDS),
       },
       plain: {
-        screen: info?.screen ?? null,
+        key: info?.id ?? id,
         name: info?.name ?? null,
+        screen: info?.screen ?? null,
+        panel: info?.panel ?? null,
         params: JSON.stringify(info?.params ?? {}, null, 2),
         temperature_profile: info?.temperature_profile ?? null,
         maximum_compatibility: info?.maximum_compatibility ?? null,
@@ -110,12 +137,13 @@ class ConfigDraft {
     return this.drafts[keyOf(kind, id)] ?? this.baseline(kind, id);
   }
 
-  #edit(kind, id, fn) {
+  #edit(kind, id, fn, { render = true } = {}) {
     const k = keyOf(kind, id);
     const entry = structuredClone($state.snapshot(this.drafts[k] ?? this.baseline(kind, id)));
     fn(entry);
     this.drafts = { ...this.drafts, [k]: entry };
-    this.revision += 1;
+    this.version += 1;
+    if (render) this.revision += 1;
   }
 
   value(kind, id, rung, field) {
@@ -139,7 +167,12 @@ class ConfigDraft {
     const n = field === "params" ? v : norm(field, v);
     this.#edit(kind, id, (e) => {
       if (this.#mark(e, `plain.${field}`, n)) e.plain[field] = n;
-    });
+    }, { render: !NOT_RENDERED[kind].has(field) });
+  }
+  /** The identity fields Save needs and the draft has emptied. */
+  missing(kind, id) {
+    const cur = this.#current(kind, id);
+    return REQUIRED[kind].filter((f) => (cur.plain[f] ?? null) === null);
   }
   /** Record whether `n` is valid under `key`; true when it may be stored. */
   #mark(entry, key, n) {
@@ -241,9 +274,16 @@ class ConfigDraft {
     return [...out];
   }
 
+  /**
+   * The panel Save: the WHOLE panel, identity included. The server removes
+   * every optional field the body leaves out, so a cleared Match/Width/Height
+   * is simply not sent. An `id` other than the path id renames the panel.
+   */
   savePanelBody(id) {
     const { colors_actual, dither } = this.panelWire(id);
-    const out = {};
+    const plain = this.#current("panel", id).plain;
+    const out = { id: plain.id, name: plain.name, colors: plain.colors };
+    for (const f of ["match", "width", "height"]) if (plain[f] !== null) out[f] = plain[f];
     if (colors_actual !== undefined) out.colors_actual = colors_actual;
     if (dither !== undefined) out.dither = dither;
     return out;
@@ -265,7 +305,10 @@ class ConfigDraft {
     for (const { rung, field } of this.dirty("device", id)) {
       if (rung === null) {
         const v = cur.plain[field];
-        if (field === "params") {
+        if (field === "key") {
+          // A different key renames the device (U6); an empty one never gets here (`missing`).
+          if (v !== null) body.key = v;
+        } else if (field === "params") {
           clear.push("params");
           body.params = JSON.parse(v || "{}");
         } else if (v === null) clear.push(field);
@@ -339,31 +382,54 @@ class ConfigDraft {
     await this.refreshLive();
   }
 
-  /** Stage 2: write config.yaml. The server drops the override itself. */
+  /**
+   * Stage 2: write config.yaml. The server drops the override itself.
+   * A rename (a changed panel Id or device Key) re-selects the subject under
+   * the id the server answers with, right after the refresh that lists it.
+   * A failure keeps the draft; its message is `saveError()`.
+   */
   async save(kind, id) {
+    let finalId = id;
     try {
       if (kind === "panel") {
-        await api.savePanel(id, this.savePanelBody(id));
+        const res = await api.savePanel(id, this.savePanelBody(id));
+        finalId = res?.id ?? id;
       } else {
         const body = this.saveDeviceBody(id);
-        if (body) await api.saveDevice(id, body);
+        if (body) finalId = (await api.saveDevice(id, body))?.key ?? id;
       }
     } catch (e) {
-      this.error = { op: "save", message: e.message };
+      this.error = { op: "save", message: e.message, key: keyOf(kind, id) };
       return;
     }
     this.error = null;
-    const { [keyOf(kind, id)]: _gone, ...rest } = this.drafts;
+    const { [keyOf(kind, id)]: _gone, [keyOf(kind, finalId)]: _stale, ...rest } = this.drafts;
     this.drafts = rest;
+    this.version += 1;
     this.revision += 1;
     await this.#endSessionFor(kind, id);
     await screens.refresh();
+    if (finalId !== id && subject.is(kind, id)) subject.select(kind, finalId);
     await this.load();
+  }
+
+  /** Drop a deleted entry's draft, so a later entry under its id starts clean. */
+  forget(kind, id) {
+    const { [keyOf(kind, id)]: _gone, ...rest } = this.drafts;
+    this.drafts = rest;
+    this.version += 1;
+  }
+
+  /** The last Save failure's server message, when it was this subject's. */
+  saveError(kind, id) {
+    const e = this.error;
+    return e?.op === "save" && e.key === keyOf(kind, id) ? e.message : null;
   }
 
   async discard(kind, id) {
     const { [keyOf(kind, id)]: _gone, ...rest } = this.drafts;
     this.drafts = rest;
+    this.version += 1;
     this.revision += 1;
     if (this.liveFor(kind, id) || (this.pushed?.kind === kind && this.pushed?.id === id)) {
       try {
@@ -424,6 +490,7 @@ class ConfigDraft {
     this.live = { panels: [], devices: [], tuning_sessions: [] };
     this.usage = { panels: {}, unseen: [] };
     this.revision = 0;
+    this.version = 0;
   }
 }
 

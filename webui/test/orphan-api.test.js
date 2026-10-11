@@ -27,6 +27,8 @@ const ROUTES = {
   "POST api/panels": "createPanel",
   "POST api/devices": "createDevice",
   "GET api/pending-devices": "listPendingDevices",
+  "DELETE api/panels/{panel}": "deletePanel",
+  "DELETE api/devices/{key}": "deleteDevice",
   "PUT api/tuning-session/{device}": "startTuningSession",
   "DELETE api/tuning-session/{device}": "endTuningSession",
   "POST api/render": "renderPreview",

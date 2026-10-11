@@ -170,6 +170,36 @@ async fn creating_a_panel_validates_id_name_and_colors() {
 }
 
 #[tokio::test]
+async fn creating_a_panel_can_carry_its_size() {
+    // The Library's "+" copies the current panel's size into the
+    // placeholder it creates, in the one write.
+    let dir = tempfile::tempdir().unwrap();
+    let (app, config_path) = TestApp::new_with_config_yaml(commented_config(), dir.path());
+    let r = app
+        .post_json(
+            "/dev/api/panels",
+            &[AUTH],
+            r##"{"id":"new_panel","name":"New panel","colors":"#000000,#FFFFFF","width":1600,"height":1200}"##,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let d = doc(&config_path);
+    assert_eq!(d["panels"]["new_panel"]["width"], 1600);
+    assert_eq!(d["panels"]["new_panel"]["height"], 1200);
+
+    let before = std::fs::read_to_string(&config_path).unwrap();
+    let r = app
+        .post_json(
+            "/dev/api/panels",
+            &[AUTH],
+            r##"{"id":"zero","name":"Z","colors":"#000000,#FFFFFF","width":0}"##,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text());
+    assert_eq!(std::fs::read_to_string(&config_path).unwrap(), before);
+}
+
+#[tokio::test]
 async fn creating_a_panel_needs_the_dev_session() {
     let dir = tempfile::tempdir().unwrap();
     let (app, _cfg) = TestApp::new_with_config_yaml(commented_config(), dir.path());

@@ -115,7 +115,9 @@ describe("mode b: pick a panel, change a swatch value, Push, Save", () => {
     expect(session).toHaveBeenCalledWith("kitchen");
 
     await fireEvent.click(dom.getByRole("button", { name: "Save" }));
+    // Save is whole-panel (U6/U7): the identity travels with the rung.
     await waitFor(() => expect(save).toHaveBeenCalledWith("e1004", {
+      id: "e1004", name: "reTerminal E1004", width: 800, height: 480, colors: "#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00",
       colors_actual: CHANGED, dither: { strength: 0.8 } }));
     expect(end).toHaveBeenCalledWith("kitchen");
   });

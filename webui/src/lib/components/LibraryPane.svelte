@@ -9,12 +9,9 @@
   import { FilePlus, Copy, Pencil, Trash2, Ellipsis, Plus } from "@lucide/svelte";
   import * as DropdownMenu from "$lib/ui/dropdown-menu/index.js";
   import { Button } from "$lib/ui/button/index.js";
-  import { Input } from "$lib/ui/input/index.js";
-  import { NativeSelect } from "$lib/ui/native-select/index.js";
   import PaneHeader from "./PaneHeader.svelte";
   import IconButton from "./IconButton.svelte";
   import InlineNameForm from "./InlineNameForm.svelte";
-  import InlineFieldsForm from "./InlineFieldsForm.svelte";
   import InlineConfirm from "./InlineConfirm.svelte";
 
   // --- accordion sections (VS Code explorer style) -----------------------
@@ -120,13 +117,14 @@
    *   { kind: "new" }
    *   { kind: "copy" | "rename" | "delete", ref }
    *   { kind: "rename-confirm", ref, name }   unsaved edits, name already given
-   *   { kind: "new-panel", id, name, colors }  the fields are the form's state,
-   *   { kind: "new-device", key, screen, name } so a failure keeps them as typed
+   *   { kind: "delete-entry", target, id, name } a panel or a device; `target`
+   *                                              is its kind
    */
   let ask = $state(null);
 
   $effect(() => {
     if (ask?.ref && subject.screenRef !== ask.ref) ask = null;
+    if (ask?.kind === "delete-entry" && !subject.is(ask.target, ask.id)) ask = null;
   });
 
   const pathOf = (ref) => ref.slice(ref.indexOf("/") + 1);
@@ -156,65 +154,63 @@
   function renameScreen() {
     if (subject.screenRef) ask = { kind: "rename", ref: subject.screenRef };
   }
-  function deleteScreen() {
-    if (subject.screenRef) ask = { kind: "delete", ref: subject.screenRef };
+  // Delete acts on the subject whatever its kind (U7); Copy and Rename stay
+  // screen-only.
+  const DELETE_TIP = { screen: "Delete screen", panel: "Delete panel", device: "Delete device" };
+  const deleteTip = $derived(DELETE_TIP[subject.kind] ?? "Delete screen");
+  const canDelete = $derived(subject.kind === "panel" || subject.kind === "device" || canEdit);
+  function deleteSubject() {
+    if (subject.screenRef) {
+      ask = { kind: "delete", ref: subject.screenRef };
+    } else if (subject.kind === "panel" || subject.kind === "device") {
+      const list = subject.kind === "panel" ? screens.meta.panels : screens.meta.devices;
+      const name = (list ?? []).find((x) => x.id === subject.id)?.name ?? null;
+      ask = { kind: "delete-entry", target: subject.kind, id: subject.id, name };
+    }
   }
   const closeForm = () => (ask = null);
 
-  // --- create a panel / a device (U5) -------------------------------------
-  // The "+" in a section header opens its form inside that section, so the
-  // section must be open to show it.
+  // --- "+": a placeholder panel / device (U7) ------------------------------
+  // The entry is written to config.yaml at once (ruling R1: the preview, Push
+  // and overrides need one that exists) and selected; its identity is then
+  // edited in the Edit pane's Details block.
   function expandSection(key) {
     if (!isOpen(key)) toggleSection(key);
   }
 
+  /** `base`, else `base<sep>2`, `base<sep>3`, ... -- the first one not taken. */
+  function freeId(base, sep, list) {
+    const taken = new Set((list ?? []).map((x) => x.id));
+    if (!taken.has(base)) return base;
+    for (let n = 2; ; n++) if (!taken.has(`${base}${sep}${n}`)) return `${base}${sep}${n}`;
+  }
+
   const DEFAULT_PANEL_COLORS = "#000000,#FFFFFF";
-  function newPanel() {
+  async function newPanel() {
     const current = subject.kind === "panel"
       ? (screens.meta.panels ?? []).find((p) => p.id === subject.id)
       : null;
+    const body = { id: freeId("new_panel", "_", screens.meta.panels), name: "New panel",
+                   colors: current?.colors ?? DEFAULT_PANEL_COLORS };
+    if (current?.width) body.width = current.width;
+    if (current?.height) body.height = current.height;
     expandSection("panel");
-    ask = { kind: "new-panel", id: "", name: "", colors: current?.colors ?? DEFAULT_PANEL_COLORS };
-  }
-
-  /** Seen-but-unconfigured devices, offered as one-click Key fillers. */
-  let pending = $state([]);
-  function newDevice() {
-    expandSection("device");
-    ask = { kind: "new-device", key: "", screen: subject.screenRef ?? screens.list[0]?.ref ?? "", name: "" };
-    pending = [];
-    // A failed fetch only means no suggestions; the form works without them.
-    api.listPendingDevices().then(
-      (list) => (pending = Array.isArray(list) ? list : []),
-      () => (pending = []),
-    );
-  }
-
-  const panelReady = $derived(
-    ask?.kind === "new-panel" && ask.id.trim() !== "" && ask.name.trim() !== "" && ask.colors.trim() !== "",
-  );
-  const deviceReady = $derived(ask?.kind === "new-device" && ask.key.trim() !== "" && ask.screen !== "");
-
-  async function submitPanel() {
-    const body = { id: ask.id.trim(), name: ask.name.trim(), colors: ask.colors.trim() };
-    const ok = await run("create panel", async () => {
+    await run("create panel", async () => {
       const { id } = await api.createPanel(body);
       await screens.refresh();
       subject.select("panel", id ?? body.id);
     });
-    if (ok) ask = null;
   }
 
-  async function submitDevice() {
-    const body = { key: ask.key.trim(), screen: ask.screen };
-    const name = ask.name.trim();
-    if (name) body.name = name;
-    const ok = await run("create device", async () => {
+  async function newDevice() {
+    const body = { key: freeId("new-device", "-", screens.meta.devices), name: "New device",
+                   screen: subject.screenRef ?? screens.list[0]?.ref ?? "" };
+    expandSection("device");
+    await run("create device", async () => {
       const { key } = await api.createDevice(body);
       await screens.refresh();
       subject.select("device", key ?? body.key);
     });
-    if (ok) ask = null;
   }
 
   // Without a writable repo there is nowhere to put a screen; say so rather
@@ -280,6 +276,18 @@
     });
     if (ok) ask = null;
   }
+
+  async function submitDeleteEntry() {
+    const { target, id } = ask;
+    const ok = await run(`delete ${target}`, async () => {
+      if (target === "panel") await api.deletePanel(id);
+      else await api.deleteDevice(id);
+      configDraft.forget(target, id);
+      subject.clear();
+      await screens.refresh();
+    });
+    if (ok) ask = null;
+  }
 </script>
 
 <div class="flex min-h-0 min-w-0 flex-1 flex-col text-xs" role="region" aria-label="Library">
@@ -294,7 +302,7 @@
         <IconButton icon={FilePlus} label="New" tip="New screen" onclick={newScreen} />
         <IconButton icon={Copy} label="Copy" tip="Copy screen" onclick={copyScreen} disabled={!subject.screenRef} />
         <IconButton icon={Pencil} label="Rename" tip="Rename screen" onclick={renameScreen} disabled={!canEdit} />
-        <IconButton icon={Trash2} label="Delete" tip="Delete screen" onclick={deleteScreen} disabled={!canEdit} />
+        <IconButton icon={Trash2} label="Delete" tip={deleteTip} onclick={deleteSubject} disabled={!canDelete} />
       </div>
       <div data-testid="library-actions-menu" class="hidden @max-[14rem]:flex">
         <DropdownMenu.Root>
@@ -305,14 +313,14 @@
               </Button>
             {/snippet}
           </DropdownMenu.Trigger>
-          <!-- Every item opens an inline form that focuses its own field or
+          <!-- An item may open an inline form that focuses its own field or
                button; the menu must not pull focus back to its trigger as
                it closes. -->
           <DropdownMenu.Content align="end" onCloseAutoFocus={(e) => e.preventDefault()}>
             <DropdownMenu.Item aria-label="New" onSelect={newScreen}><FilePlus aria-hidden="true" />New screen</DropdownMenu.Item>
             <DropdownMenu.Item aria-label="Copy" disabled={!subject.screenRef} onSelect={copyScreen}><Copy aria-hidden="true" />Copy screen</DropdownMenu.Item>
             <DropdownMenu.Item aria-label="Rename" disabled={!canEdit} onSelect={renameScreen}><Pencil aria-hidden="true" />Rename screen</DropdownMenu.Item>
-            <DropdownMenu.Item aria-label="Delete" variant="destructive" disabled={!canEdit} onSelect={deleteScreen}><Trash2 aria-hidden="true" />Delete screen</DropdownMenu.Item>
+            <DropdownMenu.Item aria-label="Delete" variant="destructive" disabled={!canDelete} onSelect={deleteSubject}><Trash2 aria-hidden="true" />{deleteTip}</DropdownMenu.Item>
             <DropdownMenu.Separator />
             <DropdownMenu.Item onSelect={newPanel}><Plus aria-hidden="true" />New panel</DropdownMenu.Item>
             <DropdownMenu.Item onSelect={newDevice}><Plus aria-hidden="true" />New device</DropdownMenu.Item>
@@ -343,9 +351,16 @@
       onconfirm={submitDelete}
       oncancel={closeForm}
     />
+  {:else if ask?.kind === "delete-entry"}
+    <InlineConfirm
+      label={`Confirm ${ask.target} deletion`}
+      message={`Delete ${ask.target} ${ask.name ? `${ask.name} (${ask.id})` : ask.id}? This cannot be undone.`}
+      onconfirm={submitDeleteEntry}
+      oncancel={closeForm}
+    />
   {/if}
 
-  {#snippet section(key, label, body, add, form)}
+  {#snippet section(key, label, body, add)}
     <!-- Expanded sections share the pane height (flex-1 on a zero basis) and
          scroll on their own; a collapsed one shrinks to its header. -->
     <section class="flex flex-col border-t border-border {isOpen(key) ? 'min-h-(--section-h) flex-1 basis-0 overflow-hidden' : 'shrink-0'}"
@@ -367,57 +382,9 @@
         {/if}
       </div>
       {#if isOpen(key)}
-        <!-- The form scrolls with the list: in a short window its OK/Cancel
-             row stays reachable instead of being clipped by the section. -->
-        <div class="min-h-0 flex-1 overflow-auto pb-1">{@render form?.()}{@render body()}</div>
+        <div class="min-h-0 flex-1 overflow-auto pb-1">{@render body()}</div>
       {/if}
     </section>
-  {/snippet}
-
-  <!-- A label beside its control, at the form's text size. -->
-  {#snippet fieldRow(name, control)}
-    <div class="flex min-w-0 items-center gap-1.5">
-      <span class="w-12 shrink-0 text-muted-foreground" aria-hidden="true">{name}</span>
-      <div class="min-w-0 flex-1">{@render control()}</div>
-    </div>
-  {/snippet}
-
-  {#snippet panelForm()}
-    {#if ask?.kind === "new-panel"}
-      <InlineFieldsForm label="New panel" canSubmit={panelReady} onsubmit={submitPanel} oncancel={closeForm}>
-        {#snippet idInput()}<Input bind:value={ask.id} aria-label="Id" placeholder="my-panel" class="h-6 font-mono text-xs" />{/snippet}
-        {#snippet nameInput()}<Input bind:value={ask.name} aria-label="Name" class="h-6 text-xs" />{/snippet}
-        {#snippet colorsInput()}<Input bind:value={ask.colors} aria-label="Colors" class="h-6 font-mono text-xs" />{/snippet}
-        {@render fieldRow("Id", idInput)}
-        {@render fieldRow("Name", nameInput)}
-        {@render fieldRow("Colors", colorsInput)}
-      </InlineFieldsForm>
-    {/if}
-  {/snippet}
-
-  {#snippet deviceForm()}
-    {#if ask?.kind === "new-device"}
-      <InlineFieldsForm label="New device" canSubmit={deviceReady} onsubmit={submitDevice} oncancel={closeForm}>
-        {#if pending.length}
-          <div class="flex min-w-0 flex-col items-start gap-1" role="group" aria-label="Seen, not configured">
-            {#each pending as p (p.mac)}
-              <Button type="button" size="xs" variant="ghost" class="max-w-full truncate font-mono"
-                      onclick={() => (ask.key = p.mac)}>{p.mac} · {p.model}</Button>
-            {/each}
-          </div>
-        {/if}
-        {#snippet keyInput()}<Input bind:value={ask.key} aria-label="Key" placeholder="MAC or registration code" class="h-6 font-mono text-xs" />{/snippet}
-        {#snippet screenInput()}
-          <NativeSelect bind:value={ask.screen} aria-label="Screen" size="xs" class="w-full">
-            {#each screens.list as s (s.ref)}<option value={s.ref}>{s.ref}</option>{/each}
-          </NativeSelect>
-        {/snippet}
-        {#snippet nameInput()}<Input bind:value={ask.name} aria-label="Name" placeholder="optional" class="h-6 text-xs" />{/snippet}
-        {@render fieldRow("Key", keyInput)}
-        {@render fieldRow("Screen", screenInput)}
-        {@render fieldRow("Name", nameInput)}
-      </InlineFieldsForm>
-    {/if}
   {/snippet}
 
   {#snippet screensBody()}
@@ -450,6 +417,6 @@
   {/snippet}
 
   {@render section("screen", "Screens", screensBody)}
-  {@render section("panel", "Panels", panelsBody, { label: "New panel", onclick: newPanel }, panelForm)}
-  {@render section("device", "Devices", devicesBody, { label: "New device", onclick: newDevice }, deviceForm)}
+  {@render section("panel", "Panels", panelsBody, { label: "New panel", onclick: newPanel })}
+  {@render section("device", "Devices", devicesBody, { label: "New device", onclick: newDevice })}
 </div>

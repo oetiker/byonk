@@ -1,5 +1,6 @@
 <script>
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
+  import * as api from "../api.js";
   import { subject } from "../state/subject.svelte.js";
   import { configDraft, SCHEMAS } from "../state/configDraft.svelte.js";
   import { resolution } from "../state/resolution.svelte.js";
@@ -29,9 +30,9 @@
   const displayName = $derived(info?.name ?? id);
   const users = $derived(configDraft.usage.panels?.[id]?.length ?? 0);
   const unseen = $derived(configDraft.usage.unseen?.length ?? 0);
-  const dirtyCount = $derived((configDraft.revision, configDraft.dirtyCount(kind, id)));
-  const pushBody = $derived((configDraft.revision, configDraft.pushBody(kind, id)));
-  const unpushable = $derived((configDraft.revision, configDraft.unpushable(kind, id)));
+  const dirtyCount = $derived((configDraft.version, configDraft.dirtyCount(kind, id)));
+  const pushBody = $derived((configDraft.version, configDraft.pushBody(kind, id)));
+  const unpushable = $derived((configDraft.version, configDraft.unpushable(kind, id)));
   const live = $derived(configDraft.liveFor(kind, id));
   // Never show another subject's report (the store is shared and outlives a switch).
   const ownsResolution = $derived(resolution.subjectKey === subject.key);
@@ -40,12 +41,32 @@
   const screenMissing = $derived(kind === "device" && !plain("screen"));
   // A number field holding no number keeps its old value in the draft; Save
   // and Push wait until it is finished, so it can never travel as a removal.
-  const invalid = $derived((configDraft.revision, configDraft.invalid(kind, id)));
-  const canSave = $derived(dirtyCount > 0 && !screenMissing && invalid.length === 0);
+  const invalid = $derived((configDraft.version, configDraft.invalid(kind, id)));
+  // Identity Save cannot do without (an emptied Id, Name, Colors or Key).
+  const missing = $derived((configDraft.version, configDraft.missing(kind, id)));
+  const MISSING_LABEL = { id: "an id", name: "a name", colors: "colors", key: "a key" };
+  const canSave = $derived(dirtyCount > 0 && !screenMissing && invalid.length === 0 && missing.length === 0);
+  // A refused Save (409/400) keeps the draft; the server's reason shows here.
+  const saveError = $derived(configDraft.saveError(kind, id));
+
+  // Key suggestions: devices byonk has seen that no entry configures yet,
+  // fetched when a device opens in the editor. A failure only means none.
+  let pending = $state([]);
+  $effect(() => {
+    if (kind !== "device") return;
+    id; // re-fetch per device
+    untrack(() => {
+      pending = [];
+      api.listPendingDevices().then(
+        (list) => (pending = Array.isArray(list) ? list : []),
+        () => (pending = []),
+      );
+    });
+  });
 
   const cid = (rung, field) => `cfg-${rung}-${field.replaceAll(".", "-")}`;
-  const val = (rung, field) => (configDraft.revision, configDraft.value(kind, id, rung, field));
-  const plain = (field) => (configDraft.revision, configDraft.plainValue(kind, id, field));
+  const val = (rung, field) => (configDraft.version, configDraft.value(kind, id, rung, field));
+  const plain = (field) => (configDraft.version, configDraft.plainValue(kind, id, field));
 
   // A browser reports a half-typed number ("-", "1e") as `badInput` with an
   // empty `value`; NaN tells the store it is no number rather than a removal.
@@ -92,9 +113,12 @@
   {/snippet}
   <PaneHeader data-testid="config-actions" role="toolbar" aria-label="Actions"
               title="Edit" subject={subjectName} actions={headerActions} />
-  {#if invalid.length || unpushable.length}
+  {#if invalid.length || unpushable.length || saveError}
     <!-- Fixed row under the header (not in the scrolling body): the Save/Push blockers stay visible. -->
     <div data-testid="config-messages" class="flex shrink-0 flex-col gap-0.5 border-b border-border px-2 py-1 text-xs">
+      {#if saveError}
+        <Field.Error class="text-xs">Save failed: {saveError}</Field.Error>
+      {/if}
       {#if invalid.length}
         <Field.Error class="text-xs">not a number: {invalid.join(", ")} — finish or clear it to Save.</Field.Error>
       {/if}
@@ -104,6 +128,76 @@
     </div>
   {/if}
   <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto p-3" data-testid="config-body">
+  <!-- Details (U7): what names the entry. Save-only: never pushed, never
+       rendered until saved. -->
+  <section class="flex flex-col gap-1 pb-2" aria-label="Details">
+    <h3 class="font-mono text-xs">Details</h3>
+    <Field.Group class="gap-3">
+    {#if kind === "panel"}
+      <Field.Field>
+        <Field.Label for="cfg-plain-id">Id</Field.Label>
+        <Input id="cfg-plain-id" class="font-mono" value={plain("id") ?? ""} oninput={(e) => onPlain("id", e)} />
+      </Field.Field>
+      <Field.Field>
+        <Field.Label for="cfg-plain-name">Name</Field.Label>
+        <Input id="cfg-plain-name" value={plain("name") ?? ""} oninput={(e) => onPlain("name", e)} />
+      </Field.Field>
+      <Field.Field>
+        <Field.Label for="cfg-plain-match">Match</Field.Label>
+        <Input id="cfg-plain-match" class="font-mono" placeholder="the firmware's Board header" value={plain("match") ?? ""}
+               oninput={(e) => onPlain("match", e)} />
+      </Field.Field>
+      <div class="grid grid-cols-2 gap-3">
+        <Field.Field>
+          <Field.Label for="cfg-plain-width">Width</Field.Label>
+          <Input id="cfg-plain-width" type="number" min="1" step="1" value={plain("width") ?? ""}
+                 oninput={(e) => onPlain("width", e)} />
+        </Field.Field>
+        <Field.Field>
+          <Field.Label for="cfg-plain-height">Height</Field.Label>
+          <Input id="cfg-plain-height" type="number" min="1" step="1" value={plain("height") ?? ""}
+                 oninput={(e) => onPlain("height", e)} />
+        </Field.Field>
+      </div>
+      <Field.Field>
+        <Field.Label for="cfg-plain-colors">Colors</Field.Label>
+        <Input id="cfg-plain-colors" class="font-mono" value={plain("colors") ?? ""} oninput={(e) => onPlain("colors", e)} />
+        <Field.Description class="text-xs">The official palette, comma-separated hex.</Field.Description>
+      </Field.Field>
+    {:else}
+      <Field.Field>
+        <Field.Label for="cfg-plain-key">Key</Field.Label>
+        <Input id="cfg-plain-key" class="font-mono" list="cfg-pending-keys" value={plain("key") ?? ""}
+               oninput={(e) => onPlain("key", e)} />
+        <datalist id="cfg-pending-keys">
+          {#each pending as p (p.mac)}<option value={p.mac}>{p.model}</option>{/each}
+        </datalist>
+      </Field.Field>
+      <Field.Field>
+        <Field.Label for="cfg-plain-name">Name</Field.Label>
+        <Input id="cfg-plain-name" value={plain("name") ?? ""} oninput={(e) => onPlain("name", e)} />
+      </Field.Field>
+      <Field.Field>
+        <Field.Label for="cfg-plain-screen">Screen</Field.Label>
+        <NativeSelect id="cfg-plain-screen" value={plain("screen")} onchange={(e) => onPlain("screen", e)}>
+          {#each screens.list as s (s.ref)}<option value={s.ref}>{s.ref}</option>{/each}
+        </NativeSelect>
+        {#if screenMissing}<Field.Error class="text-xs">A device needs a screen — pick one to enable Save.</Field.Error>{/if}
+      </Field.Field>
+      <Field.Field>
+        <Field.Label for="cfg-plain-panel">Panel</Field.Label>
+        <NativeSelect id="cfg-plain-panel" value={plain("panel") ?? ""} onchange={(e) => onPlain("panel", e)}>
+          <option value="">auto (from the device's Board header)</option>
+          {#each screens.meta.panels ?? [] as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
+        </NativeSelect>
+      </Field.Field>
+    {/if}
+    {#each missing as f (f)}
+      <Field.Error class="text-xs">A {kind} needs {MISSING_LABEL[f]} — fill it in to enable Save.</Field.Error>
+    {/each}
+    </Field.Group>
+  </section>
+
   {#if kind === "panel"}
     <p class="text-xs">{users === 1 ? "⚠ 1 device uses this panel" : `⚠ ${users} devices use this panel`}</p>
     {#if unseen > 0}<p class="text-xs text-muted-foreground">{unseen === 1 ? "1 more device has not polled since byonk started, so its panel is not known yet." : `${unseen} more devices have not polled since byonk started, so their panel is not known yet.`}</p>{/if}
@@ -117,19 +211,8 @@
   {/if}
 
   {#if kind === "device"}
-    <section class="py-2" aria-label="Device">
+    <section class="border-t border-border py-2" aria-label="Device">
       <Field.Group class="gap-3">
-        <Field.Field>
-          <Field.Label for="cfg-plain-screen">Screen</Field.Label>
-          <NativeSelect id="cfg-plain-screen" value={plain("screen")} onchange={(e) => onPlain("screen", e)}>
-            {#each screens.list as s (s.ref)}<option value={s.ref}>{s.ref}</option>{/each}
-          </NativeSelect>
-          {#if screenMissing}<Field.Error class="text-xs">A device needs a screen — pick one to enable Save.</Field.Error>{/if}
-        </Field.Field>
-        <Field.Field>
-          <Field.Label for="cfg-plain-name">Name</Field.Label>
-          <Input id="cfg-plain-name" value={plain("name") ?? ""} oninput={(e) => onPlain("name", e)} />
-        </Field.Field>
         <Field.Field>
           <Field.Label for="cfg-plain-params">Params (JSON)</Field.Label>
           <Textarea id="cfg-plain-params" class="max-h-40 min-h-20 overflow-auto font-mono"

@@ -163,6 +163,10 @@ describe("api", () => {
         expectedUrl: "api/devices", expectedMethod: "POST", responseBody: '{"key":"hall","screen":"local/a"}' },
       { name: "listPendingDevices", call: () => api.listPendingDevices(),
         expectedUrl: "api/pending-devices", expectedMethod: "GET", responseBody: "[]" },
+      { name: "deletePanel", call: () => api.deletePanel("e1004"),
+        expectedUrl: "api/panels/e1004", expectedMethod: "DELETE", responseBody: '{"deleted":"e1004"}' },
+      { name: "deleteDevice", call: () => api.deleteDevice("AA:BB"),
+        expectedUrl: "api/devices/AA%3ABB", expectedMethod: "DELETE", responseBody: '{"deleted":"AA:BB"}' },
     ];
 
     // Mock factory: store the current entry so the mock can respond accordingly

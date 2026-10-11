@@ -101,9 +101,9 @@ shows it.
 then the devices. Choosing an entry makes it the subject. A repo you cannot
 write to is labelled "read-only" next to its handle; you can still open any
 of its screens and read every file, and **Copy** one into a repo you can
-write to — but its files open read-only. **New**, **Copy**, **Rename** and
-**Delete** work on screens; see [New, Copy, Rename,
-Delete](#new-copy-rename-delete). Screens, Panels and Devices are collapsible
+write to — but its files open read-only. **New**, **Copy** and **Rename**
+work on screens; **Delete** works on whatever is selected — a screen, a panel
+or a device. See [New, Copy, Rename, Delete](#new-copy-rename-delete). Screens, Panels and Devices are collapsible
 sections, as in the VS Code explorer: click a section heading (or press
 Enter or Space on it) to fold it. All three headings stay visible, open
 sections share the height and scroll on their own, and the browser remembers
@@ -111,24 +111,18 @@ which ones you folded. Selecting a subject elsewhere opens the section it
 lives in.
 
 The **+** at the right of the **Panels** and **Devices** headings adds one
-(in a narrow Library they are also in the **More actions** menu, ⋯, as **New panel** and
-**New device**). The form opens inside that section:
+right away (in a narrow Library they are also in the **More actions** menu,
+⋯, as **New panel** and **New device**). There is no form: the entry is
+written to `config.yaml` at once, with the rest of the file, comments
+included, left as it was, and becomes the subject, so you fill in its
+details in Edit's **Details** block (see [The config editor](#the-config-editor)).
 
-- **New panel** asks for an **Id** (letters, digits, `_` and `-`), a
-  **Name** and the **Colors** — the comma-separated `#RRGGBB` palette, at
-  least two entries. Colors starts from the panel you have selected, or
-  `#000000,#FFFFFF`. The panel is added to `panels:` in `config.yaml`; the
-  rest of the file, comments included, is left as it was. Its `match`,
-  `width` and `height` are edited in `config.yaml`; until it has a `match`,
-  only devices that name it with `panel:` use it.
-- **New device** asks for its **Key** (a MAC address or a registration
-  code), a **Screen** (the selected screen, or the first one) and an optional
-  **Name**. Devices byonk has seen but that have no entry in `config.yaml`
-  are listed above the fields as `MAC · model`; click one to use its MAC.
-
-Enter creates, Escape cancels. An id or key that already exists is refused
-and the form stays open so you can change it. The new panel or device
-becomes the subject right away.
+- **New panel** adds `new_panel` (or `new_panel_2`, `new_panel_3`, … when
+  that is taken), named "New panel". Its colours and size are copied from the
+  panel you have selected; with no panel selected it gets
+  `#000000,#FFFFFF` and no size.
+- **New device** adds `new-device` (or `new-device-2`, …), named "New
+  device", showing the selected screen, or the first one.
 
 **Edit.** The header names the subject. For a screen it is the file editor:
 one tab per file, with `meta.yaml`, `script.lua` and `screen.svg` first and
@@ -209,12 +203,12 @@ working on.
 | **New** | a writable repo to put it in | Scaffolds `meta.yaml`, `script.lua` and `screen.svg` from a minimal starter. The generated `meta.yaml` pins the running engine's `byonk:` compatibility requirement. The screen is created in `local`, your own screen repo; if `local` is missing or read-only, the first writable repo is used instead. |
 | **Copy** | any selected screen | Forks it — every file in its folder — into `local`, the same default **New** uses. This works from `byonk-builtin` and from git-fetched repos, which is the supported way to customize a screen you cannot edit. |
 | **Rename** | a writable repo | Moves the screen within its own repo. You are asked to confirm first if you have unsaved edits, because the rename would leave them unsavable. |
-| **Delete** | a writable repo | Removes the screen. |
+| **Delete** | a writable repo, or a selected panel or device | Removes the screen, or the panel or device from `config.yaml`. A panel that a device names with `panel:` is not removed; the message lists those devices. |
 
 **New**, **Copy** and **Rename** ask for the name in a small form under the
 Library toolbar (**Copy** and **Rename** start from the current name);
-**Delete** asks you to confirm there too, and names the screen it would
-remove. When the screen has unsaved edits, **Rename** adds a second question —
+**Delete** asks you to confirm there too, and names the screen, panel or
+device it would remove; its tooltip says which kind. When the screen has unsaved edits, **Rename** adds a second question —
 "Rename anyway?" — before it goes ahead. Enter confirms, Escape cancels. If the
 server refuses the name, the form stays open so you can correct it. The
 editor's **+** and **−** work the same way.
@@ -320,8 +314,26 @@ depends on the subject:
 
 - A **panel** edits its own rung, `panels.<id>` in `config.yaml`.
 - A **device** edits its base rung and its `final:` rung. Above them are the
-  device's screen, name, params, temperature profile, maximum compatibility
-  and minimum PNG bytes.
+  device's params, temperature profile, maximum compatibility and minimum PNG
+  bytes.
+
+The first block, **Details**, holds what names the entry:
+
+- A **panel**: **Id** (letters, digits, `_` and `-`), **Name**, **Match**
+  (the firmware `Board` string this panel is picked for; empty means only
+  devices that name it with `panel:` use it), **Width**, **Height** and
+  **Colors**, the official palette as comma-separated `#RRGGBB`.
+- A **device**: **Key** (a MAC address or a registration code; devices byonk
+  has seen but that have no entry are suggested as you type), **Name**,
+  **Screen** and **Panel** — "auto" picks it from the device's `Board`
+  header, or choose one by name.
+
+Details apply on **Save** only: **Push** never carries them, and the
+preview shows them once saved. Changing the Id or Key renames the entry —
+a panel's devices follow it — and the Library keeps it selected under its
+new name. An Id or Key that is already taken, or a name, colours or size
+the server refuses, keeps your draft and shows the reason under the header.
+The default device cannot be renamed.
 
 The **ladder** lists every rung that can set that setting, from the strongest
 to the weakest, each with its value and a status:
@@ -594,6 +606,9 @@ than a redirect when you are not admitted.
 | `PUT /dev/api/overrides/panels/{panel}`, `DELETE …` | Push, and clear, a panel's temporary override: `colors_actual`, `dither`, the tuning numbers and `gamut`, applied to every device on that panel |
 | `PUT /dev/api/overrides/devices/{device}`, `DELETE …` | Push, and clear, one device's temporary override: everything but `colors` and `refresh` |
 | `POST /dev/api/panels/{panel}/save` | Write a panel into `config.yaml` — `name`, `match`, `width`, `height`, `colors`, `colors_actual` and the `dither` block — in place, key by key, so comments and the order of panels survive, and clear its override. Save is whole-panel: `name` and `colors` are required, and an optional field the request omits is removed from `config.yaml`. An `id` different from `{panel}` renames the panel in the same write: its key changes where it stands and every device's `panel:` follows (`409` if the id is taken). Answers `{"id": …}` with the panel's id after the save |
+| `POST /dev/api/panels` | Add `panels.<id>` with `{id, name, colors, width?, height?}`, in place; `409` if the id is taken. Answers `{"id": …}` |
+| `POST /dev/api/devices` | Add a device: the `POST /api/admin/devices` body (`key` and `screen` required); `409` if the key is taken. Answers `{"key": …, "screen": …}` |
+| `GET /dev/api/pending-devices` | Devices byonk has seen that no entry in `config.yaml` configures |
 | `DELETE /dev/api/panels/{panel}` | Remove a panel from `config.yaml` and clear its override. `409` while a device names it in `panel:`; the message lists those devices |
 | `PATCH /dev/api/devices/{key}` | Save a device: the same body and rules as `PATCH /api/admin/devices/{key}` — `clear` applies first, then the set fields, so one request can replace a value — then clear its override. Unlike the admin route, a `key` different from `{key}` renames the device in the same write (`409` if it is taken), keeping its place and comments in `config.yaml`, and ends the old key's tuning session. Answers `{"key": …, "screen": …}` |
 | `DELETE /dev/api/devices/{key}` | Remove a device from `config.yaml`, as `DELETE /api/admin/devices/{key}` does, and clear its override and tuning session |

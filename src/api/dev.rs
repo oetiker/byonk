@@ -598,15 +598,18 @@ pub async fn handle_delete_panel(
     Ok(Json(serde_json::json!({ "deleted": panel })))
 }
 
-/// `POST /dev/api/panels` body: a new panel's id and the two fields a panel
-/// cannot do without. `match`, `width` and `height` are edited in
-/// config.yaml (U5 ruling R2).
+/// `POST /dev/api/panels` body: a new panel's id, the two fields a panel
+/// cannot do without, and optionally its size (the Library's "+" copies the
+/// current panel's). Everything else is edited afterwards through the panel
+/// Save.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PanelCreate {
     pub id: String,
     pub name: String,
     pub colors: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 
 /// Create `panels.<id>` in `config.yaml` with `name` and `colors`, in place:
@@ -629,6 +632,11 @@ pub async fn handle_create_panel(
     }
     let colors = body.colors.trim();
     crate::api::admin::write::validate_colors(colors, "colors")?;
+    if body.width == Some(0) || body.height == Some(0) {
+        return Err(ApiError::BadRequest(
+            "panel width and height must be positive".into(),
+        ));
+    }
 
     let path = crate::api::config_persist::require_file_config(&state)?;
     let _guard = state.write_lock.lock().await;
@@ -641,6 +649,12 @@ pub async fn handle_create_panel(
     let mut block = serde_yaml::Mapping::new();
     block.insert("name".into(), name.into());
     block.insert("colors".into(), colors.into());
+    if let Some(w) = body.width {
+        block.insert("width".into(), w.into());
+    }
+    if let Some(h) = body.height {
+        block.insert("height".into(), h.into());
+    }
     let block = serde_yaml::Value::Mapping(block);
 
     // `set_path` needs the parent to exist. A `panels:` that is absent or

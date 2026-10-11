@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen as dom, fireEvent, waitFor, cleanup } from "@testing-library/svelte";
+import { render, screen as dom, fireEvent, waitFor, cleanup, within } from "@testing-library/svelte";
 import ConfigEditor from "../src/lib/components/ConfigEditor.svelte";
 import { configDraft } from "../src/lib/state/configDraft.svelte.js";
 import { subject } from "../src/lib/state/subject.svelte.js";
@@ -12,7 +12,8 @@ beforeEach(() => {
   configDraft.reset(); subject.reset(); resolution.reset();
   screens.list = [{ ref: "local/a" }, { ref: "local/b" }];
   screens.meta = {
-    panels: [{ id: "e1004", name: "reTerminal E1004", colors: "#000000,#FFFFFF",
+    panels: [{ id: "e1004", name: "reTerminal E1004", match: "reterminal_e1004", width: 1600, height: 1200,
+               colors: "#000000,#FFFFFF",
                colors_actual: "#101010,#E8E8E8", dither: null }],
     devices: [{ id: "kitchen", screen: "local/a", panel: "e1004", name: "Kitchen", params: {},
                 base: {}, final: null, temperature_profile: null, maximum_compatibility: null, min_png_bytes: null }],
@@ -261,5 +262,134 @@ describe("ConfigEditor, device schema", () => {
     // The raw text reaches the store too (the jsdom path): still no clear.
     configDraft.set("device", "kitchen", "device_final", "strength", "-");
     expect(configDraft.saveDeviceBody("kitchen").clear).toBeUndefined();
+  });
+});
+
+describe("ConfigEditor Details block (U7)", () => {
+  const details = () => dom.getByRole("region", { name: "Details" });
+
+  describe("panel", () => {
+    beforeEach(() => subject.select("panel", "e1004"));
+
+    it("is the first block of the body and shows the panel's identity, match included", () => {
+      render(ConfigEditor);
+      const body = dom.getByTestId("config-body");
+      const first = body.querySelector("section");
+      expect(first).toBe(details());
+      const v = (f) => document.querySelector(`#cfg-plain-${f}`).value;
+      expect(v("id")).toBe("e1004");
+      expect(v("name")).toBe("reTerminal E1004");
+      expect(v("match")).toBe("reterminal_e1004");
+      expect(v("width")).toBe("1600");
+      expect(v("height")).toBe("1200");
+      expect(v("colors")).toBe("#000000,#FFFFFF");
+      for (const label of ["Id", "Name", "Match", "Width", "Height", "Colors"]) {
+        expect(within(details()).getByLabelText(label)).toBeTruthy();
+      }
+    });
+
+    it("an identity edit counts as unsaved and does not render", async () => {
+      render(ConfigEditor);
+      const rev = configDraft.revision;
+      const w = document.querySelector("#cfg-plain-width");
+      w.value = "800";
+      await fireEvent.input(w);
+      expect(dom.getByText("1 unsaved")).toBeTruthy();
+      expect(configDraft.revision).toBe(rev);
+      expect(dom.getByRole("button", { name: "Save" }).disabled).toBe(false);
+      // Push carries no identity: with nothing else dirty there is nothing to push.
+      expect(dom.getByRole("button", { name: "Push to panel" }).disabled).toBe(true);
+    });
+
+    it("Save sends the identity with the rung", async () => {
+      const save = vi.spyOn(api, "savePanel").mockResolvedValue({ id: "e1004" });
+      vi.spyOn(screens, "refresh").mockResolvedValue();
+      render(ConfigEditor);
+      const m = document.querySelector("#cfg-plain-match");
+      m.value = "other_board";
+      await fireEvent.input(m);
+      await fireEvent.click(dom.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(save).toHaveBeenCalled());
+      expect(save.mock.calls[0][1]).toMatchObject({
+        id: "e1004", name: "reTerminal E1004", match: "other_board", width: 1600, height: 1200, colors: "#000000,#FFFFFF" });
+    });
+
+    it("a 409 keeps the draft and shows the server message in the message row", async () => {
+      vi.spyOn(api, "savePanel").mockRejectedValue(new Error("409 Conflict: panel `og` already exists"));
+      render(ConfigEditor);
+      const idf = document.querySelector("#cfg-plain-id");
+      idf.value = "og";
+      await fireEvent.input(idf);
+      await fireEvent.click(dom.getByRole("button", { name: "Save" }));
+      const msg = await dom.findByText(/panel `og` already exists/);
+      expect(dom.getByTestId("config-messages").contains(msg)).toBe(true);
+      expect(document.querySelector("#cfg-plain-id").value).toBe("og");
+      expect(dom.getByText("1 unsaved")).toBeTruthy();
+    });
+
+    it("an emptied Name disables Save and says why", async () => {
+      render(ConfigEditor);
+      const n = document.querySelector("#cfg-plain-name");
+      n.value = "";
+      await fireEvent.input(n);
+      expect(dom.getByRole("button", { name: "Save" }).disabled).toBe(true);
+      expect(dom.getByText(/needs a name/i)).toBeTruthy();
+    });
+  });
+
+  describe("device", () => {
+    beforeEach(() => subject.select("device", "kitchen"));
+
+    it("holds Key, Name, Screen and Panel; Screen appears once", async () => {
+      vi.spyOn(api, "listPendingDevices").mockResolvedValue([]);
+      render(ConfigEditor);
+      const d = details();
+      expect(dom.getByTestId("config-body").querySelector("section")).toBe(d);
+      for (const label of ["Key", "Name", "Screen", "Panel"]) expect(within(d).getByLabelText(label)).toBeTruthy();
+      expect(dom.getAllByLabelText("Screen")).toHaveLength(1);
+      expect(document.querySelector("#cfg-plain-key").value).toBe("kitchen");
+      const panel = within(d).getByLabelText("Panel");
+      expect([...panel.options].map((o) => [o.value, o.textContent])).toEqual([
+        ["", "auto (from the device's Board header)"], ["e1004", "reTerminal E1004"]]);
+      expect(panel.value).toBe("e1004");
+    });
+
+    it("offers the pending devices' MACs as Key suggestions", async () => {
+      const pending = vi.spyOn(api, "listPendingDevices").mockResolvedValue([
+        { mac: "11:22:33:44:55:66", registration_code: "ABC", model: "og", firmware_version: "1", last_seen: "x" }]);
+      render(ConfigEditor);
+      const key = document.querySelector("#cfg-plain-key");
+      const list = document.getElementById(key.getAttribute("list"));
+      await waitFor(() => expect([...list.querySelectorAll("option")].map((o) => o.value)).toEqual(["11:22:33:44:55:66"]));
+      expect(pending).toHaveBeenCalledTimes(1);
+    });
+
+    it("a failed pending fetch just gives no suggestions", async () => {
+      vi.spyOn(api, "listPendingDevices").mockRejectedValue(new Error("500"));
+      render(ConfigEditor);
+      await new Promise((r) => setTimeout(r, 0));
+      const key = document.querySelector("#cfg-plain-key");
+      expect(document.getElementById(key.getAttribute("list")).querySelectorAll("option")).toHaveLength(0);
+      expect(configDraft.error).toBe(null);
+    });
+
+    it("Save sends key and panel in the PATCH and re-selects the renamed device", async () => {
+      vi.spyOn(api, "listPendingDevices").mockResolvedValue([]);
+      const save = vi.spyOn(api, "saveDevice").mockResolvedValue({ key: "pantry", screen: "local/a" });
+      vi.spyOn(screens, "refresh").mockImplementation(async () => {
+        screens.meta = { ...screens.meta, devices: [{ ...screens.meta.devices[0], id: "pantry", panel: null }] };
+      });
+      render(ConfigEditor);
+      const key = document.querySelector("#cfg-plain-key");
+      key.value = "pantry";
+      await fireEvent.input(key);
+      const panel = document.querySelector("#cfg-plain-panel");
+      panel.value = "";
+      await fireEvent.change(panel);
+      await fireEvent.click(dom.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(save).toHaveBeenCalledWith("kitchen", { key: "pantry", clear: ["panel"] }));
+      await waitFor(() => expect(subject.key).toBe("device:pantry"));
+      expect(dom.getByText("0 unsaved")).toBeTruthy();
+    });
   });
 });

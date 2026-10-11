@@ -1,4 +1,4 @@
-//! Panel Save writes the whole panel rung into config.yaml, in place, keeping every comment and the order of panels.
+//! Panel Save writes the whole panel into config.yaml, in place, keeping every comment and the order of panels.
 
 mod common;
 
@@ -6,6 +6,10 @@ use common::TestApp;
 
 const AUTH: (&str, &str) = ("Authorization", "Bearer secret");
 const TUNED: &str = "#101010,#E8E8E8,#B03030,#D0C040,#3040A0,#00994D";
+// Save is whole-panel (U6): every body carries the panel's name and colors.
+const E1004: &str =
+    r##""name":"reTerminal E1004","colors":"#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00""##;
+const OG: &str = r##""name":"TRMNL OG","colors":"#000000,#FFFFFF""##;
 
 fn commented_config() -> &'static str {
     "\
@@ -39,7 +43,7 @@ async fn saving_adds_colors_actual_and_keeps_every_comment() {
         .post_json(
             "/dev/api/panels/e1004/save",
             &[AUTH],
-            &format!(r#"{{"colors_actual":"{TUNED}"}}"#),
+            &format!(r#"{{{E1004},"colors_actual":"{TUNED}"}}"#),
         )
         .await;
     assert!(
@@ -77,7 +81,7 @@ async fn saving_replaces_an_existing_colors_actual_in_place() {
         .post_json(
             "/dev/api/panels/og/save",
             &[AUTH],
-            r##"{"colors_actual":"#0A0A0A,#F0F0F0"}"##,
+            r##"{"name":"TRMNL OG","colors":"#000000,#FFFFFF","colors_actual":"#0A0A0A,#F0F0F0"}"##,
         )
         .await;
     assert!(r.status.is_success());
@@ -105,7 +109,7 @@ async fn saving_clears_the_temporary_override() {
         .post_json(
             "/dev/api/panels/e1004/save",
             &[AUTH],
-            &format!(r#"{{"colors_actual":"{TUNED}"}}"#),
+            &format!(r#"{{{E1004},"colors_actual":"{TUNED}"}}"#),
         )
         .await;
     assert!(r.status.is_success());
@@ -159,7 +163,7 @@ async fn saving_an_unknown_panel_is_a_404() {
         .post_json(
             "/dev/api/panels/nosuchpanel/save",
             &[AUTH],
-            r##"{"colors_actual":"#000000,#FFFFFF"}"##,
+            r##"{"name":"TRMNL OG","colors":"#000000,#FFFFFF","colors_actual":"#000000,#FFFFFF"}"##,
         )
         .await;
     assert_eq!(r.status, axum::http::StatusCode::NOT_FOUND);
@@ -213,7 +217,7 @@ async fn a_dither_save_keeps_comments_and_panel_order() {
             "/dev/api/panels/e1004/save",
             &[AUTH],
             &format!(
-                r#"{{"colors_actual":"{TUNED}","dither":{{"strength":0.8,"gamut":{{"knee":0.6}}}}}}"#
+                r#"{{{E1004},"colors_actual":"{TUNED}","dither":{{"strength":0.8,"gamut":{{"knee":0.6}}}}}}"#
             ),
         )
         .await;
@@ -257,7 +261,7 @@ async fn saving_changes_one_dither_key_in_place_and_keeps_algorithm_blocks() {
         .post_json(
             "/dev/api/panels/og/save",
             &[AUTH],
-            r##"{"colors_actual":"#1A1A1A,#D8D8D8","dither":{"max_error":0.5,"strength":0.9,"atkinson":{"noise_scale":2.0}}}"##,
+            r##"{"name":"TRMNL OG","colors":"#000000,#FFFFFF","colors_actual":"#1A1A1A,#D8D8D8","dither":{"max_error":0.5,"strength":0.9,"atkinson":{"noise_scale":2.0}}}"##,
         )
         .await;
     assert!(r.status.is_success(), "{} {}", r.status, r.text());
@@ -280,7 +284,7 @@ async fn saving_without_colors_actual_or_dither_removes_both() {
     let dir = tempfile::tempdir().unwrap();
     let (app, config_path) = TestApp::new_with_config_yaml(COMMENTED_PANELS, dir.path());
     let r = app
-        .post_json("/dev/api/panels/og/save", &[AUTH], "{}")
+        .post_json("/dev/api/panels/og/save", &[AUTH], &format!("{{{OG}}}"))
         .await;
     assert!(r.status.is_success(), "{} {}", r.status, r.text());
     let yaml = std::fs::read_to_string(&config_path).unwrap();
@@ -299,7 +303,7 @@ async fn an_unknown_field_is_refused() {
         .post_json(
             "/dev/api/panels/og/save",
             &[AUTH],
-            r##"{"colors":"#000000,#FFFFFF"}"##,
+            &format!(r#"{{{OG},"refresh":900}}"#),
         )
         .await;
     assert_eq!(r.status, axum::http::StatusCode::UNPROCESSABLE_ENTITY);
@@ -316,7 +320,7 @@ async fn saving_what_the_file_already_says_leaves_it_byte_identical() {
         .post_json(
             "/dev/api/panels/og/save",
             &[AUTH],
-            r##"{"colors_actual":"#1A1A1A,#D8D8D8","dither":{"max_error":0.5,"atkinson":{"noise_scale":2.0}}}"##,
+            r##"{"name":"TRMNL OG","colors":"#000000,#FFFFFF","colors_actual":"#1A1A1A,#D8D8D8","dither":{"max_error":0.5,"atkinson":{"noise_scale":2.0}}}"##,
         )
         .await;
     assert!(r.status.is_success(), "{} {}", r.status, r.text());
@@ -355,7 +359,7 @@ panels:
     let dir = tempfile::tempdir().unwrap();
     let (app, config_path) = TestApp::new_with_config_yaml(FLOW, dir.path());
     let r = app
-        .post_json("/dev/api/panels/og/save", &[AUTH], "{}")
+        .post_json("/dev/api/panels/og/save", &[AUTH], &format!("{{{OG}}}"))
         .await;
     assert!(r.status.is_success(), "{} {}", r.status, r.text());
     let yaml = std::fs::read_to_string(&config_path).unwrap();
@@ -368,7 +372,7 @@ panels:
         .post_json(
             "/dev/api/panels/og/save",
             &[AUTH],
-            r##"{"colors_actual":"#222222,#DDDDDD","dither":{"strength":0.8}}"##,
+            r##"{"name":"TRMNL OG","colors":"#000000,#FFFFFF","colors_actual":"#222222,#DDDDDD","dither":{"strength":0.8}}"##,
         )
         .await;
     assert!(r.status.is_success(), "{} {}", r.status, r.text());

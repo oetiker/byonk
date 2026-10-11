@@ -915,6 +915,53 @@ pub fn update_device(
     sync_mapping(yaml, &["devices", key], &target)
 }
 
+/// Rename the mapping key at `path` (its last element) to `new_key`, in
+/// place: only the key's own text changes, so the entry keeps its position,
+/// its value, and every comment around and inside it. Works for a key in a
+/// block or a flow mapping; a quoted key is replaced quote and all, and the
+/// new key is quoted only when it needs to be.
+///
+/// [`ConfigWriteError::NotFound`] when `path` is absent; a
+/// [`ConfigWriteError::Patch`] when a sibling already has `new_key`. Renaming
+/// a key to itself changes nothing.
+pub fn rename_key(yaml: &str, path: &[&str], new_key: &str) -> Result<String, ConfigWriteError> {
+    assert!(!path.is_empty(), "rename_key: path must not be empty");
+    let doc = parse(yaml)?;
+    if lookup(&doc, path).is_none() {
+        return Err(ConfigWriteError::NotFound(path.join(".")));
+    }
+    let old_key = path[path.len() - 1];
+    if old_key == new_key {
+        return Ok(yaml.to_string());
+    }
+    let parent = &path[..path.len() - 1];
+    let mut sibling: Vec<&str> = parent.to_vec();
+    sibling.push(new_key);
+    if lookup(&doc, &sibling).is_some() {
+        return Err(ConfigWriteError::Patch(format!(
+            "{} already exists",
+            sibling.join(".")
+        )));
+    }
+    let (start, end) = document(yaml)?
+        .query_key_only(&route_for(path))
+        .map_err(|e| ConfigWriteError::Patch(e.to_string()))?
+        .location
+        .byte_span;
+    let mut out = yaml.to_string();
+    out.replace_range(start..end, &flow_key(new_key)?);
+    // The result must hold the same value under the new key: a span that
+    // missed a quote would show up here rather than in the file.
+    let check = parse(&out)?;
+    if lookup(&check, &sibling) != lookup(&doc, path) {
+        return Err(ConfigWriteError::Patch(format!(
+            "renaming {} did not round-trip",
+            path.join(".")
+        )));
+    }
+    Ok(out)
+}
+
 /// Remove `screen_repos.<handle>` entirely. Returns [`ConfigWriteError::NotFound`]
 /// if the screen repo does not exist.
 pub fn remove_screen_repo(yaml: &str, handle: &str) -> Result<String, ConfigWriteError> {
@@ -2002,5 +2049,77 @@ devices:
             "devices:\n  k:\n    rows:\n    - name: x\n      v: 1\n    - name: y\n    size: 3\n";
         let out = remove_path(yaml, &["devices", "k", "rows"]).unwrap();
         assert_eq!(out, "devices:\n  k:\n    size: 3\n");
+    }
+
+    const RENAME_SAMPLE: &str = "\
+panels:
+  # first panel
+  a:
+    name: A   # inline
+    colors: '#000000,#FFFFFF'
+  # the one to rename
+  b:
+    name: B
+    colors: '#000000,#FFFFFF'
+  c: {name: C, colors: '#000000,#FFFFFF'}
+devices:
+  \"AA:BB\":
+    screen: s
+  k:
+    screen: s
+";
+
+    fn keys_of(yaml: &str, section: &str) -> Vec<String> {
+        parse(yaml).unwrap()[section]
+            .as_mapping()
+            .unwrap()
+            .keys()
+            .map(|k| k.as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn rename_key_renames_in_place_keeping_block_comments_and_position() {
+        let out = rename_key(RENAME_SAMPLE, &["panels", "b"], "bee").unwrap();
+        assert_eq!(out, RENAME_SAMPLE.replace("\n  b:\n", "\n  bee:\n"));
+        assert_eq!(keys_of(&out, "panels"), vec!["a", "bee", "c"]);
+    }
+
+    #[test]
+    fn rename_key_inside_a_flow_mapping_keeps_it_flow() {
+        let yaml = "panels: {a: {name: A}, b: {name: B}}\n";
+        let out = rename_key(yaml, &["panels", "b"], "bee").unwrap();
+        assert_eq!(out, "panels: {a: {name: A}, bee: {name: B}}\n");
+    }
+
+    #[test]
+    fn rename_key_replaces_a_quoted_key_and_quotes_the_new_one_when_needed() {
+        let out = rename_key(RENAME_SAMPLE, &["devices", "AA:BB"], "CC:DD").unwrap();
+        assert_eq!(keys_of(&out, "devices"), vec!["CC:DD", "k"]);
+        assert!(!out.contains("AA:BB"), "{out}");
+        let out = rename_key(RENAME_SAMPLE, &["devices", "AA:BB"], "plain").unwrap();
+        assert_eq!(keys_of(&out, "devices"), vec!["plain", "k"]);
+        assert!(out.contains("\n  plain:\n"), "{out}");
+    }
+
+    #[test]
+    fn rename_key_of_an_absent_entry_is_not_found() {
+        assert!(matches!(
+            rename_key(RENAME_SAMPLE, &["panels", "zz"], "y"),
+            Err(ConfigWriteError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn rename_key_onto_an_existing_sibling_is_refused() {
+        assert!(rename_key(RENAME_SAMPLE, &["panels", "b"], "a").is_err());
+    }
+
+    #[test]
+    fn rename_key_to_itself_changes_nothing() {
+        assert_eq!(
+            rename_key(RENAME_SAMPLE, &["panels", "b"], "b").unwrap(),
+            RENAME_SAMPLE
+        );
     }
 }

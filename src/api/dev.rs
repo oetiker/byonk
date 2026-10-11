@@ -180,6 +180,9 @@ pub struct DeviceInfo {
 pub struct PanelInfo {
     pub id: String,
     pub name: String,
+    /// The firmware `Board` (or `Model`) string this panel is picked for.
+    #[serde(rename = "match")]
+    pub match_pattern: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub colors: String,
@@ -317,6 +320,7 @@ pub async fn handle_screens(State(state): State<AppState>) -> Json<ScreensRespon
         .map(|(id, panel)| PanelInfo {
             id: id.clone(),
             name: panel.name.clone(),
+            match_pattern: panel.match_pattern.clone(),
             width: panel.width,
             height: panel.height,
             colors: panel.colors.clone(),
@@ -415,33 +419,90 @@ pub async fn handle_resolve_mac(
     }
 }
 
-/// Body of `POST /dev/api/panels/{panel}/save`: the panel rung, whole. An
-/// absent field is removed from the panel, because the draft replaced the
-/// rung (controller ruling R-B).
+/// Body of `POST /dev/api/panels/{panel}/save`: the panel, whole -- its
+/// identity and its rung. An absent optional field is removed from the
+/// panel, because the draft replaced it (controller ruling R-B). `id`
+/// different from the path panel renames the panel in the same write.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PanelRungWrite {
+pub struct PanelSave {
+    pub id: Option<String>,
+    pub name: String,
+    #[serde(rename = "match")]
+    pub match_pattern: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub colors: String,
     pub colors_actual: Option<String>,
     pub dither: Option<PanelDitherConfig>,
 }
 
-/// Write a panel's whole rung into `config.yaml`, durably (controller ruling
+/// A panel id as config.yaml keys it: letters, digits, `_` and `-`.
+fn validate_panel_id(id: &str) -> Result<(), ApiError> {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(ApiError::BadRequest(
+            "panel id must be letters, digits, `_` or `-`".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Write a panel, whole, into `config.yaml`, durably (controller ruling
 /// R-D), in place, key by key: lines it does not change are not rewritten,
 /// so comments and the order of `panels:` survive (ruling C2). Then drop the
 /// panel's live override (P1-9): the config now carries the value, and an
 /// override that merely restates it is invisible weight.
+///
+/// With `id` set to another id, the panel is also renamed: its key changes
+/// in place and every `devices.*.panel` naming it follows, in the same write
+/// (U6 ruling R1). 409 when the new id is taken. Answers `{"id": <final id>}`.
 ///
 /// Deliberately NOT guarded by `require_writable_global`: `panels` is absent
 /// from the Home Assistant add-on Options schema, so nothing else owns it.
 pub async fn handle_save_panel(
     State(state): State<AppState>,
     axum::extract::Path(panel): axum::extract::Path<String>,
-    Json(body): Json<PanelRungWrite>,
-) -> Result<StatusCode, ApiError> {
-    use crate::services::config_writer::{remove_path, set_path, sync_mapping};
+    Json(body): Json<PanelSave>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    use crate::services::config_writer::{remove_path, rename_key, set_path, sync_mapping};
     require_known_panel(&state, &panel)?;
+    let new_id = body.id.as_deref().map(str::trim).filter(|id| *id != panel);
+    if let Some(id) = new_id {
+        validate_panel_id(id)?;
+    }
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("panel name must not be empty".into()));
+    }
+    let colors = body.colors.trim();
+    crate::api::admin::write::validate_colors(colors, "colors")?;
+    if body.width == Some(0) || body.height == Some(0) {
+        return Err(ApiError::BadRequest(
+            "panel width and height must be positive".into(),
+        ));
+    }
     let path = crate::api::config_persist::require_file_config(&state)?;
     let _guard = state.write_lock.lock().await;
+    // Every device that names the panel, from the config this write starts
+    // from; checked under the lock so no other write slips in between.
+    let users: Vec<String> = {
+        let config = state.config.load();
+        if let Some(id) = new_id {
+            if config.get_panel(id).is_some() {
+                return Err(ApiError::Conflict(format!("panel `{id}` already exists")));
+            }
+        }
+        config
+            .devices
+            .iter()
+            .filter(|(_, d)| d.panel.as_deref() == Some(panel.as_str()))
+            .map(|(k, _)| k.clone())
+            .collect()
+    };
 
     let patch = |e: crate::services::config_writer::ConfigWriteError| {
         ApiError::Internal(format!("patch config: {e}"))
@@ -449,14 +510,28 @@ pub async fn handle_save_panel(
     let mut yaml = std::fs::read_to_string(&path)
         .map_err(|e| ApiError::Internal(format!("read config: {e}")))?;
 
-    let actual_path = ["panels", panel.as_str(), "colors_actual"];
-    yaml = match &body.colors_actual {
-        Some(c) => set_path(&yaml, &actual_path, &serde_yaml::Value::from(c.as_str())),
-        None => remove_path(&yaml, &actual_path),
-    }
+    let field = |f: &'static str| ["panels", panel.as_str(), f];
+    let set_or_remove = |yaml: &str, f: &'static str, v: Option<serde_yaml::Value>| match v {
+        Some(v) => set_path(yaml, &field(f), &v),
+        None => remove_path(yaml, &field(f)),
+    };
+    let match_pattern = body
+        .match_pattern
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty());
+    yaml = set_path(&yaml, &field("name"), &name.into()).map_err(patch)?;
+    yaml = set_or_remove(&yaml, "match", match_pattern.map(Into::into)).map_err(patch)?;
+    yaml = set_or_remove(&yaml, "width", body.width.map(Into::into)).map_err(patch)?;
+    yaml = set_or_remove(&yaml, "height", body.height.map(Into::into)).map_err(patch)?;
+    yaml = set_path(&yaml, &field("colors"), &colors.into()).map_err(patch)?;
+    yaml = set_or_remove(
+        &yaml,
+        "colors_actual",
+        body.colors_actual.as_deref().map(Into::into),
+    )
     .map_err(patch)?;
 
-    let dither_path = ["panels", panel.as_str(), "dither"];
     yaml = match body.dither.as_ref().filter(|d| !d.is_empty()) {
         Some(d) => {
             let serde_yaml::Value::Mapping(target) = serde_yaml::to_value(d)
@@ -466,15 +541,61 @@ pub async fn handle_save_panel(
                     "dither did not serialize to a mapping".into(),
                 ));
             };
-            sync_mapping(&yaml, &dither_path, &target)
+            sync_mapping(&yaml, &field("dither"), &target)
         }
-        None => remove_path(&yaml, &dither_path),
+        None => remove_path(&yaml, &field("dither")),
     }
     .map_err(patch)?;
 
+    if let Some(id) = new_id {
+        yaml = rename_key(&yaml, &["panels", panel.as_str()], id).map_err(patch)?;
+        for device in &users {
+            yaml = set_path(&yaml, &["devices", device.as_str(), "panel"], &id.into())
+                .map_err(patch)?;
+        }
+    }
+
     crate::api::config_persist::persist(&state, &path, yaml)?;
     state.dev_overrides.panels.remove(&panel).await;
-    Ok(StatusCode::OK)
+    Ok(Json(serde_json::json!({ "id": new_id.unwrap_or(&panel) })))
+}
+
+/// `DELETE /dev/api/panels/{panel}`: remove the panel's block from
+/// `config.yaml` and drop its live override. 404 for an unknown panel; 409
+/// while any device names it in `panel:` -- the message lists them (U6
+/// ruling R2: a delete never edits devices).
+pub async fn handle_delete_panel(
+    State(state): State<AppState>,
+    axum::extract::Path(panel): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let path = crate::api::config_persist::require_file_config(&state)?;
+    let _guard = state.write_lock.lock().await;
+    {
+        let config = state.config.load();
+        if config.get_panel(&panel).is_none() {
+            return Err(ApiError::NotFound);
+        }
+        let mut users: Vec<&str> = config
+            .devices
+            .iter()
+            .filter(|(_, d)| d.panel.as_deref() == Some(panel.as_str()))
+            .map(|(k, _)| k.as_str())
+            .collect();
+        if !users.is_empty() {
+            users.sort_unstable();
+            return Err(ApiError::Conflict(format!(
+                "panel `{panel}` is used by: {}",
+                users.join(", ")
+            )));
+        }
+    }
+    let yaml = std::fs::read_to_string(&path)
+        .map_err(|e| ApiError::Internal(format!("read config: {e}")))?;
+    let yaml = crate::services::config_writer::remove_path(&yaml, &["panels", panel.as_str()])
+        .map_err(|e| ApiError::Internal(format!("patch config: {e}")))?;
+    crate::api::config_persist::persist(&state, &path, yaml)?;
+    state.dev_overrides.panels.remove(&panel).await;
+    Ok(Json(serde_json::json!({ "deleted": panel })))
 }
 
 /// `POST /dev/api/panels` body: a new panel's id and the two fields a panel
@@ -501,15 +622,7 @@ pub async fn handle_create_panel(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     use crate::services::config_writer::set_path;
     let id = body.id.trim();
-    if id.is_empty()
-        || !id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        return Err(ApiError::BadRequest(
-            "panel id must be letters, digits, `_` or `-`".into(),
-        ));
-    }
+    validate_panel_id(id)?;
     let name = body.name.trim();
     if name.is_empty() {
         return Err(ApiError::BadRequest("panel name must not be empty".into()));
@@ -659,10 +772,15 @@ pub async fn handle_delete_device_override(
 }
 
 /// `PATCH /dev/api/devices/{key}`: Save a device draft. The same write as the
-/// admin PATCH and the MCP tool -- `apply_device_patch`, with its screen,
-/// params, clear and read-only-config guards -- then drop the device's live
-/// override, which the config now carries (P1-9). The override is keyed by the
-/// resolved config key, as the override routes are.
+/// admin PATCH and the MCP tool -- with its screen, params, clear and
+/// read-only-config guards -- then drop the device's live override, which the
+/// config now carries (P1-9). The override is keyed by the resolved config
+/// key, as the override routes are.
+///
+/// Unlike the admin PATCH, a `key` in the body that differs from the path
+/// renames the device in the same write (`apply_device_patch_renaming`); the
+/// old key's override and tuning session are dropped. Answers
+/// `{"key": <final key>, "screen": …}`.
 pub async fn handle_save_device(
     State(state): State<AppState>,
     axum::extract::Path(key): axum::extract::Path<String>,
@@ -673,8 +791,46 @@ pub async fn handle_save_device(
         .load()
         .resolve_device_key(&key, Some(&key))
         .unwrap_or(key);
-    let out = crate::api::admin::write::apply_device_patch(&state, &key, body).await?;
+    let new_key = body.key.clone();
+    let out = crate::api::admin::write::apply_device_patch_renaming(
+        &state,
+        &key,
+        new_key.as_deref(),
+        body,
+    )
+    .await?;
     state.dev_overrides.devices.remove(&key).await;
+    if out["key"].as_str() != Some(key.as_str()) {
+        state
+            .dev_overrides
+            .tuning_sessions
+            .write()
+            .await
+            .remove(&key);
+    }
+    Ok(Json(out))
+}
+
+/// `DELETE /dev/api/devices/{key}`: the admin delete's core
+/// (`apply_device_delete`: 404 unknown, 409 for DEFAULT), then drop the
+/// device's live override and tuning session. Answers `{"deleted": <key>}`.
+pub async fn handle_delete_device(
+    State(state): State<AppState>,
+    axum::extract::Path(key): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let key = state
+        .config
+        .load()
+        .resolve_device_key(&key, Some(&key))
+        .unwrap_or(key);
+    let out = crate::api::admin::write::apply_device_delete(&state, &key).await?;
+    state.dev_overrides.devices.remove(&key).await;
+    state
+        .dev_overrides
+        .tuning_sessions
+        .write()
+        .await
+        .remove(&key);
     Ok(Json(out))
 }
 
@@ -1207,7 +1363,7 @@ pub async fn handle_panel_usage(State(state): State<AppState>) -> Json<PanelUsag
 /// `nest` semantics — nothing at `/dev/`; `server::build_router` registers
 /// that explicitly, outside this nest, wearing the same `require_dev` layer.
 pub fn dev_router(state: &AppState) -> Router<AppState> {
-    use axum::routing::{get, patch, post, put};
+    use axum::routing::{delete, get, patch, post, put};
     let api = Router::new()
         .route("/screens", get(handle_screens))
         .route("/events", get(handle_events))
@@ -1224,9 +1380,13 @@ pub fn dev_router(state: &AppState) -> Router<AppState> {
             put(handle_put_panel_override).delete(handle_delete_panel_override),
         )
         .route("/panels", post(handle_create_panel))
+        .route("/panels/{panel}", delete(handle_delete_panel))
         .route("/panels/{panel}/save", post(handle_save_panel))
         .route("/devices", post(handle_create_device))
-        .route("/devices/{key}", patch(handle_save_device))
+        .route(
+            "/devices/{key}",
+            patch(handle_save_device).delete(handle_delete_device),
+        )
         .route("/pending-devices", get(handle_pending_devices))
         .route(
             "/tuning-session/{device}",

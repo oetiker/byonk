@@ -33,7 +33,9 @@ use super::require_admin;
 #[derive(Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeviceWrite {
-    pub key: Option<String>, // required for POST, ignored for PATCH (taken from URL)
+    /// Required for POST. The admin PATCH and MCP ignore it (the URL names
+    /// the device); the dev UI's PATCH reads a different key as a rename.
+    pub key: Option<String>,
     pub screen: Option<String>,
     pub panel: Option<String>,
     pub dither: Option<String>,
@@ -735,16 +737,54 @@ pub async fn apply_device_patch(
     key: &str,
     body: DeviceWrite,
 ) -> Result<serde_json::Value, ApiError> {
+    apply_device_patch_renaming(state, key, None, body).await
+}
+
+/// [`apply_device_patch`], optionally renaming the entry to `new_key` in the
+/// same write: the key changes in place (block, comments and position kept)
+/// and the patch lands under the new key, under one lock and one persist, so
+/// either both happen or neither does. `body.key` is never read here; the
+/// caller decides whether the body's key means a rename (the dev UI) or is
+/// ignored (the admin PATCH, the MCP tool).
+///
+/// A `new_key` equal to `key` is no rename. Empty or containing whitespace:
+/// 400. Taken by another device: 409. The reserved DEFAULT device is neither
+/// renamed nor renamed onto: 409.
+pub async fn apply_device_patch_renaming(
+    state: &AppState,
+    key: &str,
+    new_key: Option<&str>,
+    body: DeviceWrite,
+) -> Result<serde_json::Value, ApiError> {
     let path = require_file_config(state)?;
+    let new_key = new_key.filter(|k| *k != key);
+    if let Some(k) = new_key {
+        if k.is_empty() || k.chars().any(char::is_whitespace) {
+            return Err(ApiError::BadRequest(
+                "a device key must not be empty or contain whitespace".into(),
+            ));
+        }
+        if key == RESERVED_DEFAULT_KEY || k == RESERVED_DEFAULT_KEY {
+            return Err(ApiError::Conflict(
+                "the reserved DEFAULT device cannot be renamed".into(),
+            ));
+        }
+    }
     validate_device_settings(state, &body)?;
     let clear = resolve_clear(&body)?;
     let keys = touched_keys(&body);
     let _guard = state.write_lock.lock().await;
 
-    // Must already exist.
+    // Must already exist; a rename target must not.
     let existing = {
         let config = state.config.load();
-        config.devices.get(key).cloned().ok_or(ApiError::NotFound)?
+        let existing = config.devices.get(key).cloned().ok_or(ApiError::NotFound)?;
+        if let Some(k) = new_key {
+            if config.devices.contains_key(k) {
+                return Err(ApiError::Conflict(format!("device `{k}` already exists")));
+            }
+        }
+        existing
     };
 
     // Ruling C3: clear the existing entry first, then merge the body's sets
@@ -834,10 +874,19 @@ pub async fn apply_device_patch(
     let empty = HashMap::new();
     validate_screen_and_params(state, &screen, merged.params.as_ref().unwrap_or(&empty))?;
 
-    let yaml = state
+    let mut yaml = state
         .asset_loader
         .read_config_string()
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+    // The rename first, in place; the patch then edits the renamed entry.
+    let key = match new_key {
+        Some(k) => {
+            yaml = config_writer::rename_key(&yaml, &["devices", key], k)
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+            k
+        }
+        None => key,
+    };
     // Only the keys this request names are written, in place: the entry
     // keeps its position, its comments and every other line.
     let block = device_block(&merged, &screen);
@@ -871,26 +920,36 @@ pub async fn delete_device(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&state, &headers)?;
+    Ok(Json(apply_device_delete(&state, &key).await?))
+}
+
+/// Remove `devices.<key>` from config.yaml. Shared by
+/// `DELETE /api/admin/devices/{key}` and `DELETE /dev/api/devices/{key}`.
+/// The reserved DEFAULT device: 409. Absent from the file: 404.
+pub async fn apply_device_delete(
+    state: &AppState,
+    key: &str,
+) -> Result<serde_json::Value, ApiError> {
     if key == RESERVED_DEFAULT_KEY {
         return Err(ApiError::Conflict(
             "the reserved DEFAULT device cannot be deleted".into(),
         ));
     }
-    let path = require_file_config(&state)?;
+    let path = require_file_config(state)?;
     let _guard = state.write_lock.lock().await;
 
     let yaml = state
         .asset_loader
         .read_config_string()
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let new_yaml = match config_writer::remove_device(&yaml, &key) {
+    let new_yaml = match config_writer::remove_device(&yaml, key) {
         Ok(y) => y,
         Err(config_writer::ConfigWriteError::NotFound(_)) => return Err(ApiError::NotFound),
         Err(e) => return Err(ApiError::Internal(e.to_string())),
     };
-    persist(&state, &path, new_yaml)?;
+    persist(state, &path, new_yaml)?;
 
-    Ok(Json(serde_json::json!({ "deleted": key })))
+    Ok(serde_json::json!({ "deleted": key }))
 }
 
 #[derive(Deserialize)]

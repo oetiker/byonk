@@ -88,6 +88,12 @@ class ConfigDraft {
   drafts = $state({});
   pushed = $state(null);
   error = $state(null);
+  /**
+   * The last refused Save, `{key, message}`. Kept apart from `error` so it is
+   * shown once, in the editor's message row, not also in the StatusStrip;
+   * the next draft edit or a successful Save clears it.
+   */
+  saveFailure = $state(null);
   live = $state({ panels: [], devices: [], tuning_sessions: [] });
   usage = $state({ panels: {}, unseen: [] });
   /** Bumped on every draft edit the render reads; the Preview re-renders on it (P2-7). */
@@ -142,6 +148,7 @@ class ConfigDraft {
     const entry = structuredClone($state.snapshot(this.drafts[k] ?? this.baseline(kind, id)));
     fn(entry);
     this.drafts = { ...this.drafts, [k]: entry };
+    if (this.saveFailure?.key === k) this.saveFailure = null;
     this.version += 1;
     if (render) this.revision += 1;
   }
@@ -399,17 +406,19 @@ class ConfigDraft {
         if (body) finalId = (await api.saveDevice(id, body))?.key ?? id;
       }
     } catch (e) {
-      this.error = { op: "save", message: e.message, key: keyOf(kind, id) };
+      this.saveFailure = { key: keyOf(kind, id), message: e.message };
       return;
     }
     this.error = null;
+    this.saveFailure = null;
     const { [keyOf(kind, id)]: _gone, [keyOf(kind, finalId)]: _stale, ...rest } = this.drafts;
     this.drafts = rest;
     this.version += 1;
     this.revision += 1;
     await this.#endSessionFor(kind, id);
-    await screens.refresh();
-    if (finalId !== id && subject.is(kind, id)) subject.select(kind, finalId);
+    // The rename lands with the refreshed lists: one render of the renamed
+    // entry, never one of the old id that the new lists no longer hold.
+    await screens.refresh({ applied: () => finalId !== id && subject.renamed(kind, id, finalId) });
     await this.load();
   }
 
@@ -422,8 +431,8 @@ class ConfigDraft {
 
   /** The last Save failure's server message, when it was this subject's. */
   saveError(kind, id) {
-    const e = this.error;
-    return e?.op === "save" && e.key === keyOf(kind, id) ? e.message : null;
+    const f = this.saveFailure;
+    return f?.key === keyOf(kind, id) ? f.message : null;
   }
 
   async discard(kind, id) {
@@ -487,6 +496,7 @@ class ConfigDraft {
     this.drafts = {};
     this.pushed = null;
     this.error = null;
+    this.saveFailure = null;
     this.live = { panels: [], devices: [], tuning_sessions: [] };
     this.usage = { panels: {}, unseen: [] };
     this.revision = 0;

@@ -64,7 +64,12 @@ class Screens {
     }
   }
 
-  async refresh() {
+  /**
+   * `applied`, when given, runs in the same synchronous step that installs
+   * the new lists, so state that must follow them (a renamed subject) never
+   * lets an effect see the new meta with the old id, or the reverse.
+   */
+  async refresh({ applied } = {}) {
     const [repos, payload] = await Promise.all([api.listRepos(), api.listScreens()]);
     this.repos = repos;
     this.meta = {
@@ -76,6 +81,7 @@ class Screens {
       const handle = s.name.split("/", 1)[0];
       return { ...s, ref: s.name, handle, label: s.name.slice(handle.length + 1) };
     });
+    applied?.();
   }
 }
 

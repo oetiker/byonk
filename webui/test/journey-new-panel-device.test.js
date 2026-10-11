@@ -98,7 +98,7 @@ describe("New panel", () => {
     const library = dom.getByRole("region", { name: "Library" });
 
     const before = calls.length;
-    await fireEvent.click(within(library).getByRole("button", { name: "New panel" }));
+    await fireEvent.click(within(library).getByRole("button", { name: "Add panel" }));
     await waitFor(() => expect(subject.key).toBe("panel:new_panel"));
     expect(create).toHaveBeenCalledWith({ id: "new_panel", name: "New panel", colors: "#000000,#FFFFFF" });
     expect(within(library).queryByRole("form")).toBeNull();
@@ -116,13 +116,19 @@ describe("New panel", () => {
     expect(renderBodies(calls, typed)).toHaveLength(0);
     expect(dom.getByText("3 unsaved")).toBeTruthy();
 
+    const saved = calls.length;
     await fireEvent.click(dom.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(subject.key).toBe("panel:hall_panel"));
+    // A saved change re-renders once: the renamed panel, at its new size.
+    await waitFor(() => expect(renderBodies(calls, saved).length).toBeGreaterThan(0));
+    await settle();
+    expect(renderBodies(calls, saved)).toHaveLength(1);
+    expect(renderBodies(calls, saved)[0]).toMatchObject({ panel: "hall_panel" });
     expect(save).toHaveBeenCalledWith("new_panel", {
       id: "hall_panel", name: "New panel", width: 1600, height: 1200, colors: "#000000,#FFFFFF" });
-    // The row keeps its name ("New panel", like the "+"); it is the selected one.
-    const rows = await within(library).findAllByRole("button", { name: "New panel" });
-    expect(rows.filter((r) => r.getAttribute("aria-current") === "true")).toHaveLength(1);
+    // The row keeps its name ("New panel"; the "+" is "Add panel") and is the selected one.
+    const row = await within(library).findByRole("button", { name: "New panel" });
+    expect(row).toHaveAttribute("aria-current", "true");
     expect(subject.is("panel", "hall_panel")).toBe(true);
     expect(document.querySelector("#cfg-plain-id").value).toBe("hall_panel");
     expect(dom.getByText("0 unsaved")).toBeTruthy();
@@ -150,7 +156,7 @@ describe("New device", () => {
     const library = dom.getByRole("region", { name: "Library" });
 
     const before = calls.length;
-    await fireEvent.click(within(library).getByRole("button", { name: "New device" }));
+    await fireEvent.click(within(library).getByRole("button", { name: "Add device" }));
     await waitFor(() => expect(subject.key).toBe("device:new-device"));
     expect(create).toHaveBeenCalledWith({ key: "new-device", name: "New device", screen: "local/a" });
     await waitFor(() => expect(renderBodies(calls, before).length).toBeGreaterThan(0));

@@ -322,8 +322,8 @@
             <DropdownMenu.Item aria-label="Rename" disabled={!canEdit} onSelect={renameScreen}><Pencil aria-hidden="true" />Rename screen</DropdownMenu.Item>
             <DropdownMenu.Item aria-label="Delete" variant="destructive" disabled={!canDelete} onSelect={deleteSubject}><Trash2 aria-hidden="true" />{deleteTip}</DropdownMenu.Item>
             <DropdownMenu.Separator />
-            <DropdownMenu.Item onSelect={newPanel}><Plus aria-hidden="true" />New panel</DropdownMenu.Item>
-            <DropdownMenu.Item onSelect={newDevice}><Plus aria-hidden="true" />New device</DropdownMenu.Item>
+            <DropdownMenu.Item onSelect={newPanel}><Plus aria-hidden="true" />Add panel</DropdownMenu.Item>
+            <DropdownMenu.Item onSelect={newDevice}><Plus aria-hidden="true" />Add device</DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Root>
       </div>
@@ -417,6 +417,6 @@
   {/snippet}
 
   {@render section("screen", "Screens", screensBody)}
-  {@render section("panel", "Panels", panelsBody, { label: "New panel", onclick: newPanel })}
-  {@render section("device", "Devices", devicesBody, { label: "New device", onclick: newDevice })}
+  {@render section("panel", "Panels", panelsBody, { label: "Add panel", onclick: newPanel })}
+  {@render section("device", "Devices", devicesBody, { label: "Add device", onclick: newDevice })}
 </div>

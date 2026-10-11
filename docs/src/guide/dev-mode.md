@@ -112,16 +112,16 @@ lives in.
 
 The **+** at the right of the **Panels** and **Devices** headings adds one
 right away (in a narrow Library they are also in the **More actions** menu,
-⋯, as **New panel** and **New device**). There is no form: the entry is
+⋯, as **Add panel** and **Add device**). There is no form: the entry is
 written to `config.yaml` at once, with the rest of the file, comments
 included, left as it was, and becomes the subject, so you fill in its
 details in Edit's **Details** block (see [The config editor](#the-config-editor)).
 
-- **New panel** adds `new_panel` (or `new_panel_2`, `new_panel_3`, … when
+- **Add panel** adds `new_panel` (or `new_panel_2`, `new_panel_3`, … when
   that is taken), named "New panel". Its colours and size are copied from the
   panel you have selected; with no panel selected it gets
   `#000000,#FFFFFF` and no size.
-- **New device** adds `new-device` (or `new-device-2`, …), named "New
+- **Add device** adds `new-device` (or `new-device-2`, …), named "New
   device", showing the selected screen, or the first one.
 
 **Edit.** The header names the subject. For a screen it is the file editor:
@@ -331,8 +331,10 @@ The first block, **Details**, holds what names the entry:
 Details apply on **Save** only: **Push** never carries them, and the
 preview shows them once saved. Changing the Id or Key renames the entry —
 a panel's devices follow it — and the Library keeps it selected under its
-new name. An Id or Key that is already taken, or a name, colours or size
-the server refuses, keeps your draft and shows the reason under the header.
+new name, and the preview's **Render as** and **Watch on** choices follow it.
+An Id or Key that is already taken, or a name, colours or size the server
+refuses, keeps your draft and shows the reason under the header until your
+next edit.
 The default device cannot be renamed.
 
 The **ladder** lists every rung that can set that setting, from the strongest

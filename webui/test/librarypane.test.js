@@ -566,7 +566,7 @@ describe("LibraryPane: + adds a placeholder panel or device (U7)", () => {
 
   it("puts a labelled + button beside the Panels and Devices toggles, never inside them", () => {
     render(LibraryPane);
-    for (const [label, section] of [["New panel", "Panels"], ["New device", "Devices"]]) {
+    for (const [label, section] of [["Add panel", "Panels"], ["Add device", "Devices"]]) {
       const plus = dom.getByRole("button", { name: label });
       expect(plus.closest("button[aria-expanded]")).toBeNull();
       const t = toggle(section);
@@ -579,7 +579,7 @@ describe("LibraryPane: + adds a placeholder panel or device (U7)", () => {
   it("+ on Panels creates new_panel at once with defaults, selects it, and opens no form", async () => {
     const create = vi.spyOn(api, "createPanel").mockResolvedValue({ id: "new_panel" });
     render(LibraryPane);
-    await fireEvent.click(dom.getByRole("button", { name: "New panel" }));
+    await fireEvent.click(dom.getByRole("button", { name: "Add panel" }));
     await waitFor(() => expect(subject.key).toBe("panel:new_panel"));
     expect(create).toHaveBeenCalledWith({ id: "new_panel", name: "New panel", colors: "#000000,#FFFFFF" });
     expect(refresh).toHaveBeenCalled();
@@ -591,8 +591,10 @@ describe("LibraryPane: + adds a placeholder panel or device (U7)", () => {
     const create = vi.spyOn(api, "createPanel").mockResolvedValue({ id: "new_panel_2" });
     subject.select("panel", "e1004");
     render(LibraryPane);
-    // The placeholder row is named "New panel" too: take the "+" from the section header.
-    await fireEvent.click(within(toggle("Panels").parentElement).getByRole("button", { name: "New panel" }));
+    // The "+" ("Add panel") no longer shares its name with the "New panel" row.
+    expect(dom.getAllByRole("button", { name: "Add panel" })).toHaveLength(1);
+    expect(dom.getByRole("button", { name: "New panel" })).not.toHaveAttribute("aria-expanded");
+    await fireEvent.click(dom.getByRole("button", { name: "Add panel" }));
     await waitFor(() => expect(subject.key).toBe("panel:new_panel_2"));
     expect(create).toHaveBeenCalledWith({
       id: "new_panel_2", name: "New panel", colors: "#000000,#FFFFFF,#FF0000", width: 1600, height: 1200 });
@@ -601,7 +603,7 @@ describe("LibraryPane: + adds a placeholder panel or device (U7)", () => {
   it("+ on Devices creates the next free new-device key on the first screen and selects it", async () => {
     const create = vi.spyOn(api, "createDevice").mockResolvedValue({ key: "new-device-2", screen: "local/a" });
     render(LibraryPane);
-    await fireEvent.click(dom.getByRole("button", { name: "New device" }));
+    await fireEvent.click(dom.getByRole("button", { name: "Add device" }));
     await waitFor(() => expect(subject.key).toBe("device:new-device-2"));
     expect(create).toHaveBeenCalledWith({ key: "new-device-2", name: "New device", screen: "local/a" });
     expect(dom.queryByRole("form")).toBeNull();
@@ -612,7 +614,7 @@ describe("LibraryPane: + adds a placeholder panel or device (U7)", () => {
     const create = vi.spyOn(api, "createDevice").mockResolvedValue({ key: "new-device", screen: "byonk-builtin/b" });
     subject.select("screen", "byonk-builtin/b");
     render(LibraryPane);
-    await fireEvent.click(dom.getByRole("button", { name: "New device" }));
+    await fireEvent.click(dom.getByRole("button", { name: "Add device" }));
     await waitFor(() => expect(subject.key).toBe("device:new-device"));
     expect(create).toHaveBeenCalledWith({ key: "new-device", name: "New device", screen: "byonk-builtin/b" });
   });
@@ -621,14 +623,14 @@ describe("LibraryPane: + adds a placeholder panel or device (U7)", () => {
     vi.spyOn(api, "createPanel").mockResolvedValue({ id: "new_panel" });
     render(LibraryPane);
     await fireEvent.click(toggle("Panels"));
-    await fireEvent.click(dom.getByRole("button", { name: "New panel" }));
+    await fireEvent.click(dom.getByRole("button", { name: "Add panel" }));
     await waitFor(() => expect(toggle("Panels")).toHaveAttribute("aria-expanded", "true"));
   });
 
   it("a failed create reports on screens.error and leaves the subject alone", async () => {
     vi.spyOn(api, "createPanel").mockRejectedValue(new Error("409 Conflict: panel `new_panel` already exists"));
     render(LibraryPane);
-    await fireEvent.click(dom.getByRole("button", { name: "New panel" }));
+    await fireEvent.click(dom.getByRole("button", { name: "Add panel" }));
     await waitFor(() => expect(screens.error?.message).toMatch(/409/));
     expect(subject.kind).toBe(null);
   });
@@ -638,10 +640,10 @@ describe("LibraryPane: + adds a placeholder panel or device (U7)", () => {
     const device = vi.spyOn(api, "createDevice").mockResolvedValue({ key: "new-device-2", screen: "local/a" });
     render(LibraryPane);
     await fireEvent.pointerDown(dom.getByRole("button", { name: "More actions" }), { button: 0, pointerType: "mouse" });
-    await fireEvent.click(await dom.findByRole("menuitem", { name: "New panel" }));
+    await fireEvent.click(await dom.findByRole("menuitem", { name: "Add panel" }));
     await waitFor(() => expect(subject.key).toBe("panel:new_panel"));
     await fireEvent.pointerDown(dom.getByRole("button", { name: "More actions" }), { button: 0, pointerType: "mouse" });
-    await fireEvent.click(await dom.findByRole("menuitem", { name: "New device" }));
+    await fireEvent.click(await dom.findByRole("menuitem", { name: "Add device" }));
     await waitFor(() => expect(subject.key).toBe("device:new-device-2"));
     expect(panel).toHaveBeenCalledTimes(1);
     expect(device).toHaveBeenCalledTimes(1);

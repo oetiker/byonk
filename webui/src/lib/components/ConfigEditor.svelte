@@ -47,7 +47,7 @@
   const MISSING_LABEL = { id: "an id", name: "a name", colors: "colors", key: "a key" };
   const canSave = $derived(dirtyCount > 0 && !screenMissing && invalid.length === 0 && missing.length === 0);
   // A refused Save (409/400) keeps the draft; the server's reason shows here.
-  const saveError = $derived(configDraft.saveError(kind, id));
+  const saveError = $derived((configDraft.version, configDraft.saveError(kind, id)));
 
   // Key suggestions: devices byonk has seen that no entry configures yet,
   // fetched when a device opens in the editor. A failure only means none.

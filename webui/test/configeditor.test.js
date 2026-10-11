@@ -325,6 +325,11 @@ describe("ConfigEditor Details block (U7)", () => {
       expect(dom.getByTestId("config-messages").contains(msg)).toBe(true);
       expect(document.querySelector("#cfg-plain-id").value).toBe("og");
       expect(dom.getByText("1 unsaved")).toBeTruthy();
+      expect(dom.getAllByText(/already exists/)).toHaveLength(1);
+      // The next edit clears the stale message.
+      idf.value = "og2";
+      await fireEvent.input(idf);
+      expect(dom.queryByText(/already exists/)).toBeNull();
     });
 
     it("an emptied Name disables Save and says why", async () => {
@@ -376,8 +381,9 @@ describe("ConfigEditor Details block (U7)", () => {
     it("Save sends key and panel in the PATCH and re-selects the renamed device", async () => {
       vi.spyOn(api, "listPendingDevices").mockResolvedValue([]);
       const save = vi.spyOn(api, "saveDevice").mockResolvedValue({ key: "pantry", screen: "local/a" });
-      vi.spyOn(screens, "refresh").mockImplementation(async () => {
+      vi.spyOn(screens, "refresh").mockImplementation(async ({ applied } = {}) => {
         screens.meta = { ...screens.meta, devices: [{ ...screens.meta.devices[0], id: "pantry", panel: null }] };
+        applied?.();
       });
       render(ConfigEditor);
       const key = document.querySelector("#cfg-plain-key");

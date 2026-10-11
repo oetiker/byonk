@@ -19,7 +19,7 @@ beforeEach(() => {
   };
   vi.spyOn(api, "listOverrides").mockResolvedValue({ panels: [], devices: [], tuning_sessions: [] });
   vi.spyOn(api, "panelUsage").mockResolvedValue({ panels: {}, unseen: [] });
-  vi.spyOn(screens, "refresh").mockResolvedValue();
+  vi.spyOn(screens, "refresh").mockImplementation(async ({ applied } = {}) => applied?.());
 });
 
 describe("configDraft", () => {
@@ -233,8 +233,10 @@ describe("configDraft identity (U7)", () => {
 
   it("a panel Save with a changed Id re-selects the subject under the new id and leaves no draft", async () => {
     subject.select("panel", "e1004");
-    vi.spyOn(screens, "refresh").mockImplementation(async () => {
+    subject.target = { kind: "panel", id: "e1004" };
+    vi.spyOn(screens, "refresh").mockImplementation(async ({ applied } = {}) => {
       screens.meta = { ...screens.meta, panels: [{ ...screens.meta.panels[0], id: "big" }] };
+      applied?.();
     });
     const save = vi.spyOn(api, "savePanel").mockResolvedValue({ id: "big" });
     configDraft.setPlain("panel", "e1004", "id", "big");
@@ -242,6 +244,8 @@ describe("configDraft identity (U7)", () => {
     expect(save.mock.calls[0][0]).toBe("e1004");
     expect(save.mock.calls[0][1].id).toBe("big");
     expect(subject.key).toBe("panel:big");
+    // The preview's target follows the rename, so it keeps rendering the entry.
+    expect(subject.target).toEqual({ kind: "panel", id: "big" });
     expect(configDraft.dirtyCount("panel", "big")).toBe(0);
     expect(configDraft.drafts).toEqual({});
   });
@@ -262,12 +266,47 @@ describe("configDraft identity (U7)", () => {
     expect(configDraft.plainValue("device", "kitchen", "key")).toBe("kitchen");
     expect(configDraft.plainValue("device", "kitchen", "panel")).toBe("e1004");
     subject.select("device", "kitchen");
+    subject.target = { kind: "device", id: "kitchen" };
+    subject.watchDevice = "kitchen";
     const save = vi.spyOn(api, "saveDevice").mockResolvedValue({ key: "pantry", screen: "local/a" });
     configDraft.setPlain("device", "kitchen", "key", "pantry");
     configDraft.setPlain("device", "kitchen", "panel", "");
     await configDraft.save("device", "kitchen");
     expect(save).toHaveBeenCalledWith("kitchen", { key: "pantry", clear: ["panel"] });
     expect(subject.key).toBe("device:pantry");
+    expect(subject.target).toEqual({ kind: "device", id: "pantry" });
+    expect(subject.watchDevice).toBe("pantry");
+  });
+
+  it("a rename leaves a target or watched device that names another entry alone", async () => {
+    subject.select("device", "kitchen");
+    subject.target = { kind: "panel", id: "kitchen" };
+    subject.watchDevice = "hall";
+    vi.spyOn(api, "saveDevice").mockResolvedValue({ key: "pantry", screen: "local/a" });
+    configDraft.setPlain("device", "kitchen", "key", "pantry");
+    await configDraft.save("device", "kitchen");
+    expect(subject.target).toEqual({ kind: "panel", id: "kitchen" });
+    expect(subject.watchDevice).toBe("hall");
+  });
+
+  it("a save failure is shown in one place (the editor, not configDraft.error) and clears on the next edit", async () => {
+    vi.spyOn(api, "savePanel").mockRejectedValue(new Error("409 Conflict: panel `og` already exists"));
+    configDraft.setPlain("panel", "e1004", "id", "og");
+    await configDraft.save("panel", "e1004");
+    expect(configDraft.error).toBe(null);
+    expect(configDraft.saveError("panel", "e1004")).toMatch(/already exists/);
+    configDraft.setPlain("panel", "e1004", "id", "og2");
+    expect(configDraft.saveError("panel", "e1004")).toBe(null);
+  });
+
+  it("a successful save clears an earlier save failure", async () => {
+    const save = vi.spyOn(api, "savePanel").mockRejectedValueOnce(new Error("400 Bad Request: bad colors"));
+    configDraft.setPlain("panel", "e1004", "colors", "#000000");
+    await configDraft.save("panel", "e1004");
+    expect(configDraft.saveError("panel", "e1004")).toMatch(/bad colors/);
+    save.mockResolvedValueOnce({ id: "e1004" });
+    await configDraft.save("panel", "e1004");
+    expect(configDraft.saveError("panel", "e1004")).toBe(null);
   });
 
   it("a device panel choice is set by id", () => {

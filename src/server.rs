@@ -316,7 +316,7 @@ pub fn build_screen_repo_manager(
 
     // `SCREENS_DIR` auto-registers as the writable `local` screen repo handle,
     // and the seeded examples dir (`<SCREENS_DIR>/../examples`) auto-registers
-    // as the writable `examples` handle — unless `config.screen_repos` already
+    // as the read-only `examples` handle — unless `config.screen_repos` already
     // has an explicit entry for that handle — see
     // `ScreenRepoManager::build_disk_sources`.
     let screens_dir = asset_loader.screens_dir().map(|p| p.to_path_buf());

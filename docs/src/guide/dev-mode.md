@@ -157,14 +157,14 @@ to borrow or a simulated battery level changes what you see and nothing else.
 ## Which repos you can edit
 
 Writability is a property of where a screen repo's files live, not of its
-name. `local` (your `SCREENS_DIR`), `examples`, and any repo registered with
-`path:` are backed by directories Byonk manages and are editable in place. The
-embedded `byonk-builtin` screens and any repo fetched from git with `repo:`
-are read-only — a fetch can replace a git checkout wholesale, so edits there
-would not survive. The full picture is in
+name. `local` (your `SCREENS_DIR`) and any repo registered with `path:` are
+backed by directories Byonk manages and are editable in place. The embedded
+`byonk-builtin` screens, the shipped `examples` and any repo fetched from git
+with `repo:` are read-only (Copy an example into `local` to change it). A
+fetch can replace a git checkout wholesale, so edits there would not survive. The full picture is in
 [Screen Authoring](authoring.md#what-makes-a-repo-writable).
 
-In the Home Assistant app only `local` and `examples` are writable: the app's
+In the Home Assistant app only `local` is writable: the app's
 Screen repos option accepts `repo:` rows only.
 
 ## Editing and saving

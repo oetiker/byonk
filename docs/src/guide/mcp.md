@@ -271,8 +271,9 @@ general-purpose Lua.
 1. `list_screens` to see what's already there and which repos are writable.
 2. `copy_screen` a builtin or an example into a writable repo as a starting point.
    The built-in screens (`byonk-builtin`) are read-only, so editing one in place
-   fails; forking first is the way in. `examples` is writable directly, but
-   copying still keeps the original example intact as a reference.
+   fails; forking first is the way in. The `examples` repo is read-only too, so
+   copy an example into `local` to change it; the original stays intact as a
+   reference.
 3. Edit with `write_screen_file`.
 4. `render_screen` and read its `log` and `error.line` fields — Lua errors and
    template errors both surface there, pointing at what to fix.

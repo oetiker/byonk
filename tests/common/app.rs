@@ -278,7 +278,7 @@ impl TestApp {
     /// Also seeds `dir/examples` (`<SCREENS_DIR>/../examples`, i.e. a sibling
     /// of `screens_dir`) with the real `gphoto` and `swiss-departure-board`
     /// example screens plus a manifest, copied from the embedded `examples`
-    /// set — so it auto-registers as the writable `examples` screen repo
+    /// set — so it auto-registers as the read-only `examples` screen repo
     /// handle (Task 11) and `examples/gphoto` / `examples/swiss-departure-board`
     /// resolve for real, params schema and all. `config.yaml` declares no
     /// `screen_repos.examples` entry, so nothing suppresses the auto-register.
@@ -385,7 +385,7 @@ impl TestApp {
 
     /// Copy `gphoto` and `swiss-departure-board` from the embedded `examples`
     /// set (Task 10) into `dir/examples`, plus a `byonk-screens.yaml`
-    /// manifest, so `dir/examples` auto-registers as the writable `examples`
+    /// manifest, so `dir/examples` auto-registers as the read-only `examples`
     /// screen repo handle (Task 11) once `screens_dir` is set to a sibling of
     /// `dir`. Shared by `new_admin_with_screens` and any other fixture that
     /// needs a real, params-bearing `examples/*` ref to resolve.

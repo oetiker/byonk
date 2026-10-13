@@ -379,6 +379,9 @@ pub struct LocalScreenRepoSource {
     /// This is also what `writable_root` returns: reads and writes MUST share
     /// one base directory, or a write would land somewhere `read` can't see it.
     manifest_root: PathBuf,
+    /// `false` for a directory byonk ships and seeds itself (the auto-registered
+    /// `examples`): readable like any local repo, but no write path may touch it.
+    writable: bool,
 }
 
 impl LocalScreenRepoSource {
@@ -393,7 +396,17 @@ impl LocalScreenRepoSource {
         Ok(LocalScreenRepoSource {
             manifest,
             manifest_root,
+            writable: true,
         })
+    }
+
+    /// Like `load`, but `writable_root` is `None`, so every write path
+    /// (`ScreenStore::resolve_writable_root`) refuses it. Copying *from* it
+    /// still works.
+    pub fn load_read_only(root: &Path) -> Result<LocalScreenRepoSource, String> {
+        let mut src = Self::load(root)?;
+        src.writable = false;
+        Ok(src)
     }
 }
 
@@ -423,7 +436,7 @@ impl ScreenRepoSource for LocalScreenRepoSource {
     }
 
     fn writable_root(&self) -> Option<&Path> {
-        Some(&self.manifest_root)
+        self.writable.then_some(self.manifest_root.as_path())
     }
 
     fn kind(&self) -> ScreenRepoKind {
@@ -672,6 +685,9 @@ pub enum DiskSource {
     Git(PathBuf),
     /// A writable, authored/managed local directory (`LocalScreenRepoSource`).
     Local(PathBuf),
+    /// A local directory byonk ships and seeds (the auto-registered
+    /// `examples`): read like `Local`, never written (`LocalScreenRepoSource::load_read_only`).
+    LocalReadOnly(PathBuf),
 }
 
 /// Resolves screen references against a registry of screen repos keyed by handle.
@@ -716,6 +732,16 @@ impl ScreenRepoLoader {
                         tracing::warn!(handle = %handle, root = %root.display(), error = %e, "skipping local screen repo: invalid manifest");
                     }
                 },
+                DiskSource::LocalReadOnly(root) => {
+                    match LocalScreenRepoSource::load_read_only(&root) {
+                        Ok(src) => {
+                            registry.insert(handle, Arc::new(src));
+                        }
+                        Err(e) => {
+                            tracing::warn!(handle = %handle, root = %root.display(), error = %e, "skipping read-only local screen repo: invalid manifest");
+                        }
+                    }
+                }
             }
         }
 

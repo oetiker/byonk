@@ -67,10 +67,9 @@
    * `local` is the reserved handle for the user's own screens
    * (`LOCAL_HANDLE`, src/services/screen_repo_manager.rs:34), so it is the
    * default even though /api/repos does not sort it first: that list is
-   * writable-first then handle-ascending (src/api/dev_files.rs:149), and
-   * `examples` -- the directory byonk seeds with its own samples -- sorts
-   * ahead of `local`. Taking the first writable entry put every new screen
-   * in with the shipped examples (Finding G).
+   * writable-first then handle-ascending (src/api/dev_files.rs:149), so
+   * another writable repo registered with `path:` can sort ahead of `local`.
+   * (`examples` is read-only and never a candidate here.)
    *
    * Falls back to the first writable repo, because `local` is registered
    * from `screens_dir` and a deployment can leave it out or make it

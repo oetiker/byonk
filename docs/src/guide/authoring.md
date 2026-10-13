@@ -16,7 +16,7 @@ byonk ships three of these out of the box, and they play different roles:
 |-------|--------|-----------|----------------|
 | Base include library | `byonk-base-v1` | No (embedded) | Shared SVG layouts and components (`base.svg`, `header.svg`, `footer.svg`, …) that screens `{% extends %}` or `{% include %}` — see [SVG Templates](../tutorial/svg-templates.md). It's also a sandboxed Lua module namespace: `require("byonk-base-v1/std")` and similar from `script.lua`. Not a screen repo itself; you never reference it as `handle/path` for a *screen*, only inside `{% include "byonk-base-v1/…" %}` or `require("byonk-base-v1/…")`. |
 | Built-in screens | `byonk-builtin` | No | A minimal, fixed set: `default` (the fallback screen for un-onboarded/unassigned devices) and `calibration/*` (panel calibration patterns). Always present, never changes shape. |
-| Examples | `examples` | Yes | Worked, runnable samples (`hello`, `mandelbrot`, `webscrape`, `gphoto`, `swiss-departure-board`, a font demo) — seeded to disk once so you can read, run, and edit them directly. |
+| Examples | `examples` | No | Worked, runnable samples (`hello`, `mandelbrot`, `webscrape`, `gphoto`, `swiss-departure-board`, a font demo) — seeded to disk once so you can read and run them. To change one, copy it into `local` first. |
 
 Your own screens live in a fourth place: the `local` repo, described below.
 It isn't a *shipped* layer — it starts out empty (or with whatever you put
@@ -26,8 +26,9 @@ in it).
 
 Writability is a property of *where a screen repo's files live*, not of its
 name. A screen repo backed by files on disk under a directory byonk manages
-(`local`, `examples`, or any `path:`-configured repo — see below) is
-writable. A screen repo embedded in the binary (`byonk-builtin`) or checked
+(`local`, or any `path:`-configured repo — see below) is writable. The
+seeded `examples` repo is the exception: byonk ships it, so it is read-only
+(copy an example into `local` to change it). A screen repo embedded in the binary (`byonk-builtin`) or checked
 out from git (`repo:`-configured, including the git-fetched form of
 `screen_repos` entries) is read-only — git checkouts can be silently
 replaced by the next fetch, so treating them as writable would risk losing
@@ -67,7 +68,7 @@ seeding details.
 ## Where examples land: `EXAMPLES_DIR`
 
 The shipped example screens are seeded once to `<SCREENS_DIR>/../examples`
-by default, and auto-register as the writable `examples` handle — override
+by default, and auto-register as the read-only `examples` handle — override
 the location with the `EXAMPLES_DIR` environment variable (useful in Docker,
 where the derived default may fall outside your mounted volume). See
 [Environment Variables](installation.md#environment-variables) for the full
@@ -75,7 +76,7 @@ seeding-vs-registration precedence rules.
 
 ## The `path:` config variant
 
-Beyond `local` and `examples`, you can register any writable directory as a
+Beyond `local`, you can register any writable directory as a
 named screen repo with `screen_repos.<handle>.path`:
 
 ```yaml
@@ -119,7 +120,7 @@ You don't have to copy files by hand. byonk exposes its screen-authoring core
 your client at `/mcp` with the admin token as a bearer credential — see
 [MCP](mcp.md) for the endpoint and authentication details — then:
 
-- `copy_screen` forks any screen, including read-only builtins and examples,
+- `copy_screen` forks any screen, including the read-only builtins and examples,
   into a writable repo. Pass the destination **repo handle** as `to_handle`
   (e.g. `local`) and the copy's **path inside that repo** as `to_path`
   (e.g. `my-hello`), yielding `local/my-hello`. `to_path` is a directory

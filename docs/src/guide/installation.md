@@ -142,7 +142,7 @@ data/
 │   │   ├── script.lua       # Data-fetch logic
 │   │   └── screen.svg       # Tera template
 │   └── ...
-├── examples/                # Shipped worked examples, seeded once (editable)
+├── examples/                # Shipped worked examples, seeded once (read-only; copy to `local` to edit)
 │   ├── byonk-screens.yaml
 │   ├── hello/
 │   └── ...

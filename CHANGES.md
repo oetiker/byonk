@@ -254,6 +254,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The shipped `examples` screens are read-only.** They used to be editable in place, which made it easy to change a sample you meant to keep as a reference. Copy an example into `local` (the dev UI's Copy, or the MCP tool `copy_screen`) to change it. An explicit `screen_repos: examples:` entry in `config.yaml` is unaffected.
+
 - **The MCP tool `assign_screen` is now `configure_device`, and it can set
   everything about a device, not just its screen.** Assigning a screen was the
   only thing an assistant could do; every other per-device setting — which

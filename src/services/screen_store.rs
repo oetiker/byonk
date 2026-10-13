@@ -1602,6 +1602,71 @@ pub(crate) mod tests {
         assert!(matches!(err, StoreError::ReadOnly { .. }));
     }
 
+    /// A store over an auto-registered `local` plus an auto-registered
+    /// `examples` holding one screen (`examples/hello`).
+    fn test_store_with_local_and_examples() -> (ScreenStore, PathBuf, PathBuf) {
+        let outer = tempdir_path("screen_store_examples");
+        let local_root = outer.join("local_repo");
+        let examples_root = outer.join("examples_repo");
+        for (root, name) in [(&local_root, "local"), (&examples_root, "examples")] {
+            std::fs::create_dir_all(root).unwrap();
+            std::fs::write(
+                root.join("byonk-screens.yaml"),
+                format!("name: {name}\ndescription: d\nauthor: a\nlicense: MIT\n"),
+            )
+            .unwrap();
+        }
+        let hello = examples_root.join("hello");
+        std::fs::create_dir_all(&hello).unwrap();
+        std::fs::write(
+            hello.join("meta.yaml"),
+            "title: Hello\ndescription: d\nbyonk: \"0.15\"\n",
+        )
+        .unwrap();
+        std::fs::write(hello.join("script.lua"), "return { data = {} }\n").unwrap();
+        std::fs::write(hello.join("screen.svg"), "<svg/>\n").unwrap();
+        let manager =
+            crate::services::screen_repo_manager::tests::test_manager_with_screens_and_examples_dir(
+                &local_root,
+                &examples_root,
+            );
+        let asset_loader = Arc::new(AssetLoader::new(None, None, None));
+        let renderer = Arc::new(RenderService::new(&asset_loader).unwrap());
+        let shared_config: SharedConfig =
+            Arc::new(arc_swap::ArcSwap::from(Arc::new(AppConfig::default())));
+        let pipeline = Arc::new(
+            ContentPipeline::new(shared_config, asset_loader, renderer, manager.clone()).unwrap(),
+        );
+        (
+            ScreenStore::new(manager, pipeline),
+            local_root,
+            examples_root,
+        )
+    }
+
+    #[test]
+    fn auto_registered_examples_rejects_writes_but_copies_to_local() {
+        let (store, local_root, examples_root) = test_store_with_local_and_examples();
+        let err = store
+            .write_file("examples/hello", "script.lua", b"x", None)
+            .unwrap_err();
+        assert!(matches!(err, StoreError::ReadOnly { .. }));
+        assert_eq!(
+            std::fs::read_to_string(examples_root.join("hello/script.lua")).unwrap(),
+            "return { data = {} }\n",
+            "the example must be untouched"
+        );
+        // Copy FROM examples still works.
+        store
+            .copy_screen("examples/hello", "local", "mine")
+            .unwrap();
+        assert!(local_root.join("mine/script.lua").is_file());
+        // ...and the copy is editable.
+        store
+            .write_file("local/mine", "script.lua", b"return {}", None)
+            .unwrap();
+    }
+
     #[test]
     fn write_then_read_roundtrips_with_etag() {
         let (store, _repo_root) = test_store_with_local();
@@ -2401,14 +2466,14 @@ pub(crate) mod tests {
     /// Minor 6 coverage gap: every other `examples`-handle test uses either
     /// two unrelated tempdirs (`ScreenRepoManager` unit tests) or only
     /// checks `resolve()` (the `server.rs` e2e test) — none actually
-    /// *writes* through the auto-registered `examples` handle against the
+    /// *writes* through (and is refused by) the auto-registered `examples` handle against the
     /// real, production-shaped `<SCREENS_DIR>/../examples` (a genuinely
     /// `..`-bearing path, not a synthetic sibling tempdir). This locks in
     /// what the reviewer verified by reading: the write-path
     /// canonicalization guards handle that root correctly, and a write
     /// really does land where `read_file`/the seeded files agree it should.
     #[test]
-    fn write_through_examples_handle_with_real_derived_dot_dot_root() {
+    fn examples_handle_with_real_derived_dot_dot_root_is_read_only_but_copyable() {
         // `screens_dir` must be NESTED inside a private parent: the derived
         // examples dir is `<SCREENS_DIR>/../examples`, so a screens dir placed
         // directly in the system temp dir would resolve `..` to the temp dir
@@ -2450,24 +2515,26 @@ pub(crate) mod tests {
         );
         let store = ScreenStore::new(manager, pipeline);
 
-        // Write through the auto-registered `examples` handle.
-        store
-            .write_file(
-                "examples/hello",
-                "script.lua",
-                b"-- edited\nreturn {}",
-                None,
-            )
-            .unwrap();
+        // The auto-registered `examples` handle is read-only: a write is
+        // refused and the seeded file is untouched.
+        let before = std::fs::read(examples_dir.join("hello/script.lua")).unwrap();
+        let err = store
+            .write_file("examples/hello", "script.lua", b"-- edited", None)
+            .unwrap_err();
+        assert!(matches!(err, StoreError::ReadOnly { .. }));
+        assert_eq!(
+            std::fs::read(examples_dir.join("hello/script.lua")).unwrap(),
+            before
+        );
 
-        // Read back through the store...
+        // Reading through the `..`-bearing root and copying out of it still work.
         let f = store.read_file("examples/hello", "script.lua").unwrap();
-        assert_eq!(f.bytes, b"-- edited\nreturn {}");
-
-        // ...and confirm it actually landed on disk under the real
-        // `..`-bearing root, not some other location.
-        let on_disk = std::fs::read_to_string(examples_dir.join("hello/script.lua")).unwrap();
-        assert_eq!(on_disk, "-- edited\nreturn {}");
+        assert_eq!(f.bytes, before);
+        store
+            .copy_screen("examples/hello", "local", "hello-copy")
+            .unwrap();
+        let copied = store.read_file("local/hello-copy", "script.lua").unwrap();
+        assert_eq!(copied.bytes, before);
     }
 
     // --- Task 9: render -----------------------------------------------------

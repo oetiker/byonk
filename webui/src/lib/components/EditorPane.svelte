@@ -11,6 +11,9 @@
   import IconButton from "./IconButton.svelte";
   import InlineNameForm from "./InlineNameForm.svelte";
   import InlineConfirm from "./InlineConfirm.svelte";
+  import { Input } from "$lib/ui/input/index.js";
+  import * as Field from "$lib/ui/field/index.js";
+  import { NativeSelect } from "$lib/ui/native-select/index.js";
 
   // $state, not a plain `let`: `bind:this` and the assignment inside onMount
   // are both plain writes, and an $effect reading a plain `let` captures its
@@ -131,6 +134,11 @@
     !!editor.ref && screens.writable(editor.ref),
   );
 
+  // Details (U9): where the screen lives. A move can only go to a writable repo.
+  const writableRepos = $derived(screens.repos.filter((r) => r.writable));
+  const fileDirty = $derived(!!editor.active && !editor.active.readOnly && editor.active.dirty);
+  const canSave = $derived(fileDirty || (editor.moveDirty && !editor.moveMissing));
+
   /**
    * The file the delete button would remove, or null when there is nothing
    * it may remove. The ACTIVE tab, not "the selected listing entry": the
@@ -234,11 +242,52 @@
       <HeaderAction
         icon={Save}
         label="Save"
-        disabled={!editor.active || editor.active.readOnly || !editor.active.dirty}
-        onclick={() => editor.trySave()}
+        disabled={!canSave}
+        onclick={() => canSave && editor.commit()}
       />
     {/snippet}
   </PaneHeader>
+  {#if editor.moveFailure}
+    <!-- The same fixed message row as the config editor's: a refused move stays in view. -->
+    <div data-testid="editor-messages" class="flex shrink-0 flex-col gap-0.5 border-b border-border px-2 py-1 text-xs">
+      <Field.Error class="text-xs">Save failed: {editor.moveFailure}</Field.Error>
+    </div>
+  {/if}
+  {#if editor.place}
+    <!-- Details (U9): the screen's identity. Repo and Path are Save-only: the
+         preview keeps rendering the screen where it is until Save moves it. -->
+    <section class="flex shrink-0 flex-col gap-1 border-b border-border p-3 text-sm" aria-label="Details">
+      <h3 class="flex items-center gap-1 font-mono text-xs">
+        Details
+        {#if editor.moveDirty}<span role="img" aria-label="unsaved changes"><Circle class="size-2 fill-current" aria-hidden="true" /></span>{/if}
+      </h3>
+      {#if canEdit}
+        <div class="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3">
+          <Field.Field>
+            <Field.Label for="screen-repo">Repo</Field.Label>
+            <NativeSelect id="screen-repo" value={editor.target.handle}
+                          onchange={(e) => editor.setTarget("handle", e.currentTarget.value)}>
+              {#each writableRepos as r (r.handle)}<option value={r.handle}>{r.handle}</option>{/each}
+            </NativeSelect>
+          </Field.Field>
+          <Field.Field>
+            <Field.Label for="screen-path">Path</Field.Label>
+            <Input id="screen-path" class="font-mono" value={editor.target.path}
+                   oninput={(e) => editor.setTarget("path", e.currentTarget.value)} />
+          </Field.Field>
+        </div>
+        {#if editor.moveMissing}
+          <Field.Error class="text-xs">A screen needs a path — fill it in to enable Save.</Field.Error>
+        {/if}
+      {:else}
+        <!-- A read-only repo (builtin, examples): Copy it to make it yours. -->
+        <dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
+          <dt class="text-muted-foreground">Repo</dt><dd class="truncate font-mono">{editor.place.handle}</dd>
+          <dt class="text-muted-foreground">Path</dt><dd class="truncate font-mono">{editor.place.path}</dd>
+        </dl>
+      {/if}
+    </section>
+  {/if}
   <PaneToolbar flush>
     <div role="tablist" aria-label="Files" class="flex h-full min-w-0 flex-1 overflow-x-auto">
       <!--

@@ -7,6 +7,7 @@ pub mod display;
 mod headers;
 pub mod log;
 pub mod resolution;
+pub mod screen_move;
 pub mod setup;
 pub mod time;
 

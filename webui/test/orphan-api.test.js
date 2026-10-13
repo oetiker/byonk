@@ -43,7 +43,7 @@ const ROUTES = {
   "POST api/screen": "createScreen",
   "DELETE api/screen": "deleteScreen",
   "POST api/screen/copy": "copyScreen",
-  "POST api/screen/rename": "renameScreen",
+  "POST api/screen/move": "moveScreen",
   "POST api/screen/validate": "validateScreen",
   "POST api/screen/check": "checkFile",
 };

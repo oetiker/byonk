@@ -112,7 +112,13 @@ export const createScreen = (handle, name, starter = "minimal") =>
   post("api/screen", { handle, name, starter });
 export const copyScreen = (ref, to_handle, to_name) =>
   post("api/screen/copy", { ref, to_handle, to_name });
-export const renameScreen = (ref, name) => post("api/screen/rename", { ref, name });
+/**
+ * Rename a screen inside its repo, or move it into another writable one.
+ * The server points every device on it at the new ref in the same request.
+ * Answers `{ref, rewritten: [device keys]}`.
+ */
+export const moveScreen = (ref, to_handle, to_name) =>
+  post("api/screen/move", { ref, to_handle, to_name });
 export const checkFile = (ref, file, text) => post("api/screen/check", { ref, file, text });
 
 /**

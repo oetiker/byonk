@@ -144,7 +144,7 @@ async fn create_list_read_write_delete_round_trip() {
 }
 
 #[tokio::test]
-async fn copy_rename_validate_check() {
+async fn copy_move_validate_check() {
     let dir = tempfile::tempdir().unwrap();
     let app = app(dir.path());
     let c = app
@@ -157,9 +157,9 @@ async fn copy_rename_validate_check() {
     assert_eq!(c.status, StatusCode::OK);
     let rn = app
         .post_json(
-            "/dev/api/screen/rename",
+            "/dev/api/screen/move",
             &[AUTH],
-            r#"{"ref":"local/mine","name":"yours"}"#,
+            r#"{"ref":"local/mine","to_handle":"local","to_name":"yours"}"#,
         )
         .await;
     assert_eq!(rn.json::<serde_json::Value>()["ref"], "local/yours");

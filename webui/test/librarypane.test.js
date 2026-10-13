@@ -47,21 +47,33 @@ beforeEach(async () => {
 });
 
 describe("LibraryPane", () => {
-  it("disables Rename and Delete on a read-only screen, keeps Copy and New", async () => {
+  it("disables Delete on a read-only screen, keeps Copy and New", async () => {
     // Spec §8.6.
     subject.select("screen", "byonk-builtin/b");
     render(LibraryPane);
-    expect(screen.getByRole("button", { name: /rename/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /delete/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /copy/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: "New" })).toBeEnabled();
   });
 
-  it("enables Rename and Delete on a writable screen", () => {
+  it("enables Delete on a writable screen", () => {
     subject.select("screen", "local/a");
     render(LibraryPane);
-    expect(screen.getByRole("button", { name: /rename/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /delete/i })).toBeEnabled();
+  });
+
+  // U9: a screen's Repo and Path are edited in the Edit pane's Details; the
+  // Library keeps New / Copy / Delete only.
+  it("has no Rename, neither in the header nor in the folded menu", async () => {
+    subject.select("screen", "local/a");
+    render(LibraryPane);
+    const actions = screen.getByTestId("library-actions");
+    expect(within(actions).getAllByRole("button").map((b) => b.getAttribute("aria-label")))
+      .toEqual(["New", "Copy", "Delete"]);
+    expect(screen.queryByRole("button", { name: /rename/i })).toBeNull();
+    await fireEvent.pointerDown(screen.getByRole("button", { name: "More actions" }), { button: 0, pointerType: "mouse" });
+    await screen.findByRole("menuitem", { name: "New" });
+    expect(screen.queryByRole("menuitem", { name: /rename/i })).toBeNull();
   });
 
   it("selects the new screen after a successful create", async () => {
@@ -79,18 +91,6 @@ describe("LibraryPane", () => {
     await fireEvent.click(screen.getByRole("button", { name: /copy/i }));
     await answer("Copy to name", "dup");
     await waitFor(() => expect(subject.screenRef).toBe("local/dup"));
-  });
-
-  it("selects the renamed screen after a successful rename", async () => {
-    // This is the behaviour the rename-reselect deviation (task-6-report.md)
-    // exists for: without it, `subject.screenRef` would stay pinned to the
-    // pre-rename ref, which no longer names anything after the rename.
-    vi.spyOn(api, "renameScreen").mockResolvedValue({ ref: "local/renamed" });
-    subject.select("screen", "local/a");
-    render(LibraryPane);
-    await fireEvent.click(screen.getByRole("button", { name: /rename/i }));
-    await answer("Rename to", "renamed");
-    await waitFor(() => expect(subject.screenRef).toBe("local/renamed"));
   });
 
   it("captures a rejected create on screens.error instead of an unhandled rejection", async () => {
@@ -127,14 +127,6 @@ describe("LibraryPane", () => {
     await fireEvent.keyDown(within(form).getByRole("textbox"), { key: "Escape" });
     expect(screen.queryByRole("form", { name: "New screen name" })).toBeNull();
     expect(create).not.toHaveBeenCalled();
-  });
-
-  it("Rename starts from the screen's current name", async () => {
-    subject.select("screen", "local/a");
-    render(LibraryPane);
-    await fireEvent.click(screen.getByRole("button", { name: /rename/i }));
-    const form = await screen.findByRole("form", { name: "Rename to" });
-    expect(within(form).getByRole("textbox").value).toBe("a");
   });
 
   it("Delete asks inline, names the screen, and deletes only on Delete", async () => {
@@ -208,57 +200,6 @@ describe("LibraryPane", () => {
     await fireEvent.click(screen.getByRole("button", { name: "New" }));
     await answer("New screen name", "fresh");
     await waitFor(() => expect(screen.queryByRole("form", { name: "New screen name" })).toBeNull());
-  });
-
-  describe("renaming a screen with unsaved edits", () => {
-    async function dirtyScreen() {
-      vi.spyOn(api, "listFiles").mockResolvedValue([{ name: "script.lua", size: 1, text: true }]);
-      vi.spyOn(api, "readFile").mockResolvedValue({ text: "-- lua", etag: '"1"' });
-      subject.select("screen", "local/a");
-      editor.reset();
-      await editor.loadScreen("local/a");
-      await editor.open("local/a", "script.lua");
-      editor.setText("-- edited");
-      expect(editor.active.dirty).toBe(true);
-    }
-
-    it("asks before renaming, and renames only when confirmed", async () => {
-      await dirtyScreen();
-      const rename = vi.spyOn(api, "renameScreen").mockResolvedValue({ ref: "local/renamed" });
-      render(LibraryPane);
-      await fireEvent.click(screen.getByRole("button", { name: /rename/i }));
-      await answer("Rename to", "renamed");
-      const form = await screen.findByRole("form", { name: "Confirm rename with unsaved edits" });
-      expect(form.textContent).toContain("local/a has unsaved edits");
-      expect(rename).not.toHaveBeenCalled();
-      await fireEvent.click(within(form).getByRole("button", { name: "Rename anyway" }));
-      await waitFor(() => expect(rename).toHaveBeenCalledWith("local/a", "renamed"));
-      await waitFor(() => expect(subject.screenRef).toBe("local/renamed"));
-    });
-
-    it("Cancel renames nothing and keeps the edits", async () => {
-      await dirtyScreen();
-      const rename = vi.spyOn(api, "renameScreen");
-      render(LibraryPane);
-      await fireEvent.click(screen.getByRole("button", { name: /rename/i }));
-      await answer("Rename to", "renamed");
-      const form = await screen.findByRole("form", { name: "Confirm rename with unsaved edits" });
-      await fireEvent.click(within(form).getByRole("button", { name: "Cancel" }));
-      expect(screen.queryByRole("form", { name: "Confirm rename with unsaved edits" })).toBeNull();
-      expect(rename).not.toHaveBeenCalled();
-      expect(editor.active.dirty).toBe(true);
-    });
-
-    it("renames straight away when nothing is unsaved", async () => {
-      editor.reset();
-      const rename = vi.spyOn(api, "renameScreen").mockResolvedValue({ ref: "local/renamed" });
-      subject.select("screen", "local/a");
-      render(LibraryPane);
-      await fireEvent.click(screen.getByRole("button", { name: /rename/i }));
-      await answer("Rename to", "renamed");
-      await waitFor(() => expect(rename).toHaveBeenCalledWith("local/a", "renamed"));
-      expect(screen.queryByRole("form", { name: "Confirm rename with unsaved edits" })).toBeNull();
-    });
   });
 
   it("never opens a native dialog", async () => {
@@ -421,7 +362,7 @@ describe("LibraryPane accordion sections", () => {
     expect(screen.getByRole("button", { name: "a" })).toBeTruthy();
   });
 
-  it("keeps the New/Copy/Rename/Delete toolbar and inline forms while a section is collapsed", async () => {
+  it("keeps the New/Copy/Delete toolbar and inline forms while a section is collapsed", async () => {
     render(LibraryPane);
     await fireEvent.click(header("Screens"));
     await fireEvent.click(screen.getByRole("button", { name: "New" }));
@@ -522,7 +463,7 @@ describe("LibraryPane headings and chevrons", () => {
 });
 
 describe("LibraryPane narrow header (fix round 1, finding 2)", () => {
-  it("folds the four actions into a More-actions menu below 14rem, by container query", () => {
+  it("folds the three actions into a More-actions menu below 14rem, by container query", () => {
     render(LibraryPane);
     const header = screen.getByRole("region", { name: "Library" }).querySelector('[data-slot="pane-header"]');
     expect(header.className).toMatch(/@container/);
@@ -531,14 +472,14 @@ describe("LibraryPane narrow header (fix round 1, finding 2)", () => {
     expect(menu).toEqual(expect.arrayContaining(["hidden", "@max-[14rem]:flex"]));
   });
 
-  it("the menu offers the same four actions, under the same names and gates", async () => {
-    render(LibraryPane); // no subject: Copy, Rename, Delete disabled
+  it("the menu offers the same three actions, under the same names and gates", async () => {
+    render(LibraryPane); // no subject: Copy, Delete disabled
     const trigger = screen.getByRole("button", { name: "More actions" });
     // bits-ui opens a DropdownMenu on pointerdown (a click would open and shut it).
     await fireEvent.pointerDown(trigger, { button: 0, pointerType: "mouse" });
     const item = async (name) => screen.findByRole("menuitem", { name });
     expect(await item("New")).not.toHaveAttribute("data-disabled");
-    for (const n of ["Copy", "Rename", "Delete"]) expect(await item(n)).toHaveAttribute("data-disabled");
+    for (const n of ["Copy", "Delete"]) expect(await item(n)).toHaveAttribute("data-disabled");
 
     await fireEvent.click(await item("New"));
     const form = await screen.findByRole("form", { name: "New screen name" });
@@ -688,11 +629,10 @@ describe("LibraryPane: delete a panel or a device (U7)", () => {
     expect(item).not.toHaveAttribute("data-disabled");
   });
 
-  it.each([["panel", "e1004"], ["device", "kitchen"]])("Copy and Rename stay screen-only: disabled for a %s", (kind, id) => {
+  it.each([["panel", "e1004"], ["device", "kitchen"]])("Copy stays screen-only: disabled for a %s", (kind, id) => {
     subject.select(kind, id);
     render(LibraryPane);
     expect(dom.getByRole("button", { name: "Copy" }).disabled).toBe(true);
-    expect(dom.getByRole("button", { name: "Rename" }).disabled).toBe(true);
   });
 
   it("deletes a panel after the inline confirmation, then clears the subject", async () => {

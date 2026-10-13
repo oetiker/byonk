@@ -88,11 +88,11 @@ describe("api", () => {
         responseBody: '{"ref":"local/dest/copy"}',
       },
       {
-        name: "renameScreen",
-        call: () => api.renameScreen("local/test", "renamed"),
-        expectedUrl: "api/screen/rename",
+        name: "moveScreen",
+        call: () => api.moveScreen("local/test", "shared", "renamed"),
+        expectedUrl: "api/screen/move",
         expectedMethod: "POST",
-        responseBody: '{"ref":"local/renamed"}',
+        responseBody: '{"ref":"shared/renamed","rewritten":[]}',
       },
       {
         name: "checkFile",
@@ -284,6 +284,15 @@ describe("api", () => {
     expect(init.method).toBe("POST");
     expect(init.headers["Content-Type"]).toBe("application/json");
     expect(JSON.parse(init.body)).toEqual(body);
+  });
+
+  it("moveScreen POSTs {ref, to_handle, to_name} and returns {ref, rewritten}", async () => {
+    mockFetch(async () => new Response('{"ref":"shared/b","rewritten":["kitchen"]}', { status: 200 }));
+    const out = await api.moveScreen("local/a", "shared", "b");
+    expect(out).toEqual({ ref: "shared/b", rewritten: ["kitchen"] });
+    const [url, init] = globalThis.fetch.mock.calls.at(-1);
+    expect(url).toBe("api/screen/move");
+    expect(JSON.parse(init.body)).toEqual({ ref: "local/a", to_handle: "shared", to_name: "b" });
   });
 
   it("sends deleteScreen's ref as a query parameter, not a JSON body", async () => {

@@ -101,9 +101,10 @@ shows it.
 then the devices. Choosing an entry makes it the subject. A repo you cannot
 write to is labelled "read-only" next to its handle; you can still open any
 of its screens and read every file, and **Copy** one into a repo you can
-write to — but its files open read-only. **New**, **Copy** and **Rename**
-work on screens; **Delete** works on whatever is selected — a screen, a panel
-or a device. See [New, Copy, Rename, Delete](#new-copy-rename-delete). Screens, Panels and Devices are collapsible
+write to — but its files open read-only. **New** and **Copy** work on
+screens; **Delete** works on whatever is selected — a screen, a panel or a
+device. See [New, Copy, Delete](#new-copy-delete). A screen is renamed or
+moved in Edit's **Details** block. Screens, Panels and Devices are collapsible
 sections, as in the VS Code explorer: click a section heading (or press
 Enter or Space on it) to fold it. All three headings stay visible, open
 sections share the height and scroll on their own, and the browser remembers
@@ -125,10 +126,18 @@ details in Edit's **Details** block (see [The config editor](#the-config-editor)
   device", showing the selected screen, or the first one.
 
 **Edit.** The header names the subject. For a screen it is the file editor:
-one tab per file, with `meta.yaml`, `script.lua` and `screen.svg` first and
-everything else after them alphabetically. **Save** and Cmd/Ctrl-S write the
-file you are in; see [Editing and saving](#editing-and-saving). For a panel
-or a device it is the [config editor](#the-config-editor).
+a **Details** block, then one tab per file, with `meta.yaml`, `script.lua`
+and `screen.svg` first and everything else after them alphabetically.
+**Save** and Cmd/Ctrl-S write the file you are in; see [Editing and
+saving](#editing-and-saving). For a panel or a device it is the [config
+editor](#the-config-editor).
+
+The screen's **Details** say where it lives: its **Repo** and its **Path**
+inside that repo. In a writable repo you can change both — the Repo menu
+lists every writable repo — and **Save** moves the screen there; see
+[Renaming and moving a screen](#renaming-and-moving-a-screen). A screen in a
+read-only repo (the built-in screens, `examples`, anything fetched from git)
+shows its Repo and Path as plain text.
 
 **Preview.** Always what is rendered. The header says which screen is shown
 as which hardware, and at which size. The controls depend on the subject:
@@ -196,20 +205,41 @@ The same banner appears when the file watcher reports a change to a file you
 have unsaved edits in — Byonk never silently replaces a buffer you are still
 working on.
 
-### New, Copy, Rename, Delete
+### Renaming and moving a screen
+
+Change the **Path** in Edit's Details block to rename a screen (`clock`, or
+`home/clock` to put it in a folder), or pick another **Repo** to move it
+there; both go in one **Save**. A dot next to "Details" marks a change not
+saved yet, and typing never re-renders the preview — the screen renders
+where it is until you save.
+
+**Save** then moves the screen's folder, every file in it. Into another
+repo it is copied and the original removed, as one step: if the original
+cannot be removed, the copy is removed again, so the screen is never in
+both places, nor in neither. Every device whose `screen:` in `config.yaml`
+named the old place is changed to the new one in the same step, comments
+kept, so no device is left pointing at nothing. The Library then shows the
+screen selected under its new name, and the preview renders it once.
+
+If you also have unsaved file edits, **Save** writes them first and moves the
+screen only once all of them are saved; a file save that is refused (see
+[Conflict detection](#conflict-detection)) stops the move. When the move is
+refused — the path is taken, or the repo is read-only — the Details keep
+what you typed and the reason shows under the Edit header until your next
+change. A screen needs a path: an emptied **Path** cannot be saved.
+
+### New, Copy, Delete
 
 | Button | What it needs | What it does |
 |--------|---------------|--------------|
 | **New** | a writable repo to put it in | Scaffolds `meta.yaml`, `script.lua` and `screen.svg` from a minimal starter. The generated `meta.yaml` pins the running engine's `byonk:` compatibility requirement. The screen is created in `local`, your own screen repo; if `local` is missing or read-only, the first writable repo is used instead. |
 | **Copy** | any selected screen | Forks it — every file in its folder — into `local`, the same default **New** uses. This works from `byonk-builtin` and from git-fetched repos, which is the supported way to customize a screen you cannot edit. |
-| **Rename** | a writable repo | Moves the screen within its own repo. You are asked to confirm first if you have unsaved edits, because the rename would leave them unsavable. |
 | **Delete** | a writable repo, or a selected panel or device | Removes the screen, or the panel or device from `config.yaml`. A panel that a device names with `panel:` is not removed; the message lists those devices. |
 
-**New**, **Copy** and **Rename** ask for the name in a small form under the
-Library toolbar (**Copy** and **Rename** start from the current name);
-**Delete** asks you to confirm there too, and names the screen, panel or
-device it would remove; its tooltip says which kind. When the screen has unsaved edits, **Rename** adds a second question —
-"Rename anyway?" — before it goes ahead. Enter confirms, Escape cancels. If the
+**New** and **Copy** ask for the name in a small form under the Library
+toolbar (**Copy** starts from the current name); **Delete** asks you to
+confirm there too, and names the screen, panel or device it would remove; its
+tooltip says which kind. Enter confirms, Escape cancels. If the
 server refuses the name, the form stays open so you can correct it. The
 editor's **+** and **−** work the same way.
 
@@ -598,7 +628,7 @@ than a redirect when you are not admitted.
 | `POST /dev/api/screen` | Create a screen from a starter |
 | `DELETE /dev/api/screen?ref=` | Delete a screen |
 | `POST /dev/api/screen/copy` | Fork a screen into a writable repo |
-| `POST /dev/api/screen/rename` | Rename a screen within its repo |
+| `POST /dev/api/screen/move` | Rename a screen within its repo, or move it into another writable one: body `{"ref", "to_handle", "to_name"}`. Every device whose `screen:` named `ref` is pointed at the new ref in the same request. Answers `{"ref": …, "rewritten": [device keys]}`; `409` when the target exists or a repo is read-only |
 | `POST /dev/api/screen/validate` | Validate a screen as it is on disk |
 | `POST /dev/api/screen/check` | Check one file's unsaved text |
 | `POST /dev/api/render` | Render a screen to PNG under simulated device context; the answer carries `X-Byonk-Resolution` (see [Rendering a preview](#rendering-a-preview)) |

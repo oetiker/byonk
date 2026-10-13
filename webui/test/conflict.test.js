@@ -240,7 +240,7 @@ describe("conflict handling", () => {
     it("a 428 PreconditionRequiredError does not throw and is recorded", async () => {
       await openDirty();
       vi.spyOn(api, "writeFile").mockRejectedValue(new api.PreconditionRequiredError());
-      await expect(editor.trySave()).resolves.toBeUndefined();
+      await expect(editor.trySave()).resolves.toBe(false); // resolves (no throw): "did not land"
       expect(editor.conflict).toBeNull();
       expect(editor.error).toMatchObject({ op: "save" });
     });
@@ -248,7 +248,7 @@ describe("conflict handling", () => {
     it("a generic failure (e.g. a 401 after session expiry) does not throw and is recorded", async () => {
       await openDirty();
       vi.spyOn(api, "writeFile").mockRejectedValue(new Error("401 Unauthorized"));
-      await expect(editor.trySave()).resolves.toBeUndefined();
+      await expect(editor.trySave()).resolves.toBe(false); // resolves (no throw): "did not land"
       expect(editor.error).toMatchObject({ op: "save" });
       expect(editor.error.message).toMatch(/401/);
     });

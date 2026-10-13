@@ -6,7 +6,7 @@
   import * as api from "../api.js";
   import { devicePanel } from "../render-request.js"; // the one device->panel lookup (ruling PF8)
   import { untrack } from "svelte";
-  import { FilePlus, Copy, Pencil, Trash2, Ellipsis, Plus } from "@lucide/svelte";
+  import { FilePlus, Copy, Trash2, Ellipsis, Plus } from "@lucide/svelte";
   import * as DropdownMenu from "$lib/ui/dropdown-menu/index.js";
   import { Button } from "$lib/ui/button/index.js";
   import PaneHeader from "./PaneHeader.svelte";
@@ -114,8 +114,7 @@
    * opens and submit acts on that, so a confirmation that names `local/a`
    * can never delete `local/b`; changing the subject closes it.
    *   { kind: "new" }
-   *   { kind: "copy" | "rename" | "delete", ref }
-   *   { kind: "rename-confirm", ref, name }   unsaved edits, name already given
+   *   { kind: "copy" | "delete", ref }
    *   { kind: "delete-entry", target, id, name } a panel or a device; `target`
    *                                              is its kind
    */
@@ -127,7 +126,6 @@
   });
 
   const pathOf = (ref) => ref.slice(ref.indexOf("/") + 1);
-  const hasUnsavedEdits = (ref) => editor.tabs.some((t) => t.ref === ref && t.dirty);
 
   function panelName(id) {
     return (screens.meta.panels ?? []).find((p) => p.id === id)?.name ?? id;
@@ -150,11 +148,8 @@
   function copyScreen() {
     if (subject.screenRef) ask = { kind: "copy", ref: subject.screenRef };
   }
-  function renameScreen() {
-    if (subject.screenRef) ask = { kind: "rename", ref: subject.screenRef };
-  }
-  // Delete acts on the subject whatever its kind (U7); Copy and Rename stay
-  // screen-only.
+  // Delete acts on the subject whatever its kind (U7); Copy stays
+  // screen-only. A screen is renamed or moved in the Edit pane's Details (U9).
   const DELETE_TIP = { screen: "Delete screen", panel: "Delete panel", device: "Delete device" };
   const deleteTip = $derived(DELETE_TIP[subject.kind] ?? "Delete screen");
   const canDelete = $derived(subject.kind === "panel" || subject.kind === "device" || canEdit);
@@ -245,24 +240,6 @@
     if (ok) ask = null;
   }
 
-  // Renaming reloads the editor under the new ref, which drops every buffer;
-  // unsaved edits get one more question first instead of vanishing.
-  function submitRename(name) {
-    if (hasUnsavedEdits(ask.ref)) ask = { kind: "rename-confirm", ref: ask.ref, name };
-    else return doRename(ask.ref, name);
-  }
-
-  async function doRename(from, name) {
-    const ok = await run("rename", async () => {
-      const { ref } = await api.renameScreen(from, name);
-      await screens.refresh();
-      subject.select("screen", ref);
-    });
-    if (ok) ask = null;
-    // A failed confirmed rename returns to the name form so the name can be fixed.
-    else if (ask?.kind === "rename-confirm") ask = { kind: "rename", ref: from, name };
-  }
-
   async function submitDelete() {
     const ref = ask.ref;
     const ok = await run("delete", async () => {
@@ -292,7 +269,7 @@
 <div class="flex min-h-0 min-w-0 flex-1 flex-col text-xs" role="region" aria-label="Library">
   <PaneHeader title="Library">
     {#snippet actions()}
-      <!-- Wide header: four icon buttons. Below 14rem (title + four buttons
+      <!-- Wide header: three icon buttons. Below 14rem (title + three buttons
            no longer fit; at 1024 px the pane is ~177 px, at its 12% minimum
            in an 800 px window ~136 px) they fold into one "More actions"
            menu. Both forms are in the DOM; the container query only hides
@@ -300,7 +277,6 @@
       <div data-testid="library-actions" class="flex items-center gap-1 @max-[14rem]:hidden">
         <IconButton icon={FilePlus} label="New" tip="New screen" onclick={newScreen} />
         <IconButton icon={Copy} label="Copy" tip="Copy screen" onclick={copyScreen} disabled={!subject.screenRef} />
-        <IconButton icon={Pencil} label="Rename" tip="Rename screen" onclick={renameScreen} disabled={!canEdit} />
         <IconButton icon={Trash2} label="Delete" tip={deleteTip} onclick={deleteSubject} disabled={!canDelete} />
       </div>
       <div data-testid="library-actions-menu" class="hidden @max-[14rem]:flex">
@@ -318,7 +294,6 @@
           <DropdownMenu.Content align="end" onCloseAutoFocus={(e) => e.preventDefault()}>
             <DropdownMenu.Item aria-label="New" onSelect={newScreen}><FilePlus aria-hidden="true" />New screen</DropdownMenu.Item>
             <DropdownMenu.Item aria-label="Copy" disabled={!subject.screenRef} onSelect={copyScreen}><Copy aria-hidden="true" />Copy screen</DropdownMenu.Item>
-            <DropdownMenu.Item aria-label="Rename" disabled={!canEdit} onSelect={renameScreen}><Pencil aria-hidden="true" />Rename screen</DropdownMenu.Item>
             <DropdownMenu.Item aria-label="Delete" variant="destructive" disabled={!canDelete} onSelect={deleteSubject}><Trash2 aria-hidden="true" />{deleteTip}</DropdownMenu.Item>
             <DropdownMenu.Separator />
             <DropdownMenu.Item onSelect={newPanel}><Plus aria-hidden="true" />Add panel</DropdownMenu.Item>
@@ -333,16 +308,6 @@
     <InlineNameForm label="New screen name" onsubmit={submitNew} oncancel={closeForm} />
   {:else if ask?.kind === "copy"}
     <InlineNameForm label="Copy to name" value={pathOf(ask.ref)} onsubmit={submitCopy} oncancel={closeForm} />
-  {:else if ask?.kind === "rename"}
-    <InlineNameForm label="Rename to" value={ask.name ?? pathOf(ask.ref)} onsubmit={submitRename} oncancel={closeForm} />
-  {:else if ask?.kind === "rename-confirm"}
-    <InlineConfirm
-      label="Confirm rename with unsaved edits"
-      message={`${ask.ref} has unsaved edits that renaming would discard. Rename anyway?`}
-      confirmLabel="Rename anyway"
-      onconfirm={() => doRename(ask.ref, ask.name)}
-      oncancel={closeForm}
-    />
   {:else if ask?.kind === "delete"}
     <InlineConfirm
       label="Confirm screen deletion"

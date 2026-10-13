@@ -98,7 +98,7 @@ still referencing it, and your edits are safe from the next git fetch.
 
 The quickest way is the built-in screen editor: select the screen, press
 **Copy**, and pick a writable repo to fork it into — see
-[Dev Mode](dev-mode.md#new-copy-rename-delete). It carries over every file in
+[Dev Mode](dev-mode.md#new-copy-delete). It carries over every file in
 the screen's folder, not just the core three.
 
 You can also do it by hand: copy the screen's `meta.yaml`, `script.lua`, and
@@ -141,8 +141,8 @@ only those can be edited in place, so fork a builtin first.
 ## Editing in the browser
 
 Byonk also ships a web-based screen editor at `/dev/`: a screens list, a code
-editor, and a live preview, plus the New / Copy / Rename / Delete operations
-over the same `ScreenStore` the MCP tools use. See [Dev Mode](dev-mode.md) for
+editor, and a live preview, plus the New / Copy / Delete operations and
+renaming or moving a screen, over the same `ScreenStore` the MCP tools use. See [Dev Mode](dev-mode.md) for
 how to enable and open it.
 
 ## Next Steps

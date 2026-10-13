@@ -41,12 +41,13 @@ class Subject {
   }
 
   /**
-   * An entry was renamed (a panel Id or device Key saved under a new name):
-   * the subject, mode a's target and mode b's watched device follow it, so
-   * the preview keeps rendering the renamed entry.
+   * An entry was renamed (a panel Id or device Key saved under a new name,
+   * a screen moved): the subject, mode a's target, mode b's watched device
+   * and borrowed screen follow it, so the preview keeps rendering it.
    */
   renamed(kind, from, to) {
     if (this.is(kind, from)) this.id = to;
+    if (kind === "screen" && this.borrowedScreen === from) this.borrowedScreen = to;
     if (this.target?.kind === kind && this.target.id === from) this.target = { kind, id: to };
     if (kind === "device" && this.watchDevice === from) this.watchDevice = to;
   }

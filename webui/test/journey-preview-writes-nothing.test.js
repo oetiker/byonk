@@ -85,7 +85,7 @@ describe("spec §2 rule 2: the Preview panel never writes anything", () => {
     const calls = stubServer();
     const writers = ["pushPanelOverride", "releasePanelOverride", "pushDeviceOverride", "releaseDeviceOverride",
       "savePanel", "saveDevice", "startTuningSession", "endTuningSession", "writeFile", "deleteFile",
-      "createScreen", "copyScreen", "renameScreen", "deleteScreen"].map((n) => vi.spyOn(api, n));
+      "createScreen", "copyScreen", "moveScreen", "deleteScreen"].map((n) => vi.spyOn(api, n));
     await mount();
 
     await fireEvent.click(dom.getByRole("button", { name: "a" }));

@@ -34,6 +34,14 @@ pub struct ScreenRefOutput {
     pub screen_ref: String,
 }
 
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct RenamedScreenOutput {
+    pub screen_ref: String,
+    /// Device keys whose `screen:` named the old reference and now names the
+    /// new one.
+    pub rewritten_devices: Vec<String>,
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CreateScreenArgs {
     /// Writable repo handle on its own — `local`, not `local/clock`. Only a
@@ -157,18 +165,25 @@ impl ByonkMcp {
     }
 
     #[tool(
-        description = "Rename a screen within its repo. Devices still pointing at the old \
-                          reference will stop resolving — reassign them with configure_device."
+        description = "Rename a screen within its repo. Every device whose screen is the old \
+                          reference is pointed at the new one in config.yaml, in the same call \
+                          (the dev UI's move does the same); the result lists them."
     )]
     pub async fn rename_screen(
         &self,
         Parameters(a): Parameters<RenameScreenArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let store = self.state.screen_store.clone();
-        let outcome = blocking(move || store.rename_screen(&a.screen_ref, &a.new_path)).await?;
-        match outcome {
-            Ok(screen_ref) => ok_json(ScreenRefOutput { screen_ref }),
-            Err(e) => Ok(store_failure(e)),
+        use crate::api::screen_move::{apply_screen_move, MoveError};
+        let handle = a.screen_ref.split_once('/').map_or("", |(h, _)| h);
+        match apply_screen_move(&self.state, &a.screen_ref, handle, &a.new_path).await {
+            Ok(m) => ok_json(RenamedScreenOutput {
+                screen_ref: m.screen_ref,
+                rewritten_devices: m.rewritten,
+            }),
+            Err(MoveError::Store(e)) => Ok(store_failure(e)),
+            Err(MoveError::Config(e)) => Ok(CallToolResult::error(vec![
+                rmcp::model::ContentBlock::text(e.to_string()),
+            ])),
         }
     }
 

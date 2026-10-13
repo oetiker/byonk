@@ -79,9 +79,10 @@ struct CopyIn {
 }
 
 #[derive(Deserialize)]
-struct RenameIn {
+struct MoveIn {
     r#ref: String,
-    name: String,
+    to_handle: String,
+    to_name: String,
 }
 
 #[derive(Deserialize)]
@@ -308,15 +309,25 @@ async fn copy(
     Ok(Json(serde_json::json!({"ref": r})))
 }
 
-async fn rename(
+/// Rename a screen inside its repo, or move it into another writable one,
+/// and point every device on it at the new ref (U9). Answers
+/// `{ref, rewritten: [device keys]}`.
+async fn move_screen(
     State(s): State<AppState>,
-    Json(b): Json<RenameIn>,
+    Json(b): Json<MoveIn>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let store = s.screen_store.clone();
-    let r = blocking(move || store.rename_screen(&b.r#ref, &b.name))
-        .await?
-        .map_err(map_store)?;
-    Ok(Json(serde_json::json!({"ref": r})))
+    use crate::api::screen_move::{apply_screen_move, MoveError};
+    let target = format!("{}/{}", b.to_handle, b.to_name);
+    match apply_screen_move(&s, &b.r#ref, &b.to_handle, &b.to_name).await {
+        Ok(m) => Ok(Json(
+            serde_json::json!({"ref": m.screen_ref, "rewritten": m.rewritten}),
+        )),
+        Err(MoveError::Store(StoreError::Conflict)) => Err(ApiError::Conflict(format!(
+            "screen `{target}` already exists"
+        ))),
+        Err(MoveError::Store(e)) => Err(map_store(e)),
+        Err(MoveError::Config(e)) => Err(e),
+    }
 }
 
 async fn delete_screen(
@@ -361,7 +372,7 @@ pub fn files_router() -> Router<AppState> {
         .route("/file", get(read_file).put(write_file).delete(delete_file))
         .route("/screen", post(create).delete(delete_screen))
         .route("/screen/copy", post(copy))
-        .route("/screen/rename", post(rename))
+        .route("/screen/move", post(move_screen))
         .route("/screen/validate", post(validate))
         .route("/screen/check", post(check))
 }

@@ -760,7 +760,19 @@ impl ScreenStore {
         // the filesystem, not in-memory state a panicking thread could have
         // torn. Recover and proceed.
         let _guard = self.mutation_lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.copy_locked(from_ref, to_handle, to_name)?;
+        self.manager.rebuild_loader();
+        Ok(format!("{to_handle}/{to_name}"))
+    }
 
+    /// `copy_screen`'s body, for a caller already holding `mutation_lock`.
+    /// Does not rebuild the loader. Returns the destination directory.
+    fn copy_locked(
+        &self,
+        from_ref: &str,
+        to_handle: &str,
+        to_name: &str,
+    ) -> Result<PathBuf, StoreError> {
         let (from_handle, from_path) = Self::split_ref(from_ref)?;
         let to_path = safe_rel(to_name)?;
 
@@ -787,9 +799,7 @@ impl ScreenStore {
             let _ = std::fs::remove_dir_all(&to_dir);
             return Err(e);
         }
-
-        self.manager.rebuild_loader();
-        Ok(format!("{to_handle}/{to_name}"))
+        Ok(to_dir)
     }
 
     /// Copy every file `from_source.screen_files(from_path)` lists into
@@ -841,7 +851,94 @@ impl ScreenStore {
         // the filesystem, not in-memory state a panicking thread could have
         // torn. Recover and proceed.
         let _guard = self.mutation_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let r = self.rename_locked(screen_ref, new_name)?;
+        self.manager.rebuild_loader();
+        Ok(r)
+    }
 
+    /// Move a screen to `to_handle/to_name`: a rename when the handle stays
+    /// the same, else a copy into the other repo and a delete of the source,
+    /// as ONE operation under the mutation lock. Both repos must be
+    /// writable. Should the source refuse to go after the copy landed, the
+    /// copy is removed again: the screen is never in both places, nor in
+    /// neither.
+    pub fn move_screen(
+        &self,
+        from_ref: &str,
+        to_handle: &str,
+        to_name: &str,
+    ) -> Result<String, StoreError> {
+        let _guard = self.mutation_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let (from_handle, from_path) = Self::split_ref(from_ref)?;
+        if from_handle == to_handle {
+            let r = self.rename_locked(from_ref, to_name)?;
+            self.manager.rebuild_loader();
+            return Ok(r);
+        }
+
+        // Every refusal is decided before anything is written.
+        let from_base = self.resolve_writable_root(from_handle, from_path)?;
+        let from_dir = from_base.join(from_path);
+        if !from_dir.join("meta.yaml").is_file() {
+            return Err(StoreError::NotFound);
+        }
+        let loader = self.manager.loader();
+        let to_source = loader.source_for(to_handle).ok_or(StoreError::NotFound)?;
+        if to_source.writable_root().is_none() {
+            return Err(StoreError::ReadOnly {
+                copy_hint: format!(
+                    "'{to_handle}' is read-only; a screen can only move into a writable repo"
+                ),
+            });
+        }
+        drop(loader);
+
+        let to_dir = self.copy_locked(from_ref, to_handle, to_name)?;
+        if let Err(e) = Self::discard_screen_dir(&from_base, &from_dir) {
+            // The source stays; so the copy must go.
+            let _ = std::fs::remove_dir_all(&to_dir);
+            return Err(e);
+        }
+        self.manager.rebuild_loader();
+        Ok(format!("{to_handle}/{to_name}"))
+    }
+
+    /// Remove a screen directory without ever leaving a half-deleted screen
+    /// the loader would still list. First an atomic rename to a hidden
+    /// sibling (fails => nothing changed), then its `meta.yaml` goes (fails
+    /// => renamed back, nothing changed): from there on the loader no longer
+    /// sees a screen, and a failure to clear the rest is only logged.
+    fn discard_screen_dir(base: &Path, dir: &Path) -> Result<(), StoreError> {
+        let canon_base = base
+            .canonicalize()
+            .map_err(|e| StoreError::Io(e.to_string()))?;
+        let canon_dir = dir
+            .canonicalize()
+            .map_err(|e| StoreError::Io(e.to_string()))?;
+        if !canon_dir.starts_with(&canon_base) || canon_dir == canon_base {
+            return Err(StoreError::Traversal);
+        }
+        let parent = dir.parent().unwrap_or(base);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        let trash = parent.join(format!(".byonk-moved-{}-{stamp}", std::process::id()));
+        std::fs::rename(dir, &trash)
+            .map_err(|e| StoreError::Io(format!("remove {}: {e}", dir.display())))?;
+        if let Err(e) = std::fs::remove_file(trash.join("meta.yaml")) {
+            let _ = std::fs::rename(&trash, dir);
+            return Err(StoreError::Io(format!("remove {}: {e}", dir.display())));
+        }
+        if let Err(e) = std::fs::remove_dir_all(&trash) {
+            tracing::warn!(dir = %trash.display(), error = %e, "moved screen: leftover not removed");
+        }
+        Ok(())
+    }
+
+    /// `rename_screen`'s body, for a caller already holding `mutation_lock`.
+    /// Does not rebuild the loader.
+    fn rename_locked(&self, screen_ref: &str, new_name: &str) -> Result<String, StoreError> {
         let (handle, screen_path) = Self::split_ref(screen_ref)?;
         let new_path = safe_rel(new_name)?;
         let base = self.resolve_writable_root(handle, screen_path)?;
@@ -885,7 +982,6 @@ impl ScreenStore {
         std::fs::create_dir_all(new_parent).map_err(|e| StoreError::Io(e.to_string()))?;
 
         std::fs::rename(&old_dir, &new_dir).map_err(|e| StoreError::Io(e.to_string()))?;
-        self.manager.rebuild_loader();
         Ok(format!("{handle}/{new_name}"))
     }
 

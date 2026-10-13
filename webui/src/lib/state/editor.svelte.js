@@ -1,5 +1,6 @@
 import * as api from "../api.js";
 import { screens } from "./screens.svelte.js";
+import { subject } from "./subject.svelte.js";
 
 /** How long after its own write the page ignores the watcher reporting it. */
 const OWN_WRITE_ECHO_MS = 2000;
@@ -99,6 +100,19 @@ class Editor {
    */
   diskRevision = $state(0);
 
+  /**
+   * Where Save would move the screen (U9): `{handle, path}`, or null while
+   * the Details block is untouched. Save-only -- nothing renders it.
+   */
+  moveDraft = $state(null);
+
+  /**
+   * Why the last move was refused (a 409 for a taken path, a read-only
+   * repo), or null. Shown once, in the Edit pane's message row, and gone on
+   * the next Details edit or a successful move.
+   */
+  moveFailure = $state(null);
+
   /** basename -> when this page last wrote it; see `onWatchEvent`. */
   #ownWrites = new Map();
 
@@ -136,12 +150,45 @@ class Editor {
     return this.tabs[this.activeIndex] ?? null;
   }
 
+  /** The loaded screen's own place, `{handle, path}`, or null. */
+  get place() {
+    if (!this.ref) return null;
+    const i = this.ref.indexOf("/");
+    return { handle: this.ref.slice(0, i), path: this.ref.slice(i + 1) };
+  }
+
+  /** Where the screen is going: the Details draft, else where it is. */
+  get target() {
+    return this.moveDraft ?? this.place;
+  }
+
+  /** The Details name a place other than the screen's own. */
+  get moveDirty() {
+    const d = this.moveDraft;
+    const p = this.place;
+    return !!d && !!p && (d.handle !== p.handle || d.path.trim() !== p.path);
+  }
+
+  /** The Details hold an emptied Path: nothing a move could go to. */
+  get moveMissing() {
+    return !!this.moveDraft && this.moveDraft.path.trim() === "";
+  }
+
+  /** Edit one Details field (`"handle"` or `"path"`). */
+  setTarget(field, value) {
+    if (!this.place) return;
+    this.moveDraft = { ...this.target, [field]: value };
+    this.moveFailure = null;
+  }
+
   reset() {
     this.ref = null;
     this.tabs = [];
     this.activeIndex = -1;
     this.conflict = null;
     this.error = null;
+    this.moveDraft = null;
+    this.moveFailure = null;
     this.cursorLine = 1;
     this.cursorCol = 1;
     // A validate result describes ONE screen. Carrying it across a switch
@@ -279,8 +326,7 @@ class Editor {
     t.issues = report.issues ?? [];
   }
 
-  async save() {
-    const t = this.active;
+  async save(t = this.active) {
     if (!t) return;
     const { etag } = await api.writeFile(t.ref, t.name, t.text, t.etag);
     t.etag = etag;
@@ -418,19 +464,18 @@ class Editor {
    * into the generic branch below along with a 401, a dropped connection,
    * or a disk error -- plus anything else `save()` can throw.
    */
-  async trySave() {
-    const t = this.active;
-    if (!t) return;
+  async trySave(t = this.active) {
+    if (!t) return false;
     this.error = null;
     try {
-      await this.save();
+      await this.save(t);
     } catch (e) {
       if (e instanceof api.ConflictError) {
         this.conflict = { ref: t.ref, name: t.name, source: "save" };
-        return;
+        return false;
       }
       this.error = { op: "save", message: e.message };
-      return;
+      return false;
     }
 
     // Spec :315 -- "after a successful save the page runs `validate` on the
@@ -446,6 +491,55 @@ class Editor {
     } catch (e) {
       this.error = { op: "validate", message: e.message };
     }
+    return true;
+  }
+
+  /**
+   * The Edit pane's Save. Without a Details change it saves the active file,
+   * as before. With one, it writes every unsaved file of the screen first --
+   * moving reloads the editor under the new ref, which would drop them --
+   * and moves only when all of them landed.
+   */
+  async commit() {
+    if (!this.moveDirty) return this.trySave();
+    if (this.moveMissing) return false;
+    for (const t of this.tabs.filter((x) => x.ref === this.ref && x.dirty && !x.readOnly)) {
+      if (!(await this.trySave(t))) return false;
+    }
+    return this.move();
+  }
+
+  /**
+   * Move the screen to the Details' place. The server rewrites the devices
+   * on it; the subject (and mode b's borrowed screen) follow the new ref in
+   * the same step that installs the refreshed lists, so the preview renders
+   * once, for the new ref. A refusal keeps the draft and lands on
+   * `moveFailure`.
+   */
+  async move() {
+    const from = this.ref;
+    const { handle, path } = this.target;
+    this.moveFailure = null;
+    let moved;
+    try {
+      moved = await api.moveScreen(from, handle, path.trim());
+    } catch (e) {
+      this.moveFailure = e?.message ?? String(e);
+      return false;
+    }
+    // The watcher reports the moved files a moment later; that is this
+    // page's own write, not an outside edit to render again.
+    const now = Date.now();
+    for (const f of this.files) this.#ownWrites.set(f.name, now);
+    this.moveDraft = null;
+    const follow = () => subject.renamed("screen", from, moved.ref);
+    try {
+      await screens.refresh({ applied: follow });
+    } catch (e) {
+      follow();
+      screens.error = { op: "refresh", message: e?.message ?? String(e) };
+    }
+    return true;
   }
 
   /**

@@ -119,7 +119,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   You can create a screen from a starter, copy any screen — including the
   built-in ones and anything fetched from git — into a repo you can write to,
-  rename it, and delete it. Every file in a screen is editable, not just the
+  and delete it. To rename a screen or move it to another writable repo,
+  change its Repo and Path in Edit's Details block and save; devices showing
+  it follow it in `config.yaml`, and so do they when an AI agent renames a
+  screen over MCP. Every file in a screen is editable, not just the
   core three, and you can add new ones.
 
   Saving checks that the file has not changed underneath you. If it has —

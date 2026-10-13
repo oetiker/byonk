@@ -170,4 +170,37 @@ describe("Details block of a screen", () => {
     expect(move).not.toHaveBeenCalled();
     expect(subject.key).toBe("screen:local/a");
   });
+
+  it("the watcher's echo of a move is this page's own write: no extra render", async () => {
+    vi.spyOn(api, "moveScreen").mockResolvedValue({ ref: "local/b", rewritten: [] });
+    const details = await open("local/a");
+    await type(within(details).getByLabelText("Path"), "b");
+    await fireEvent.click(dom.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(subject.key).toBe("screen:local/b"));
+    const rev = editor.diskRevision;
+    await editor.onWatchEvent(["script.lua"]);
+    expect(editor.diskRevision).toBe(rev);
+  });
+
+  it("Cmd/Ctrl-S does what Save does: it moves too", async () => {
+    const move = vi.spyOn(api, "moveScreen").mockResolvedValue({ ref: "local/b", rewritten: [] });
+    const details = await open("local/a");
+    await type(within(details).getByLabelText("Path"), "b");
+    await lastOpts.onSave();
+    await waitFor(() => expect(subject.key).toBe("screen:local/b"));
+    expect(move).toHaveBeenCalledWith("local/a", "local", "b");
+  });
+
+  it("a refused move after a quiet file save renders the saved file after all", async () => {
+    vi.spyOn(api, "writeFile").mockResolvedValue({ etag: '"2"' });
+    vi.spyOn(api, "moveScreen").mockRejectedValue(new Error("409 Conflict: taken"));
+    const details = await open("local/a");
+    lastOpts.onChange("-- edited");
+    flushSync();
+    await type(within(details).getByLabelText("Path"), "b");
+    const rev = editor.diskRevision;
+    await fireEvent.click(dom.getByRole("button", { name: "Save" }));
+    await dom.findByRole("alert");
+    expect(editor.diskRevision).toBe(rev + 1);
+  });
 });

@@ -116,9 +116,10 @@ class Editor {
   /** basename -> when this page last wrote it; see `onWatchEvent`. */
   #ownWrites = new Map();
 
-  #wrote(name) {
+  /** `quiet`: record the own write but leave the render to the caller (a move). */
+  #wrote(name, { quiet = false } = {}) {
     this.#ownWrites.set(name, Date.now());
-    this.diskRevision += 1;
+    if (!quiet) this.diskRevision += 1;
   }
 
   /**
@@ -326,12 +327,12 @@ class Editor {
     t.issues = report.issues ?? [];
   }
 
-  async save(t = this.active) {
+  async save(t = this.active, { quiet = false } = {}) {
     if (!t) return;
     const { etag } = await api.writeFile(t.ref, t.name, t.text, t.etag);
     t.etag = etag;
     t.saved = t.text;
-    this.#wrote(t.name);
+    this.#wrote(t.name, { quiet });
   }
 
   /**
@@ -464,11 +465,11 @@ class Editor {
    * into the generic branch below along with a 401, a dropped connection,
    * or a disk error -- plus anything else `save()` can throw.
    */
-  async trySave(t = this.active) {
+  async trySave(t = this.active, { quiet = false } = {}) {
     if (!t) return false;
     this.error = null;
     try {
-      await this.save(t);
+      await this.save(t, { quiet });
     } catch (e) {
       if (e instanceof api.ConflictError) {
         this.conflict = { ref: t.ref, name: t.name, source: "save" };
@@ -499,14 +500,27 @@ class Editor {
    * as before. With one, it writes every unsaved file of the screen first --
    * moving reloads the editor under the new ref, which would drop them --
    * and moves only when all of them landed.
+   *
+   * One render for the whole Save, of the new ref: the file saves are quiet
+   * (no `diskRevision` bump, which would render the old ref first) and the
+   * move's subject change renders the new place with the saved files. Only
+   * when nothing moves -- a save or the move refused -- does a landed file
+   * save render after all, so the preview never hides a saved change.
    */
   async commit() {
     if (!this.moveDirty) return this.trySave();
     if (this.moveMissing) return false;
+    let saved = false;
     for (const t of this.tabs.filter((x) => x.ref === this.ref && x.dirty && !x.readOnly)) {
-      if (!(await this.trySave(t))) return false;
+      if (!(await this.trySave(t, { quiet: true }))) {
+        if (saved) this.diskRevision += 1;
+        return false;
+      }
+      saved = true;
     }
-    return this.move();
+    const moved = await this.move();
+    if (!moved && saved) this.diskRevision += 1;
+    return moved;
   }
 
   /**

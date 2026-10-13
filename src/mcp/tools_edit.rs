@@ -167,7 +167,9 @@ impl ByonkMcp {
     #[tool(
         description = "Rename a screen within its repo. Every device whose screen is the old \
                           reference is pointed at the new one in config.yaml, in the same call \
-                          (the dev UI's move does the same); the result lists them."
+                          (the dev UI's move does the same); the result lists them. When devices use \
+                          the screen and config.yaml is embedded/read-only, the rename is refused \
+                          and nothing moves."
     )]
     pub async fn rename_screen(
         &self,

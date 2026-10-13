@@ -130,9 +130,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused and you are offered a choice between reloading and overwriting,
   rather than one of the two edits vanishing.
 
-  Editing in place needs a writable screen repo: `local`, `examples`, or one
-  registered with `path:`. The built-in screens and any repo fetched from git
-  stay read-only, so the way to customize one is **Copy** — the same
+  Editing in place needs a writable screen repo: `local`, or one registered
+  with `path:`. The built-in screens, the shipped `examples` and any repo
+  fetched from git stay read-only, so the way to customize one is **Copy** — the same
   fork-to-edit that previously meant copying directories in a shell.
 
   **Panels and devices are edited the same way.** Pick a panel profile or a

@@ -185,6 +185,9 @@ dirty marker until the bytes reach disk.
 - The **Save** button next to the tabs does the same thing: it saves the
   active file, not every file you have changed. Switch to a tab and save it
   to save it.
+- With a Repo or Path change pending in Details, both save every changed
+  file and then move the screen; see [Renaming and moving a
+  screen](#renaming-and-moving-a-screen).
 
 In a read-only repo the files open read-only: you cannot type in them at all.
 Cmd/Ctrl-S still fires there, and is answered with a message naming the repo
@@ -209,7 +212,7 @@ working on.
 
 Change the **Path** in Edit's Details block to rename a screen (`clock`, or
 `home/clock` to put it in a folder), or pick another **Repo** to move it
-there; both go in one **Save**. A dot next to "Details" marks a change not
+there; both go in one **Save** (or Cmd/Ctrl-S). A dot next to "Details" marks a change not
 saved yet, and typing never re-renders the preview — the screen renders
 where it is until you save.
 
@@ -223,7 +226,9 @@ screen selected under its new name, and the preview renders it once.
 
 If you also have unsaved file edits, **Save** writes them first and moves the
 screen only once all of them are saved; a file save that is refused (see
-[Conflict detection](#conflict-detection)) stops the move. When the move is
+[Conflict detection](#conflict-detection)) stops the move. Either way the
+preview renders once: the moved screen with your saved files, or, when
+nothing moved, the screen where it is. When the move is
 refused — the path is taken, or the repo is read-only — the Details keep
 what you typed and the reason shows under the Edit header until your next
 change. A screen needs a path: an emptied **Path** cannot be saved.

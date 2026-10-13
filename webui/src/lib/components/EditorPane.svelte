@@ -78,7 +78,9 @@
       // codemirror.js's Mod-s keymap was calling nothing. trySave() is
       // this store's own conflict-aware save, so wiring it straight through
       // here also gets the keybinding conflict handling for free.
-      onSave: () => editor.trySave(),
+      // commit(), not trySave(): the keybinding does what the Save button
+      // does, a pending Repo/Path move included (U9).
+      onSave: () => editor.commit(),
       onCursor: (line, col) => editor.setCursor(line, col),
     });
     return () => {

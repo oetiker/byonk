@@ -75,7 +75,7 @@ Or as a JSON config block (the shape most MCP clients accept):
 | `write_screen_file` | Write one file inside a screen, atomically (supports optimistic-concurrency `if_match`). UTF-8 text only — refuses to overwrite an existing binary asset. |
 | `create_screen` | Scaffold a new screen from the minimal starter (`meta.yaml`, `script.lua`, `screen.svg`). |
 | `copy_screen` | Fork any screen — including read-only builtins and examples — into a writable repo. |
-| `rename_screen` | Move a screen to a different path within its repo. Every device whose `screen:` named the old reference is pointed at the new one in `config.yaml`, in the same call, and the result lists them (`rewritten_devices`). |
+| `rename_screen` | Move a screen to a different path within its repo. Every device whose `screen:` named the old reference is pointed at the new one in `config.yaml`, in the same call, and the result lists them (`rewritten_devices`). When devices use the screen and the config is embedded or read-only (no `CONFIG_FILE`), the rename is refused and nothing moves. |
 | `delete_screen` | Delete a screen and every file in its directory. |
 | `delete_screen_file` | Delete one sibling asset from a screen directory. |
 

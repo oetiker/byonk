@@ -304,3 +304,29 @@ async fn the_mcp_rename_rewrites_the_device_refs_too() {
     assert_eq!(d["devices"]["study"]["screen"], "local/other");
     assert!(f.root.join("local/wall/meta.yaml").is_file());
 }
+
+/// config.yaml cannot be rewritten after the files moved: the move is undone,
+/// so the screen is back where every device still points.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_config_that_cannot_be_written_undoes_the_move() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = fixture().await;
+    let before = std::fs::read_to_string(&f.config).unwrap();
+    // config.yaml's directory refuses the temp file `persist` writes; the
+    // repos below it stay writable.
+    std::fs::set_permissions(&f.root, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let same = move_screen(&f, "local/clock", "local", "wall").await;
+    let across = move_screen(&f, "local/clock", "shared", "clock").await;
+    std::fs::set_permissions(&f.root, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    for r in [&same, &across] {
+        assert_eq!(r.status, StatusCode::INTERNAL_SERVER_ERROR, "{}", r.text());
+    }
+    assert!(f.root.join("local/clock/meta.yaml").is_file());
+    assert!(!f.root.join("local/wall").exists());
+    assert!(!f.root.join("shared/clock").exists());
+    assert_eq!(std::fs::read_to_string(&f.config).unwrap(), before);
+    let listed = refs(&f).await;
+    assert!(listed.contains(&"local/clock".to_string()), "{listed:?}");
+}

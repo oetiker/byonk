@@ -69,7 +69,23 @@ pub async fn apply_screen_move(
             // Put the screen back where the config still points.
             let store = state.screen_store.clone();
             let (back, (handle, path)) = (screen_ref.clone(), split(from_ref));
-            let _ = blocking(move || store.move_screen(&back, &handle, &path)).await;
+            let undo = match blocking(move || store.move_screen(&back, &handle, &path)).await {
+                Ok(Ok(_)) => Ok(()),
+                Ok(Err(store_err)) => Err(format!("{store_err:?}")),
+                Err(join_err) => Err(format!("{join_err:?}")),
+            };
+            if let Err(undo_err) = undo {
+                tracing::error!(
+                    from = %from_ref, to = %screen_ref, config_error = %e, undo_error = %undo_err,
+                    "screen moved, config.yaml not updated, and the move could not be undone"
+                );
+                return Err(MoveError::Config(undo_failed(
+                    from_ref,
+                    &screen_ref,
+                    &e,
+                    &undo_err,
+                )));
+            }
             return Err(MoveError::Config(e));
         }
     }
@@ -98,6 +114,16 @@ fn rewrite_refs(
     crate::api::config_persist::persist(state, path, yaml)
 }
 
+/// The error for the one state the core cannot repair: the files are at the
+/// new place, config.yaml still names the old one. Says exactly that.
+fn undo_failed(from_ref: &str, new_ref: &str, config_err: &ApiError, undo_err: &str) -> ApiError {
+    ApiError::Internal(format!(
+        "the screen is now at `{new_ref}`, but config.yaml was not updated ({config_err}) \
+         and moving it back to `{from_ref}` failed ({undo_err}); devices still name \
+         `{from_ref}` -- move the screen back or point them at `{new_ref}`"
+    ))
+}
+
 fn split(screen_ref: &str) -> (String, String) {
     let (h, p) = screen_ref.split_once('/').unwrap_or((screen_ref, ""));
     (h.to_owned(), p.to_owned())
@@ -109,4 +135,25 @@ async fn blocking<T: Send + 'static>(
     tokio::task::spawn_blocking(f)
         .await
         .map_err(|e| MoveError::Config(ApiError::Internal(e.to_string())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_undo_says_where_the_screen_is_and_that_config_was_not_updated() {
+        let e = undo_failed(
+            "local/clock",
+            "shared/clock",
+            &ApiError::Internal("write temp: denied".into()),
+            "Io(\"busy\")",
+        )
+        .to_string();
+        assert!(e.contains("now at `shared/clock`"), "{e}");
+        assert!(e.contains("config.yaml was not updated"), "{e}");
+        assert!(e.contains("write temp: denied"), "{e}");
+        assert!(e.contains("back to `local/clock` failed"), "{e}");
+        assert!(e.contains("busy"), "{e}");
+    }
 }

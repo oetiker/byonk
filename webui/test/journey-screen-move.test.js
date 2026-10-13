@@ -111,4 +111,37 @@ describe("Moving a screen", () => {
     expect(within(details).queryByRole("img", { name: "unsaved changes" })).toBeNull();
     expect(dom.getByRole("button", { name: "Save" })).toBeDisabled();
   });
+
+  it("Save with a file edit and a new Path writes the file, moves, and renders once -- the new ref", async () => {
+    const calls = stubServer();
+    vi.spyOn(api, "validateScreen").mockResolvedValue({ ok: true, issues: [] });
+    const write = vi.spyOn(api, "writeFile").mockResolvedValue({ etag: '"2"' });
+    vi.spyOn(api, "moveScreen").mockImplementation(async (_ref, handle, name) => {
+      api.listScreens.mockResolvedValue(payload([`${handle}/${name}`, "local/other"]));
+      return { ref: `${handle}/${name}`, rewritten: [] };
+    });
+
+    render(AppShell);
+    await waitFor(() => expect(screens.list).toHaveLength(2));
+    await tick();
+    const library = dom.getByRole("region", { name: "Library" });
+    await fireEvent.click(within(library).getByRole("button", { name: "a" }));
+    await waitFor(() => expect(editor.active?.name).toBe("script.lua"));
+    await settle();
+
+    editor.setText("-- edited");
+    const path = within(dom.getByRole("region", { name: "Details" })).getByLabelText("Path");
+    path.value = "b";
+    await fireEvent.input(path);
+    await settle();
+
+    const saved = calls.length;
+    await fireEvent.click(dom.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(subject.key).toBe("screen:local/b"));
+    expect(write).toHaveBeenCalledWith("local/a", "script.lua", "-- edited", '"1"');
+    await waitFor(() => expect(renderBodies(calls, saved).length).toBeGreaterThan(0));
+    await settle();
+    expect(renderBodies(calls, saved)).toHaveLength(1);
+    expect(renderBodies(calls, saved)[0]).toMatchObject({ screen: "local/b" });
+  });
 });

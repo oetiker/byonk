@@ -825,7 +825,8 @@ impl AppConfig {
     ///
     /// Currently checks that no `screen_repos` entry sets both `repo` and
     /// `path` (they are mutually exclusive: one is a git remote, the other a
-    /// writable local directory).
+    /// writable local directory), and that every panel's `width`/`height`
+    /// lies within `1..=MAX_PANEL_DIMENSION`.
     pub fn validate(&self) -> Result<(), String> {
         for (handle, entry) in &self.screen_repos {
             entry.validate(handle)?;

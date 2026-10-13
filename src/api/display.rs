@@ -13,6 +13,7 @@ use super::resolution::{
     resolve_pre_script, resolve_render, PreScriptInputs, RenderInputs, RungSettings,
 };
 use crate::error::ApiError;
+use crate::models::display_spec::MAX_PANEL_DIMENSION;
 use crate::models::{
     verify_ed25519_signature, ApiKey, AppConfig, CascadeValues, Device, DeviceId, DisplaySpec,
     DitherTuningValues, PanelConfig, PanelDitherConfig,
@@ -30,8 +31,6 @@ use crate::services::{
 };
 
 // Maximum allowed display dimensions to prevent DoS
-const MAX_DISPLAY_WIDTH: u32 = 2000;
-const MAX_DISPLAY_HEIGHT: u32 = 2000;
 
 /// Default 4-grey palette for devices that don't send a Colors header
 const DEFAULT_COLORS: &str = "#000000,#555555,#AAAAAA,#FFFFFF";
@@ -523,12 +522,7 @@ pub async fn handle_display<R: DeviceRegistry>(
     let api_key_str = headers.require_str("Access-Token")?;
 
     // Parse and validate dimensions with bounds checking
-    let width: u32 = headers
-        .get_parsed_filtered("Width", |&w| w > 0 && w <= MAX_DISPLAY_WIDTH)
-        .unwrap_or(800);
-    let height: u32 = headers
-        .get_parsed_filtered("Height", |&h| h > 0 && h <= MAX_DISPLAY_HEIGHT)
-        .unwrap_or(480);
+    let (width, height) = header_dimensions(&headers);
 
     let api_key = ApiKey::new(api_key_str);
 
@@ -1356,8 +1350,31 @@ pub struct DisplayJsonResponse {
     pub maximum_compatibility: Option<bool>,
 }
 
+/// The `Width`/`Height` request headers; a missing, zero or over-limit
+/// value falls back to the original TRMNL's 800x480. The limit is the one
+/// every panel size answers to, `MAX_PANEL_DIMENSION`.
+fn header_dimensions(headers: &HeaderMap) -> (u32, u32) {
+    let ok = |v: &u32| (1..=MAX_PANEL_DIMENSION).contains(v);
+    (
+        headers.get_parsed_filtered("Width", ok).unwrap_or(800),
+        headers.get_parsed_filtered("Height", ok).unwrap_or(480),
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn header_dimensions_share_the_panel_limit() {
+        let h = |w: &str, ht: &str| {
+            let mut m = HeaderMap::new();
+            m.insert("Width", w.parse().unwrap());
+            m.insert("Height", ht.parse().unwrap());
+            header_dimensions(&m)
+        };
+        assert_eq!(h("3000", "4096"), (3000, 4096));
+        assert_eq!(h("5000", "0"), (800, 480));
+    }
+
     use super::*;
 
     #[test]

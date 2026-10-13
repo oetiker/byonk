@@ -10,7 +10,11 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // once the CodeMirror bundle is counted. This budget is deliberately close
 // to that: a framework is affordable here, an unbounded one is not.
 // Raising it is a decision, not a formality -- say why in the commit.
-const BUDGET_BYTES = 900 * 1024;
+// Raised from 900 KiB to 1 MiB (2026-10-13, U11): the owner-requested
+// identity and screen-repo editing pushed the bundle past 900 KiB. The
+// number is uncompressed; slimming it (e.g. lazy CodeMirror languages) is a
+// separate decision.
+const BUDGET_BYTES = 1024 * 1024;
 
 describe("bundle size", () => {
   it("fits the stated budget", () => {

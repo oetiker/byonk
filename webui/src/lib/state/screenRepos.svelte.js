@@ -16,9 +16,14 @@ import { subject } from "./subject.svelte.js";
 export const NEW_REPO = "+new";
 /** The server's handle rule (`check_handle`, src/api/dev_repos.rs). */
 export const HANDLE_RE = /^[a-z0-9][a-z0-9_-]*$/;
-/** How often, and how long, the list is polled while a fetch runs. */
+/**
+ * How often the list is polled while a fetch runs: every second for the
+ * first two minutes, then every ten seconds; a failed GET backs off
+ * (doubling, up to ten seconds) instead of ending the poll.
+ */
 const POLL_MS = 1000;
-const POLL_MAX = 120;
+const POLL_SLOW_AFTER = 120;
+const POLL_MAX_MS = 10_000;
 
 class ScreenRepos {
   addonMode = $state(false);
@@ -54,6 +59,23 @@ class ScreenRepos {
     const out = await api.listScreenRepos();
     this.addonMode = !!out?.addon_mode;
     this.list = out?.repos ?? [];
+    this.error = null;
+  }
+
+  /**
+   * After a write that landed: reload the repo list and the screens. A
+   * failure here is not the write's failure -- it lands on `error` (shown in
+   * the Library section), never as "Save failed".
+   */
+  async #reload() {
+    try {
+      await this.refresh();
+      await screens.refresh();
+      return true;
+    } catch (e) {
+      this.error = e?.message ?? String(e);
+      return false;
+    }
   }
 
   /** Open the unsaved new-repo draft; returns its subject id. */
@@ -146,8 +168,8 @@ class ScreenRepos {
   /** Save the draft (POST for the new one, PATCH otherwise). Resolves to whether it landed. */
   async save(key) {
     const isNew = key === NEW_REPO;
+    let handle = key;
     try {
-      let handle = key;
       if (isNew) {
         const body = this.addBody(key);
         await api.addScreenRepo(body);
@@ -155,16 +177,16 @@ class ScreenRepos {
       } else {
         await api.patchScreenRepo(key, this.patchBody(key));
       }
-      this.forget(key);
-      await this.refresh();
-      if (isNew && subject.is("screen-repo", NEW_REPO)) subject.select("screen-repo", handle);
-      await screens.refresh();
-      this.#watch(handle);
-      return true;
     } catch (e) {
       this.failure = { key, op: "save", message: e?.message ?? String(e) };
       return false;
     }
+    // The write landed: from here on nothing is a failed Save.
+    this.forget(key);
+    if (isNew && subject.is("screen-repo", NEW_REPO)) subject.select("screen-repo", handle);
+    await this.#reload();
+    this.#watch(handle);
+    return true;
   }
 
   /** Fetch the repo again now, then follow its status. */
@@ -172,22 +194,32 @@ class ScreenRepos {
     if (this.failure?.key === handle) this.failure = null;
     try {
       await api.updateScreenRepo(handle);
-      await this.refresh();
-      await screens.refresh();
-      this.#watch(handle);
-      return true;
     } catch (e) {
       this.failure = { key: handle, op: "update", message: e?.message ?? String(e) };
       return false;
     }
+    await this.#reload();
+    this.#watch(handle);
+    return true;
   }
 
-  /** Delete a repo; a 409 (in use) is thrown to the caller, whose message row shows it. */
+  /**
+   * Delete a repo. A refused DELETE (409: in use) is thrown to the caller,
+   * whose message row shows it; a failed reload after it is not.
+   */
   async remove(handle) {
     await api.deleteScreenRepo(handle);
     this.forget(handle);
-    await this.refresh();
-    await screens.refresh();
+    await this.#reload();
+  }
+
+  /** Reload the list quietly (choosing a repo): a status seen earlier may be stale. */
+  async sync() {
+    try {
+      await this.refresh();
+    } catch (e) {
+      this.error = e?.message ?? String(e);
+    }
   }
 
   /**
@@ -197,19 +229,27 @@ class ScreenRepos {
    */
   #watch(handle) {
     const gen = ++this.#pollGen;
-    const tick = async (n) => {
-      if (gen !== this.#pollGen || this.find(handle)?.status !== "fetching" || n >= POLL_MAX) return;
-      await new Promise((r) => setTimeout(r, POLL_MS));
+    const tick = async (n, failures) => {
+      if (gen !== this.#pollGen || this.find(handle)?.status !== "fetching") return;
+      const delay = failures > 0
+        ? Math.min(POLL_MS * 2 ** failures, POLL_MAX_MS)
+        : n >= POLL_SLOW_AFTER ? POLL_MAX_MS : POLL_MS;
+      await new Promise((r) => setTimeout(r, delay));
       if (gen !== this.#pollGen) return;
       try {
         await this.refresh();
-        if (this.find(handle)?.status !== "fetching") await screens.refresh();
-      } catch {
-        return; // the next user action refreshes again
+      } catch (e) {
+        // A transient failure: say so in the Library and try again later.
+        this.error = e?.message ?? String(e);
+        return tick(n + 1, failures + 1);
       }
-      await tick(n + 1);
+      if (this.find(handle)?.status !== "fetching") {
+        await screens.refresh().catch((e) => (this.error = e?.message ?? String(e)));
+        return;
+      }
+      return tick(n + 1, 0);
     };
-    tick(0);
+    tick(0, 0);
   }
 
   reset() {

@@ -257,6 +257,8 @@ describe("Edit pane: a screen repo", () => {
     render(EditPane);
     expect(screen.getByRole("region", { name: "Details" }).querySelector("input")).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    // Ruling: fetching again is not editing, and the server allows it in add-on mode.
+    expect(screen.getByRole("button", { name: "Update now" })).toBeEnabled();
   });
 
   it("Discard on a new draft drops it and clears the subject", async () => {
@@ -266,5 +268,67 @@ describe("Edit pane: a screen repo", () => {
     await tick();
     expect(subject.kind).toBe(null);
     expect(screenRepos.draft(NEW_REPO)).toBe(null);
+  });
+});
+
+describe("screen repo refresh failures (U11 fix round 1)", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("a POST that lands is not a failed Save when the list refresh after it fails", async () => {
+    vi.spyOn(api, "addScreenRepo").mockResolvedValue(repo({ handle: "clocks", status: "fetching" }));
+    listSpy.mockRejectedValue(new Error("502 Bad Gateway"));
+    subject.select("screen-repo", screenRepos.startNew());
+    render(EditPane);
+    await type("repo-handle", "clocks");
+    await type("repo-url", "https://example.com/clocks.git");
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(subject.key).toBe("screen-repo:clocks"));
+    await waitFor(() => expect(screenRepos.error).toMatch(/502/));
+    expect(screenRepos.failure).toBe(null);
+    expect(screen.queryByText(/Save failed/)).toBeNull();
+    expect(screen.queryByText(/is gone/)).toBeNull();
+    expect(screen.getByText(/Could not reload the screen repos: 502/)).toBeTruthy();
+  });
+
+  it("a DELETE that lands clears the subject even when the list refresh after it fails", async () => {
+    vi.spyOn(api, "deleteScreenRepo").mockResolvedValue({ deleted: "weather" });
+    listSpy.mockRejectedValue(new Error("502 Bad Gateway"));
+    subject.select("screen-repo", "weather");
+    render(LibraryPane);
+    await fireEvent.click(within(screen.getByTestId("library-actions")).getByRole("button", { name: "Delete" }));
+    const form = await screen.findByRole("form", { name: "Confirm screen repo deletion" });
+    await fireEvent.click(within(form).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(subject.kind).toBe(null));
+    expect(screens.error).toBe(null);
+    expect(screenRepos.error).toMatch(/502/);
+  });
+
+  it("the background poll survives a failed GET and a fetch longer than two minutes", async () => {
+    vi.useFakeTimers();
+    const fetching = { addon_mode: false, repos: [...REPOS, repo({ handle: "slow", status: "fetching" })] };
+    const ready = { addon_mode: false, repos: [...REPOS, repo({ handle: "slow", status: "ready", screen_count: 3 })] };
+    vi.spyOn(api, "updateScreenRepo").mockResolvedValue(repo({ handle: "slow", status: "fetching" }));
+    listSpy.mockResolvedValue(fetching);
+    const refresh = vi.spyOn(screens, "refresh");
+    await screenRepos.update("slow");
+    refresh.mockClear();
+    // A transient error ...
+    listSpy.mockRejectedValueOnce(new Error("502 Bad Gateway"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    // ... and a fetch that outlasts the old 120-try cap.
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(screenRepos.find("slow").status).toBe("fetching");
+    listSpy.mockResolvedValue(ready);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(screenRepos.find("slow").status).toBe("ready");
+    expect(refresh).toHaveBeenCalled();
+    screenRepos.reset(); // stop the poll
+  });
+
+  it("selecting a repo refreshes the list, so a stale status does not stick", async () => {
+    render(LibraryPane);
+    const calls = listSpy.mock.calls.length;
+    await fireEvent.click(within(section()).getByRole("button", { name: /^weather/ }));
+    await waitFor(() => expect(listSpy.mock.calls.length).toBeGreaterThan(calls));
   });
 });

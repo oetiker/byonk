@@ -430,7 +430,10 @@
       <button type="button" data-repo={r.handle}
               class={rowClass(on, "min-h-(--row-h) py-0.5")}
               aria-current={on ? "true" : undefined}
-              onclick={() => subject.select("screen-repo", r.handle)}>
+              onclick={() => {
+                subject.select("screen-repo", r.handle);
+                screenRepos.sync(); // a status seen earlier may be stale
+              }}>
         <span class="flex min-w-0 items-center gap-1">
           <span class="truncate">{r.handle}</span>
           {#if r.status !== "ready"}

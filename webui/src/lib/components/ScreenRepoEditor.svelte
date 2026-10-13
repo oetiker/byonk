@@ -90,7 +90,10 @@
     </div>
   {/if}
   <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto p-3">
-    {#if !d}
+    {#if !d && screenRepos.error}
+      <!-- Saved, but the list could not be reloaded: not "gone", just not known yet. -->
+      <p class="text-destructive">Could not reload the screen repos: {screenRepos.error}</p>
+    {:else if !d}
       <p class="text-muted-foreground">This screen repo is gone. Pick another one in the Library.</p>
     {:else}
       <section class="flex flex-col gap-1 pb-2" aria-label="Details">

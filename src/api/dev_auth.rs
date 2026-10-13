@@ -359,18 +359,28 @@ pub fn dev_auth_router() -> Router<AppState> {
 mod tests {
     use super::*;
 
+    /// A fresh random credential pair per call: the tests need *some*
+    /// username and password, never a particular one.
+    fn test_creds() -> (String, String) {
+        (fresh_token(), fresh_token())
+    }
+
+    fn fresh_token() -> String {
+        fresh_key().iter().map(|b| format!("{b:02x}")).collect()
+    }
+
     #[test]
     fn resolve_requires_both_halves() {
-        assert!(DevAuth::resolve(Some("u"), None).credentials.is_none());
-        assert!(DevAuth::resolve(None, Some("p")).credentials.is_none());
-        assert!(DevAuth::resolve(Some("u"), Some("p")).credentials.is_some());
+        let (u, p) = test_creds();
+        assert!(DevAuth::resolve(Some(&u), None).credentials.is_none());
+        assert!(DevAuth::resolve(None, Some(&p)).credentials.is_none());
+        assert!(DevAuth::resolve(Some(&u), Some(&p)).credentials.is_some());
     }
 
     #[test]
     fn resolve_treats_blank_as_unset() {
-        assert!(DevAuth::resolve(Some("  "), Some("p"))
-            .credentials
-            .is_none());
+        let (_, p) = test_creds();
+        assert!(DevAuth::resolve(Some("  "), Some(&p)).credentials.is_none());
     }
 
     #[test]
@@ -383,21 +393,24 @@ mod tests {
 
     #[test]
     fn cookie_round_trips() {
-        let a = DevAuth::with_credentials("u", "p");
+        let (u, p) = test_creds();
+        let a = DevAuth::with_credentials(&u, &p);
         let v = a.issue_cookie_value(1_000);
         assert!(a.verify_cookie_value(&v, 1_000 + 60));
     }
 
     #[test]
     fn cookie_from_another_key_is_rejected() {
-        let a = DevAuth::with_credentials("u", "p");
-        let b = DevAuth::with_credentials("u", "p");
+        let (u, p) = test_creds();
+        let a = DevAuth::with_credentials(&u, &p);
+        let b = DevAuth::with_credentials(&u, &p);
         assert!(!b.verify_cookie_value(&a.issue_cookie_value(1_000), 1_060));
     }
 
     #[test]
     fn tampered_timestamp_is_rejected() {
-        let a = DevAuth::with_credentials("u", "p");
+        let (u, p) = test_creds();
+        let a = DevAuth::with_credentials(&u, &p);
         let v = a.issue_cookie_value(1_000);
         let (_, mac) = v.split_once('.').unwrap();
         assert!(!a.verify_cookie_value(&format!("2000.{mac}"), 2_060));
@@ -405,7 +418,8 @@ mod tests {
 
     #[test]
     fn expired_cookie_is_rejected() {
-        let a = DevAuth::with_credentials("u", "p");
+        let (u, p) = test_creds();
+        let a = DevAuth::with_credentials(&u, &p);
         let v = a.issue_cookie_value(1_000);
         assert!(!a.verify_cookie_value(&v, 1_000 + SESSION_MAX_AGE_SECS + 1));
         assert!(a.verify_cookie_value(&v, 1_000 + SESSION_MAX_AGE_SECS - 1));
@@ -413,7 +427,8 @@ mod tests {
 
     #[test]
     fn garbage_is_rejected() {
-        let a = DevAuth::with_credentials("u", "p");
+        let (u, p) = test_creds();
+        let a = DevAuth::with_credentials(&u, &p);
         assert!(!a.verify_cookie_value("", 0));
         assert!(!a.verify_cookie_value("abc", 0));
         assert!(!a.verify_cookie_value("12.zz", 0));
@@ -421,7 +436,8 @@ mod tests {
 
     #[test]
     fn adversarial_timestamp_is_rejected_not_panicking() {
-        let a = DevAuth::with_credentials("u", "p");
+        let (u, p) = test_creds();
+        let a = DevAuth::with_credentials(&u, &p);
         assert!(!a.verify_cookie_value(&format!("{}.deadbeef", i64::MIN), 0));
         assert!(!a.verify_cookie_value(&format!("{}.deadbeef", i64::MAX), 0));
     }

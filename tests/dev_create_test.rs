@@ -197,6 +197,15 @@ async fn creating_a_panel_can_carry_its_size() {
         .await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text());
     assert_eq!(std::fs::read_to_string(&config_path).unwrap(), before);
+
+    // Above the cap: a clear 400 naming the limit, and nothing written.
+    for size in [r#""width":5000"#, r#""height":4097"#] {
+        let body = format!(r##"{{"id":"huge","name":"H","colors":"#000000,#FFFFFF",{size}}}"##);
+        let r = app.post_json("/dev/api/panels", &[AUTH], &body).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{size}: {}", r.text());
+        assert!(r.text().contains("4096"), "{}", r.text());
+    }
+    assert_eq!(std::fs::read_to_string(&config_path).unwrap(), before);
 }
 
 #[tokio::test]

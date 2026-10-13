@@ -173,6 +173,8 @@ async fn panel_save_validates_name_colors_and_size() {
         r#"{"name":"OG","colors":"not-a-colour"}"#.to_string(),
         format!(r#"{{"name":"OG","colors":"{BW}","width":0}}"#),
         format!(r#"{{"name":"OG","colors":"{BW}","height":0}}"#),
+        format!(r#"{{"name":"OG","colors":"{BW}","width":5000}}"#),
+        format!(r#"{{"name":"OG","colors":"{BW}","height":4097}}"#),
         format!(r#"{{"id":"bad id","name":"OG","colors":"{BW}"}}"#),
     ] {
         let r = app

@@ -661,3 +661,22 @@ async fn a_tuning_session_for_an_unknown_device_is_refused() {
         .await;
     assert_eq!(r.status, axum::http::StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn the_dev_render_rejects_oversized_dimensions_with_a_400() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _cfg) = TestApp::new_with_config_yaml("admin:\n  token: secret\n", dir.path());
+    for body in [
+        r#"{"screen":"byonk-builtin/default","width":100000,"height":480}"#,
+        r#"{"screen":"byonk-builtin/default","width":800,"height":0}"#,
+    ] {
+        let r = app.post_json("/dev/api/render", &[AUTH], body).await;
+        assert_eq!(
+            r.status,
+            axum::http::StatusCode::BAD_REQUEST,
+            "{body}: {}",
+            r.text()
+        );
+        assert!(r.text().contains("4096"), "{}", r.text());
+    }
+}

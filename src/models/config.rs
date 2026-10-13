@@ -830,6 +830,17 @@ impl AppConfig {
         for (handle, entry) in &self.screen_repos {
             entry.validate(handle)?;
         }
+        // Sorted, so the same bad config always names the same panel first.
+        let mut panels: Vec<_> = self.panels.iter().collect();
+        panels.sort_by_key(|(id, _)| id.as_str());
+        for (id, panel) in panels {
+            for (label, v) in [("width", panel.width), ("height", panel.height)] {
+                if let Some(v) = v {
+                    crate::models::DisplaySpec::check_dimension(label, v)
+                        .map_err(|e| format!("panels.{id}.{label}: {e}"))?;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -963,6 +974,23 @@ mod tests {
 
         let cfg2: AppConfig = serde_yaml::from_str("registration:\n  enabled: true\n").unwrap();
         assert_eq!(cfg2.admin.token, None);
+    }
+
+    #[test]
+    fn config_with_an_oversized_panel_fails_validation_naming_it() {
+        for dim in ["width: 5000", "height: 0"] {
+            let yaml = format!(
+                "panels:\n  huge:\n    name: H\n    colors: '#000000,#FFFFFF'\n    {dim}\n"
+            );
+            let cfg: AppConfig = serde_yaml::from_str(&yaml).unwrap();
+            let err = cfg.validate().unwrap_err();
+            assert!(err.contains("huge") && err.contains("4096"), "{err}");
+        }
+        let ok: AppConfig = serde_yaml::from_str(
+            "panels:\n  big:\n    name: B\n    colors: '#000000,#FFFFFF'\n    width: 4096\n    height: 4096\n",
+        )
+        .unwrap();
+        assert!(ok.validate().is_ok());
     }
 
     #[test]

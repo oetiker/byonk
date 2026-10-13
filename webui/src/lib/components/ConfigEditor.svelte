@@ -150,12 +150,12 @@
       <div class="grid grid-cols-2 gap-3">
         <Field.Field>
           <Field.Label for="cfg-plain-width">Width</Field.Label>
-          <Input id="cfg-plain-width" type="number" min="1" step="1" value={plain("width") ?? ""}
+          <Input id="cfg-plain-width" type="number" min="1" max="4096" step="1" value={plain("width") ?? ""}
                  oninput={(e) => onPlain("width", e)} />
         </Field.Field>
         <Field.Field>
           <Field.Label for="cfg-plain-height">Height</Field.Label>
-          <Input id="cfg-plain-height" type="number" min="1" step="1" value={plain("height") ?? ""}
+          <Input id="cfg-plain-height" type="number" min="1" max="4096" step="1" value={plain("height") ?? ""}
                  oninput={(e) => onPlain("height", e)} />
         </Field.Field>
       </div>

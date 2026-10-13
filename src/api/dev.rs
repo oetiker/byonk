@@ -480,10 +480,11 @@ pub async fn handle_save_panel(
     }
     let colors = body.colors.trim();
     crate::api::admin::write::validate_colors(colors, "colors")?;
-    if body.width == Some(0) || body.height == Some(0) {
-        return Err(ApiError::BadRequest(
-            "panel width and height must be positive".into(),
-        ));
+    for (label, v) in [("width", body.width), ("height", body.height)] {
+        if let Some(v) = v {
+            DisplaySpec::check_dimension(label, v)
+                .map_err(|e| ApiError::BadRequest(format!("panel {e}")))?;
+        }
     }
     let path = crate::api::config_persist::require_file_config(&state)?;
     let _guard = state.write_lock.lock().await;
@@ -632,10 +633,11 @@ pub async fn handle_create_panel(
     }
     let colors = body.colors.trim();
     crate::api::admin::write::validate_colors(colors, "colors")?;
-    if body.width == Some(0) || body.height == Some(0) {
-        return Err(ApiError::BadRequest(
-            "panel width and height must be positive".into(),
-        ));
+    for (label, v) in [("width", body.width), ("height", body.height)] {
+        if let Some(v) = v {
+            DisplaySpec::check_dimension(label, v)
+                .map_err(|e| ApiError::BadRequest(format!("panel {e}")))?;
+        }
     }
 
     let path = crate::api::config_persist::require_file_config(&state)?;
@@ -1085,6 +1087,9 @@ pub async fn handle_render(
     };
     // Determine dimensions from model or explicit values
     let (width, height) = display::resolve_preview_dimensions(&model, req.width, req.height);
+    if let Err(message) = DisplaySpec::check_dimensions(width, height) {
+        return render_error(StatusCode::BAD_REQUEST, message, None);
+    }
 
     // The device's params (or the draft's, which replace them), with the
     // simulated ones on top.

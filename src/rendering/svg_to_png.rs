@@ -1,4 +1,5 @@
 use crate::error::RenderError;
+use crate::models::display_spec::MAX_PANEL_DIMENSION;
 use crate::models::DisplaySpec;
 use crate::rendering::font_config::{FontConfig, HintingSpec};
 use eink_dither::{
@@ -899,7 +900,11 @@ fn pack_nbits(indices: &[u8], width: u32, bits: u8) -> Vec<u8> {
     let bytes_per_row = (width as usize).div_ceil(pixels_per_byte);
     let height = indices.len() / width as usize;
     let mask = (1u8 << bits) - 1;
-    let mut packed = Vec::with_capacity(bytes_per_row * height);
+    // The capacity is only a hint, and `width` reaches here through
+    // `DisplaySpec`, which caps both sides at `MAX_PANEL_DIMENSION`; bound the
+    // hint by that too, so a caller that skips the spec cannot make it huge.
+    let max_hint = (MAX_PANEL_DIMENSION as usize).pow(2);
+    let mut packed = Vec::with_capacity((bytes_per_row * height).min(max_hint));
 
     for row in indices.chunks(width as usize) {
         let mut byte = 0u8;

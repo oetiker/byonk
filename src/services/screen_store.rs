@@ -1308,6 +1308,16 @@ impl ScreenStore {
         // `resolve_query_palette`), shared so the two previews can't drift.
         let (width, height) =
             crate::api::display::resolve_preview_dimensions(&opts.model, opts.width, opts.height);
+        // Refuse before anything is sized from it.
+        if let Err(message) = DisplaySpec::check_dimensions(width, height) {
+            return RenderResult {
+                error: Some(RenderError {
+                    line: None,
+                    message,
+                }),
+                ..empty()
+            };
+        }
         let query_palette: Vec<(u8, u8, u8)> =
             crate::api::display::resolve_query_palette(&opts.model, None);
 
@@ -2654,6 +2664,33 @@ pub(crate) mod tests {
         assert!(!res.png.is_empty());
         assert_eq!(res.data["message"], "X");
         assert!(res.log.iter().any(|l| l.contains("hi")));
+    }
+
+    /// A width or height from a request is rejected with a clear error before
+    /// anything is allocated for it: no panic, no huge pixmap.
+    #[test]
+    fn render_rejects_oversized_dimensions() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "big", StarterKind::Minimal)
+            .unwrap();
+        for (w, h) in [
+            (Some(100_000), None),
+            (None, Some(0)),
+            (Some(5000), Some(5000)),
+        ] {
+            let res = store.render(
+                "local/big",
+                RenderOpts {
+                    width: w,
+                    height: h,
+                    ..RenderOpts::default()
+                },
+            );
+            let err = res.error.expect("oversized dimensions must be an error");
+            assert!(err.message.contains("4096"), "{}", err.message);
+            assert!(res.png.is_empty());
+        }
     }
 
     /// A screen whose SVG is not the panel's size is silently rescaled to fit,

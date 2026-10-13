@@ -320,6 +320,53 @@ describe("EditorPane renders editor.files (Task 1)", () => {
     expect(queryByLabelText("unsaved changes")).not.toBeNull(); // opened, dirty
   });
 
+  describe("the whole tab is the click target (U15)", () => {
+    beforeEach(async () => {
+      editor.files = [
+        { name: "a.lua", size: 1, text: true },
+        { name: "b.lua", size: 1, text: true },
+      ];
+      vi.spyOn(api, "readFile").mockResolvedValue({ text: "x", etag: '"1"' });
+      await editor.open("local/a", "a.lua");
+      editor.setText("changed"); // a.lua is dirty -> a marker span exists
+      await editor.open("local/a", "b.lua"); // b.lua is now active
+    });
+
+    it("a click on a tab's marker (not its name) activates that tab", async () => {
+      const { getByLabelText, getByRole } = render(EditorPane);
+      flushSync();
+      expect(getByRole("tab", { name: /b\.lua/ })).toHaveAttribute("aria-selected", "true");
+
+      await fireEvent.click(getByLabelText("unsaved changes"));
+      flushSync();
+
+      expect(editor.active?.name).toBe("a.lua");
+      expect(getByRole("tab", { name: /a\.lua/ })).toHaveAttribute("aria-selected", "true");
+      expect(getByRole("tab", { name: /b\.lua/ })).toHaveAttribute("aria-selected", "false");
+    });
+
+    it("the marker lives inside the tab button, which carries the padding", () => {
+      const { getByLabelText, getByRole } = render(EditorPane);
+      flushSync();
+      const tab = getByRole("tab", { name: /a\.lua/ });
+      expect(tab.contains(getByLabelText("unsaved changes"))).toBe(true);
+      expect(tab.className).toContain("pl-2");
+    });
+
+    it("the close button keeps its own action and does not switch tabs", async () => {
+      const { getByRole, queryByRole } = render(EditorPane);
+      flushSync();
+
+      await fireEvent.click(getByRole("button", { name: "Close a.lua" }));
+      flushSync();
+
+      expect(editor.active?.name).toBe("b.lua");
+      expect(editor.tabs.map((t) => t.name)).toEqual(["b.lua"]);
+      expect(getByRole("tab", { name: /b\.lua/ })).toHaveAttribute("aria-selected", "true");
+      expect(queryByRole("button", { name: "Close a.lua" })).toBeNull();
+    });
+  });
+
   it("empties CodeMirror when no tab is left active (Finding H)", async () => {
     // Deleting the selected screen resets the store to no tabs, and the
     // status line says "no file open" -- but the tab-swap effect returned

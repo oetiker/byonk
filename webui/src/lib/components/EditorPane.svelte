@@ -322,21 +322,20 @@
                shadcn active trigger, plus a 2 px primary underline. -->
           <div
             role="presentation"
-            class="flex h-full shrink-0 items-center gap-1 border-r border-b-2 border-r-border border-b-transparent px-2
-                   text-muted-foreground has-aria-selected:border-b-primary has-aria-selected:bg-background has-aria-selected:text-foreground"
+            class="flex h-full shrink-0 items-center gap-1 border-r border-b-2 border-r-border border-b-transparent
+                   {t ? 'pr-2' : ''} text-muted-foreground has-aria-selected:border-b-primary has-aria-selected:bg-background has-aria-selected:text-foreground"
           >
             <button
               type="button"
               role="tab"
               aria-selected={t != null && t === editor.active}
-              class="whitespace-nowrap aria-selected:font-semibold"
+              class="flex h-full items-center gap-1 self-stretch whitespace-nowrap pl-2 aria-selected:font-semibold {t ? '' : 'pr-2'}"
               onclick={() =>
                 editor.open(editor.ref, f.name, {
                   readOnly: !screens.writable(editor.ref),
                 })}
             >
               {f.name}
-            </button>
             <!-- Dirty/issues follow the LOADED buffer, not the listing entry: a
                  file that has never been opened has neither. -->
             {#if t?.dirty}<span role="img" aria-label="unsaved changes"><Circle class="size-2 fill-current" aria-hidden="true" /></span>{/if}
@@ -353,6 +352,7 @@
             {#if editor.clean.has(f.name) && !t?.dirty}
               <span role="img" aria-label={`${f.name} is valid`} class="text-success"><Check class="size-3.5" aria-hidden="true" /></span>
             {/if}
+            </button>
             {#if t}
               <!-- Closes the BUFFER only -- `editor.close()` never touches `files`,
                    so the file stays listed and can be reopened. -->

@@ -294,6 +294,8 @@
   function repoSource(r) {
     if (r.kind === "builtin") return "built in";
     if (r.kind === "local") return "local folder";
+    if (r.kind === "path") return r.path ?? "folder";
+    if (r.kind === "dir") return "folder (SCREEN_REPOS_DIR)";
     return r.repo ?? r.kind;
   }
   const STATUS_CLASS = { error: "text-destructive", fetching: "text-primary", offline: "text-muted-foreground" };

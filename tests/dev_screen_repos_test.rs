@@ -407,3 +407,83 @@ async fn add_rejects_invalid_handles_and_accepts_a_valid_one() {
         .await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
 }
+
+/// An app whose config.yaml registers `mine` as a writable folder (`path:`)
+/// next to a git repo `weather`.
+fn app_with_path_repo(dir: &std::path::Path) -> (TestApp, std::path::PathBuf, std::path::PathBuf) {
+    let folder = dir.join("mine");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("byonk-screens.yaml"), "").unwrap();
+    let config_path = dir.join("config.yaml");
+    std::fs::write(
+        &config_path,
+        format!(
+            "admin:\n  token: secret\nscreen_repos:\n  mine:\n    path: {}\n  weather:\n    repo: {REPO}\n",
+            folder.display()
+        ),
+    )
+    .unwrap();
+    let loader = Arc::new(AssetLoader::new(None, None, Some(config_path.clone())));
+    let config = AppConfig::load_from_assets(&loader).unwrap();
+    let state = create_app_state_with_config(loader, config).unwrap();
+    (TestApp::from_state(state), config_path, folder)
+}
+
+#[tokio::test]
+async fn a_path_repo_lists_as_a_folder_and_is_never_rewritten() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, config_path, folder) = app_with_path_repo(dir.path());
+    let list: serde_json::Value = app.get_with_headers(BASE, &[AUTH]).await.json();
+    let mine = row(&list, "mine");
+    assert_eq!(mine["kind"], "path", "{mine}");
+    assert_eq!(mine["path"], folder.display().to_string());
+    assert_eq!(mine["repo"], serde_json::Value::Null);
+    assert_eq!(row(&list, "weather")["kind"], "git");
+    let before = std::fs::read_to_string(&config_path).unwrap();
+
+    // The dev surface refuses every change to a folder repo ...
+    for r in [
+        app.patch_json(
+            &format!("{BASE}/mine"),
+            &[AUTH],
+            &format!(r#"{{"repo":"{REPO}"}}"#),
+        )
+        .await,
+        app.patch_json(&format!("{BASE}/mine"), &[AUTH], r#"{"pin":"v2"}"#)
+            .await,
+        app.delete(&format!("{BASE}/mine"), &[AUTH]).await,
+        app.post_json(&format!("{BASE}/mine/update"), &[AUTH], "{}")
+            .await,
+    ] {
+        assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text());
+    }
+    assert_eq!(std::fs::read_to_string(&config_path).unwrap(), before);
+}
+
+#[tokio::test]
+async fn the_shared_patch_core_refuses_a_repo_on_a_path_entry_and_keeps_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, config_path, folder) = app_with_path_repo(dir.path());
+    // The admin route shares the core the dev route wraps, without the dev guard.
+    let bad = app
+        .patch_json(
+            "/api/admin/screen-repos/mine",
+            &[AUTH],
+            &format!(r#"{{"repo":"{REPO}"}}"#),
+        )
+        .await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST, "{}", bad.text());
+    let ok = app
+        .patch_json("/api/admin/screen-repos/mine", &[AUTH], r#"{"pin":"v2"}"#)
+        .await;
+    assert_eq!(ok.status, StatusCode::OK, "{}", ok.text());
+    let yaml = std::fs::read_to_string(&config_path).unwrap();
+    assert!(
+        yaml.contains(&format!("path: {}", folder.display())),
+        "path was dropped:\n{yaml}"
+    );
+    assert!(
+        !yaml.contains(&format!("repo: {REPO}\n  weather")),
+        "{yaml}"
+    );
+}

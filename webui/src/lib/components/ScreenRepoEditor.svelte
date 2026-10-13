@@ -22,7 +22,7 @@
   const tokenSet = $derived(!!info?.has_token && !d?.clearToken);
   // Update is allowed in add-on mode too (it changes no config); only the
   // repos byonk registers itself cannot be updated here.
-  const canUpdate = $derived(!!info && info.managed === false);
+  const canUpdate = $derived(!!info && info.managed === false && info.kind === "git");
 
   let saving = $state(false);
   let updating = $state(false);
@@ -57,6 +57,8 @@
   function source(r) {
     if (r?.kind === "builtin") return "built in";
     if (r?.kind === "local") return r.repo ?? "local folder";
+    if (r?.kind === "path") return r.path ?? "folder";
+    if (r?.kind === "dir") return "folder";
     return r?.repo ?? "—";
   }
   function when(ts) {
@@ -101,12 +103,16 @@
         {#if readOnly}
           <dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
             <dt class="text-muted-foreground">Handle</dt><dd class="truncate font-mono">{d.handle}</dd>
-            <dt class="text-muted-foreground">Repo URL</dt><dd class="truncate font-mono">{source(info)}</dd>
+            <dt class="text-muted-foreground">{info?.kind === "path" || info?.kind === "dir" ? "Folder" : "Repo URL"}</dt><dd class="truncate font-mono">{source(info)}</dd>
             {#if info?.pin}<dt class="text-muted-foreground">Ref</dt><dd class="truncate font-mono">{info.pin}</dd>{/if}
             {#if info?.has_token}<dt class="text-muted-foreground">Token</dt><dd>set</dd>{/if}
           </dl>
           {#if info?.managed}
             <p class="text-xs text-muted-foreground">byonk registers this repo itself; it cannot be changed here.</p>
+          {:else if info?.kind === "path"}
+            <p class="text-xs text-muted-foreground">A folder on disk, not a git repo: change it in config.yaml.</p>
+          {:else if info?.kind === "dir"}
+            <p class="text-xs text-muted-foreground">A folder from SCREEN_REPOS_DIR, not a git repo; it is not in config.yaml.</p>
           {/if}
         {:else}
           <Field.Group class="gap-3">

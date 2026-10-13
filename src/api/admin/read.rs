@@ -382,9 +382,9 @@ pub async fn screens(
 ///   (defaulting to `"error"` if `state` is `None`); `pin_kind`/
 ///   `resolved_sha`/`error` copied through; `last_fetched` rendered RFC3339.
 /// - non-builtin with no status entry (never fetched — e.g. right after
-///   registration, before the first refresh runs): `status: "error"`, all
-///   other fields `None`. It is not currently serving, so `"error"` is the
-///   honest default.
+///   registration, before the first refresh has started): `status:
+///   "fetching"`, all other fields `None`. The first fetch is always about
+///   to run, and a client that sees `error` here would stop watching it.
 pub(crate) fn build_screen_repo_info(
     config: &AppConfig,
     status: Option<&ScreenRepoStatus>,
@@ -422,7 +422,7 @@ pub(crate) fn build_screen_repo_info(
                     s.error.clone(),
                 )
             }
-            None => ("error".to_string(), None, None, None, None),
+            None => ("fetching".to_string(), None, None, None, None),
         }
     };
 
@@ -526,7 +526,7 @@ mod build_package_info_tests {
     }
 
     #[test]
-    fn non_builtin_never_fetched_defaults_to_error() {
+    fn non_builtin_never_fetched_is_fetching_not_error() {
         let mut config = AppConfig::default();
         config.screen_repos.insert(
             "weather".to_string(),
@@ -539,7 +539,7 @@ mod build_package_info_tests {
         );
         let info = build_screen_repo_info(&config, None, 0, "weather".to_string());
         assert!(!info.builtin);
-        assert_eq!(info.status, "error");
+        assert_eq!(info.status, "fetching");
         assert_eq!(info.pin_kind, None);
         assert_eq!(info.resolved_sha, None);
         assert_eq!(info.last_fetched, None);

@@ -250,6 +250,33 @@ describe("Edit pane: a screen repo", () => {
     expect(screen.queryByRole("button", { name: "Clear token" })).toBeNull();
   });
 
+  it.each([
+    ["path", { kind: "path", path: "/data/mine" }],
+    ["dir", { kind: "dir" }],
+  ])("a %s repo is a folder, not git: read-only, no URL error, no Update, no Delete", async (_n, extra) => {
+    serve([...REPOS, repo({ handle: "mine", managed: false, writable: true, ...extra })]);
+    await screenRepos.refresh();
+    expect(screenRepos.readOnly("mine")).toBe(true);
+    subject.select("screen-repo", "mine");
+    render(EditPane);
+    const details = screen.getByRole("region", { name: "Details" });
+    expect(details.querySelector("input")).toBeNull();
+    expect(details.textContent).not.toContain("needs a repo URL");
+    expect(screenRepos.missing("mine")).toEqual([]);
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Update now" })).toBeNull();
+    cleanup();
+    render(LibraryPane);
+    expect(within(screen.getByTestId("library-actions")).getByRole("button", { name: "Delete" })).toBeDisabled();
+  });
+
+  it("a path repo shows its folder", async () => {
+    serve([...REPOS, repo({ handle: "mine", managed: false, kind: "path", path: "/data/mine" })]);
+    await screenRepos.refresh();
+    render(LibraryPane);
+    expect(section().textContent).toContain("/data/mine");
+  });
+
   it("in add-on mode a git repo is read-only too", async () => {
     serve(REPOS, true);
     await screenRepos.refresh();
@@ -301,6 +328,27 @@ describe("screen repo refresh failures (U11 fix round 1)", () => {
     await waitFor(() => expect(subject.kind).toBe(null));
     expect(screens.error).toBe(null);
     expect(screenRepos.error).toMatch(/502/);
+  });
+
+  it("a just-added repo that reports fetching is followed until ready, then the screens refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(api, "addScreenRepo").mockResolvedValue(repo({ handle: "fresh", status: "fetching" }));
+      const fetching = { addon_mode: false, repos: [...REPOS, repo({ handle: "fresh", status: "fetching" })] };
+      const ready = { addon_mode: false, repos: [...REPOS, repo({ handle: "fresh", status: "ready", screen_count: 3 })] };
+      listSpy.mockResolvedValueOnce(fetching).mockResolvedValue(ready);
+      const screensSpy = vi.spyOn(screens, "refresh").mockResolvedValue();
+      screenRepos.startNew();
+      screenRepos.set(NEW_REPO, "handle", "fresh");
+      screenRepos.set(NEW_REPO, "repo", "https://example.com/fresh.git");
+      await screenRepos.save(NEW_REPO);
+      screensSpy.mockClear();
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(screenRepos.find("fresh").status).toBe("ready");
+      expect(screensSpy).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("the background poll survives a failed GET and a fetch longer than two minutes", async () => {

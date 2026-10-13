@@ -32,9 +32,14 @@ use crate::services::screen_repo_manager::{EXAMPLES_HANDLE, LOCAL_HANDLE, RESERV
 #[derive(Serialize)]
 struct RepoOut {
     handle: String,
-    /// `builtin` | `local` | `examples` | `git`.
+    /// `builtin` | `local` | `examples` | `path` | `dir` | `git`. Only `git`
+    /// repos can be edited, updated or deleted here: `path` is a folder
+    /// registered with `screen_repos.<handle>.path` in config.yaml, `dir` a
+    /// folder found in `SCREEN_REPOS_DIR` (not in config.yaml at all).
     kind: &'static str,
     repo: Option<String>,
+    /// The folder of a `path` repo.
+    path: Option<String>,
     pin: Option<String>,
     has_token: bool,
     /// `ready` | `fetching` | `error` | `offline`.
@@ -62,13 +67,22 @@ fn is_managed(handle: &str) -> bool {
 }
 
 fn out(state: &AppState, info: ScreenRepoInfo) -> RepoOut {
+    let config_path = state
+        .config
+        .load()
+        .screen_repos
+        .get(&info.handle)
+        .and_then(|c| c.path.clone());
+    let in_config = state.config.load().screen_repos.contains_key(&info.handle);
     let source = state.screen_repo_manager.loader().source_for(&info.handle);
     let writable = source.as_ref().is_some_and(|s| s.writable_root().is_some());
     let kind = match info.handle.as_str() {
         BUILTIN_HANDLE => "builtin",
         EXAMPLES_HANDLE => "examples",
         LOCAL_HANDLE => "local",
+        _ if config_path.is_some() => "path",
         _ => match source.map(|s| s.kind()) {
+            Some(ScreenRepoKind::Local) if !in_config => "dir",
             Some(ScreenRepoKind::Local) => "local",
             _ => "git",
         },
@@ -78,6 +92,7 @@ fn out(state: &AppState, info: ScreenRepoInfo) -> RepoOut {
         has_token: info.token_set,
         writable,
         managed: is_managed(&info.handle),
+        path: config_path,
         repo: info.repo,
         pin: info.pin,
         status: info.status,
@@ -90,10 +105,31 @@ fn out(state: &AppState, info: ScreenRepoInfo) -> RepoOut {
     }
 }
 
-fn refuse_managed(handle: &str) -> Result<(), ApiError> {
+fn refuse_managed(state: &AppState, handle: &str) -> Result<(), ApiError> {
     if is_managed(handle) {
         return Err(ApiError::Conflict(format!(
             "`{handle}` is registered by byonk itself and cannot be changed here"
+        )));
+    }
+    let cfg = state.config.load();
+    if cfg
+        .screen_repos
+        .get(handle)
+        .is_some_and(|c| c.path.is_some())
+    {
+        return Err(ApiError::Conflict(format!(
+            "`{handle}` is a folder (`path:` in config.yaml), not a git repo: change it in config.yaml"
+        )));
+    }
+    if !cfg.screen_repos.contains_key(handle)
+        && state
+            .screen_repo_manager
+            .loader()
+            .source_for(handle)
+            .is_some()
+    {
+        return Err(ApiError::Conflict(format!(
+            "`{handle}` comes from SCREEN_REPOS_DIR, not from config.yaml, and cannot be changed here"
         )));
     }
     Ok(())
@@ -146,7 +182,7 @@ async fn add(
         .handle
         .clone()
         .ok_or_else(|| ApiError::BadRequest("`handle` is required".into()))?;
-    refuse_managed(&handle)?;
+    refuse_managed(&state, &handle)?;
     check_handle(&handle)?;
     let repo = body
         .repo
@@ -166,7 +202,7 @@ async fn patch(
     Json(body): Json<ScreenRepoWrite>,
 ) -> Result<Json<RepoOut>, ApiError> {
     require_writable_global(&state)?;
-    refuse_managed(&handle)?;
+    refuse_managed(&state, &handle)?;
     if body.handle.as_deref().is_some_and(|h| h != handle) {
         return Err(ApiError::BadRequest(
             "a screen repo cannot be renamed; delete it and add it again".into(),
@@ -186,7 +222,7 @@ async fn delete(
     Path(handle): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_writable_global(&state)?;
-    refuse_managed(&handle)?;
+    refuse_managed(&state, &handle)?;
     delete_screen_repo_core(&state, &handle).await?;
     Ok(Json(serde_json::json!({ "deleted": handle })))
 }
@@ -197,7 +233,7 @@ async fn update(
     State(state): State<AppState>,
     Path(handle): Path<String>,
 ) -> Result<Json<RepoOut>, ApiError> {
-    refuse_managed(&handle)?;
+    refuse_managed(&state, &handle)?;
     let info = update_screen_repo_core(&state, handle)?;
     Ok(Json(out(&state, info)))
 }

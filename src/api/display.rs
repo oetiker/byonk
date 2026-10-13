@@ -30,8 +30,6 @@ use crate::services::{
     CachedContent, ContentCache, ContentPipeline, DeviceContext, DeviceRegistry, RenderService,
 };
 
-// Maximum allowed display dimensions to prevent DoS
-
 /// Default 4-grey palette for devices that don't send a Colors header
 const DEFAULT_COLORS: &str = "#000000,#555555,#AAAAAA,#FFFFFF";
 
@@ -1363,6 +1361,8 @@ fn header_dimensions(headers: &HeaderMap) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn header_dimensions_share_the_panel_limit() {
         let h = |w: &str, ht: &str| {
@@ -1374,8 +1374,6 @@ mod tests {
         assert_eq!(h("3000", "4096"), (3000, 4096));
         assert_eq!(h("5000", "0"), (800, 480));
     }
-
-    use super::*;
 
     #[test]
     fn device_panel_key_is_panel_then_board_then_model() {

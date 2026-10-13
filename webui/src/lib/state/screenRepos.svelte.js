@@ -40,10 +40,16 @@ class ScreenRepos {
     return this.list.find((r) => r.handle === handle) ?? null;
   }
 
-  /** A repo byonk itself registers, or every repo in add-on mode: nothing here can change it. */
+  /**
+   * A repo byonk itself registers, a folder (kind `path` or `dir`: not git,
+   * nothing to fetch and no URL to edit), or every repo in add-on mode:
+   * nothing here can change it.
+   */
   readOnly(key) {
     if (this.addonMode) return true;
-    return key !== NEW_REPO && this.find(key)?.managed !== false;
+    if (key === NEW_REPO) return false;
+    const r = this.find(key);
+    return r?.managed !== false || r?.kind !== "git";
   }
 
   async load() {
@@ -135,7 +141,7 @@ class ScreenRepos {
   /** Why Save cannot go yet, as user-facing sentences. */
   missing(key) {
     const d = this.draft(key);
-    if (!d) return [];
+    if (!d || (key !== NEW_REPO && this.find(key)?.kind !== "git")) return [];
     const out = [];
     if (key === NEW_REPO && !HANDLE_RE.test(d.handle)) {
       out.push("The handle takes lowercase letters, digits, - and _, starting with a letter or digit.");
@@ -204,8 +210,9 @@ class ScreenRepos {
   }
 
   /**
-   * Delete a repo. A refused DELETE (409: in use) is thrown to the caller,
-   * whose message row shows it; a failed reload after it is not.
+   * Delete a repo. A refused DELETE (409: in use) is thrown to the caller
+   * (LibraryPane's `run` puts it on `screens.error`, i.e. the app status
+   * bar); a failed reload after it is not.
    */
   async remove(handle) {
     await api.deleteScreenRepo(handle);

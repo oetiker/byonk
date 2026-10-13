@@ -3,7 +3,8 @@
   // 49"). StatusBar's own validity/cursor/watch trio stays inside EditorPane
   // per spec §1's table, but the captured error fields cannot live there:
   // StatusBar only exists while the Edit panel is open, so they would go dark
-  // whenever it was closed. Mounted by AppShell above the panel row, next to
+  // whenever it was closed. Mounted by AppShell in an absolutely positioned overlay
+  // over the foot of the pane row (U12: showing it never moves a pane), next to
   // ConflictBanner, outside every `layout.isOpen(...)` gate.
   //
   // Renders nothing at all -- not even an empty bar -- when there is
@@ -18,6 +19,11 @@
   import { Alert } from "$lib/ui/alert/index.js";
 
   // One 24px line per message (tokens, not py-*); Alert supplies role and colour.
+  // Long messages truncate; click toggles the full text (the overlay grows,
+  // the panes do not move). The full text is also the tooltip.
+  let expanded = $state({});
+  const toggle = (k) => (expanded[k] = !expanded[k]);
+
   const line = "flex min-h-6 items-center gap-2 rounded-none border-0 bg-transparent p-0 text-xs";
 
   // Ruling 66: restoring Logout (Task 13a) created a FIFTH error owner
@@ -38,9 +44,18 @@
   );
 </script>
 
+{#snippet msg(k, text)}
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <span
+    class="min-w-0 flex-1 cursor-pointer {expanded[k] ? 'whitespace-pre-wrap break-words' : 'truncate'}"
+    title={text}
+    onclick={() => toggle(k)}>{text}</span
+  >
+{/snippet}
+
 {#if hasAnything}
   <div
-    class="flex flex-col gap-0.5 border-b border-border
+    class="flex flex-col gap-0.5 border-t border-border
            bg-muted px-2 py-1 font-mono text-xs text-foreground"
   >
     {#if editor.error}
@@ -49,16 +64,16 @@
            editor.svelte.js), and labelling every one of them "save" told the
            user a save had failed when none had been attempted. The other four
            surfaces below already render their own `op`. -->
-      <Alert variant="destructive" class={line}>{editor.error.op}: {editor.error.message}</Alert>
+      <Alert variant="destructive" class={line}>{@render msg("editor", `${editor.error.op}: ${editor.error.message}`)}</Alert>
     {/if}
     {#if screens.error}
-      <Alert variant="destructive" class={line}>{screens.error.op}: {screens.error.message}</Alert>
+      <Alert variant="destructive" class={line}>{@render msg("screens", `${screens.error.op}: ${screens.error.message}`)}</Alert>
     {/if}
     {#if simulate.error}
-      <Alert variant="destructive" class={line}>{simulate.error.op}: {simulate.error.message}</Alert>
+      <Alert variant="destructive" class={line}>{@render msg("simulate", `${simulate.error.op}: ${simulate.error.message}`)}</Alert>
     {/if}
     {#if auth.error}
-      <Alert variant="destructive" class={line}>{auth.error.op}: {auth.error.message}</Alert>
+      <Alert variant="destructive" class={line}>{@render msg("auth", `${auth.error.op}: ${auth.error.message}`)}</Alert>
     {/if}
     {#each configDraft.live.panels as o (o.key)}
       <Alert variant="destructive" role="status" class={line}>
@@ -73,7 +88,7 @@
       </Alert>
     {/each}
     {#if configDraft.error}
-      <Alert variant="destructive" class={line}>config {configDraft.error.op}: {configDraft.error.message}</Alert>
+      <Alert variant="destructive" class={line}>{@render msg("config", `config ${configDraft.error.op}: ${configDraft.error.message}`)}</Alert>
     {/if}
   </div>
 {/if}

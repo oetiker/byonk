@@ -152,9 +152,14 @@
 </script>
 
 <div class="flex h-full flex-col bg-background text-foreground">
-  <ConflictBanner />
-  <StatusStrip />
-  <div class="flex min-h-0 flex-1">
+  <div class="relative flex min-h-0 flex-1">
+    <!-- Transient messages and the conflict banner float over the foot of the
+         pane row (U12): absolutely positioned, so showing or clearing one
+         never moves or resizes a pane. -->
+    <div data-testid="status-overlay" class="absolute inset-x-0 bottom-0 z-40 flex max-h-1/2 flex-col overflow-auto shadow-md">
+      <ConflictBanner />
+      <StatusStrip />
+    </div>
     <IconRail />
 
     <Resizable.PaneGroup

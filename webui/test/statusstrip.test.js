@@ -127,6 +127,17 @@ describe("StatusStrip", () => {
     cleanup();
   });
 
+  it("truncates a long message and keeps the full text in a tooltip, expandable on click (U12)", async () => {
+    const long = "x".repeat(300);
+    editor.error = { op: "save", message: long };
+    render(StatusStrip);
+    const msg = screen.getByText(new RegExp(long));
+    expect(msg.getAttribute("title")).toBe(`save: ${long}`);
+    expect(msg.className.split(/\s+/)).toContain("truncate");
+    await fireEvent.click(msg);
+    expect(msg.className.split(/\s+/)).not.toContain("truncate");
+  });
+
   it("renders nothing when there is nothing to report", () => {
     const { container } = render(StatusStrip);
     expect(container.textContent.trim()).toBe("");

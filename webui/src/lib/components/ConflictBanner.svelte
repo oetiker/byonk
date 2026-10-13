@@ -2,7 +2,7 @@
   // The on-disk-changed banner (spec §6, §8.5). It must appear on BOTH
   // triggers editor.conflict can carry -- a 412 from trySave() and the SSE
   // watcher's file-change (via editor.onWatchEvent) -- and it is not one of
-  // the four toggleable panels, so AppShell mounts it above the panel row
+  // the four toggleable panels, so AppShell mounts it in the non-shifting status overlay
   // rather than gating it on any layout state.
   import { editor } from "../state/editor.svelte.js";
   import { Alert } from "$lib/ui/alert/index.js";

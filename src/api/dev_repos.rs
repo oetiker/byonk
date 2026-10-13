@@ -99,6 +99,23 @@ fn refuse_managed(handle: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// A handle is the prefix of every screen ref (`handle/path`), so it must be a
+/// single plain path segment.
+fn check_handle(handle: &str) -> Result<(), ApiError> {
+    let mut chars = handle.chars();
+    let ok = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
+    if ok {
+        Ok(())
+    } else {
+        Err(ApiError::BadRequest(format!(
+            "invalid handle `{handle}`: use lowercase letters, digits, `-` and `_`, starting with a letter or digit"
+        )))
+    }
+}
+
 fn check_url(repo: &str) -> Result<(), ApiError> {
     validate_repo(repo).map_err(|e| ApiError::BadRequest(e.to_string()))
 }
@@ -130,6 +147,7 @@ async fn add(
         .clone()
         .ok_or_else(|| ApiError::BadRequest("`handle` is required".into()))?;
     refuse_managed(&handle)?;
+    check_handle(&handle)?;
     let repo = body
         .repo
         .as_deref()
@@ -140,8 +158,7 @@ async fn add(
 }
 
 /// `PATCH /dev/api/screen-repos/{handle}` `{repo?, pin?, token?}`: an omitted
-/// field keeps its value (a pin or token cannot be cleared here; delete and
-/// re-add instead). A `handle` in the body that differs from the path is a
+/// field keeps its value (an empty string for `pin` or `token` removes it). A `handle` in the body that differs from the path is a
 /// 400: repos are not renamed.
 async fn patch(
     State(state): State<AppState>,

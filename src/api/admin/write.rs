@@ -1077,10 +1077,11 @@ pub(crate) async fn add_screen_repo_core(
         )));
     }
 
+    // An empty pin or token is never a value: treat it as absent.
     let block = screen_repo_block(
         body.repo.as_deref(),
-        body.pin.as_deref(),
-        body.token.as_deref(),
+        body.pin.as_deref().filter(|v| !v.is_empty()),
+        body.token.as_deref().filter(|v| !v.is_empty()),
     );
     let yaml = state
         .asset_loader
@@ -1145,10 +1146,16 @@ pub(crate) async fn patch_screen_repo_core(
     // Overlay only the provided fields; an omitted field (incl. `token`)
     // keeps its existing value.
     let repo = body.repo.clone().or_else(|| existing.repo.clone());
-    let pin = body.pin.clone().or_else(|| existing.pin.clone());
-    let token = body.token.clone().or_else(|| existing.token.clone());
-    let repo_or_pin_changed = (body.repo.is_some() && body.repo != existing.repo)
-        || (body.pin.is_some() && body.pin != existing.pin);
+    // An empty string removes the pin or token (empty is never a valid value).
+    let overlay = |new: &Option<String>, old: &Option<String>| match new {
+        Some(v) if v.is_empty() => None,
+        Some(v) => Some(v.clone()),
+        None => old.clone(),
+    };
+    let pin = overlay(&body.pin, &existing.pin);
+    let token = overlay(&body.token, &existing.token);
+    let repo_or_pin_changed =
+        (body.repo.is_some() && body.repo != existing.repo) || pin != existing.pin;
 
     let block = screen_repo_block(repo.as_deref(), pin.as_deref(), token.as_deref());
     let yaml = state

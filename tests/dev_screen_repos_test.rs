@@ -319,3 +319,91 @@ async fn managed_repos_report_kind_and_writability() {
     assert_eq!(local["managed"], true);
     assert_eq!(local["writable"], true);
 }
+
+#[tokio::test]
+async fn empty_string_clears_token_and_pin_absent_keeps_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, path) = app(dir.path());
+    app.post_json(
+        BASE,
+        &[AUTH],
+        &format!(r#"{{"handle":"weather","repo":"{REPO}","pin":"v1","token":"tok-xyz"}}"#),
+    )
+    .await;
+    let kept = app
+        .patch_json(&format!("{BASE}/weather"), &[AUTH], "{}")
+        .await;
+    assert_eq!(kept.status, StatusCode::OK, "{}", kept.text());
+    let j: serde_json::Value = kept.json();
+    assert_eq!(
+        (j["has_token"].clone(), j["pin"].clone()),
+        (true.into(), "v1".into())
+    );
+
+    let r = app
+        .patch_json(&format!("{BASE}/weather"), &[AUTH], r#"{"token":""}"#)
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let j: serde_json::Value = r.json();
+    assert_eq!(j["has_token"], false);
+    assert_eq!(j["pin"], "v1");
+    let d: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(d["screen_repos"]["weather"].get("token").is_none());
+    assert_eq!(d["screen_repos"]["weather"]["pin"], "v1");
+
+    let r = app
+        .patch_json(&format!("{BASE}/weather"), &[AUTH], r#"{"pin":""}"#)
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert!(r.json::<serde_json::Value>()["pin"].is_null());
+    let d: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(d["screen_repos"]["weather"].get("pin").is_none());
+    assert_eq!(d["screen_repos"]["weather"]["repo"], REPO);
+}
+
+#[tokio::test]
+async fn add_with_empty_token_or_pin_stores_neither() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, path) = app(dir.path());
+    let r = app
+        .post_json(
+            BASE,
+            &[AUTH],
+            &format!(r#"{{"handle":"weather","repo":"{REPO}","pin":"","token":""}}"#),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json::<serde_json::Value>()["has_token"], false);
+    let d: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(d["screen_repos"]["weather"].get("token").is_none());
+    assert!(d["screen_repos"]["weather"].get("pin").is_none());
+}
+
+#[tokio::test]
+async fn add_rejects_invalid_handles_and_accepts_a_valid_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, path) = app(dir.path());
+    let before = std::fs::read_to_string(&path).unwrap();
+    for bad in ["", "a/b", "a b", "-x", "Up"] {
+        let r = app
+            .post_json(
+                BASE,
+                &[AUTH],
+                &format!(r#"{{"handle":"{bad}","repo":"{REPO}"}}"#),
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{bad:?}: {}", r.text());
+    }
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    let r = app
+        .post_json(
+            BASE,
+            &[AUTH],
+            &format!(r#"{{"handle":"my-repo_2","repo":"{REPO}"}}"#),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+}

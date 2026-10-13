@@ -1407,7 +1407,8 @@ pub fn dev_router(state: &AppState) -> Router<AppState> {
             put(handle_start_tuning_session).delete(handle_end_tuning_session),
         )
         .route("/whoami", get(crate::api::dev_auth::whoami))
-        .merge(crate::api::dev_files::files_router());
+        .merge(crate::api::dev_files::files_router())
+        .merge(crate::api::dev_repos::repos_router());
     let protected = Router::new()
         .route("/", get(handle_dev_page))
         .route("/app.js", get(handle_app_js))

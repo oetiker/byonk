@@ -91,7 +91,7 @@ pub struct DeviceWrite {
 /// as an HA add-on. The add-on Options form (`/data/options.json`) is the sole
 /// editor for global config; per-device writes and screen repo content-refresh are
 /// unaffected.
-fn require_writable_global(state: &AppState) -> Result<(), ApiError> {
+pub(crate) fn require_writable_global(state: &AppState) -> Result<(), ApiError> {
     if state.addon_mode {
         return Err(ApiError::Conflict(
             "global config is read-only in add-on mode; edit it in the byonk add-on Configuration tab".into(),
@@ -1048,7 +1048,17 @@ pub async fn add_screen_repo(
 ) -> Result<Json<ScreenRepoInfo>, ApiError> {
     require_writable_global(&state)?;
     require_admin(&state, &headers)?;
-    let path = require_file_config(&state)?;
+    add_screen_repo_core(&state, body).await.map(Json)
+}
+
+/// Register a screen repo in `config.yaml` and start its first fetch. The
+/// caller has already authenticated and passed `require_writable_global`;
+/// shared by the admin route and the dev UI's.
+pub(crate) async fn add_screen_repo_core(
+    state: &AppState,
+    body: ScreenRepoWrite,
+) -> Result<ScreenRepoInfo, ApiError> {
+    let path = require_file_config(state)?;
     let _guard = state.write_lock.lock().await;
 
     let handle = body
@@ -1078,7 +1088,7 @@ pub async fn add_screen_repo(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let new_yaml = config_writer::upsert_screen_repo(&yaml, &handle, &block)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    persist(&state, &path, new_yaml)?;
+    persist(state, &path, new_yaml)?;
 
     // Fetch asynchronously; the response reflects whatever status exists at
     // this instant (likely no entry yet). The client polls GET /screen-repos for
@@ -1087,10 +1097,14 @@ pub async fn add_screen_repo(
     let h = handle.clone();
     tokio::task::spawn_blocking(move || mgr.refresh_one(&h));
 
-    let count = screen_repo_screen_count(&state, &handle);
+    Ok(screen_repo_info_now(state, handle))
+}
+
+/// The current `ScreenRepoInfo` for `handle`, from live config and status.
+pub(crate) fn screen_repo_info_now(state: &AppState, handle: String) -> ScreenRepoInfo {
+    let count = screen_repo_screen_count(state, &handle);
     let statuses = state.screen_repo_manager.status_snapshot();
-    let info = build_screen_repo_info(&state.config.load(), statuses.get(&handle), count, handle);
-    Ok(Json(info))
+    build_screen_repo_info(&state.config.load(), statuses.get(&handle), count, handle)
 }
 
 pub async fn patch_screen_repo(
@@ -1101,7 +1115,17 @@ pub async fn patch_screen_repo(
 ) -> Result<Json<ScreenRepoInfo>, ApiError> {
     require_writable_global(&state)?;
     require_admin(&state, &headers)?;
-    let path = require_file_config(&state)?;
+    patch_screen_repo_core(&state, handle, body).await.map(Json)
+}
+
+/// Overlay the provided fields onto an existing screen repo entry. Same
+/// contract as [`add_screen_repo_core`].
+pub(crate) async fn patch_screen_repo_core(
+    state: &AppState,
+    handle: String,
+    body: ScreenRepoWrite,
+) -> Result<ScreenRepoInfo, ApiError> {
+    let path = require_file_config(state)?;
     let _guard = state.write_lock.lock().await;
 
     if handle == BUILTIN_HANDLE {
@@ -1133,7 +1157,7 @@ pub async fn patch_screen_repo(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let new_yaml = config_writer::upsert_screen_repo(&yaml, &handle, &block)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    persist(&state, &path, new_yaml)?;
+    persist(state, &path, new_yaml)?;
 
     if repo_or_pin_changed {
         let mgr = state.screen_repo_manager.clone();
@@ -1141,10 +1165,7 @@ pub async fn patch_screen_repo(
         tokio::task::spawn_blocking(move || mgr.refresh_one(&h));
     }
 
-    let count = screen_repo_screen_count(&state, &handle);
-    let statuses = state.screen_repo_manager.status_snapshot();
-    let info = build_screen_repo_info(&state.config.load(), statuses.get(&handle), count, handle);
-    Ok(Json(info))
+    Ok(screen_repo_info_now(state, handle))
 }
 
 pub async fn delete_screen_repo(
@@ -1154,7 +1175,19 @@ pub async fn delete_screen_repo(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_writable_global(&state)?;
     require_admin(&state, &headers)?;
-    let path = require_file_config(&state)?;
+    delete_screen_repo_core(&state, &handle).await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Remove a screen repo from `config.yaml`, unless a device still uses one
+/// of its screens (409 naming every such device). Same contract as
+/// [`add_screen_repo_core`].
+pub(crate) async fn delete_screen_repo_core(
+    state: &AppState,
+    handle: &str,
+) -> Result<(), ApiError> {
+    let handle = handle.to_string();
+    let path = require_file_config(state)?;
     let _guard = state.write_lock.lock().await;
 
     if handle == BUILTIN_HANDLE {
@@ -1166,14 +1199,17 @@ pub async fn delete_screen_repo(
     // Reject if any device's screen dangles into this screen repo's namespace.
     let prefix = format!("{handle}/");
     let config = state.config.load();
-    if let Some((device_key, _)) = config
+    let mut users: Vec<&str> = config
         .devices
         .iter()
-        .find(|(_, d)| d.screen.starts_with(&prefix))
-        .map(|(k, d)| (k.clone(), d.screen.clone()))
-    {
+        .filter(|(_, d)| d.screen.starts_with(&prefix))
+        .map(|(k, _)| k.as_str())
+        .collect();
+    if !users.is_empty() {
+        users.sort_unstable();
         return Err(ApiError::Conflict(format!(
-            "screen repo `{handle}` is referenced by device `{device_key}`"
+            "screen repo `{handle}` is referenced by device(s): {}",
+            users.join(", ")
         )));
     }
     drop(config);
@@ -1187,7 +1223,7 @@ pub async fn delete_screen_repo(
         Err(config_writer::ConfigWriteError::NotFound(_)) => return Err(ApiError::NotFound),
         Err(e) => return Err(ApiError::Internal(e.to_string())),
     };
-    persist(&state, &path, new_yaml)?;
+    persist(state, &path, new_yaml)?;
 
     // Forget the deleted handle's fetch status so a later re-registration of
     // the same handle doesn't briefly surface the stale resolved_sha/Ready
@@ -1197,7 +1233,7 @@ pub async fn delete_screen_repo(
     // resolving immediately (in-memory only; not blocking).
     state.screen_repo_manager.rebuild_loader();
 
-    Ok(Json(serde_json::json!({ "ok": true })))
+    Ok(())
 }
 
 pub async fn update_screen_repo(
@@ -1206,7 +1242,15 @@ pub async fn update_screen_repo(
     headers: HeaderMap,
 ) -> Result<Json<ScreenRepoInfo>, ApiError> {
     require_admin(&state, &headers)?;
+    update_screen_repo_core(&state, handle).map(Json)
+}
 
+/// Start a content refresh of one screen repo (not a config write, so it is
+/// allowed in add-on mode). 404 for an unknown handle.
+pub(crate) fn update_screen_repo_core(
+    state: &AppState,
+    handle: String,
+) -> Result<ScreenRepoInfo, ApiError> {
     if handle != BUILTIN_HANDLE && !state.config.load().screen_repos.contains_key(&handle) {
         return Err(ApiError::NotFound);
     }
@@ -1215,10 +1259,7 @@ pub async fn update_screen_repo(
     let h = handle.clone();
     tokio::task::spawn_blocking(move || mgr.refresh_one(&h));
 
-    let count = screen_repo_screen_count(&state, &handle);
-    let statuses = state.screen_repo_manager.status_snapshot();
-    let info = build_screen_repo_info(&state.config.load(), statuses.get(&handle), count, handle);
-    Ok(Json(info))
+    Ok(screen_repo_info_now(state, handle))
 }
 
 pub async fn update_all_screen_repos(

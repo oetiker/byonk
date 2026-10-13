@@ -3,6 +3,7 @@ pub mod config_persist;
 pub mod dev;
 pub mod dev_auth;
 pub mod dev_files;
+pub mod dev_repos;
 pub mod display;
 mod headers;
 pub mod log;

@@ -103,7 +103,7 @@ the screen's folder, not just the core three.
 
 You can also do it by hand: copy the screen's `meta.yaml`, `script.lua`, and
 `screen.svg` (and any other files in its folder) from the read-only repo's
-directory into `local` or `examples` under a new name, then point a device's
+directory into `local` under a new name, then point a device's
 `screen` at the new `handle/path`. For example, to base a screen on
 `examples/hello`:
 

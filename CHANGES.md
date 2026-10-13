@@ -262,6 +262,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A panel in `config.yaml` wider or taller than 4096 pixels now stops byonk from starting**, naming the panel and the key. No TRMNL panel is anywhere near the limit.
 
+- **The MCP tool `rename_screen` now keeps devices on the screen.** Renaming (or moving) a screen used to leave every device that showed it pointing at the old name. The devices in `config.yaml` that show the screen now follow the rename. If byonk cannot write `config.yaml` (it is embedded, or the Home Assistant add-on owns it) and a device uses the screen, the rename is refused and nothing is moved.
+
 - **The shipped `examples` screens are read-only.** They used to be editable in place, which made it easy to change a sample you meant to keep as a reference. Copy an example into `local` (the dev UI's Copy, or the MCP tool `copy_screen`) to change it. An explicit `screen_repos: examples:` entry in `config.yaml` is unaffected.
 
 - **The MCP tool `assign_screen` is now `configure_device`, and it can set

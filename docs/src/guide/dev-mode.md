@@ -97,6 +97,14 @@ Everything in the work area is about one **subject**: a screen, a panel
 profile or a device. You choose it in Library; Edit changes it and Preview
 shows it.
 
+**App status bar.** One line at the bottom of the window, below the three
+panes (not to be confused with the Edit panel's own `watch:` line). It shows
+the most important message first: a save conflict, then an error from the
+Library, Edit or Preview, then the live overrides that are still pushed to
+devices. When more than one is waiting, `+N` shows how many; click it to
+open the full list upward. The bar always keeps the same height, so the panes
+above it do not move when a message appears or goes.
+
 **Library.** Screens grouped by screen repo handle, then the panel profiles,
 the devices and the screen repos. Choosing an entry makes it the subject. A repo you cannot
 write to is labelled "read-only" next to its handle; you can still open any
@@ -152,6 +160,11 @@ and renders nothing: Preview stays empty.
   of its screens it is refused, and the message names the devices.
 - `byonk-builtin`, `local` and `examples` are registered by byonk itself:
   their details are read-only and they cannot be updated or deleted here.
+  The same holds for a repo registered with `path:` in `config.yaml` and for
+  one found in `SCREEN_REPOS_DIR`: they are folders, not git repos, so there
+  is no URL to edit and nothing to fetch. Their Details show the folder; the
+  screens in a `path:` repo are edited like those in `local`, and the entry
+  itself is changed in `config.yaml`.
   In the Home Assistant app the section is read-only too, with the note
   "Managed in the byonk add-on configuration in Home Assistant." — repos are
   set in the app's Configuration tab there; **Update now** still works.
@@ -229,13 +242,13 @@ writable repo and edit the copy.
 
 Every save carries the etag the file had when you opened it. If the file
 changed underneath you — another browser tab, an editor on the server, a git
-fetch — the write is refused and a banner offers two ways out:
+fetch — the write is refused and the [status bar](#the-three-panels) shows the conflict, with two ways out:
 
 - **Reload** throws your edits away and takes the version on disk.
 - **Overwrite** re-reads the file only to take its current etag, then writes
   your buffer over it.
 
-The same banner appears when the file watcher reports a change to a file you
+The same conflict is shown when the file watcher reports a change to a file you
 have unsaved edits in — Byonk never silently replaces a buffer you are still
 working on.
 
@@ -270,7 +283,7 @@ change. A screen needs a path: an emptied **Path** cannot be saved.
 |--------|---------------|--------------|
 | **New** | a writable repo to put it in | Scaffolds `meta.yaml`, `script.lua` and `screen.svg` from a minimal starter. The generated `meta.yaml` pins the running engine's `byonk:` compatibility requirement. The screen is created in `local`, your own screen repo; if `local` is missing or read-only, the first writable repo is used instead. |
 | **Copy** | any selected screen | Forks it — every file in its folder — into `local`, the same default **New** uses. This works from `byonk-builtin` and from git-fetched repos, which is the supported way to customize a screen you cannot edit. |
-| **Delete** | a writable repo, or a selected panel or device | Removes the screen, or the panel or device from `config.yaml`. A panel that a device names with `panel:` is not removed; the message lists those devices. |
+| **Delete** | a writable repo, or a selected panel, device or git screen repo | Removes the screen, or the panel, device or screen repo from `config.yaml`. A panel that a device names with `panel:`, or a screen repo one of whose screens a device shows, is not removed; the message lists those devices. |
 
 **New** and **Copy** ask for the name in a small form under the Library
 toolbar (**Copy** starts from the current name); **Delete** asks you to
@@ -359,7 +372,7 @@ dropped connection retries by itself every three seconds.
 
 When a watched file changes, an open buffer showing that file is reloaded from
 disk — unless you have unsaved edits in it, in which case you get the conflict
-banner instead — and the preview re-renders. This is what makes an external
+in the status bar instead — and the preview re-renders. This is what makes an external
 editor work alongside the built-in one.
 
 Without `SCREENS_DIR` there is nothing on disk to watch, and Byonk says so at
@@ -450,7 +463,7 @@ back, and Preview renders it as you type.
   override.
 
 Switching to another subject, or closing Edit, clears a pushed override but
-keeps the draft. A live override is also listed in the status strip, with its
+keeps the draft. A live override is also listed in the app status bar, with its
 own **Discard**, and is still listed after you reload the page. Saving works
 the same way whether Byonk runs standalone or as the Home Assistant add-on —
 the add-on's Options screen does not own `panels:`, so nothing blocks the
@@ -676,7 +689,7 @@ than a redirect when you are not admitted.
 | `POST /dev/api/panels/{panel}/save` | Write a panel into `config.yaml` — `name`, `match`, `width`, `height`, `colors`, `colors_actual` and the `dither` block — in place, key by key, so comments and the order of panels survive, and clear its override. Save is whole-panel: `name` and `colors` are required, and an optional field the request omits is removed from `config.yaml`. An `id` different from `{panel}` renames the panel in the same write: its key changes where it stands and every device's `panel:` follows (`409` if the id is taken). Answers `{"id": …}` with the panel's id after the save |
 | `POST /dev/api/panels` | Add `panels.<id>` with `{id, name, colors, width?, height?}`, in place; `409` if the id is taken. Answers `{"id": …}` |
 | `POST /dev/api/devices` | Add a device: the `POST /api/admin/devices` body (`key` and `screen` required); `409` if the key is taken. Answers `{"key": …, "screen": …}` |
-| `GET /dev/api/screen-repos` | Every screen repo: `handle`, `kind` (`builtin`, `local`, `examples`, `git`), `repo`, `pin`, `has_token` (the token itself is never served), `status`, `pin_kind`, `resolved_sha`, `last_fetched`, `error`, `screen_count`, `writable`, and `managed` (`true` for `byonk-builtin`, `local` and `examples`, which byonk registers itself). Wrapped as `{"addon_mode", "repos"}` |
+| `GET /dev/api/screen-repos` | Every screen repo: `handle`, `kind` (`builtin`, `local`, `examples`, `git`, `path` for a folder registered with `path:` in `config.yaml`, `dir` for a folder from `SCREEN_REPOS_DIR`), `repo`, `path` (the folder of a `path` repo), `pin`, `has_token` (the token itself is never served), `status`, `pin_kind`, `resolved_sha`, `last_fetched`, `error`, `screen_count`, `writable`, and `managed` (`true` for `byonk-builtin`, `local` and `examples`, which byonk registers itself). Only `git` repos can be changed, updated or deleted here: the others answer `409` and their folders are changed on disk or in `config.yaml`. Wrapped as `{"addon_mode", "repos"}` |
 | `POST /dev/api/screen-repos` | Add a repo: `{handle, repo, pin?, token?}`, in place in `config.yaml`; the first fetch runs in the background, so poll the list. `400` for a `handle` that is not lowercase letters, digits, `-` and `_` (starting with a letter or digit) and for a `repo` without an explicit scheme (`https://`, `ssh://`, `file:///…`, `git@host:path`); `409` for a taken or reserved handle, and in Home Assistant add-on mode, where the add-on Configuration tab owns the registry. Answers the new repo |
 | `PATCH /dev/api/screen-repos/{handle}` | Change `repo`, `pin` or `token`; an omitted field keeps its value and an empty string for `pin` or `token` removes it (an empty `pin` or `token` on add is ignored). Repos are not renamed (`400` if the body names another `handle`). Same `400`/`409` rules as add. Answers the repo |
 | `DELETE /dev/api/screen-repos/{handle}` | Remove a repo from `config.yaml`. `409` while a device names one of its screens (the message lists the devices) and for reserved handles. Answers `{"deleted": handle}` |

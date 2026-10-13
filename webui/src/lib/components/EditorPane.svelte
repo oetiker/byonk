@@ -144,7 +144,7 @@
   // Collapsed unless the user opened it -- or it holds a pending move or a
   // refused one, which must not hide.
   const detailsForced = $derived(editor.moveDirty || !!editor.moveFailure);
-  const detailsOpen = $derived(detailsForced || details.isOpen("screen"));
+  const detailsOpen = $derived(detailsForced || details.isOpen());
   const canSave = $derived(fileDirty || (editor.moveDirty && !editor.moveMissing));
 
   /**
@@ -227,7 +227,7 @@
       -->
       {#if editor.place}
         <DetailsToggle expanded={detailsOpen} forced={detailsForced} controls="screen-details"
-                       onToggle={(open) => details.set("screen", open)} />
+                       onToggle={(open) => details.set(open)} />
       {/if}
       <IconButton
         icon={Plus}

@@ -1,23 +1,24 @@
-// Whether the Edit pane's Details block is open, remembered per subject KIND
-// ("screen", "panel", "device"). Collapsed by default: the block holds what
-// names the subject, which is rarely what you came to edit. Auto-opening (a
-// new placeholder, unsaved Details edits, a failed Save) is the editors' own
-// business and is never written here -- only the user's explicit choice is.
+// Whether a screen's Details block is open in the Edit pane. Collapsed by
+// default: the block says where the screen lives, which is rarely what you
+// came to edit. Panels, devices and screen repos always show their Details, so
+// only screens need this. Auto-opening (a pending Repo/Path edit, a refused
+// move) is the editor's own business and is never written here -- only the
+// user's explicit choice is.
 
-export const STORAGE_KEY = "byonk.details.v1";
+export const STORAGE_KEY = "byonk.details.v2";
 
 class DetailsState {
-  #s = $state({});
+  #open = $state(false);
 
-  isOpen(kind) {
-    return this.#s[kind] === true;
+  isOpen() {
+    return this.#open;
   }
 
-  set(kind, open) {
-    if (this.isOpen(kind) === open) return;
-    this.#s = { ...this.#s, [kind]: open };
+  set(open) {
+    if (this.#open === open) return;
+    this.#open = open;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.#s));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(open));
     } catch {
       // Storage denied: the choice then lasts for the page session only.
     }
@@ -25,17 +26,14 @@ class DetailsState {
 
   load() {
     try {
-      const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null");
-      const next = {};
-      for (const k of ["screen", "panel", "device"]) if (parsed?.[k] === true) next[k] = true;
-      this.#s = next;
+      this.#open = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") === true;
     } catch {
       // Missing, corrupt or unreadable: keep the default (collapsed).
     }
   }
 
   reset() {
-    this.#s = {};
+    this.#open = false;
   }
 }
 

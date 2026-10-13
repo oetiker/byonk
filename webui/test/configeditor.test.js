@@ -10,7 +10,7 @@ import * as api from "../src/lib/api.js";
 
 beforeEach(() => {
   // Details are collapsed by default (U14); these tests are about their content.
-  for (const k of ["screen", "panel", "device"]) details.set(k, true);
+  details.set(true);
   cleanup(); vi.restoreAllMocks();
   configDraft.reset(); subject.reset(); resolution.reset();
   screens.list = [{ ref: "local/a" }, { ref: "local/b" }];

@@ -41,7 +41,7 @@ beforeEach(() => {
   localStorage.clear();
   // Details are collapsed by default (U14); these tests are about their content.
   details.reset();
-  for (const k of ["screen", "panel", "device"]) details.set(k, true);
+  details.set(true);
   layout.reset(); theme.reset(); auth.reset(); editor.reset(); editor.files = [];
   simulate.reset(); simulate.error = null;
   subject.reset();

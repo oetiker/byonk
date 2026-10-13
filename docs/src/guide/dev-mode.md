@@ -177,12 +177,11 @@ and `screen.svg` first and everything else after them alphabetically.
 saving](#editing-and-saving). For a panel or a device it is the [config
 editor](#the-config-editor).
 
-The **…** button in Edit's header shows and hides the **Details**; they start
-hidden, and byonk remembers your choice for screens, panels and devices
-separately. They open by themselves while they hold a change you have not
-saved or after a refused Save, so unsaved work is never hidden, and a new
-panel or device opens with them showing. A screen repo's Details are its whole
-editor, so they are always shown.
+For a screen, the **…** button in Edit's header shows and hides the **Details**;
+they start hidden, and byonk remembers your choice. They open by themselves while
+they hold a Repo or Path change you have not saved or after a refused move, so
+unsaved work is never hidden. A panel's, a device's and a screen repo's Details
+are always shown, with no **…** button.
 
 The screen's **Details** say where it lives: its **Repo** and its **Path**
 inside that repo. In a writable repo you can change both — the Repo menu
@@ -404,7 +403,7 @@ depends on the subject:
   device's params, temperature profile, maximum compatibility and minimum PNG
   bytes.
 
-The first block, **Details** (open it with the **…** button in the header),
+The first block, **Details** (always shown),
 holds what names the entry:
 
 - A **panel**: **Id** (letters, digits, `_` and `-`), **Name**, **Match**

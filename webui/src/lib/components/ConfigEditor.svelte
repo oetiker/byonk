@@ -16,8 +16,6 @@
   import { Circle, Save, Undo2 } from "@lucide/svelte";
   import PaneHeader from "./PaneHeader.svelte";
   import HeaderAction from "./HeaderAction.svelte";
-  import DetailsToggle from "./DetailsToggle.svelte";
-  import { details } from "../state/details.svelte.js";
 
   const RUNG_LABEL = { panel: "panel", device_base: "device base", device_final: "device final" };
   const STEP = { max_error: 0.05, noise_scale: 0.5, chroma_clamp: 0.05, strength: 0.05,
@@ -50,22 +48,6 @@
   const canSave = $derived(dirtyCount > 0 && !screenMissing && invalid.length === 0 && missing.length === 0);
   // A refused Save (409/400) keeps the draft; the server's reason shows here.
   const saveError = $derived((configDraft.version, configDraft.saveError(kind, id)));
-
-  // Details are collapsed by default (U14). They open by themselves for a
-  // brand-new placeholder (its identity is what the user must fill in), while
-  // an identity field is dirty, and after a refused Save -- never hide unsaved
-  // work. The auto-open is not remembered; only an explicit toggle is.
-  const isPlaceholder = $derived(kind === "panel" ? /^new_panel(_\d+)?$/.test(id) : /^new-device(-\d+)?$/.test(id));
-  let seeded = $state(untrack(() => isPlaceholder));
-  const identityDirty = $derived(
-    (configDraft.version, configDraft.dirty(kind, id).some((d) => d.rung === null && schema.identity.includes(d.field))),
-  );
-  const detailsForced = $derived(identityDirty || !!saveError);
-  const detailsOpen = $derived(detailsForced || seeded || details.isOpen(kind));
-  function toggleDetails(open) {
-    seeded = open;
-    details.set(kind, open);
-  }
 
   // Key suggestions: devices byonk has seen that no entry configures yet,
   // fetched when a device opens in the editor. A failure only means none.
@@ -119,7 +101,6 @@
     </span>
   {/snippet}
   {#snippet headerActions()}
-    <DetailsToggle expanded={detailsOpen} forced={detailsForced} controls="config-details" onToggle={toggleDetails} />
     <HeaderAction icon={Undo2} label="Discard" variant="ghost" disabled={dirtyCount === 0 && !live} onclick={() => configDraft.discard(kind, id)} />
     <HeaderAction icon={Save} label="Save" disabled={!canSave} onclick={() => canSave && configDraft.save(kind, id)} />
     <HeaderAction
@@ -149,7 +130,6 @@
   <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto p-3" data-testid="config-body">
   <!-- Details (U7): what names the entry. Save-only: never pushed, never
        rendered until saved. -->
-  {#if detailsOpen}
   <section id="config-details" class="flex flex-col gap-1 pb-2" aria-label="Details">
     <h3 class="font-mono text-xs">Details</h3>
     <Field.Group class="gap-3">
@@ -217,7 +197,6 @@
     {/each}
     </Field.Group>
   </section>
-  {/if}
 
   {#if kind === "panel"}
     <p class="text-xs">{users === 1 ? "⚠ 1 device uses this panel" : `⚠ ${users} devices use this panel`}</p>

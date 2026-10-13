@@ -10,8 +10,9 @@ import { resolution } from "../src/lib/state/resolution.svelte.js";
 import { screenRepos } from "../src/lib/state/screenRepos.svelte.js";
 import { details } from "../src/lib/state/details.svelte.js";
 
-// U14: the Details block hides behind a "…" in the Edit header; the active
-// file tab is marked from aria-selected.
+// U14/U16: a screen's Details hide behind a "…" in the Edit header; panels,
+// devices and screen repos always show theirs. The active file tab is marked
+// from aria-selected.
 const cmMock = { setDoc: vi.fn(), setDiagnostics: vi.fn(), setTheme: vi.fn(), destroy: vi.fn(), view: {} };
 vi.mock("../src/lib/codemirror.js", () => ({ createEditor: vi.fn(() => cmMock) }));
 import EditorPane from "../src/lib/components/EditorPane.svelte";
@@ -93,7 +94,7 @@ describe("screen Details", () => {
     expect(regionOf()).toBeTruthy();
   });
 
-  it("remembers the choice per kind", async () => {
+  it("remembers the choice", async () => {
     await openScreen();
     await fireEvent.click(toggle());
     cleanup();
@@ -122,64 +123,35 @@ describe("file tabs", () => {
 });
 
 describe("panel and device Details", () => {
-  it("are collapsed for an existing panel; … toggles; aria-expanded follows", async () => {
+  it("are always shown for a panel and a device, with no … button", () => {
     subject.select("panel", "e1004");
     render(ConfigEditor);
-    expect(regionOf()).toBeNull();
-    expect(toggle().getAttribute("aria-expanded")).toBe("false");
-    await fireEvent.click(toggle());
     expect(regionOf()).toBeTruthy();
-    expect(toggle().getAttribute("aria-expanded")).toBe("true");
-  });
-
-  it("are collapsed for an existing device", () => {
+    expect(regionOf().id).toBe("config-details");
+    expect(toggle()).toBeNull();
+    cleanup();
     subject.select("device", "kitchen");
     render(ConfigEditor);
-    expect(regionOf()).toBeNull();
+    expect(regionOf()).toBeTruthy();
+    expect(toggle()).toBeNull();
   });
 
-  it("open for a brand-new placeholder panel and device", () => {
+  it("stay shown for a placeholder and after a Save failure", () => {
     subject.select("panel", "new_panel");
     render(ConfigEditor);
     expect(regionOf()).toBeTruthy();
-    cleanup();
-    subject.select("device", "new-device");
-    render(ConfigEditor);
-    expect(regionOf()).toBeTruthy();
-  });
-
-  it("open while a Details field is dirty", async () => {
-    subject.select("panel", "e1004");
-    render(ConfigEditor);
-    expect(regionOf()).toBeNull();
-    configDraft.setPlain("panel", "e1004", "name", "Renamed");
+    configDraft.saveFailure = { key: "panel:new_panel", message: "409 Conflict" };
     flushSync();
     expect(regionOf()).toBeTruthy();
+    expect(toggle()).toBeNull();
   });
 
-  it("a dirty non-Details setting does not open it", () => {
+  it("a stored per-kind choice does not hide them", () => {
+    try { localStorage.setItem("byonk.details.v2", JSON.stringify({ panel: false, device: false })); } catch {}
+    details.load();
     subject.select("panel", "e1004");
     render(ConfigEditor);
-    configDraft.set("panel", "e1004", "panel", "strength", 0.5);
-    flushSync();
-    expect(regionOf()).toBeNull();
-  });
-
-  it("open after a Save failure", async () => {
-    subject.select("panel", "e1004");
-    render(ConfigEditor);
-    configDraft.saveFailure = { key: "panel:e1004", message: "409 Conflict" };
-    flushSync();
     expect(regionOf()).toBeTruthy();
-  });
-
-  it("toggling Details renders nothing", async () => {
-    subject.select("panel", "e1004");
-    render(ConfigEditor);
-    const rev = configDraft.revision;
-    await fireEvent.click(toggle());
-    await fireEvent.click(toggle());
-    expect(configDraft.revision).toBe(rev);
   });
 });
 

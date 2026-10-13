@@ -43,7 +43,7 @@ async function type(el, value) {
 
 beforeEach(async () => {
   // Details are collapsed by default (U14); these tests are about their content.
-  for (const k of ["screen", "panel", "device"]) details.set(k, true);
+  details.set(true);
   cleanup();
   vi.restoreAllMocks();
   lastOpts = null;

@@ -102,7 +102,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The **+** on the Panels and Devices headings adds a "New panel" or "New
   device" to `config.yaml` at once, comments kept, whose identity (id, name,
   match, size and colours; a device's key, name, screen and panel) you then
-  edit — and rename — in Edit's Details block, and **Delete** removes the
+  edit — and rename — in Edit's Details block (shown with the **…** button
+  in Edit's header, and open by itself for a new entry), and **Delete** removes the
   selected panel or device too. A fourth section, Screen repos, lists every
   screen repo with its fetch status and lets you add a git repo (URL, ref,
   write-only token), change it, fetch it again with **Update now** or delete

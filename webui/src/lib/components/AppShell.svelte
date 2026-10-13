@@ -4,6 +4,7 @@
   import * as Resizable from "$lib/ui/resizable/index.js";
   import StatusStrip from "./StatusStrip.svelte";
   import { layout } from "../state/layout.svelte.js";
+  import { details } from "../state/details.svelte.js";
   import { theme } from "../state/theme.svelte.js";
   import { editor } from "../state/editor.svelte.js";
   import { auth } from "../state/auth.svelte.js";
@@ -27,6 +28,7 @@
   // frame only to be torn down again. (Pane sizes are PaneForge's; see the
   // Resizable section below.)
   layout.load();
+  details.load();
   // Same reasoning as layout.load() above: read synchronously here, before
   // ThemeSwitch (mounted inside IconRail) reads `theme.mode` for its first
   // render, so a persisted explicit choice from a prior session is never

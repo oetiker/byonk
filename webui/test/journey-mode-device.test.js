@@ -9,6 +9,7 @@ import { layout } from "../src/lib/state/layout.svelte.js";
 import { auth } from "../src/lib/state/auth.svelte.js";
 import { theme } from "../src/lib/state/theme.svelte.js";
 import { subject } from "../src/lib/state/subject.svelte.js";
+import { details } from "../src/lib/state/details.svelte.js";
 import { resolution } from "../src/lib/state/resolution.svelte.js";
 import { configDraft } from "../src/lib/state/configDraft.svelte.js";
 import * as api from "../src/lib/api.js";
@@ -51,6 +52,9 @@ beforeEach(() => {
   cleanup();
   vi.restoreAllMocks();
   localStorage.clear();
+  // Details are collapsed by default (U14); these tests are about their content.
+  details.reset();
+  for (const k of ["screen", "panel", "device"]) details.set(k, true);
   layout.reset(); theme.reset(); auth.reset(); editor.reset(); editor.files = [];
   simulate.reset(); simulate.error = null;
   subject.reset();

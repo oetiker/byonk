@@ -6,6 +6,8 @@
   import StatusBar from "./StatusBar.svelte";
   import { Plus, Minus, X, Circle, TriangleAlert, Check, Save } from "@lucide/svelte";
   import PaneHeader from "./PaneHeader.svelte";
+  import DetailsToggle from "./DetailsToggle.svelte";
+  import { details } from "../state/details.svelte.js";
   import HeaderAction from "./HeaderAction.svelte";
   import PaneToolbar from "./PaneToolbar.svelte";
   import IconButton from "./IconButton.svelte";
@@ -139,6 +141,10 @@
   // Details (U9): where the screen lives. A move can only go to a writable repo.
   const writableRepos = $derived(screens.repos.filter((r) => r.writable));
   const fileDirty = $derived(!!editor.active && !editor.active.readOnly && editor.active.dirty);
+  // Collapsed unless the user opened it -- or it holds a pending move or a
+  // refused one, which must not hide.
+  const detailsForced = $derived(editor.moveDirty || !!editor.moveFailure);
+  const detailsOpen = $derived(detailsForced || details.isOpen("screen"));
   const canSave = $derived(fileDirty || (editor.moveDirty && !editor.moveMissing));
 
   /**
@@ -219,6 +225,10 @@
         the server refuses them too (`CORE_FILES`, src/api/dev_files.rs) and is
         the authority -- this only avoids offering an action that cannot work.
       -->
+      {#if editor.place}
+        <DetailsToggle expanded={detailsOpen} forced={detailsForced} controls="screen-details"
+                       onToggle={(open) => details.set("screen", open)} />
+      {/if}
       <IconButton
         icon={Plus}
         label="Add file"
@@ -255,10 +265,10 @@
       <Field.Error class="text-xs">Save failed: {editor.moveFailure}</Field.Error>
     </div>
   {/if}
-  {#if editor.place}
+  {#if editor.place && detailsOpen}
     <!-- Details (U9): the screen's identity. Repo and Path are Save-only: the
          preview keeps rendering the screen where it is until Save moves it. -->
-    <section class="flex shrink-0 flex-col gap-1 border-b border-border p-3 text-sm" aria-label="Details">
+    <section id="screen-details" class="flex shrink-0 flex-col gap-1 border-b border-border p-3 text-sm" aria-label="Details">
       <h3 class="flex items-center gap-1 font-mono text-xs">
         Details
         {#if editor.moveDirty}<span role="img" aria-label="unsaved changes"><Circle class="size-2 fill-current" aria-hidden="true" /></span>{/if}
@@ -307,12 +317,19 @@
       {#each editor.files as f (f.name)}
         {@const t = editor.tabs.find((x) => x.name === f.name)}
         {#if f.text}
-          <div role="presentation" class="flex shrink-0 items-center gap-1 border-r border-border px-2">
+          <!-- The active tab is marked from `aria-selected` itself (has-aria-selected),
+               so the look and the semantics cannot disagree: filled like the
+               shadcn active trigger, plus a 2 px primary underline. -->
+          <div
+            role="presentation"
+            class="flex h-full shrink-0 items-center gap-1 border-r border-b-2 border-r-border border-b-transparent px-2
+                   text-muted-foreground has-aria-selected:border-b-primary has-aria-selected:bg-background has-aria-selected:text-foreground"
+          >
             <button
               type="button"
               role="tab"
               aria-selected={t != null && t === editor.active}
-              class="whitespace-nowrap"
+              class="whitespace-nowrap aria-selected:font-semibold"
               onclick={() =>
                 editor.open(editor.ref, f.name, {
                   readOnly: !screens.writable(editor.ref),

@@ -3,11 +3,14 @@ import { render, screen as dom, fireEvent, waitFor, cleanup, within } from "@tes
 import ConfigEditor from "../src/lib/components/ConfigEditor.svelte";
 import { configDraft } from "../src/lib/state/configDraft.svelte.js";
 import { subject } from "../src/lib/state/subject.svelte.js";
+import { details } from "../src/lib/state/details.svelte.js";
 import { resolution } from "../src/lib/state/resolution.svelte.js";
 import { screens } from "../src/lib/state/screens.svelte.js";
 import * as api from "../src/lib/api.js";
 
 beforeEach(() => {
+  // Details are collapsed by default (U14); these tests are about their content.
+  for (const k of ["screen", "panel", "device"]) details.set(k, true);
   cleanup(); vi.restoreAllMocks();
   configDraft.reset(); subject.reset(); resolution.reset();
   screens.list = [{ ref: "local/a" }, { ref: "local/b" }];

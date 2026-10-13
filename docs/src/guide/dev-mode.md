@@ -170,11 +170,19 @@ and renders nothing: Preview stays empty.
   set in the app's Configuration tab there; **Update now** still works.
 
 **Edit.** The header names the subject. For a screen it is the file editor:
-a **Details** block, then one tab per file, with `meta.yaml`, `script.lua`
+an optional **Details** block, then one tab per file (the one you are in is
+highlighted and underlined), with `meta.yaml`, `script.lua`
 and `screen.svg` first and everything else after them alphabetically.
 **Save** and Cmd/Ctrl-S write the file you are in; see [Editing and
 saving](#editing-and-saving). For a panel or a device it is the [config
 editor](#the-config-editor).
+
+The **…** button in Edit's header shows and hides the **Details**; they start
+hidden, and byonk remembers your choice for screens, panels and devices
+separately. They open by themselves while they hold a change you have not
+saved or after a refused Save, so unsaved work is never hidden, and a new
+panel or device opens with them showing. A screen repo's Details are its whole
+editor, so they are always shown.
 
 The screen's **Details** say where it lives: its **Repo** and its **Path**
 inside that repo. In a writable repo you can change both — the Repo menu
@@ -396,7 +404,8 @@ depends on the subject:
   device's params, temperature profile, maximum compatibility and minimum PNG
   bytes.
 
-The first block, **Details**, holds what names the entry:
+The first block, **Details** (open it with the **…** button in the header),
+holds what names the entry:
 
 - A **panel**: **Id** (letters, digits, `_` and `-`), **Name**, **Match**
   (the firmware `Board` string this panel is picked for; empty means only

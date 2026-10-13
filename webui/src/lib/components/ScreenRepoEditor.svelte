@@ -98,6 +98,9 @@
     {:else if !d}
       <p class="text-muted-foreground">This screen repo is gone. Pick another one in the Library.</p>
     {:else}
+      <!-- Always open, and no "…" in the header: for a screen repo the Details
+           are the whole editor (the Status block below is read-only), so there
+           is nothing else for them to make room for. -->
       <section class="flex flex-col gap-1 pb-2" aria-label="Details">
         <h3 class="font-mono text-xs">Details</h3>
         {#if readOnly}

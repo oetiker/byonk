@@ -5,6 +5,7 @@ import * as api from "../src/lib/api.js";
 import { editor } from "../src/lib/state/editor.svelte.js";
 import { screens } from "../src/lib/state/screens.svelte.js";
 import { subject } from "../src/lib/state/subject.svelte.js";
+import { details } from "../src/lib/state/details.svelte.js";
 
 // U9: a screen's Repo and Path are its identity, edited in the Edit pane's
 // Details block; Save moves the screen. CodeMirror is mocked as in
@@ -41,6 +42,8 @@ async function type(el, value) {
 }
 
 beforeEach(async () => {
+  // Details are collapsed by default (U14); these tests are about their content.
+  for (const k of ["screen", "panel", "device"]) details.set(k, true);
   cleanup();
   vi.restoreAllMocks();
   lastOpts = null;

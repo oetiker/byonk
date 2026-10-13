@@ -231,9 +231,10 @@ rather than a sign that something is wrong.
 
 The editor lists your screens, edits their Lua and SVG, saves with conflict
 detection, previews the rendered result, and calibrates a panel's measured
-colours against the device itself. Here the writable repos are `screens/`
-(the `local` handle) and `examples/`; the built-in screens and anything
-fetched from git are read-only, so fork one with **Copy** to customize it.
+colours against the device itself. Here the only writable repo is `screens/`
+(the `local` handle); the built-in screens, the shipped `examples/` and
+anything fetched from git are read-only, so fork one with **Copy** to
+customize it.
 See [Dev Mode](dev-mode.md) for the full tour.
 
 To reach the editor from outside Home Assistant as well, set **Dev UI

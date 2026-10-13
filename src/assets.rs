@@ -38,7 +38,7 @@ struct EmbeddedScreens;
 
 /// Embedded example screen assets (`screens/examples/`), shipped separately
 /// from `byonk-builtin`. Not yet registered as a screen repo — that is
-/// `Task 11`'s job (seeding `examples` to disk as an editable local repo).
+/// `Task 11`'s job (seeding `examples` to disk as a read-only local repo).
 #[derive(RustEmbed)]
 #[folder = "screens/examples/"]
 #[include = "*.lua"]

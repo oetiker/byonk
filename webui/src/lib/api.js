@@ -226,6 +226,21 @@ export const createDevice = (body) => post("api/devices", body);
 export const listPendingDevices = () => json("api/pending-devices");
 
 /**
+ * Screen repos (U10). The list answers `{addon_mode, repos: [Repo]}`; a
+ * Repo never carries its token, only `has_token`. Add and Update start a
+ * fetch in the background, so poll the list for `status`.
+ */
+export const listScreenRepos = () => json("api/screen-repos");
+/** Add `{handle, repo, pin?, token?}`; 400 on a bad handle or a URL without a scheme, 409 when taken. */
+export const addScreenRepo = (body) => post("api/screen-repos", body);
+/** `{repo?, pin?, token?}`: an absent field keeps its value, "" removes a pin or token. No rename. */
+export const patchScreenRepo = (handle, body) => patch(`api/screen-repos/${enc(handle)}`, body);
+/** 409 while a device shows one of its screens (the message names the devices). */
+export const deleteScreenRepo = (handle) => del(`api/screen-repos/${enc(handle)}`);
+/** Fetch the repo again now. */
+export const updateScreenRepo = (handle) => post(`api/screen-repos/${enc(handle)}/update`, {});
+
+/**
  * POST a preview render (see docs/src/guide/dev-mode.md, "Rendering a
  * preview"). Relative, for HA Ingress. Returns the raw `Response`, so the
  * caller reads the PNG blob and the `X-Byonk-Resolution` header.

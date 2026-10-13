@@ -46,8 +46,11 @@ export function previewSize({ subject, meta, usage }) {
   }
 }
 
+/** The subjects that have a picture; a screen repo has none (U11). */
+const RENDERED = ["screen", "panel", "device"];
+
 export function buildRenderRequest({ subject, draft, simulate, meta, usage }) {
-  if (!subject.kind) return null;
+  if (!RENDERED.includes(subject.kind)) return null;
   const size = previewSize({ subject, meta, usage });
   const view = { use_actual: !!simulate.use_actual };
   if (subject.kind === "screen") {

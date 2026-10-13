@@ -3,6 +3,7 @@
   import { subject } from "../state/subject.svelte.js";
   import { editor } from "../state/editor.svelte.js";
   import { configDraft } from "../state/configDraft.svelte.js";
+  import { screenRepos } from "../state/screenRepos.svelte.js";
   import * as api from "../api.js";
   import { devicePanel } from "../render-request.js"; // the one device->panel lookup (ruling PF8)
   import { untrack } from "svelte";
@@ -19,7 +20,7 @@
   // localStorage; every access is guarded because storage can be blocked
   // (private window, cleared site data) and the pane must work without it.
   const COLLAPSED_KEY = "byonk.library.collapsed.v1";
-  const SECTIONS = ["screen", "panel", "device"];
+  const SECTIONS = ["screen", "panel", "device", "screen-repo"];
 
   function loadCollapsed() {
     try {
@@ -136,8 +137,8 @@
   }
   // Sidebar tokens, like the rail: the selection is a quiet accent row, not
   // a primary-coloured bar, and hover is a lighter step of the same accent.
-  const rowClass = (on) =>
-    "block h-(--row-h) w-full shrink-0 truncate px-2 text-left " +
+  const rowClass = (on, height = "h-(--row-h)") =>
+    `block ${height} w-full shrink-0 truncate px-2 text-left ` +
     (on
       ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
       : "hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground");
@@ -150,9 +151,16 @@
   }
   // Delete acts on the subject whatever its kind (U7); Copy stays
   // screen-only. A screen is renamed or moved in the Edit pane's Details (U9).
-  const DELETE_TIP = { screen: "Delete screen", panel: "Delete panel", device: "Delete device" };
+  const DELETE_TIP = { screen: "Delete screen", panel: "Delete panel", device: "Delete device",
+                       "screen-repo": "Delete screen repo" };
+  const ENTRY_LABEL = { panel: "panel", device: "device", "screen-repo": "screen repo" };
   const deleteTip = $derived(DELETE_TIP[subject.kind] ?? "Delete screen");
-  const canDelete = $derived(subject.kind === "panel" || subject.kind === "device" || canEdit);
+  // A screen repo can be deleted when it is listed (not the unsaved draft)
+  // and nothing manages it: not byonk itself, not the add-on (U11).
+  const repoDeletable = $derived(
+    subject.kind === "screen-repo" && !!screenRepos.find(subject.id) && !screenRepos.readOnly(subject.id),
+  );
+  const canDelete = $derived(subject.kind === "panel" || subject.kind === "device" || repoDeletable || canEdit);
   function deleteSubject() {
     if (subject.screenRef) {
       ask = { kind: "delete", ref: subject.screenRef };
@@ -160,6 +168,8 @@
       const list = subject.kind === "panel" ? screens.meta.panels : screens.meta.devices;
       const name = (list ?? []).find((x) => x.id === subject.id)?.name ?? null;
       ask = { kind: "delete-entry", target: subject.kind, id: subject.id, name };
+    } else if (repoDeletable) {
+      ask = { kind: "delete-entry", target: "screen-repo", id: subject.id, name: null };
     }
   }
   const closeForm = () => (ask = null);
@@ -255,7 +265,13 @@
 
   async function submitDeleteEntry() {
     const { target, id } = ask;
-    const ok = await run(`delete ${target}`, async () => {
+    const ok = await run(`delete ${ENTRY_LABEL[target]}`, async () => {
+      if (target === "screen-repo") {
+        // A 409 (a device shows one of its screens) lands on screens.error.
+        await screenRepos.remove(id);
+        subject.clear();
+        return;
+      }
       if (target === "panel") await api.deletePanel(id);
       else await api.deleteDevice(id);
       configDraft.forget(target, id);
@@ -264,6 +280,23 @@
     });
     if (ok) ask = null;
   }
+
+  // --- "+": a new screen repo (U11) ----------------------------------------
+  // A git repo needs a URL to exist, so nothing is written yet (ruling
+  // U11-R1): the Edit pane opens an unsaved draft, and its Save adds it.
+  function newRepo() {
+    expandSection("screen-repo");
+    subject.select("screen-repo", screenRepos.startNew());
+  }
+  const repoAdd = $derived(screenRepos.addonMode ? undefined : { label: "Add screen repo", onclick: newRepo });
+
+  /** The row's second line: where the screens come from. */
+  function repoSource(r) {
+    if (r.kind === "builtin") return "built in";
+    if (r.kind === "local") return "local folder";
+    return r.repo ?? r.kind;
+  }
+  const STATUS_CLASS = { error: "text-destructive", fetching: "text-primary", offline: "text-muted-foreground" };
 </script>
 
 <div class="flex min-h-0 min-w-0 flex-1 flex-col text-xs" role="region" aria-label="Library">
@@ -298,6 +331,9 @@
             <DropdownMenu.Separator />
             <DropdownMenu.Item onSelect={newPanel}><Plus aria-hidden="true" />Add panel</DropdownMenu.Item>
             <DropdownMenu.Item onSelect={newDevice}><Plus aria-hidden="true" />Add device</DropdownMenu.Item>
+            {#if !screenRepos.addonMode}
+              <DropdownMenu.Item onSelect={newRepo}><Plus aria-hidden="true" />Add screen repo</DropdownMenu.Item>
+            {/if}
           </DropdownMenu.Content>
         </DropdownMenu.Root>
       </div>
@@ -317,8 +353,8 @@
     />
   {:else if ask?.kind === "delete-entry"}
     <InlineConfirm
-      label={`Confirm ${ask.target} deletion`}
-      message={`Delete ${ask.target} ${ask.name ? `${ask.name} (${ask.id})` : ask.id}? This cannot be undone.`}
+      label={`Confirm ${ENTRY_LABEL[ask.target]} deletion`}
+      message={`Delete ${ENTRY_LABEL[ask.target]} ${ask.name ? `${ask.name} (${ask.id})` : ask.id}? This cannot be undone.`}
       onconfirm={submitDeleteEntry}
       oncancel={closeForm}
     />
@@ -380,7 +416,38 @@
     {/each}
   {/snippet}
 
+  {#snippet reposBody()}
+    {#if screenRepos.addonMode}
+      <p class="px-2 py-1 text-muted-foreground">Managed in the byonk add-on configuration in Home Assistant.</p>
+    {/if}
+    {#if screenRepos.error}
+      <p class="px-2 py-1 text-destructive">Could not load the screen repos: {screenRepos.error}</p>
+    {/if}
+    {#each screenRepos.list as r (r.handle)}
+      {@const on = subject.is("screen-repo", r.handle)}
+      <!-- Two lines (handle, then where it comes from), so the row grows
+           past --row-h; the colours are rowClass's. -->
+      <button type="button" data-repo={r.handle}
+              class={rowClass(on, "min-h-(--row-h) py-0.5")}
+              aria-current={on ? "true" : undefined}
+              onclick={() => subject.select("screen-repo", r.handle)}>
+        <span class="flex min-w-0 items-center gap-1">
+          <span class="truncate">{r.handle}</span>
+          {#if r.status !== "ready"}
+            <span data-testid="repo-status" title={r.error ?? r.status}
+                  class="inline-flex shrink-0 items-center {STATUS_CLASS[r.status] ?? 'text-muted-foreground'}">
+              <span aria-hidden="true" class="size-1.5 rounded-full bg-current"></span>
+              <span class="sr-only">{r.status}</span>
+            </span>
+          {/if}
+        </span>
+        <span class="block truncate text-muted-foreground">{repoSource(r)}</span>
+      </button>
+    {/each}
+  {/snippet}
+
   {@render section("screen", "Screens", screensBody)}
   {@render section("panel", "Panels", panelsBody, { label: "Add panel", onclick: newPanel })}
   {@render section("device", "Devices", devicesBody, { label: "Add device", onclick: newDevice })}
+  {@render section("screen-repo", "Screen repos", reposBody, repoAdd)}
 </div>

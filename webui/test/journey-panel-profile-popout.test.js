@@ -86,6 +86,7 @@ beforeEach(() => {
   vi.spyOn(api, "listFiles").mockResolvedValue([{ name: "script.lua", size: 1, text: true }]);
   vi.spyOn(api, "readFile").mockResolvedValue({ text: "-- lua", etag: '"1"' });
   vi.spyOn(api, "panelUsage").mockResolvedValue({ panels: {}, unseen: [] }); // configDraft.load() fetches it; not a render fetch
+  vi.spyOn(api, "listScreenRepos").mockResolvedValue({ addon_mode: false, repos: [] }); // AppShell loads it; not a render fetch
   vi.spyOn(api, "listOverrides").mockResolvedValue({ panels: [], devices: [], tuning_sessions: [] }); // likewise
 });
 

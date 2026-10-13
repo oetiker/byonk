@@ -4,6 +4,7 @@
   import { subject } from "../state/subject.svelte.js";
   import EditorPane from "./EditorPane.svelte";
   import ConfigEditor from "./ConfigEditor.svelte";
+  import ScreenRepoEditor from "./ScreenRepoEditor.svelte";
   import PaneHeader from "./PaneHeader.svelte";
 </script>
 
@@ -12,8 +13,10 @@
     <EditorPane />
   {:else if subject.kind === "panel" || subject.kind === "device"}
     {#key subject.key}<ConfigEditor />{/key}
+  {:else if subject.kind === "screen-repo"}
+    {#key subject.key}<ScreenRepoEditor />{/key}
   {:else}
     <PaneHeader title="Edit" />
-    <p class="p-3 text-sm text-muted-foreground">Pick a screen, panel or device in the Library.</p>
+    <p class="p-3 text-sm text-muted-foreground">Pick a screen, panel, device or screen repo in the Library.</p>
   {/if}
 </div>

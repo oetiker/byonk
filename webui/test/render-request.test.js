@@ -17,6 +17,10 @@ describe("buildRenderRequest", () => {
     expect(buildRenderRequest({ subject: { kind: null }, draft, simulate: sim(), meta, usage })).toBe(null);
   });
 
+  it("returns null for a screen repo: there is nothing to preview (U11)", () => {
+    expect(buildRenderRequest({ subject: { kind: "screen-repo", id: "weather" }, draft, simulate: sim(), meta, usage })).toBe(null);
+  });
+
   it("mode a, no target: the screen at the default size, with simulated params", () => {
     const r = buildRenderRequest({ subject: { kind: "screen", id: "local/a", target: null }, draft, simulate: sim(), meta, usage });
     expect(r.body).toEqual({ screen: "local/a", ...DEFAULT_SIZE, simulated: { params: { a: 1 } }, view: { use_actual: true } });

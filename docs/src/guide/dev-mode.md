@@ -98,15 +98,15 @@ profile or a device. You choose it in Library; Edit changes it and Preview
 shows it.
 
 **Library.** Screens grouped by screen repo handle, then the panel profiles,
-then the devices. Choosing an entry makes it the subject. A repo you cannot
+the devices and the screen repos. Choosing an entry makes it the subject. A repo you cannot
 write to is labelled "read-only" next to its handle; you can still open any
 of its screens and read every file, and **Copy** one into a repo you can
 write to — but its files open read-only. **New** and **Copy** work on
-screens; **Delete** works on whatever is selected — a screen, a panel or a
-device. See [New, Copy, Delete](#new-copy-delete). A screen is renamed or
-moved in Edit's **Details** block. Screens, Panels and Devices are collapsible
+screens; **Delete** works on whatever is selected — a screen, a panel, a
+device or a screen repo. See [New, Copy, Delete](#new-copy-delete). A screen is renamed or
+moved in Edit's **Details** block. Screens, Panels, Devices and Screen repos are collapsible
 sections, as in the VS Code explorer: click a section heading (or press
-Enter or Space on it) to fold it. All three headings stay visible, open
+Enter or Space on it) to fold it. All four headings stay visible, open
 sections share the height and scroll on their own, and the browser remembers
 which ones you folded. Selecting a subject elsewhere opens the section it
 lives in.
@@ -124,6 +124,37 @@ details in Edit's **Details** block (see [The config editor](#the-config-editor)
   `#000000,#FFFFFF` and no size.
 - **Add device** adds `new-device` (or `new-device-2`, …), named "New
   device", showing the selected screen, or the first one.
+
+**Screen repos.** Each row shows the repo's handle and, under it, where its
+screens come from: the git URL, "built in" or "local folder". A dot after
+the handle marks a repo that is fetching, offline or failed; a failed one is
+red, and hovering the dot shows the error. Choosing a repo opens it in Edit
+and renders nothing: Preview stays empty.
+
+- **Add screen repo** (the **+** on the heading) works differently from
+  panels and devices: a git repo cannot exist without its URL, so nothing is
+  written yet. Edit opens an unsaved draft with the handle `new-repo`; fill
+  in the handle and the repo URL and **Save** adds it. Choosing another
+  subject, or **Discard**, drops the draft.
+- Edit's **Details** hold the **Handle** (fixed once the repo exists —
+  repos are not renamed), the **Repo URL** (it needs a scheme, such as
+  `https://…`, `git@host:…` or `file:///…`), the **Ref** (a branch, tag or
+  sha to fetch) and the **Token** for a private
+  repo. The token is write-only: the field shows "set" when one is stored,
+  stays empty to keep it, and **Clear token** removes it on Save. A refused
+  Save — a handle that is taken, a URL without a scheme — shows the server's
+  reason under the header and keeps your draft.
+- The **Status** block shows the repo's state, how many screens it has, the
+  commit it resolved to, when it was last fetched and the last error.
+  **Update now** fetches it again. A fetch runs in the background; the
+  Library and the Screens section follow once it is done.
+- **Delete** removes the repo from `config.yaml`. While a device shows one
+  of its screens it is refused, and the message names the devices.
+- `byonk-builtin`, `local` and `examples` are registered by byonk itself:
+  their details are read-only and they cannot be updated or deleted here.
+  In the Home Assistant app the section is read-only too, with the note
+  "Managed in the byonk add-on configuration in Home Assistant." — repos are
+  set in the app's Configuration tab there; **Update now** still works.
 
 **Edit.** The header names the subject. For a screen it is the file editor:
 a **Details** block, then one tab per file, with `meta.yaml`, `script.lua`

@@ -96,7 +96,7 @@ describe("AppShell", () => {
 
   it("the Edit panel asks for a subject when there is none", async () => {
     render(AppShell);
-    expect(await screen.findByText("Pick a screen, panel or device in the Library.")).toBeTruthy();
+    expect(await screen.findByText("Pick a screen, panel, device or screen repo in the Library.")).toBeTruthy();
   });
 });
 

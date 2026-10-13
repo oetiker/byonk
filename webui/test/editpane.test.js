@@ -15,6 +15,6 @@ describe("EditPane empty state", () => {
     const header = container.querySelector("[data-slot=pane-header]");
     expect(header).not.toBeNull();
     expect(header.textContent).toContain("Edit");
-    expect(container.textContent).toContain("Pick a screen, panel or device");
+    expect(container.textContent).toContain("Pick a screen, panel, device or screen repo");
   });
 });

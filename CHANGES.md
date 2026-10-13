@@ -103,7 +103,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   device" to `config.yaml` at once, comments kept, whose identity (id, name,
   match, size and colours; a device's key, name, screen and panel) you then
   edit — and rename — in Edit's Details block, and **Delete** removes the
-  selected panel or device too.
+  selected panel or device too. A fourth section, Screen repos, lists every
+  screen repo with its fetch status and lets you add a git repo (URL, ref,
+  write-only token), change it, fetch it again with **Update now** or delete
+  it.
   For a screen, Edit opens its files as tabs and saves your work; Preview
   renders it through the same pipeline the device uses and updates as you
   work, so a mistake in `script.lua`, `screen.svg` or `meta.yaml` shows up as

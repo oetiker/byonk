@@ -46,6 +46,11 @@ const ROUTES = {
   "POST api/screen/move": "moveScreen",
   "POST api/screen/validate": "validateScreen",
   "POST api/screen/check": "checkFile",
+  "GET api/screen-repos": "listScreenRepos",
+  "POST api/screen-repos": "addScreenRepo",
+  "PATCH api/screen-repos/{handle}": "patchScreenRepo",
+  "DELETE api/screen-repos/{handle}": "deleteScreenRepo",
+  "POST api/screen-repos/{handle}/update": "updateScreenRepo",
 };
 
 // Routes the router registers that the SPA deliberately does not call.
@@ -84,7 +89,7 @@ describe("no orphan APIs", () => {
 
   it("every route the server registers is mapped to an export or explicitly allowed", () => {
     const mapped = new Set(Object.keys(ROUTES).map((k) => "/" + k.split(" ")[1].replace(/^api\//, "")));
-    const registered = [...routePaths("dev.rs"), ...routePaths("dev_files.rs")];
+    const registered = [...routePaths("dev.rs"), ...routePaths("dev_files.rs"), ...routePaths("dev_repos.rs")];
     const unmapped = registered.filter((p) => !mapped.has(p) && !(p in ALLOWED_UNCALLED));
     expect(unmapped, `server routes with no api.js export: ${unmapped.join(", ")}`).toEqual([]);
   });

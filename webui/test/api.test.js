@@ -167,6 +167,16 @@ describe("api", () => {
         expectedUrl: "api/panels/e1004", expectedMethod: "DELETE", responseBody: '{"deleted":"e1004"}' },
       { name: "deleteDevice", call: () => api.deleteDevice("AA:BB"),
         expectedUrl: "api/devices/AA%3ABB", expectedMethod: "DELETE", responseBody: '{"deleted":"AA:BB"}' },
+      { name: "listScreenRepos", call: () => api.listScreenRepos(),
+        expectedUrl: "api/screen-repos", expectedMethod: "GET", responseBody: '{"addon_mode":false,"repos":[]}' },
+      { name: "addScreenRepo", call: () => api.addScreenRepo({ handle: "w", repo: "https://x/w.git" }),
+        expectedUrl: "api/screen-repos", expectedMethod: "POST", responseBody: '{"handle":"w"}' },
+      { name: "patchScreenRepo", call: () => api.patchScreenRepo("my repo", { pin: "v2" }),
+        expectedUrl: "api/screen-repos/my%20repo", expectedMethod: "PATCH", responseBody: '{"handle":"my repo"}' },
+      { name: "deleteScreenRepo", call: () => api.deleteScreenRepo("w"),
+        expectedUrl: "api/screen-repos/w", expectedMethod: "DELETE", responseBody: '{"deleted":"w"}' },
+      { name: "updateScreenRepo", call: () => api.updateScreenRepo("w"),
+        expectedUrl: "api/screen-repos/w/update", expectedMethod: "POST", responseBody: '{"handle":"w"}' },
     ];
 
     // Mock factory: store the current entry so the mock can respond accordingly

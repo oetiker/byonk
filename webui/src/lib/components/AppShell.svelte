@@ -12,6 +12,7 @@
   import { subject } from "../state/subject.svelte.js";
   import { configDraft } from "../state/configDraft.svelte.js";
   import { resolution } from "../state/resolution.svelte.js";
+  import { screenRepos, NEW_REPO } from "../state/screenRepos.svelte.js";
   import * as api from "../api.js";
 
   // Placeholders until Tasks 6-10 fill them in.
@@ -50,6 +51,16 @@
   // at all. Task 14's browser walk found exactly that.
   screens.load();
   configDraft.load();
+  screenRepos.load();
+
+  // The new-repo draft is unsaved and not in any list (ruling U11-R1):
+  // leaving it discards it.
+  $effect(() => {
+    const key = subject.key;
+    untrack(() => {
+      if (key !== `screen-repo:${NEW_REPO}`) screenRepos.discardNew();
+    });
+  });
 
   // Spec §7's trap: switching subject must not discard open buffers.
   // `loadScreen()` resets every buffer, so it runs only when the subject is

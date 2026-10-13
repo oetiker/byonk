@@ -47,7 +47,11 @@
         ? subject.borrowedScreen
         : (screens.meta.devices ?? []).find((d) => d.id === subject.id)?.screen,
   );
-  const title = $derived(subject.kind ? `${shownScreen ?? "?"} as ${asLabel}` : "nothing selected");
+  const title = $derived(
+    subject.kind === "screen-repo"
+      ? "nothing to preview"
+      : subject.kind ? `${shownScreen ?? "?"} as ${asLabel}` : "nothing selected",
+  );
   // Spec §4: a screen can win colors outright, so switching hardware may change only the size.
   // The payload belongs to the subject it was rendered for; ignore a stale one.
   const screenInCharge = $derived(

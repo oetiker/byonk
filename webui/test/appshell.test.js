@@ -32,30 +32,29 @@ afterEach(() => {
 });
 
 describe("AppShell", () => {
-  it("keeps status messages out of the flow above the panes (U12)", async () => {
-    const { configDraft } = await import("../src/lib/state/configDraft.svelte.js");
-    editor.error = { op: "save", message: "syntax error near x" };
+  it("has one fixed-height status bar as the last flow child, idle or not (U12)", async () => {
     const { container } = render(AppShell);
     const root = container.firstElementChild;
-    // The shell's only flow child is the pane row: nothing sits above it.
-    expect(root.children.length).toBe(1);
-    const row = root.firstElementChild;
-    // The strip lives in an absolutely positioned overlay inside that row.
-    const msg = screen.getByText(/syntax error near x/);
-    const overlay = screen.getByTestId("status-overlay");
-    expect(row.contains(overlay)).toBe(true);
-    expect(overlay.contains(msg)).toBe(true);
-    expect(overlay.className.split(/\s+/)).toEqual(expect.arrayContaining(["absolute", "bottom-0"]));
-    expect(row.className.split(/\s+/)).toContain("relative");
+    const bar = screen.getByTestId("status-bar");
+    expect(root.lastElementChild).toBe(bar);
+    expect(root.children.length).toBe(2); // pane row, then the bar
+    expect(bar.className.split(/\s+/)).toEqual(expect.arrayContaining(["h-(--status-h)", "shrink-0"]));
+    editor.error = { op: "save", message: "syntax error near x" };
+    await tick();
+    expect(screen.getByTestId("status-bar")).toBe(bar);
+    expect(bar.contains(screen.getByText(/syntax error near x/))).toBe(true);
+    expect(root.lastElementChild).toBe(bar);
+    expect(root.children.length).toBe(2);
+    expect(bar.className.split(/\s+/)).toContain("h-(--status-h)");
     editor.error = null;
-    configDraft.reset?.();
   });
 
-  it("puts the conflict banner in the same non-shifting overlay (U12)", async () => {
+  it("shows the conflict banner and its actions in the bar (U12)", async () => {
     editor.conflict = { name: "script.lua", source: "watch" };
     render(AppShell);
-    const overlay = screen.getByTestId("status-overlay");
-    expect(overlay.contains(screen.getByRole("button", { name: "Reload" }))).toBe(true);
+    const bar = screen.getByTestId("status-bar");
+    expect(bar.contains(screen.getByRole("button", { name: "Reload" }))).toBe(true);
+    expect(bar.textContent).toMatch(/script\.lua\s+changed on disk/);
     editor.conflict = null;
   });
 

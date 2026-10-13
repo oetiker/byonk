@@ -2,7 +2,6 @@
   import { onMount, untrack } from "svelte";
   import IconRail from "./IconRail.svelte";
   import * as Resizable from "$lib/ui/resizable/index.js";
-  import ConflictBanner from "./ConflictBanner.svelte";
   import StatusStrip from "./StatusStrip.svelte";
   import { layout } from "../state/layout.svelte.js";
   import { theme } from "../state/theme.svelte.js";
@@ -152,14 +151,7 @@
 </script>
 
 <div class="flex h-full flex-col bg-background text-foreground">
-  <div class="relative flex min-h-0 flex-1">
-    <!-- Transient messages and the conflict banner float over the foot of the
-         pane row (U12): absolutely positioned, so showing or clearing one
-         never moves or resizes a pane. -->
-    <div data-testid="status-overlay" class="absolute inset-x-0 bottom-0 z-40 flex max-h-1/2 flex-col overflow-auto shadow-md">
-      <ConflictBanner />
-      <StatusStrip />
-    </div>
+  <div class="flex min-h-0 flex-1">
     <IconRail />
 
     <Resizable.PaneGroup
@@ -200,4 +192,7 @@
       {/if}
     </Resizable.PaneGroup>
   </div>
+  <!-- The app status bar: fixed height, always present, below the pane row
+       (U12) -- a message never moves a pane. -->
+  <StatusStrip />
 </div>

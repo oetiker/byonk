@@ -1,15 +1,18 @@
 <script>
-  // The error surface no panel toggle can hide (review finding 2, "Ruling
-  // 49"). StatusBar's own validity/cursor/watch trio stays inside EditorPane
-  // per spec §1's table, but the captured error fields cannot live there:
-  // StatusBar only exists while the Edit panel is open, so they would go dark
-  // whenever it was closed. Mounted by AppShell in an absolutely positioned overlay
-  // over the foot of the pane row (U12: showing it never moves a pane), next to
-  // ConflictBanner, outside every `layout.isOpen(...)` gate.
+  // The app status bar (U12): ONE always-present, fixed-height, single-line
+  // bar at the foot of the shell, in flow below the pane row. Panes never
+  // move, whether or not a message shows. It carries every message no panel
+  // toggle may hide: the on-disk conflict (with Reload/Overwrite), the five
+  // captured error fields (editor, screens, simulate, auth, config) and the
+  // live-override notices. Most important first (conflict, errors, live);
+  // the line shows that one plus a "+N" count, truncated with the full text
+  // as tooltip. Clicking opens a panel UPWARD over the pane foot listing
+  // everything in full; it closes by itself when the set of messages changes.
   //
-  // Renders nothing at all -- not even an empty bar -- when there is
-  // nothing to report: height is the scarce dimension in this layout (spec
-  // §1), and an always-present empty strip would spend it for nothing.
+  // editor.error is raised by four operations (save, reload, overwrite,
+  // watch-reload), so each message names its own `op`, never a fixed "save:".
+  // auth.error (Ruling 66) needs a surface too: a failed logout with no
+  // visible consequence reads as a session that ended.
   import { editor } from "../state/editor.svelte.js";
   import { screens } from "../state/screens.svelte.js";
   import { simulate } from "../state/simulate.svelte.js";
@@ -18,77 +21,99 @@
   import { Button } from "$lib/ui/button/index.js";
   import { Alert } from "$lib/ui/alert/index.js";
 
-  // One 24px line per message (tokens, not py-*); Alert supplies role and colour.
-  // Long messages truncate; click toggles the full text (the overlay grows,
-  // the panes do not move). The full text is also the tooltip.
-  let expanded = $state({});
-  const toggle = (k) => (expanded[k] = !expanded[k]);
 
-  const line = "flex min-h-6 items-center gap-2 rounded-none border-0 bg-transparent p-0 text-xs";
+  const items = $derived.by(() => {
+    const out = [];
+    const c = editor.conflict;
+    if (c) {
+      out.push({
+        id: `conflict:${c.name}:${c.source}`,
+        kind: "conflict",
+        text: `${c.name} changed on disk${c.source === "save" ? " while you were editing" : ""}.`,
+        c,
+      });
+    }
+    for (const [k, e, label] of [
+      ["editor", editor.error, ""],
+      ["screens", screens.error, ""],
+      ["simulate", simulate.error, ""],
+      ["auth", auth.error, ""],
+      ["config", configDraft.error, "config "],
+    ]) {
+      if (e) out.push({ id: `${k}:${e.op}:${e.message}`, kind: "error", text: `${label}${e.op}: ${e.message}` });
+    }
+    for (const o of configDraft.live.panels)
+      out.push({ id: `live-panel:${o.key}`, kind: "live", text: `◉ Live on ${o.key}`, type: "panel", key: o.key });
+    for (const o of configDraft.live.devices)
+      out.push({ id: `live-device:${o.key}`, kind: "live", text: `◉ Live on ${o.key}`, type: "device", key: o.key });
+    return out;
+  });
 
-  // Ruling 66: restoring Logout (Task 13a) created a FIFTH error owner
-  // (auth.error, from a failed whoami or a failed logout) and left it with
-  // no surface at all -- worse than merely hidden, since a failed logout
-  // with no visible consequence reads to the user as a session that ended
-  // when it did not. Same rule as the other four: this is the one place no
-  // panel toggle can hide, so it belongs here, not somewhere a click could
-  // unmount it.
-  const hasAnything = $derived(
-    !!editor.error ||
-      !!screens.error ||
-      !!simulate.error ||
-      !!auth.error ||
-      !!configDraft.error ||
-      configDraft.live.panels.length > 0 ||
-      configDraft.live.devices.length > 0,
-  );
+  // The panel is open only for the exact set of messages it was opened on:
+  // a new or changed message starts collapsed, with no effect to order.
+  const sig = $derived(items.map((i) => i.id).join("\n"));
+  let openOn = $state(null);
+  const open = $derived(openOn === sig);
+  const setOpen = (v) => (openOn = v ? sig : null);
 </script>
 
-{#snippet msg(k, text)}
-  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <span
-    class="min-w-0 flex-1 cursor-pointer {expanded[k] ? 'whitespace-pre-wrap break-words' : 'truncate'}"
-    title={text}
-    onclick={() => toggle(k)}>{text}</span
-  >
+{#snippet actions(it)}
+  {#if it.kind === "conflict"}
+    <Button type="button" size="xs" variant="outline" onclick={() => editor.resolveReload()}>Reload</Button>
+    <Button type="button" size="xs" variant="outline" onclick={() => editor.resolveOverwrite()}>Overwrite</Button>
+  {:else if it.kind === "live"}
+    <Button type="button" size="xs" variant="ghost" onclick={() => configDraft.discardLive(it.type, it.key)}>Discard</Button>
+  {/if}
 {/snippet}
 
-{#if hasAnything}
-  <div
-    class="flex flex-col gap-0.5 border-t border-border
-           bg-muted px-2 py-1 font-mono text-xs text-foreground"
+{#snippet row(it, wrap)}
+  <Alert
+    variant="destructive"
+    role={it.kind === "live" ? "status" : "alert"}
+    class="flex min-h-6 min-w-0 items-center gap-2 rounded-none border-0 bg-transparent p-0 text-xs"
   >
-    {#if editor.error}
-      <!-- `{op}:`, not a hard-coded "save:". `editor.error` is raised by four
-           different operations (save, reload, overwrite, watch-reload --
-           editor.svelte.js), and labelling every one of them "save" told the
-           user a save had failed when none had been attempted. The other four
-           surfaces below already render their own `op`. -->
-      <Alert variant="destructive" class={line}>{@render msg("editor", `${editor.error.op}: ${editor.error.message}`)}</Alert>
+    {#if wrap}
+      <span class="min-w-0 flex-1 whitespace-pre-wrap break-words">{it.text}</span>
+    {:else}
+      <button
+        type="button"
+        class="min-w-0 flex-1 cursor-pointer truncate text-left"
+        title={it.text}
+        aria-expanded={open}
+        onclick={() => setOpen(!open)}>{it.text}</button
+      >
     {/if}
-    {#if screens.error}
-      <Alert variant="destructive" class={line}>{@render msg("screens", `${screens.error.op}: ${screens.error.message}`)}</Alert>
+    {@render actions(it)}
+  </Alert>
+{/snippet}
+
+<div
+  data-testid="status-bar"
+  class="relative flex h-(--status-h) shrink-0 items-center gap-2 border-t border-border bg-muted px-2 font-mono text-xs text-foreground"
+>
+  {#if items.length > 0}
+    {#if open}
+      <div
+        data-testid="status-panel"
+        class="absolute inset-x-0 bottom-full z-40 flex max-h-60 flex-col gap-1 overflow-auto border-t border-border bg-muted px-2 py-1 shadow-md"
+      >
+        {#each items as it (it.id)}
+          {@render row(it, true)}
+        {/each}
+      </div>
+      <button type="button" class="cursor-pointer text-left" aria-expanded="true" onclick={() => setOpen(false)}>
+        Hide {items.length} message{items.length === 1 ? "" : "s"}
+      </button>
+    {:else}
+      <div class="flex min-w-0 flex-1 items-center">{@render row(items[0], false)}</div>
+      {#if items.length > 1}
+        <button
+          type="button"
+          class="shrink-0 cursor-pointer text-destructive"
+          title="Show all {items.length} messages"
+          onclick={() => setOpen(true)}>+{items.length - 1}</button
+        >
+      {/if}
     {/if}
-    {#if simulate.error}
-      <Alert variant="destructive" class={line}>{@render msg("simulate", `${simulate.error.op}: ${simulate.error.message}`)}</Alert>
-    {/if}
-    {#if auth.error}
-      <Alert variant="destructive" class={line}>{@render msg("auth", `${auth.error.op}: ${auth.error.message}`)}</Alert>
-    {/if}
-    {#each configDraft.live.panels as o (o.key)}
-      <Alert variant="destructive" role="status" class={line}>
-        ◉ Live on {o.key}
-        <Button type="button" size="xs" variant="ghost" onclick={() => configDraft.discardLive("panel", o.key)}>Discard</Button>
-      </Alert>
-    {/each}
-    {#each configDraft.live.devices as o (o.key)}
-      <Alert variant="destructive" role="status" class={line}>
-        ◉ Live on {o.key}
-        <Button type="button" size="xs" variant="ghost" onclick={() => configDraft.discardLive("device", o.key)}>Discard</Button>
-      </Alert>
-    {/each}
-    {#if configDraft.error}
-      <Alert variant="destructive" class={line}>{@render msg("config", `config ${configDraft.error.op}: ${configDraft.error.message}`)}</Alert>
-    {/if}
-  </div>
-{/if}
+  {/if}
+</div>

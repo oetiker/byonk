@@ -55,7 +55,7 @@ class FakeEventSource {
 function banner() {
   const found = dom
     .queryAllByRole("alert")
-    .filter((el) => el.querySelector("button"));
+    .filter((el) => [...el.querySelectorAll("button")].some((b) => b.textContent.trim() === "Reload"));
   expect(found.length).toBeLessThan(2);
   return found[0] ?? null;
 }
@@ -219,6 +219,8 @@ describe("resolving the conflict by clicking the banner", () => {
     // failed Reload told the user a save had failed -- and no save had been
     // attempted. Invisible to statusstrip.test.js, whose fixtures only ever
     // set `op: "save"`; the same blind-fixture shape as Finding G.
+    // (Behind the "+N": the conflict outranks the error in the one-line bar.)
+    await fireEvent.click(dom.getByRole("button", { name: /^\+\d+$/ }));
     expect(dom.getByText(/reload: network down/)).toBeTruthy();
     expect(dom.queryByText(/save: network down/)).toBeNull();
 

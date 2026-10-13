@@ -57,12 +57,13 @@ function closeEditor() {
 describe("the error/override strip is visible independent of the Editor panel", () => {
   it("shows editor.error and screens.error and simulate.error and auth.error with the Editor panel CLOSED, none clobbering another", async () => {
     closeEditor();
-    screens.error = { op: "delete", message: "screens-msg" };
-    simulate.error = { op: "render", message: "simulate-msg" };
-    auth.error = { op: "logout", message: "auth-msg" };
+    // Keep AppShell's own whoami from failing later and replacing auth.error.
+    vi.spyOn(api, "whoami").mockReturnValue(new Promise(() => {}));
 
     render(AppShell);
-    await tick();
+    // Let AppShell's own loads (whoami, repos) fail and settle first: they
+    // write screens.error / auth.error, which would replace ours mid-test.
+    await new Promise((r) => setTimeout(r, 0));
     // Set AFTER mount, unlike the other three fields above: AppShell's own
     // Task-1 effect calls `editor.loadScreen(subject.screenRef, ...)` on
     // mount, and `loadScreen()` starts with `editor.reset()` (screens.error/
@@ -73,10 +74,18 @@ describe("the error/override strip is visible independent of the Editor panel", 
     // editor.error before mount would have it wiped by that same mount,
     // which is not what this test is about.
     editor.error = { op: "save", message: "save-msg" };
+    // auth.load() (AppShell) fails in jsdom and would replace auth.error,
+    // so it is set after mount as well.
+    auth.error = { op: "logout", message: "auth-msg" };
+    screens.error = { op: "delete", message: "screens-msg" };
+    simulate.error = { op: "render", message: "simulate-msg" };
     await tick();
 
     expect(screen.queryByRole("tablist")).toBeNull();
+    // One line shows the most important message plus a count; opening the
+    // panel lists all of them.
     expect(screen.getByText(/save-msg/)).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: "+3" }));
     expect(screen.getByText(/screens-msg/)).toBeTruthy();
     expect(screen.getByText(/simulate-msg/)).toBeTruthy();
     expect(screen.getByText(/auth-msg/)).toBeTruthy();
@@ -127,23 +136,34 @@ describe("StatusStrip", () => {
     cleanup();
   });
 
-  it("truncates a long message and keeps the full text in a tooltip, expandable on click (U12)", async () => {
+  it("truncates a long message, full text in the tooltip, expandable by button; a new message starts collapsed (U12)", async () => {
     const long = "x".repeat(300);
     editor.error = { op: "save", message: long };
     render(StatusStrip);
-    const msg = screen.getByText(new RegExp(long));
-    expect(msg.getAttribute("title")).toBe(`save: ${long}`);
-    expect(msg.className.split(/\s+/)).toContain("truncate");
-    await fireEvent.click(msg);
-    expect(msg.className.split(/\s+/)).not.toContain("truncate");
+    const btn = screen.getByRole("button", { name: new RegExp(long) });
+    expect(btn.getAttribute("title")).toBe(`save: ${long}`);
+    expect(btn.className.split(/\s+/)).toContain("truncate");
+    await fireEvent.click(btn);
+    const panel = screen.getByTestId("status-panel");
+    expect(panel.className.split(/\s+/)).toContain("bottom-full");
+    expect(panel.textContent).toContain(long);
+    editor.error = { op: "save", message: "other" };
+    await tick();
+    expect(screen.queryByTestId("status-panel")).toBeNull();
+    expect(screen.getByRole("button", { name: /other/ }).getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("renders nothing when there is nothing to report", () => {
+  it("keeps a fixed-height bar when idle (U12)", () => {
+    render(StatusStrip);
+    expect(screen.getByTestId("status-bar").className.split(/\s+/)).toContain("h-(--status-h)");
+  });
+
+  it("shows no text when there is nothing to report", () => {
     const { container } = render(StatusStrip);
     expect(container.textContent.trim()).toBe("");
   });
 
-  it("renders all four error surfaces at once, none clobbering another", () => {
+  it("renders all four error surfaces at once, none clobbering another", async () => {
     editor.error = { op: "save", message: "save-msg" };
     screens.error = { op: "delete", message: "screens-msg" };
     simulate.error = { op: "render", message: "simulate-msg" };
@@ -152,6 +172,7 @@ describe("StatusStrip", () => {
     render(StatusStrip);
 
     expect(screen.getByText(/save-msg/)).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: "+3" }));
     expect(screen.getByText(/screens-msg/)).toBeTruthy();
     expect(screen.getByText(/simulate-msg/)).toBeTruthy();
     expect(screen.getByText(/auth-msg/)).toBeTruthy();
@@ -211,6 +232,6 @@ describe("StatusStrip", () => {
   it("renders configDraft.error as its own surface", () => {
     configDraft.error = { op: "save", message: "409 Conflict" };
     render(StatusStrip);
-    expect(screen.getByRole("alert").textContent).toBe("config save: 409 Conflict");
+    expect(screen.getByRole("alert").textContent.trim()).toBe("config save: 409 Conflict");
   });
 });

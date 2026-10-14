@@ -3,7 +3,7 @@
 
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 
-.PHONY: all build release debug run clean docs docs-dev check fmt lint test ha-setup ha-check fonts fonts-setup fonts-check help
+.PHONY: all build release debug run clean docs docs-dev check fmt lint test ha-setup ha-check fonts fonts-setup fonts-check webui webui-test help
 
 # Default target
 all: release
@@ -12,12 +12,17 @@ all: release
 # Software Build
 # =============================================================================
 
-# Build release binary (runs fmt and clippy first)
-release: fmt lint
+# Build release binary (runs fmt, clippy and the dev UI first)
+#
+# webui before lint: `lint` compiles the crate (cargo clippy), and cargo
+# builds now fail via build.rs when webui/dist doesn't exist yet. GNU Make
+# runs a rule's prerequisites left to right in serial mode, so their order
+# here is load-bearing, not cosmetic.
+release: fmt webui lint
 	cargo build --release
 
-# Build debug binary (runs fmt and clippy first)
-debug: fmt lint
+# Build debug binary (runs fmt, clippy and the dev UI first)
+debug: fmt webui lint
 	cargo build
 
 # Alias for debug build
@@ -108,7 +113,10 @@ docs-samples: release
 # =============================================================================
 
 # Check everything before commit
-check: fmt lint test
+#
+# webui before lint and test: both compile the crate, and cargo builds now
+# fail via build.rs when webui/dist doesn't exist yet (see `debug` above).
+check: fmt webui lint test
 	@echo "All checks passed!"
 
 # =============================================================================
@@ -131,6 +139,23 @@ fonts: fonts-check ## rebuild the 26 X11 TTFs from their pinned BDF sources
 	.venv-fonts/bin/python fonts/x11-importer.py
 
 # =============================================================================
+# Svelte Dev UI (webui/)
+# =============================================================================
+#
+# webui/dist/{index.html,app.js,app.css} is embedded into the binary via
+# include_str! (src/api/dev.rs) -- a COMPILE-time dependency, so it must
+# exist before cargo runs. build.rs checks for it and fails the build with
+# a plain message if it doesn't; it never runs pnpm itself. `debug`,
+# `release` and `check` all depend on `webui` so every build path produces
+# it first.
+
+webui: ## build the /dev editor UI into webui/dist (needs pnpm)
+	cd webui && pnpm install --frozen-lockfile && pnpm run build
+
+webui-test: ## run the UI's component tests
+	cd webui && pnpm run test
+
+# =============================================================================
 # Home Assistant Integration
 # =============================================================================
 
@@ -150,8 +175,8 @@ help:
 	@echo "Byonk Makefile"
 	@echo ""
 	@echo "Software:"
-	@echo "  make build        Build debug binary (runs fmt + clippy)"
-	@echo "  make release      Build release binary (runs fmt + clippy)"
+	@echo "  make build        Build debug binary (runs fmt + clippy + webui)"
+	@echo "  make release      Build release binary (runs fmt + clippy + webui)"
 	@echo "  make run          Run server in debug mode"
 	@echo "  make run-release  Run server in release mode"
 	@echo "  make watch        Run with auto-reload (needs cargo-watch)"
@@ -175,6 +200,10 @@ help:
 	@echo "  make fonts-setup  Create .venv-fonts (run once)"
 	@echo "  make fonts-check  Run the font importer's tests"
 	@echo "  make fonts        Rebuild the 26 X11 TTFs from pinned BDF sources"
+	@echo ""
+	@echo "Dev UI (webui/):"
+	@echo "  make webui        Build the /dev editor UI into webui/dist (needs pnpm)"
+	@echo "  make webui-test   Run the UI's component tests"
 	@echo ""
 	@echo "Home Assistant VM:"
 	@echo "  make ha-vm        Boot the Home Assistant OS test VM (headless)"

@@ -1,4 +1,6 @@
 use crate::assets::AssetLoader;
+// The MCP tool's argument schema embeds these two types, so they derive it.
+use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -11,14 +13,47 @@ pub const RESERVED_DEFAULT_KEY: &str = "DEFAULT";
 ///
 /// Frame-level, not per adaptation group: groups change only which pixels are
 /// measured together to derive the compression factor, not the curve's shape.
-#[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq, schemars::JsonSchema)]
 pub struct GamutTuningValues {
     /// Where compression begins, as a fraction of the reachable chroma limit.
+    #[serde(serialize_with = "serialize_tidy_opt")]
     pub knee: Option<f32>,
     /// 0 = no mapping, 1 = full. Only 1 guarantees in-gamut output.
+    #[serde(serialize_with = "serialize_tidy_opt")]
     pub amount: Option<f32>,
     /// Cap on the compression factor.
+    #[serde(serialize_with = "serialize_tidy_opt")]
     pub max_compression: Option<f32>,
+}
+
+/// Deserialize a `gamut:` block that refuses unknown keys. Used for the
+/// device's own `gamut:` and for the cascade rungs (`final.gamut`, JSON API
+/// bodies); `GamutTuningValues` itself stays tolerant because panel tuning
+/// shares it.
+fn strict_gamut<'de, D: serde::Deserializer<'de>>(d: D) -> Result<GamutTuningValues, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Strict {
+        knee: Option<f32>,
+        amount: Option<f32>,
+        max_compression: Option<f32>,
+    }
+    let s = Strict::deserialize(d)?;
+    Ok(GamutTuningValues {
+        knee: s.knee,
+        amount: s.amount,
+        max_compression: s.max_compression,
+    })
+}
+
+/// [`strict_gamut`] for an optional field (a JSON body's `gamut`): absent or
+/// `null` is `None`, a present block refuses unknown keys.
+pub(crate) fn strict_gamut_opt<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<GamutTuningValues>, D::Error> {
+    #[derive(Deserialize)]
+    struct Strict(#[serde(deserialize_with = "strict_gamut")] GamutTuningValues);
+    Ok(Option::<Strict>::deserialize(d)?.map(|s| s.0))
 }
 
 impl GamutTuningValues {
@@ -51,7 +86,7 @@ impl GamutTuningValues {
 ///
 /// Used at every level of the tuning priority chain:
 /// panel defaults, device config, script overrides, dev UI overrides.
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
 pub struct DitherTuningValues {
     pub max_error: Option<f32>,
     pub noise_scale: Option<f32>,
@@ -98,6 +133,92 @@ impl DitherTuningValues {
     }
 }
 
+/// An `f32` as the `f64` with the same shortest decimal, so `0.8` is written
+/// and reported as `0.8` and not `0.800000011920929`. The one place f32
+/// representation noise is removed (plan ruling PF1).
+pub fn tidy(v: f32) -> f64 {
+    v.to_string().parse().unwrap_or(v as f64)
+}
+
+/// `serialize_with` for an `Option<f32>` field: `None` stays `null`, `Some`
+/// goes through [`tidy`].
+pub fn serialize_tidy_opt<S: serde::Serializer>(v: &Option<f32>, s: S) -> Result<S::Ok, S::Error> {
+    match v {
+        Some(v) => s.serialize_some(&tidy(*v)),
+        None => s.serialize_none(),
+    }
+}
+
+/// The settings that take part in the resolution cascade.
+///
+/// Used for the `final:` block and as the shape the resolver works in. One
+/// struct and one resolver is what stops a newly added setting from quietly
+/// acquiring a precedence order of its own, which is how `dither` came to be
+/// inverted relative to its four neighbours.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CascadeValues {
+    pub colors: Option<String>,
+    pub colors_actual: Option<String>,
+    pub dither: Option<String>,
+    #[serde(serialize_with = "serialize_tidy_opt")]
+    pub max_error: Option<f32>,
+    #[serde(serialize_with = "serialize_tidy_opt")]
+    pub noise_scale: Option<f32>,
+    #[serde(serialize_with = "serialize_tidy_opt")]
+    pub chroma_clamp: Option<f32>,
+    #[serde(serialize_with = "serialize_tidy_opt")]
+    pub strength: Option<f32>,
+    pub refresh: Option<u32>,
+    #[serde(default, deserialize_with = "strict_gamut")]
+    pub gamut: GamutTuningValues,
+}
+
+impl CascadeValues {
+    /// Merge: `self` takes priority, `other` fills the gaps, field by field.
+    pub fn or(&self, other: &CascadeValues) -> CascadeValues {
+        CascadeValues {
+            colors: self.colors.clone().or_else(|| other.colors.clone()),
+            colors_actual: self
+                .colors_actual
+                .clone()
+                .or_else(|| other.colors_actual.clone()),
+            dither: self.dither.clone().or_else(|| other.dither.clone()),
+            max_error: self.max_error.or(other.max_error),
+            noise_scale: self.noise_scale.or(other.noise_scale),
+            chroma_clamp: self.chroma_clamp.or(other.chroma_clamp),
+            strength: self.strength.or(other.strength),
+            refresh: self.refresh.or(other.refresh),
+            gamut: self.gamut.or(&other.gamut),
+        }
+    }
+}
+
+impl DeviceConfig {
+    /// The device's base rung as a `CascadeValues`.
+    pub fn base(&self) -> CascadeValues {
+        CascadeValues {
+            colors: self.colors.clone(),
+            colors_actual: self.colors_actual.clone(),
+            dither: self.dither.clone(),
+            max_error: self.max_error,
+            noise_scale: self.noise_scale,
+            chroma_clamp: self.chroma_clamp,
+            strength: self.strength,
+            refresh: self.refresh,
+            gamut: self.gamut.clone(),
+        }
+    }
+
+    /// The device's final rung, or an empty rung when there is none. Every
+    /// render path reads it through this, so "no `final:` block" and "a
+    /// `final:` block that sets nothing" resolve identically — which they
+    /// must, or deleting the last field from the block would change pixels.
+    pub fn device_final(&self) -> CascadeValues {
+        self.final_rung.clone().unwrap_or_default()
+    }
+}
+
 /// Panel dither configuration with flat defaults and per-algorithm overrides.
 ///
 /// Deserialized from a YAML map where scalar keys (`max_error`, `noise_scale`,
@@ -112,7 +233,7 @@ impl DitherTuningValues {
 ///     max_error: 0.08
 ///     noise_scale: 4.0
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct PanelDitherConfig {
     pub defaults: DitherTuningValues,
     pub algorithms: HashMap<String, DitherTuningValues>,
@@ -129,6 +250,95 @@ impl PanelDitherConfig {
             }
         }
         self.defaults.clone()
+    }
+}
+
+impl PanelDitherConfig {
+    /// True when the block configures nothing at all. An algorithm entry
+    /// that sets nothing configures nothing, and is not written back either.
+    pub fn is_empty(&self) -> bool {
+        self.defaults.is_empty() && self.algorithms.values().all(DitherTuningValues::is_empty)
+    }
+}
+
+/// Write the set fields of one tuning block into a map. Shared by a panel
+/// block's flat defaults and each per-algorithm sub-map, so both serialise
+/// exactly as `PanelDitherConfig`'s `Deserialize` reads them. Every number
+/// goes through [`tidy`] (ruling P1-8), so a saved `0.8` reads `0.8` in
+/// config.yaml and compares equal on the next Save.
+fn write_tuning<M: serde::ser::SerializeMap>(
+    m: &mut M,
+    t: &DitherTuningValues,
+) -> Result<(), M::Error> {
+    if let Some(v) = t.max_error {
+        m.serialize_entry("max_error", &tidy(v))?;
+    }
+    if let Some(v) = t.noise_scale {
+        m.serialize_entry("noise_scale", &tidy(v))?;
+    }
+    if let Some(v) = t.chroma_clamp {
+        m.serialize_entry("chroma_clamp", &tidy(v))?;
+    }
+    if let Some(v) = t.strength {
+        m.serialize_entry("strength", &tidy(v))?;
+    }
+    if !t.gamut.is_empty() {
+        m.serialize_entry("gamut", &GamutOut(&t.gamut))?;
+    }
+    Ok(())
+}
+
+/// A gamut block without its unset fields (no `knee: null` in config.yaml).
+struct GamutOut<'a>(&'a GamutTuningValues);
+
+impl Serialize for GamutOut<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(None)?;
+        if let Some(v) = self.0.knee {
+            m.serialize_entry("knee", &tidy(v))?;
+        }
+        if let Some(v) = self.0.amount {
+            m.serialize_entry("amount", &tidy(v))?;
+        }
+        if let Some(v) = self.0.max_compression {
+            m.serialize_entry("max_compression", &tidy(v))?;
+        }
+        m.end()
+    }
+}
+
+/// One per-algorithm sub-map.
+struct TuningOut<'a>(&'a DitherTuningValues);
+
+impl Serialize for TuningOut<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(None)?;
+        write_tuning(&mut m, self.0)?;
+        m.end()
+    }
+}
+
+/// The flat form `Deserialize` reads: scalars and `gamut` are the defaults,
+/// every other key is an algorithm (sorted by name, empty ones skipped).
+/// `error_clamp` is never written back.
+impl Serialize for PanelDitherConfig {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(None)?;
+        write_tuning(&mut m, &self.defaults)?;
+        let mut names: Vec<&String> = self
+            .algorithms
+            .iter()
+            .filter(|(_, t)| !t.is_empty())
+            .map(|(name, _)| name)
+            .collect();
+        names.sort();
+        for name in names {
+            m.serialize_entry(name, &TuningOut(&self.algorithms[name]))?;
+        }
+        m.end()
     }
 }
 
@@ -242,6 +452,32 @@ pub fn normalize_algorithm_name(name: &str) -> String {
     }
 }
 
+/// Map an algorithm name to the `eink-dither` variant that implements it.
+///
+/// Aliases are accepted — the name is normalized first — and an unrecognised
+/// name falls back to the default variant, the same way the renderer treats a
+/// name it does not know.
+///
+/// This exists so the dev UI can publish each algorithm's *tuning defaults*
+/// (`DitherAlgorithm::defaults()`) instead of carrying its own copy of the
+/// numbers, which is what the old dev page did and what let the preview
+/// disagree with the engine.
+pub fn dither_algorithm_for_name(name: &str) -> eink_dither::DitherAlgorithm {
+    use eink_dither::DitherAlgorithm as A;
+    match normalize_algorithm_name(name).as_str() {
+        "atkinson" => A::Atkinson,
+        "atkinson-hybrid" => A::AtkinsonHybrid,
+        "floyd-steinberg" => A::FloydSteinberg,
+        "jarvis-judice-ninke" => A::JarvisJudiceNinke,
+        "sierra" => A::Sierra,
+        "sierra-two-row" => A::SierraTwoRow,
+        "sierra-lite" => A::SierraLite,
+        "stucki" => A::Stucki,
+        "burkes" => A::Burkes,
+        _ => A::default(),
+    }
+}
+
 /// Reference to a named screen screen repo.
 ///
 /// `repo == None` means the embedded byonk-builtin screen repo.
@@ -329,6 +565,7 @@ pub struct PanelConfig {
 
 /// Configuration for a specific device
 #[derive(Debug, Deserialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
 pub struct DeviceConfig {
     /// Which screen to display
     pub screen: String,
@@ -339,6 +576,16 @@ pub struct DeviceConfig {
 
     /// Optional display color override (comma-separated hex, e.g. "#000000,#FFFFFF,#FF0000")
     pub colors: Option<String>,
+
+    /// Optional measured-colour override for this one display,
+    /// comma-separated hex. The **base rung** of `colors_actual`: it outranks
+    /// the panel's calibration (which describes the hardware type) and is
+    /// outranked by a screen that measures its own, and by `final:`.
+    ///
+    /// Same validity rule as every other rung: an entry count that does not
+    /// match the resolved palette is reported `rejected` and the resolver
+    /// walks on down (spec §4.4).
+    pub colors_actual: Option<String>,
 
     /// Optional dither algorithm override (e.g. "atkinson", "floyd-steinberg")
     pub dither: Option<String>,
@@ -364,7 +611,7 @@ pub struct DeviceConfig {
     pub strength: Option<f32>,
 
     /// Optional gamut mapping overrides for continuous-tone regions
-    #[serde(default)]
+    #[serde(default, deserialize_with = "strict_gamut")]
     pub gamut: GamutTuningValues,
 
     /// Optional per-device refresh override in seconds (0/absent = use Lua/screen default)
@@ -434,6 +681,19 @@ pub struct DeviceConfig {
     /// construction.
     #[serde(default)]
     pub min_png_bytes: Option<u32>,
+
+    /// The **final rung** — the owner's veto: "whatever the screen says, on
+    /// *this* display, no." Nothing outranks it but a live dev-UI override.
+    ///
+    /// `final` is a reserved word in Rust, hence the rename. Read it through
+    /// [`DeviceConfig::device_final`], which saves every call site an
+    /// `unwrap_or_default`.
+    ///
+    /// Strict, like the base rung: `CascadeValues` carries
+    /// `deny_unknown_fields`, so `final: {screen: …}` fails at startup with
+    /// the field named rather than being silently dropped (spec §3).
+    #[serde(rename = "final", default)]
+    pub final_rung: Option<CascadeValues>,
 }
 
 /// Admin/management API settings.
@@ -443,6 +703,11 @@ pub struct AdminConfig {
     /// unset), the admin API is disabled (returns 404).
     #[serde(default)]
     pub token: Option<String>,
+    /// Dev UI form login. Both required; set by env or add-on options.
+    #[serde(default)]
+    pub dev_username: Option<String>,
+    #[serde(default)]
+    pub dev_password: Option<String>,
 }
 
 /// Device registration settings
@@ -471,6 +736,12 @@ impl Default for RegistrationConfig {
     }
 }
 
+/// A device entry in config.yaml holds a key byonk does not know. Typed so
+/// the write path can answer 400 (the owner's file is wrong) rather than 500.
+#[derive(Debug, thiserror::Error)]
+#[error("Invalid config.yaml: {0}")]
+pub struct UnknownDeviceKey(pub String);
+
 impl AppConfig {
     /// Load configuration from AssetLoader (embedded or external).
     ///
@@ -482,8 +753,14 @@ impl AppConfig {
             .read_config_string()
             .map_err(|e| anyhow::anyhow!("Failed to read config: {e}"))?;
 
-        let config: Self = serde_yaml::from_str(&content)
-            .map_err(|e| anyhow::anyhow!("Invalid config.yaml: {e}"))?;
+        let config: Self = serde_yaml::from_str(&content).map_err(|e| {
+            let msg = e.to_string();
+            if msg.starts_with("devices.") && msg.contains(": unknown field `") {
+                anyhow::Error::new(UnknownDeviceKey(msg))
+            } else {
+                anyhow::anyhow!("Invalid config.yaml: {e}")
+            }
+        })?;
 
         config.validate().map_err(|e| anyhow::anyhow!(e))?;
 
@@ -548,10 +825,22 @@ impl AppConfig {
     ///
     /// Currently checks that no `screen_repos` entry sets both `repo` and
     /// `path` (they are mutually exclusive: one is a git remote, the other a
-    /// writable local directory).
+    /// writable local directory), and that every panel's `width`/`height`
+    /// lies within `1..=MAX_PANEL_DIMENSION`.
     pub fn validate(&self) -> Result<(), String> {
         for (handle, entry) in &self.screen_repos {
             entry.validate(handle)?;
+        }
+        // Sorted, so the same bad config always names the same panel first.
+        let mut panels: Vec<_> = self.panels.iter().collect();
+        panels.sort_by_key(|(id, _)| id.as_str());
+        for (id, panel) in panels {
+            for (label, v) in [("width", panel.width), ("height", panel.height)] {
+                if let Some(v) = v {
+                    crate::models::DisplaySpec::check_dimension(label, v)
+                        .map_err(|e| format!("panels.{id}.{label}: {e}"))?;
+                }
+            }
         }
         Ok(())
     }
@@ -689,6 +978,23 @@ mod tests {
     }
 
     #[test]
+    fn config_with_an_oversized_panel_fails_validation_naming_it() {
+        for dim in ["width: 5000", "height: 0"] {
+            let yaml = format!(
+                "panels:\n  huge:\n    name: H\n    colors: '#000000,#FFFFFF'\n    {dim}\n"
+            );
+            let cfg: AppConfig = serde_yaml::from_str(&yaml).unwrap();
+            let err = cfg.validate().unwrap_err();
+            assert!(err.contains("huge") && err.contains("4096"), "{err}");
+        }
+        let ok: AppConfig = serde_yaml::from_str(
+            "panels:\n  big:\n    name: B\n    colors: '#000000,#FFFFFF'\n    width: 4096\n    height: 4096\n",
+        )
+        .unwrap();
+        assert!(ok.validate().is_ok());
+    }
+
+    #[test]
     fn test_default_config() {
         let config = AppConfig::default();
 
@@ -781,6 +1087,24 @@ registration:
                 "`{name}` is advertised but is not its own canonical form"
             );
         }
+    }
+
+    /// Every advertised algorithm must map to a variant of its own. A missing
+    /// arm in `dither_algorithm_for_name` falls through to the Atkinson
+    /// default, which would publish Atkinson's tuning defaults under another
+    /// algorithm's name — exactly the preview-lies-about-the-engine failure
+    /// that serving the defaults from the engine is meant to end.
+    #[test]
+    fn test_every_advertised_algorithm_maps_to_a_distinct_variant() {
+        let mut seen: Vec<(&str, eink_dither::DitherAlgorithm)> = Vec::new();
+        for name in DITHER_ALGORITHMS {
+            let algo = dither_algorithm_for_name(name);
+            if let Some((other, _)) = seen.iter().find(|(_, a)| *a == algo) {
+                panic!("`{name}` and `{other}` both map to {algo:?}");
+            }
+            seen.push((name, algo));
+        }
+        assert_eq!(seen.len(), DITHER_ALGORITHMS.len());
     }
 
     /// `sierra-light` is a misspelling that reached shipped config and the
@@ -1258,5 +1582,226 @@ colors: "#000000,#FFFFFF"
         assert_eq!(merged.gamut.amount, Some(0.0));
         assert_eq!(merged.gamut.knee, Some(0.55));
         assert!(!merged.is_empty());
+    }
+
+    #[test]
+    fn cascade_values_refuses_unknown_fields() {
+        let err = serde_yaml::from_str::<CascadeValues>("screen: local/x\n").unwrap_err();
+        assert!(err.to_string().contains("unknown field"), "{err}");
+    }
+
+    #[test]
+    fn device_base_copies_every_cascade_field() {
+        let dc: DeviceConfig = serde_yaml::from_str(
+            "screen: local/x\ncolors: '#000000,#FFFFFF'\ndither: atkinson\nmax_error: 0.5\nnoise_scale: 2.0\nchroma_clamp: 0.1\nstrength: 0.8\nrefresh: 600\ngamut: { knee: 0.7 }\n",
+        )
+        .unwrap();
+        let b = dc.base();
+        assert_eq!(b.colors.as_deref(), Some("#000000,#FFFFFF"));
+        assert_eq!(b.dither.as_deref(), Some("atkinson"));
+        assert_eq!(
+            (b.max_error, b.noise_scale, b.chroma_clamp, b.strength),
+            (Some(0.5), Some(2.0), Some(0.1), Some(0.8))
+        );
+        assert_eq!(b.refresh, Some(600));
+        assert_eq!(b.gamut.knee, Some(0.7));
+        assert_eq!(b.colors_actual, None);
+    }
+
+    #[test]
+    fn device_final_rung_parses_from_the_final_key() {
+        let yaml = r#"
+screen: local/hello
+dither: floyd-steinberg
+final:
+  dither: atkinson
+  refresh: 1800
+"#;
+        let dc: DeviceConfig = serde_yaml::from_str(yaml).expect("parses");
+        assert_eq!(dc.dither.as_deref(), Some("floyd-steinberg"), "base rung");
+        let f = dc.final_rung.expect("final rung present");
+        assert_eq!(f.dither.as_deref(), Some("atkinson"));
+        assert_eq!(f.refresh, Some(1800));
+        // Untouched fields of the final rung stay None, so the resolver walks
+        // past them to a lower rung instead of vetoing with nothing.
+        assert_eq!(f.strength, None);
+    }
+
+    #[test]
+    fn absent_final_key_is_none_not_an_empty_rung() {
+        let dc: DeviceConfig = serde_yaml::from_str("screen: local/hello").expect("parses");
+        assert!(dc.final_rung.is_none());
+        // …and `device_final()` still answers, so callers need no branch.
+        assert_eq!(dc.device_final(), CascadeValues::default());
+    }
+
+    /// The asymmetry spec §3 asks for: the `final:` block is strict so that a
+    /// non-cascade key there is a startup error naming the field, because in
+    /// add-on mode that message is the only diagnostic the operator sees.
+    #[test]
+    fn a_non_cascade_key_in_final_is_an_error_naming_the_field() {
+        let yaml = r#"
+screen: local/hello
+final:
+  screen: local/other
+"#;
+        let err = serde_yaml::from_str::<DeviceConfig>(yaml)
+            .expect_err("`final.screen` must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("screen"),
+            "the error must name the offending field, got: {msg}"
+        );
+    }
+
+    /// A typo on a device used to do nothing and say nothing. It is a startup
+    /// error now, naming the device and the key (owner ruling E4).
+    #[test]
+    fn an_unknown_key_on_the_base_rung_is_refused_by_name() {
+        let yaml = "devices:\n  kitchen:\n    screen: local/hello\n    dithr: atkinson\n";
+        let err = serde_yaml::from_str::<AppConfig>(yaml)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("devices.kitchen"), "{err}");
+        assert!(err.contains("unknown field `dithr`"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_key_in_a_device_gamut_block_is_refused_by_name() {
+        let yaml = "devices:\n  kitchen:\n    screen: local/hello\n    gamut:\n      kne: 0.5\n";
+        let err = serde_yaml::from_str::<AppConfig>(yaml)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("devices.kitchen"), "{err}");
+        assert!(err.contains("unknown field `kne`"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_key_in_final_gamut_is_refused_by_name() {
+        let yaml = "devices:\n  kitchen:\n    screen: local/hello\n    final:\n      gamut:\n        kne: 0.5\n";
+        let err = serde_yaml::from_str::<AppConfig>(yaml)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("devices.kitchen"), "{err}");
+        assert!(err.contains("unknown field `kne`"), "{err}");
+    }
+
+    #[test]
+    fn a_merge_key_on_a_device_is_reported_not_silently_ignored() {
+        let yaml = "base: &b {dither: atkinson}\ndevices:\n  kitchen:\n    <<: *b\n    screen: local/hello\n";
+        let err = serde_yaml::from_str::<AppConfig>(yaml)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("devices.kitchen") && err.contains("`<<`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn every_documented_device_key_still_parses() {
+        let yaml = "\
+screen: local/hello
+params: {a: 1}
+colors: '#000000,#FFFFFF'
+colors_actual: '#101010,#EFEFEF'
+dither: atkinson
+panel: og
+max_error: 1.0
+error_clamp: 0.2
+noise_scale: 0.5
+chroma_clamp: 0.1
+strength: 0.8
+gamut: {knee: 0.6, amount: 1.0, max_compression: 0.3}
+refresh: 600
+name: Kitchen
+temperature_profile: a
+maximum_compatibility: true
+min_png_bytes: 102401
+final: {dither: stucki}
+";
+        let dc: DeviceConfig = serde_yaml::from_str(yaml).expect("every documented key parses");
+        assert_eq!(dc.gamut.knee, Some(0.6));
+        assert_eq!(dc.deprecated_error_clamp, Some(0.2));
+    }
+
+    #[test]
+    fn device_colors_actual_is_a_base_rung_string() {
+        let yaml = r#"
+screen: local/hello
+colors_actual: '#1C5240,#FFFFFF'
+"#;
+        let dc: DeviceConfig = serde_yaml::from_str(yaml).expect("parses");
+        assert_eq!(dc.colors_actual.as_deref(), Some("#1C5240,#FFFFFF"));
+    }
+
+    /// `base()` is how every render path reads the base rung. A field it forgets
+    /// is a setting that silently stops working at that rung only.
+    #[test]
+    fn base_carries_every_cascade_field_including_the_new_ones() {
+        let yaml = r#"
+screen: local/hello
+colors: '#000000,#FFFFFF'
+colors_actual: '#1C5240,#FEFEFE'
+dither: stucki
+max_error: 1.5
+noise_scale: 0.6
+chroma_clamp: 2.0
+strength: 0.9
+refresh: 900
+gamut:
+  knee: 0.8
+"#;
+        let dc: DeviceConfig = serde_yaml::from_str(yaml).expect("parses");
+        let b = dc.base();
+        assert_eq!(b.colors.as_deref(), Some("#000000,#FFFFFF"));
+        assert_eq!(b.colors_actual.as_deref(), Some("#1C5240,#FEFEFE"));
+        assert_eq!(b.dither.as_deref(), Some("stucki"));
+        assert_eq!(b.max_error, Some(1.5));
+        assert_eq!(b.noise_scale, Some(0.6));
+        assert_eq!(b.chroma_clamp, Some(2.0));
+        assert_eq!(b.strength, Some(0.9));
+        assert_eq!(b.refresh, Some(900));
+        assert_eq!(b.gamut.knee, Some(0.8));
+    }
+
+    /// The dev render's `draft.panel.dither` arrives as JSON, so the
+    /// hand-written deserializer must accept the YAML shape from JSON too.
+    #[test]
+    fn panel_dither_config_deserializes_from_json() {
+        let pdc: PanelDitherConfig =
+            serde_json::from_str(r#"{"max_error": 1.0, "floyd-steinberg": {"noise_scale": 0.6}}"#)
+                .unwrap();
+        assert_eq!(pdc.defaults.max_error, Some(1.0));
+        assert_eq!(pdc.algorithms["floyd-steinberg"].noise_scale, Some(0.6));
+    }
+
+    #[test]
+    fn panel_dither_config_serializes_to_the_flat_form_it_parses_from() {
+        let yaml =
+            "max_error: 0.5\nstrength: 0.8\ngamut:\n  knee: 0.6\natkinson:\n  noise_scale: 2.0\n";
+        let parsed: PanelDitherConfig = serde_yaml::from_str(yaml).unwrap();
+        let json = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "max_error": 0.5,
+                "strength": 0.8,
+                "gamut": {"knee": 0.6},
+                "atkinson": {"noise_scale": 2.0}
+            })
+        );
+        let back: PanelDitherConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(back, parsed);
+        // Ruling P1-8: no f32 representation noise reaches config.yaml.
+        let text = serde_yaml::to_string(&parsed).unwrap();
+        assert!(text.contains("strength: 0.8\n"), "{text}");
+    }
+
+    #[test]
+    fn an_empty_panel_dither_config_is_empty() {
+        assert!(PanelDitherConfig::default().is_empty());
+        let one: PanelDitherConfig = serde_yaml::from_str("stucki:\n  strength: 0.5\n").unwrap();
+        assert!(!one.is_empty());
     }
 }

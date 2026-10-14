@@ -78,13 +78,28 @@ class ByonkScreenSelect(_ByonkSelect):
 
 
 class ByonkDitherSelect(_ByonkSelect):
+    # The HA control is the device OWNER's veto, so it reads and writes
+    # byonk's `final` rung, not the bare `dither` key. byonk's cascade puts a
+    # bare `dither` BELOW the screen's own choice, so writing there would show
+    # the user a value the panel does not render. `final` outranks the screen,
+    # which is what this control has always meant.
     _field = "dither"
 
     def _base_options(self) -> list[str]:
         return self.coordinator.data.dither
 
+    @property
+    def current_option(self) -> str | None:
+        device = self.device
+        if not device:
+            return None
+        # `or {}` and not `.get("final", {})`: byonk omits an empty rung, but a
+        # hand-edited config.yaml can carry `final:` with nothing under it,
+        # which arrives as null.
+        return (device.get("final") or {}).get("dither")
+
     async def async_select_option(self, option: str) -> None:
-        await self._write({"dither": option})
+        await self._write({"final": {"dither": option}})
 
 
 class ByonkPanelSelect(_ByonkSelect):

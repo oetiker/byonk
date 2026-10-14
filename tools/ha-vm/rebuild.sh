@@ -42,7 +42,13 @@ mkdir -p "$dst"
 # Assistant config dir itself at startup (see src/ha_integration.rs). Omit it
 # and an app built by this script fails on every start with "no readable
 # manifest.json".
-for item in src crates fonts screens byonk-base static docs/src custom_components Cargo.toml Cargo.lock default-config.yaml; do
+#
+# `build.rs` and `webui/dist` are compile-time inputs as well: `src/api/dev.rs`
+# embeds the Svelte dev UI with `include_str!("../../webui/dist/...")`, and
+# `build.rs` is what turns the three resulting include errors into one sentence
+# naming `make webui`. `webui/dist` is git-ignored, so it exists here only
+# because `make webui` has been run -- run it before this script.
+for item in src crates fonts screens byonk-base static docs/src custom_components build.rs webui/dist Cargo.toml Cargo.lock default-config.yaml; do
   [ -e "$REPO_ROOT/$item" ] || continue
   if [ -d "$REPO_ROOT/$item" ]; then
     mkdir -p "$dst/$item"

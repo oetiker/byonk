@@ -91,8 +91,10 @@ fn addon_config_matches_design() {
     // schema exposes EXACTLY the add-on-owned options: admin_token + log_level
     // (Phase 2) plus the genuinely-global settings and the package registry
     // (Plan A — add-on-owned global config: auth_mode, screen_repo_refresh_interval,
-    // packages). The operational registration_enabled toggle and per-device
-    // config are NOT here — they stay live via the admin API / HA integration.
+    // packages), plus the dev UI login (dev_username/dev_password, Task 11 —
+    // the optional external login for the /dev/ screen editor). The
+    // operational registration_enabled toggle and per-device config are NOT
+    // here — they stay live via the admin API / HA integration.
     let schema_keys: std::collections::BTreeSet<&str> = cfg["schema"]
         .as_mapping()
         .expect("schema mapping")
@@ -105,13 +107,53 @@ fn addon_config_matches_design() {
         "auth_mode",
         "screen_repo_refresh_interval",
         "screen_repos",
+        "dev_username",
+        "dev_password",
     ]
     .into_iter()
     .collect();
     assert_eq!(
         schema_keys, expected,
         "add-on schema must expose exactly admin_token, log_level, auth_mode, \
-         screen_repo_refresh_interval, and packages"
+         screen_repo_refresh_interval, screen_repos, dev_username, and dev_password"
+    );
+}
+
+/// Task 11 (dev-mode-editor spec, section 1 "Add-on manifest"): Home
+/// Assistant reaches the screen editor two ways — a no-second-login Ingress
+/// sidebar entry (`ingress_port`/`ingress_entry`/`panel_*`, and the
+/// `BYONK_INGRESS_ADDR` listener the server binds for it), and an optional
+/// external login for people who reach `/dev/` directly. The ingress port
+/// must stay off the public `ports:` map — it is reached only through the
+/// Supervisor proxy or, per the spec's peer check, from inside the add-on
+/// network.
+#[test]
+fn addon_config_declares_ingress_and_dev_login() {
+    let cfg = load_yaml("homeassistant/byonk/config.yaml");
+    assert_eq!(cfg["ingress"], true);
+    assert_eq!(cfg["ingress_port"], 8099);
+    // No leading slash. The Supervisor builds the iframe URL by joining its
+    // own base onto this value, so a leading slash yields
+    // `/api/hassio_ingress/<token>//dev/` -- a doubled slash that byonk's
+    // router 404s, leaving an empty panel in the sidebar. Measured on HAOS
+    // with Supervisor/HA 2026.7.2: `/dev/` gave the 404, `dev/` gave 200 and
+    // the working editor. This assertion is the accountability hook for that
+    // defect; do not "tidy" the slash back on.
+    assert_eq!(cfg["ingress_entry"], "dev/");
+    assert!(
+        !cfg["ingress_entry"]
+            .as_str()
+            .expect("ingress_entry is a string")
+            .starts_with('/'),
+        "ingress_entry must not start with '/' -- the Supervisor adds the separator"
+    );
+    assert_eq!(cfg["panel_admin"], true);
+    assert_eq!(cfg["environment"]["BYONK_INGRESS_ADDR"], "0.0.0.0:8099");
+    assert_eq!(cfg["schema"]["dev_username"], "str?");
+    assert_eq!(cfg["schema"]["dev_password"], "password?");
+    assert!(
+        cfg["ports"].as_mapping().unwrap().get("8099/tcp").is_none(),
+        "ingress port must not be published"
     );
 }
 

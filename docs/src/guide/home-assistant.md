@@ -172,6 +172,8 @@ has no palette to map.
 | `auth_mode` | `api_key` | Device authentication mode (`api_key` or `ed25519`). |
 | `screen_repo_refresh_interval` | `0` | Seconds between automatic screen repo refreshes (`0` = disabled — refresh only via the **Update screen repos** button, see [Entities](#entities) above). |
 | `screen_repos` | *(empty)* | The screen repo registry: a repeatable list of `handle` / `repo` / `pin` (branch, tag, or commit SHA) / `token` (optional, for private repos) rows — add one row per remote screen repo. |
+| `dev_username` | *(blank)* | Only needed to open the [screen editor](#screen-editor) from outside Home Assistant. The sidebar entry works without it. |
+| `dev_password` | *(blank)* | Password for the above. Leave both blank to keep the external route disabled. |
 
 **This Configuration tab is the source of truth for Byonk's server-global
 configuration** — `auth_mode`, `screen_repo_refresh_interval`, and the screen repo
@@ -199,7 +201,10 @@ holding `config.yaml`, `screens/` (your writable `local` screen repo),
 run, and fork them), and `fonts/`. Edit these with the **File editor** or
 **Studio Code Server** app. Empty folders are seeded with the embedded
 defaults on first start — see [Screen Authoring](authoring.md) for what gets
-seeded where. Edits to `config.yaml` are applied without a restart.
+seeded where. Byonk does not watch `config.yaml` for changes made outside its
+own writers, so an edit made this way — through the File editor, Studio Code
+Server, or any other route that touches the file directly — takes effect only
+after you restart the app.
 
 > **Note:** the `screen_repos:` section and the `auth_mode` /
 > `screen_repo_refresh_interval` settings in `config.yaml` are **ignored** —
@@ -208,7 +213,34 @@ seeded where. Edits to `config.yaml` are applied without a restart.
 > through the entities in [Entities](#entities) above), including the reserved
 > `devices.DEFAULT` entry that controls what an un-onboarded or unassigned
 > device displays — set live from the **Byonk Default** device's Screen select
-> (see [Entities](#entities) above), no restart needed.
+> (see [Entities](#entities) above). That entity, and every other write this
+> page describes, goes through Byonk's own config writer, which reloads the
+> file it just wrote — no restart needed there. Only a manual edit to the
+> file itself, bypassing Byonk, needs one.
+
+## Screen editor
+
+The **Byonk** entry in the Home Assistant sidebar opens Byonk's built-in
+screen editor. No extra login is needed — Home Assistant has already
+authenticated you — and the entry is shown to administrators only.
+
+If the entry is missing, open Byonk's page under **Settings** and turn on
+**Show in sidebar**. Home Assistant keeps that switch off for a newly
+installed app regardless of what the app requests, so it is a one-time step
+rather than a sign that something is wrong.
+
+The editor lists your screens, edits their Lua and SVG, saves with conflict
+detection, previews the rendered result, and calibrates a panel's measured
+colours against the device itself. Here the only writable repo is `screens/`
+(the `local` handle); the built-in screens, the shipped `examples/` and
+anything fetched from git are read-only, so fork one with **Copy** to
+customize it.
+See [Dev Mode](dev-mode.md) for the full tour.
+
+To reach the editor from outside Home Assistant as well, set **Dev UI
+username** and **Dev UI password** in [Settings](#settings) and open
+`http://<host>:3000/dev/`. Leaving either blank keeps that external route
+disabled; the sidebar entry works either way.
 
 ## Screen repo cache persistence
 

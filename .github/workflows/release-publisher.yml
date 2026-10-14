@@ -182,6 +182,20 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/setup-nasm@v1
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: corepack enable
+
+      # windows-latest ships Chocolatey but not GNU Make (unlike the Linux
+      # and macOS runners, where `make` is already on PATH).
+      - name: Install make (Windows)
+        if: runner.os == 'Windows'
+        run: choco install make -y
+
+      - name: Build the dev UI
+        run: make webui
+
       - name: Build binary
         run: |
           if [ "${{ matrix.cross }}" = "true" ]; then
@@ -384,6 +398,13 @@ jobs:
           key: ${{ runner.os }}-cargo-docs-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-docs-
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: corepack enable
+      - name: Build the dev UI
+        run: make webui
 
       - name: Build Byonk
         run: cargo build --release

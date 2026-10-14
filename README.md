@@ -35,13 +35,17 @@ for details.
 
 ## Dev Mode
 
-Byonk includes a development mode with a web-based device simulator for creating and testing screens:
+Byonk has a built-in screen editor: pick a screen, edit its Lua and SVG, and
+watch the rendered result beside them. It is part of the normal server, at
+`/dev/`, behind a login you enable by setting a username and a password:
 
 ```bash
-docker run --rm -it --pull always -p 3000:3000 ghcr.io/oetiker/byonk:latest dev
+docker run --rm -it --pull always -p 3000:3000 \
+  -e BYONK_DEV_USERNAME=me -e BYONK_DEV_PASSWORD=secret \
+  ghcr.io/oetiker/byonk:latest
 ```
 
-Then open `http://localhost:3000/dev` in your browser:
+Then open `http://localhost:3000/dev/` in your browser:
 
 ![Dev Mode](docs/src/guide/images/dev-mode-screenshot.png)
 

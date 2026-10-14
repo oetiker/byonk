@@ -66,7 +66,7 @@ pub struct ScreenRepoManager {
     /// handle when `config.screen_repos` has no explicit `local` entry.
     screens_dir: Option<PathBuf>,
     /// The seeded examples directory, if configured — auto-registered as the
-    /// writable `examples` handle when `config.screen_repos` has no explicit
+    /// read-only `examples` handle (copy to `local` to edit) when `config.screen_repos` has no explicit
     /// `examples` entry. Mirrors `screens_dir`/`local`.
     examples_dir: Option<PathBuf>,
 }
@@ -188,7 +188,10 @@ impl ScreenRepoManager {
 
         if !config.screen_repos.contains_key(EXAMPLES_HANDLE) {
             if let Some(dir) = examples_dir {
-                disk_sources.insert(EXAMPLES_HANDLE.to_string(), DiskSource::Local(dir.clone()));
+                disk_sources.insert(
+                    EXAMPLES_HANDLE.to_string(),
+                    DiskSource::LocalReadOnly(dir.clone()),
+                );
             }
         }
 
@@ -1141,7 +1144,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn examples_dir_auto_registers_as_writable_examples_handle() {
+    fn examples_dir_auto_registers_as_read_only_examples_handle() {
         let screens_dir = tempfile::tempdir().unwrap();
         let examples_dir = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -1168,7 +1171,7 @@ pub(crate) mod tests {
         let src = loader
             .source_for("examples")
             .expect("examples handle present");
-        assert!(src.writable_root().is_some());
+        assert!(src.writable_root().is_none(), "examples is read-only");
 
         // End to end: `examples/hello` actually resolves.
         assert!(loader.resolve("examples/hello").is_some());
@@ -1227,6 +1230,46 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn explicit_examples_path_entry_stays_writable() {
+        let explicit_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            explicit_dir.path().join("byonk-screens.yaml"),
+            "name: explicit\ndescription: d\nauthor: a\nlicense: MIT\n",
+        )
+        .unwrap();
+        let examples_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            examples_dir.path().join("byonk-screens.yaml"),
+            "name: examples\ndescription: d\nauthor: a\nlicense: MIT\n",
+        )
+        .unwrap();
+        let mut screen_repos = HashMap::new();
+        screen_repos.insert(
+            "examples".to_string(),
+            ScreenRepoRef {
+                repo: None,
+                path: Some(explicit_dir.path().display().to_string()),
+                pin: None,
+                token: None,
+            },
+        );
+        let mgr = ScreenRepoManager::new(
+            asset_loader(),
+            shared_config(screen_repos),
+            ScreenRepoCache::new(tempdir_path("pkgmgr_cache_examples_explicit_writable")),
+            HashMap::new(),
+            None,
+            Some(examples_dir.path().to_path_buf()),
+        );
+        let loader = mgr.loader();
+        let src = loader.source_for("examples").unwrap();
+        assert!(
+            src.writable_root().is_some(),
+            "an explicit `path:` entry keeps what the entry says"
+        );
+    }
+
+    #[test]
     fn examples_dir_auto_register_survives_rebuild_loader() {
         let screens_dir = tempfile::tempdir().unwrap();
         let examples_dir = tempfile::tempdir().unwrap();
@@ -1242,6 +1285,6 @@ pub(crate) mod tests {
         let src = loader
             .source_for("examples")
             .expect("examples handle present");
-        assert!(src.writable_root().is_some());
+        assert!(src.writable_root().is_none(), "examples is read-only");
     }
 }

@@ -135,6 +135,16 @@ impl TestApp {
             .await
     }
 
+    /// Make a PUT request with a `text/plain` body.
+    pub async fn put_text(&self, path: &str, headers: &[(&str, &str)], body: &str) -> TestResponse {
+        let mut builder = Request::put(path).header("Content-Type", "text/plain");
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        self.request(builder.body(Body::from(body.to_string())).unwrap())
+            .await
+    }
+
     /// Send a request to the router
     async fn request(&self, request: Request<Body>) -> TestResponse {
         let response = self
@@ -184,6 +194,21 @@ impl TestApp {
     pub fn from_config(config: AppConfig) -> Self {
         let asset_loader = Arc::new(AssetLoader::new(None, None, None));
         let state = create_app_state_with_config(asset_loader, config).expect("create state");
+        let registry = state.registry.clone();
+        let content_cache = state.content_cache.clone();
+        let recovery = state.recovery.clone();
+        let router = build_router(state);
+        Self {
+            router,
+            registry,
+            content_cache,
+            recovery,
+        }
+    }
+
+    /// Build a test app around a state the caller keeps a handle to, so a
+    /// test can look at what the handlers left in it (the preview cache).
+    pub fn from_state(state: byonk::server::AppState) -> Self {
         let registry = state.registry.clone();
         let content_cache = state.content_cache.clone();
         let recovery = state.recovery.clone();
@@ -253,7 +278,7 @@ impl TestApp {
     /// Also seeds `dir/examples` (`<SCREENS_DIR>/../examples`, i.e. a sibling
     /// of `screens_dir`) with the real `gphoto` and `swiss-departure-board`
     /// example screens plus a manifest, copied from the embedded `examples`
-    /// set — so it auto-registers as the writable `examples` screen repo
+    /// set — so it auto-registers as the read-only `examples` screen repo
     /// handle (Task 11) and `examples/gphoto` / `examples/swiss-departure-board`
     /// resolve for real, params schema and all. `config.yaml` declares no
     /// `screen_repos.examples` entry, so nothing suppresses the auto-register.
@@ -323,9 +348,44 @@ impl TestApp {
         }
     }
 
+    /// A dev-authenticated app whose writable `local` repo is registered but
+    /// **empty** — the state of a fresh install before the first screen is
+    /// created. Mirrors production wiring: `local` comes from `screens_dir`
+    /// via `build_disk_sources`, NOT from a `screen_repos` config entry, so
+    /// this is the one repo whose visibility cannot rely on the config map.
+    pub fn new_dev_with_empty_local(dir: &std::path::Path, token: &str) -> Self {
+        let screens_dir = dir.join("screens");
+        std::fs::create_dir_all(&screens_dir).expect("create screens dir");
+
+        let config_path = dir.join("config.yaml");
+        std::fs::write(
+            &config_path,
+            format!("admin:\n  token: {token}\ndevices:\n  DEFAULT:\n    screen: byonk-builtin/default\n"),
+        )
+        .expect("write config.yaml");
+
+        let asset_loader = Arc::new(AssetLoader::new(Some(screens_dir), None, Some(config_path)));
+        // Writes `byonk-screens.yaml` into `screens_dir`, which is what makes
+        // the `local` handle register at all. It stays screen-less.
+        asset_loader
+            .seed_if_configured()
+            .expect("seed local manifest");
+        let config = AppConfig::load_from_assets(&asset_loader).expect("load config");
+        let state = create_app_state_with_config(asset_loader, config).expect("create state");
+        let registry = state.registry.clone();
+        let content_cache = state.content_cache.clone();
+        let recovery = state.recovery.clone();
+        Self {
+            router: build_router(state),
+            registry,
+            content_cache,
+            recovery,
+        }
+    }
+
     /// Copy `gphoto` and `swiss-departure-board` from the embedded `examples`
     /// set (Task 10) into `dir/examples`, plus a `byonk-screens.yaml`
-    /// manifest, so `dir/examples` auto-registers as the writable `examples`
+    /// manifest, so `dir/examples` auto-registers as the read-only `examples`
     /// screen repo handle (Task 11) once `screens_dir` is set to a sibling of
     /// `dir`. Shared by `new_admin_with_screens` and any other fixture that
     /// needs a real, params-bearing `examples/*` ref to resolve.
@@ -369,12 +429,77 @@ impl TestApp {
             .await
     }
 
+    pub async fn put_json(&self, path: &str, headers: &[(&str, &str)], body: &str) -> TestResponse {
+        let mut builder = Request::put(path).header("Content-Type", "application/json");
+        for (n, v) in headers {
+            builder = builder.header(*n, *v);
+        }
+        self.request(builder.body(Body::from(body.to_string())).unwrap())
+            .await
+    }
+
     pub async fn delete(&self, path: &str, headers: &[(&str, &str)]) -> TestResponse {
         let mut builder = Request::delete(path);
         for (n, v) in headers {
             builder = builder.header(*n, *v);
         }
         self.request(builder.body(Body::empty()).unwrap()).await
+    }
+
+    /// Like `new_admin` but with dev credentials set (config-embedded, no
+    /// on-disk file needed). Pass `token` to also enable the admin bearer
+    /// token alongside the dev login.
+    pub fn new_with_dev_login(token: Option<&str>, user: &str, pass: &str) -> Self {
+        let asset_loader = Arc::new(AssetLoader::new(None, None, None));
+        let mut config = AppConfig::load_from_assets(&asset_loader).expect("load config");
+        if let Some(t) = token {
+            config.admin.token = Some(t.to_string());
+        }
+        config.admin.dev_username = Some(user.to_string());
+        config.admin.dev_password = Some(pass.to_string());
+        let state = create_app_state_with_config(asset_loader, config).expect("create state");
+        let registry = state.registry.clone();
+        let content_cache = state.content_cache.clone();
+        let recovery = state.recovery.clone();
+        let router = build_router(state);
+        Self {
+            router,
+            registry,
+            content_cache,
+            recovery,
+        }
+    }
+
+    /// Send a request that pretends to come from `peer` on the ingress
+    /// listener (i.e. carries the `ViaIngress` marker and a `ConnectInfo`
+    /// the way the real ingress listener's `Router::into_make_service_with_connect_info`
+    /// would attach it).
+    pub async fn get_via_ingress(
+        &self,
+        path: &str,
+        peer: &str,
+        headers: &[(&str, &str)],
+    ) -> TestResponse {
+        use axum::extract::ConnectInfo;
+        let mut builder = Request::get(path);
+        for (n, v) in headers {
+            builder = builder.header(*n, *v);
+        }
+        let mut req = builder.body(Body::empty()).unwrap();
+        req.extensions_mut()
+            .insert(byonk::api::dev_auth::ViaIngress);
+        req.extensions_mut()
+            .insert(ConnectInfo(peer.parse::<std::net::SocketAddr>().unwrap()));
+        self.request(req).await
+    }
+
+    /// Make a POST request with a `application/x-www-form-urlencoded` body.
+    pub async fn post_form(&self, path: &str, body: &str) -> TestResponse {
+        let req = Request::post(path)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        self.request(req).await
     }
 
     /// Register a device and return the api_key

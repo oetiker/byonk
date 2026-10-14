@@ -28,7 +28,13 @@ pub async fn pending(
     headers: HeaderMap,
 ) -> Result<Json<Vec<PendingDevice>>, ApiError> {
     require_admin(&state, &headers)?;
+    Ok(Json(pending_devices(&state).await?))
+}
 
+/// Devices the registry has seen that no `devices:` entry configures yet.
+/// Shared by the admin `GET /api/admin/pending` and the dev UI's
+/// `GET /dev/api/pending-devices`, so there is one place this is decided.
+pub async fn pending_devices(state: &AppState) -> Result<Vec<PendingDevice>, ApiError> {
     let config = state.config.load();
     let mut out = Vec::new();
     for d in state.registry.list_all().await? {
@@ -45,7 +51,7 @@ pub async fn pending(
             last_seen: d.last_seen.to_rfc3339(),
         });
     }
-    Ok(Json(out))
+    Ok(out)
 }
 
 /// Build the non-secret config view: the raw config file with `admin.token`
@@ -125,6 +131,28 @@ pub struct AdminDevice {
     pub params: serde_json::Value,
     pub refresh: Option<u32>,
     pub name: Option<String>,
+    /// The device's `final:` rung (owner vetoes that outrank the screen).
+    /// Omitted when the device vetoes nothing the integration can read, so an
+    /// empty or absent `final:` block looks the same to a client.
+    #[serde(rename = "final", skip_serializing_if = "Option::is_none")]
+    pub final_rung: Option<AdminFinal>,
+}
+
+/// The slice of the `final:` rung exposed on [`AdminDevice`].
+///
+/// Deliberately only `dither`: that is the one veto the Home Assistant
+/// integration writes, so it must be able to read it back. Like the rest of
+/// `AdminDevice` this is a read projection, not the full config.
+#[derive(Serialize)]
+pub struct AdminFinal {
+    pub dither: String,
+}
+
+impl AdminFinal {
+    fn from_device(dc: Option<&crate::models::DeviceConfig>) -> Option<Self> {
+        dc.and_then(|c| c.device_final().dither)
+            .map(|dither| Self { dither })
+    }
 }
 
 pub async fn list_devices(
@@ -167,6 +195,7 @@ pub async fn list_devices(
                 .unwrap_or(serde_json::Value::Null),
             refresh: dc.and_then(|c| c.refresh),
             name: dc.and_then(|c| c.name.clone()),
+            final_rung: AdminFinal::from_device(dc),
         });
     }
 
@@ -210,6 +239,7 @@ pub async fn list_devices(
             params: serde_json::to_value(&dc.params).unwrap_or(serde_json::Value::Null),
             refresh: dc.refresh,
             name: dc.name.clone(),
+            final_rung: AdminFinal::from_device(Some(dc)),
         });
     }
 
@@ -352,9 +382,9 @@ pub async fn screens(
 ///   (defaulting to `"error"` if `state` is `None`); `pin_kind`/
 ///   `resolved_sha`/`error` copied through; `last_fetched` rendered RFC3339.
 /// - non-builtin with no status entry (never fetched — e.g. right after
-///   registration, before the first refresh runs): `status: "error"`, all
-///   other fields `None`. It is not currently serving, so `"error"` is the
-///   honest default.
+///   registration, before the first refresh has started): `status:
+///   "fetching"`, all other fields `None`. The first fetch is always about
+///   to run, and a client that sees `error` here would stop watching it.
 pub(crate) fn build_screen_repo_info(
     config: &AppConfig,
     status: Option<&ScreenRepoStatus>,
@@ -392,7 +422,7 @@ pub(crate) fn build_screen_repo_info(
                     s.error.clone(),
                 )
             }
-            None => ("error".to_string(), None, None, None, None),
+            None => ("fetching".to_string(), None, None, None, None),
         }
     };
 
@@ -496,7 +526,7 @@ mod build_package_info_tests {
     }
 
     #[test]
-    fn non_builtin_never_fetched_defaults_to_error() {
+    fn non_builtin_never_fetched_is_fetching_not_error() {
         let mut config = AppConfig::default();
         config.screen_repos.insert(
             "weather".to_string(),
@@ -509,7 +539,7 @@ mod build_package_info_tests {
         );
         let info = build_screen_repo_info(&config, None, 0, "weather".to_string());
         assert!(!info.builtin);
-        assert_eq!(info.status, "error");
+        assert_eq!(info.status, "fetching");
         assert_eq!(info.pin_kind, None);
         assert_eq!(info.resolved_sha, None);
         assert_eq!(info.last_fetched, None);

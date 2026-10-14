@@ -19,7 +19,7 @@ pub mod screen_store;
 pub mod template_service;
 
 pub use config_writer::{
-    remove_device, replace_scalar, set_scalar, upsert_device, ConfigWriteError,
+    remove_device, replace_scalar, set_scalar, update_device, upsert_device, ConfigWriteError,
 };
 pub use content_cache::{CachedContent, ContentCache};
 pub use content_pipeline::{ContentPipeline, DeviceContext};

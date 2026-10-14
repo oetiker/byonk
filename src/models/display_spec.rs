@@ -1,5 +1,10 @@
 use crate::error::RenderError;
 
+/// Largest panel width or height, in pixels, a config or a render request may
+/// name. The largest TRMNL panel is far below this; the cap exists so a
+/// typo or a hostile request cannot make the renderer allocate gigabytes.
+pub const MAX_PANEL_DIMENSION: u32 = 4096;
+
 /// Display specifications for different TRMNL models
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DisplaySpec {
@@ -23,9 +28,30 @@ impl DisplaySpec {
         max_size_bytes: 750_000, // 750KB
     };
 
+    /// Check one dimension against `1..=MAX_PANEL_DIMENSION`. The one rule
+    /// behind config load, panel save/create and every render request; the
+    /// error names the limit so it can be shown to the user as is.
+    pub fn check_dimension(label: &str, value: u32) -> Result<(), String> {
+        if (1..=MAX_PANEL_DIMENSION).contains(&value) {
+            Ok(())
+        } else {
+            Err(format!(
+                "{label} must be between 1 and {MAX_PANEL_DIMENSION} pixels (got {value})"
+            ))
+        }
+    }
+
+    /// [`Self::check_dimension`] for a width and a height.
+    pub fn check_dimensions(width: u32, height: u32) -> Result<(), String> {
+        Self::check_dimension("width", width)?;
+        Self::check_dimension("height", height)
+    }
+
     /// Determine spec from Width/Height headers.
     /// Uses the exact dimensions provided, with size limits based on display tier.
     pub fn from_dimensions(width: u32, height: u32) -> Result<Self, RenderError> {
+        Self::check_dimensions(width, height)
+            .map_err(|_| RenderError::UnsupportedDimensions { width, height })?;
         let max_size_bytes = if width <= 800 && height <= 480 {
             Self::OG.max_size_bytes
         } else {
@@ -54,6 +80,16 @@ impl DisplaySpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dimensions_outside_one_to_max_are_rejected() {
+        assert!(DisplaySpec::from_dimensions(0, 480).is_err());
+        assert!(DisplaySpec::from_dimensions(800, 0).is_err());
+        assert!(DisplaySpec::from_dimensions(MAX_PANEL_DIMENSION + 1, 480).is_err());
+        assert!(DisplaySpec::from_dimensions(800, MAX_PANEL_DIMENSION + 1).is_err());
+        assert!(DisplaySpec::from_dimensions(MAX_PANEL_DIMENSION, MAX_PANEL_DIMENSION).is_ok());
+        assert!(DisplaySpec::from_dimensions(1, 1).is_ok());
+    }
 
     #[test]
     fn test_og_dimensions() {

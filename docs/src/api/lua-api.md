@@ -58,6 +58,21 @@ end
 
 > **Note:** Device fields may be `nil` if the device doesn't report them. Always check before using.
 
+#### What the render settings in `device` mean
+
+`device.colors`, `device.colors_actual` and `device.dither` are **resolved
+before your script runs**, on byonk's render cascade (see
+[`dither`](#dither) below for the full ladder). Of that ladder they walk the
+rungs that exist yet: a live dev-UI override, the device's `final:` veto, the
+device's own base setting, the panel, and byonk's fallback — **veto first**, so
+you are told the decision the renderer will actually make rather than a value
+it is about to overrule.
+
+One rung is necessarily missing: the screen's. That rung is what you are about
+to return, so it cannot be in the value you read on the way in. Everything you
+return outranks the device's base setting and the panel, and loses to `final:`
+and to a dev override.
+
 #### device.colors_actual
 
 The colours the panel **really** shows, as measured — index-parallel to
@@ -97,15 +112,21 @@ are filled from `device.colors` and pick their label colour from
 `device.colors_actual` is resolved *before* this script runs, so it reflects
 whichever of these applies first: the dev colour-tuning override (or, when
 rendering via the `render_screen` MCP tool, its `colors_actual` argument) >
+the device's `final.colors_actual` > the device's own `colors_actual` >
 `panel.colors_actual` in `config.yaml` > the `Measured-Colors` header > none.
 
-A script can still go one step further and override what actually gets
-dithered against by *returning* its own `colors_actual` — see below. That
-return, when present, wins over everything `device.colors_actual` could have
-reported: the full chain for a render is `script > dev-override /
-render-opts > panel.colors_actual > measured header > none`. A mismatched
-length anywhere in that chain never fails the render — the offending layer is
-skipped with a warning and the next one down is tried.
+A script can still change what actually gets dithered against by *returning*
+its own `colors_actual` — see below. The return takes the screen rung of the
+cascade, so for the render itself the full chain is: dev override /
+render-opts > `final.colors_actual` > **script** > device `colors_actual` >
+`panel.colors_actual` > measured header > none. A mismatched length anywhere
+in that chain never fails the render — the offending layer is skipped with a
+warning and the next one down is tried.
+
+> **Changed in 0.20.0.** A caller's explicit measurement — the dev UI's panel
+> editor (Push), or the `render_screen` tool's `colors_actual` argument — now outranks
+> a `colors_actual` returned by the script. It used to lose to it, which made
+> previewing a calibration impossible on any screen that measures its own.
 
 **Which palette a pixel is matched against depends on how it is marked.**
 Content inside a `data-byonk-tone="continuous"` region is matched against the
@@ -123,7 +144,10 @@ instead see what the panel will really look like.
 
 #### device.dither
 
-The `device.dither` sub-table contains the pre-script resolved dither tuning values (panel defaults merged with device config). Scripts can read these to make selective adjustments rather than setting everything blindly.
+The `device.dither` sub-table contains the pre-script resolved dither tuning values — the panel's defaults with the device's base settings and its `final:` vetoes resolved over them. Scripts can read these to make selective adjustments rather than setting everything blindly.
+
+Every render path resolves this the same way, so a value you branch on in a
+preview is the value you get on the glass.
 
 ```lua
 -- Read current tuning
@@ -149,6 +173,17 @@ return {
 | `noise_scale` | number or nil | Blue noise jitter scale |
 | `chroma_clamp` | number or nil | Chromatic error clamp |
 | `strength` | number or nil | Error diffusion strength (0.0–2.0, default 1.0) |
+| `gamut` | table | Gamut compression: `knee`, `amount`, `max_compression`, each a number or nil |
+
+> **`algorithm` is the configured string, not a canonical one.** The rest of
+> byonk accepts aliases and spelling variants — `jjn` for
+> `jarvis-judice-ninke`, `Floyd_Steinberg` for `floyd-steinberg` — and
+> normalises them internally. The name handed to your script is the raw one,
+> so compare it with care: lowercase it, swap `_` for `-`, and map the
+> remaining aliases — `floydsteinberg`, `atkinsonhybrid`, `jjn`,
+> `sierratworow`, `sierralite`, and `sierra-light`/`sierralight` (all three
+> mean `sierra-lite`) — before matching, or branch on the tuning numbers
+> instead.
 
 ### layout
 
@@ -1278,13 +1313,28 @@ In templates, access this data with the `data.` prefix:
 - **3600+**: Static or slow-changing content
 
 If `refresh_rate` is 0 or omitted, the device's `refresh` is used, and failing
-that the screen's `default_refresh` from config.
+that the screen's own `refresh` from `meta.yaml`. `0` means "unset" at every
+level, so a device with `refresh: 0` is a device that has not set one.
 
-**The screen outranks the device here** — the opposite of `dither`. Only the
-script knows when its own content next changes, so a screen that returns
-`refresh_rate` keeps that interval even on a device configured with `refresh`.
-Byonk logs when a device's `refresh` is displaced this way, so an operator can
-see why their setting is inert.
+**The screen outranks the device's `refresh`.** Only the script knows when its
+own content next changes, so a screen that returns `refresh_rate` keeps that
+interval even on a device configured with `refresh`. Byonk logs when a device's
+`refresh` is displaced this way, so an operator can see why their setting is
+inert.
+
+The one thing above you is the device's `final.refresh` — the owner's veto,
+and the only rung that can hold a battery-powered display to an interval it
+can live with:
+
+1. The device's `final.refresh` — the owner's veto
+2. The script's `refresh_rate` (when greater than `0`) — **this is you**
+3. The device's `refresh`
+4. The screen's `meta.yaml` `refresh`, or 900 seconds
+
+A displaced `final.refresh` is impossible, so nothing is logged for it: the
+owner set it on purpose, and `/dev/api/render`'s `X-Byonk-Resolution` header
+reports the whole ladder when you need to see why an interval came out as it
+did.
 
 ### colors
 
@@ -1292,12 +1342,23 @@ see why their setting is inert.
 |-------|------|-------------|
 | `colors` | table or nil | Optional array of hex RGB color strings to override the display palette |
 
-When `colors` is returned by a script, it takes the **highest priority** in the color palette chain:
+The palette is resolved on byonk's render cascade (see [`dither`](#dither)
+below), highest first:
 
-1. **Script `colors`** (strongest) — returned in the script result table
-2. **Device config `colors`** — set per-device in `config.yaml`
-3. **Firmware `Colors` header** — sent by device hardware
-4. **System default** — `#000000,#555555,#AAAAAA,#FFFFFF`
+1. The device's `final.colors` — the owner's veto
+2. The script's `colors` — **this is you**
+3. The device's `colors` — the owner's default
+4. The panel profile's `colors`
+5. **Fallback** — the firmware's own `Colors` header, and failing that
+   `#000000,#555555,#AAAAAA,#FFFFFF`
+
+The firmware header is the bottom of the ladder, not a rung of it: what the
+hardware says about itself is evidence, used when nobody has decided, and any
+configured or returned palette replaces it.
+
+The cascade's override rung sits above all of these, but no caller can reach it
+for `colors`: `/dev/api/render` refuses `override.colors` outright, because
+your script would then have been shown a palette the render does not use.
 
 ```lua
 -- Force a 3-color palette for this screen
@@ -1329,11 +1390,17 @@ return {
 Must have the same number of entries as the resolved palette (`colors`, above). If it does not,
 the render still succeeds: the value is ignored, the next source in the chain is used instead, and
 a warning is written to the script log. On the authoring path this is visible in the MCP
-`render_screen` tool's `log` field; on `/dev/render` the warning goes only to the server's
-`tracing` output — the dev UI receives raw PNG bytes and has no log surface to show it on.
+`render_screen` tool's `log` field. On `/dev/api/render` the warning goes to the server's
+`tracing` output, and the rejected value and its reason are reported in the response's
+`X-Byonk-Resolution` header (the dev UI does not display it yet).
 
-A script that returns `colors_actual` wins over every other source, including the dev
-colour-tuning popup. The winning source isn't rendered anywhere in the dev UI, but it is visible
+A script that returns `colors_actual` takes the screen rung of the cascade: it wins over the
+device's own `colors_actual`, the panel's calibration and the firmware's measured header, and
+loses to the device's `final.colors_actual` and to a caller's explicit measurement — the dev
+UI's panel editor (Push), `/dev/api/render`'s `override.colors_actual`, or the `render_screen` MCP
+tool's `colors_actual` argument. **This changed in 0.20.0**; the script used to win over those
+too, which left no way to preview a calibration against a screen that measures its own.
+The winning source isn't rendered anywhere in the dev UI, but it is visible
 as `measured_source` in the MCP `render_screen` tool's diagnostics, and as a `tracing` field in
 server logs — so it's inspectable rather than mysterious, just not from the dev UI itself. See
 `device.colors_actual` above for the full precedence chain and why measured colours steer
@@ -1359,18 +1426,30 @@ Controls the dithering algorithm used when converting SVG to e-ink PNG. Availabl
 | `"stucki"` | Stucki | Wide 12-neighbor kernel similar to JJN |
 | `"burkes"` | Burkes | 7-neighbor, good balance of speed and quality |
 
-The dither mode follows a priority chain:
+The algorithm is resolved on byonk's render cascade, highest first:
 
-1. **Dev UI override** (strongest) — set in dev mode
-2. **Device config `dither`** — set per-device in `config.yaml`
-3. **Script `dither`** — returned in the script result table
-4. **Default** — `"atkinson"`
+1. A live dev-UI override
+2. The device's `final.dither` — the owner's veto
+3. The script's `dither` — **this is you**
+4. The device's `dither` — the owner's default
+5. `atkinson`
 
-**The device outranks the screen here.** The algorithm suits the panel, not
-the content, and the operator who set it on the device cannot see a screen
-replacing it. A screen's `dither` still applies on any device that does not
-name one. When both name one and they differ, the device's is used and Byonk
-logs which value was dropped.
+**The screen outranks the device's default, and loses to its veto.** A device
+sets `dither:` to say "normally use this here", which your script may override
+because only the script knows what it just drew; it sets `final: {dither: …}`
+to say "on this display, no" — for instance because the panel hangs in a dark
+hallway and the owner can see the result and you cannot.
+
+Every render setting walks that same ladder —
+`override → final: → screen → device → panel → fallback` — and every render
+path walks it the same way, so what a preview shows is what the panel gets.
+
+> **New in 0.20.0.** `final:` is the rung that vetoes a screen. A bare
+> `devices.<key>.dither` is a default your script may override; if you keep a
+> config that needs the device to win, move the value into `final:`. To see
+> which rung actually won, render through `POST /dev/api/render`: its
+> `X-Byonk-Resolution` header names every rung's value and whether it won, was
+> outranked, or was rejected.
 
 ```lua
 -- Use Floyd-Steinberg dithering for a screen that displays images
@@ -1435,9 +1514,11 @@ screen sets this up.
 | `chroma_clamp` | number or nil | Limits chromatic error propagation (e.g. 2.0) |
 | `strength` | number or nil | Error diffusion strength multiplier (0.0 = no diffusion, 1.0 = standard, default) |
 
-Fine-tune dithering behavior per-script. These override device config and panel default values but are overridden by dev UI settings.
+Fine-tune dithering behavior per-script. These take the screen rung of the
+cascade, so they override the device's own numbers and the panel's defaults,
+and are overridden by the device's `final:` block and by dev UI settings.
 
-Priority chain: **dev UI** > **script return** > **device config** > **panel dither defaults** > **algorithm defaults**.
+Priority chain: **dev UI** > **device `final:`** > **script return** > **device config** > **panel dither defaults** > **algorithm defaults**.
 
 Use [dev mode](../guide/dev-mode.md) to interactively find good values, then set them here or in the [panel dither defaults](../guide/configuration.md#panel-dither-defaults) for production use.
 

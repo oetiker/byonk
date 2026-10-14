@@ -499,7 +499,8 @@ impl SvgRenderer {
     /// size of the panel — see [`Self::scale_warning`]. The renderer has no
     /// channel of its own to reach the screen's author, so the caller decides
     /// where it goes; the ones with nowhere to put it pass `&mut None`. This
-    /// mirrors `api::display::resolve_render_params`' `measured_warning`.
+    /// mirrors `RenderParams::warnings`, which the cascade fills in the same
+    /// way.
     fn rasterize_svg(
         &self,
         svg_data: &[u8],
@@ -796,8 +797,8 @@ fn build_eink_palette(
         Some(unique_actual.as_slice())
     } else {
         // Never fail a device render over calibration — but do not lose it
-        // silently either. After the length check in
-        // `api::display::resolve_measured_colors` this should be unreachable
+        // silently either. After the `colors_actual` length check in
+        // `api::resolution::resolve_render` this should be unreachable
         // from the script path; if it fires, something upstream disagrees
         // about palette length (e.g. dedup removed a duplicate official
         // colour without a matching measured entry).
@@ -895,10 +896,10 @@ fn optimize_png(png_bytes: Vec<u8>) -> Vec<u8> {
 /// Pack pixel values into N-bit PNG row data (1, 2, or 4 bits per pixel).
 fn pack_nbits(indices: &[u8], width: u32, bits: u8) -> Vec<u8> {
     let pixels_per_byte = 8 / bits as usize;
-    let bytes_per_row = (width as usize).div_ceil(pixels_per_byte);
-    let height = indices.len() / width as usize;
     let mask = (1u8 << bits) - 1;
-    let mut packed = Vec::with_capacity(bytes_per_row * height);
+    // The capacity hint is bounded by the input buffer that already exists:
+    // packed output never exceeds one byte per input pixel.
+    let mut packed = Vec::with_capacity(indices.len());
 
     for row in indices.chunks(width as usize) {
         let mut byte = 0u8;

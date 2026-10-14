@@ -207,6 +207,9 @@ pub struct IssueOut {
     pub severity: String,
     /// The screen-relative file the issue is in.
     pub location: String,
+    /// Best-effort 1-based line number, when the underlying error message
+    /// carried one.
+    pub line: Option<u32>,
     pub message: String,
 }
 
@@ -349,6 +352,7 @@ impl ByonkMcp {
                         Severity::Warning => "warning".to_string(),
                     },
                     location: i.location,
+                    line: i.line,
                     message: i.message,
                 })
                 .collect(),

@@ -1539,9 +1539,9 @@ panels:
 async fn test_render_screen_wrong_length_colors_actual_falls_through_to_the_panel() {
     // The reason the authoring path PREPENDS a `render_opts` candidate to
     // the chain instead of collapsing the chain to a single winner before
-    // resolving: the length rule lives inside `resolve_measured_colors`'s
-    // loop, so a wrong-length render option is DISCARDED and the walk
-    // continues to `panel.colors_actual` — it does not kill the calibration
+    // resolving: the length rule is the `colors_actual` ladder's `accept`
+    // in `api::resolution::resolve_render`, so a wrong-length render option is
+    // DISCARDED and the walk continues to `panel.colors_actual` — it does not kill the calibration
     // outright, and it does not fail the render.
     //
     // No other test in the tree has this discriminating power: a future

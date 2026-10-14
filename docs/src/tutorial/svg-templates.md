@@ -334,7 +334,7 @@ reach your screen.
 
 E-ink displays support a limited color palette. The default 4-grey OG palette is `#000000, #555555, #AAAAAA, #FFFFFF`, but color displays may have palettes like `#000000, #FFFFFF, #FF0000, #FFFF00`. The display palette is available in Lua via `layout.colors`.
 
-The palette follows a priority chain: **Lua script `colors` return** > **device config `colors`** > **firmware `Colors` header** > **system default**. You can override the palette per-device in `config.yaml`:
+The palette follows byonk's render cascade: **the device's `final.colors`** > **the Lua script's `colors` return** > **the device's `colors`** > **the panel profile's `colors`** > **the firmware `Colors` header** > **the system default**. See [Settings order](../guide/configuration.md#settings-order-defaults-and-vetoes). You can override the palette per-device in `config.yaml`:
 
 ```yaml
 devices:
@@ -347,12 +347,14 @@ Or per-script by returning `colors` in the Lua result table (see [Lua API: color
 
 ### Dithering Mode
 
-Byonk supports two dithering modes via the `dither` option:
+The `dither` option picks the error-diffusion algorithm, for example:
 
-- **`graphics`** (default) — Blue noise ordered dithering, best for UI content
-- **`photo`** — Atkinson error diffusion, best for photographs
+- **`atkinson`** (default) — a good general-purpose choice, crisp on UI content
+- **`floyd-steinberg`** — smooth gradients, best for photographs
 
-Set per-device in `config.yaml` or per-script in the Lua return table (see [Lua API: dither](../api/lua-api.md#dither) and [Content Pipeline: Rendering Intents](../concepts/content-pipeline.md#rendering-intents)).
+The full list is under [Dither Algorithms](../guide/configuration.md#dither-algorithms).
+
+Set per-device in `config.yaml` or per-script in the Lua return table (see [Lua API: dither](../api/lua-api.md#dither) and [Content Pipeline: Dither Algorithms](../concepts/content-pipeline.md#dither-algorithms)).
 
 ### Using Palette Colors
 

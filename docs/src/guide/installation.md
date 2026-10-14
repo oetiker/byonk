@@ -142,7 +142,7 @@ data/
 │   │   ├── script.lua       # Data-fetch logic
 │   │   └── screen.svg       # Tera template
 │   └── ...
-├── examples/                # Shipped worked examples, seeded once (editable)
+├── examples/                # Shipped worked examples, seeded once (read-only; copy to `local` to edit)
 │   ├── byonk-screens.yaml
 │   ├── hello/
 │   └── ...
@@ -162,6 +162,8 @@ your-own-screens layers relate to each other.
 | `SCREENS_DIR` | *(embedded)* | Your own writable screen repo (auto-registers as the `local` handle) |
 | `FONTS_DIR` | *(embedded)* | Directory containing font files |
 | `EXAMPLES_DIR` | `<SCREENS_DIR>/../examples` | Where the shipped worked-example screens are seeded (auto-registers as the `examples` handle). Only takes effect once — an existing, non-empty directory is left alone. |
+| `BYONK_DEV_USERNAME` | *(unset)* | Login name for the [screen editor](dev-mode.md) at `/dev/`. Both this and the password must be set, or `/dev/` stays a `404`. |
+| `BYONK_DEV_PASSWORD` | *(unset)* | Password for the above. |
 
 When path variables are not set, Byonk uses embedded assets (no filesystem access).
 
@@ -253,7 +255,8 @@ Render a screen directly to PNG (useful for testing):
 |--------|-------------|
 | `-m, --mac` | Device MAC address (required) |
 | `-o, --output` | Output PNG file path (required) |
-| `-d, --device` | Device type: "og" (800x480) or "x" (1872x1404) |
+| `-d, --device` | Device type: "og" (800x480) or "x" (1872x1404). The CLI has no live device report, so this also stands in for the reported Model: a panel whose `match:` equals it is used for a device without `panel:` |
+| `--board` | The Board string a real device would report (e.g. `trmnl_x`), matched against panel `match:` ahead of the Model. Together with `--device` it lets `byonk render` pick the same panel `/api/display` does |
 | `-b, --battery` | Battery voltage for testing (e.g., 4.12) |
 | `-r, --rssi` | WiFi signal strength for testing (e.g., -67) |
 | `-f, --firmware` | Firmware version string for testing |

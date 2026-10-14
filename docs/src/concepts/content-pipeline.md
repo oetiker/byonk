@@ -41,7 +41,7 @@ The script receives a global `params` table from `config.yaml`:
 # config.yaml
 devices:
   "94:A9:90:8C:6D:18":
-    screen: transit
+    screen: examples/swiss-departure-board
     params:
       station: "Olten, Bahnhof"
       limit: 8
@@ -236,8 +236,8 @@ Set the dither mode per-device in `config.yaml`:
 ```yaml
 devices:
   "ABCDE-FGHJK":
-    screen: gphoto
-    dither: photo
+    screen: examples/gphoto
+    dither: floyd-steinberg
 ```
 
 Or per-script by returning `dither` in the Lua result table:
@@ -246,11 +246,15 @@ Or per-script by returning `dither` in the Lua result table:
 return {
   data = { ... },
   refresh_rate = 300,
-  dither = "photo"
+  dither = "floyd-steinberg"
 }
 ```
 
-The priority chain is: **dev UI override** > **script `dither`** > **device config `dither`** > **default (`graphics`)**.
+The priority chain is: **override** > **the device's `final.dither`** >
+**script `dither`** > **device config `dither`** > **default (`atkinson`)**.
+The device's bare `dither:` is a default a screen may override; its `final:`
+block is the veto nothing overrides. See
+[Settings order](../guide/configuration.md#settings-order-defaults-and-vetoes).
 
 ### Dither Tuning
 
@@ -258,14 +262,18 @@ Fine-tune dithering behavior with these parameters, settable at multiple levels:
 
 | Parameter | Description | Typical range |
 |-----------|-------------|---------------|
-| `error_clamp` | Limits error diffusion amplitude. Lower values reduce oscillation. | 0.05 – 0.5 |
+| `max_error` | Caps the accumulated diffusion error one pixel may carry. Lower values reduce oscillation; very low ones render saturated areas flat. | 0 – 2.0, default 1.0 |
 | `noise_scale` | Blue noise jitter scale. Higher values break worm artifacts more aggressively. | 0.3 – 1.0 |
 | `chroma_clamp` | Limits chromatic error propagation. Prevents color bleeding. | 0.5 – 5.0 |
 | `strength` | Scales diffused error before propagation. 0.0 = no diffusion, 1.0 = standard. | 0.0 – 2.0 |
 
 Use [dev mode](../guide/dev-mode.md) to find optimal values interactively, then commit them to your panel profile, device config, or Lua script for production use.
 
-Priority chain: **dev UI override** > **script return** > **device config** > **panel dither defaults** > **algorithm defaults**.
+Priority chain: **override** > **the device's `final:` block** > **script
+return** > **device config** > **panel dither defaults** > **algorithm
+defaults**. It is the same ladder for every render setting, and every render
+path walks it the same way — see
+[Settings order](../guide/configuration.md#settings-order-defaults-and-vetoes).
 
 Panel dither defaults are especially useful because optimal tuning is usually tied to the color palette (which is tied to the panel). Set them once in the panel profile and every device using that panel inherits good defaults. See [Panel Dither Defaults](../guide/configuration.md#panel-dither-defaults) for the config format.
 

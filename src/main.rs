@@ -23,8 +23,6 @@ struct Cli {
 enum Commands {
     /// Start the HTTP server
     Serve,
-    /// Start the HTTP server with dev mode (live reload, device simulator)
-    Dev,
     /// Render a screen directly to a PNG file
     Render {
         /// Device MAC address (determines which screen to render)
@@ -35,11 +33,20 @@ enum Commands {
         #[arg(short, long)]
         output: PathBuf,
 
-        /// Fallback render size when the device has no configured panel:
-        /// "og" (800x480) or "x" (1872x1404). A device whose `panel:` is set
-        /// renders at that panel's own dimensions and ignores this.
+        /// Fallback render size when no panel resolves: "og" (800x480) or
+        /// "x" (1872x1404). The CLI has no live device report, so this also
+        /// stands in for the reported Model: a panel whose `match:` equals it
+        /// is used for a device without `panel:`. A resolved panel renders at
+        /// its own dimensions.
         #[arg(short, long, default_value = "og")]
         device: String,
+
+        /// The Board string a real device would report (e.g. "trmnl_x").
+        /// The CLI has no live device report, so this stands in for it: a
+        /// panel whose `match:` equals it is used for a device without
+        /// `panel:`, ahead of the Model given by `--device`.
+        #[arg(long)]
+        board: Option<String>,
 
         /// Battery voltage (e.g., 4.12)
         #[arg(short, long)]
@@ -139,6 +146,7 @@ async fn main() -> anyhow::Result<()> {
             mac,
             output,
             device,
+            board,
             battery,
             rssi,
             firmware,
@@ -149,6 +157,7 @@ async fn main() -> anyhow::Result<()> {
             &mac,
             &output,
             &device,
+            board.as_deref(),
             battery,
             rssi,
             firmware,
@@ -165,7 +174,6 @@ async fn main() -> anyhow::Result<()> {
             list,
         }) => run_init_command(screens, fonts, config, all, force, list),
         Some(Commands::Serve) => run_server().await,
-        Some(Commands::Dev) => run_dev_server().await,
         None => {
             run_status_command();
             Ok(())
@@ -205,6 +213,7 @@ fn run_render_command(
     mac: &str,
     output: &PathBuf,
     device_type: &str,
+    board: Option<&str>,
     battery: Option<f32>,
     rssi: Option<i32>,
     firmware: Option<String>,
@@ -265,9 +274,7 @@ fn run_render_command(
             .and_then(|code| config.get_device_config_for_code(code))
     });
     let dc_colors = device_config.and_then(|dc| dc.colors.clone());
-    let dc_dither = device_config.and_then(|dc| dc.dither.clone());
-    let dc_panel = device_config.and_then(|dc| dc.panel.clone());
-    let panel = dc_panel.as_deref().and_then(|name| config.get_panel(name));
+    let panel = byonk::api::resolution::cli_panel_for(&config, device_config, board, device_type);
     let panel_colors = panel.map(|p| p.colors.clone());
 
     // The panel is part of that same chain: it knows its own dimensions, and
@@ -292,12 +299,6 @@ fn run_render_command(
     let measured: Option<Vec<(u8, u8, u8)>> = panel
         .and_then(|p| p.colors_actual.as_deref())
         .map(byonk::api::display::parse_colors_header);
-    // Pre-script chain for the final measured-colour resolution after the
-    // script runs — the CLI has no dev-override or header layer (see
-    // `resolve_render_params`'s doc comment).
-    let pre_script_measured_candidates: [byonk::api::display::MeasuredCandidate; 1] =
-        [(byonk::api::display::SRC_PANEL_ACTUAL, measured.clone())];
-
     // Create device context with all provided fields
     let device_context = DeviceContext {
         mac: mac.to_string(),
@@ -377,31 +378,39 @@ fn run_render_command(
         // No script runs on the unregistered path. `is_unregistered` is the
         // negation of `is_device_registered`, which is true iff
         // `device_config` resolves — so here `device_config` is always
-        // `None`, `panel` is always `None`, and
-        // `pre_script_measured_candidates` is always `[(SRC_PANEL_ACTUAL,
-        // None)]`. This call therefore always yields `SRC_NONE` with no
-        // colors and no warning; it's kept (rather than hardcoded) so this
-        // stays correct if the unregistered path ever grows a measured
-        // source of its own.
-        let measured = byonk::api::display::resolve_measured_colors(
-            cli_palette.len(),
-            &pre_script_measured_candidates,
-        );
-        if let Some(w) = &measured.warning {
+        // `None` and `panel` is always `None`: every rung is empty and the
+        // fallback palette wins. It still goes through the ladder (rather
+        // than being hardcoded) so this stays correct if the unregistered
+        // path ever grows a source of its own.
+        let params =
+            byonk::api::resolution::resolve_render(&byonk::api::resolution::RenderInputs {
+                over: Default::default(),
+                device_final: Default::default(),
+                screen: Default::default(),
+                device_base: Default::default(),
+                panel: Default::default(),
+                panel_dither: None,
+                fallback_palette: cli_palette.clone(),
+                fallback_colors_actual: None,
+                screen_default_refresh: 0,
+                override_source: byonk::api::display::SRC_RENDER_OPTS,
+            })
+            .into_params();
+        for w in &params.warnings {
             tracing::warn!(mac = %mac, "{w}");
         }
 
         (
             svg,
-            cli_palette,
-            None,
-            None,
-            None,
-            None,
-            None,
-            measured.colors,
-            measured.source,
-            byonk::models::GamutTuningValues::default(),
+            params.palette,
+            params.dither,
+            params.max_error,
+            params.noise_scale,
+            params.chroma_clamp,
+            params.strength,
+            params.measured_colors,
+            params.measured_source,
+            params.gamut,
             // The registration screen is byonk's own; it carries no screen
             // directive, so the panel's adaptive default applies.
             None,
@@ -415,54 +424,19 @@ fn run_render_command(
             // and mislabelled every variant that is not a script failure.
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        // device_config/panel/dc_colors/dc_dither/panel_colors/measured were
-        // already resolved once above (before the device context) and are
-        // reused here rather than looked up a second time.
-        let dc_tuning = byonk::models::DitherTuningValues {
-            deprecated_error_clamp: None,
-            max_error: device_config.and_then(|dc| dc.max_error),
-            noise_scale: device_config.and_then(|dc| dc.noise_scale),
-            chroma_clamp: device_config.and_then(|dc| dc.chroma_clamp),
-            strength: device_config.and_then(|dc| dc.strength),
-            gamut: device_config.map(|dc| dc.gamut.clone()).unwrap_or_default(),
-        };
-
-        // Resolve panel dither tuning for the effective algorithm
-        let panel_dither_config = panel.and_then(|p| p.dither.clone());
-        let effective_algo = script_result
-            .script_dither
-            .as_deref()
-            .or(dc_dither.as_deref());
-        let effective_algo_normalized = effective_algo.map(byonk::models::normalize_algorithm_name);
-        let panel_tuning = panel_dither_config
-            .as_ref()
-            .map(|pdc| pdc.resolve_for_algorithm(effective_algo_normalized.as_deref()))
-            .unwrap_or_default();
-
-        let script_tuning = byonk::models::DitherTuningValues {
-            deprecated_error_clamp: None,
-            max_error: script_result.script_max_error,
-            noise_scale: script_result.script_noise_scale,
-            chroma_clamp: script_result.script_chroma_clamp,
-            strength: script_result.script_strength,
-            gamut: script_result.script_gamut.clone().unwrap_or_default(),
-        };
-        let tuning = byonk::api::display::resolve_tuning(&script_tuning, &dc_tuning, &panel_tuning);
-
-        let mut render_warnings: Vec<String> = Vec::new();
-        let render_params = byonk::api::display::resolve_render_params(
-            script_result.script_colors.as_deref(),
-            script_result.script_colors_actual.as_deref(),
-            script_result.script_dither.as_deref(),
-            dc_colors.as_deref(),
-            dc_dither.as_deref(),
-            panel_colors.as_deref(),
-            &cli_palette,
-            &pre_script_measured_candidates,
-            &tuning,
-            &mut render_warnings,
-        );
-        for w in &render_warnings {
+        // device_config/panel were already resolved once above (before the
+        // device context) and are reused here rather than looked up a second
+        // time. `cli_render_inputs_for` derives the panel rung — colours,
+        // measurement and per-algorithm tuning — from the profile itself.
+        let render_params =
+            byonk::api::resolution::resolve_render(&byonk::api::resolution::cli_render_inputs_for(
+                device_config,
+                panel,
+                &script_result,
+                cli_palette.clone(),
+            ))
+            .into_params();
+        for w in &render_params.warnings {
             tracing::warn!(mac = %mac, "{w}");
         }
 
@@ -510,6 +484,7 @@ fn run_render_command(
     tracing::info!(
         measured_source = measured_source,
         use_actual = use_actual,
+        dither = ?dither,
         "CLI render measured-colour resolution"
     );
 
@@ -790,8 +765,7 @@ fn run_status_command() {
 
     // Commands section
     println!("\nCommands:");
-    println!("  byonk serve    Start the HTTP server");
-    println!("  byonk dev      Start server with dev mode (live reload)");
+    println!("  byonk serve    Start the HTTP server (dev UI at /dev, behind login)");
     println!("  byonk render   Render a screen to PNG file");
     println!("  byonk init     Extract embedded assets");
     println!("\nRun 'byonk --help' for more details.");
@@ -800,14 +774,12 @@ fn run_status_command() {
 /// Seed configured-but-empty asset directories, then run the one-time
 /// `byonk-builtin` -> `local` migration for pre-existing installs.
 ///
-/// Shared by `run_server` and `run_dev_server` so the two can't drift: a
-/// `byonk dev` run reads and writes the very same `SCREENS_DIR` and
-/// `config.yaml` a `byonk serve` run does, so skipping the migration in one
-/// of them leaves an unmigrated tree behind for the other (and, now that
-/// `byonk-builtin` no longer enumerates the `SCREENS_DIR` overlay, an
-/// unmigrated `byonk-builtin/<user-screen>` ref simply stops resolving).
+/// Called once by `run_server` on startup (the dev UI is now mounted inside
+/// the same server, under `/dev` — there is no separate `byonk dev` process
+/// any more to keep this in step with). Kept as its own function because the
+/// two steps must run in this order and both are best-effort: neither may
+/// prevent the server from starting.
 ///
-/// Both steps are best-effort: neither may prevent the server from starting.
 /// Order matters — the migration reads the `byonk-screens.yaml` manifest that
 /// seeding may have just written, and both must complete before app state is
 /// built from the config they may have rewritten.
@@ -891,12 +863,19 @@ async fn run_server() -> anyhow::Result<()> {
 
     // Create application state, injecting the add-on admin token (if any) into config.
     // Explicit BYONK_ADMIN_TOKEN env still wins (server resolves env before config.admin.token).
-    let mut config = byonk::models::AppConfig::load_from_assets(&asset_loader)?;
-    byonk::addon_options::apply_to_config(&addon, &mut config);
+    // Same loader as `reload_config`, so a reload can never produce a
+    // different config from the same files (see `load_config_with_addon_overlay`).
+    let config = byonk::server::load_config_with_addon_overlay(&asset_loader)?;
     let mut state = server::create_app_state_with_config(asset_loader, config)?;
     // Add-on mode = the options file was present and parsed. Gates global-config
     // admin writes to read-only (the add-on Options form is the sole editor).
     state.addon_mode = matches!(addon, byonk::addon_options::ReadResult::Parsed(_));
+
+    if state.file_watcher.is_active() {
+        tracing::info!("File watcher active for live reload");
+    } else {
+        tracing::warn!("File watcher not active - set SCREENS_DIR to enable live reload");
+    }
 
     // In add-on mode byonk owns its Home Assistant integration: write it into
     // the HA config dir and announce ourselves. Spawned so a slow or wedged
@@ -955,121 +934,35 @@ async fn run_server() -> anyhow::Result<()> {
         // Static file serving (production only)
         .nest_service("/static", ServeDir::new("./static"));
 
-    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    tracing::info!(addr = %bind_addr, "Byonk server listening");
-
-    axum::serve(listener, app).await?;
-
-    Ok(())
-}
-
-/// Run the HTTP server with dev mode (file watching, live reload)
-async fn run_dev_server() -> anyhow::Result<()> {
-    use axum::{
-        routing::{delete, get, post},
-        Router,
-    };
-    use byonk::api::dev::{
-        handle_delete_panel_colors, handle_dev_css, handle_dev_js, handle_dev_page, handle_events,
-        handle_render, handle_resolve_mac, handle_screens, handle_set_panel_colors, DevState,
-    };
-    use byonk::assets::AssetLoader;
-    use byonk::services::FileWatcher;
-
-    // Initialize tracing
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "byonk=debug,tower_http=debug".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
-    // Create asset loader with optional external paths from env vars
-    let screens_dir = std::env::var("SCREENS_DIR").ok().map(PathBuf::from);
-    let fonts_dir = std::env::var("FONTS_DIR").ok().map(PathBuf::from);
-    let config_file = std::env::var("CONFIG_FILE").ok().map(PathBuf::from);
-    let examples_dir_env = std::env::var("EXAMPLES_DIR").ok().map(PathBuf::from);
-    let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
-
-    let asset_loader = Arc::new(
-        AssetLoader::new(screens_dir.clone(), fonts_dir.clone(), config_file.clone())
-            .with_examples_dir_override(examples_dir_env.clone()),
-    );
-
-    // Log asset sources
-    tracing::info!(
-        screens = ?screens_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
-        fonts = ?fonts_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
-        config = ?config_file.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "embedded".to_string()),
-        examples = ?asset_loader.examples_dir().map(|p| p.display().to_string()).unwrap_or_else(|| "none".to_string()),
-        "Asset sources configured"
-    );
-
-    // Seed empty configured directories, then migrate a pre-existing install —
-    // exactly as `run_server` does, so `byonk dev` and `byonk serve` leave the
-    // same SCREENS_DIR/config.yaml state behind.
-    seed_and_migrate(&asset_loader);
-
-    // Create file watcher for screens directory
-    let file_watcher = Arc::new(FileWatcher::new(screens_dir.clone()));
-    if file_watcher.is_active() {
-        tracing::info!("File watcher active for live reload");
-    } else {
-        tracing::warn!("File watcher not active - set SCREENS_DIR to enable live reload");
+    // Home Assistant Supervisor ingress listener: a second bind, on a
+    // separate address, that tags every request with `ViaIngress` so
+    // `require_dev`'s `admit()` can trust the Supervisor's own peer address
+    // instead of requiring a login. Only opened when the add-on sets
+    // `BYONK_INGRESS_ADDR`; standalone/Docker runs never bind it.
+    if let Ok(ingress_addr) = std::env::var("BYONK_INGRESS_ADDR") {
+        let ingress_app = server::ingress_app(app.clone());
+        let l = tokio::net::TcpListener::bind(&ingress_addr).await?;
+        tracing::info!(addr = %ingress_addr, "Byonk ingress listener");
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(
+                l,
+                ingress_app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            {
+                tracing::error!(error = %e, "ingress listener stopped");
+            }
+        });
     }
 
-    // Create shared dev overrides (shared between dev UI and production handlers)
-    let dev_overrides = server::DevOverrides::default();
-
-    // Create application state with shared overrides
-    let config = Arc::new(AppConfig::load_from_assets(&asset_loader)?);
-    let state = server::create_app_state_with_overrides(
-        asset_loader.clone(),
-        config.clone(),
-        dev_overrides.clone(),
-    )?;
-
-    // Create dev state sharing the same overrides
-    let dev_state = DevState {
-        config,
-        content_pipeline: state.content_pipeline.clone(),
-        content_cache: state.content_cache.clone(),
-        renderer: state.renderer.clone(),
-        file_watcher,
-        asset_loader,
-        screen_repo_manager: state.screen_repo_manager.clone(),
-        dev_overrides,
-    };
-
-    // Build dev routes as a nested router with DevState
-    let dev_router = Router::new()
-        .route("/", get(handle_dev_page))
-        .route("/dev.css", get(handle_dev_css))
-        .route("/dev.js", get(handle_dev_js))
-        .route("/screens", get(handle_screens))
-        .route("/events", get(handle_events))
-        .route("/render", get(handle_render))
-        .route("/resolve-mac", get(handle_resolve_mac))
-        .route("/panel-colors", post(handle_set_panel_colors))
-        .route("/panel-colors/{panel}", delete(handle_delete_panel_colors))
-        .with_state(dev_state);
-
-    // Build router: start with shared API routes, add dev routes
-    let app = server::build_router(state)
-        // OpenAPI documentation
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        // Static file serving
-        .nest_service("/static", ServeDir::new("./static"))
-        // Dev mode routes (nested with their own state)
-        .nest("/dev", dev_router);
-
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    tracing::info!(addr = %bind_addr, "Byonk dev server listening");
-    tracing::info!("Dev mode UI available at http://{}/dev", bind_addr);
-
-    axum::serve(listener, app).await?;
-
+    tracing::info!(addr = %bind_addr, "Byonk server listening");
+    tracing::info!("Dev UI at http://{}/dev/", bind_addr);
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -1078,15 +971,194 @@ mod tests {
     use super::*;
     use byonk::assets::AssetLoader;
 
-    /// Minor 5: `byonk dev` and `byonk serve` must leave the same on-disk
-    /// state behind. They do so by both calling `seed_and_migrate` and
-    /// nothing else — this asserts that helper really does both halves
-    /// (seed, then migrate), so "did `dev` migrate?" reduces to "does `dev`
-    /// call the helper?", which is checkable by reading two lines.
+    /// `byonk render --board trmnl_x` reaches the panel lookup as the Board.
+    #[test]
+    fn render_board_flag_picks_the_matching_panel() {
+        let cli = Cli::try_parse_from([
+            "byonk", "render", "-m", "AA:BB", "-o", "out.png", "--device", "x", "--board",
+            "trmnl_x",
+        ])
+        .unwrap();
+        let Some(Commands::Render { device, board, .. }) = cli.command else {
+            panic!("expected the render command");
+        };
+        let config: byonk::models::AppConfig = serde_yaml::from_str(
+            "panels:\n  trmnl_x: {name: X, match: trmnl_x, colors: '#000000,#FFFFFF'}\ndevices:\n  'AA:BB': {screen: local/a}\n",
+        )
+        .unwrap();
+        let dc = config.get_device_config("AA:BB");
+        let hit = byonk::api::resolution::cli_panel_for(&config, dc, board.as_deref(), &device);
+        assert_eq!(hit.map(|p| p.name.as_str()), Some("X"));
+        // Without the flag the Model "x" matches nothing.
+        assert!(byonk::api::resolution::cli_panel_for(&config, dc, None, &device).is_none());
+    }
+
+    /// Minimal screen-repo source: `ScriptResult` carries an `Arc` of one, and
+    /// the wiring test needs a result, not a repo.
+    struct NoRepo(byonk::models::screen_repo_manifest::ScreenRepoManifest);
+    impl byonk::services::screen_repo_loader::ScreenRepoSource for NoRepo {
+        fn read(&self, _rel: &str) -> Option<Vec<u8>> {
+            None
+        }
+        fn screen_paths(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn svg_files(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn manifest(&self) -> &byonk::models::screen_repo_manifest::ScreenRepoManifest {
+            &self.0
+        }
+        fn screen_files(&self, _screen_path: &str) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    /// Every binding gets a distinct value, so swapping ANY two rungs (or any
+    /// two slots) fails. `tests/render_cascade_convergence_test.rs` drives the
+    /// same function against the other four paths; this one pins the slots
+    /// one by one, which a whole-path comparison cannot localise.
+    #[test]
+    fn cli_render_inputs_for_assigns_each_binding_to_its_own_rung() {
+        use byonk::api::display::{parse_colors_header, SRC_RENDER_OPTS};
+        let manifest = byonk::models::screen_repo_manifest::ScreenRepoManifest::from_yaml(
+            "name: t\ndescription: d\nauthor: a\nlicense: MIT\n",
+        )
+        .unwrap();
+        let script = byonk::services::content_pipeline::ScriptResult {
+            data: serde_json::Value::Null,
+            refresh_rate: 900,
+            script_refresh_rate: None,
+            screen_default_refresh: 900,
+            skip_update: false,
+            screen_name: "t".into(),
+            source: Arc::new(NoRepo(manifest)),
+            screen_dir: String::new(),
+            params: Default::default(),
+            script_colors: Some(vec!["#000001".into(), "#FFFFFE".into()]),
+            script_colors_actual: Some(vec!["#010101".into(), "#FEFEFE".into()]),
+            script_dither: Some("sierra-lite".into()),
+            script_max_error: Some(0.11),
+            script_noise_scale: Some(0.12),
+            script_chroma_clamp: Some(0.13),
+            script_strength: Some(0.14),
+            script_gamut: None,
+            font_hinting: None,
+            logs: Vec::new(),
+        };
+        let device: byonk::models::DeviceConfig = serde_yaml::from_str(
+            r##"
+screen: local/x
+colors: "#000003,#FFFFFC"
+colors_actual: "#060606,#F9F9F9"
+dither: atkinson
+max_error: 0.71
+noise_scale: 0.72
+chroma_clamp: 0.73
+strength: 0.74
+final:
+  colors: "#000004,#FFFFFB"
+  colors_actual: "#050505,#FAFAFA"
+  dither: floyd_steinberg
+  max_error: 0.51
+  noise_scale: 0.52
+  chroma_clamp: 0.53
+  strength: 0.54
+"##,
+        )
+        .unwrap();
+        let panel: byonk::models::config::PanelConfig = serde_yaml::from_str(
+            r##"
+name: Test panel
+colors: "#000002,#FFFFFD"
+colors_actual: "#030303,#FCFCFC"
+"##,
+        )
+        .unwrap();
+        let panel_actual = parse_colors_header("#030303,#FCFCFC");
+        let fallback = parse_colors_header("#0A0A0A,#F0F0F0");
+        let i = byonk::api::resolution::cli_render_inputs_for(
+            Some(&device),
+            Some(&panel),
+            &script,
+            fallback.clone(),
+        );
+
+        // Override: the CLI has no setting flags, so the rung is empty.
+        assert_eq!(i.over.colors, None);
+        assert_eq!(i.over.colors_actual, None);
+        assert_eq!(i.over.dither, None);
+        assert_eq!(i.over.tuning.max_error, None);
+        assert_eq!(i.over.tuning.noise_scale, None);
+        assert_eq!(i.over.tuning.chroma_clamp, None);
+        assert_eq!(i.over.tuning.strength, None);
+        // Final: the device's `final:` block.
+        assert_eq!(
+            i.device_final.colors,
+            Some(parse_colors_header("#000004,#FFFFFB"))
+        );
+        assert_eq!(
+            i.device_final.colors_actual,
+            Some(parse_colors_header("#050505,#FAFAFA"))
+        );
+        assert_eq!(i.device_final.dither.as_deref(), Some("floyd_steinberg"));
+        assert_eq!(i.device_final.tuning.max_error, Some(0.51));
+        assert_eq!(i.device_final.tuning.noise_scale, Some(0.52));
+        assert_eq!(i.device_final.tuning.chroma_clamp, Some(0.53));
+        assert_eq!(i.device_final.tuning.strength, Some(0.54));
+        // Screen: the script's return value, normalised.
+        assert_eq!(
+            i.screen.colors,
+            Some(parse_colors_header("#000001,#FFFFFE"))
+        );
+        assert_eq!(
+            i.screen.colors_actual,
+            Some(parse_colors_header("#010101,#FEFEFE"))
+        );
+        assert_eq!(i.screen.dither.as_deref(), Some("sierra-lite"));
+        assert_eq!(i.screen.tuning.max_error, Some(0.11));
+        assert_eq!(i.screen.tuning.noise_scale, Some(0.12));
+        assert_eq!(i.screen.tuning.chroma_clamp, Some(0.13));
+        assert_eq!(i.screen.tuning.strength, Some(0.14));
+        // Device base: the device's bare settings.
+        assert_eq!(
+            i.device_base.colors,
+            Some(parse_colors_header("#000003,#FFFFFC"))
+        );
+        assert_eq!(
+            i.device_base.colors_actual,
+            Some(parse_colors_header("#060606,#F9F9F9"))
+        );
+        assert_eq!(i.device_base.dither.as_deref(), Some("atkinson"));
+        assert_eq!(i.device_base.tuning.max_error, Some(0.71));
+        assert_eq!(i.device_base.tuning.noise_scale, Some(0.72));
+        assert_eq!(i.device_base.tuning.chroma_clamp, Some(0.73));
+        assert_eq!(i.device_base.tuning.strength, Some(0.74));
+        // Panel: palette and measurement; tuning comes from panel_dither.
+        assert_eq!(i.panel.colors, Some(parse_colors_header("#000002,#FFFFFD")));
+        assert_eq!(i.panel.colors_actual, Some(panel_actual));
+        assert_eq!(i.panel.dither, None);
+        // Fallbacks; no firmware header on the CLI.
+        assert_eq!(i.fallback_palette, fallback);
+        assert_eq!(i.fallback_colors_actual, None);
+        assert_eq!(i.override_source, SRC_RENDER_OPTS);
+
+        // No device config: both device rungs are empty.
+        let none = byonk::api::resolution::cli_render_inputs_for(None, None, &script, fallback);
+        assert_eq!(none.device_final.dither, None);
+        assert_eq!(none.device_base.dither, None);
+        assert_eq!(none.device_base.tuning.strength, None);
+    }
+
+    /// `seed_and_migrate` must actually do both halves (seed, then migrate)
+    /// on the real `SCREENS_DIR`/`config.yaml` a `byonk serve` run uses —
+    /// historically a `byonk dev` run had its own copy of this logic and
+    /// could drift from `byonk serve`'s; now there is only one server mode
+    /// and one call site, but the migration behavior itself still needs
+    /// coverage.
     ///
     /// Non-vacuous: drop the `migrate_builtin_overlay_to_local` call from
-    /// `seed_and_migrate` (which is what `run_dev_server` effectively did
-    /// before this change) and the manifest/ref assertions fail.
+    /// `seed_and_migrate` and the manifest/ref assertions fail.
     #[test]
     fn seed_and_migrate_both_seeds_and_migrates() {
         let tmp = tempfile::tempdir().unwrap();

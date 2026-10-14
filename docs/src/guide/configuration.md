@@ -55,17 +55,26 @@ Each device entry maps a MAC address to a screen:
 | Property | Required | Description |
 |----------|----------|-------------|
 | `screen` | Yes | Qualified `handle/path` reference of the screen to display |
+| `name` | No | A friendly name for the device, shown in the dev UI and Home Assistant |
 | `params` | No | Key-value pairs passed to the Lua script |
 | `colors` | No | Override display palette (comma-separated hex RGB, e.g. `"#000000,#FFFFFF,#FF0000"`) |
+| `colors_actual` | No | **This one display's** measured colors, comma-separated hex RGB and index-parallel to `colors`. Overrides the panel profile's calibration, for the one panel that drifted. |
 | `dither` | No | Dithering algorithm (see [Dither Algorithms](#dither-algorithms) below) |
 | `panel` | No | Panel profile name (references `panels` section) |
 | `max_error` | No | Caps how much accumulated dithering error one pixel may carry (e.g. `1.0`, the default). Lower values suppress error diffusion; very low values make saturated areas render flat. |
 | `noise_scale` | No | Blue noise jitter scale (e.g. `0.6`). Controls noise modulation strength. |
 | `chroma_clamp` | No | Chroma clamp for dithering. Limits chromatic error propagation. |
 | `strength` | No | Error diffusion strength (0.0–2.0, default 1.0). Lower = less dithering texture. |
+| `refresh` | No | Refresh interval in seconds; `0` means "unset". A screen's own `refresh_rate` overrides it — see [Settings order](#settings-order-defaults-and-vetoes). |
+| `gamut` | No | Gamut-compression block: `knee` (where compression begins, as a fraction of the reachable chroma limit), `amount` (`0` = none, `1` = full) and `max_compression` (a cap on the factor). |
+| `final` | No | The owner's **vetoes** — the same settings as above, but nothing overrides them. See [`final:`](#final--the-owners-veto). |
 | `temperature_profile` | No | Refresh profile sent to the device: `default` (the default), `a` or `b`. See [Ghosting](#ghosting) below. |
 | `maximum_compatibility` | No | Ask the device to force a full refresh on every update. No effect on a TRMNL X. See [Ghosting](#ghosting). |
 | `min_png_bytes` | No | Pad the served image up to this many bytes. Only useful on a TRMNL X; see [Ghosting](#ghosting). |
+
+These are the only keys a device entry accepts (plus the retired `error_clamp`, which is still read and reported). Anything else — a typo such as `dithr:`, or a key from another tool — stops byonk at startup with a message naming the device and the key, for example ``Invalid config.yaml: devices.kitchen: unknown field `dithr` ``. The same holds inside a device's `gamut:` block and inside `final:` (including `final.gamut`). A YAML merge key (`<<:`) inside a device entry is an error as well: it was never applied.
+
+If such a key reaches the file while byonk is running (a hand edit), byonk keeps running on the configuration it loaded, and every change made through the dev UI, the admin API or Home Assistant is refused with HTTP 400 and the same message, leaving your file untouched, until the key is fixed. A write whose own body carries an unknown key is refused with HTTP 422.
 
 ### Ghosting
 
@@ -231,6 +240,11 @@ The `dither` option selects which dithering algorithm to use. All algorithms per
 | Burkes | `"burkes"` | 7-neighbor kernel. Good balance of speed and quality. |
 
 For most screens, the default `"atkinson"` works well. Use `"atkinson-hybrid"` for chromatic palettes where Atkinson shows color drift. Use `"floyd-steinberg"` for photographic content. For sparse chromatic palettes (e.g. black/white/red/yellow), try `"jarvis-judice-ninke"` or `"sierra"` to reduce oscillation artifacts.
+
+A device's `dither:` is a **default**: a screen that names its own algorithm
+overrides it, because only the script knows what it just drew. To make the
+device's choice stick regardless, put it in the device's `final:` block — see
+[Settings order](#settings-order-defaults-and-vetoes).
 
 ## The Reserved DEFAULT Device
 
@@ -516,42 +530,8 @@ Resolution within a panel: per-algorithm value > flat default > None.
 
 Algorithm names accept aliases (e.g. `jjn` for `jarvis-judice-ninke`).
 
-The overall tuning priority chain is:
-
-| Priority | Source |
-|----------|--------|
-| 1 (highest) | Dev UI overrides |
-| 2 | Lua script return values |
-| 3 | Device config (`max_error`, `noise_scale`, `chroma_clamp`, `strength`) |
-| 4 | Panel dither defaults |
-| 5 (lowest) | Built-in per-algorithm defaults |
-
-That chain is for the tuning *values*. Choosing the **algorithm** puts the
-device above the screen instead:
-
-| Priority | Source |
-|----------|--------|
-| 1 (highest) | Dev UI override |
-| 2 | Device config `dither` |
-| 3 | Screen's Lua `dither` |
-| 4 (lowest) | `atkinson` |
-
-The algorithm suits the panel rather than the content, and an operator who
-sets it on the device cannot see a screen replacing it. A screen's `dither`
-still applies on any device that does not name one; when both do and they
-differ, Byonk logs which value was dropped.
-
-The **refresh interval** goes the other way, because only the script knows
-when its own content next changes:
-
-| Priority | Source |
-|----------|--------|
-| 1 (highest) | Screen's Lua `refresh_rate` (when greater than 0) |
-| 2 | Device config `refresh` |
-| 3 (lowest) | The screen's `meta.yaml` `refresh`, or 900 seconds |
-
-Byonk logs when a device's `refresh` is displaced by a screen, so an operator
-can see why their setting is inert.
+A panel's defaults are one rung of the ladder every render setting walks — see
+[Settings order](#settings-order-defaults-and-vetoes) below for the whole of it.
 
 ### Panel Assignment
 
@@ -569,6 +549,81 @@ devices:
 ```
 
 When a panel has `colors_actual`, the ditherer uses these measured values to model what the display really shows. Use [dev mode](dev-mode.md) to calibrate and find the right measured colors for your panel.
+
+## Settings order: defaults and vetoes
+
+**Every render setting resolves in one order, and every render path uses it.**
+There is one ladder, highest first:
+
+| Priority | Source | What it is |
+|----------|--------|------------|
+| 1 (highest) | Override | A live dev-UI experiment, or a caller's explicit request (`POST /dev/api/render`, the MCP `render_screen` tool). Never configuration. |
+| 2 | The device's `final:` block | **The owner's veto** — "whatever the screen says, on *this* display, no". |
+| 3 | The screen's Lua return values | The script is the only participant that can inspect the content it is about to render. |
+| 4 | The device, written directly under its key | **The owner's default** — which a screen may override. |
+| 5 | The panel profile | What the hardware is, shared by every device of that type. |
+| 6 (lowest) | Fallback | Byonk's own defaults, and the device's own firmware headers. A hardware self-report is evidence, not policy. |
+
+The settings on that ladder are `colors`, `colors_actual`, `dither`,
+`max_error`, `noise_scale`, `chroma_clamp`, `strength`, `gamut` and `refresh`.
+For the tuning *numbers*, the panel rung is the [panel dither
+defaults](#panel-dither-defaults) above and the fallback is the built-in
+per-algorithm default; for `colors` the fallback is the firmware's `Colors`
+header and then byonk's default palette; for `refresh` there is no panel rung,
+and the fallback is the screen's own `meta.yaml` `refresh`, or 900 seconds.
+
+Byonk logs when a device's `refresh` is displaced by a screen, so an operator
+can see why their setting is inert. For the whole ladder at once — every
+rung's value, and whether it won, was outranked or was rejected — render
+through `POST /dev/api/render` and read its `X-Byonk-Resolution` header, or ask
+the device preview for it with
+`GET /api/admin/devices/{key}/preview?resolution`.
+
+### `final:` — the owner's veto
+
+Settings written directly under a device are **defaults**: a screen may
+override them, because the script is the only participant that can inspect
+the content it is about to render. Settings under `final:` are **vetoes**:
+nothing overrides them.
+
+```yaml
+devices:
+  "AA:BB:CC:DD:EE:FF":
+    screen: local/weather
+    panel: trmnl_x
+
+    dither: floyd-steinberg    # a default — a screen may pick its own
+    strength: 0.9              # a default
+    colors_actual: '#1C5240,#00994D,#D8D8C8,#303030'   # this display's own measurement
+
+    final:
+      dither: atkinson         # a veto — no screen overrides this
+      refresh: 1800            # this panel runs on a battery
+```
+
+`final:` accepts the same settings as the base rung — `colors`,
+`colors_actual`, `dither`, `max_error`, `noise_scale`, `chroma_clamp`,
+`strength`, `refresh` and `gamut` — and nothing else: an unrecognised key
+there is a startup error naming the field, so a typo cannot silently do
+nothing. The settings written directly under a device are just as strict; see
+[Devices Section](#devices-section).
+
+`final.refresh` is the one way to hold a battery-powered display to an interval
+the owner chooses: it replaces whatever the screen asked for, in either
+direction, so a screen that wants a 60-second refresh gets 1800 seconds on the
+device above.
+
+Through the admin API or the MCP `configure_device` tool, `final:` merges field
+by field — setting `final.dither` does not wipe `final.strength` — and a field
+is removed with one dot: `clear: ["dither"]` removes the default,
+`clear: ["final.dither"]` the veto, `clear: ["final"]` the whole block. A bare
+name never touches `final:`.
+
+> **Home Assistant.** The integration's **Dither** control writes
+> `final.dither`, because what it shows has to be what the device renders. A
+> device last configured through an older integration holds a bare `dither:`
+> instead, so its Dither entity reads empty until you pick the value again.
+> See the [changelog](https://github.com/oetiker/byonk/blob/main/CHANGES.md).
 
 ## Customization & File Locations
 

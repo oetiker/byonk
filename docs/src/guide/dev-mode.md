@@ -305,6 +305,26 @@ Creating a file that already exists is reported rather than silently opening
 the existing one. `meta.yaml`, `script.lua` and `screen.svg` cannot be deleted
 — **−** stays disabled for them — and no single file may exceed 5 MB.
 
+### Asset files
+
+Files that are not text (an image, a font) are tabs too. Selecting one shows
+it instead of the editor: an image is displayed scaled to fit, with its name,
+pixel size and byte size; any other file shows its size and a **Download**
+link. An asset has no unsaved state and nothing to Save.
+
+- **−** deletes the selected asset (after a confirmation), as for a text file.
+- **Rename file** (the text-cursor icon) renames the selected file; the open
+  tab follows the new name, and a name that is already taken is reported in
+  the form. It is disabled for the three core files, and for a text file with
+  unsaved changes (save it first).
+- **+** has an **Upload…** button next to the name field. Pick one or several
+  files; if a name already exists byonk asks *Replace name?* before
+  overwriting. An uploaded `.lua`, `.yaml` or `.svg` becomes an ordinary text
+  tab afterwards. A batch triggers one preview render.
+
+In a read-only repo (the examples, a path or directory repo, an add-on managed
+one) assets can be viewed and downloaded, but not uploaded, renamed or deleted.
+
 ## Syntax checking
 
 Byonk can check a screen's files without rendering them: `meta.yaml` against

@@ -40,6 +40,9 @@ const ROUTES = {
   "GET api/file": "readFile",
   "PUT api/file": "writeFile",
   "DELETE api/file": "deleteFile",
+  "GET api/file/raw": "rawUrl",
+  "PUT api/file/raw": "putRaw",
+  "POST api/file/rename": "renameFile",
   "POST api/screen": "createScreen",
   "DELETE api/screen": "deleteScreen",
   "POST api/screen/copy": "copyScreen",
@@ -62,8 +65,6 @@ const ALLOWED_UNCALLED = {
   "/app.css": "the SPA stylesheet, loaded by index.html",
   "/lens.js": "static script loaded by the preview page, not an API",
   "/preview.html": "static preview page loaded in the iframe, not an API",
-  "/file/raw": "U18 server half; U19 adds the api.js exports and removes this entry",
-  "/file/rename": "U18 server half; U19 adds the api.js export and removes this entry",
 };
 
 /** Every `.route("<path>"` in a Rust source (the path may follow a newline). */

@@ -85,6 +85,43 @@ export async function writeFile(ref, name, text, etag) {
   return { etag: res.headers.get("ETag") };
 }
 
+/** URL of one file's raw bytes (an `<img src>` or a download link). `v` busts the cache. */
+export const rawUrl = (ref, name, v) => `api/file/raw?${qs({ ref, name, v })}`;
+
+/** The current etag of any file (text or binary), read with HEAD. */
+export async function rawEtag(ref, name) {
+  const res = await fetch(rawUrl(ref, name), { method: "HEAD" });
+  if (!res.ok) throw await fail(res);
+  return res.headers.get("ETag");
+}
+
+/**
+ * Write raw bytes (an asset). Same If-Match rules as `writeFile`: a null etag
+ * is `*`, "create, 412 if it exists"; an etag replaces.
+ */
+export async function putRaw(ref, name, body, etag) {
+  const res = await fetch(rawUrl(ref, name), {
+    method: "PUT",
+    headers: { "If-Match": etag ?? "*" },
+    body,
+  });
+  if (res.status === 412) throw new ConflictError();
+  if (res.status === 428) throw new PreconditionRequiredError();
+  if (!res.ok) throw await fail(res);
+  return { etag: res.headers.get("ETag") };
+}
+
+/** Rename one file inside its screen. 412 (`to` exists) is a ConflictError. */
+export async function renameFile(ref, from, to) {
+  const res = await fetch("api/file/rename", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ref, from, to }),
+  });
+  if (res.status === 412) throw new ConflictError();
+  if (!res.ok) throw await fail(res);
+}
+
 export async function deleteFile(ref, name) {
   const res = await fetch(`api/file?${qs({ ref, name })}`, { method: "DELETE" });
   if (!res.ok) throw await fail(res);

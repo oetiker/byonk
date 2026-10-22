@@ -67,6 +67,32 @@ describe("api", () => {
         expectedMethod: "DELETE",
       },
       {
+        name: "rawUrl",
+        call: () => api.rawUrl("local/hello", "a b.png"),
+        expectedUrl: "api/file/raw?ref=local%2Fhello&name=a+b.png",
+        isStringBuilder: true,
+      },
+      {
+        name: "rawEtag",
+        call: () => api.rawEtag("local/hello", "a.png"),
+        expectedUrl: "api/file/raw?ref=local%2Fhello&name=a.png",
+        expectedMethod: "HEAD",
+      },
+      {
+        name: "putRaw",
+        call: () => api.putRaw("local/hello", "a.png", new Blob(["x"]), null),
+        expectedUrl: "api/file/raw?ref=local%2Fhello&name=a.png",
+        expectedMethod: "PUT",
+        responseStatus: 204,
+      },
+      {
+        name: "renameFile",
+        call: () => api.renameFile("local/hello", "a.png", "b.png"),
+        expectedUrl: "api/file/rename",
+        expectedMethod: "POST",
+        responseStatus: 204,
+      },
+      {
         name: "createScreen",
         call: () => api.createScreen("local", "test"),
         expectedUrl: "api/screen",

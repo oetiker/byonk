@@ -4,7 +4,9 @@
   import { screens } from "../state/screens.svelte.js";
   import { createEditor } from "../codemirror.js";
   import StatusBar from "./StatusBar.svelte";
-  import { Plus, Minus, X, Circle, TriangleAlert, Check, Save } from "@lucide/svelte";
+  import AssetViewer from "./AssetViewer.svelte";
+  import { Button } from "$lib/ui/button/index.js";
+  import { Plus, Minus, TextCursorInput, X, Circle, TriangleAlert, Check, Save } from "@lucide/svelte";
   import PaneHeader from "./PaneHeader.svelte";
   import DetailsToggle from "./DetailsToggle.svelte";
   import { details } from "../state/details.svelte.js";
@@ -154,9 +156,15 @@
    * looking at is the only unambiguous reading.
    */
   const deletableName = $derived(
-    canEdit && editor.active && !CORE_FILES.includes(editor.active.name)
-      ? editor.active.name
+    canEdit && editor.selectedName && !CORE_FILES.includes(editor.selectedName)
+      ? editor.selectedName
       : null,
+  );
+
+  // Rename acts on the same file as delete, but refuses a text buffer with
+  // unsaved edits: the rename would have to carry them along, or lose them.
+  const renamableName = $derived(
+    deletableName && !(!editor.asset && fileDirty) ? deletableName : null,
   );
 
   /**
@@ -166,6 +174,7 @@
    * different file than the one it names. Switching screens closes it.
    */
   let ask = $state(null);
+  let uploadInput = $state(null);
   let askRef = null;
 
   function openForm(next) {
@@ -179,6 +188,49 @@
 
   function addFile() {
     openForm({ kind: "add" });
+  }
+
+  function renameFile() {
+    if (renamableName) openForm({ kind: "rename", name: renamableName });
+  }
+
+  async function submitRename(to) {
+    await editor.renameFile(ask.name, to);
+    if (!editor.error) ask = null;
+  }
+
+  // Upload: every file is a create-only PUT; names that exist are asked
+  // about one by one. The batch renders once, when the last one is settled.
+  let uploaded = [];
+  async function onPick(e) {
+    const picked = [...(e.currentTarget.files ?? [])];
+    e.currentTarget.value = "";
+    uploaded = [];
+    const clashes = [];
+    for (const f of picked) {
+      const r = await editor.uploadFile(f);
+      if (r === "ok") uploaded.push(f.name);
+      else if (r === "exists") clashes.push(f);
+    }
+    ask = null;
+    await nextClash(clashes);
+  }
+
+  async function nextClash(queue) {
+    if (queue.length) {
+      ask = { kind: "replace", name: queue[0].name, queue };
+      return;
+    }
+    ask = null;
+    const names = uploaded;
+    uploaded = [];
+    await editor.finishUpload(names);
+  }
+
+  async function answerReplace(yes) {
+    const [file, ...rest] = ask.queue;
+    if (yes && (await editor.uploadFile(file, { replace: true })) === "ok") uploaded.push(file.name);
+    await nextClash(rest);
   }
 
   function deleteFile() {
@@ -236,6 +288,14 @@
         variant="outline"
         disabled={!canEdit}
         onclick={addFile}
+      />
+      <IconButton
+        icon={TextCursorInput}
+        label="Rename file"
+        tip={renamableName ? `Rename ${renamableName}` : "Select a renamable, saved file"}
+        variant="outline"
+        disabled={!renamableName}
+        onclick={renameFile}
       />
       <IconButton
         icon={Minus}
@@ -328,7 +388,7 @@
             <button
               type="button"
               role="tab"
-              aria-selected={t != null && t === editor.active}
+              aria-selected={!editor.asset && t != null && t === editor.active}
               class="flex h-full items-center gap-1 self-stretch whitespace-nowrap pl-2 aria-selected:font-semibold {t ? '' : 'pr-2'}"
               onclick={() =>
                 editor.open(editor.ref, f.name, {
@@ -367,12 +427,22 @@
             {/if}
           </div>
         {:else}
+          <!-- A binary: no buffer, so no dirty marker and no close button; the
+               viewer takes the editor's place while it is selected. -->
           <div
-            aria-disabled="true"
-            class="flex shrink-0 cursor-not-allowed items-center gap-1 border-r
-                   border-border px-2 text-muted-foreground opacity-60"
+            role="presentation"
+            class="flex h-full shrink-0 items-center gap-1 border-r border-b-2 border-r-border border-b-transparent
+                   text-muted-foreground has-aria-selected:border-b-primary has-aria-selected:bg-background has-aria-selected:text-foreground"
           >
-            {f.name} ({f.size})
+            <button
+              type="button"
+              role="tab"
+              aria-selected={editor.asset?.name === f.name}
+              class="flex h-full items-center gap-1 self-stretch whitespace-nowrap px-2 aria-selected:font-semibold"
+              onclick={() => editor.selectAsset(f.name)}
+            >
+              {f.name}
+            </button>
           </div>
         {/if}
       {/each}
@@ -380,6 +450,24 @@
   </PaneToolbar>
   {#if ask?.kind === "add"}
     <InlineNameForm label="New file name" onsubmit={submitAdd} oncancel={() => (ask = null)} />
+    <div class="flex items-center gap-1 border-b border-border p-1 text-xs">
+      <Button type="button" size="xs" variant="outline" onclick={() => uploadInput?.click()}>Upload…</Button>
+      <input bind:this={uploadInput} type="file" multiple hidden aria-label="Upload files" onchange={onPick} />
+      <span class="text-muted-foreground">or name a new empty text file above</span>
+    </div>
+  {:else if ask?.kind === "rename"}
+    <InlineNameForm label="Rename file" value={ask.name} submitLabel="Rename" onsubmit={submitRename} oncancel={() => (ask = null)} />
+    {#if editor.error?.op === "rename-file"}
+      <p role="alert" class="border-b border-border px-2 py-1 text-xs text-destructive">{editor.error.message}</p>
+    {/if}
+  {:else if ask?.kind === "replace"}
+    <InlineConfirm
+      label="Confirm replace"
+      message={`Replace ${ask.name}?`}
+      confirmLabel="Replace"
+      onconfirm={() => answerReplace(true)}
+      oncancel={() => answerReplace(false)}
+    />
   {:else if ask?.kind === "delete"}
     <InlineConfirm
       label="Confirm file deletion"
@@ -388,6 +476,9 @@
       oncancel={() => (ask = null)}
     />
   {/if}
-  <div bind:this={host} class="min-h-0 flex-1 overflow-auto"></div>
+  {#if editor.asset}
+    <AssetViewer asset={editor.asset} />
+  {/if}
+  <div bind:this={host} class="min-h-0 flex-1 overflow-auto" class:hidden={!!editor.asset}></div>
   <StatusBar />
 </div>

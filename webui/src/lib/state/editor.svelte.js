@@ -62,6 +62,15 @@ class Editor {
    */
   files = $state([]);
 
+  /**
+   * The selected binary entry, `{ref, name}`, or null. A binary file has no
+   * text buffer, so it is not in `tabs`; while this is set the pane shows the
+   * asset viewer instead of CodeMirror and no text tab counts as selected.
+   * `assetRev` busts the browser's image cache after the bytes change.
+   */
+  asset = $state(null);
+  assetRev = $state(0);
+
   /** `null` or `{ref, name, source: "save" | "watch"}` -- Task 10, spec §8.5. */
   conflict = $state(null);
 
@@ -147,6 +156,11 @@ class Editor {
     return new Set(this.report?.clean ?? []);
   }
 
+  /** The name of whatever the strip shows as selected: an asset, else the active tab. */
+  get selectedName() {
+    return this.asset?.name ?? this.active?.name ?? null;
+  }
+
   get active() {
     return this.tabs[this.activeIndex] ?? null;
   }
@@ -186,6 +200,7 @@ class Editor {
     this.ref = null;
     this.tabs = [];
     this.activeIndex = -1;
+    this.asset = null;
     this.conflict = null;
     this.error = null;
     this.moveDraft = null;
@@ -215,11 +230,18 @@ class Editor {
     const found = this.tabs.findIndex((t) => t.ref === ref && t.name === name);
     if (found >= 0) {
       this.activeIndex = found;
+      this.asset = null;
       return;
     }
     const { text, etag } = await api.readFile(ref, name);
     this.tabs.push(makeTab(ref, name, text, etag, readOnly));
     this.activeIndex = this.tabs.length - 1;
+    this.asset = null;
+  }
+
+  /** Select a binary entry of the current screen: no buffer, just the viewer. */
+  selectAsset(name) {
+    if (this.ref) this.asset = { ref: this.ref, name };
   }
 
   /**
@@ -428,7 +450,82 @@ class Editor {
     }
     const i = this.tabs.findIndex((t) => t.ref === ref && t.name === name);
     if (i >= 0) this.close(i);
+    if (this.asset?.name === name) this.asset = null;
     await this.refreshFiles(ref);
+  }
+
+  /**
+   * Rename one file. The server owns the rules (core files 422, existing
+   * target 412). A clean open text tab follows the new name; the UI refuses
+   * a dirty one (a rename must not lose, or silently re-home, an unsaved
+   * buffer), and so does this, as a second guard. One render per rename.
+   */
+  async renameFile(from, to) {
+    const ref = this.ref;
+    if (!ref || !from || !to || from === to) return;
+    const tab = this.tabs.find((t) => t.ref === ref && t.name === from);
+    this.error = null;
+    if (tab?.dirty) {
+      this.error = { op: "rename-file", message: `save ${from} before renaming it` };
+      return;
+    }
+    try {
+      await api.renameFile(ref, from, to);
+    } catch (e) {
+      const message = e instanceof api.ConflictError ? `${to} already exists` : e.message;
+      this.error = { op: "rename-file", message };
+      return;
+    }
+    if (tab) {
+      tab.name = to;
+      tab.revision += 1;
+    }
+    if (this.asset?.name === from) this.asset = { ref, name: to };
+    this.assetRev += 1;
+    this.#wrote(from, { quiet: true });
+    this.#wrote(to);
+    await this.refreshFiles(ref);
+  }
+
+  /**
+   * Upload one file's bytes. `replace` first reads the current etag and
+   * overwrites; without it the PUT is create-only and an existing name comes
+   * back as "exists" so the caller can ask. Renders nothing itself: the
+   * caller ends a batch with `finishUpload`, which renders once.
+   * @returns {Promise<"ok" | "exists" | "failed">}
+   */
+  async uploadFile(file, { replace = false } = {}) {
+    const ref = this.ref;
+    if (!ref) return "failed";
+    this.error = null;
+    try {
+      const etag = replace ? await api.rawEtag(ref, file.name) : null;
+      await api.putRaw(ref, file.name, file, etag);
+    } catch (e) {
+      if (!replace && e instanceof api.ConflictError) return "exists";
+      const message = e instanceof api.ConflictError ? `${file.name} changed meanwhile` : e.message;
+      this.error = { op: "upload", message };
+      return "failed";
+    }
+    this.#wrote(file.name, { quiet: true });
+    return "ok";
+  }
+
+  /** End of an upload batch: refresh, render once, show the last file. */
+  async finishUpload(names) {
+    const ref = this.ref;
+    if (!ref || !names.length) return;
+    await this.refreshFiles(ref);
+    this.diskRevision += 1;
+    this.assetRev += 1;
+    // An open buffer of a replaced file: reload it, or raise the conflict
+    // banner when it has unsaved edits (same as the watcher does).
+    await Promise.all(names.map((name) => this.onFileChange({ ref, name })));
+    const last = names[names.length - 1];
+    const entry = this.files.find((f) => f.name === last);
+    if (!entry) return;
+    if (entry.text) await this.open(ref, last, { readOnly: false });
+    else this.selectAsset(last);
   }
 
   /**
@@ -441,6 +538,7 @@ class Editor {
   async refreshFiles(ref) {
     try {
       this.files = await api.listFiles(ref);
+      if (this.asset && !this.files.some((f) => f.name === this.asset.name)) this.asset = null;
     } catch (e) {
       screens.error = { op: "files", message: e?.message ?? String(e) };
     }
@@ -609,6 +707,7 @@ class Editor {
     const now = Date.now();
     const outside = (names ?? []).filter((n) => !(now - (this.#ownWrites.get(n) ?? -Infinity) < OWN_WRITE_ECHO_MS));
     if (outside.length) this.diskRevision += 1;
+    if (this.asset && outside.includes(this.asset.name)) this.assetRev += 1;
     const pending = [];
     for (const name of names ?? []) {
       for (const t of this.tabs) {

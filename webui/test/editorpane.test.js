@@ -272,20 +272,18 @@ describe("EditorPane renders editor.files (Task 1)", () => {
     screens.repos = [{ handle: "local", writable: true }];
   });
 
-  it("renders a binary entry disabled, not clickable, and it does not open on click", async () => {
+  it("renders a binary entry as a real tab that selects without reading text", async () => {
+    // R4 (disabled binary entries) is superseded by U19: assets are tabs.
     editor.files = [{ name: "logo.png", size: 1234, text: false }];
     const readFileSpy = vi.spyOn(api, "readFile");
 
-    const { getByText, queryByRole } = render(EditorPane);
+    const { getByRole } = render(EditorPane);
     flushSync();
 
-    const entry = getByText("logo.png (1234)");
-    expect(entry).toHaveAttribute("aria-disabled", "true");
-    // Not a tab, and not a button -- nothing to focus or activate.
-    expect(queryByRole("tab")).toBeNull();
-    expect(queryByRole("button", { name: /logo\.png/ })).toBeNull();
-
-    await fireEvent.click(entry);
+    const tab = getByRole("tab", { name: "logo.png" });
+    await fireEvent.click(tab);
+    flushSync();
+    expect(tab).toHaveAttribute("aria-selected", "true");
     expect(readFileSpy).not.toHaveBeenCalled();
   });
 

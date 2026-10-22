@@ -20,7 +20,7 @@ use crate::services::screen_repo_manager::ScreenRepoManager;
 
 /// Largest file `read_file`/`write_file` will handle. Guards against
 /// accidentally loading e.g. a stray multi-gigabyte asset into memory.
-const MAX_FILE_BYTES: usize = 5 * 1024 * 1024;
+pub const MAX_FILE_BYTES: usize = 5 * 1024 * 1024;
 
 /// A screen file's bytes plus enough metadata for the authoring UI/API to
 /// display it and detect edit conflicts.
@@ -67,6 +67,10 @@ pub enum StoreError {
     Traversal,
     /// `bytes` (write) or the on-disk file (read) exceeds `MAX_FILE_BYTES`.
     TooLarge,
+    /// The operation named one of the three files that define a screen
+    /// (`meta.yaml`, `script.lua`, `screen.svg`); raw upload and single-file
+    /// rename refuse them. Carries the offending name.
+    CoreFile(String),
     /// Any other I/O failure, stringified.
     Io(String),
 }
@@ -391,6 +395,15 @@ fn safe_rel(rel: &str) -> Result<PathBuf, StoreError> {
     Ok(out)
 }
 
+/// The three files that define a screen; they cannot be deleted, renamed or
+/// raw-uploaded. Compared case-insensitively on the whole relative name, so
+/// `sub/script.lua` is an ordinary asset.
+fn is_core_file(rel: &Path) -> bool {
+    const CORE: [&str; 3] = ["meta.yaml", "script.lua", "screen.svg"];
+    let name = rel.to_string_lossy();
+    CORE.iter().any(|d| name.eq_ignore_ascii_case(d))
+}
+
 /// Find the deepest ancestor of `path` (inclusive) that currently exists on
 /// disk. A screen's directory usually doesn't exist yet on its first write,
 /// so the write-path symlink guard canonicalizes the nearest *real* ancestor
@@ -574,6 +587,34 @@ impl ScreenStore {
         bytes: &[u8],
         if_match: Option<&str>,
     ) -> Result<String, StoreError> {
+        self.write_file_inner(screen_ref, file, bytes, if_match, false)
+    }
+
+    /// Write `bytes` verbatim to one asset file (binary or text), creating or
+    /// replacing it. Same guards and `if_match` semantics as `write_file`,
+    /// except that an existing binary target may be replaced (the caller
+    /// sends bytes, not text) and the three screen-defining files are
+    /// refused with `CoreFile` (edit those through `write_file`).
+    pub fn write_raw(
+        &self,
+        screen_ref: &str,
+        file: &str,
+        bytes: &[u8],
+        if_match: Option<&str>,
+    ) -> Result<String, StoreError> {
+        self.write_file_inner(screen_ref, file, bytes, if_match, true)
+    }
+
+    /// Shared guard sequence of `write_file` and `write_raw`; `raw` selects
+    /// the binary-friendly, core-file-refusing variant.
+    fn write_file_inner(
+        &self,
+        screen_ref: &str,
+        file: &str,
+        bytes: &[u8],
+        if_match: Option<&str>,
+        raw: bool,
+    ) -> Result<String, StoreError> {
         // Poisoning is not a correctness signal here — the guarded data is
         // the filesystem, not in-memory state a panicking thread could have
         // torn. Recover and proceed.
@@ -585,6 +626,9 @@ impl ScreenStore {
         let (handle, screen_path) = Self::split_ref(screen_ref)?;
         let rel = safe_rel(file)?;
         let base = self.resolve_writable_root(handle, screen_path)?;
+        if raw && is_core_file(&rel) {
+            return Err(StoreError::CoreFile(file.to_string()));
+        }
         let target = base.join(screen_path).join(&rel);
 
         // Guard + create the target's parent dir BEFORE any filesystem
@@ -600,7 +644,7 @@ impl ScreenStore {
         // `StoreError::BinaryOverwrite`).
         match std::fs::read(&target) {
             Ok(cur) => {
-                if std::str::from_utf8(&cur).is_err() {
+                if !raw && std::str::from_utf8(&cur).is_err() {
                     return Err(StoreError::BinaryOverwrite);
                 }
                 if let Some(expected) = if_match {
@@ -1066,6 +1110,44 @@ impl ScreenStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(StoreError::NotFound),
             Err(e) => return Err(StoreError::Io(e.to_string())),
         }
+        self.manager.rebuild_loader();
+        Ok(())
+    }
+
+    /// Rename one file inside a screen directory (`to` may name a
+    /// subdirectory of the screen). Refuses the screen-defining files on
+    /// either side (`CoreFile`), a missing source (`NotFound`) and an
+    /// existing target (`Conflict`); read-only repos report `ReadOnly` first.
+    pub fn rename_file(&self, screen_ref: &str, from: &str, to: &str) -> Result<(), StoreError> {
+        let _guard = self.mutation_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let (handle, screen_path) = Self::split_ref(screen_ref)?;
+        let from_rel = safe_rel(from)?;
+        let to_rel = safe_rel(to)?;
+        let base = self.resolve_writable_root(handle, screen_path)?;
+        for (rel, name) in [(&from_rel, from), (&to_rel, to)] {
+            if is_core_file(rel) {
+                return Err(StoreError::CoreFile(name.to_string()));
+            }
+        }
+        let src = base.join(screen_path).join(&from_rel);
+        let dst = base.join(screen_path).join(&to_rel);
+        // Guard both ends before touching either; only the destination's
+        // parent is created, and only once the checks below have passed.
+        Self::verify_writable_parent(&base, &src)?;
+        Self::verify_writable_parent(&base, &dst)?;
+        match std::fs::symlink_metadata(&src) {
+            Ok(m) if m.is_file() || m.file_type().is_symlink() => {}
+            Ok(_) => return Err(StoreError::NotFound),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(StoreError::NotFound),
+            Err(e) => return Err(StoreError::Io(e.to_string())),
+        }
+        match std::fs::symlink_metadata(&dst) {
+            Ok(_) => return Err(StoreError::Conflict),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(StoreError::Io(e.to_string())),
+        }
+        Self::ensure_writable_parent(&base, &dst)?;
+        std::fs::rename(&src, &dst).map_err(|e| StoreError::Io(e.to_string()))?;
         self.manager.rebuild_loader();
         Ok(())
     }
@@ -1935,6 +2017,111 @@ pub(crate) mod tests {
         let after = store.read_file("local/clock", "logo.png").unwrap();
         assert_eq!(after.bytes, original, "original binary bytes must survive");
         assert!(after.binary);
+    }
+
+    #[test]
+    fn write_raw_replaces_an_existing_binary_and_refuses_core_files() {
+        let (store, repo_root) = test_store_with_local();
+        store
+            .write_file("local/clock", "logo.png", &[0xFF, 0xD8, 0x00], None)
+            .unwrap();
+        let etag = store
+            .write_raw("local/clock", "logo.png", &[0x89, 0x50, 0xFF], None)
+            .unwrap();
+        assert_eq!(etag, super::etag(&[0x89, 0x50, 0xFF]));
+        assert_eq!(
+            std::fs::read(repo_root.join("clock/logo.png")).unwrap(),
+            [0x89, 0x50, 0xFF]
+        );
+        // etag mismatch still conflicts
+        assert!(matches!(
+            store.write_raw("local/clock", "logo.png", &[1], Some("nope")),
+            Err(StoreError::Conflict)
+        ));
+        for core in ["meta.yaml", "script.lua", "SCREEN.svg"] {
+            assert!(
+                matches!(
+                    store.write_raw("local/clock", core, b"x", None),
+                    Err(StoreError::CoreFile(_))
+                ),
+                "{core}"
+            );
+        }
+        // read-only is reported before anything else
+        assert!(matches!(
+            store.write_raw("byonk-builtin/default", "a.png", b"x", None),
+            Err(StoreError::ReadOnly { .. })
+        ));
+        assert!(matches!(
+            store.write_raw("local/clock", "../x.png", b"x", None),
+            Err(StoreError::Traversal)
+        ));
+    }
+
+    #[test]
+    fn rename_file_moves_an_asset_and_may_enter_a_subdirectory() {
+        let (store, repo_root) = test_store_with_local();
+        store
+            .write_file("local/clock", "a.png", &[0xFF, 0x00], None)
+            .unwrap();
+        store
+            .rename_file("local/clock", "a.png", "img/b.png")
+            .unwrap();
+        assert!(!repo_root.join("clock/a.png").exists());
+        assert_eq!(
+            std::fs::read(repo_root.join("clock/img/b.png")).unwrap(),
+            [0xFF, 0x00]
+        );
+    }
+
+    #[test]
+    fn rename_file_refuses_existing_target_missing_source_core_and_traversal() {
+        let (store, repo_root) = test_store_with_local();
+        store
+            .write_file("local/clock", "a.txt", b"a", None)
+            .unwrap();
+        store
+            .write_file("local/clock", "b.txt", b"b", None)
+            .unwrap();
+        store
+            .write_file("local/clock", "script.lua", b"s", None)
+            .unwrap();
+        assert!(matches!(
+            store.rename_file("local/clock", "a.txt", "b.txt"),
+            Err(StoreError::Conflict)
+        ));
+        assert_eq!(std::fs::read(repo_root.join("clock/b.txt")).unwrap(), b"b");
+        assert!(matches!(
+            store.rename_file("local/clock", "nope.txt", "c.txt"),
+            Err(StoreError::NotFound)
+        ));
+        assert!(matches!(
+            store.rename_file("local/clock", "script.lua", "c.lua"),
+            Err(StoreError::CoreFile(_))
+        ));
+        assert!(matches!(
+            store.rename_file("local/clock", "a.txt", "Meta.yaml"),
+            Err(StoreError::CoreFile(_))
+        ));
+        assert!(repo_root.join("clock/script.lua").exists());
+        assert!(matches!(
+            store.rename_file("local/clock", "a.txt", "../out.txt"),
+            Err(StoreError::Traversal)
+        ));
+        assert!(matches!(
+            store.rename_file("local/clock", "../a.txt", "z.txt"),
+            Err(StoreError::Traversal)
+        ));
+        assert!(repo_root.join("clock/a.txt").exists());
+    }
+
+    #[test]
+    fn rename_file_on_a_read_only_repo_is_refused() {
+        let (store, _repo_root) = test_store_with_local();
+        assert!(matches!(
+            store.rename_file("byonk-builtin/default", "a.png", "b.png"),
+            Err(StoreError::ReadOnly { .. })
+        ));
     }
 
     // --- Task 7: create / copy / rename / delete -------------------------

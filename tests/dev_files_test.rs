@@ -364,3 +364,236 @@ async fn empty_writable_repo_is_still_listed() {
         "`local` must be listed as writable so New/Copy can target it"
     );
 }
+
+async fn new_screen(app: &TestApp, name: &str) {
+    let r = app
+        .post_json(
+            "/dev/api/screen",
+            &[AUTH],
+            &format!(r#"{{"handle":"local","name":"{name}","starter":"minimal"}}"#),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+}
+
+const PNG_MAGIC: [u8; 8] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+#[tokio::test]
+async fn raw_get_serves_binary_with_type_and_hardening_headers() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(dir.path());
+    new_screen(&app, "pic").await;
+    std::fs::write(dir.path().join("local/pic/logo.png"), PNG_MAGIC).unwrap();
+
+    let r = app
+        .get_with_headers("/dev/api/file/raw?ref=local/pic&name=logo.png", &[AUTH])
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.bytes(), PNG_MAGIC);
+    assert_eq!(r.headers["content-type"], "image/png");
+    assert_eq!(r.headers["x-content-type-options"], "nosniff");
+    assert_eq!(r.headers["content-security-policy"], "sandbox");
+    assert_eq!(r.headers["cache-control"], "no-cache");
+    assert_eq!(r.headers["etag"].to_str().unwrap().len(), 64);
+
+    // A text file is served too, and svg gets its image type.
+    let t = app
+        .get_with_headers("/dev/api/file/raw?ref=local/pic&name=script.lua", &[AUTH])
+        .await;
+    assert_eq!(t.status, StatusCode::OK);
+    std::fs::write(dir.path().join("local/pic/a.svg"), "<svg/>").unwrap();
+    let v = app
+        .get_with_headers("/dev/api/file/raw?ref=local/pic&name=a.svg", &[AUTH])
+        .await;
+    assert_eq!(v.headers["content-type"], "image/svg+xml");
+    std::fs::write(dir.path().join("local/pic/x.bin"), [1u8]).unwrap();
+    let u = app
+        .get_with_headers("/dev/api/file/raw?ref=local/pic&name=x.bin", &[AUTH])
+        .await;
+    assert_eq!(u.headers["content-type"], "application/octet-stream");
+}
+
+#[tokio::test]
+async fn raw_get_missing_is_404_and_traversal_is_400() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(dir.path());
+    new_screen(&app, "pic").await;
+    let m = app
+        .get_with_headers("/dev/api/file/raw?ref=local/pic&name=nope.png", &[AUTH])
+        .await;
+    assert_eq!(m.status, StatusCode::NOT_FOUND);
+    let t = app
+        .get_with_headers("/dev/api/file/raw?ref=local/pic&name=../x.png", &[AUTH])
+        .await;
+    assert_eq!(t.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn raw_put_accepts_a_body_over_axums_2mb_default_and_rejects_over_5mib() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(dir.path());
+    new_screen(&app, "pic").await;
+
+    let big = vec![0xABu8; 4 * 1024 * 1024];
+    let w = app
+        .put_bytes(
+            "/dev/api/file/raw?ref=local/pic&name=big.bin",
+            &[AUTH, ("If-Match", "*")],
+            big.clone(),
+        )
+        .await;
+    assert_eq!(w.status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        std::fs::read(dir.path().join("local/pic/big.bin")).unwrap(),
+        big
+    );
+
+    let huge = vec![0u8; 5 * 1024 * 1024 + 1];
+    let w = app
+        .put_bytes(
+            "/dev/api/file/raw?ref=local/pic&name=huge.bin",
+            &[AUTH, ("If-Match", "*")],
+            huge,
+        )
+        .await;
+    assert_eq!(w.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(!dir.path().join("local/pic/huge.bin").exists());
+}
+
+#[tokio::test]
+async fn raw_put_if_match_rules_and_binary_replace() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(dir.path());
+    new_screen(&app, "pic").await;
+    let url = "/dev/api/file/raw?ref=local/pic&name=logo.png";
+
+    // Missing If-Match -> 428; non-ASCII -> 400.
+    assert_eq!(
+        app.put_bytes(url, &[AUTH], PNG_MAGIC.to_vec()).await.status,
+        StatusCode::PRECONDITION_REQUIRED
+    );
+
+    // `*` creates, then 412s on the existing file; bytes are verbatim.
+    let c = app
+        .put_bytes(url, &[AUTH, ("If-Match", "*")], PNG_MAGIC.to_vec())
+        .await;
+    assert_eq!(c.status, StatusCode::NO_CONTENT);
+    let etag = c.headers["etag"].to_str().unwrap().to_string();
+    assert_eq!(
+        std::fs::read(dir.path().join("local/pic/logo.png")).unwrap(),
+        PNG_MAGIC
+    );
+    assert_eq!(
+        app.put_bytes(url, &[AUTH, ("If-Match", "*")], vec![1])
+            .await
+            .status,
+        StatusCode::PRECONDITION_FAILED
+    );
+
+    // A wrong etag 412s; the right one replaces the (binary) file.
+    assert_eq!(
+        app.put_bytes(url, &[AUTH, ("If-Match", "deadbeef")], vec![2])
+            .await
+            .status,
+        StatusCode::PRECONDITION_FAILED
+    );
+    let r = app
+        .put_bytes(url, &[AUTH, ("If-Match", &etag)], vec![0xFF, 0xFE, 0x00])
+        .await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT);
+    assert_ne!(r.headers["etag"].to_str().unwrap(), etag);
+    assert_eq!(
+        std::fs::read(dir.path().join("local/pic/logo.png")).unwrap(),
+        vec![0xFF, 0xFE, 0x00]
+    );
+
+    // The text route still refuses to overwrite a binary asset.
+    let t = app
+        .put_text(
+            "/dev/api/file?ref=local/pic&name=logo.png",
+            &[AUTH, ("If-Match", "*")],
+            "x",
+        )
+        .await;
+    assert_eq!(t.status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn raw_put_refuses_core_files_and_read_only_repos() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(dir.path());
+    new_screen(&app, "pic").await;
+    let before = std::fs::read(dir.path().join("local/pic/script.lua")).unwrap();
+    let w = app
+        .put_bytes(
+            "/dev/api/file/raw?ref=local/pic&name=Script.lua",
+            &[AUTH, ("If-Match", "*")],
+            b"x".to_vec(),
+        )
+        .await;
+    assert_eq!(w.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        std::fs::read(dir.path().join("local/pic/script.lua")).unwrap(),
+        before
+    );
+
+    let ro = app
+        .put_bytes(
+            "/dev/api/file/raw?ref=byonk-builtin/default&name=a.png",
+            &[AUTH, ("If-Match", "*")],
+            vec![1],
+        )
+        .await;
+    assert_eq!(ro.status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn rename_route_status_codes() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = app(dir.path());
+    new_screen(&app, "pic").await;
+    std::fs::write(dir.path().join("local/pic/a.png"), PNG_MAGIC).unwrap();
+    std::fs::write(dir.path().join("local/pic/b.png"), [1u8]).unwrap();
+    let rename =
+        |from: &str, to: &str, r: &str| format!(r#"{{"ref":"{r}","from":"{from}","to":"{to}"}}"#);
+    let url = "/dev/api/file/rename";
+
+    let ok = app
+        .post_json(url, &[AUTH], &rename("a.png", "img/c.png", "local/pic"))
+        .await;
+    assert_eq!(ok.status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        std::fs::read(dir.path().join("local/pic/img/c.png")).unwrap(),
+        PNG_MAGIC
+    );
+    assert!(!dir.path().join("local/pic/a.png").exists());
+
+    let exists = app
+        .post_json(url, &[AUTH], &rename("b.png", "img/c.png", "local/pic"))
+        .await;
+    assert_eq!(exists.status, StatusCode::PRECONDITION_FAILED);
+    let missing = app
+        .post_json(url, &[AUTH], &rename("zzz.png", "q.png", "local/pic"))
+        .await;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+    let core_from = app
+        .post_json(url, &[AUTH], &rename("script.lua", "s.lua", "local/pic"))
+        .await;
+    assert_eq!(core_from.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let core_to = app
+        .post_json(url, &[AUTH], &rename("b.png", "meta.yaml", "local/pic"))
+        .await;
+    assert_eq!(core_to.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let trav = app
+        .post_json(url, &[AUTH], &rename("b.png", "../x.png", "local/pic"))
+        .await;
+    assert_eq!(trav.status, StatusCode::BAD_REQUEST);
+    let ro = app
+        .post_json(url, &[AUTH], &rename("a", "b", "byonk-builtin/default"))
+        .await;
+    assert_eq!(ro.status, StatusCode::CONFLICT);
+    let no_auth = app
+        .post_json(url, &[], &rename("a", "b", "local/pic"))
+        .await;
+    assert_ne!(no_auth.status, StatusCode::NO_CONTENT);
+}

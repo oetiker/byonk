@@ -94,6 +94,18 @@ pub struct DeleteFileArgs {
     pub file: String,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RenameFileArgs {
+    /// Screen reference, `handle/path`. Must be in a writable repo.
+    pub screen_ref: String,
+    /// Existing sibling asset, relative to the screen directory.
+    pub from: String,
+    /// New name, relative to the screen directory (may include a
+    /// subdirectory). Must not exist yet. meta.yaml / script.lua / screen.svg
+    /// cannot be the source or the target.
+    pub to: String,
+}
+
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct OkOutput {
     pub ok: bool,
@@ -214,6 +226,22 @@ impl ByonkMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let store = self.state.screen_store.clone();
         match blocking(move || store.delete_file(&a.screen_ref, &a.file)).await? {
+            Ok(()) => ok_json(OkOutput { ok: true }),
+            Err(e) => Ok(store_failure(e)),
+        }
+    }
+
+    #[tool(
+        description = "Rename one sibling asset inside a screen directory (the new name may \
+                          include a subdirectory). Refused when the target already exists. \
+                          meta.yaml, script.lua and screen.svg cannot be renamed or be the target."
+    )]
+    pub async fn rename_screen_file(
+        &self,
+        Parameters(a): Parameters<RenameFileArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let store = self.state.screen_store.clone();
+        match blocking(move || store.rename_file(&a.screen_ref, &a.from, &a.to)).await? {
             Ok(()) => ok_json(OkOutput { ok: true }),
             Err(e) => Ok(store_failure(e)),
         }

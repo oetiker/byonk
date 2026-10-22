@@ -123,6 +123,10 @@ pub(crate) fn store_failure(e: crate::services::screen_store::StoreError) -> Cal
                                directory), not over MCP."
             .to_string(),
         E::TooLarge => "file exceeds the 5 MB limit".to_string(),
+        E::CoreFile(name) => format!(
+            "'{name}' defines the screen (meta.yaml, script.lua, screen.svg) and cannot be \
+             renamed or replaced by this operation"
+        ),
         E::Io(m) => m,
     };
     CallToolResult::error(vec![ContentBlock::text(message)])

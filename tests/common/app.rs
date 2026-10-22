@@ -145,6 +145,20 @@ impl TestApp {
             .await
     }
 
+    /// Make a PUT request with an `application/octet-stream` body.
+    pub async fn put_bytes(
+        &self,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: Vec<u8>,
+    ) -> TestResponse {
+        let mut builder = Request::put(path).header("Content-Type", "application/octet-stream");
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        self.request(builder.body(Body::from(body)).unwrap()).await
+    }
+
     /// Send a request to the router
     async fn request(&self, request: Request<Body>) -> TestResponse {
         let response = self

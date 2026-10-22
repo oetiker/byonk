@@ -107,7 +107,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   screen repo with its fetch status and lets you add a git repo (URL, ref,
   write-only token), change it, fetch it again with **Update now** or delete
   it.
-  For a screen, Edit opens its files as tabs and saves your work; Preview
+  For a screen, Edit opens its files as tabs (images and other asset files
+  can be viewed, uploaded and renamed too) and saves your work; Preview
   renders it through the same pipeline the device uses and updates as you
   work, so a mistake in `script.lua`, `screen.svg` or `meta.yaml` shows up as
   a render error right next to the code, not after you ship it. Edit also
@@ -259,6 +260,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or an error image, neither of which resolved anything.
 
 ### Changed
+
+- **New MCP tool `rename_screen_file`** renames one asset file inside a screen directory (the new name may include a subfolder). It refuses an existing target and the three files that define a screen.
 
 - **A panel in `config.yaml` wider or taller than 4096 pixels now stops byonk from starting**, naming the panel and the key. No TRMNL panel is anywhere near the limit.
 

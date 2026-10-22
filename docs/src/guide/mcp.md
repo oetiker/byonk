@@ -78,6 +78,7 @@ Or as a JSON config block (the shape most MCP clients accept):
 | `rename_screen` | Move a screen to a different path within its repo. Every device whose `screen:` named the old reference is pointed at the new one in `config.yaml`, in the same call, and the result lists them (`rewritten_devices`). When devices use the screen and the config is embedded or read-only (no `CONFIG_FILE`), the rename is refused and nothing moves. |
 | `delete_screen` | Delete a screen and every file in its directory. |
 | `delete_screen_file` | Delete one sibling asset from a screen directory. |
+| `rename_screen_file` | Rename one sibling asset inside a screen directory (the new name may include a subfolder). Refused when the target exists; `meta.yaml`, `script.lua` and `screen.svg` cannot be renamed or be the target. |
 
 `create_screen`, `copy_screen` and `rename_screen` each take the screen's
 location inside a repo — `path`, `to_path` and `new_path` respectively. These

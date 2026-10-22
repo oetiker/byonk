@@ -457,7 +457,50 @@ async fn test_delete_screen_file_end_to_end() {
 }
 
 #[tokio::test]
-async fn test_tools_list_reports_exactly_the_14_authoring_tools() {
+async fn test_rename_screen_file_end_to_end() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = TestApp::new_admin_with_screens("secret", tmp.path());
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+    client
+        .call_tool(
+            "create_screen",
+            serde_json::json!({ "handle": "local", "path": "ren" }),
+        )
+        .await;
+    client
+        .call_tool(
+            "write_screen_file",
+            serde_json::json!({ "screen_ref": "local/ren", "file": "a.txt", "content": "x" }),
+        )
+        .await;
+
+    let renamed = client
+        .call_tool(
+            "rename_screen_file",
+            serde_json::json!({ "screen_ref": "local/ren", "from": "a.txt", "to": "img/b.txt" }),
+        )
+        .await;
+    assert_eq!(structured(&renamed)["ok"], true, "{renamed}");
+    let read = client
+        .call_tool(
+            "read_screen_file",
+            serde_json::json!({ "screen_ref": "local/ren", "file": "img/b.txt" }),
+        )
+        .await;
+    assert_ne!(read["isError"], serde_json::json!(true), "{read}");
+
+    let core = client
+        .call_tool(
+            "rename_screen_file",
+            serde_json::json!({ "screen_ref": "local/ren", "from": "img/b.txt", "to": "script.lua" }),
+        )
+        .await;
+    assert_eq!(core["isError"], true, "{core}");
+}
+
+#[tokio::test]
+async fn test_tools_list_reports_exactly_the_15_authoring_tools() {
     // Cleanup 5: McpTestClient::list_tools existed but was never called —
     // an entire `tools/list` response class had no coverage. Pin the
     // documented tool count and names down.
@@ -486,6 +529,7 @@ async fn test_tools_list_reports_exactly_the_14_authoring_tools() {
         "rename_screen",
         "delete_screen",
         "delete_screen_file",
+        "rename_screen_file",
         // render
         "render_screen",
         "validate_screen",
@@ -498,9 +542,9 @@ async fn test_tools_list_reports_exactly_the_14_authoring_tools() {
 
     assert_eq!(
         names, expected,
-        "tools/list must report exactly these 14 tools"
+        "tools/list must report exactly these 15 tools"
     );
-    assert_eq!(tools.len(), 14, "no duplicate tool names");
+    assert_eq!(tools.len(), 15, "no duplicate tool names");
 }
 
 #[tokio::test]

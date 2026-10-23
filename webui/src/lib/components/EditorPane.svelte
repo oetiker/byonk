@@ -201,37 +201,61 @@
 
   // Upload: every file is a create-only PUT; names that exist are asked
   // about one by one. The batch renders once, when the last one is settled.
-  let uploaded = [];
+  //
+  // The batch owns its screen `ref` (captured once: a screen switch mid-batch
+  // must not redirect later files) and ends exactly once, however the Replace
+  // questions end -- answered, cancelled, or cut off by another form or a
+  // screen switch (the effect below).
+  let batch = null;
   async function onPick(e) {
     const picked = [...(e.currentTarget.files ?? [])];
     e.currentTarget.value = "";
-    uploaded = [];
+    if (!editor.ref || !picked.length) return;
+    batch = { ref: editor.ref, uploaded: [], waiting: false };
+    const mine = batch;
     const clashes = [];
     for (const f of picked) {
-      const r = await editor.uploadFile(f);
-      if (r === "ok") uploaded.push(f.name);
+      const r = await editor.uploadFile(mine.ref, f);
+      if (r === "ok") mine.uploaded.push(f.name);
       else if (r === "exists") clashes.push(f);
     }
+    if (batch !== mine) return;
     ask = null;
     await nextClash(clashes);
   }
 
+  async function finishBatch() {
+    const b = batch;
+    batch = null;
+    if (b?.uploaded.length) await editor.finishUpload(b.ref, b.uploaded);
+  }
+
   async function nextClash(queue) {
     if (queue.length) {
+      batch.waiting = true;
       ask = { kind: "replace", name: queue[0].name, queue };
       return;
     }
     ask = null;
-    const names = uploaded;
-    uploaded = [];
-    await editor.finishUpload(names);
+    await finishBatch();
   }
 
   async function answerReplace(yes) {
+    const b = batch;
+    if (!b) return;
     const [file, ...rest] = ask.queue;
-    if (yes && (await editor.uploadFile(file, { replace: true })) === "ok") uploaded.push(file.name);
+    if (yes && (await editor.uploadFile(b.ref, file, { replace: true })) === "ok") b.uploaded.push(file.name);
+    if (batch !== b) return;
     await nextClash(rest);
   }
+
+  // Anything that ends the Replace questions other than answering them
+  // (another inline form, a screen switch) still finishes the batch.
+  $effect(() => {
+    const kind = ask?.kind;
+    const ref = editor.ref;
+    if (batch?.waiting && (kind !== "replace" || ref !== batch.ref)) untrack(() => finishBatch());
+  });
 
   function deleteFile() {
     if (deletableName) openForm({ kind: "delete", name: deletableName });

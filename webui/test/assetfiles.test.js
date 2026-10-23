@@ -217,3 +217,87 @@ describe("read-only screen", () => {
     }
   });
 });
+
+describe("upload batch lifecycle (fix round 1)", () => {
+  const f = (n) => new File([new Uint8Array([1])], n);
+  async function pick(files) {
+    await fireEvent.click(dom.getByRole("button", { name: "Add file" }));
+    const input = await dom.findByLabelText("Upload files");
+    await fireEvent.change(input, { target: { files } });
+  }
+
+  it("uses the batch's screen for every file after a screen switch", async () => {
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const put = vi.spyOn(api, "putRaw").mockImplementation(async (r, n) => {
+      if (n === "one.png") await gate;
+      return { etag: '"e"' };
+    });
+    render(EditorPane);
+    await pick([f("one.png"), f("two.png")]);
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+    editor.ref = "local/b";
+    release();
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+    expect(put.mock.calls.map((c) => c[0])).toEqual(["local/a", "local/a"]);
+  });
+
+  it("a cancelled Replace queue still refreshes and renders once for what was written", async () => {
+    vi.spyOn(api, "putRaw").mockImplementation(async (r, n) => {
+      if (n === "logo.png") throw new api.ConflictError();
+      listing.push({ name: n, size: 1, text: false });
+      return { etag: '"e"' };
+    });
+    render(EditorPane);
+    const before = editor.diskRevision;
+    await pick([f("new.png"), f("logo.png")]);
+    await dom.findByRole("form", { name: "Confirm replace" });
+    expect(editor.diskRevision).toBe(before);
+    // Another inline form opens: the question is dropped.
+    await fireEvent.click(dom.getByRole("button", { name: "Rename file" }).disabled ? dom.getByRole("button", { name: "Add file" }) : dom.getByRole("button", { name: "Rename file" }));
+    await waitFor(() => expect(dom.getByRole("tab", { name: "new.png" })).toBeTruthy());
+    expect(editor.diskRevision).toBe(before + 1);
+  });
+
+  it("a screen switch during the Replace question finishes without touching the new screen", async () => {
+    vi.spyOn(api, "putRaw").mockImplementation(async (r, n) => {
+      if (n === "logo.png") throw new api.ConflictError();
+      return { etag: '"e"' };
+    });
+    render(EditorPane);
+    const before = editor.diskRevision;
+    await pick([f("new.png"), f("logo.png")]);
+    await dom.findByRole("form", { name: "Confirm replace" });
+    editor.ref = "local/b";
+    await waitFor(() => expect(dom.queryByRole("form", { name: "Confirm replace" })).toBeNull());
+    expect(editor.diskRevision).toBe(before);
+  });
+
+  it("No skips that file and the batch still renders once", async () => {
+    const put = vi.spyOn(api, "putRaw").mockImplementation(async (r, n) => {
+      if (n === "logo.png") throw new api.ConflictError();
+      listing.push({ name: n, size: 1, text: false });
+      return { etag: '"e"' };
+    });
+    render(EditorPane);
+    const before = editor.diskRevision;
+    await pick([f("new.png"), f("logo.png")]);
+    const form = await dom.findByRole("form", { name: "Confirm replace" });
+    await fireEvent.click(within(form).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(editor.diskRevision).toBe(before + 1));
+    expect(put).toHaveBeenCalledTimes(2);
+  });
+
+  it("Escape on the question behaves like No", async () => {
+    vi.spyOn(api, "putRaw").mockRejectedValue(new api.ConflictError());
+    const etag = vi.spyOn(api, "rawEtag");
+    render(EditorPane);
+    const before = editor.diskRevision;
+    await pick([f("logo.png")]);
+    const form = await dom.findByRole("form", { name: "Confirm replace" });
+    await fireEvent.keyDown(form, { key: "Escape" });
+    await waitFor(() => expect(dom.queryByRole("form", { name: "Confirm replace" })).toBeNull());
+    expect(etag).not.toHaveBeenCalled();
+    expect(editor.diskRevision).toBe(before);
+  });
+});

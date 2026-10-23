@@ -494,8 +494,7 @@ class Editor {
    * caller ends a batch with `finishUpload`, which renders once.
    * @returns {Promise<"ok" | "exists" | "failed">}
    */
-  async uploadFile(file, { replace = false } = {}) {
-    const ref = this.ref;
+  async uploadFile(ref, file, { replace = false } = {}) {
     if (!ref) return "failed";
     this.error = null;
     try {
@@ -512,9 +511,10 @@ class Editor {
   }
 
   /** End of an upload batch: refresh, render once, show the last file. */
-  async finishUpload(names) {
-    const ref = this.ref;
-    if (!ref || !names.length) return;
+  async finishUpload(ref, names) {
+    // The batch's screen, captured at its start: if another screen is open
+    // now, the files are on disk but nothing here belongs to them.
+    if (!ref || !names.length || this.ref !== ref) return;
     await this.refreshFiles(ref);
     this.diskRevision += 1;
     this.assetRev += 1;

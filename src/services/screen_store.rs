@@ -3870,6 +3870,7 @@ pub(crate) mod tests {
 
         let config = AppConfig {
             panels: grey_panel(PanelDitherConfig {
+                algorithm: None,
                 defaults: DitherTuningValues {
                     strength: Some(0.0),
                     ..Default::default()
@@ -3907,6 +3908,7 @@ pub(crate) mod tests {
         );
         let config = AppConfig {
             panels: grey_panel(PanelDitherConfig {
+                algorithm: None,
                 defaults: DitherTuningValues::default(),
                 algorithms,
             }),
@@ -4169,6 +4171,7 @@ pub(crate) mod tests {
         // panel's block.
         let config = AppConfig {
             panels: grey_panel(PanelDitherConfig {
+                algorithm: None,
                 defaults: DitherTuningValues {
                     strength: Some(0.0),
                     ..Default::default()

@@ -295,6 +295,54 @@ async fn saving_without_colors_actual_or_dither_removes_both() {
     assert!(yaml.contains("# the six-colour one"), "{yaml}");
 }
 
+/// Task U22: `dither.algorithm` is the panel rung of `dither`. Save writes
+/// it (canonical name, an alias accepted), a later Save without it removes
+/// it, and the algorithm blocks beside it are kept.
+#[tokio::test]
+async fn saving_writes_and_removes_the_panel_dither_algorithm() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, config_path) = TestApp::new_with_config_yaml(COMMENTED_PANELS, dir.path());
+    let r = app
+        .post_json(
+            "/dev/api/panels/og/save",
+            &[AUTH],
+            r##"{"name":"TRMNL OG","colors":"#000000,#FFFFFF","colors_actual":"#1A1A1A,#D8D8D8","dither":{"algorithm":"Floyd_Steinberg","max_error":0.5,"atkinson":{"noise_scale":2.0}}}"##,
+        )
+        .await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+    let yaml = std::fs::read_to_string(&config_path).unwrap();
+    let p = panel_of(&yaml, "og");
+    assert_eq!(p["dither"]["algorithm"], "floyd-steinberg", "{yaml}");
+    assert_eq!(p["dither"]["atkinson"]["noise_scale"].as_f64(), Some(2.0));
+    assert!(yaml.contains("max_error: 0.5   # hand-tuned"), "{yaml}");
+
+    // The dev UI reads it back from the screens payload.
+    let r = app.get_with_headers("/dev/api/screens", &[AUTH]).await;
+    let json: serde_json::Value = r.json();
+    let og = json["panels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "og")
+        .unwrap()
+        .clone();
+    assert_eq!(og["dither"]["algorithm"], "floyd-steinberg", "{og}");
+
+    // Whole-rung: a Save without `algorithm` removes it.
+    let r = app
+        .post_json(
+            "/dev/api/panels/og/save",
+            &[AUTH],
+            r##"{"name":"TRMNL OG","colors":"#000000,#FFFFFF","colors_actual":"#1A1A1A,#D8D8D8","dither":{"max_error":0.5,"atkinson":{"noise_scale":2.0}}}"##,
+        )
+        .await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+    let yaml = std::fs::read_to_string(&config_path).unwrap();
+    let p = panel_of(&yaml, "og");
+    assert!(p["dither"].get("algorithm").is_none(), "{yaml}");
+    assert_eq!(p["dither"]["max_error"].as_f64(), Some(0.5));
+}
+
 #[tokio::test]
 async fn an_unknown_field_is_refused() {
     let dir = tempfile::tempdir().unwrap();
@@ -405,6 +453,8 @@ async fn saving_bad_colors_actual_or_tuning_is_a_400_that_leaves_the_file_alone(
             r#""dither":{"atkinson":{"gamut":{"amount":1e39}}}"#,
             "dither.atkinson.gamut.amount",
         ),
+        // Task U22: the panel rung's algorithm is checked like a device's.
+        (r#""dither":{"algorithm":"floyd"}"#, "dither.algorithm"),
     ];
     for (extra, field) in cases {
         let dir = tempfile::tempdir().unwrap();

@@ -12,7 +12,8 @@ export const NUMBER_FIELDS = [
   "max_error", "noise_scale", "chroma_clamp", "strength",
   "gamut.knee", "gamut.amount", "gamut.max_compression",
 ];
-export const PANEL_FIELDS = ["colors_actual", ...NUMBER_FIELDS];
+/** A panel's `dither` is its block's `algorithm` on the wire (U22). */
+export const PANEL_FIELDS = ["colors_actual", "dither", ...NUMBER_FIELDS];
 export const DEVICE_CASCADE_FIELDS = ["colors", "colors_actual", "dither", ...NUMBER_FIELDS, "refresh"];
 /** The Details block (U7): what names an entry, edited on Save only. */
 export const PANEL_IDENTITY_FIELDS = ["id", "name", "match", "width", "height", "colors"];
@@ -75,7 +76,7 @@ function nest(flat) {
   return out;
 }
 
-const SCALAR_DITHER_KEYS = new Set(["max_error", "noise_scale", "chroma_clamp", "strength", "gamut"]);
+const SCALAR_DITHER_KEYS = new Set(["algorithm", "max_error", "noise_scale", "chroma_clamp", "strength", "gamut"]);
 function algorithmsOf(dither) {
   const out = {};
   for (const [k, v] of Object.entries(dither ?? {})) if (!SCALAR_DITHER_KEYS.has(k)) out[k] = v;
@@ -110,7 +111,11 @@ class ConfigDraft {
     const info = this.#info(kind, id);
     if (kind === "panel") {
       return {
-        values: { panel: { colors_actual: info?.colors_actual ?? null, ...flatten(info?.dither, NUMBER_FIELDS) } },
+        values: { panel: {
+          colors_actual: info?.colors_actual ?? null,
+          dither: info?.dither?.algorithm ?? null,
+          ...flatten(info?.dither, NUMBER_FIELDS),
+        } },
         plain: {
           id: info?.id ?? id,
           name: info?.name ?? null,
@@ -222,8 +227,9 @@ class ConfigDraft {
   panelWire(id) {
     const info = this.#info("panel", id);
     const v = this.#current("panel", id).values.panel;
-    const { colors_actual, ...numbers } = v;
+    const { colors_actual, dither: algorithm, ...numbers } = v;
     const dither = { ...nest(numbers), ...algorithmsOf(info?.dither) };
+    if (algorithm) dither.algorithm = algorithm;
     const out = { colors: info?.colors };
     if (colors_actual !== null) out.colors_actual = colors_actual;
     if (Object.keys(dither).length) out.dither = dither;

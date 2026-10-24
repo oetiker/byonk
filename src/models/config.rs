@@ -225,8 +225,14 @@ impl DeviceConfig {
 /// `chroma_clamp`) become `defaults` and map-valued keys become per-algorithm
 /// overrides in `algorithms`.
 ///
+/// The reserved `algorithm` key names the panel's own algorithm: the panel
+/// rung of the `dither` cascade (task U22). The algorithm resolves first;
+/// its numbers are then looked up for the algorithm that WON, so a panel's
+/// per-algorithm block applies whichever rung chose that algorithm.
+///
 /// ```yaml
 /// dither:
+///   algorithm: floyd-steinberg   # the panel rung of `dither`
 ///   max_error: 0.1         # flat default for all algorithms
 ///   noise_scale: 5.0
 ///   floyd-steinberg:          # per-algorithm override
@@ -235,6 +241,10 @@ impl DeviceConfig {
 /// ```
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PanelDitherConfig {
+    /// The panel rung of `dither`, canonicalised on read
+    /// ([`normalize_algorithm_name`]). Like a device's `dither`, an unknown
+    /// name loads (and renders the engine default); the write APIs refuse it.
+    pub algorithm: Option<String>,
     pub defaults: DitherTuningValues,
     pub algorithms: HashMap<String, DitherTuningValues>,
 }
@@ -257,7 +267,9 @@ impl PanelDitherConfig {
     /// True when the block configures nothing at all. An algorithm entry
     /// that sets nothing configures nothing, and is not written back either.
     pub fn is_empty(&self) -> bool {
-        self.defaults.is_empty() && self.algorithms.values().all(DitherTuningValues::is_empty)
+        self.algorithm.is_none()
+            && self.defaults.is_empty()
+            && self.algorithms.values().all(DitherTuningValues::is_empty)
     }
 }
 
@@ -320,13 +332,16 @@ impl Serialize for TuningOut<'_> {
     }
 }
 
-/// The flat form `Deserialize` reads: scalars and `gamut` are the defaults,
-/// every other key is an algorithm (sorted by name, empty ones skipped).
-/// `error_clamp` is never written back.
+/// The flat form `Deserialize` reads: `algorithm` first, then scalars and
+/// `gamut` as the defaults; every other key is an algorithm (sorted by name,
+/// empty ones skipped). `error_clamp` is never written back.
 impl Serialize for PanelDitherConfig {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
         let mut m = s.serialize_map(None)?;
+        if let Some(algorithm) = &self.algorithm {
+            m.serialize_entry("algorithm", algorithm)?;
+        }
         write_tuning(&mut m, &self.defaults)?;
         let mut names: Vec<&String> = self
             .algorithms
@@ -364,11 +379,18 @@ impl<'de> Deserialize<'de> for PanelDitherConfig {
             where
                 M: MapAccess<'de>,
             {
+                let mut algorithm = None;
                 let mut defaults = DitherTuningValues::default();
                 let mut algorithms = HashMap::new();
 
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
+                        "algorithm" => {
+                            // Reserved: the panel rung of `dither`, never an
+                            // algorithm sub-map. A non-string is an error.
+                            let name: String = map.next_value()?;
+                            algorithm = Some(normalize_algorithm_name(name.trim()));
+                        }
                         "max_error" => {
                             defaults.max_error = Some(map.next_value()?);
                         }
@@ -401,6 +423,7 @@ impl<'de> Deserialize<'de> for PanelDitherConfig {
                 }
 
                 Ok(PanelDitherConfig {
+                    algorithm,
                     defaults,
                     algorithms,
                 })
@@ -1803,5 +1826,48 @@ gamut:
         assert!(PanelDitherConfig::default().is_empty());
         let one: PanelDitherConfig = serde_yaml::from_str("stucki:\n  strength: 0.5\n").unwrap();
         assert!(!one.is_empty());
+    }
+
+    /// Task U22: `algorithm` is the panel rung of the `dither` cascade, a
+    /// reserved scalar inside the block -- not an algorithm sub-map.
+    #[test]
+    fn a_panel_dither_block_carries_an_algorithm_name() {
+        let yaml =
+            "algorithm: Floyd_Steinberg\nmax_error: 1.0\nfloyd-steinberg:\n  noise_scale: 0.6\n";
+        let pdc: PanelDitherConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            pdc.algorithm.as_deref(),
+            Some("floyd-steinberg"),
+            "normalised"
+        );
+        assert!(!pdc.algorithms.contains_key("algorithm"));
+        assert_eq!(pdc.defaults.max_error, Some(1.0));
+        assert_eq!(pdc.algorithms["floyd-steinberg"].noise_scale, Some(0.6));
+
+        // Serialised first in the block, and read back unchanged.
+        let text = serde_yaml::to_string(&pdc).unwrap();
+        assert!(text.starts_with("algorithm: floyd-steinberg\n"), "{text}");
+        let json = serde_json::to_value(&pdc).unwrap();
+        assert_eq!(json["algorithm"], "floyd-steinberg");
+        let back: PanelDitherConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(back, pdc);
+
+        // A block that only names the algorithm is not empty.
+        let only: PanelDitherConfig = serde_yaml::from_str("algorithm: stucki\n").unwrap();
+        assert!(!only.is_empty());
+    }
+
+    #[test]
+    fn a_panel_dither_algorithm_must_be_a_string() {
+        let err = serde_yaml::from_str::<PanelDitherConfig>("algorithm:\n  strength: 0.5\n");
+        assert!(
+            err.is_err(),
+            "a map under `algorithm` is not an algorithm sub-map"
+        );
+        // A JSON number (the dev UI's wire) is refused. A YAML `3` is read as
+        // the string "3", exactly as a device's `dither: 3` is; it is then an
+        // unknown name, which the write APIs refuse.
+        let err = serde_json::from_str::<PanelDitherConfig>(r#"{"algorithm": 3}"#);
+        assert!(err.is_err(), "a number is not an algorithm name");
     }
 }

@@ -137,7 +137,7 @@ fn validate_screen_and_params(
 /// `svg_to_png`'s match ends in `_ => DitherAlgorithm::Atkinson` — so without
 /// this check a typo silently rendered Atkinson, and the only symptom was on
 /// the glass.
-fn validate_dither_name(name: &str, key: &str) -> Result<(), ApiError> {
+pub(crate) fn validate_dither_name(name: &str, key: &str) -> Result<(), ApiError> {
     let canonical = normalize_algorithm_name(name);
     if !DITHER_ALGORITHMS.contains(&canonical.as_str()) {
         return Err(ApiError::BadRequest(format!(

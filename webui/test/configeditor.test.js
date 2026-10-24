@@ -117,6 +117,19 @@ describe("ConfigEditor, panel schema", () => {
     expect(push).not.toHaveBeenCalled();
   });
 
+  it("offers the dither algorithm on the panel rung, with an unset option and a ladder (U22)", async () => {
+    render(ConfigEditor);
+    const sel = document.querySelector("#cfg-panel-dither");
+    expect(sel.tagName).toBe("SELECT");
+    expect([...sel.options].map((o) => o.value)).toEqual(["", "atkinson", "stucki"]);
+    expect(sel.value).toBe("");
+    expect(document.querySelector('[data-testid="ladder-dither"]')).toBeTruthy();
+    sel.value = "stucki";
+    await fireEvent.change(sel);
+    expect(configDraft.value("panel", "e1004", "panel", "dither")).toBe("stucki");
+    expect(dom.getByText("1 unsaved")).toBeTruthy();
+  });
+
   it("shows a ladder per setting from the shared store", () => {
     resolution.record({ strength: { effective: 1, from: "fallback", order: ["fallback"], rungs: { fallback: { value: 1, status: "winner" } } } }, "panel:e1004");
     render(ConfigEditor);

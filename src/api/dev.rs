@@ -437,11 +437,15 @@ pub struct PanelSave {
     pub dither: Option<PanelDitherConfig>,
 }
 
-/// A panel's `dither` block as Save receives it: the flat defaults and every
-/// per-algorithm sub-map get the number checks a device write gets, each
-/// error naming the field as the panel's YAML spells it.
+/// A panel's `dither` block as Save receives it: its `algorithm` gets the
+/// name check a device's `dither` gets, the flat defaults and every
+/// per-algorithm sub-map the number checks a device write gets, each error
+/// naming the field as the panel's YAML spells it.
 fn validate_panel_dither(d: &PanelDitherConfig) -> Result<(), ApiError> {
-    use crate::api::admin::write::validate_tuning_values;
+    use crate::api::admin::write::{validate_dither_name, validate_tuning_values};
+    if let Some(algorithm) = &d.algorithm {
+        validate_dither_name(algorithm, "dither.algorithm")?;
+    }
     validate_tuning_values(&d.defaults, "dither.")?;
     for (algorithm, tuning) in &d.algorithms {
         validate_tuning_values(tuning, &format!("dither.{algorithm}."))?;

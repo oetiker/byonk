@@ -412,11 +412,11 @@ has one section per setting in the render cascade. Each section has an input
 for each rung you are editing, and a ladder under them. Which sections you get
 depends on the subject:
 
-- A **panel** has `colors_actual` (with the swatch editor), the four tuning
-  numbers (`max_error`, `noise_scale`, `chroma_clamp`, `strength`) and the
-  `gamut` knobs. It has no algorithm picker and no `colors` section.
-- A **device** has all of those, plus `dither` (the algorithm), `colors` and
-  `refresh`.
+- A **panel** has `colors_actual` (with the swatch editor), `dither` (the
+  algorithm, saved as `dither.algorithm`), the four tuning numbers
+  (`max_error`, `noise_scale`, `chroma_clamp`, `strength`) and the `gamut`
+  knobs. It has no `colors` section.
+- A **device** has all of those, plus `colors` and `refresh`.
 
 - A **panel** edits its own rung, `panels.<id>` in `config.yaml`.
 - A **device** edits its base rung and its `final:` rung. Above them are the
@@ -504,8 +504,9 @@ physical display. Their controls are in the [config editor](#the-config-editor).
 
 ### Dither Algorithm Selection
 
-A device's `dither` section lets you try all 9 algorithms on your content (a
-panel has no algorithm of its own):
+The `dither` setting lets you try all 9 algorithms on your content, on a
+device's base or final rung or on the panel rung (a panel's
+`dither.algorithm`; "— (none)" leaves the rung unset):
 - `atkinson` (default) — Atkinson error diffusion (75% propagation)
 - `atkinson-hybrid` — Atkinson with hybrid propagation (100% achromatic / 75% chromatic)
 - `floyd-steinberg` — Floyd-Steinberg with blue noise jitter
@@ -622,8 +623,10 @@ what a real screen gets, not a tuning surface.
    in.
 5. **Save**, which writes `colors_actual` and the tuning numbers into
    `panels.<id>` in `config.yaml`.
-6. To choose the dither algorithm, pick the **device** in Library, set
-   `dither` there, and Save. That writes `devices.<key>`.
+6. To choose the dither algorithm for every device of the panel, set `dither`
+   on the panel and Save; that writes `panels.<id>.dither.algorithm`. For one
+   display only, pick the **device** in Library, set `dither` there, and Save.
+   That writes `devices.<key>`.
 
 ```yaml
 panels:
@@ -632,6 +635,7 @@ panels:
     colors: "#000000,#FFFFFF,#FF0000,#FFFF00"
     colors_actual: "#303030,#D0D0C8,#C04040,#D0D020"  # written by the panel's Save
     dither:
+      algorithm: atkinson-hybrid   # written by the panel's Save
       strength: 0.8    # written by the panel's Save
 
 devices:

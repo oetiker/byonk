@@ -482,11 +482,11 @@ panels:
 | `height` | No | Display height in pixels |
 | `colors` | Yes | Official palette colors (comma-separated hex) |
 | `colors_actual` | No | Measured/actual colors the panel really displays |
-| `dither` | No | Per-panel dither tuning defaults (see below) |
+| `dither` | No | Per-panel dither algorithm and tuning defaults (see below) |
 
 ### Panel Dither Defaults
 
-Panels can carry default dither tuning values that apply to all devices using that panel. This avoids repeating the same tuning in every device config entry.
+Panels can carry a default dither algorithm and default tuning values that apply to all devices using that panel. This avoids repeating the same settings in every device config entry.
 
 ```yaml
 panels:
@@ -495,6 +495,7 @@ panels:
     colors: "#000000,#FFFFFF,#FF0000,#FFFF00"
     colors_actual: "#303030,#D0D0C8,#C04040,#D0D020"
     dither:
+      algorithm: floyd-steinberg   # the panel's default algorithm
       max_error: 1.0         # flat default for all algorithms
       noise_scale: 5.0
       floyd-steinberg:          # per-algorithm override
@@ -505,10 +506,15 @@ panels:
 ```
 
 The `dither` section supports:
+- **`algorithm`**: the panel's default [dither algorithm](#dither-algorithms). It is the panel rung of `dither` in the [settings order](#settings-order-defaults-and-vetoes): it beats byonk's `atkinson` fallback and loses to the device, the screen, the device's `final:` block and a live override. Leave it out and the panel picks no algorithm.
 - **Flat keys** (`max_error`, `noise_scale`, `chroma_clamp`, `strength`): default values for all algorithms
 - **Algorithm sub-sections**: per-algorithm overrides that take priority over flat defaults
 
-Resolution within a panel: per-algorithm value > flat default > None.
+Resolution within a panel: per-algorithm value > flat default > None. The
+algorithm is resolved first; the sub-section used is the one for the algorithm
+that *won*, whichever rung chose it. A panel's own `algorithm` therefore brings
+its own sub-section with it, and a screen that picks another algorithm gets
+that algorithm's sub-section instead.
 
 > **`error_clamp` was renamed to `max_error` and is now ignored.**
 >
@@ -566,7 +572,8 @@ There is one ladder, highest first:
 
 The settings on that ladder are `colors`, `colors_actual`, `dither`,
 `max_error`, `noise_scale`, `chroma_clamp`, `strength`, `gamut` and `refresh`.
-For the tuning *numbers*, the panel rung is the [panel dither
+For `dither`, the panel rung is the panel's `dither.algorithm` and the fallback
+is `atkinson`. For the tuning *numbers*, the panel rung is the [panel dither
 defaults](#panel-dither-defaults) above and the fallback is the built-in
 per-algorithm default; for `colors` the fallback is the firmware's `Colors`
 header and then byonk's default palette; for `refresh` there is no panel rung,

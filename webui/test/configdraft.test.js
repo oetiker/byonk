@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { configDraft } from "../src/lib/state/configDraft.svelte.js";
+import { configDraft, SCHEMAS } from "../src/lib/state/configDraft.svelte.js";
 import { screens } from "../src/lib/state/screens.svelte.js";
 import { subject } from "../src/lib/state/subject.svelte.js";
 import * as api from "../src/lib/api.js";
@@ -321,5 +321,49 @@ describe("configDraft identity (U7)", () => {
     expect(configDraft.missing("panel", "e1004")).toEqual(["id", "name"]);
     configDraft.setPlain("device", "kitchen", "key", "");
     expect(configDraft.missing("device", "kitchen")).toEqual(["key"]);
+  });
+});
+
+describe("configDraft panel dither algorithm (U22)", () => {
+  beforeEach(() => {
+    screens.meta.panels[0].dither = {
+      algorithm: "floyd-steinberg", strength: 0.8, atkinson: { noise_scale: 2 },
+    };
+  });
+
+  it("dither is a panel field, read from dither.algorithm", () => {
+    expect(SCHEMAS.panel.fields).toContain("dither");
+    expect(configDraft.value("panel", "e1004", "panel", "dither")).toBe("floyd-steinberg");
+    expect(configDraft.dirtyCount("panel", "e1004")).toBe(0);
+  });
+
+  it("the render draft carries it as dither.algorithm, never as an algorithm block", () => {
+    configDraft.set("panel", "e1004", "panel", "dither", "stucki");
+    expect(configDraft.panelWire("e1004").dither).toEqual({
+      algorithm: "stucki", strength: 0.8, atkinson: { noise_scale: 2 },
+    });
+  });
+
+  it("Save sends it; a cleared algorithm is left out (= removed)", async () => {
+    const save = vi.spyOn(api, "savePanel").mockResolvedValue(null);
+    await configDraft.save("panel", "e1004");
+    expect(save.mock.calls[0][1].dither).toEqual({
+      algorithm: "floyd-steinberg", strength: 0.8, atkinson: { noise_scale: 2 },
+    });
+    configDraft.set("panel", "e1004", "panel", "dither", "");
+    expect(configDraft.dirty("panel", "e1004")).toEqual([{ rung: "panel", field: "dither" }]);
+    await configDraft.save("panel", "e1004");
+    expect(save.mock.calls[1][1].dither).toEqual({ strength: 0.8, atkinson: { noise_scale: 2 } });
+  });
+
+  it("a panel that names no algorithm sends none", () => {
+    screens.meta.panels[0].dither = { strength: 0.8 };
+    expect(configDraft.value("panel", "e1004", "panel", "dither")).toBe(null);
+    expect(configDraft.panelWire("e1004").dither).toEqual({ strength: 0.8 });
+  });
+
+  it("a Push carries a changed algorithm onto the override rung", () => {
+    configDraft.set("panel", "e1004", "panel", "dither", "stucki");
+    expect(configDraft.pushBody("panel", "e1004")).toEqual({ dither: "stucki" });
   });
 });

@@ -58,6 +58,11 @@ const DEVICE_SIGHTED: &str = "CC:DD:EE:FF:AA:BB";
 const SIGHTED_MODEL: &str = "cascade-model";
 const SCREEN: &str = "local/cascade";
 const PANEL: &str = "trmnl_x";
+/// Task U22: a device whose only `dither` comes from its panel's
+/// `dither.algorithm`, on a screen that sets no algorithm of its own.
+const DEVICE_PANEL_ALGO: &str = "DD:EE:FF:AA:BB:CC";
+const PLAIN_SCREEN: &str = "local/plain";
+const PANEL_ALGO: &str = "panel_algo";
 
 /// The panel's palette, deliberately NOT the 4-grey `DEFAULT_COLORS` every
 /// path falls back to: an identical value on the panel rung and the fallback
@@ -94,6 +99,16 @@ panels:
         noise_scale: 0.25
       stucki:
         noise_scale: 0.75
+  {PANEL_ALGO}:
+    name: Panel with an algorithm
+    colors: '{PANEL_COLORS}'
+    dither:
+      algorithm: floyd-steinberg   # the panel rung of `dither`
+      max_error: 1.0
+      atkinson:
+        noise_scale: 0.25
+      floyd-steinberg:
+        noise_scale: 0.6
 devices:
   '{DEVICE_VETO}':
     screen: {SCREEN}
@@ -119,6 +134,9 @@ devices:
     strength: 0.4
     gamut:
       amount: 0.6
+  '{DEVICE_PANEL_ALGO}':
+    screen: {PLAIN_SCREEN}
+    panel: {PANEL_ALGO}     # no `dither` on any device rung
 ",
         repo = dir.join("local").display(),
     )
@@ -133,13 +151,20 @@ const SCRIPT: &str =
 /// A `local` screen repo holding the one screen the fixture renders.
 fn scaffold(dir: &std::path::Path) {
     let repo = dir.join("local");
-    let screen = repo.join("cascade");
-    std::fs::create_dir_all(&screen).unwrap();
+    std::fs::create_dir_all(&repo).unwrap();
     std::fs::write(
         repo.join("byonk-screens.yaml"),
         "name: local\ndescription: Convergence fixture.\nauthor: test\nlicense: MIT\n",
     )
     .unwrap();
+    write_screen(&repo.join("cascade"), SCRIPT);
+    // Sets no algorithm and no tuning: the panel's `dither.algorithm` is the
+    // only `dither` on the ladder.
+    write_screen(&repo.join("plain"), "return { data = {} }\n");
+}
+
+fn write_screen(screen: &std::path::Path, script: &str) {
+    std::fs::create_dir_all(screen).unwrap();
     std::fs::write(
         screen.join("meta.yaml"),
         format!(
@@ -148,7 +173,7 @@ fn scaffold(dir: &std::path::Path) {
         ),
     )
     .unwrap();
-    std::fs::write(screen.join("script.lua"), SCRIPT).unwrap();
+    std::fs::write(screen.join("script.lua"), script).unwrap();
     std::fs::write(
         screen.join("screen.svg"),
         r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
@@ -230,6 +255,24 @@ fn expected_screen_wins() -> ExpectedParams {
         gamut_max_compression: None,
         palette_hex: PANEL_COLORS.to_string(),
         measured_hex: Some(PANEL_COLORS_ACTUAL.to_string()),
+    }
+}
+
+/// Task U22: no device rung and no screen sets `dither`, so the panel's
+/// `dither.algorithm` wins over the fallback -- and the panel's block for
+/// THAT algorithm applies (`noise_scale` 0.6, not atkinson's 0.25).
+fn expected_panel_algorithm() -> ExpectedParams {
+    ExpectedParams {
+        dither: Some("floyd-steinberg".to_string()),
+        max_error: Some(1.0),
+        noise_scale: Some(0.6),
+        chroma_clamp: None,
+        strength: None,
+        gamut_knee: None,
+        gamut_amount: None,
+        gamut_max_compression: None,
+        palette_hex: PANEL_COLORS.to_string(),
+        measured_hex: None,
     }
 }
 
@@ -420,7 +463,8 @@ impl Fixture {
             ..RenderOpts::default()
         };
         let store = self.state.screen_store.clone();
-        let result = tokio::task::spawn_blocking(move || store.render(SCREEN, opts))
+        let screen = dc.screen.clone();
+        let result = tokio::task::spawn_blocking(move || store.render(&screen, opts))
             .await
             .unwrap();
         assert!(result.error.is_none(), "{:?}", result.error);
@@ -511,6 +555,12 @@ async fn all_five_render_paths_resolve_identically() {
             DEVICE_SIGHTED,
             SIGHTED_MODEL,
             expected_screen_wins(),
+        ),
+        (
+            "a panel's `dither.algorithm` is the panel rung",
+            DEVICE_PANEL_ALGO,
+            "og",
+            expected_panel_algorithm(),
         ),
     ] {
         // `/api/display` runs first: it records the sighting the dev render

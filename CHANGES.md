@@ -381,6 +381,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole table, and the Lua API reference states it for every value a script can
   return.
 
+  A panel can now name its own default algorithm, as `algorithm:` inside its
+  `dither:` block (`panels.<id>.dither.algorithm`); it is the panel rung of
+  `dither`, between the device and byonk's `atkinson`, and it brings the
+  panel's own per-algorithm tuning block with it. The dev UI's panel editor
+  sets it with the same algorithm picker a device has.
+
   Two consequences are worth knowing even if you configure nothing:
 
   - **A device preview's script is now told the device's own tuning.** The

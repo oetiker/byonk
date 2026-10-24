@@ -451,8 +451,8 @@ pub struct RenderInputs<'a> {
     pub device_final: RungSettings,
     pub screen: RungSettings,
     pub device_base: RungSettings,
-    /// Colours only; the panel's tuning is per algorithm and comes from
-    /// `panel_dither` once the algorithm is known (spec §4.2).
+    /// Colours only; the panel's algorithm (its `dither.algorithm`) and its
+    /// per-algorithm tuning both come from `panel_dither` (spec §4.2).
     pub panel: RungSettings,
     pub panel_dither: Option<&'a PanelDitherConfig>,
     /// The model's default palette — this path's stand-in for the firmware
@@ -540,6 +540,15 @@ fn rejection_warnings(report: &SettingReport, override_source: &str) -> Vec<Stri
         .collect()
 }
 
+/// The panel rung of `dither`: the panel block's `algorithm` (task U22).
+///
+/// Read from `panel_dither`, the one panel input every path already passes
+/// both resolvers, so no call site can build a panel rung that forgets it.
+/// `RungSettings::dither` on the panel rung is never read.
+fn panel_algorithm(panel_dither: Option<&PanelDitherConfig>) -> Option<String> {
+    panel_dither.and_then(|p| p.algorithm.clone())
+}
+
 fn ladder_of<T: Clone>(
     i: &RenderInputs,
     pick: impl Fn(&RungSettings) -> Option<T>,
@@ -603,12 +612,13 @@ pub fn resolve_render(i: &RenderInputs) -> RenderResolution {
     report.insert("colors_actual", colors_actual.report(|c| hex_json(c)));
 
     // The algorithm before its numbers (spec §4.2). Compared canonically, so
-    // `Floyd_Steinberg` and `floyd-steinberg` are one value.
+    // `Floyd_Steinberg` and `floyd-steinberg` are one value. The panel rung
+    // is the panel block's `algorithm` (task U22).
     let dither = resolve(
         &ladder_of(
             i,
             |r| r.dither.as_deref().map(normalize_algorithm_name),
-            None,
+            panel_algorithm(i.panel_dither),
             Some("atkinson".to_string()),
         ),
         ORDER_DITHER,
@@ -619,9 +629,9 @@ pub fn resolve_render(i: &RenderInputs) -> RenderResolution {
         .effective
         .clone()
         .unwrap_or_else(|| "atkinson".to_string());
-    // The panel block is looked up for the CONFIGURED algorithm: with no
-    // rung setting `dither` that is `None`, which selects the panel's flat
-    // defaults only — what every other render path does today. `algo` (the
+    // The panel block is looked up for the CONFIGURED algorithm (the panel's
+    // own `algorithm` included): with no rung setting `dither` that is
+    // `None`, which selects the panel's flat defaults only. `algo` (the
     // fallback included) only names the engine defaults reported below.
     let panel_tuning = i
         .panel_dither
@@ -711,8 +721,8 @@ pub struct PreScriptInputs<'a> {
     /// The device's base rung; every field counts, its measured colours
     /// included (the renderer honours them, so the script is told them).
     pub device_base: RungSettings,
-    /// Colours and measured colours; its tuning comes from `panel_dither`
-    /// once the algorithm is known.
+    /// Colours and measured colours; its algorithm and tuning come from
+    /// `panel_dither`.
     pub panel: RungSettings,
     pub panel_dither: Option<&'a PanelDitherConfig>,
     pub fallback_palette: Vec<(u8, u8, u8)>,
@@ -791,7 +801,12 @@ pub fn resolve_pre_script(i: &PreScriptInputs) -> PreScriptContext {
     // concrete name — `"atkinson"` when nothing is configured — which is
     // what the script has always been shown.
     let algorithm = resolve(
-        &ladder(i, |r| r.dither.clone(), None, Some("atkinson".to_string())),
+        &ladder(
+            i,
+            |r| r.dither.clone(),
+            panel_algorithm(i.panel_dither),
+            Some("atkinson".to_string()),
+        ),
         ORDER_DITHER,
         accept_any,
     )
@@ -1069,6 +1084,7 @@ devices:
             },
         );
         let pdc = PanelDitherConfig {
+            algorithm: None,
             defaults: DitherTuningValues {
                 strength: Some(0.9),
                 ..Default::default()
@@ -1100,6 +1116,7 @@ devices:
             },
         );
         let pdc = PanelDitherConfig {
+            algorithm: None,
             defaults: DitherTuningValues {
                 strength: Some(0.9),
                 ..Default::default()
@@ -1116,6 +1133,95 @@ devices:
             "flat panel default, not the atkinson block"
         );
         assert_eq!(r.report["strength"].from, Rung::Panel);
+    }
+
+    /// Task U22: a panel with `dither.algorithm` sets the panel rung of
+    /// `dither`, and its per-algorithm block for THAT algorithm applies --
+    /// the sibling of the test above, for a panel that names one.
+    fn panel_naming(algorithm: &str) -> PanelDitherConfig {
+        let mut algorithms = HashMap::new();
+        for (name, strength) in [("floyd-steinberg", 0.3), ("stucki", 0.5)] {
+            algorithms.insert(
+                name.to_string(),
+                DitherTuningValues {
+                    strength: Some(strength),
+                    ..Default::default()
+                },
+            );
+        }
+        PanelDitherConfig {
+            algorithm: Some(algorithm.to_string()),
+            defaults: DitherTuningValues {
+                strength: Some(0.9),
+                ..Default::default()
+            },
+            algorithms,
+        }
+    }
+
+    #[test]
+    fn a_panel_algorithm_wins_over_the_fallback_and_brings_its_block() {
+        let pdc = panel_naming("floyd-steinberg");
+        let mut i = inputs();
+        i.panel_dither = Some(&pdc);
+        let r = resolve_render(&i);
+        assert_eq!(r.dither.as_deref(), Some("floyd-steinberg"));
+        let rep = &r.report["dither"];
+        assert_eq!(rep.from, Rung::Panel);
+        assert_eq!(rep.rungs[&Rung::Panel].status, RungStatus::Winner);
+        assert_eq!(rep.rungs[&Rung::Fallback].status, RungStatus::Outranked);
+        assert_eq!(
+            r.tuning.strength,
+            Some(0.3),
+            "the panel's own floyd-steinberg block"
+        );
+    }
+
+    #[test]
+    fn a_panel_algorithm_loses_to_every_rung_above_it() {
+        let pdc = panel_naming("floyd-steinberg");
+        type Set = fn(&mut RenderInputs);
+        let cases: [(Rung, Set); 4] = [
+            (Rung::DeviceBase, |i| {
+                i.device_base.dither = Some("stucki".into())
+            }),
+            (Rung::Screen, |i| i.screen.dither = Some("stucki".into())),
+            (Rung::DeviceFinal, |i| {
+                i.device_final.dither = Some("stucki".into())
+            }),
+            (Rung::Override, |i| i.over.dither = Some("stucki".into())),
+        ];
+        for (rung, set) in cases {
+            let mut i = inputs();
+            i.panel_dither = Some(&pdc);
+            set(&mut i);
+            let r = resolve_render(&i);
+            assert_eq!(r.dither.as_deref(), Some("stucki"), "{rung:?}");
+            let rep = &r.report["dither"];
+            assert_eq!(rep.from, rung);
+            assert_eq!(rep.rungs[&Rung::Panel].status, RungStatus::Outranked);
+            assert_eq!(
+                r.tuning.strength,
+                Some(0.5),
+                "the winner's block, not the panel algorithm's ({rung:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn the_script_is_told_the_panel_algorithm() {
+        let pdc = panel_naming("floyd-steinberg");
+        let pre = resolve_pre_script(&PreScriptInputs {
+            over: RungSettings::default(),
+            device_final: RungSettings::default(),
+            device_base: RungSettings::default(),
+            panel: RungSettings::default(),
+            panel_dither: Some(&pdc),
+            fallback_palette: grey4(),
+            fallback_colors_actual: None,
+        });
+        assert_eq!(pre.algorithm, "floyd-steinberg");
+        assert_eq!(pre.tuning.strength, Some(0.3));
     }
 
     #[test]
@@ -1227,9 +1333,8 @@ devices:
     }
 
     /// Build a `RenderInputs` in which exactly `rungs` carry values. The panel
-    /// rung supplies colours only — a panel has a `dither:` *block*, not an
-    /// algorithm name, and its numbers come from `panel_dither` once the
-    /// algorithm is known (spec §4.2).
+    /// rung supplies colours only here; a panel's algorithm and numbers come
+    /// from `panel_dither`, which the `panel_algorithm_*` tests cover.
     fn table_inputs(rungs: &[Rung]) -> RenderInputs<'static> {
         let (over, device_final, screen, device_base) = rung_inputs(rungs);
         let panel = if rungs.contains(&Rung::Panel) {
@@ -1279,9 +1384,10 @@ devices:
             "refresh",
         ];
         // Highest first. Peel one rung off the top at a time; the next must win.
-        // The panel and fallback rungs are per-setting (a panel has no `dither`,
-        // no `refresh`), so the walk stops at DeviceBase and the lower rungs get
-        // their own assertions below.
+        // The panel and fallback rungs are per-setting (a panel's `dither`
+        // lives in `panel_dither`, and a panel has no `refresh`), so the walk
+        // stops at DeviceBase; the lower rungs get their own assertions below
+        // and in the `a_panel_algorithm_*` tests.
         let ladder = [
             Rung::Override,
             Rung::DeviceFinal,
@@ -1520,6 +1626,7 @@ devices:
         algorithms.insert("sierra".to_string(), block(0.5));
         algorithms.insert("atkinson".to_string(), block(0.9));
         PanelDitherConfig {
+            algorithm: None,
             defaults: DitherTuningValues {
                 max_error: Some(0.1),
                 noise_scale: Some(9.0),

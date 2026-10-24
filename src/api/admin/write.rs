@@ -29,7 +29,8 @@ use super::require_admin;
 // `serde_yaml::Value`).
 //
 // Strict like the device entry it writes (owner ruling E4): an unknown key,
-// at the top or inside `gamut`, is a 400, never a silently dropped setting.
+// at the top or inside `gamut`, is refused (axum's JSON extractor answers
+// 422), never a silently dropped setting.
 #[derive(Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeviceWrite {
@@ -287,8 +288,11 @@ fn validate_gamut(g: &GamutTuningValues, name: &str) -> Result<(), ApiError> {
 pub(crate) fn validate_colors(colors: &str, key: &str) -> Result<(), ApiError> {
     let entries: Vec<&str> = colors.split(',').map(str::trim).collect();
     for entry in &entries {
-        let hex = entry.strip_prefix('#').unwrap_or(entry);
-        let valid = hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit());
+        // The documented `#RRGGBB` form, `#` included: the render path
+        // reads a bare `RRGGBB` too, but a written value is what the docs say.
+        let valid = entry
+            .strip_prefix('#')
+            .is_some_and(|hex| hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()));
         if !valid {
             return Err(ApiError::BadRequest(format!(
                 "`{key}` entry `{entry}` is not a #rrggbb color"

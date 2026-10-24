@@ -708,7 +708,7 @@ than a redirect when you are not admitted.
 | `DELETE /dev/api/file?ref=&name=` | Delete one file (not the core three) |
 | `GET /dev/api/file/raw?ref=&name=` | One file's bytes, text or binary, with its etag and a `Content-Type` guessed from the extension (`nosniff` and `Content-Security-Policy: sandbox` are set, so an SVG opened directly runs no script) |
 | `PUT /dev/api/file/raw?ref=&name=` | Write the request body verbatim, replacing a binary asset or creating one. `If-Match` rules as for `PUT /dev/api/file`. The core three are refused (`422`); up to 5 MiB (`413` beyond) |
-| `POST /dev/api/file/rename` | `{ref, from, to}`: rename one file inside its screen (`to` may name a subfolder). `204`; `412` if `to` exists, `404` if `from` is missing, `422` for a core file on either side |
+| `POST /dev/api/file/rename` | `{ref, from, to}`: rename one file inside its screen (`to` may name a subfolder). `204` (also when `to` equals `from`, which changes nothing; a rename that only changes letter case works on a case-insensitive file system too); `412` if `to` exists, `404` if `from` is missing, `422` for a core file on either side |
 | `POST /dev/api/screen` | Create a screen from a starter |
 | `DELETE /dev/api/screen?ref=` | Delete a screen |
 | `POST /dev/api/screen/copy` | Fork a screen into a writable repo |

@@ -3,7 +3,7 @@
 
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 
-.PHONY: all build release debug run clean docs docs-dev check fmt lint test ha-setup ha-check fonts fonts-setup fonts-check webui webui-test help
+.PHONY: all build release debug run run-release watch clean docs docs-dev docs-samples check fmt lint test coverage coverage-ci coverage-text ha-setup ha-check fonts fonts-setup fonts-check webui webui-test help
 
 # Default target
 all: release

@@ -252,7 +252,11 @@ fn split_doc(text: &str) -> SplitDoc {
 /// `### ` headings inside it.
 fn render_index(doc_uri: &str, doc: &SplitDoc) -> String {
     let mut out = doc.preamble.trim_end().to_string();
-    out.push_str("\n\n## Sections\n\nRead one section at a time: `<uri>`.\n");
+    out.push_str("\n\n## Sections\n\nRead one section at a time, by its URI");
+    match doc.sections.first() {
+        Some(first) => out.push_str(&format!(", e.g. `{doc_uri}/{}`.\n", first.slug)),
+        None => out.push_str(".\n"),
+    }
     for s in &doc.sections {
         out.push_str(&format!("\n- **{}** — `{doc_uri}/{}`\n", s.title, s.slug));
         for sub in &s.subheadings {
@@ -265,6 +269,17 @@ fn render_index(doc_uri: &str, doc: &SplitDoc) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_index_names_a_real_section_uri_not_a_placeholder() {
+        let doc = split_doc("# Doc\n\nIntro.\n\n## First Part\n\nA.\n\n## Second\n\nB.\n");
+        let index = render_index("byonk://reference/lua-api", &doc);
+        assert!(!index.contains("<uri>"), "{index}");
+        assert!(
+            index.contains("e.g. `byonk://reference/lua-api/first-part`"),
+            "{index}"
+        );
+    }
 
     #[test]
     fn slug_is_lowercase_dashed_and_trimmed() {

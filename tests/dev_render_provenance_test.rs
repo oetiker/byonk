@@ -143,6 +143,11 @@ panels:
     name: reTerminal E1004
     colors: '#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00'
     colors_actual: '#101010,#E8E8E8,#B03030,#D0C040,#3040A0,#00994D'
+  tall:
+    name: Tall
+    colors: '#000000,#FFFFFF'
+    width: 480
+    height: 800
 devices:
   kitchen:
     screen: local/gradient
@@ -155,6 +160,9 @@ devices:
     screen: local/plain
     final:
       strength: 0.4
+  hallway:
+    screen: local/plain
+    panel: tall
 ",
         dir.join("local").display()
     );
@@ -479,4 +487,63 @@ async fn the_reported_algorithm_is_the_rendered_algorithm() {
         configured_png, other_png,
         "different reported algorithm, same image"
     );
+}
+
+/// Width and height from a PNG's IHDR chunk.
+fn png_size(r: &common::app::TestResponse) -> (u32, u32) {
+    let b = r.bytes();
+    let be = |i: usize| u32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+    (be(16), be(20))
+}
+
+/// Task U24 (U20's dev.rs fix): with no width/height in the request, a
+/// panel that states its size decides the render's size, whether the panel
+/// is named or reached through the device; an explicit size still wins.
+#[tokio::test]
+async fn a_render_without_a_size_takes_the_panels_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = app(dir.path());
+    for (body, want) in [
+        (r#"{"screen":"local/plain","panel":"tall"}"#, (480, 800)),
+        (r#"{"device":"hallway"}"#, (480, 800)),
+        (
+            r#"{"screen":"local/plain","panel":"tall","width":400,"height":300}"#,
+            (400, 300),
+        ),
+    ] {
+        let r = app.post_json("/dev/api/render", &[AUTH], body).await;
+        assert!(r.status.is_success(), "{body}: {} {}", r.status, r.text());
+        assert!(r.is_png(), "{body}");
+        assert_eq!(png_size(&r), want, "{body}");
+    }
+}
+
+/// Task U24: the exact bodies the web UI builds (pinned in
+/// `webui/test/render-request.test.js`, "the UI-built draft bodies the
+/// server test posts") deserialize here, and each draft rung wins where the
+/// cascade says it should -- the panel draft's `dither.algorithm` included.
+#[tokio::test]
+async fn the_web_uis_own_draft_bodies_deserialize_and_win_their_rungs() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _) = app(dir.path());
+    let panel_body = r##"{"screen":"local/gradient","panel":"e1004","width":800,"height":480,"draft":{"panel":{"colors":"#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00","colors_actual":"#101010,#E8E8E8,#B03030,#D0C040,#3040A0,#00994D","dither":{"strength":0.8,"atkinson":{"max_error":0.5},"algorithm":"atkinson"}}},"simulated":{"params":{}},"view":{"use_actual":true}}"##;
+    let r = app.post_json("/dev/api/render", &[AUTH], panel_body).await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+    let res = resolution(&r);
+    assert_eq!(res["dither"]["effective"], "atkinson");
+    assert_eq!(res["dither"]["from"], "panel");
+    assert_eq!(res["dither"]["rungs"]["panel"]["status"], "winner");
+    assert_eq!(res["strength"]["from"], "panel");
+    assert_eq!(res["strength"]["effective"], 0.8);
+
+    let device_body = r##"{"device":"kitchen","screen":"local/gradient","width":800,"height":480,"draft":{"base":{"dither":"floyd-steinberg","refresh":600,"gamut":{"knee":0.7}},"final":{"strength":0.4},"params":{"greeting":"hi"}},"simulated":{},"view":{"use_actual":true}}"##;
+    let r = app.post_json("/dev/api/render", &[AUTH], device_body).await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+    let res = resolution(&r);
+    assert_eq!(res["dither"]["effective"], "floyd-steinberg");
+    assert_eq!(res["dither"]["from"], "device_base");
+    assert_eq!(res["gamut.knee"]["from"], "device_base");
+    assert_eq!(res["gamut.knee"]["effective"], 0.7);
+    assert_eq!(res["strength"]["from"], "device_final");
+    assert_eq!(res["strength"]["effective"], 0.4);
 }

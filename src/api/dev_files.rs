@@ -351,13 +351,11 @@ async fn put_with_if_match(
     Ok((StatusCode::NO_CONTENT, [(header::ETAG, etag)]).into_response())
 }
 
-const CORE_FILES: [&str; 3] = ["meta.yaml", "script.lua", "screen.svg"];
-
 async fn delete_file(
     State(s): State<AppState>,
     Query(q): Query<FileQuery>,
 ) -> Result<StatusCode, ApiError> {
-    if CORE_FILES.iter().any(|f| q.name.eq_ignore_ascii_case(f)) {
+    if crate::services::screen_store::is_core_file_name(&q.name) {
         return Err(ApiError::Unprocessable(format!(
             "{} cannot be deleted",
             q.name
@@ -379,6 +377,8 @@ struct RenameIn {
 
 /// Rename one file inside a screen directory. 204; 422 for a core file on
 /// either side, 412 when the target exists, 404 when the source is missing.
+/// A rename onto the same name is a 204 that changes nothing; a case-only
+/// rename works on a case-folding file system too.
 async fn rename_file(
     State(s): State<AppState>,
     Json(b): Json<RenameIn>,

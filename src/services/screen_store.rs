@@ -395,12 +395,55 @@ fn safe_rel(rel: &str) -> Result<PathBuf, StoreError> {
     Ok(out)
 }
 
+/// Whether `dst` is the very file `src` is under a name differing in case
+/// only -- what a case-folding file system reports for a case-only rename.
+/// On unix the device and inode must match too (a hard link under another
+/// spelling is a real conflict); Windows always folds case.
+fn same_file(src: &std::fs::Metadata, dst: &std::fs::Metadata, from: &Path, to: &Path) -> bool {
+    let case_only = from
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&to.to_string_lossy());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        case_only && src.dev() == dst.dev() && src.ino() == dst.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (src, dst);
+        case_only
+    }
+}
+
+/// Remove the directories a moved-out screen left empty, from `dir`'s
+/// parent upwards, stopping at the first one that still holds something
+/// and never touching `base` (the repo root) itself.
+fn prune_empty_parents(base: &Path, dir: &Path) {
+    let mut cur = dir.parent();
+    while let Some(d) = cur {
+        if d == base || !d.starts_with(base) {
+            break;
+        }
+        // `remove_dir` only removes an empty directory; anything else ends
+        // the walk.
+        if std::fs::remove_dir(d).is_err() {
+            break;
+        }
+        cur = d.parent();
+    }
+}
+
 /// The three files that define a screen; they cannot be deleted, renamed or
 /// raw-uploaded. Compared case-insensitively on the whole relative name, so
 /// `sub/script.lua` is an ordinary asset.
 fn is_core_file(rel: &Path) -> bool {
+    is_core_file_name(&rel.to_string_lossy())
+}
+
+/// `is_core_file` on a name as the caller spelled it: the one list of the
+/// screen-defining files, shared with the dev API's delete route.
+pub(crate) fn is_core_file_name(name: &str) -> bool {
     const CORE: [&str; 3] = ["meta.yaml", "script.lua", "screen.svg"];
-    let name = rel.to_string_lossy();
     CORE.iter().any(|d| name.eq_ignore_ascii_case(d))
 }
 
@@ -943,6 +986,7 @@ impl ScreenStore {
             let _ = std::fs::remove_dir_all(&to_dir);
             return Err(e);
         }
+        prune_empty_parents(&from_base, &from_dir);
         self.manager.rebuild_loader();
         Ok(format!("{to_handle}/{to_name}"))
     }
@@ -1026,6 +1070,7 @@ impl ScreenStore {
         std::fs::create_dir_all(new_parent).map_err(|e| StoreError::Io(e.to_string()))?;
 
         std::fs::rename(&old_dir, &new_dir).map_err(|e| StoreError::Io(e.to_string()))?;
+        prune_empty_parents(&base, &old_dir);
         Ok(format!("{handle}/{new_name}"))
     }
 
@@ -1091,11 +1136,7 @@ impl ScreenStore {
         // than "that file is undeletable".
         let base = self.resolve_writable_root(handle, screen_path)?;
 
-        const DEFINING: [&str; 3] = ["meta.yaml", "script.lua", "screen.svg"];
-        if DEFINING
-            .iter()
-            .any(|d| rel.to_string_lossy().eq_ignore_ascii_case(d))
-        {
+        if is_core_file(&rel) {
             return Err(StoreError::Io(format!(
                 "'{file}' defines the screen and cannot be deleted; use delete_screen to remove '{screen_ref}'"
             )));
@@ -1135,19 +1176,43 @@ impl ScreenStore {
         // parent is created, and only once the checks below have passed.
         Self::verify_writable_parent(&base, &src)?;
         Self::verify_writable_parent(&base, &dst)?;
-        match std::fs::symlink_metadata(&src) {
-            Ok(m) if m.is_file() || m.file_type().is_symlink() => {}
+        let src_meta = match std::fs::symlink_metadata(&src) {
+            Ok(m) if m.is_file() || m.file_type().is_symlink() => m,
             Ok(_) => return Err(StoreError::NotFound),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(StoreError::NotFound),
             Err(e) => return Err(StoreError::Io(e.to_string())),
+        };
+        // Renaming a file onto its own name changes nothing: a success.
+        if from_rel == to_rel {
+            return Ok(());
         }
-        match std::fs::symlink_metadata(&dst) {
+        // A case-only rename (`logo.png` -> `Logo.png`) on a file system that
+        // folds case finds the source itself at the destination. That is
+        // not a conflict; the rename goes through a temporary name, because
+        // a direct one may be a no-op there.
+        let case_only = match std::fs::symlink_metadata(&dst) {
+            Ok(d) if same_file(&src_meta, &d, &from_rel, &to_rel) => true,
             Ok(_) => return Err(StoreError::Conflict),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
             Err(e) => return Err(StoreError::Io(e.to_string())),
-        }
+        };
         Self::ensure_writable_parent(&base, &dst)?;
-        std::fs::rename(&src, &dst).map_err(|e| StoreError::Io(e.to_string()))?;
+        if case_only {
+            let tmp = src.with_file_name(format!(
+                ".byonk-rename-{}-{}",
+                std::process::id(),
+                src.file_name()
+                    .map(|n| n.to_string_lossy())
+                    .unwrap_or_default()
+            ));
+            std::fs::rename(&src, &tmp).map_err(|e| StoreError::Io(e.to_string()))?;
+            if let Err(e) = std::fs::rename(&tmp, &dst) {
+                let _ = std::fs::rename(&tmp, &src);
+                return Err(StoreError::Io(e.to_string()));
+            }
+        } else {
+            std::fs::rename(&src, &dst).map_err(|e| StoreError::Io(e.to_string()))?;
+        }
         self.manager.rebuild_loader();
         Ok(())
     }
@@ -2128,6 +2193,38 @@ pub(crate) mod tests {
             Err(StoreError::Traversal)
         ));
         assert!(repo_root.join("clock/a.txt").exists());
+    }
+
+    /// Renaming a file onto its own name changes nothing and succeeds; a
+    /// rename that only changes letter case works even where the file system
+    /// folds case (macOS, Windows), where the target "exists" as the source.
+    #[test]
+    fn rename_file_onto_itself_is_a_no_op_and_a_case_only_rename_works() {
+        let (store, repo_root) = test_store_with_local();
+        store
+            .write_file("local/clock", "logo.png", b"L", None)
+            .unwrap();
+        store
+            .rename_file("local/clock", "logo.png", "logo.png")
+            .expect("from == to is a no-op");
+        assert_eq!(
+            std::fs::read(repo_root.join("clock/logo.png")).unwrap(),
+            b"L"
+        );
+
+        store
+            .rename_file("local/clock", "logo.png", "Logo.png")
+            .expect("a case-only rename");
+        let names: Vec<String> = std::fs::read_dir(repo_root.join("clock"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"Logo.png".to_string()), "{names:?}");
+        assert!(!names.contains(&"logo.png".to_string()), "{names:?}");
+        assert_eq!(
+            std::fs::read(repo_root.join("clock/Logo.png")).unwrap(),
+            b"L"
+        );
     }
 
     #[test]

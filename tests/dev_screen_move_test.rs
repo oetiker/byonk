@@ -330,3 +330,28 @@ async fn a_config_that_cannot_be_written_undoes_the_move() {
     let listed = refs(&f).await;
     assert!(listed.contains(&"local/clock".to_string()), "{listed:?}");
 }
+
+/// Task U24: moving a nested screen out leaves no empty directories behind
+/// in the source repo -- up to, but never including, the repo root.
+#[tokio::test]
+async fn a_move_removes_the_empty_parents_it_leaves_behind() {
+    let f = fixture().await;
+    screen(&f.app, "local", "nest/deep/clock").await;
+    screen(&f.app, "local", "keep/sibling").await;
+    screen(&f.app, "local", "keep/moving").await;
+
+    let r = move_screen(&f, "local/nest/deep/clock", "shared", "clock").await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert!(!f.root.join("local/nest").exists(), "empty parents remain");
+    assert!(f.root.join("local/byonk-screens.yaml").is_file());
+
+    // A parent that still holds another screen stays.
+    let r = move_screen(&f, "local/keep/moving", "local", "moved").await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert!(f.root.join("local/keep/sibling/meta.yaml").is_file());
+
+    // The repo root itself is never removed, even when the move empties it.
+    let shared_only = move_screen(&f, "shared/clock", "local", "back").await;
+    assert_eq!(shared_only.status, StatusCode::OK, "{}", shared_only.text());
+    assert!(f.root.join("shared").is_dir());
+}

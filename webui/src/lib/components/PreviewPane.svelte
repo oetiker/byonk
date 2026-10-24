@@ -529,21 +529,30 @@
     </label>
   </PaneToolbar>
   <div data-testid="preview-region" aria-busy={busy ? "true" : "false"}
-       class="relative flex min-h-0 flex-1 items-center justify-center p-4">
-    <div class={`device-frame ${frameClass} flex items-center justify-center rounded-xl bg-muted p-6`}>
+       class="relative min-h-0 flex-1">
+    <!-- The scroll container. The frame is fitted to its WIDTH; a render whose
+         fitted height is taller (portrait panels) scrolls in here instead of
+         painting over the header and the simulated inputs. `my-auto` on the
+         frame centres a short one yet leaves a tall one scrollable to its top
+         (`items-center` would clip the top unreachably). The busy badge is a
+         sibling, so it stays put while this scrolls. The element is never
+         re-created, so a re-render keeps the scroll position. -->
+    <div data-testid="preview-scroll" class="flex h-full flex-col overflow-y-auto overflow-x-hidden p-4">
+    <div class={`device-frame ${frameClass} mx-auto my-auto flex max-w-full shrink-0 items-center justify-center rounded-xl bg-muted p-6`}>
       <div class="device-bezel rounded-lg bg-border p-3">
         <div class="screen-well overflow-hidden rounded-sm bg-background">
           <img
             bind:this={imgEl}
             alt="Screen preview"
             src={blobUrl}
-            class={`max-h-full max-w-full object-contain transition-opacity ${busy ? "opacity-50" : ""} ${frameClass === "og" ? "[image-rendering:pixelated]" : ""}`}
+            class={`h-auto max-w-full object-contain transition-opacity ${busy ? "opacity-50" : ""} ${frameClass === "og" ? "[image-rendering:pixelated]" : ""}`}
             onmouseenter={showLens}
             onmouseleave={hideLens}
             onmousemove={moveLens}
           />
         </div>
       </div>
+    </div>
     </div>
     {#if busy}
       <div role="status"

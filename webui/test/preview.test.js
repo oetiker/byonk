@@ -661,3 +661,67 @@ describe("PreviewPane measured inks", () => {
     expect(box().disabled).toBe(false);
   });
 });
+
+describe("PreviewPane tall render scrolls inside the region (U21)", () => {
+  const okResponse = () => ({ ok: true, headers: { get: () => null }, blob: async () => new Blob(["png"]) });
+  beforeEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    subject.reset();
+    screens.meta = { devices: [], dither_algorithms: [], panels: [] };
+    configDraft.reset();
+    simulate.reset();
+    simulate.error = null;
+    subject.select("screen", "local/a");
+  });
+  const has = (el, cls) => el.classList.contains(cls);
+
+  it("the region scrolls vertically, never horizontally, and clips to itself", async () => {
+    vi.spyOn(api, "renderPreview").mockResolvedValue(okResponse());
+    const { container } = render(PreviewPane);
+    const scroller = await screen.findByTestId("preview-scroll");
+    expect(has(scroller, "overflow-y-auto")).toBe(true);
+    expect(has(scroller, "overflow-x-hidden")).toBe(true);
+    expect(screen.getByTestId("preview-region").contains(scroller)).toBe(true);
+    expect(container.querySelector("img")).not.toBeNull();
+  });
+
+  it("the image is fitted to the width, not height-capped to the region", async () => {
+    vi.spyOn(api, "renderPreview").mockResolvedValue(okResponse());
+    const { container } = render(PreviewPane);
+    await screen.findByTestId("preview-scroll");
+    const img = container.querySelector("img");
+    expect(has(img, "max-w-full")).toBe(true);
+    expect(has(img, "max-h-full")).toBe(false);
+  });
+
+  it("the frame uses auto block margins: centred when short, top-anchored when tall", async () => {
+    vi.spyOn(api, "renderPreview").mockResolvedValue(okResponse());
+    const { container } = render(PreviewPane);
+    await screen.findByTestId("preview-scroll");
+    const frame = container.querySelector(".device-frame");
+    expect(has(frame, "my-auto")).toBe(true);
+    expect(has(frame, "shrink-0")).toBe(true);
+    expect(has(screen.getByTestId("preview-scroll"), "items-center")).toBe(false);
+  });
+
+  it("the busy badge lives outside the scrolling content", async () => {
+    let resolve;
+    vi.spyOn(api, "renderPreview").mockReturnValue(new Promise((r) => (resolve = r)));
+    render(PreviewPane);
+    const badge = await screen.findByRole("status", {}, { timeout: 1000 });
+    expect(screen.getByTestId("preview-scroll").contains(badge)).toBe(false);
+    expect(screen.getByTestId("preview-region").contains(badge)).toBe(true);
+    resolve(okResponse());
+  });
+
+  it("a re-render of the same screen keeps the same scroll container", async () => {
+    vi.spyOn(api, "renderPreview").mockResolvedValue(okResponse());
+    render(PreviewPane);
+    const scroller = await screen.findByTestId("preview-scroll");
+    scroller.scrollTop = 120;
+    simulate.use_actual = !simulate.use_actual;
+    await new Promise((r) => setTimeout(r, 100));
+    expect(screen.getByTestId("preview-scroll")).toBe(scroller);
+  });
+});

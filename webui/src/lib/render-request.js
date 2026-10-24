@@ -13,10 +13,14 @@ function sizeOf(meta, panelId, model) {
   return MODEL_SIZE[model] ?? DEFAULT_SIZE;
 }
 
-/** A device's panel size, else the size of the model it last reported (`DeviceInfo.model`). */
+/** The model a device last reported (`DeviceInfo.model`), if any. */
+function deviceModel(meta, deviceId) {
+  return (meta.devices ?? []).find((x) => x.id === deviceId)?.model;
+}
+
+/** A device's panel size, else the size of the model it last reported. */
 function deviceSize({ meta, usage }, deviceId) {
-  const d = (meta.devices ?? []).find((x) => x.id === deviceId);
-  return sizeOf(meta, devicePanel({ meta, usage }, deviceId), d?.model);
+  return sizeOf(meta, devicePanel({ meta, usage }, deviceId), deviceModel(meta, deviceId));
 }
 
 /** The device's explicit panel, else the panel the server says it resolves to. */
@@ -38,7 +42,9 @@ export function previewSize({ subject, meta, usage }) {
       return DEFAULT_SIZE;
     }
     case "panel":
-      return sizeOf(meta, subject.id);
+      // P2-6: a watched device renders as that device, so a panel without
+      // geometry takes the watched device's model size, as the server would.
+      return sizeOf(meta, subject.id, subject.watchDevice ? deviceModel(meta, subject.watchDevice) : undefined);
     case "device":
       return deviceSize({ meta, usage }, subject.id);
     default:

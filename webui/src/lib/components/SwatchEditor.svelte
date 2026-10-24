@@ -12,13 +12,17 @@
   const HEX_RE = /^#?[0-9A-Fa-f]{6}$/;
   const split = (s) => (s ?? "").split(",").map((c) => c.trim()).filter(Boolean);
 
-  let selected = $state(0);
+  // `picked` is what the user clicked; `selected` is it clamped to the
+  // palette, which may shrink under it (the text field shortens the list).
+  let picked = $state(0);
   const colors = $derived(split(value));
   const original = $derived(split(baseline));
+  const selected = $derived(Math.min(picked, Math.max(colors.length - 1, 0)));
   const selectedHex = $derived(colors[selected] ?? "");
   const hsl = $derived(HEX_RE.test(selectedHex) ? hexToHsl(selectedHex) : { h: 0, s: 0, l: 0 });
 
   function setColor(i, hex) {
+    if (i >= colors.length) return;
     const next = [...colors];
     next[i] = hex;
     onchange?.(next.join(","));
@@ -53,7 +57,7 @@
           class="h-6 w-6 rounded border-2"
           style:background-color={c}
           style:border-color={selected === i ? "var(--ring)" : "var(--border)"}
-          onclick={() => (selected = i)}
+          onclick={() => (picked = i)}
         ></button>
       {/each}
     </div>

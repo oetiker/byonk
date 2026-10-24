@@ -105,4 +105,15 @@ describe("previewSize of a device without panel geometry", () => {
     const r = buildRenderRequest({ subject: { kind: "device", id: "tx" }, draft, simulate: sim(), meta: m, usage: none });
     expect(r.body).toMatchObject(X);
   });
+
+  it("mode b: a panel without geometry watched on a model-x device takes that model's size", () => {
+    const X = { width: 1872, height: 1404 };
+    const s = { kind: "panel", id: "bare", borrowedScreen: "byonk-builtin/calibration/tone", watchDevice: "tx" };
+    expect(previewSize({ subject: s, meta: m, usage: none })).toEqual(X);
+    const r = buildRenderRequest({ subject: s, draft, simulate: sim(), meta: m, usage: none });
+    expect(r.body).toMatchObject({ panel: "bare", device: "tx", ...X });
+    // Unwatched, there is no model to go by: the default size, still explicit.
+    const u = buildRenderRequest({ subject: { ...s, watchDevice: "" }, draft, simulate: sim(), meta: m, usage: none });
+    expect(u.body).toMatchObject(DEFAULT_SIZE);
+  });
 });

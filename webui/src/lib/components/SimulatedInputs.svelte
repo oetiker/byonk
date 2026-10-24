@@ -24,7 +24,15 @@
   });
 
   function onTimeChange() {
-    simulate.timestamp = Math.floor(new Date(timeInput).getTime() / 1000);
+    // A cleared (or unparseable) field means "no simulated time": release the
+    // clock rather than lock it on NaN, which the server would ignore while
+    // the UI said "frozen".
+    const ms = timeInput ? new Date(timeInput).getTime() : NaN;
+    if (!Number.isFinite(ms)) {
+      resetTime();
+      return;
+    }
+    simulate.timestamp = Math.floor(ms / 1000);
     simulate.timeLocked = true;
   }
 

@@ -87,20 +87,21 @@ can't silently overwrite each other's changes), see a live preview of the
 rendered screen, and calibrate a panel's measured colours against the device
 itself.
 
-Editing works in the **writable** screen repos: `local` (your own config
-folder) and `examples`, both seeded and made writable automatically — no
-configuration needed. The built-in `byonk-builtin` screens and any repo
-added through the screen repo registry above (`repo:`, fetched from git) are
-read-only: you can browse and copy their screens, but not edit them in
-place.
+Editing works in the one **writable** screen repo, `local` (your own config
+folder), set up automatically — no configuration needed. The `examples`
+screens, the built-in `byonk-builtin` screens and any repo added through the
+screen repo registry above (`repo:`, fetched from git) are read-only: you can
+browse them and copy their screens, but not edit them in place. To change an
+example, copy it into `local` first — **Copy** in the editor's Library, or
+the MCP `copy_screen` tool — and edit the copy.
 
-Byonk itself has a third writable repo type, `path:` instead of `repo:`
+Byonk itself has another writable repo type, `path:` instead of `repo:`
 (see the [screen repo authoring
 guide](https://oetiker.github.io/byonk/guide/authoring.html#the-path-config-variant)) —
 but this app doesn't expose it. The Screen repos option above only accepts
 `repo:` rows, and it replaces the whole registry on every restart, so a
-`path:` entry hand-added to `config.yaml` would not survive one. `local` and
-`examples` are the only writable repos this app offers.
+`path:` entry hand-added to `config.yaml` would not survive one. `local` is
+the only writable repo this app offers.
 
 ### Opening the editor from outside Home Assistant
 

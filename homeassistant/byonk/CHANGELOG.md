@@ -1,9 +1,5 @@
 # Changelog
 
-## 0.20.0
-
-- Update to byonk 0.20.0 (see the main CHANGES.md for details).
-
 ## 0.19.0
 
 - Update to byonk 0.19.0 (see the main CHANGES.md for details).

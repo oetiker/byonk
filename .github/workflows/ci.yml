@@ -80,6 +80,10 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      # After the Rust suite, not beside it: the UI journeys time out under load.
+      - name: Run UI tests
+        run: make webui-test
+
   build:
     name: Build
     runs-on: ubuntu-latest

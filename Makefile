@@ -14,10 +14,10 @@ all: release
 
 # Build release binary (runs fmt, clippy and the dev UI first)
 #
-# webui before lint: `lint` compiles the crate (cargo clippy), and cargo
-# builds now fail via build.rs when webui/dist doesn't exist yet. GNU Make
-# runs a rule's prerequisites left to right in serial mode, so their order
-# here is load-bearing, not cosmetic.
+# Every target that compiles the crate lists `webui` as a prerequisite of
+# its own: build.rs fails when webui/dist doesn't exist yet, and under
+# `make -j` a sibling prerequisite gives no ordering. Make builds `webui`
+# once per invocation however many targets name it.
 release: fmt webui lint
 	cargo build --release
 
@@ -34,7 +34,7 @@ build: debug
 DEV_RUN_ENV = CONFIG_FILE=config.yaml SCREENS_DIR=screens FONTS_DIR=fonts
 
 # Run the server (debug mode)
-run: fmt lint
+run: fmt webui lint
 	$(DEV_RUN_ENV) cargo run
 
 # Run the server (release mode)
@@ -42,7 +42,7 @@ run-release: release
 	$(DEV_RUN_ENV) ./target/release/byonk
 
 # Run with auto-reload (requires cargo-watch)
-watch:
+watch: webui
 	$(DEV_RUN_ENV) cargo watch -x run
 
 # Format code
@@ -54,7 +54,7 @@ fmt:
 # --workspace --all-targets, because the bare form checks only the root
 # package's non-test targets. That silently skipped every crate under
 # crates/ and every test file in the repo.
-lint:
+lint: webui
 	cargo clippy --workspace --all-targets -- -D warnings
 
 # Run tests
@@ -62,7 +62,7 @@ lint:
 # --workspace: `cargo test` alone runs only the root package, so the
 # eink-dither suite never ran here and a failing test in it still reported
 # "All checks passed!".
-test:
+test: webui
 	cargo test --workspace
 
 # Coverage configuration for Homebrew Rust (set LLVM paths)
@@ -75,15 +75,15 @@ endif
 
 # Run tests with coverage (requires cargo-llvm-cov)
 # Install: cargo install cargo-llvm-cov
-coverage:
+coverage: webui
 	cargo llvm-cov --html --open
 
 # Generate coverage report for CI (lcov format)
-coverage-ci:
+coverage-ci: webui
 	cargo llvm-cov --lcov --output-path lcov.info
 
 # Generate coverage report (text summary)
-coverage-text:
+coverage-text: webui
 	cargo llvm-cov --summary-only
 
 # Clean build artifacts
@@ -114,9 +114,12 @@ docs-samples: release
 
 # Check everything before commit
 #
-# webui before lint and test: both compile the crate, and cargo builds now
-# fail via build.rs when webui/dist doesn't exist yet (see `debug` above).
+# lint and test depend on webui themselves (see `release` above). The UI
+# tests (`webui-test` minus its prerequisite) run from the recipe, after the
+# Rust suite, not as a prerequisite: under `make -j` the two would run side
+# by side, and the UI journeys time out under that load.
 check: fmt webui lint test
+	cd webui && pnpm run test
 	@echo "All checks passed!"
 
 # =============================================================================
@@ -147,12 +150,13 @@ fonts: fonts-check ## rebuild the 26 X11 TTFs from their pinned BDF sources
 # exist before cargo runs. build.rs checks for it and fails the build with
 # a plain message if it doesn't; it never runs pnpm itself. `debug`,
 # `release` and `check` all depend on `webui` so every build path produces
-# it first.
+# it first; so do `lint`, `test`, `run`, `watch` and `coverage*`, which
+# compile it too, and `webui-test`, whose bundle tests read webui/dist.
 
 webui: ## build the /dev editor UI into webui/dist (needs pnpm)
 	cd webui && pnpm install --frozen-lockfile && pnpm run build
 
-webui-test: ## run the UI's component tests
+webui-test: webui ## run the UI's component tests
 	cd webui && pnpm run test
 
 # =============================================================================
@@ -183,7 +187,7 @@ help:
 	@echo "  make fmt          Format code"
 	@echo "  make lint         Run clippy"
 	@echo "  make test         Run tests"
-	@echo "  make check        Format, lint, and test"
+	@echo "  make check        Format, lint, Rust and UI tests"
 	@echo "  make clean        Clean all build artifacts"
 	@echo ""
 	@echo "Coverage (requires cargo-llvm-cov):"

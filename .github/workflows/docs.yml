@@ -51,6 +51,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-docs-
 
+      # build.rs embeds webui/dist and fails without it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: corepack enable
+      - name: Build the dev UI
+        run: make webui
+
       - name: Build Byonk
         run: cargo build --release
 
@@ -159,6 +167,14 @@ jobs:
           key: ${{ runner.os }}-cargo-docs-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-docs-
+
+      # build.rs embeds webui/dist and fails without it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: corepack enable
+      - name: Build the dev UI
+        run: make webui
 
       - name: Build Byonk
         run: cargo build --release

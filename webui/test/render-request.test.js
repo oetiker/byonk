@@ -157,3 +157,13 @@ describe("the UI-built draft bodies the server test posts", () => {
     screens.meta = { devices: [], panels: [], dither_algorithms: [] };
   });
 });
+
+describe("previewSize of a panel that states only one dimension", () => {
+  // Mirrors the server: each axis falls back on its own (dev render,
+  // ScreenStore and the admin preview all resolve per axis).
+  it("keeps the stated axis and takes the other from the model default", () => {
+    const m = { panels: [{ id: "w", width: 480, height: null }, { id: "h", width: null, height: 600 }], devices: [] };
+    expect(previewSize({ subject: { kind: "panel", id: "w" }, meta: m, usage })).toEqual({ width: 480, height: 480 });
+    expect(previewSize({ subject: { kind: "panel", id: "h" }, meta: m, usage })).toEqual({ width: 800, height: 600 });
+  });
+});

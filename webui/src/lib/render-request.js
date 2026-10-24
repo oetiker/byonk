@@ -9,8 +9,9 @@ const MODEL_SIZE = { x: { width: 1872, height: 1404 } };
 
 function sizeOf(meta, panelId, model) {
   const p = (meta.panels ?? []).find((x) => x.id === panelId);
-  if (p && p.width && p.height) return { width: p.width, height: p.height };
-  return MODEL_SIZE[model] ?? DEFAULT_SIZE;
+  // Per axis, as the server: each missing axis falls back on its own.
+  const base = MODEL_SIZE[model] ?? DEFAULT_SIZE;
+  return { width: p?.width || base.width, height: p?.height || base.height };
 }
 
 /** The model a device last reported (`DeviceInfo.model`), if any. */

@@ -595,5 +595,5 @@ async fn rename_route_status_codes() {
     let no_auth = app
         .post_json(url, &[], &rename("a", "b", "local/pic"))
         .await;
-    assert_ne!(no_auth.status, StatusCode::NO_CONTENT);
+    assert_eq!(no_auth.status, StatusCode::UNAUTHORIZED);
 }

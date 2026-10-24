@@ -196,14 +196,24 @@ async fn main() -> anyhow::Result<()> {
 /// `--device` stays as the fallback for a MAC with no device config, and
 /// for a panel that declares no dimensions.
 fn resolve_cli_display_spec(
-    panel_size: Option<(u32, u32)>,
+    panel_width: Option<u32>,
+    panel_height: Option<u32>,
     device_type: &str,
 ) -> anyhow::Result<byonk::models::DisplaySpec> {
     use byonk::models::DisplaySpec;
-    match panel_size {
-        Some((w, h)) => Ok(DisplaySpec::from_dimensions(w, h)?),
-        None if device_type == "x" => Ok(DisplaySpec::X),
-        None => Ok(DisplaySpec::OG),
+    // Per axis, like the server: a panel stating only one dimension keeps it,
+    // and the other falls back to the device type's.
+    let base = if device_type == "x" {
+        DisplaySpec::X
+    } else {
+        DisplaySpec::OG
+    };
+    match (panel_width, panel_height) {
+        (None, None) => Ok(base),
+        (w, h) => Ok(DisplaySpec::from_dimensions(
+            w.unwrap_or(base.width),
+            h.unwrap_or(base.height),
+        )?),
     }
 }
 
@@ -280,8 +290,11 @@ fn run_render_command(
     // The panel is part of that same chain: it knows its own dimensions, and
     // taking the size from anywhere else is how a device configured for a
     // 1200x1600 panel rendered at 800x480 in that panel's colours.
-    let display_spec =
-        resolve_cli_display_spec(panel.and_then(|p| Some((p.width?, p.height?))), device_type)?;
+    let display_spec = resolve_cli_display_spec(
+        panel.and_then(|p| p.width),
+        panel.and_then(|p| p.height),
+        device_type,
+    )?;
 
     // Build initial palette from --colors flag or device type default
     let cli_palette: Vec<(u8, u8, u8)> = if let Some(ref colors_str) = colors {
@@ -1220,7 +1233,7 @@ colors_actual: "#030303,#FCFCFC"
     /// was the wrong size for the device it named.
     #[test]
     fn a_panel_the_device_type_flag_cannot_express_still_renders_at_its_own_size() {
-        let spec = resolve_cli_display_spec(Some((1200, 1600)), "og").unwrap();
+        let spec = resolve_cli_display_spec(Some(1200), Some(1600), "og").unwrap();
         assert_eq!(
             (spec.width, spec.height),
             (1200, 1600),
@@ -1235,7 +1248,7 @@ colors_actual: "#030303,#FCFCFC"
     /// whenever the flag happened to agree.
     #[test]
     fn the_configured_panel_outranks_the_device_type_flag() {
-        let spec = resolve_cli_display_spec(Some((800, 480)), "x").unwrap();
+        let spec = resolve_cli_display_spec(Some(800), Some(480), "x").unwrap();
         assert_eq!(
             (spec.width, spec.height),
             (800, 480),
@@ -1243,18 +1256,28 @@ colors_actual: "#030303,#FCFCFC"
         );
     }
 
+    /// A panel stating only one axis keeps it; the other axis falls back to the
+    /// device type's, as the server resolves it.
+    #[test]
+    fn a_panel_with_one_dimension_resolves_the_other_axis_per_axis() {
+        let w = resolve_cli_display_spec(Some(480), None, "og").unwrap();
+        assert_eq!((w.width, w.height), (480, 480));
+        let h = resolve_cli_display_spec(None, Some(600), "x").unwrap();
+        assert_eq!((h.width, h.height), (1872, 600));
+    }
+
     /// The fallback still works, for a MAC with no device config and for a
     /// panel that declares no dimensions. Both arrive here as `None`.
     #[test]
     fn without_a_panel_the_device_type_flag_still_chooses_the_size() {
-        let x = resolve_cli_display_spec(None, "x").unwrap();
+        let x = resolve_cli_display_spec(None, None, "x").unwrap();
         assert_eq!((x.width, x.height), (1872, 1404));
 
-        let og = resolve_cli_display_spec(None, "og").unwrap();
+        let og = resolve_cli_display_spec(None, None, "og").unwrap();
         assert_eq!((og.width, og.height), (800, 480));
 
         // Anything unrecognised is OG, which is what the old `match` did.
-        let other = resolve_cli_display_spec(None, "nonsense").unwrap();
+        let other = resolve_cli_display_spec(None, None, "nonsense").unwrap();
         assert_eq!((other.width, other.height), (800, 480));
     }
 }

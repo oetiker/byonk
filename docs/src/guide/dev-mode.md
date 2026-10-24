@@ -487,6 +487,10 @@ back, and Preview renders it as you type.
 - **Save** writes `panels.<id>` or `devices.<key>` in `config.yaml`, which is
   the durable step. A panel is saved as a whole: a field you removed is
   removed from the file. A device cannot be saved without a screen.
+  A pushed panel value sits on the override rung, above the screen and the
+  device, while Save writes the panel rung, below them. So when a device or
+  screen sets its own `dither`, the panel shows a different result after Save
+  than it did while pushed.
 - **Discard** reverts the draft to what is in `config.yaml` and clears the
   override.
 

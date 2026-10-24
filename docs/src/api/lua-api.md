@@ -1432,7 +1432,8 @@ The algorithm is resolved on byonk's render cascade, highest first:
 2. The device's `final.dither` — the owner's veto
 3. The script's `dither` — **this is you**
 4. The device's `dither` — the owner's default
-5. `atkinson`
+5. The panel's `dither.algorithm`
+6. `atkinson`
 
 **The screen outranks the device's default, and loses to its veto.** A device
 sets `dither:` to say "normally use this here", which your script may override

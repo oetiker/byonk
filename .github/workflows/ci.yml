@@ -81,8 +81,9 @@ jobs:
         run: cargo test --workspace
 
       # After the Rust suite, not beside it: the UI journeys time out under load.
+      # The bundle was built above, so run the tests without `make webui-test`'s rebuild.
       - name: Run UI tests
-        run: make webui-test
+        run: cd webui && pnpm run test
 
   build:
     name: Build

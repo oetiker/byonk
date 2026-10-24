@@ -429,7 +429,7 @@ holds what names the entry:
 - A **panel**: **Id** (letters, digits, `_` and `-`), **Name**, **Match**
   (the firmware `Board` string this panel is picked for; empty means only
   devices that name it with `panel:` use it), **Width**, **Height** and
-  **Colors**, the official palette as comma-separated `#RRGGBB`.
+  **Colors**, the official palette as comma-separated `#RRGGBB` (the leading `#` is optional).
 - A **device**: **Key** (a MAC address or a registration code; devices byonk
   has seen but that have no entry are suggested as you type), **Name**,
   **Screen** and **Panel** — "auto" picks it from the device's `Board`

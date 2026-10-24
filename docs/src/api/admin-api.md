@@ -435,8 +435,8 @@ The full set of writable settings is:
 | `screen` | Qualified `handle/path` screen reference |
 | `panel` | Panel profile name, as configured under `panels` |
 | `dither` | Dither algorithm — `GET /api/admin/screens` lists the accepted names |
-| `colors` | Palette override, comma-separated `#rrggbb`, at least two |
-| `colors_actual` | This one display's measured colors, comma-separated `#rrggbb`, index-parallel to the resolved palette. Overrides the panel profile's calibration |
+| `colors` | Palette override, comma-separated `#rrggbb` (the leading `#` is optional), at least two |
+| `colors_actual` | This one display's measured colors, comma-separated `#rrggbb` (`#` optional), index-parallel to the resolved palette. Overrides the panel profile's calibration |
 | `params` | Parameters for the screen's Lua script |
 | `refresh` | Refresh interval in seconds; `0` means "use the screen's own default" |
 | `name` | Friendly name |

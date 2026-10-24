@@ -10,6 +10,7 @@ vi.mock("../src/lib/codemirror.js", () => ({
   createEditor: vi.fn(() => ({ setDoc: vi.fn(), setDiagnostics: vi.fn(), setTheme: vi.fn(), destroy: vi.fn(), view: {} })),
 }));
 import EditorPane from "../src/lib/components/EditorPane.svelte";
+import { createEditor } from "../src/lib/codemirror.js";
 
 const FILES = [
   { name: "meta.yaml", size: 10, text: true },
@@ -94,10 +95,35 @@ describe("an asset shown over a dirty text buffer", () => {
     expect(dom.queryByText("valid")).toBeNull();
     expect(dom.getByText("logo.png (asset)")).toBeTruthy();
 
+    // Mod-s (CodeMirror's onSave -> editor.commit()) writes nothing either.
+    const write = vi.spyOn(api, "writeFile").mockResolvedValue({ etag: '"2"' });
+    expect(await createEditor.mock.calls.at(-1)[1].onSave()).toBe(false);
+    expect(write).not.toHaveBeenCalled();
+
     // Back on the text tab, its unsaved edit is still there to save.
     await select("script.lua");
     expect(dom.getByRole("button", { name: "Save" })).toBeEnabled();
     expect(editor.active.dirty).toBe(true);
+  });
+});
+
+describe("a pending move while an asset hides a dirty text buffer", () => {
+  it("Save neither writes the hidden buffer nor moves without it, and says why", async () => {
+    screens.repos = [{ handle: "local", writable: true }, { handle: "other", writable: true }];
+    const write = vi.spyOn(api, "writeFile").mockResolvedValue({ etag: '"2"' });
+    const move = vi.spyOn(api, "moveScreen").mockResolvedValue({ ref: "local/b", rewritten: [] });
+    render(EditorPane);
+    await select("script.lua");
+    await waitFor(() => expect(editor.active?.name).toBe("script.lua"));
+    editor.setText("changed");
+    editor.setTarget("path", "b");
+    await select("logo.png");
+    expect(dom.getByRole("button", { name: "Save" })).toBeEnabled();
+    await fireEvent.click(dom.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(editor.moveFailure).toMatch(/script\.lua/));
+    expect(write).not.toHaveBeenCalled();
+    expect(move).not.toHaveBeenCalled();
+    expect(editor.tabs[0].dirty).toBe(true);
   });
 });
 

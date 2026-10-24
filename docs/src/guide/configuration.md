@@ -57,7 +57,7 @@ Each device entry maps a MAC address to a screen:
 | `screen` | Yes | Qualified `handle/path` reference of the screen to display |
 | `name` | No | A friendly name for the device, shown in the dev UI and Home Assistant |
 | `params` | No | Key-value pairs passed to the Lua script |
-| `colors` | No | Override display palette (comma-separated hex RGB, e.g. `"#000000,#FFFFFF,#FF0000"`) |
+| `colors` | No | Override display palette (comma-separated hex RGB, e.g. `"#000000,#FFFFFF,#FF0000"`; the leading `#` is optional) |
 | `colors_actual` | No | **This one display's** measured colors, comma-separated hex RGB and index-parallel to `colors`. Overrides the panel profile's calibration, for the one panel that drifted. |
 | `dither` | No | Dithering algorithm (see [Dither Algorithms](#dither-algorithms) below) |
 | `panel` | No | Panel profile name (references `panels` section) |
@@ -480,7 +480,7 @@ panels:
 | `match` | No | Exact string match against firmware `Board` header for auto-detection |
 | `width` | No | Display width in pixels |
 | `height` | No | Display height in pixels |
-| `colors` | Yes | Official palette colors (comma-separated hex) |
+| `colors` | Yes | Official palette colors (comma-separated `#RRGGBB`; the leading `#` is optional) |
 | `colors_actual` | No | Measured/actual colors the panel really displays |
 | `dither` | No | Per-panel dither algorithm and tuning defaults (see below) |
 

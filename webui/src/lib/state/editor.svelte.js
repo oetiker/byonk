@@ -606,10 +606,22 @@ class Editor {
    * save render after all, so the preview never hides a saved change.
    */
   async commit() {
+    const unsaved = this.tabs.filter((x) => x.ref === this.ref && x.dirty && !x.readOnly);
+    // An asset in front of the text tabs (U24): Save never writes a buffer
+    // the user cannot see -- the button and Mod-s alike. A move would drop
+    // those buffers, so it waits too, and says why.
+    if (this.asset) {
+      if (!this.moveDirty || this.moveMissing) return false;
+      if (unsaved.length) {
+        this.moveFailure = `unsaved changes in ${unsaved.map((t) => t.name).join(", ")}: open the file to save it before moving`;
+        return false;
+      }
+      return this.move();
+    }
     if (!this.moveDirty) return this.trySave();
     if (this.moveMissing) return false;
     let saved = false;
-    for (const t of this.tabs.filter((x) => x.ref === this.ref && x.dirty && !x.readOnly)) {
+    for (const t of unsaved) {
       if (!(await this.trySave(t, { quiet: true }))) {
         if (saved) this.diskRevision += 1;
         return false;

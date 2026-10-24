@@ -278,7 +278,8 @@ fn validate_gamut(g: &GamutTuningValues, name: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// A `colors` override must be a comma-separated list of `#rrggbb` entries.
+/// A `colors` override must be a comma-separated list of `#rrggbb` entries
+/// (the leading `#` is optional).
 /// `key` is the fully-qualified name the caller used, so errors point at it.
 ///
 /// Strict where the render path is forgiving: `parse_colors_header` builds the
@@ -288,11 +289,11 @@ fn validate_gamut(g: &GamutTuningValues, name: &str) -> Result<(), ApiError> {
 pub(crate) fn validate_colors(colors: &str, key: &str) -> Result<(), ApiError> {
     let entries: Vec<&str> = colors.split(',').map(str::trim).collect();
     for entry in &entries {
-        // The documented `#RRGGBB` form, `#` included: the render path
-        // reads a bare `RRGGBB` too, but a written value is what the docs say.
-        let valid = entry
-            .strip_prefix('#')
-            .is_some_and(|hex| hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()));
+        // `#RRGGBB` or a bare `RRGGBB`: exactly what config load and the
+        // render path (`parse_hex_color`) accept, so an untouched entry from
+        // config.yaml is never refused when the UI sends it back.
+        let hex = entry.strip_prefix('#').unwrap_or(entry);
+        let valid = hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit());
         if !valid {
             return Err(ApiError::BadRequest(format!(
                 "`{key}` entry `{entry}` is not a #rrggbb color"

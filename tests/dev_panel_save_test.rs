@@ -441,8 +441,7 @@ async fn saving_bad_colors_actual_or_tuning_is_a_400_that_leaves_the_file_alone(
     let cases: &[(&str, &str)] = &[
         (r##""colors_actual":"#12345,#FFFFFF""##, "colors_actual"),
         (r##""colors_actual":"#101010""##, "colors_actual"),
-        // Task U24: written values carry the documented `#RRGGBB` form.
-        (r#""colors_actual":"101010,#E8E8E8""#, "colors_actual"),
+        (r#""colors_actual":"10101,#E8E8E8""#, "colors_actual"),
         (r#""dither":{"strength":-0.5}"#, "dither.strength"),
         // 1e39 overflows f32: it arrives as infinity.
         (r#""dither":{"max_error":1e39}"#, "dither.max_error"),
@@ -510,4 +509,23 @@ async fn saving_keeps_the_config_files_permissions() {
         .mode()
         & 0o777;
     assert_eq!(mode, 0o600, "config.yaml is now {mode:o}");
+}
+
+/// Config load reads `RRGGBB` without the `#`, and the web UI sends a
+/// panel's untouched entries back as they are: Save must accept them.
+#[tokio::test]
+async fn saving_a_bare_rrggbb_palette_is_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, config_path) = TestApp::new_with_config_yaml(commented_config(), dir.path());
+    let r = app
+        .post_json(
+            "/dev/api/panels/og/save",
+            &[AUTH],
+            r#"{"name":"TRMNL OG","colors":"000000,FFFFFF","colors_actual":"1A1A1A,#D8D8D8"}"#,
+        )
+        .await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+    let yaml = std::fs::read_to_string(&config_path).unwrap();
+    assert!(yaml.contains("000000,FFFFFF"), "{yaml}");
+    assert!(yaml.contains("1A1A1A,#D8D8D8"), "{yaml}");
 }

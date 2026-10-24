@@ -349,9 +349,6 @@ async fn a_move_removes_the_empty_parents_it_leaves_behind() {
     let r = move_screen(&f, "local/keep/moving", "local", "moved").await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     assert!(f.root.join("local/keep/sibling/meta.yaml").is_file());
-
-    // The repo root itself is never removed, even when the move empties it.
-    let shared_only = move_screen(&f, "shared/clock", "local", "back").await;
-    assert_eq!(shared_only.status, StatusCode::OK, "{}", shared_only.text());
-    assert!(f.root.join("shared").is_dir());
+    // (That the walk never removes the repo root, even an empty one, is
+    // `prune_empty_parents_stops_at_the_root` in screen_store.rs.)
 }

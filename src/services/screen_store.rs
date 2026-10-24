@@ -2227,6 +2227,19 @@ pub(crate) mod tests {
         );
     }
 
+    /// The walk removes every directory a moved-out screen left empty and
+    /// stops at the repo root, even when the root is empty too.
+    #[test]
+    fn prune_empty_parents_stops_at_the_root() {
+        let base = tempdir_path("prune_empty_parents");
+        std::fs::create_dir_all(base.join("a/b")).unwrap();
+        // The screen dir itself (`a/b/clock`) is already gone.
+        prune_empty_parents(&base, &base.join("a/b/clock"));
+        assert!(!base.join("a").exists());
+        assert!(base.is_dir(), "the repo root was removed");
+        assert_eq!(std::fs::read_dir(&base).unwrap().count(), 0);
+    }
+
     #[test]
     fn rename_file_on_a_read_only_repo_is_refused() {
         let (store, _repo_root) = test_store_with_local();

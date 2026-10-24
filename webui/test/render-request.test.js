@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { buildRenderRequest, previewSize, devicePanel, DEFAULT_SIZE } from "../src/lib/render-request.js";
+import { configDraft } from "../src/lib/state/configDraft.svelte.js";
+import { screens } from "../src/lib/state/screens.svelte.js";
+import { simulate } from "../src/lib/state/simulate.svelte.js";
 
 const meta = {
   panels: [{ id: "e1004", width: 800, height: 480 }, { id: "x", width: 1600, height: 1200 }],
@@ -115,5 +118,42 @@ describe("previewSize of a device without panel geometry", () => {
     // Unwatched, there is no model to go by: the default size, still explicit.
     const u = buildRenderRequest({ subject: { ...s, watchDevice: "" }, draft, simulate: sim(), meta: m, usage: none });
     expect(u.body).toMatchObject(DEFAULT_SIZE);
+  });
+});
+
+// Task U24: the exact bodies the real stores build, pinned. The Rust test
+// `the_web_uis_own_draft_bodies_deserialize_and_win_their_rungs`
+// (tests/dev_render_provenance_test.rs) posts these same two literals, so a
+// wire-shape change on either side breaks one of the two tests.
+describe("the UI-built draft bodies the server test posts", () => {
+  it("a panel draft with an algorithm and a device draft with both rungs", () => {
+    screens.meta = {
+      panels: [{ id: "e1004", name: "reTerminal E1004", width: null, height: null,
+        colors: "#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00",
+        colors_actual: "#101010,#E8E8E8,#B03030,#D0C040,#3040A0,#00994D",
+        dither: { strength: 0.8, atkinson: { max_error: 0.5 } } }],
+      // The shape `GET dev/api/screens` sends: every base field, nulls included.
+      devices: [{ id: "kitchen", screen: "local/gradient", panel: "e1004", name: null, params: { greeting: "hi" },
+        base: { dither: "floyd-steinberg", colors: null, colors_actual: null, max_error: null, noise_scale: null,
+                chroma_clamp: null, strength: null, refresh: 600, gamut: {} },
+        final: null, temperature_profile: null, maximum_compatibility: null, min_png_bytes: null }],
+      dither_algorithms: [],
+    };
+    configDraft.reset();
+    simulate.reset();
+    configDraft.set("panel", "e1004", "panel", "dither", "atkinson");
+    configDraft.set("device", "kitchen", "device_base", "gamut.knee", 0.7);
+    configDraft.set("device", "kitchen", "device_final", "strength", 0.4);
+    const ctx = { draft: configDraft, simulate, meta: screens.meta, usage: { panels: {}, unseen: [] } };
+    const panel = buildRenderRequest({
+      ...ctx, subject: { kind: "panel", id: "e1004", borrowedScreen: "local/gradient", watchDevice: "" } });
+    const device = buildRenderRequest({ ...ctx, subject: { kind: "device", id: "kitchen" } });
+    expect(JSON.stringify(panel.body)).toBe(
+      '{"screen":"local/gradient","panel":"e1004","width":800,"height":480,"draft":{"panel":{"colors":"#000000,#FFFFFF,#FF0000,#FFFF00,#0000FF,#00FF00","colors_actual":"#101010,#E8E8E8,#B03030,#D0C040,#3040A0,#00994D","dither":{"strength":0.8,"atkinson":{"max_error":0.5},"algorithm":"atkinson"}}},"simulated":{"params":{}},"view":{"use_actual":true}}');
+    expect(JSON.stringify(device.body)).toBe(
+      '{"device":"kitchen","screen":"local/gradient","width":800,"height":480,"draft":{"base":{"dither":"floyd-steinberg","refresh":600,"gamut":{"knee":0.7}},"final":{"strength":0.4},"params":{"greeting":"hi"}},"simulated":{},"view":{"use_actual":true}}');
+    configDraft.reset();
+    simulate.reset();
+    screens.meta = { devices: [], panels: [], dither_algorithms: [] };
   });
 });

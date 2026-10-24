@@ -142,7 +142,12 @@
 
   // Details (U9): where the screen lives. A move can only go to a writable repo.
   const writableRepos = $derived(screens.repos.filter((r) => r.writable));
-  const fileDirty = $derived(!!editor.active && !editor.active.readOnly && editor.active.dirty);
+  // The text tab's unsaved edit counts only while that tab is what is shown:
+  // an asset in front of it offers no text Save (U24). The tab strip still
+  // marks the buffer unsaved.
+  const fileDirty = $derived(
+    !editor.asset && !!editor.active && !editor.active.readOnly && editor.active.dirty,
+  );
   // Collapsed unless the user opened it -- or it holds a pending move or a
   // refused one, which must not hide.
   const detailsForced = $derived(editor.moveDirty || !!editor.moveFailure);
@@ -163,9 +168,7 @@
 
   // Rename acts on the same file as delete, but refuses a text buffer with
   // unsaved edits: the rename would have to carry them along, or lose them.
-  const renamableName = $derived(
-    deletableName && !(!editor.asset && fileDirty) ? deletableName : null,
-  );
+  const renamableName = $derived(deletableName && !fileDirty ? deletableName : null);
 
   /**
    * The open inline form, or null: `{ kind: "add" }` or

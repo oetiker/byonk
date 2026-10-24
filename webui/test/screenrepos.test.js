@@ -8,6 +8,7 @@ import { screens } from "../src/lib/state/screens.svelte.js";
 import { subject } from "../src/lib/state/subject.svelte.js";
 import { configDraft } from "../src/lib/state/configDraft.svelte.js";
 import { screenRepos, NEW_REPO } from "../src/lib/state/screenRepos.svelte.js";
+import { editor } from "../src/lib/state/editor.svelte.js";
 import * as api from "../src/lib/api.js";
 
 const repo = (o) => ({
@@ -106,6 +107,37 @@ describe("Library: Screen repos section", () => {
     await waitFor(() => expect(subject.kind).toBe(null));
     expect(refresh).toHaveBeenCalled();
     expect(listSpy.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  // U24 (U11 review minor 5): the editor's buffers of a screen in the
+  // deleted repo go with it; another repo's buffers stay.
+  async function deleteRepoWithEditorOn(ref) {
+    vi.spyOn(api, "deleteScreenRepo").mockResolvedValue({ deleted: "weather" });
+    vi.spyOn(api, "readFile").mockResolvedValue({ text: "-- x", etag: '"1"' });
+    editor.reset();
+    editor.ref = ref;
+    await editor.open(ref, "script.lua");
+    editor.setText("-- unsaved");
+    subject.select("screen-repo", "weather");
+    render(LibraryPane);
+    await fireEvent.click(within(screen.getByTestId("library-actions")).getByRole("button", { name: "Delete" }));
+    const form = await screen.findByRole("form", { name: "Confirm screen repo deletion" });
+    await fireEvent.click(within(form).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(subject.kind).toBe(null));
+  }
+
+  it("deleting a repo closes the editor's buffers of its screens", async () => {
+    await deleteRepoWithEditorOn("weather/clock");
+    expect(editor.ref).toBe(null);
+    expect(editor.tabs).toEqual([]);
+  });
+
+  it("deleting a repo keeps the editor's buffers of another repo's screen", async () => {
+    await deleteRepoWithEditorOn("weatherly/clock");
+    expect(editor.ref).toBe("weatherly/clock");
+    expect(editor.tabs).toHaveLength(1);
+    expect(editor.active.dirty).toBe(true);
+    editor.reset();
   });
 
   it("shows the server's 409 when a repo in use cannot be deleted", async () => {

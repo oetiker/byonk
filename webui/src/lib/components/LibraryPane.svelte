@@ -270,6 +270,9 @@
         // A 409 (a device shows one of its screens) lands on screens.error.
         await screenRepos.remove(id);
         subject.clear();
+        // Its screens are gone: so are the editor's buffers of one of them
+        // (as for a deleted screen, Finding H).
+        if (editor.ref?.startsWith(`${id}/`)) await editor.loadScreen(null);
         return;
       }
       if (target === "panel") await api.deletePanel(id);

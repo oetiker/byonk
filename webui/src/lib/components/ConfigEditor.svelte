@@ -251,10 +251,15 @@
         <Field.Field>
         <Field.Label for={cid(rung, field)}>{field} ({RUNG_LABEL[rung]})</Field.Label>
         {#if field === "dither"}
-          <NativeSelect id={cid(rung, field)} value={val(rung, field) ?? ""}
+          {@const current = val(rung, field)}
+          {@const known = (screens.meta.dither_algorithms ?? []).some((a) => a.name === current)}
+          <NativeSelect id={cid(rung, field)} value={current ?? ""}
                         onchange={(e) => onField(rung, field, e)}>
             <option value="">— (none)</option>
             {#each screens.meta.dither_algorithms ?? [] as a (a.name)}<option value={a.name}>{a.name}</option>{/each}
+            <!-- A name config.yaml holds but the server does not list: shown,
+                 so the select tells the truth instead of reading "none" (U24). -->
+            {#if current && !known}<option value={current}>{current} (unknown)</option>{/if}
           </NativeSelect>
         {:else if field === "colors_actual" && kind === "panel"}
           <Input id={cid(rung, field)} value={val(rung, field) ?? ""} oninput={(e) => onField(rung, field, e)} />

@@ -7,7 +7,8 @@
   // live-override notices. Most important first (conflict, errors, live);
   // the line shows that one plus a "+N" count, truncated with the full text
   // as tooltip. Clicking opens a panel UPWARD over the pane foot listing
-  // everything in full; it closes by itself when the set of messages changes.
+  // everything in full; it closes by itself when the set of messages changes,
+  // on Escape and on a press outside it.
   //
   // editor.error is raised by four operations (save, reload, overwrite,
   // watch-reload), so each message names its own `op`, never a fixed "save:".
@@ -49,13 +50,27 @@
     return out;
   });
 
-  // The panel is open only for the exact set of messages it was opened on:
-  // a new or changed message starts collapsed, with no effect to order.
+  // The panel is open only for the set of messages it was opened on: a
+  // writable derived, so ANY change to the set resets it to collapsed -- and
+  // a set that comes back later does not reopen it (U24).
   const sig = $derived(items.map((i) => i.id).join("\n"));
-  let openOn = $state(null);
-  const open = $derived(openOn === sig);
-  const setOpen = (v) => (openOn = v ? sig : null);
+  let open = $derived.by(() => {
+    void sig; // the dependency: a changed set collapses the panel
+    return false;
+  });
+  const setOpen = (v) => (open = v);
+
+  // Escape, or a press anywhere outside the bar and its panel, closes it.
+  let bar = $state();
+  function onKey(e) {
+    if (open && e.key === "Escape") setOpen(false);
+  }
+  function onPointer(e) {
+    if (open && bar && !bar.contains(e.target)) setOpen(false);
+  }
 </script>
+
+<svelte:document onkeydown={onKey} onpointerdown={onPointer} />
 
 {#snippet actions(it)}
   {#if it.kind === "conflict"}
@@ -80,6 +95,7 @@
         class="min-w-0 flex-1 cursor-pointer truncate text-left"
         title={it.text}
         aria-expanded={open}
+        aria-controls="status-panel"
         onclick={() => setOpen(!open)}>{it.text}</button
       >
     {/if}
@@ -88,12 +104,14 @@
 {/snippet}
 
 <div
+  bind:this={bar}
   data-testid="status-bar"
   class="relative flex h-(--status-h) shrink-0 items-center gap-2 border-t border-border bg-muted px-2 font-mono text-xs text-foreground"
 >
   {#if items.length > 0}
     {#if open}
       <div
+        id="status-panel"
         data-testid="status-panel"
         class="absolute inset-x-0 bottom-full z-40 flex max-h-60 flex-col gap-1 overflow-auto border-t border-border bg-muted px-2 py-1 shadow-md"
       >
@@ -101,7 +119,8 @@
           {@render row(it, true)}
         {/each}
       </div>
-      <button type="button" class="cursor-pointer text-left" aria-expanded="true" onclick={() => setOpen(false)}>
+      <button type="button" class="cursor-pointer text-left" aria-expanded="true" aria-controls="status-panel"
+              onclick={() => setOpen(false)}>
         Hide {items.length} message{items.length === 1 ? "" : "s"}
       </button>
     {:else}
@@ -111,6 +130,8 @@
           type="button"
           class="shrink-0 cursor-pointer text-destructive"
           title="Show all {items.length} messages"
+          aria-expanded="false"
+          aria-controls="status-panel"
           onclick={() => setOpen(true)}>+{items.length - 1}</button
         >
       {/if}

@@ -153,6 +153,42 @@ describe("StatusStrip", () => {
     expect(screen.getByRole("button", { name: /other/ }).getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("a message set that returns after a change comes back collapsed (U24)", async () => {
+    editor.error = { op: "save", message: "first" };
+    render(StatusStrip);
+    await fireEvent.click(screen.getByRole("button", { name: /first/ }));
+    expect(screen.getByTestId("status-panel")).toBeTruthy();
+    editor.error = { op: "save", message: "second" };
+    await tick();
+    editor.error = { op: "save", message: "first" };
+    await tick();
+    expect(screen.queryByTestId("status-panel")).toBeNull();
+  });
+
+  it("'+N' says what it controls and the panel closes on Escape and on an outside click (U24)", async () => {
+    editor.error = { op: "save", message: "one" };
+    screens.error = { op: "list", message: "two" };
+    render(StatusStrip);
+    const more = screen.getByRole("button", { name: "+1" });
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    expect(more.getAttribute("aria-controls")).toBe("status-panel");
+    await fireEvent.click(more);
+    const panel = screen.getByTestId("status-panel");
+    expect(panel.id).toBe("status-panel");
+    expect(screen.getByRole("button", { name: /Hide 2 messages/ }).getAttribute("aria-controls")).toBe("status-panel");
+
+    await fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByTestId("status-panel")).toBeNull();
+
+    await fireEvent.click(screen.getByRole("button", { name: "+1" }));
+    expect(screen.getByTestId("status-panel")).toBeTruthy();
+    // A click inside the panel keeps it open; one elsewhere closes it.
+    await fireEvent.pointerDown(screen.getByTestId("status-panel"));
+    expect(screen.getByTestId("status-panel")).toBeTruthy();
+    await fireEvent.pointerDown(document.body);
+    expect(screen.queryByTestId("status-panel")).toBeNull();
+  });
+
   it("keeps a fixed-height bar when idle (U12)", () => {
     render(StatusStrip);
     expect(screen.getByTestId("status-bar").className.split(/\s+/)).toContain("h-(--status-h)");

@@ -24,7 +24,10 @@
     return "text";
   }
 
-  const t = $derived(editor.active);
+  // An asset shown in front of a text tab is what the bar describes (U24):
+  // its name, and no validity or cursor of the hidden buffer.
+  const asset = $derived(editor.asset);
+  const t = $derived(asset ? null : editor.active);
   const issues = $derived(t?.issues ?? []);
 </script>
 
@@ -32,7 +35,9 @@
   class="flex h-(--status-h) shrink-0 items-center gap-3 overflow-hidden whitespace-nowrap border-t border-border
          bg-muted px-2 font-mono text-xs text-foreground"
 >
-  {#if !t}
+  {#if asset}
+    <span class="text-muted-foreground">{asset.name} (asset)</span>
+  {:else if !t}
     <span class="text-muted-foreground">no file open</span>
   {:else if issues.length === 0}
     <span class="inline-flex items-center gap-1 text-success"><Check class="size-3.5" aria-hidden="true" />valid</span>

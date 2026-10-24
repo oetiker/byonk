@@ -130,6 +130,22 @@ describe("ConfigEditor, panel schema", () => {
     expect(dom.getByText("1 unsaved")).toBeTruthy();
   });
 
+  it("shows a configured algorithm the server does not list as an extra '(unknown)' option (U24)", () => {
+    screens.meta.panels[0].dither = { algorithm: "floyd" };
+    render(ConfigEditor);
+    const sel = document.querySelector("#cfg-panel-dither");
+    expect([...sel.options].map((o) => [o.value, o.textContent])).toEqual([
+      ["", "— (none)"], ["atkinson", "atkinson"], ["stucki", "stucki"], ["floyd", "floyd (unknown)"],
+    ]);
+    expect(sel.value).toBe("floyd");
+    // A known value adds no extra option.
+    cleanup();
+    screens.meta.panels[0].dither = { algorithm: "stucki" };
+    configDraft.reset();
+    render(ConfigEditor);
+    expect([...document.querySelector("#cfg-panel-dither").options].map((o) => o.value)).toEqual(["", "atkinson", "stucki"]);
+  });
+
   it("shows a ladder per setting from the shared store", () => {
     resolution.record({ strength: { effective: 1, from: "fallback", order: ["fallback"], rungs: { fallback: { value: 1, status: "winner" } } } }, "panel:e1004");
     render(ConfigEditor);

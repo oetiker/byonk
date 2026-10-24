@@ -74,6 +74,33 @@ describe("asset viewer", () => {
   });
 });
 
+// Task U24 (U19 review minor): the toolbar and the status bar describe the
+// tab the user is LOOKING AT. An asset shown over a dirty text buffer offers
+// no text Save, and the status bar names the asset, not the hidden buffer.
+describe("an asset shown over a dirty text buffer", () => {
+  it("disables Save and names the asset in the status bar", async () => {
+    render(EditorPane);
+    await select("script.lua");
+    await waitFor(() => expect(editor.active?.name).toBe("script.lua"));
+    editor.setText("changed");
+    editor.setCursor(3, 7);
+    flushSync();
+    expect(dom.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(dom.getByText("lua 3:7")).toBeTruthy();
+
+    await select("logo.png");
+    expect(dom.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(dom.queryByText("lua 3:7")).toBeNull();
+    expect(dom.queryByText("valid")).toBeNull();
+    expect(dom.getByText("logo.png (asset)")).toBeTruthy();
+
+    // Back on the text tab, its unsaved edit is still there to save.
+    await select("script.lua");
+    expect(dom.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(editor.active.dirty).toBe(true);
+  });
+});
+
 describe("rename", () => {
   it("renames a binary and the tab follows", async () => {
     const ren = vi.spyOn(api, "renameFile").mockImplementation(async (r, from, to) => {

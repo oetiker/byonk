@@ -150,7 +150,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wakes a battery-powered device into a refresh cycle, so nothing repaints
   until you ask it to, and it reverts on its own within 30 minutes. Once it
   looks right, **Save** writes it into `config.yaml`; **Discard** reverts the
-  draft and clears the temporary override.
+  draft and clears the temporary override. A panel Save that carries a
+  malformed `colors_actual` or a negative or non-finite tuning number is
+  refused with the field named, and `config.yaml` is left as it was.
 
 - **A pop-out preview window.** The preview opens in a window of its own, with
   **Fit** and **100%** zoom, and follows the editor as you work — useful on a
@@ -421,6 +423,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trace of it, and needs hours of cycling rather than a stronger refresh.
 
 ### Fixed
+
+- **Saving no longer makes a private `config.yaml` readable by everyone.**
+  A change saved through the dev UI, the admin API or Home Assistant replaced
+  `config.yaml` with a new file created with default permissions, so a file
+  you had restricted with `chmod 600` — it holds your tokens — came back
+  `0644`. The new file now takes the permissions of the one it replaces.
 
 - **MCP `render_screen` with a `panel` now renders at the panel's size.** It used to ignore the panel's `width`/`height` and render at the model default (800x480 even for a 1200x1600 panel). The size is now an explicit `width`/`height`, else the panel's, else the model's, per axis. An unknown panel name is reported in the render `log` instead of being ignored silently. The dev UI preview uses the same rule when a panel is named without a size.
 

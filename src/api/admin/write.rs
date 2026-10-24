@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use crate::api::config_persist::{persist, require_file_config};
 use crate::error::ApiError;
 use crate::models::config::{
-    normalize_algorithm_name, CascadeValues, GamutTuningValues, DITHER_ALGORITHMS,
-    RESERVED_DEFAULT_KEY,
+    normalize_algorithm_name, CascadeValues, DitherTuningValues, GamutTuningValues,
+    DITHER_ALGORITHMS, RESERVED_DEFAULT_KEY,
 };
 use crate::models::param_schema::validate_params;
 use crate::server::AppState;
@@ -201,13 +201,7 @@ fn validate_device_settings(state: &AppState, w: &DeviceWrite) -> Result<(), Api
         ("chroma_clamp", w.chroma_clamp),
         ("strength", w.strength),
     ] {
-        if let Some(v) = value {
-            if !v.is_finite() || v < 0.0 {
-                return Err(ApiError::BadRequest(format!(
-                    "`{key}` must be a finite, non-negative number, got {v}"
-                )));
-            }
-        }
+        validate_number(key, value)?;
     }
 
     if let Some(colors) = &w.colors_actual {
@@ -221,6 +215,32 @@ fn validate_device_settings(state: &AppState, w: &DeviceWrite) -> Result<(), Api
     }
 
     Ok(())
+}
+
+/// Ranges stay open (see `validate_device_settings`); only values arithmetic
+/// cannot use are refused. `name` is the field as the request named it.
+fn validate_number(name: &str, value: Option<f32>) -> Result<(), ApiError> {
+    match value {
+        Some(n) if !n.is_finite() || n < 0.0 => Err(ApiError::BadRequest(format!(
+            "`{name}` must be a finite, non-negative number, got {n}"
+        ))),
+        _ => Ok(()),
+    }
+}
+
+/// The number checks for one panel tuning block (a panel's flat `dither`
+/// defaults or one per-algorithm sub-map). `prefix` is how the caller names
+/// the block, ending in `.` (`dither.`, `dither.atkinson.`).
+pub(crate) fn validate_tuning_values(v: &DitherTuningValues, prefix: &str) -> Result<(), ApiError> {
+    for (key, value) in [
+        ("max_error", v.max_error),
+        ("noise_scale", v.noise_scale),
+        ("chroma_clamp", v.chroma_clamp),
+        ("strength", v.strength),
+    ] {
+        validate_number(&format!("{prefix}{key}"), value)?;
+    }
+    validate_gamut(&v.gamut, &format!("{prefix}gamut"))
 }
 
 /// The same checks the base rung gets, applied to a rung written as a block.
@@ -241,13 +261,7 @@ fn validate_cascade_values(v: &CascadeValues, prefix: &str) -> Result<(), ApiErr
         ("chroma_clamp", v.chroma_clamp),
         ("strength", v.strength),
     ] {
-        if let Some(n) = value {
-            if !n.is_finite() || n < 0.0 {
-                return Err(ApiError::BadRequest(format!(
-                    "`{prefix}{key}` must be a finite, non-negative number, got {n}"
-                )));
-            }
-        }
+        validate_number(&format!("{prefix}{key}"), value)?;
     }
     validate_gamut(&v.gamut, &format!("{prefix}gamut"))
 }
@@ -258,13 +272,7 @@ fn validate_gamut(g: &GamutTuningValues, name: &str) -> Result<(), ApiError> {
         ("amount", g.amount),
         ("max_compression", g.max_compression),
     ] {
-        if let Some(n) = value {
-            if !n.is_finite() || n < 0.0 {
-                return Err(ApiError::BadRequest(format!(
-                    "`{name}.{key}` must be a finite, non-negative number, got {n}"
-                )));
-            }
-        }
+        validate_number(&format!("{name}.{key}"), value)?;
     }
     Ok(())
 }

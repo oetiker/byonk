@@ -437,6 +437,18 @@ pub struct PanelSave {
     pub dither: Option<PanelDitherConfig>,
 }
 
+/// A panel's `dither` block as Save receives it: the flat defaults and every
+/// per-algorithm sub-map get the number checks a device write gets, each
+/// error naming the field as the panel's YAML spells it.
+fn validate_panel_dither(d: &PanelDitherConfig) -> Result<(), ApiError> {
+    use crate::api::admin::write::validate_tuning_values;
+    validate_tuning_values(&d.defaults, "dither.")?;
+    for (algorithm, tuning) in &d.algorithms {
+        validate_tuning_values(tuning, &format!("dither.{algorithm}."))?;
+    }
+    Ok(())
+}
+
 /// A panel id as config.yaml keys it: letters, digits, `_` and `-`.
 fn validate_panel_id(id: &str) -> Result<(), ApiError> {
     if id.is_empty()
@@ -480,6 +492,17 @@ pub async fn handle_save_panel(
     }
     let colors = body.colors.trim();
     crate::api::admin::write::validate_colors(colors, "colors")?;
+    if let Some(actual) = body
+        .colors_actual
+        .as_deref()
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+    {
+        crate::api::admin::write::validate_colors(actual, "colors_actual")?;
+    }
+    if let Some(dither) = &body.dither {
+        validate_panel_dither(dither)?;
+    }
     for (label, v) in [("width", body.width), ("height", body.height)] {
         if let Some(v) = v {
             DisplaySpec::check_dimension(label, v)

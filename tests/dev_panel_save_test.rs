@@ -384,3 +384,78 @@ panels:
     assert!(yaml.contains("# the six-colour one"), "{yaml}");
     assert_eq!(panel_order(&yaml), vec!["og", "e1004"]);
 }
+
+/// Save validates what it writes beyond `colors`: a bad `colors_actual` or a
+/// tuning number arithmetic cannot use is refused with the field named, and
+/// config.yaml is left exactly as it was.
+#[tokio::test]
+async fn saving_bad_colors_actual_or_tuning_is_a_400_that_leaves_the_file_alone() {
+    let cases: &[(&str, &str)] = &[
+        (r##""colors_actual":"#12345,#FFFFFF""##, "colors_actual"),
+        (r##""colors_actual":"#101010""##, "colors_actual"),
+        (r#""dither":{"strength":-0.5}"#, "dither.strength"),
+        // 1e39 overflows f32: it arrives as infinity.
+        (r#""dither":{"max_error":1e39}"#, "dither.max_error"),
+        (r#""dither":{"gamut":{"knee":-1}}"#, "dither.gamut.knee"),
+        (
+            r#""dither":{"atkinson":{"noise_scale":-2}}"#,
+            "dither.atkinson.noise_scale",
+        ),
+        (
+            r#""dither":{"atkinson":{"gamut":{"amount":1e39}}}"#,
+            "dither.atkinson.gamut.amount",
+        ),
+    ];
+    for (extra, field) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, config_path) = TestApp::new_with_config_yaml(commented_config(), dir.path());
+        let before = std::fs::read_to_string(&config_path).unwrap();
+        let r = app
+            .post_json(
+                "/dev/api/panels/e1004/save",
+                &[AUTH],
+                &format!("{{{E1004},{extra}}}"),
+            )
+            .await;
+        assert_eq!(r.status, 400, "{extra}: {} {}", r.status, r.text());
+        assert!(
+            r.text().contains(field),
+            "{extra}: the error does not name `{field}`: {}",
+            r.text()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&config_path).unwrap(),
+            before,
+            "{extra}: config.yaml changed"
+        );
+    }
+}
+
+/// config.yaml holds tokens; an owner who made it private keeps it private
+/// across a Save (the atomic replace must not reset it to the umask default).
+#[cfg(unix)]
+#[tokio::test]
+async fn saving_keeps_the_config_files_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let (app, config_path) = TestApp::new_with_config_yaml(commented_config(), dir.path());
+    std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let r = app
+        .post_json(
+            "/dev/api/panels/e1004/save",
+            &[AUTH],
+            &format!(r#"{{{E1004},"colors_actual":"{TUNED}"}}"#),
+        )
+        .await;
+    assert!(r.status.is_success(), "{} {}", r.status, r.text());
+    assert!(std::fs::read_to_string(&config_path)
+        .unwrap()
+        .contains(TUNED));
+    let mode = std::fs::metadata(&config_path)
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600, "config.yaml is now {mode:o}");
+}

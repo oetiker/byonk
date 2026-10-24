@@ -156,7 +156,8 @@ impl ServerHandler for ByonkMcp {
              as writable by list_screens can be edited; fork a read-only screen with \
              copy_screen first. After editing, call render_screen to see the result and \
              read its log/data/error fields. Read the byonk://reference/* resources for \
-             the Lua and SVG contracts.",
+             the Lua and SVG contracts: each is an index of sections, and \
+             byonk://reference/<doc>/<section> reads one section.",
         )
     }
 

@@ -140,3 +140,99 @@ async fn test_reading_an_unknown_resource_is_an_error() {
 
     assert!(v.get("error").is_some(), "unknown URI must error: {v}");
 }
+
+async fn read_text(client: &McpTestClient<'_>, uri: &str) -> Option<String> {
+    let resp = client
+        .raw("resources/read", serde_json::json!({ "uri": uri }))
+        .await;
+    let v: serde_json::Value = resp.json();
+    v["result"]["contents"][0]["text"]
+        .as_str()
+        .map(str::to_string)
+}
+
+#[tokio::test]
+async fn test_reference_index_lists_every_section_with_a_working_uri() {
+    let app = TestApp::new_admin("secret");
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let index = read_text(&client, "byonk://reference/lua-api")
+        .await
+        .expect("index");
+    assert!(
+        index.len() < 6 * 1024,
+        "lua-api index is {} bytes",
+        index.len()
+    );
+    // Sub-headings are findable from the index alone.
+    assert!(
+        index.contains("time_format"),
+        "index must list ### headings"
+    );
+
+    let doc = include_str!("../docs/src/api/lua-api.md");
+    let h2s: Vec<&str> = doc.lines().filter_map(|l| l.strip_prefix("## ")).collect();
+    assert!(h2s.len() > 5);
+    for title in &h2s {
+        let slug: String = title
+            .to_lowercase()
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join("-");
+        let uri = format!("byonk://reference/lua-api/{slug}");
+        assert!(index.contains(&uri), "index lacks {uri}");
+        let section = read_text(&client, &uri).await.expect(&uri);
+        assert!(section.starts_with(&format!("## {title}")), "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn test_section_read_returns_exactly_that_section() {
+    let app = TestApp::new_admin("secret");
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let section = read_text(&client, "byonk://reference/lua-api/script-return-value")
+        .await
+        .expect("section");
+    assert!(section.starts_with("## Script Return Value"));
+    // Exactly one H2 outside fences: the next section is not included.
+    assert!(!section.contains("## Standard Lua Functions"));
+    assert!(!section.contains("## Logging Functions"));
+}
+
+#[tokio::test]
+async fn test_sections_are_listed_and_unknown_slug_is_not_found() {
+    let app = TestApp::new_admin("secret");
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let resp = client.raw("resources/list", serde_json::json!({})).await;
+    let v: serde_json::Value = resp.json();
+    let res = v["result"]["resources"].as_array().unwrap();
+    let entry = res
+        .iter()
+        .find(|r| r["uri"] == "byonk://reference/lua-api/time-functions")
+        .expect("section resource listed");
+    assert_eq!(entry["name"], "lua-api/time-functions");
+    assert_eq!(entry["description"], "Time Functions");
+
+    let unknown = client
+        .raw(
+            "resources/read",
+            serde_json::json!({ "uri": "byonk://reference/lua-api/no-such-section" }),
+        )
+        .await;
+    let u: serde_json::Value = unknown.json();
+    let other = client
+        .raw(
+            "resources/read",
+            serde_json::json!({ "uri": "byonk://reference/no-such-doc" }),
+        )
+        .await;
+    let o: serde_json::Value = other.json();
+    assert!(u["error"].is_object(), "{u}");
+    assert_eq!(u["error"]["code"], o["error"]["code"]);
+}

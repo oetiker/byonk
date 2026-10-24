@@ -1086,7 +1086,15 @@ pub async fn handle_render(
         (None, None) => "og".to_string(),
     };
     // Determine dimensions from model or explicit values
-    let (width, height) = display::resolve_preview_dimensions(&model, req.width, req.height);
+    let (width, height) = display::resolve_preview_dimensions(
+        &model,
+        req.width,
+        req.height,
+        (
+            panel_cfg.and_then(|p| p.width),
+            panel_cfg.and_then(|p| p.height),
+        ),
+    );
     if let Err(message) = DisplaySpec::check_dimensions(width, height) {
         return render_error(StatusCode::BAD_REQUEST, message, None);
     }

@@ -76,17 +76,23 @@ fn downscale_png(png: &[u8], max_width: u32) -> Vec<u8> {
 pub struct RenderArgs {
     /// Screen reference, `handle/path`.
     pub screen_ref: String,
-    /// Device model selecting default size and palette. Defaults to `og`
-    /// (800x480, 4-grey).
+    /// Device model selecting the fallback size and palette. Defaults to `og`
+    /// (800x480, 4-grey). Size chain, per axis: explicit `width`/`height`,
+    /// else the named `panel`'s size, else this model's default.
     #[serde(default)]
     pub model: Option<String>,
-    /// Override the device model's default render width, in pixels.
+    /// Render width in pixels. Wins over the `panel`'s width, which wins over
+    /// the `model` default; height is resolved independently.
     #[serde(default)]
     pub width: Option<u32>,
-    /// Override the device model's default render height, in pixels.
+    /// Render height in pixels. Wins over the `panel`'s height, which wins
+    /// over the `model` default; width is resolved independently.
     #[serde(default)]
     pub height: Option<u32>,
-    /// Panel profile name from the `panels:` config section.
+    /// Panel profile name from the `panels:` config section. Sets the render
+    /// size (the panel's `width`/`height`, unless `width`/`height` are given)
+    /// and supplies colours and dither. An unknown name falls back to the
+    /// model defaults and says so in `log`.
     #[serde(default)]
     pub panel: Option<String>,
     /// Dither algorithm, e.g. `floyd-steinberg`, `atkinson`.

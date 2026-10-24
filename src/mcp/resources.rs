@@ -45,6 +45,21 @@ pub fn list(state: &AppState) -> Vec<Resource> {
                 .with_mime_type("text/markdown")
         })
         .collect();
+    // One resource per H2 section, so a client can read one function's
+    // contract instead of the whole document.
+    for (uri, path, name, _) in DOCS {
+        let Some(text) = doc_text(path) else { continue };
+        for section in split_doc(&text).sections {
+            out.push(
+                Resource::new(
+                    format!("{uri}/{}", section.slug),
+                    format!("{name}/{}", section.slug),
+                )
+                .with_description(section.title.clone())
+                .with_mime_type("text/markdown"),
+            );
+        }
+    }
     out.push(
         Resource::new(META_SCHEMA_URI, "meta-yaml-schema")
             .with_description(
@@ -130,12 +145,162 @@ pub fn read(uri: &str, state: &AppState) -> Option<Vec<ResourceContents>> {
         }]);
     }
 
-    let (_, path, _, _) = DOCS.iter().find(|(u, _, _, _)| *u == uri)?;
-    let file = EmbeddedDocs::get(path)?;
-    Some(vec![ResourceContents::TextResourceContents {
-        uri: uri.to_string(),
-        mime_type: Some("text/markdown".to_string()),
-        text: String::from_utf8(file.data.to_vec()).ok()?,
-        meta: None,
-    }])
+    // A doc index, or one of its sections.
+    for (doc_uri, path, _, _) in DOCS {
+        let text = if uri == *doc_uri {
+            let doc = split_doc(&doc_text(path)?);
+            render_index(doc_uri, &doc)
+        } else if let Some(slug) = uri
+            .strip_prefix(doc_uri)
+            .and_then(|rest| rest.strip_prefix('/'))
+        {
+            let doc = split_doc(&doc_text(path)?);
+            doc.sections.into_iter().find(|s| s.slug == slug)?.body
+        } else {
+            continue;
+        };
+        return Some(vec![ResourceContents::TextResourceContents {
+            uri: uri.to_string(),
+            mime_type: Some("text/markdown".to_string()),
+            text,
+            meta: None,
+        }]);
+    }
+    None
+}
+
+fn doc_text(path: &str) -> Option<String> {
+    String::from_utf8(EmbeddedDocs::get(path)?.data.to_vec()).ok()
+}
+
+/// One `## ` section of a markdown doc.
+struct Section {
+    /// Heading text without the `## `.
+    title: String,
+    /// Lowercase, non-alphanumerics -> `-`, collapsed and trimmed.
+    slug: String,
+    /// The section verbatim, heading line included.
+    body: String,
+    /// The `### ` headings inside it.
+    subheadings: Vec<String>,
+}
+
+struct SplitDoc {
+    /// Everything before the first H2.
+    preamble: String,
+    sections: Vec<Section>,
+}
+
+fn slugify(title: &str) -> String {
+    let mut slug = String::new();
+    for c in title.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    slug.trim_matches('-').to_string()
+}
+
+/// Split at `## ` boundaries, ignoring lines inside fenced code blocks.
+fn split_doc(text: &str) -> SplitDoc {
+    let mut preamble = String::new();
+    let mut sections: Vec<Section> = Vec::new();
+    let mut fence: Option<(char, usize)> = None;
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        let marker = trimmed
+            .chars()
+            .next()
+            .filter(|c| *c == '`' || *c == '~')
+            .map(|c| (c, trimmed.chars().take_while(|x| *x == c).count()))
+            .filter(|(_, n)| *n >= 3);
+        if let Some((c, n)) = marker {
+            match fence {
+                None => fence = Some((c, n)),
+                Some((fc, fnn)) if fc == c && n >= fnn && trimmed[n..].trim().is_empty() => {
+                    fence = None
+                }
+                _ => {}
+            }
+        }
+        let in_fence = fence.is_some() || marker.is_some();
+        if !in_fence {
+            if let Some(title) = line.strip_prefix("## ") {
+                let title = title.trim().to_string();
+                sections.push(Section {
+                    slug: slugify(&title),
+                    title,
+                    body: String::new(),
+                    subheadings: Vec::new(),
+                });
+            } else if let (Some(sub), Some(cur)) = (line.strip_prefix("### "), sections.last_mut())
+            {
+                cur.subheadings.push(sub.trim().to_string());
+            }
+        }
+        match sections.last_mut() {
+            Some(cur) => cur.body.push_str(line),
+            None => preamble.push_str(line),
+        }
+    }
+    SplitDoc { preamble, sections }
+}
+
+/// The text before the first H2, then every section with its URI and the
+/// `### ` headings inside it.
+fn render_index(doc_uri: &str, doc: &SplitDoc) -> String {
+    let mut out = doc.preamble.trim_end().to_string();
+    out.push_str("\n\n## Sections\n\nRead one section at a time: `<uri>`.\n");
+    for s in &doc.sections {
+        out.push_str(&format!("\n- **{}** — `{doc_uri}/{}`\n", s.title, s.slug));
+        for sub in &s.subheadings {
+            out.push_str(&format!("  - {sub}\n"));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slug_is_lowercase_dashed_and_trimmed() {
+        assert_eq!(slugify("Script Return Value"), "script-return-value");
+        assert_eq!(slugify("  HTTP & JSON (v2)! "), "http-json-v2");
+    }
+
+    #[test]
+    fn a_heading_inside_a_code_fence_is_not_a_split_point() {
+        let doc = "intro\n\n## One\n\n```md\n## not a heading\n### nor this\n```\n\n### Real sub\n\n## Two\n\n~~~\n## also not\n~~~\n";
+        let split = split_doc(doc);
+        assert_eq!(split.preamble, "intro\n\n");
+        let titles: Vec<_> = split.sections.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(titles, ["One", "Two"]);
+        assert!(split.sections[0].body.contains("## not a heading"));
+        assert_eq!(split.sections[0].subheadings, ["Real sub"]);
+        assert!(split.sections[1].body.contains("## also not"));
+    }
+
+    #[test]
+    fn sections_reassemble_into_the_original_doc() {
+        for (_, path, _, _) in DOCS {
+            let text = doc_text(path).unwrap();
+            let split = split_doc(&text);
+            let joined: String = split.preamble.clone()
+                + &split
+                    .sections
+                    .iter()
+                    .map(|s| s.body.as_str())
+                    .collect::<String>();
+            assert_eq!(joined, text, "{path}");
+            let mut slugs: Vec<_> = split.sections.iter().map(|s| &s.slug).collect();
+            slugs.sort();
+            let n = slugs.len();
+            slugs.dedup();
+            assert_eq!(slugs.len(), n, "{path}: duplicate section slugs");
+        }
+    }
 }

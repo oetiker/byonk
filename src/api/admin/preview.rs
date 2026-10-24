@@ -203,7 +203,7 @@ pub async fn device_preview(
         // panel itself would display. A broken-image icon would say only
         // that something went wrong, not what.
         let svg = pipeline.render_error_svg(&message);
-        let (w, h) = resolve_preview_dimensions(&model, width, height);
+        let (w, h) = resolve_preview_dimensions(&model, width, height, (None, None));
         let spec = DisplaySpec::from_dimensions(w, h).unwrap_or(DisplaySpec::OG);
         let palette = resolve_query_palette(&model, None);
         let png = pipeline

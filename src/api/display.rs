@@ -156,20 +156,26 @@ pub fn resolve_ctx_palette(
     }
 }
 
-/// Resolve preview width/height: explicit override, else the model's
-/// default (`"x"` -> the e-ink-X's 1872x1404, everything else -> the
-/// standard 800x480). Shared by `/dev/render` (`api::dev::handle_render`)
-/// and `ScreenStore::render` so the two preview paths can't drift on model
-/// dispatch.
+/// Resolve preview width/height, each axis independently: explicit
+/// override, else the named panel's `width`/`height` (`panel_dims`), else
+/// the model's default (`"x"` -> the e-ink-X's 1872x1404, everything else ->
+/// the standard 800x480). Shared by `/dev/render`
+/// (`api::dev::handle_render`), the admin device preview and
+/// `ScreenStore::render` so the preview paths can't drift on the chain.
 pub fn resolve_preview_dimensions(
     model: &str,
     width: Option<u32>,
     height: Option<u32>,
+    panel_dims: (Option<u32>, Option<u32>),
 ) -> (u32, u32) {
-    match model {
-        "x" => (width.unwrap_or(1872), height.unwrap_or(1404)),
-        _ => (width.unwrap_or(800), height.unwrap_or(480)),
-    }
+    let (default_w, default_h) = match model {
+        "x" => (1872, 1404),
+        _ => (800, 480),
+    };
+    (
+        width.or(panel_dims.0).unwrap_or(default_w),
+        height.or(panel_dims.1).unwrap_or(default_h),
+    )
 }
 
 /// The "query" palette: an explicit colors-header override, else the

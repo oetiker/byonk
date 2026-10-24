@@ -261,6 +261,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The MCP reference documents are served as an index plus sections.** `byonk://reference/lua-api`, `svg-templates` and `authoring` now return the introduction and a list of their sections (with the `###` headings inside each) instead of the whole document; `byonk://reference/<doc>/<section>` reads one section, and each section is listed in `resources/list`. A client no longer pays for the whole 57 KB Lua reference to learn one function.
 - **New MCP tool `rename_screen_file`** renames one asset file inside a screen directory (the new name may include a subfolder). It refuses an existing target and the three files that define a screen.
 
 - **A panel in `config.yaml` wider or taller than 4096 pixels now stops byonk from starting**, naming the panel and the key. No TRMNL panel is anywhere near the limit.
@@ -420,6 +421,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trace of it, and needs hours of cycling rather than a stronger refresh.
 
 ### Fixed
+
+- **MCP `render_screen` with a `panel` now renders at the panel's size.** It used to ignore the panel's `width`/`height` and render at the model default (800x480 even for a 1200x1600 panel). The size is now an explicit `width`/`height`, else the panel's, else the model's, per axis. An unknown panel name is reported in the render `log` instead of being ignored silently. The dev UI preview uses the same rule when a panel is named without a size.
 
 - **Home Assistant's device preview and `byonk render` now use the panel a
   device reports.** A device without `panel:` whose Board or Model matches a

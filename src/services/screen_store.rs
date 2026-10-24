@@ -1384,12 +1384,23 @@ impl ScreenStore {
             resolution: None,
         };
 
-        // Dimensions + base palette: explicit override, else the model's
-        // default — the same option-resolution chain `/dev/render` uses
+        // Dimensions + base palette: explicit override, else the named
+        // panel's size, else the model's default — the same option-resolution
+        // chain `/dev/render` uses
         // (`crate::api::display::resolve_preview_dimensions`/
-        // `resolve_query_palette`), shared so the two previews can't drift.
-        let (width, height) =
-            crate::api::display::resolve_preview_dimensions(&opts.model, opts.width, opts.height);
+        // `resolve_query_palette`), shared so the previews can't drift. The
+        // panel is looked up first because it supplies the size.
+        let config = self.pipeline.config().load();
+        let panel = opts
+            .panel
+            .as_deref()
+            .and_then(|name| config.get_panel(name));
+        let (width, height) = crate::api::display::resolve_preview_dimensions(
+            &opts.model,
+            opts.width,
+            opts.height,
+            (panel.and_then(|p| p.width), panel.and_then(|p| p.height)),
+        );
         // Refuse before anything is sized from it.
         if let Err(message) = DisplaySpec::check_dimensions(width, height) {
             return RenderResult {
@@ -1403,11 +1414,6 @@ impl ScreenStore {
         let query_palette: Vec<(u8, u8, u8)> =
             crate::api::display::resolve_query_palette(&opts.model, None);
 
-        let config = self.pipeline.config().load();
-        let panel = opts
-            .panel
-            .as_deref()
-            .and_then(|name| config.get_panel(name));
         let panel_colors: Option<String> = panel.map(|p| p.colors.clone());
         let panel_actual_parsed: Option<Vec<(u8, u8, u8)>> = panel
             .and_then(|p| p.colors_actual.as_deref())
@@ -1525,6 +1531,15 @@ impl ScreenStore {
         // comment for why this has to be caller-owned rather than read out
         // of `ScriptResult` after the fact.
         let log_sink: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        // A panel name that resolves to nothing is an authoring mistake the
+        // caller should hear about, not a silent fall-back to model defaults.
+        if let (Some(name), None) = (opts.panel.as_deref(), panel) {
+            if let Ok(mut sink) = log_sink.lock() {
+                sink.push(format!(
+                    "[warn] unknown panel '{name}' — using model defaults"
+                ));
+            }
+        }
 
         // Run the script, capturing logs/data/refresh_rate. `run_script_direct`
         // is the same entry point `/dev/render` uses for a screen-name preview.
@@ -3100,6 +3115,85 @@ pub(crate) mod tests {
             res.data["colors"],
             serde_json::json!(["#FF0000", "#00FF00", "#0000FF"]),
             "device.colors should be the panel's colors, not the model default"
+        );
+    }
+
+    fn big_panel_store() -> ScreenStore {
+        let mut panels = HashMap::new();
+        panels.insert(
+            "big".to_string(),
+            PanelConfig {
+                name: "Big".to_string(),
+                match_pattern: None,
+                width: Some(1200),
+                height: Some(1600),
+                colors: "#000000,#FFFFFF".to_string(),
+                colors_actual: None,
+                dither: None,
+            },
+        );
+        let (store, _root) = test_store_with_local_and_config(AppConfig {
+            panels,
+            ..AppConfig::default()
+        });
+        store
+            .create_screen("local", "sized", StarterKind::Minimal)
+            .unwrap();
+        store
+    }
+
+    fn png_size(png: &[u8]) -> (u32, u32) {
+        let img = image::load_from_memory(png).expect("valid png");
+        (img.width(), img.height())
+    }
+
+    #[test]
+    fn render_sizes_from_the_named_panel() {
+        let store = big_panel_store();
+        let res = store.render(
+            "local/sized",
+            RenderOpts {
+                panel: Some("big".to_string()),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert_eq!(png_size(&res.png), (1200, 1600));
+    }
+
+    #[test]
+    fn render_explicit_width_overrides_only_the_panel_width() {
+        let store = big_panel_store();
+        let res = store.render(
+            "local/sized",
+            RenderOpts {
+                panel: Some("big".to_string()),
+                width: Some(600),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert_eq!(png_size(&res.png), (600, 1600));
+    }
+
+    #[test]
+    fn render_unknown_panel_uses_model_defaults_and_warns() {
+        let store = big_panel_store();
+        let res = store.render(
+            "local/sized",
+            RenderOpts {
+                panel: Some("nope".to_string()),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert_eq!(png_size(&res.png), (800, 480));
+        assert!(
+            res.log
+                .iter()
+                .any(|l| l.contains("unknown panel 'nope'") && l.contains("model defaults")),
+            "log: {:?}",
+            res.log
         );
     }
 

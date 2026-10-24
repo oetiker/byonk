@@ -1787,3 +1787,49 @@ async fn test_configure_device_needs_a_screen_to_create() {
         "the error must name the field that would fix it: {result}"
     );
 }
+
+#[tokio::test]
+async fn test_render_screen_takes_its_size_from_the_panel() {
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = r##"
+admin:
+  token: secret
+panels:
+  tall:
+    name: "Tall"
+    width: 1200
+    height: 1600
+    colors: "#000000,#FFFFFF"
+"##;
+    let (app, _config_path) = TestApp::new_with_config_yaml(yaml, dir.path());
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let size = |result: &serde_json::Value| {
+        use base64::Engine;
+        let block = image_blocks(result).remove(0);
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(block["data"].as_str().unwrap())
+            .unwrap();
+        let img = image::load_from_memory(&bytes).unwrap();
+        (img.width(), img.height())
+    };
+
+    let from_panel = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({ "screen_ref": "byonk-builtin/default", "panel": "tall" }),
+        )
+        .await;
+    assert_eq!(size(&from_panel), (1200, 1600), "{from_panel}");
+
+    let width_override = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({
+                "screen_ref": "byonk-builtin/default", "panel": "tall", "width": 600
+            }),
+        )
+        .await;
+    assert_eq!(size(&width_override), (600, 1600));
+}

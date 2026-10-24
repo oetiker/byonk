@@ -108,6 +108,8 @@ itself — a screen's dithering targets measured colours whenever they resolve, 
 
 | Argument | Type | What it does |
 |----------|------|----------------|
+| `panel` | string, optional | Panel profile from `panels:`. Sets the render size to the panel's `width`/`height` and supplies its colours and dither. An unknown name falls back to the model defaults and adds a warning to `log`. |
+| `width`, `height` | int, optional | Render size in pixels. Size chain, per axis: explicit `width`/`height`, then the `panel`'s size, then the `model` default (`og` 800x480, `x` 1872x1404). |
 | `image` | `dithered` \| `raw` \| `both` \| `none` | Which image(s) to return. Default `dithered`. `both` returns the dithered image then the pre-dither one, each preceded by a text block naming it. |
 | `image_max_width` | int, optional | Downscale returned image(s) to at most this width, preserving aspect ratio. Never upscales. |
 | `include_data` | bool, default `true` | Return the table the script produced. |
@@ -258,6 +260,12 @@ works from this server's actual rules instead of guessing from stale training da
 - `byonk://reference/lua-api` — every global and function available to `script.lua`.
 - `byonk://reference/svg-templates` — the `screen.svg` templating contract.
 - `byonk://reference/authoring` — how screens, screen repos and writability fit together.
+
+  Each reference is served as an **index plus sections**: reading the URI above returns
+  the introduction and a list of the document's `##` sections, each with its own URI
+  (`byonk://reference/<doc>/<section>`, e.g. `byonk://reference/lua-api/time-functions`)
+  and the `###` headings inside it. Read the section you need rather than the whole
+  document.
 - `byonk://schema/meta.yaml` — the JSON Schema for `meta.yaml`, generated from the same
   type that parses it.
 - `byonk://examples/<screen path>` — one resource per shipped example screen, with the

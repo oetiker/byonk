@@ -531,7 +531,7 @@ that algorithm's sub-section instead.
 >
 > ```text
 > WARN panels.reterminal_e1004.dither.sierra-lite.error_clamp: 0.11 —
->      `error_clamp` was removed in 0.18.0 and is IGNORED. ...
+>      `error_clamp` was removed in 0.20.0 and is IGNORED. ...
 > ```
 
 Algorithm names accept aliases (e.g. `jjn` for `jarvis-judice-ninke`).

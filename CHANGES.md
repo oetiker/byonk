@@ -85,6 +85,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `refresh` before and still does. The new `final.refresh` is the way to
   override a screen — see below.
 
+- **`error_clamp` is now called `max_error`, and the old name is ignored.** In
+  0.18.0 the knob stopped capping the resulting pixel value and started capping
+  the accumulated dithering error, which moved its useful range from around
+  `0.1` to around `1.0`. The old name kept working, so a value tuned before
+  0.18.0 went on being applied under a meaning it was never chosen for — and
+  rendered flat, with saturated areas collapsing to a single ink.
+
+  A setting that changes what it means should change its name with it, so it
+  has. `max_error` is the setting; `error_clamp` is read at startup, reported
+  with the exact path to edit, and then discarded. It applies wherever the old
+  name was accepted: `config.yaml` panel and device blocks, a screen's Lua
+  return table, the render API and the dev UI.
+
+  If you never set it, nothing changes. If you did, Byonk tells you where:
+
+  ```text
+  WARN panels.reterminal_e1004.dither.sierra-lite.error_clamp: 0.11 —
+       `error_clamp` was removed in 0.20.0 and is IGNORED. ...
+  ```
+
+  Delete the line to take the default, or set `max_error` if you have retuned
+  it under the new meaning. Lua scripts read the resolved value as
+  `device.dither.max_error`.
+
+- **The MCP tool `assign_screen` is now `configure_device`, and it can set
+  everything about a device, not just its screen.** Assigning a screen was the
+  only thing an assistant could do; every other per-device setting — which
+  panel profile to use, which dither algorithm, the dither tuning, the
+  anti-ghosting flags — could only be changed by editing `config.yaml` by hand
+  and restarting.
+
+  `configure_device` reaches the same settings as
+  `PATCH /api/admin/devices/{key}`: the screen, plus `panel`, `dither`,
+  `colors`, `params`, `refresh`, `name`, `max_error`, `noise_scale`,
+  `chroma_clamp`, `strength`, `temperature_profile`, `maximum_compatibility`
+  and `min_png_bytes`.
+
+  The two interfaces name the device and its screen differently. Over MCP you
+  pass `mac` and `screen_ref`; over REST the device is in the URL and the field
+  is `screen`. Everything else is spelled the same on both.
+
+  Every setting is optional and an omitted one is left alone, so one call
+  changes one setting. The screen is needed only the first time a device is
+  configured.
+
+  If you drive Byonk through MCP, rename any `assign_screen` call to
+  `configure_device`; the `mac` and `screen_ref` arguments are unchanged.
+
 ### New
 
 - **A screen editor in the browser.** The dev UI is no longer just a preview:
@@ -272,30 +320,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The shipped `examples` screens are read-only.** They used to be editable in place, which made it easy to change a sample you meant to keep as a reference. Copy an example into `local` (the dev UI's Copy, or the MCP tool `copy_screen`) to change it. An explicit `screen_repos: examples:` entry in `config.yaml` is unaffected.
 
-- **The MCP tool `assign_screen` is now `configure_device`, and it can set
-  everything about a device, not just its screen.** Assigning a screen was the
-  only thing an assistant could do; every other per-device setting — which
-  panel profile to use, which dither algorithm, the dither tuning, the
-  anti-ghosting flags — could only be changed by editing `config.yaml` by hand
-  and restarting.
-
-  `configure_device` reaches the same settings as
-  `PATCH /api/admin/devices/{key}`: the screen, plus `panel`, `dither`,
-  `colors`, `params`, `refresh`, `name`, `max_error`, `noise_scale`,
-  `chroma_clamp`, `strength`, `temperature_profile`, `maximum_compatibility`
-  and `min_png_bytes`.
-
-  The two interfaces name the device and its screen differently. Over MCP you
-  pass `mac` and `screen_ref`; over REST the device is in the URL and the field
-  is `screen`. Everything else is spelled the same on both.
-
-  Every setting is optional and an omitted one is left alone, so one call
-  changes one setting. The screen is needed only the first time a device is
-  configured.
-
-  If you drive Byonk through MCP, rename any `assign_screen` call to
-  `configure_device`; the `mac` and `screen_ref` arguments are unchanged.
-
 - **A setting can now be removed, not just changed.** Because leaving a field
   out means "keep it as it is", there was no way to undo a per-device setting
   once it existed — and a device setting overrides its panel's, so a value tried
@@ -322,30 +346,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   anywhere, it just rendered `atkinson`. A misspelling such as
   `floyd_steinburg` was accepted, saved, and then quietly gave you a different
   algorithm than the one you asked for — visible only on the panel itself.
-
-- **`error_clamp` is now called `max_error`, and the old name is ignored.** In
-  0.18.0 the knob stopped capping the resulting pixel value and started capping
-  the accumulated dithering error, which moved its useful range from around
-  `0.1` to around `1.0`. The old name kept working, so a value tuned before
-  0.18.0 went on being applied under a meaning it was never chosen for — and
-  rendered flat, with saturated areas collapsing to a single ink.
-
-  A setting that changes what it means should change its name with it, so it
-  has. `max_error` is the setting; `error_clamp` is read at startup, reported
-  with the exact path to edit, and then discarded. It applies wherever the old
-  name was accepted: `config.yaml` panel and device blocks, a screen's Lua
-  return table, the render API and the dev UI.
-
-  If you never set it, nothing changes. If you did, Byonk tells you where:
-
-  ```text
-  WARN panels.reterminal_e1004.dither.sierra-lite.error_clamp: 0.11 —
-       `error_clamp` was removed in 0.18.0 and is IGNORED. ...
-  ```
-
-  Delete the line to take the default, or set `max_error` if you have retuned
-  it under the new meaning. Lua scripts read the resolved value as
-  `device.dither.max_error`.
 
 - **The dev UI's tuning defaults now match the renderer.** Switching dither
   algorithm filled the tuning boxes from a table that had not been updated

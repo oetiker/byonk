@@ -1079,13 +1079,13 @@ impl LuaRuntime {
 
         // Parse optional dither tuning parameters from script return
         let max_error = result.get::<f32>("max_error").ok();
-        // `error_clamp` was removed in 0.18.0: it bounded the resulting pixel
+        // `error_clamp` was removed in 0.20.0: it bounded the resulting pixel
         // value, `max_error` bounds the accumulated error, and the useful
         // range moved from ~0.1 to ~1.0. A stale value still renders — flat —
         // so it is reported and discarded rather than reinterpreted.
         if let Ok(stale) = result.get::<f32>("error_clamp") {
             tracing::warn!(
-                "script returned `error_clamp = {stale}`, which was removed in 0.18.0 and \
+                "script returned `error_clamp = {stale}`, which was removed in 0.20.0 and \
                  is IGNORED. It bounded the resulting pixel value; `max_error` bounds the \
                  accumulated error, so the useful range moved from around 0.1 to around \
                  1.0. Remove it, or return `max_error` if you have retuned it."

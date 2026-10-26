@@ -54,11 +54,17 @@
           aria-checked={selected === i}
           aria-label={`Swatch ${i + 1}`}
           title={c}
-          class="h-6 w-6 rounded border-2"
-          style:background-color={c}
+          class="flex size-18 flex-col overflow-hidden rounded border-2 p-0"
           style:border-color={selected === i ? "var(--ring)" : "var(--border)"}
           onclick={() => (picked = i)}
-        ></button>
+        >
+          <span class="flex-1" style:background-color={c}></span>
+          <span
+            data-swatch-caption
+            class="border-t border-border bg-background py-0.5 text-center font-mono text-[10px] leading-none text-muted-foreground"
+            >{c}</span
+          >
+        </button>
       {/each}
     </div>
     <Label>Hue</Label>
@@ -69,13 +75,25 @@
     <Slider type="single" id="swatch-light" aria-label="Lightness" min={0} max={100} value={hsl.l} onValueChange={onLight} />
     <Label for="swatch-hex">Hex</Label>
     <Input id="swatch-hex" bind:value={hexDraft} oninput={onHexInput} />
-    <div class="flex items-center gap-2 text-xs">
-      <span class="text-muted-foreground">Original</span>
-      <span class="h-5 w-5 rounded border border-border" style:background-color={original[selected]}></span>
-      <span>{original[selected] ?? ""}</span>
-      <span class="text-muted-foreground">Live</span>
-      <span class="h-5 w-5 rounded border border-border" style:background-color={colors[selected]}></span>
-      <span>{colors[selected]}</span>
+    <div class="flex flex-col gap-1">
+      <div class="flex w-fit overflow-hidden rounded border border-border">
+        <div
+          data-testid="cmp-original"
+          class={["size-20", !original[selected] && "border border-dashed border-border bg-background"]}
+          style:background-color={original[selected]}
+        ></div>
+        <div data-testid="cmp-live" class="size-20" style:background-color={colors[selected]}></div>
+      </div>
+      <div data-testid="cmp-legend" class="flex text-[11px]">
+        <span class="flex w-20 flex-col gap-px">
+          <span class="text-muted-foreground">Original</span>
+          <span data-testid="cmp-original-hex" class="font-mono">{original[selected] ?? ""}</span>
+        </span>
+        <span class="flex w-20 flex-col gap-px">
+          <span class="text-muted-foreground">Live</span>
+          <span data-testid="cmp-live-hex" class="font-mono">{colors[selected]}</span>
+        </span>
+      </div>
     </div>
   </div>
 {/if}

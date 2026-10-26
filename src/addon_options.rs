@@ -42,6 +42,10 @@ pub struct AddonOptions {
     pub screen_repo_refresh_interval: Option<u64>,
     #[serde(default)]
     pub screen_repos: Vec<AddonScreenRepo>,
+    #[serde(default)]
+    pub dev_username: Option<String>,
+    #[serde(default)]
+    pub dev_password: Option<String>,
 }
 
 /// Outcome of attempting to read the options file.
@@ -184,6 +188,23 @@ pub fn apply_to_config(result: &ReadResult, config: &mut AppConfig) {
                 )
             })
             .collect();
+
+        // Dev UI credentials are authoritative the same way admin_token is: a
+        // non-empty value sets the config field, a blank or absent value clears
+        // it. An explicit BYONK_DEV_USERNAME/PASSWORD env pair still wins
+        // (resolved in `DevAuth::resolve`).
+        config.admin.dev_username = opts
+            .dev_username
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string);
+        config.admin.dev_password = opts
+            .dev_password
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string);
     }
 }
 
@@ -244,6 +265,8 @@ mod tests {
     fn log_filter_maps_known_level() {
         let r = ReadResult::Parsed(AddonOptions {
             admin_token: None,
+            dev_username: None,
+            dev_password: None,
             log_level: Some("info".to_string()),
             auth_mode: None,
             screen_repo_refresh_interval: None,
@@ -259,6 +282,8 @@ mod tests {
     fn log_filter_none_for_unknown_level_or_missing() {
         let unknown = ReadResult::Parsed(AddonOptions {
             admin_token: None,
+            dev_username: None,
+            dev_password: None,
             log_level: Some("verbose".to_string()),
             auth_mode: None,
             screen_repo_refresh_interval: None,
@@ -272,6 +297,8 @@ mod tests {
     fn apply_sets_token_when_present() {
         let r = ReadResult::Parsed(AddonOptions {
             admin_token: Some("secret".to_string()),
+            dev_username: None,
+            dev_password: None,
             log_level: None,
             auth_mode: None,
             screen_repo_refresh_interval: None,
@@ -290,6 +317,8 @@ mod tests {
         // stays dormant — the add-on option is the single source of truth.
         let blank = ReadResult::Parsed(AddonOptions {
             admin_token: Some("   ".to_string()),
+            dev_username: None,
+            dev_password: None,
             log_level: None,
             auth_mode: None,
             screen_repo_refresh_interval: None,
@@ -305,6 +334,8 @@ mod tests {
 
         let absent = ReadResult::Parsed(AddonOptions {
             admin_token: None,
+            dev_username: None,
+            dev_password: None,
             log_level: Some("info".to_string()),
             auth_mode: None,
             screen_repo_refresh_interval: None,
@@ -337,6 +368,8 @@ mod tests {
     fn invalid_log_level_reports_only_present_unknown() {
         let unknown = ReadResult::Parsed(AddonOptions {
             admin_token: None,
+            dev_username: None,
+            dev_password: None,
             log_level: Some("verbose".to_string()),
             auth_mode: None,
             screen_repo_refresh_interval: None,
@@ -346,6 +379,8 @@ mod tests {
 
         let valid = ReadResult::Parsed(AddonOptions {
             admin_token: None,
+            dev_username: None,
+            dev_password: None,
             log_level: Some("info".to_string()),
             auth_mode: None,
             screen_repo_refresh_interval: None,
@@ -355,6 +390,8 @@ mod tests {
 
         let blank = ReadResult::Parsed(AddonOptions {
             admin_token: None,
+            dev_username: None,
+            dev_password: None,
             log_level: Some("  ".to_string()),
             auth_mode: None,
             screen_repo_refresh_interval: None,
@@ -364,6 +401,8 @@ mod tests {
 
         let absent = ReadResult::Parsed(AddonOptions {
             admin_token: None,
+            dev_username: None,
+            dev_password: None,
             log_level: None,
             auth_mode: None,
             screen_repo_refresh_interval: None,
@@ -408,6 +447,8 @@ mod tests {
     fn apply_overrides_settings_and_builds_package_map() {
         let r = ReadResult::Parsed(AddonOptions {
             admin_token: Some("t".to_string()),
+            dev_username: None,
+            dev_password: None,
             log_level: None,
             auth_mode: Some("ed25519".to_string()),
             screen_repo_refresh_interval: Some(600),
@@ -460,6 +501,8 @@ mod tests {
 
         let r = ReadResult::Parsed(AddonOptions {
             admin_token: Some("t".to_string()),
+            dev_username: None,
+            dev_password: None,
             log_level: None,
             auth_mode: None,
             screen_repo_refresh_interval: None,
@@ -488,6 +531,8 @@ mod tests {
         // / authoritative-replace; auth_mode and interval preserve-on-absent).
         let r = ReadResult::Parsed(AddonOptions {
             admin_token: None,
+            dev_username: None,
+            dev_password: None,
             log_level: None,
             auth_mode: None,
             screen_repo_refresh_interval: None,

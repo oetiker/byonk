@@ -1,0 +1,171 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn-svelte/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* The density scale of spec §2, decided once here rather than per component.
+   Dense and cramped are neighbours; this is the guard. */
+@theme {
+  /* The nova preset (Task 5 Step 1) ships with Geist as its display font,
+     loaded via @fontsource-variable/geist. Dropped rather than self-hosted:
+     the app's build embeds exactly three fixed filenames into the byonk
+     binary via include_str! (see vite.config.js) -- Geist's five
+     unicode-range subsets (~76 KiB raw) land as separate files outside
+     that contract and would 404 in production, and inlining them as data
+     URIs would bloat app.css by roughly that much for a font nothing in
+     byonk's own settled design language asked for. Kept the system-font
+     stack Task 1 chose instead. */
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --text-xs: 0.6875rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 0.875rem;
+  --text-base--line-height: 1.25rem;
+  --spacing: 0.25rem;
+}
+
+/* Colours and radii map the :root variables into utilities; `inline` makes the
+   utilities resolve var(--x) at use site so .dark overrides take effect. */
+@theme inline {
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --color-success: var(--success);
+  --color-selection: var(--selection);
+  --color-match: var(--match);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* Row heights: one token per row kind (docs/dev-ui-design.md section 1.2).
+   Heights are set, not derived from padding. Consumed as h-(--pane-header-h). */
+:root {
+  --pane-header-h: calc(var(--spacing) * 9);
+  --pane-toolbar-h: calc(var(--spacing) * 8);
+  --section-h: calc(var(--spacing) * 6);
+  --row-h: calc(var(--spacing) * 6);
+  --status-h: calc(var(--spacing) * 6);
+}
+
+/* byonk's palette written into the shadcn variables (one token system).
+   Light is the default; dark keeps byonk's navy identity (settled, do not
+   relitigate). `.dark` is set on <html> by the theme store. */
+:root {
+  --background: #ffffff;
+  --foreground: #1a1d23;
+  --card: #ffffff;
+  --card-foreground: #1a1d23;
+  --popover: #ffffff;
+  --popover-foreground: #1a1d23;
+  --primary: #1e5aa8;
+  --primary-foreground: #ffffff;
+  --secondary: #f6f7f9;
+  --secondary-foreground: #1a1d23;
+  --muted: #f6f7f9;
+  --muted-foreground: #5a6472;
+  --accent: #e6e9ef;
+  --accent-foreground: #1a1d23;
+  --destructive: #b3261e;
+  --success: #1a7f45;
+  --border: #d8dce3;
+  --input: #d8dce3;
+  --ring: #1e5aa8;
+  --selection: #cfe0f7;
+  --match: #e3ecfa;
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+  --sidebar: #f6f7f9;
+  --sidebar-foreground: #1a1d23;
+  --sidebar-primary: #1e5aa8;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e6e9ef;
+  --sidebar-accent-foreground: #1a1d23;
+  --sidebar-border: #d8dce3;
+  --sidebar-ring: #1e5aa8;
+}
+
+.dark {
+  --background: #0f1622;
+  --foreground: #dbe3ef;
+  --card: #172030;
+  --card-foreground: #dbe3ef;
+  --popover: #172030;
+  --popover-foreground: #dbe3ef;
+  --primary: #5b9bf5;
+  --primary-foreground: #0f1622;
+  --secondary: #172030;
+  --secondary-foreground: #dbe3ef;
+  --muted: #172030;
+  --muted-foreground: #8896aa;
+  --accent: #1f2c42;
+  --accent-foreground: #dbe3ef;
+  --destructive: #f2837c;
+  --success: #56c98a;
+  --border: #27354a;
+  --input: #27354a;
+  --ring: #5b9bf5;
+  --selection: #24405f;
+  --match: #1d324a;
+  --sidebar: #172030;
+  --sidebar-foreground: #dbe3ef;
+  --sidebar-primary: #5b9bf5;
+  --sidebar-primary-foreground: #0f1622;
+  --sidebar-accent: #1f2c42;
+  --sidebar-accent-foreground: #dbe3ef;
+  --sidebar-border: #27354a;
+  --sidebar-ring: #5b9bf5;
+}
+
+html, body, #app { height: 100%; }
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+  }
+	body {
+		@apply bg-background text-foreground;
+  }
+	html {
+		@apply font-sans;
+  }
+}

@@ -2,10 +2,14 @@
 //!
 //! Strategy (avoids yamlpatch's weak spots on sequences/flow lists):
 //! - global scalar settings → in-place scalar replace
-//! - device / screen repo add/edit/remove → remove the entry's subtree + append a
-//!   freshly block-serialized subtree (entries are machine-managed, so no user
-//!   comments live inside them). Both `devices:` and `screen_repos:` share the
-//!   same section-generic helpers.
+//! - panels and devices → edited key by key in place ([`set_path`],
+//!   [`remove_path`], [`sync_mapping`]): an entry keeps its position, its
+//!   comments and the spelling of every value that does not change, and a
+//!   one-line `{…}` mapping stays a flow mapping. A new device is appended as
+//!   the last child of `devices:`.
+//! - screen repo add/edit → remove the entry's subtree + insert a freshly
+//!   block-serialized subtree (entries are machine-managed, so no user
+//!   comments live inside them).
 
 use yamlpatch::{apply_yaml_patches, Op, Patch};
 use yamlpath::Document;
@@ -135,38 +139,549 @@ fn indent_of(line: &str) -> usize {
     line.bytes().take_while(|b| *b == b' ').count()
 }
 
-/// Compute the byte range covering `<section>.<key>` *and only* its own block,
-/// starting at the key line and extending over the deeper-indented body
-/// lines that belong to it.
+/// Does `trimmed` (a line without its indentation) start a block sequence
+/// item (`- a`, or a bare `-`)?
+fn is_item_line(trimmed: &str) -> bool {
+    trimmed == "-" || trimmed.starts_with("- ") || trimmed.starts_with("-\t")
+}
+
+/// Byte range of `path`'s key line plus the body lines that belong to it.
 ///
-/// This is done manually instead of via `yamlpatch::Op::Remove` because
-/// tree-sitter attaches any following less-indented comment (e.g. a trailing
-/// top-level `# comment`) to the last block node, which would make `Op::Remove`
-/// delete that comment too. Scanning by indentation keeps such comments intact.
-fn block_range(yaml: &str, section: &str, key: &str) -> Result<(usize, usize), ConfigWriteError> {
+/// Ownership rule: every following non-comment line indented deeper than
+/// the key is body, and so are the `- ` lines of a block sequence written at
+/// the key's own indentation (compact style). Blank lines and comment lines (at any indentation, column
+/// 0 included) belong to the entry only when more of its body follows them;
+/// a run of them that is followed by a line at or left of the key's
+/// indentation (or by the end of the file) belongs to what comes next, so a
+/// comment above the next sibling stays with that sibling. A multi-line flow
+/// value is the key's through the end of the line its `}`/`]` closes on,
+/// wherever that bracket is indented.
+///
+/// Scanned by indentation rather than with `Op::Remove`, because tree-sitter
+/// attaches a following less-indented comment (e.g. a trailing top-level
+/// `# comment`) to the last block node and would delete it too.
+///
+/// Only meaningful for a key that starts its own line: a key inside a flow
+/// mapping shares its parent's line (see [`parent_is_inline`]).
+fn path_range(yaml: &str, path: &[&str]) -> Result<(usize, usize), ConfigWriteError> {
     let doc = document(yaml)?;
-    let route = yamlpath::Route::default().with_key(section).with_key(key);
     let feature = doc
-        .query_pretty(&route)
+        .query_pretty(&route_for(path))
         .map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
     let key_byte = feature.location.byte_span.0;
 
     // Start of the key line.
     let line_start = yaml[..key_byte].rfind('\n').map(|i| i + 1).unwrap_or(0);
     let key_indent = indent_of(&yaml[line_start..]);
+    // A block sequence may sit at the key's own indentation (compact style,
+    // `items:` over `- a`), as `serde_yaml` writes it: its `- ` lines are the
+    // key's body too.
+    let compact_items = matches!(
+        doc.query_exact(&route_for(path)),
+        Ok(Some(v)) if v.kind() == yamlpath::FeatureKind::BlockSequence
+    );
 
-    // Walk forward, consuming lines that are more deeply indented than the key.
+    // `end` only advances past blank and comment lines once a deeper body
+    // line after them proves they are inside.
     let mut end = next_line_start(yaml, line_start);
-    while end < yaml.len() {
-        let line_end = next_line_start(yaml, end);
-        let line = &yaml[end..line_end];
-        if line.trim().is_empty() || indent_of(line) <= key_indent {
+    let mut scan = end;
+    while scan < yaml.len() {
+        let line_end = next_line_start(yaml, scan);
+        let line = &yaml[scan..line_end];
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            scan = line_end;
+            continue;
+        }
+        let indent = indent_of(line);
+        let item = compact_items && indent == key_indent && is_item_line(trimmed);
+        if indent <= key_indent && !item {
             break;
         }
+        scan = line_end;
         end = line_end;
     }
-
+    // A multi-line flow value may close (`}` or `]`) on a line at the key's
+    // own indentation, which the scan above stops before. Its text is the
+    // key's all the same: run to the end of the line the value closes on.
+    // Only for a value that ends in a flow bracket, because a block node's
+    // span can reach into a following comment the scan rightly leaves out.
+    let value_end = feature.location.byte_span.1;
+    let value_text = yaml[key_byte..value_end].trim_end();
+    if value_end > end && (value_text.ends_with('}') || value_text.ends_with(']')) {
+        end = next_line_start(yaml, value_end);
+    }
     Ok((line_start, end))
+}
+
+/// The byte range of `<section>.<key>`'s own block; see [`path_range`].
+fn block_range(yaml: &str, section: &str, key: &str) -> Result<(usize, usize), ConfigWriteError> {
+    path_range(yaml, &[section, key])
+}
+
+fn parse(yaml: &str) -> Result<serde_yaml::Value, ConfigWriteError> {
+    serde_yaml::from_str(yaml).map_err(|e| ConfigWriteError::Patch(e.to_string()))
+}
+
+fn lookup<'a>(doc: &'a serde_yaml::Value, path: &[&str]) -> Option<&'a serde_yaml::Value> {
+    path.iter().try_fold(doc, |v, k| v.get(*k))
+}
+
+fn is_scalar(v: &serde_yaml::Value) -> bool {
+    !matches!(
+        v,
+        serde_yaml::Value::Mapping(_) | serde_yaml::Value::Sequence(_)
+    )
+}
+
+/// Does `path` carry its value on the key line (`dither: {}`, `x: 1`,
+/// `[a, b]`) rather than as an indented block (or nothing, `dither:`)?
+/// Asked of the parse tree, so a quoted key with a colon in it (`"AA:BB":`)
+/// or a trailing comment is not mistaken for an inline value.
+fn inline_value(yaml: &str, path: &[&str]) -> Result<bool, ConfigWriteError> {
+    let doc = document(yaml)?;
+    let value = doc
+        .query_exact(&route_for(path))
+        .map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
+    Ok(match value {
+        None => false,
+        Some(v) => !matches!(
+            v.kind(),
+            yamlpath::FeatureKind::BlockMapping | yamlpath::FeatureKind::BlockSequence
+        ),
+    })
+}
+
+/// The byte span (braces included) of the mapping at `path` when it is a
+/// non-empty flow mapping written on one line (`og: {name: OG}`). Such a
+/// mapping is edited inside its braces, so it stays a flow mapping: it cannot
+/// hold comments, and turning it into a block is damage the user did not ask
+/// for. An empty `{}` and a multi-line flow mapping are `None`; those are
+/// rewritten as a block.
+fn one_line_flow_mapping(
+    yaml: &str,
+    path: &[&str],
+) -> Result<Option<(usize, usize)>, ConfigWriteError> {
+    if path.is_empty() {
+        return Ok(None);
+    }
+    let doc = document(yaml)?;
+    // An absent path is no flow mapping.
+    let Ok(Some(value)) = doc.query_exact(&route_for(path)) else {
+        return Ok(None);
+    };
+    if value.kind() != yamlpath::FeatureKind::FlowMapping || value.is_multiline() {
+        return Ok(None);
+    }
+    let (start, end) = value.location.byte_span;
+    let text = &yaml[start..end];
+    if !(text.starts_with('{') && text.ends_with('}')) || text[1..text.len() - 1].trim().is_empty()
+    {
+        return Ok(None);
+    }
+    Ok(Some((start, end)))
+}
+
+/// `value` written as a one-line flow value.
+fn flow_value(value: &serde_yaml::Value) -> Result<String, ConfigWriteError> {
+    yamlpatch::serialize_flow(&to_patch_value(value)?)
+        .map_err(|e| ConfigWriteError::Patch(e.to_string()))
+}
+
+/// `key` as written inside a flow mapping: bare when it is plainly safe,
+/// quoted otherwise.
+fn flow_key(key: &str) -> Result<String, ConfigWriteError> {
+    let bare = !key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if bare {
+        Ok(key.to_string())
+    } else {
+        flow_value(&serde_yaml::Value::from(key))
+    }
+}
+
+/// Replace the value of `path`, a key inside a one-line flow mapping, by
+/// byte span. `None` when the key carries no value (`{a: }`).
+fn flow_replace(
+    yaml: &str,
+    path: &[&str],
+    value: &serde_yaml::Value,
+) -> Result<Option<String>, ConfigWriteError> {
+    let doc = document(yaml)?;
+    let Some(old) = doc
+        .query_exact(&route_for(path))
+        .map_err(|e| ConfigWriteError::Patch(e.to_string()))?
+    else {
+        return Ok(None);
+    };
+    let (start, end) = old.location.byte_span;
+    let mut out = yaml.to_string();
+    out.replace_range(start..end, &flow_value(value)?);
+    Ok(Some(out))
+}
+
+/// Add `key: value` as the last pair of the one-line flow mapping spanning
+/// `parent` (`{a: 1}` becomes `{a: 1, key: value}`). A legal trailing comma
+/// (`{a: 1,}`) is used as the separator instead of being doubled.
+fn flow_add(
+    yaml: &str,
+    parent: (usize, usize),
+    key: &str,
+    value: &serde_yaml::Value,
+) -> Result<String, ConfigWriteError> {
+    let close = parent.1 - 1; // the `}`
+    let before = yaml[parent.0..close].trim_end();
+    let at = parent.0 + before.len();
+    let sep = if before.ends_with(',') { " " } else { ", " };
+    let mut out = yaml.to_string();
+    out.insert_str(
+        at,
+        &format!("{sep}{}: {}", flow_key(key)?, flow_value(value)?),
+    );
+    Ok(out)
+}
+
+/// The length of the shortest prefix of `path` whose value is written as an
+/// alias (`d: *base`), if any. Such a value has no lines or braces of its own
+/// to edit in place; see [`write_whole`].
+fn aliased_prefix(yaml: &str, path: &[&str]) -> Result<Option<usize>, ConfigWriteError> {
+    // Read after the key: `query_exact` resolves an alias to the anchored
+    // node, so its span points at the anchor, not at `*name`.
+    let doc = document(yaml)?;
+    for n in 1..=path.len() {
+        let Ok(key) = doc.query_key_only(&route_for(&path[..n])) else {
+            return Ok(None);
+        };
+        let after = yaml[key.location.byte_span.1..].trim_start_matches([' ', '\t']);
+        let value = after
+            .strip_prefix(':')
+            .unwrap_or(after)
+            .trim_start_matches([' ', '\t']);
+        if value.starts_with('*') {
+            return Ok(Some(n));
+        }
+    }
+    Ok(None)
+}
+
+/// Replace `path`'s lines with `value` written as a block at the same place
+/// and indentation. An alias written there is replaced by `value`, which the
+/// callers build from the alias's resolved contents; the anchor it pointed at
+/// is left alone.
+fn write_whole(
+    yaml: &str,
+    path: &[&str],
+    value: &serde_yaml::Value,
+) -> Result<String, ConfigWriteError> {
+    let (start, end) = path_range(yaml, path)?;
+    let text = block_text(path[path.len() - 1], value, indent_of(&yaml[start..]))?;
+    let mut out = yaml.to_string();
+    out.replace_range(start..end, &text);
+    Ok(out)
+}
+
+/// `root` with `sub` set to `value` (`Some`) or removed (`None`), creating
+/// mappings along the way.
+fn with_change(
+    root: &serde_yaml::Value,
+    sub: &[&str],
+    value: Option<&serde_yaml::Value>,
+) -> serde_yaml::Value {
+    let Some((first, rest)) = sub.split_first() else {
+        return value.cloned().unwrap_or(serde_yaml::Value::Null);
+    };
+    let mut m = root.as_mapping().cloned().unwrap_or_default();
+    if rest.is_empty() {
+        match value {
+            Some(v) => {
+                m.insert((*first).into(), v.clone());
+            }
+            None => {
+                m.shift_remove(*first);
+            }
+        }
+    } else {
+        let child = m.get(*first).cloned().unwrap_or(serde_yaml::Value::Null);
+        m.insert((*first).into(), with_change(&child, rest, value));
+    }
+    serde_yaml::Value::Mapping(m)
+}
+
+/// Apply a set (`Some`) or removal (`None`) of `path` that runs through an
+/// alias written at `path[..n]`: the alias becomes a block holding its
+/// resolved contents with the change applied.
+fn change_through_alias(
+    yaml: &str,
+    doc: &serde_yaml::Value,
+    path: &[&str],
+    n: usize,
+    value: Option<&serde_yaml::Value>,
+) -> Result<String, ConfigWriteError> {
+    let at = &path[..n];
+    let resolved = lookup(doc, at).cloned().unwrap_or(serde_yaml::Value::Null);
+    write_whole(yaml, at, &with_change(&resolved, &path[n..], value))
+}
+
+/// Remove the pair `path` from its one-line flow mapping, with the comma that
+/// separates it from a neighbour.
+fn flow_remove(yaml: &str, path: &[&str]) -> Result<String, ConfigWriteError> {
+    let doc = document(yaml)?;
+    let route = route_for(path);
+    let key = doc
+        .query_key_only(&route)
+        .map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
+    let value = doc
+        .query_exact(&route)
+        .map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
+    // The pair: from the key to the end of its value (or of the key, for a
+    // valueless `a:`). Pretty mode's span is not the pair inside a flow
+    // mapping, so it is assembled from the two exact parts.
+    let mut start = key.location.byte_span.0;
+    let mut end = value.map_or(key.location.byte_span.1, |v| v.location.byte_span.1);
+    if yaml[end..].starts_with(':') {
+        end += 1;
+    }
+    let after = &yaml[end..];
+    let spaces_after = after.len() - after.trim_start_matches(' ').len();
+    if after[spaces_after..].starts_with(',') {
+        // `a: 1, b: 2` -> `b: 2`: through the comma and the spaces after it.
+        end += spaces_after + 1;
+        end += yaml[end..].len() - yaml[end..].trim_start_matches(' ').len();
+    } else {
+        // The last pair: `a: 1, b: 2` -> `a: 1`.
+        let before = yaml[..start].trim_end_matches(' ');
+        if before.ends_with(',') {
+            start = before.len() - 1;
+        }
+    }
+    let mut out = yaml.to_string();
+    out.replace_range(start..end, "");
+    Ok(out)
+}
+
+/// Equal as YAML values, with numbers compared by value: `1` and `1.0` are
+/// the same setting, so neither spelling is rewritten into the other.
+fn same(a: &serde_yaml::Value, b: &serde_yaml::Value) -> bool {
+    use serde_yaml::Value;
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => {
+            x == y || matches!((x.as_f64(), y.as_f64()), (Some(p), Some(q)) if p == q)
+        }
+        (Value::Mapping(x), Value::Mapping(y)) => {
+            x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| same(v, w)))
+        }
+        (Value::Sequence(x), Value::Sequence(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(v, w)| same(v, w))
+        }
+        _ => a == b,
+    }
+}
+
+/// Is `path`'s parent a flow mapping (`og: {name: OG, …}`)? Then `path`'s key
+/// shares the parent's line, and the parent is rewritten as a block instead
+/// of editing the key's "own" lines, which it does not have.
+fn parent_is_inline(yaml: &str, path: &[&str]) -> Result<bool, ConfigWriteError> {
+    Ok(path.len() >= 2 && inline_value(yaml, &path[..path.len() - 1])?)
+}
+
+/// `{key: value}` as block YAML, every line indented by `indent` spaces.
+/// Written as text because `yamlpatch`'s `Op::Add` mis-indents nested maps.
+fn block_text(
+    key: &str,
+    value: &serde_yaml::Value,
+    indent: usize,
+) -> Result<String, ConfigWriteError> {
+    let mut m = serde_yaml::Mapping::new();
+    m.insert(key.into(), value.clone());
+    let text = serde_yaml::to_string(&serde_yaml::Value::Mapping(m))
+        .map_err(|e| ConfigWriteError::Patch(e.to_string()))?;
+    let pad = " ".repeat(indent);
+    Ok(text.lines().map(|l| format!("{pad}{l}\n")).collect())
+}
+
+/// Remove `path` and its body lines. An absent path leaves the text
+/// unchanged: removing what is not there is not an error for a whole-rung
+/// write.
+pub fn remove_path(yaml: &str, path: &[&str]) -> Result<String, ConfigWriteError> {
+    let doc = parse(yaml)?;
+    if lookup(&doc, path).is_none() {
+        return Ok(yaml.to_string());
+    }
+    if let Some(n) = aliased_prefix(yaml, path)?.filter(|n| *n < path.len()) {
+        return change_through_alias(yaml, &doc, path, n, None);
+    }
+    if parent_is_inline(yaml, path)? {
+        let parent = &path[..path.len() - 1];
+        if one_line_flow_mapping(yaml, parent)?.is_some() {
+            return flow_remove(yaml, path);
+        }
+        let mut rest = lookup(&doc, parent)
+            .and_then(|v| v.as_mapping().cloned())
+            .unwrap_or_default();
+        rest.shift_remove(path[path.len() - 1]);
+        return set_path(yaml, parent, &serde_yaml::Value::Mapping(rest));
+    }
+    let (start, end) = path_range(yaml, path)?;
+    let mut out = yaml.to_string();
+    out.replace_range(start..end, "");
+    Ok(out)
+}
+
+/// Set `path` to `value`, rewriting only the lines that key owns.
+///
+/// - an equal value (numbers by value, `1` == `1.0`): nothing is written
+///   (spelling, quoting and comments stay);
+/// - an existing scalar replaced by a scalar: in place, comment kept;
+/// - an existing key otherwise: its lines are replaced by a block at the
+///   same place and indentation;
+/// - a key inside a non-empty one-line flow mapping (`{a: 1, b: 2}`):
+///   replaced or appended inside the braces, so the mapping stays flow style;
+/// - an existing key inside any other flow mapping: the parent is rewritten
+///   as a block holding the new value (the key has no lines of its own);
+/// - an absent key: appended as the parent's last child, at the indentation
+///   the parent's children already use (parent indent + 2 when it has none).
+///   Any other inline parent (`dither: {}`) is first rewritten as a block.
+///
+/// The parent must exist ([`ConfigWriteError::NotFound`] otherwise); a
+/// top-level key's parent is the document, which always does.
+pub fn set_path(
+    yaml: &str,
+    path: &[&str],
+    value: &serde_yaml::Value,
+) -> Result<String, ConfigWriteError> {
+    assert!(!path.is_empty(), "set_path: path must not be empty");
+    let doc = parse(yaml)?;
+    let (parent, key) = path.split_at(path.len() - 1);
+    let key = key[0];
+
+    if lookup(&doc, path).is_some_and(|existing| same(existing, value)) {
+        return Ok(yaml.to_string());
+    }
+    // Through or at an alias (`d: *base`): it has no lines of its own, so it
+    // is rewritten as a block holding its resolved contents plus the change.
+    if let Some(n) = aliased_prefix(yaml, path)? {
+        return change_through_alias(yaml, &doc, path, n, Some(value));
+    }
+
+    if let Some(existing) = lookup(&doc, path) {
+        if one_line_flow_mapping(yaml, parent)?.is_some() {
+            if let Some(out) = flow_replace(yaml, path, value)? {
+                return Ok(out);
+            }
+        }
+        if parent_is_inline(yaml, path)? {
+            let mut merged = lookup(&doc, parent)
+                .and_then(|v| v.as_mapping().cloned())
+                .unwrap_or_default();
+            merged.insert(key.into(), value.clone());
+            return set_path(yaml, parent, &serde_yaml::Value::Mapping(merged));
+        }
+        if is_scalar(existing) && is_scalar(value) && !existing.is_null() {
+            return replace_scalar(yaml, path, value.clone());
+        }
+        return write_whole(yaml, path, value);
+    }
+
+    if parent.is_empty() {
+        // A new top-level key: the document's last line.
+        let mut out = yaml.to_string();
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&block_text(key, value, 0)?);
+        return Ok(out);
+    }
+    let parent_value =
+        lookup(&doc, parent).ok_or_else(|| ConfigWriteError::NotFound(parent.join(".")))?;
+    if let Some(span) = one_line_flow_mapping(yaml, parent)? {
+        return flow_add(yaml, span, key, value);
+    }
+    if inline_value(yaml, parent)? {
+        let mut merged = parent_value.as_mapping().cloned().unwrap_or_default();
+        merged.insert(key.into(), value.clone());
+        return set_path(yaml, parent, &serde_yaml::Value::Mapping(merged));
+    }
+
+    let (start, end) = path_range(yaml, parent)?;
+    let parent_indent = indent_of(&yaml[start..]);
+    let child_indent = yaml[next_line_start(yaml, start)..end]
+        .lines()
+        .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+        .map(indent_of)
+        .unwrap_or(parent_indent + 2);
+    let mut text = block_text(key, value, child_indent)?;
+    if !yaml[..end].ends_with('\n') {
+        text.insert(0, '\n');
+    }
+    let mut out = yaml.to_string();
+    out.insert_str(end, &text);
+    Ok(out)
+}
+
+/// Make the mapping at `path` equal `target`, key by key: keys the target
+/// lacks are removed, changed values are set, nested mappings are synced
+/// recursively, and equal values (numbers by value) are left exactly as
+/// written. A non-empty one-line flow mapping is edited inside its braces and
+/// stays flow style. An absent, null, other inline or to-be-empty mapping is
+/// written whole by [`set_path`].
+pub fn sync_mapping(
+    yaml: &str,
+    path: &[&str],
+    target: &serde_yaml::Mapping,
+) -> Result<String, ConfigWriteError> {
+    let doc = parse(yaml)?;
+    if aliased_prefix(yaml, path)?.is_some() {
+        // An alias has nothing to edit key by key: written whole.
+        return set_path(yaml, path, &serde_yaml::Value::Mapping(target.clone()));
+    }
+    let flow = !target.is_empty() && one_line_flow_mapping(yaml, path)?.is_some();
+    let existing = match lookup(&doc, path) {
+        Some(serde_yaml::Value::Mapping(m))
+            if !target.is_empty() && (flow || !inline_value(yaml, path)?) =>
+        {
+            m.clone()
+        }
+        _ => return set_path(yaml, path, &serde_yaml::Value::Mapping(target.clone())),
+    };
+    let key_of = |k: &serde_yaml::Value| -> Result<String, ConfigWriteError> {
+        k.as_str()
+            .map(str::to_string)
+            .ok_or_else(|| ConfigWriteError::Patch(format!("non-string key {k:?}")))
+    };
+    let removals = |mut out: String| -> Result<String, ConfigWriteError> {
+        for k in existing.keys() {
+            if !target.contains_key(k) {
+                let k = key_of(k)?;
+                let child: Vec<&str> = path.iter().copied().chain([k.as_str()]).collect();
+                out = remove_path(&out, &child)?;
+            }
+        }
+        Ok(out)
+    };
+    let sets = |mut out: String| -> Result<String, ConfigWriteError> {
+        for (k, v) in target {
+            let ks = key_of(k)?;
+            let child: Vec<&str> = path.iter().copied().chain([ks.as_str()]).collect();
+            match (existing.get(k), v) {
+                (Some(old), new) if same(old, new) => {}
+                (Some(serde_yaml::Value::Mapping(_)), serde_yaml::Value::Mapping(m)) => {
+                    out = sync_mapping(&out, &child, m)?;
+                }
+                (_, new) => out = set_path(&out, &child, new)?,
+            }
+        }
+        Ok(out)
+    };
+    if flow {
+        // Sets first, so a flow mapping never passes through `{}`, which
+        // would turn it into a block.
+        removals(sets(yaml.to_string())?)
+    } else {
+        // Removals first, so an insert never lands next to a line about to go.
+        sets(removals(yaml.to_string())?)
+    }
 }
 
 /// Remove `<section>.<key>` entirely. Returns [`ConfigWriteError::NotFound`] if
@@ -342,13 +857,109 @@ pub fn remove_device(yaml: &str, key: &str) -> Result<String, ConfigWriteError> 
     remove_from_section(yaml, "devices", "device", key)
 }
 
-/// Add a new device or replace an existing one with `block`.
+/// Add a new device or make an existing one equal `block`. On an existing
+/// entry this is a whole-entry sync: keys `block` lacks are removed.
+///
+/// A new device is appended as the last child of `devices:` (the section is
+/// created if absent; `devices: {}` and a null `devices:` become a block). An
+/// existing one is synced key by key with [`sync_mapping`], so it keeps its
+/// place, its comments and every value that does not change.
 pub fn upsert_device(
     yaml: &str,
     key: &str,
     block: &serde_yaml::Mapping,
 ) -> Result<String, ConfigWriteError> {
-    upsert_in_section(yaml, "devices", "device", key, block)
+    let doc = parse(yaml)?;
+    match doc.get("devices") {
+        Some(devices) if devices.get(key).is_some() => sync_mapping(yaml, &["devices", key], block),
+        Some(_) => set_path(
+            yaml,
+            &["devices", key],
+            &serde_yaml::Value::Mapping(block.clone()),
+        ),
+        None => {
+            let mut section = serde_yaml::Mapping::new();
+            section.insert(key.into(), serde_yaml::Value::Mapping(block.clone()));
+            set_path(yaml, &["devices"], &serde_yaml::Value::Mapping(section))
+        }
+    }
+}
+
+/// Edit `devices.<key>` in place: every name in `keys` is set to `block[name]`,
+/// or removed when `block` lacks it. Keys not named are neither read nor written.
+/// [`ConfigWriteError::NotFound`] when the entry is absent from the text.
+///
+/// The target is the entry as it stands with only the named keys replaced, so
+/// [`sync_mapping`] leaves every other key exactly as written.
+pub fn update_device(
+    yaml: &str,
+    key: &str,
+    block: &serde_yaml::Mapping,
+    keys: &[&str],
+) -> Result<String, ConfigWriteError> {
+    let doc = parse(yaml)?;
+    let entry = lookup(&doc, &["devices", key])
+        .ok_or_else(|| ConfigWriteError::NotFound(format!("device {key}")))?;
+    let mut target = entry.as_mapping().cloned().unwrap_or_default();
+    for name in keys {
+        match block.get(*name) {
+            // An existing key keeps its position; a new one is appended.
+            Some(v) => {
+                target.insert((*name).into(), v.clone());
+            }
+            None => {
+                target.shift_remove(*name);
+            }
+        }
+    }
+    sync_mapping(yaml, &["devices", key], &target)
+}
+
+/// Rename the mapping key at `path` (its last element) to `new_key`, in
+/// place: only the key's own text changes, so the entry keeps its position,
+/// its value, and every comment around and inside it. Works for a key in a
+/// block or a flow mapping; a quoted key is replaced quote and all, and the
+/// new key is quoted only when it needs to be.
+///
+/// [`ConfigWriteError::NotFound`] when `path` is absent; a
+/// [`ConfigWriteError::Patch`] when a sibling already has `new_key`. Renaming
+/// a key to itself changes nothing.
+pub fn rename_key(yaml: &str, path: &[&str], new_key: &str) -> Result<String, ConfigWriteError> {
+    assert!(!path.is_empty(), "rename_key: path must not be empty");
+    let doc = parse(yaml)?;
+    if lookup(&doc, path).is_none() {
+        return Err(ConfigWriteError::NotFound(path.join(".")));
+    }
+    let old_key = path[path.len() - 1];
+    if old_key == new_key {
+        return Ok(yaml.to_string());
+    }
+    let parent = &path[..path.len() - 1];
+    let mut sibling: Vec<&str> = parent.to_vec();
+    sibling.push(new_key);
+    if lookup(&doc, &sibling).is_some() {
+        return Err(ConfigWriteError::Patch(format!(
+            "{} already exists",
+            sibling.join(".")
+        )));
+    }
+    let (start, end) = document(yaml)?
+        .query_key_only(&route_for(path))
+        .map_err(|e| ConfigWriteError::Patch(e.to_string()))?
+        .location
+        .byte_span;
+    let mut out = yaml.to_string();
+    out.replace_range(start..end, &flow_key(new_key)?);
+    // The result must hold the same value under the new key: a span that
+    // missed a quote would show up here rather than in the file.
+    let check = parse(&out)?;
+    if lookup(&check, &sibling) != lookup(&doc, path) {
+        return Err(ConfigWriteError::Patch(format!(
+            "renaming {} did not round-trip",
+            path.join(".")
+        )));
+    }
+    Ok(out)
 }
 
 /// Remove `screen_repos.<handle>` entirely. Returns [`ConfigWriteError::NotFound`]
@@ -601,6 +1212,914 @@ devices:
             v["devices"]["AA:BB"]["params"]["station"],
             serde_yaml::Value::from("Olten"),
             "params sub-map mis-nested:\n{out}"
+        );
+    }
+
+    const PANELS: &str = "\
+panels:
+    # first panel
+    e1004:
+        name: E1004   # inline
+        colors: '#000000,#FFFFFF'
+    og:
+        name: OG
+        dither:
+            max_error: 0.5   # tuned by hand
+            strength: 1.0
+";
+
+    #[test]
+    fn set_path_inserts_a_nested_mapping_at_the_parents_child_indent() {
+        let mut m = serde_yaml::Mapping::new();
+        m.insert("strength".into(), 0.8.into());
+        let out = set_path(
+            PANELS,
+            &["panels", "e1004", "dither"],
+            &serde_yaml::Value::Mapping(m),
+        )
+        .unwrap();
+        assert!(
+            out.contains("        dither:\n          strength: 0.8\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("# first panel")
+                && out.contains("# inline")
+                && out.contains("# tuned by hand")
+        );
+        let doc: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            doc["panels"]["e1004"]["dither"]["strength"].as_f64(),
+            Some(0.8)
+        );
+        assert_eq!(doc["panels"]["e1004"]["name"], "E1004");
+    }
+
+    #[test]
+    fn sync_mapping_touches_only_the_keys_that_change() {
+        let mut target = serde_yaml::Mapping::new();
+        target.insert("max_error".into(), 0.5.into()); // unchanged: its line and comment stay
+        let mut gamut = serde_yaml::Mapping::new();
+        gamut.insert("knee".into(), 0.6.into());
+        // A new nested block.
+        target.insert("gamut".into(), serde_yaml::Value::Mapping(gamut));
+        // `strength` absent from the target: removed.
+        let out = sync_mapping(PANELS, &["panels", "og", "dither"], &target).unwrap();
+        assert!(out.contains("max_error: 0.5   # tuned by hand"), "{out}");
+        assert!(!out.contains("strength"), "{out}");
+        let doc: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            doc["panels"]["og"]["dither"]["gamut"]["knee"].as_f64(),
+            Some(0.6)
+        );
+        assert_eq!(doc["panels"]["og"]["name"], "OG");
+    }
+
+    #[test]
+    fn set_path_rewrites_an_inline_flow_parent_as_a_block() {
+        let yaml = "panels:\n  og:\n    name: OG\n    dither: {}\n";
+        let out = set_path(yaml, &["panels", "og", "dither", "strength"], &0.8.into()).unwrap();
+        let doc: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            doc["panels"]["og"]["dither"]["strength"].as_f64(),
+            Some(0.8)
+        );
+        assert_eq!(doc["panels"]["og"]["name"], "OG");
+    }
+
+    #[test]
+    fn remove_path_of_an_absent_key_changes_nothing() {
+        assert_eq!(
+            remove_path(PANELS, &["panels", "e1004", "dither"]).unwrap(),
+            PANELS
+        );
+    }
+
+    #[test]
+    fn set_path_replaces_a_scalar_in_place_keeping_its_comment() {
+        let out = set_path(
+            PANELS,
+            &["panels", "og", "dither", "max_error"],
+            &0.7.into(),
+        )
+        .unwrap();
+        assert!(out.contains("max_error: 0.7   # tuned by hand"), "{out}");
+        assert_eq!(
+            out.replace("max_error: 0.7", "max_error: 0.5"),
+            PANELS,
+            "only the value changed"
+        );
+    }
+
+    #[test]
+    fn set_path_with_an_equal_value_leaves_the_text_alone() {
+        let quoted = "panels:\n  og:\n    colors: \"#000000,#FFFFFF\"  # dq\n";
+        let out = set_path(
+            quoted,
+            &["panels", "og", "colors"],
+            &"#000000,#FFFFFF".into(),
+        )
+        .unwrap();
+        assert_eq!(out, quoted);
+    }
+
+    #[test]
+    fn set_path_appends_to_the_last_block_of_a_file_without_a_final_newline() {
+        let yaml = "panels:\n  og:\n    name: OG\n    dither:\n      max_error: 0.5";
+        let out = set_path(yaml, &["panels", "og", "dither", "strength"], &0.8.into()).unwrap();
+        assert!(
+            out.ends_with("      max_error: 0.5\n      strength: 0.8\n"),
+            "{out}"
+        );
+        let doc: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            doc["panels"]["og"]["dither"]["max_error"].as_f64(),
+            Some(0.5)
+        );
+        assert_eq!(
+            doc["panels"]["og"]["dither"]["strength"].as_f64(),
+            Some(0.8)
+        );
+    }
+
+    #[test]
+    fn set_path_into_an_empty_block_parent_indents_one_level_deeper() {
+        let yaml =
+            "panels:\n  og:\n    name: OG\n    dither:   # nothing yet\n  next:\n    name: N\n";
+        let out = set_path(yaml, &["panels", "og", "dither", "strength"], &0.8.into()).unwrap();
+        assert_eq!(
+            out,
+            "panels:\n  og:\n    name: OG\n    dither:   # nothing yet\n      strength: 0.8\n  next:\n    name: N\n"
+        );
+    }
+
+    /// A blank line inside a block is part of it: removing the block must not
+    /// leave its tail behind, orphaned under the wrong parent.
+    #[test]
+    fn remove_path_takes_a_block_with_a_blank_line_inside_it_whole() {
+        let yaml = "\
+panels:
+  og:
+    name: OG
+    dither:
+      max_error: 0.5
+
+      atkinson:
+        noise_scale: 2.0
+
+  next:   # sibling
+    name: N
+";
+        let out = remove_path(yaml, &["panels", "og", "dither"]).unwrap();
+        assert_eq!(
+            out,
+            "panels:\n  og:\n    name: OG\n\n  next:   # sibling\n    name: N\n"
+        );
+    }
+
+    /// Appending a child lands after the block's last body line, not in the
+    /// middle of it at a blank line.
+    #[test]
+    fn set_path_appends_after_a_blank_line_inside_the_parent() {
+        let yaml = "\
+panels:
+  og:
+    name: OG
+
+    colors: '#000000,#FFFFFF'
+  next:
+    name: N
+";
+        let out = set_path(
+            yaml,
+            &["panels", "og", "colors_actual"],
+            &"#111111,#EEEEEE".into(),
+        )
+        .unwrap();
+        assert!(
+            out.contains(
+                "    colors: '#000000,#FFFFFF'\n    colors_actual: '#111111,#EEEEEE'\n  next:"
+            ),
+            "{out}"
+        );
+    }
+
+    /// A colon inside a quoted key is not an inline value: the block under it
+    /// must be extended in place, not rewritten (which would drop comments).
+    #[test]
+    fn set_path_under_a_quoted_key_with_a_colon_keeps_the_block() {
+        let yaml = "\
+devices:
+  \"AA:BB\":
+    screen: transit   # keep me
+";
+        let out = set_path(yaml, &["devices", "AA:BB", "panel"], &"og".into()).unwrap();
+        assert_eq!(
+            out,
+            "devices:\n  \"AA:BB\":\n    screen: transit   # keep me\n    panel: og\n"
+        );
+    }
+
+    #[test]
+    fn set_path_under_an_inline_top_level_section_rewrites_it_as_a_block() {
+        let yaml = "# head\npanels: {}   # none yet\nauth_mode: api_key\n";
+        let out = set_path(yaml, &["panels", "og"], &"x".into()).unwrap();
+        assert_eq!(out, "# head\npanels:\n  og: x\nauth_mode: api_key\n");
+    }
+
+    #[test]
+    fn set_path_of_an_absent_top_level_key_appends_it() {
+        let out = set_path("a: 1\n# tail\n", &["b"], &"x".into()).unwrap();
+        assert_eq!(out, "a: 1\n# tail\nb: x\n");
+    }
+
+    #[test]
+    fn set_path_with_a_missing_parent_is_not_found() {
+        assert!(matches!(
+            set_path(PANELS, &["panels", "nope", "dither"], &1.into()),
+            Err(ConfigWriteError::NotFound(_))
+        ));
+    }
+
+    const FLOW_PANEL: &str = "\
+panels:
+  og: {name: OG, colors: '#000000,#FFFFFF', colors_actual: '#111111,#EEEEEE'}
+  e1004:   # sibling
+    name: E
+";
+
+    fn panel(out: &str, id: &str) -> serde_yaml::Value {
+        let doc: serde_yaml::Value = serde_yaml::from_str(out).unwrap();
+        doc["panels"][id].clone()
+    }
+
+    /// A key inside a flow mapping shares its line with the parent: removing
+    /// it must not remove the parent's line.
+    #[test]
+    fn remove_path_inside_a_flow_panel_keeps_the_panel() {
+        let out = remove_path(FLOW_PANEL, &["panels", "og", "colors_actual"]).unwrap();
+        let og = panel(&out, "og");
+        assert_eq!(og["name"], "OG", "{out}");
+        assert_eq!(og["colors"], "#000000,#FFFFFF", "{out}");
+        assert!(og.get("colors_actual").is_none(), "{out}");
+        assert!(out.contains("  e1004:   # sibling\n    name: E\n"), "{out}");
+    }
+
+    #[test]
+    fn set_path_replaces_a_scalar_inside_a_flow_panel() {
+        let out = set_path(
+            FLOW_PANEL,
+            &["panels", "og", "colors_actual"],
+            &"#222222,#DDDDDD".into(),
+        )
+        .unwrap();
+        let og = panel(&out, "og");
+        assert_eq!(og["name"], "OG", "{out}");
+        assert_eq!(og["colors"], "#000000,#FFFFFF", "{out}");
+        assert_eq!(og["colors_actual"], "#222222,#DDDDDD", "{out}");
+        assert!(out.contains("  e1004:   # sibling\n    name: E\n"), "{out}");
+    }
+
+    #[test]
+    fn sync_mapping_adds_a_block_to_a_flow_panel() {
+        let mut t = serde_yaml::Mapping::new();
+        t.insert("strength".into(), 0.8.into());
+        let out = sync_mapping(FLOW_PANEL, &["panels", "og", "dither"], &t).unwrap();
+        let og = panel(&out, "og");
+        assert_eq!(og["name"], "OG", "{out}");
+        assert_eq!(og["colors_actual"], "#111111,#EEEEEE", "{out}");
+        assert_eq!(og["dither"]["strength"].as_f64(), Some(0.8), "{out}");
+        assert_eq!(panel(&out, "e1004")["name"], "E");
+    }
+
+    #[test]
+    fn remove_path_inside_a_flow_dither_keeps_its_siblings() {
+        let yaml = "panels:\n  og:\n    name: OG\n    dither: {max_error: 0.5, strength: 1.0}\n  next:\n    name: N\n";
+        let out = remove_path(yaml, &["panels", "og", "dither", "strength"]).unwrap();
+        let og = panel(&out, "og");
+        assert_eq!(og["name"], "OG", "{out}");
+        assert_eq!(og["dither"]["max_error"].as_f64(), Some(0.5), "{out}");
+        assert!(og["dither"].get("strength").is_none(), "{out}");
+    }
+
+    /// A comment left of the block's indentation does not end the block when
+    /// block content follows it: dropping `gamut` must take its tail along
+    /// rather than re-nesting `max_compression` under `atkinson`.
+    #[test]
+    fn a_column_zero_comment_inside_a_block_does_not_end_it() {
+        let yaml = "\
+panels:
+  og:
+    name: OG
+    dither:
+      atkinson:
+        noise_scale: 2.0
+      gamut:
+        knee: 0.6
+#        amount: 0.2
+        max_compression: 0.3
+  next:
+    name: N
+";
+        let mut atk = serde_yaml::Mapping::new();
+        atk.insert("noise_scale".into(), 2.0.into());
+        let mut t = serde_yaml::Mapping::new();
+        t.insert("atkinson".into(), serde_yaml::Value::Mapping(atk));
+        let out = sync_mapping(yaml, &["panels", "og", "dither"], &t).unwrap();
+        assert_eq!(
+            out,
+            "panels:\n  og:\n    name: OG\n    dither:\n      atkinson:\n        noise_scale: 2.0\n  next:\n    name: N\n"
+        );
+        let removed = remove_path(yaml, &["panels", "og", "dither"]).unwrap();
+        assert_eq!(
+            removed,
+            "panels:\n  og:\n    name: OG\n  next:\n    name: N\n"
+        );
+    }
+
+    // Ownership rule for blank and comment lines after an entry's body
+    // (`path_range`): they belong to the entry only when more of its body
+    // follows them; otherwise they belong to whatever comes next.
+
+    #[test]
+    fn remove_device_takes_a_blank_line_inside_the_entry_along() {
+        let yaml =
+            "devices:\n  AA:\n    screen: x\n\n    params:\n      a: 1\n  BB:\n    screen: y\n";
+        let out = remove_device(yaml, "AA").unwrap();
+        assert_eq!(out, "devices:\n  BB:\n    screen: y\n");
+    }
+
+    #[test]
+    fn remove_device_leaves_a_comment_after_a_blank_line_to_the_next_entry() {
+        let yaml =
+            "devices:\n  AA:\n    screen: x\n\n    # BB is the kitchen\n  BB:\n    screen: y\n";
+        let out = remove_device(yaml, "AA").unwrap();
+        assert_eq!(
+            out,
+            "devices:\n\n    # BB is the kitchen\n  BB:\n    screen: y\n"
+        );
+        let mut block = serde_yaml::Mapping::new();
+        block.insert("screen".into(), "z".into());
+        let up = upsert_device(yaml, "AA", &block).unwrap();
+        assert!(up.contains("# BB is the kitchen\n  BB:"), "{up}");
+    }
+
+    #[test]
+    fn remove_device_leaves_a_trailing_comment_without_body_after_it() {
+        let yaml = "devices:\n  AA:\n    screen: x\n    # about BB\n  BB:\n    screen: y\n";
+        let out = remove_device(yaml, "AA").unwrap();
+        assert_eq!(out, "devices:\n    # about BB\n  BB:\n    screen: y\n");
+    }
+
+    #[test]
+    fn sync_mapping_with_an_empty_target_leaves_an_empty_mapping_not_null() {
+        let out = sync_mapping(
+            PANELS,
+            &["panels", "og", "dither"],
+            &serde_yaml::Mapping::new(),
+        )
+        .unwrap();
+        let doc: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            doc["panels"]["og"]["dither"],
+            serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn sync_mapping_recurses_into_an_existing_nested_mapping() {
+        let yaml = "\
+og:
+  dither:
+    atkinson:   # per-algorithm
+      noise_scale: 2.0   # by eye
+      strength: 1.0
+";
+        let mut atk = serde_yaml::Mapping::new();
+        atk.insert("noise_scale".into(), 2.0.into());
+        atk.insert("max_error".into(), 0.4.into());
+        let mut target = serde_yaml::Mapping::new();
+        target.insert("atkinson".into(), serde_yaml::Value::Mapping(atk));
+        let out = sync_mapping(yaml, &["og", "dither"], &target).unwrap();
+        assert_eq!(
+            out,
+            "og:\n  dither:\n    atkinson:   # per-algorithm\n      noise_scale: 2.0   # by eye\n      max_error: 0.4\n"
+        );
+    }
+
+    const DEVICES: &str = "\
+# top
+devices:
+  # the hall display
+  hall:
+    screen: local/h
+  # the kitchen display
+  kitchen:
+    screen: local/a   # morning screen
+    dither: floyd-steinberg   # a default
+    # hand-tuned
+    strength: 1
+    params:
+      greeting: hi   # shown top-left
+  office: {screen: local/b, name: Office}   # flow style
+# tail
+";
+
+    fn map(pairs: &[(&str, serde_yaml::Value)]) -> serde_yaml::Mapping {
+        pairs
+            .iter()
+            .map(|(k, v)| (serde_yaml::Value::from(*k), v.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn update_device_edits_only_the_named_keys_in_place() {
+        let mut params = serde_yaml::Mapping::new();
+        params.insert("greeting".into(), "hi".into());
+        let block = map(&[
+            ("screen", "local/c".into()),
+            ("strength", 1.0.into()), // in the block but not named: never written
+            ("name", "Kitchen".into()),
+            ("params", params.into()),
+        ]);
+        let out = update_device(DEVICES, "kitchen", &block, &["screen", "dither", "name"]).unwrap();
+        assert_eq!(
+            out,
+            "\
+# top
+devices:
+  # the hall display
+  hall:
+    screen: local/h
+  # the kitchen display
+  kitchen:
+    screen: local/c   # morning screen
+    # hand-tuned
+    strength: 1
+    params:
+      greeting: hi   # shown top-left
+    name: Kitchen
+  office: {screen: local/b, name: Office}   # flow style
+# tail
+"
+        );
+    }
+
+    #[test]
+    fn a_flow_style_device_stays_flow_style() {
+        let block = map(&[
+            ("screen", "local/b".into()),
+            ("name", "Front office".into()),
+            ("panel", "og".into()),
+        ]);
+        let out = update_device(DEVICES, "office", &block, &["name", "panel"]).unwrap();
+        assert_eq!(
+            out,
+            DEVICES.replace(
+                "  office: {screen: local/b, name: Office}   # flow style",
+                "  office: {screen: local/b, name: \"Front office\", panel: og}   # flow style"
+            )
+        );
+        let out = update_device(
+            DEVICES,
+            "office",
+            &map(&[("screen", "local/b".into())]),
+            &["name"],
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            DEVICES.replace(
+                "  office: {screen: local/b, name: Office}   # flow style",
+                "  office: {screen: local/b}   # flow style"
+            )
+        );
+    }
+
+    #[test]
+    fn a_flow_sub_mapping_is_edited_in_flow_style_and_never_passes_through_empty() {
+        let yaml = "devices:\n  k:\n    screen: s\n    params: {a: 1, b: x}   # p\n";
+        let mut p = serde_yaml::Mapping::new();
+        p.insert("a".into(), 2.into());
+        p.insert("b".into(), "x".into());
+        let out = update_device(yaml, "k", &map(&[("params", p.into())]), &["params"]).unwrap();
+        assert_eq!(
+            out,
+            "devices:\n  k:\n    screen: s\n    params: {a: 2, b: x}   # p\n"
+        );
+        let mut c = serde_yaml::Mapping::new();
+        c.insert("c".into(), 3.into());
+        let out = update_device(yaml, "k", &map(&[("params", c.into())]), &["params"]).unwrap();
+        assert_eq!(
+            out,
+            "devices:\n  k:\n    screen: s\n    params: {c: 3}   # p\n"
+        );
+    }
+
+    #[test]
+    fn an_unchanged_number_keeps_its_spelling() {
+        let yaml = "devices:\n  k:\n    screen: s\n    final:\n      strength: 1\n";
+        let mut fin = serde_yaml::Mapping::new();
+        fin.insert("strength".into(), 1.0.into());
+        fin.insert("dither".into(), "atkinson".into());
+        let out = update_device(yaml, "k", &map(&[("final", fin.into())]), &["final"]).unwrap();
+        assert_eq!(
+            out,
+            "devices:\n  k:\n    screen: s\n    final:\n      strength: 1\n      dither: atkinson\n"
+        );
+    }
+
+    #[test]
+    fn update_device_of_an_absent_entry_is_not_found() {
+        assert!(matches!(
+            update_device(DEVICES, "nope", &serde_yaml::Mapping::new(), &["name"]),
+            Err(ConfigWriteError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn a_new_device_is_appended_at_the_end_of_devices() {
+        let block = map(&[("screen", "hello".into())]);
+        let out = upsert_device(
+            "devices:\n  # a\n  AA:\n    screen: x\n# tail\n",
+            "CC",
+            &block,
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            "devices:\n  # a\n  AA:\n    screen: x\n  CC:\n    screen: hello\n# tail\n"
+        );
+        let out = upsert_device("devices:\n# tail\n", "CC", &block).unwrap();
+        assert_eq!(out, "devices:\n  CC:\n    screen: hello\n# tail\n");
+        let out = upsert_device("auth_mode: api_key\n", "CC", &block).unwrap();
+        assert_eq!(
+            out,
+            "auth_mode: api_key\ndevices:\n  CC:\n    screen: hello\n"
+        );
+    }
+
+    #[test]
+    fn upsert_of_an_existing_device_keeps_its_place_and_comments() {
+        let block = map(&[("screen", "local/z".into())]);
+        let out = upsert_device(DEVICES, "hall", &block).unwrap();
+        assert_eq!(
+            out,
+            DEVICES.replace("    screen: local/h\n", "    screen: local/z\n")
+        );
+    }
+
+    #[test]
+    fn numbers_compare_by_value() {
+        let yaml = "og:\n  strength: 1   # kept\n";
+        assert_eq!(
+            set_path(yaml, &["og", "strength"], &1.0.into()).unwrap(),
+            yaml
+        );
+    }
+
+    #[test]
+    fn a_flow_panel_scalar_is_replaced_in_flow_style() {
+        let out = set_path(
+            FLOW_PANEL,
+            &["panels", "og", "colors_actual"],
+            &"#222222,#DDDDDD".into(),
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            FLOW_PANEL.replace(
+                "colors_actual: '#111111,#EEEEEE'}",
+                "colors_actual: \"#222222,#DDDDDD\"}"
+            )
+        );
+        let out = remove_path(FLOW_PANEL, &["panels", "og", "colors_actual"]).unwrap();
+        assert_eq!(
+            out,
+            FLOW_PANEL.replace(", colors_actual: '#111111,#EEEEEE'}", "}")
+        );
+    }
+
+    /// A trailing comma inside a flow mapping is legal YAML: an added pair
+    /// takes its place rather than doubling it, and a removal keeps it valid.
+    #[test]
+    fn a_flow_device_with_a_trailing_comma_takes_an_add_and_a_remove() {
+        let yaml = "devices:\n  d: {screen: a, panel: b,}   # c\n";
+        let out = update_device(yaml, "d", &map(&[("name", "N".into())]), &["name"]).unwrap();
+        assert_eq!(out, "devices:\n  d: {screen: a, panel: b, name: N}   # c\n");
+        let out = update_device(yaml, "d", &serde_yaml::Mapping::new(), &["panel"]).unwrap();
+        assert_eq!(out, "devices:\n  d: {screen: a, }   # c\n");
+    }
+
+    #[test]
+    fn a_flow_panel_with_a_trailing_comma_takes_an_add_and_a_remove() {
+        let yaml = "panels:\n  og: {name: OG, colors: x,}\n";
+        let out = set_path(yaml, &["panels", "og", "colors_actual"], &"y".into()).unwrap();
+        assert_eq!(
+            out,
+            "panels:\n  og: {name: OG, colors: x, colors_actual: y}\n"
+        );
+        let out = remove_path(yaml, &["panels", "og", "colors"]).unwrap();
+        assert_eq!(out, "panels:\n  og: {name: OG, }\n");
+    }
+
+    const ALIASED: &str = "\
+base: &cc
+  screen: a
+  dither: atkinson
+devices:
+  d: *cc   # shares base
+  f:
+    screen: b
+";
+
+    /// An aliased entry (`d: *cc`) has no lines of its own to edit: it is
+    /// rewritten as a block holding the resolved values plus the change,
+    /// and the anchor it pointed at is left alone.
+    #[test]
+    fn an_aliased_device_is_rewritten_as_a_block_with_the_change() {
+        let out = update_device(ALIASED, "d", &map(&[("name", "N".into())]), &["name"]).unwrap();
+        assert_eq!(
+            out,
+            ALIASED.replace(
+                "  d: *cc   # shares base\n",
+                "  d:\n    screen: a\n    dither: atkinson\n    name: N\n"
+            )
+        );
+        let out = update_device(ALIASED, "d", &serde_yaml::Mapping::new(), &["dither"]).unwrap();
+        assert_eq!(
+            out,
+            ALIASED.replace("  d: *cc   # shares base\n", "  d:\n    screen: a\n")
+        );
+        let out = upsert_device(ALIASED, "d", &map(&[("screen", "z".into())])).unwrap();
+        assert_eq!(
+            out,
+            ALIASED.replace("  d: *cc   # shares base\n", "  d:\n    screen: z\n")
+        );
+        // A quoted MAC key, as devices usually have.
+        let mac = ALIASED.replace("  d: *cc", "  \"AA:BB\": *cc");
+        let out = update_device(&mac, "AA:BB", &map(&[("name", "N".into())]), &["name"]).unwrap();
+        assert_eq!(
+            out,
+            ALIASED.replace(
+                "  d: *cc   # shares base\n",
+                "  AA:BB:\n    screen: a\n    dither: atkinson\n    name: N\n"
+            )
+        );
+        assert_eq!(parse(&out).unwrap()["devices"]["AA:BB"]["name"], "N");
+    }
+
+    #[test]
+    fn an_aliased_panel_is_rewritten_as_a_block_with_the_change() {
+        let yaml = "x: &p\n  name: OG\npanels:\n  og: *p\n";
+        let out = set_path(yaml, &["panels", "og", "colors_actual"], &"y".into()).unwrap();
+        assert_eq!(
+            out,
+            "x: &p\n  name: OG\npanels:\n  og:\n    name: OG\n    colors_actual: y\n"
+        );
+        let out = remove_path(yaml, &["panels", "og", "name"]).unwrap();
+        assert_eq!(out, "x: &p\n  name: OG\npanels:\n  og: {}\n");
+    }
+
+    /// The three shapes of a multi-line flow mapping whose `}` sits on a line
+    /// of its own, plus one with a comment after that `}`.
+    const CLOSING_ON_OWN_LINE: [&str; 4] = [
+        "{screen: a,\n    panel: b\n  }\n",
+        "{screen: a, panel: b,\n  }\n",
+        "{screen: a,\n    panel: b,\n  }\n",
+        "{screen: a,\n    panel: b\n  }   # closing\n",
+    ];
+
+    /// A multi-line flow entry is rewritten as a block, and every line of
+    /// the old flow text goes, the closing `}` (and a comment after it) too.
+    #[test]
+    fn a_multi_line_flow_device_is_rewritten_whole_on_add_and_remove() {
+        for shape in CLOSING_ON_OWN_LINE {
+            let yaml = format!("devices:\n  k: {shape}  z:\n    screen: q\n# tail\n");
+            let out = update_device(&yaml, "k", &map(&[("name", "N".into())]), &["name"]).unwrap();
+            assert_eq!(
+                out,
+                "devices:\n  k:\n    screen: a\n    panel: b\n    name: N\n  z:\n    screen: q\n# tail\n",
+                "{shape:?}"
+            );
+            let out = update_device(&yaml, "k", &serde_yaml::Mapping::new(), &["panel"]).unwrap();
+            assert_eq!(
+                out, "devices:\n  k:\n    screen: a\n  z:\n    screen: q\n# tail\n",
+                "{shape:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_multi_line_flow_panel_is_rewritten_whole_on_add_and_remove() {
+        for shape in CLOSING_ON_OWN_LINE {
+            let shape = shape.replace("screen", "name").replace("panel", "colors");
+            let yaml = format!("panels:\n  og: {shape}  e:\n    name: E\n");
+            let out = set_path(&yaml, &["panels", "og", "colors_actual"], &"y".into()).unwrap();
+            assert_eq!(
+                out,
+                "panels:\n  og:\n    name: a\n    colors: b\n    colors_actual: y\n  e:\n    name: E\n",
+                "{shape:?}"
+            );
+            let out = remove_path(&yaml, &["panels", "og", "colors"]).unwrap();
+            assert_eq!(
+                out, "panels:\n  og:\n    name: a\n  e:\n    name: E\n",
+                "{shape:?}"
+            );
+        }
+    }
+
+    fn seq(items: &[&str]) -> serde_yaml::Value {
+        serde_yaml::Value::Sequence(items.iter().map(|s| (*s).into()).collect())
+    }
+
+    /// A block sequence written with its `- item` lines at the key's own
+    /// indentation (compact style, the style `serde_yaml` and so
+    /// `upsert_device` write) belongs to its key: a change replaces every
+    /// item, a removal takes every item along.
+    const COMPACT_LIST: &str = "\
+devices:
+  k:
+    screen: a
+    params:
+      items:
+      - a
+      - b
+      # above the sibling
+      size: 3
+  z:
+    screen: q
+";
+
+    #[test]
+    fn a_compact_list_param_is_replaced_whole() {
+        let params = map(&[("items", seq(&["a", "b", "c"])), ("size", 3.into())]);
+        let out = update_device(
+            COMPACT_LIST,
+            "k",
+            &map(&[("params", params.into())]),
+            &["params"],
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            "devices:\n  k:\n    screen: a\n    params:\n      items:\n      - a\n      - b\n      - c\n      # above the sibling\n      size: 3\n  z:\n    screen: q\n"
+        );
+    }
+
+    #[test]
+    fn a_compact_list_param_is_removed_whole() {
+        let params = map(&[("size", 3.into())]);
+        let out = update_device(
+            COMPACT_LIST,
+            "k",
+            &map(&[("params", params.into())]),
+            &["params"],
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            "devices:\n  k:\n    screen: a\n    params:\n      # above the sibling\n      size: 3\n  z:\n    screen: q\n"
+        );
+    }
+
+    #[test]
+    fn a_compact_list_as_the_last_key_of_an_entry_stops_at_the_next_entry() {
+        let yaml = "devices:\n  k:\n    tags:\n    - a\n    - b\n  z:\n    screen: q\n";
+        let out = remove_path(yaml, &["devices", "k", "tags"]).unwrap();
+        assert_eq!(out, "devices:\n  k:\n  z:\n    screen: q\n");
+        let out = set_path(yaml, &["devices", "k", "tags"], &seq(&["c"])).unwrap();
+        assert_eq!(
+            out,
+            "devices:\n  k:\n    tags:\n    - c\n  z:\n    screen: q\n"
+        );
+    }
+
+    /// The round trip the dev UI and the admin API make: `upsert_device`
+    /// writes a list param in compact style, a later Save edits it.
+    #[test]
+    fn a_list_param_written_by_upsert_device_can_be_changed_and_removed() {
+        let entry = |items: &[&str]| {
+            map(&[
+                ("screen", "local/a".into()),
+                ("params", map(&[("items", seq(items))]).into()),
+            ])
+        };
+        let yaml = "devices:\n  z:\n    screen: q\n# tail\n";
+        let written = upsert_device(yaml, "k", &entry(&["a", "b"])).unwrap();
+        assert!(
+            written.contains("      items:\n      - a\n      - b\n"),
+            "{written}"
+        );
+
+        let changed = update_device(&written, "k", &entry(&["a", "b", "c"]), &["params"]).unwrap();
+        let parsed = parse(&changed).unwrap();
+        assert_eq!(
+            lookup(&parsed, &["devices", "k", "params", "items"]),
+            Some(&seq(&["a", "b", "c"])),
+            "{changed}"
+        );
+        assert_eq!(changed.matches("- a").count(), 1, "{changed}");
+
+        let no_params = map(&[("screen", "local/a".into()), ("params", map(&[]).into())]);
+        let removed = update_device(&written, "k", &no_params, &["params"]).unwrap();
+        let parsed = parse(&removed).unwrap();
+        assert_eq!(
+            lookup(&parsed, &["devices", "k"]),
+            Some(&serde_yaml::Value::Mapping(no_params)),
+            "{removed}"
+        );
+        assert!(!removed.contains("- a"), "{removed}");
+        assert!(removed.ends_with("# tail\n"), "{removed}");
+    }
+
+    #[test]
+    fn an_indented_list_param_is_still_replaced_and_removed_whole() {
+        let yaml = "devices:\n  k:\n    tags:\n      - a\n      - b\n    screen: s\n";
+        let out = set_path(yaml, &["devices", "k", "tags"], &seq(&["c"])).unwrap();
+        assert_eq!(out, "devices:\n  k:\n    tags:\n    - c\n    screen: s\n");
+        let out = remove_path(yaml, &["devices", "k", "tags"]).unwrap();
+        assert_eq!(out, "devices:\n  k:\n    screen: s\n");
+    }
+
+    #[test]
+    fn a_compact_list_of_mappings_is_removed_whole() {
+        let yaml =
+            "devices:\n  k:\n    rows:\n    - name: x\n      v: 1\n    - name: y\n    size: 3\n";
+        let out = remove_path(yaml, &["devices", "k", "rows"]).unwrap();
+        assert_eq!(out, "devices:\n  k:\n    size: 3\n");
+    }
+
+    const RENAME_SAMPLE: &str = "\
+panels:
+  # first panel
+  a:
+    name: A   # inline
+    colors: '#000000,#FFFFFF'
+  # the one to rename
+  b:
+    name: B
+    colors: '#000000,#FFFFFF'
+  c: {name: C, colors: '#000000,#FFFFFF'}
+devices:
+  \"AA:BB\":
+    screen: s
+  k:
+    screen: s
+";
+
+    fn keys_of(yaml: &str, section: &str) -> Vec<String> {
+        parse(yaml).unwrap()[section]
+            .as_mapping()
+            .unwrap()
+            .keys()
+            .map(|k| k.as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn rename_key_renames_in_place_keeping_block_comments_and_position() {
+        let out = rename_key(RENAME_SAMPLE, &["panels", "b"], "bee").unwrap();
+        assert_eq!(out, RENAME_SAMPLE.replace("\n  b:\n", "\n  bee:\n"));
+        assert_eq!(keys_of(&out, "panels"), vec!["a", "bee", "c"]);
+    }
+
+    #[test]
+    fn rename_key_inside_a_flow_mapping_keeps_it_flow() {
+        let yaml = "panels: {a: {name: A}, b: {name: B}}\n";
+        let out = rename_key(yaml, &["panels", "b"], "bee").unwrap();
+        assert_eq!(out, "panels: {a: {name: A}, bee: {name: B}}\n");
+    }
+
+    #[test]
+    fn rename_key_replaces_a_quoted_key_and_quotes_the_new_one_when_needed() {
+        let out = rename_key(RENAME_SAMPLE, &["devices", "AA:BB"], "CC:DD").unwrap();
+        assert_eq!(keys_of(&out, "devices"), vec!["CC:DD", "k"]);
+        assert!(!out.contains("AA:BB"), "{out}");
+        let out = rename_key(RENAME_SAMPLE, &["devices", "AA:BB"], "plain").unwrap();
+        assert_eq!(keys_of(&out, "devices"), vec!["plain", "k"]);
+        assert!(out.contains("\n  plain:\n"), "{out}");
+    }
+
+    #[test]
+    fn rename_key_of_an_absent_entry_is_not_found() {
+        assert!(matches!(
+            rename_key(RENAME_SAMPLE, &["panels", "zz"], "y"),
+            Err(ConfigWriteError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn rename_key_onto_an_existing_sibling_is_refused() {
+        assert!(rename_key(RENAME_SAMPLE, &["panels", "b"], "a").is_err());
+    }
+
+    #[test]
+    fn rename_key_to_itself_changes_nothing() {
+        assert_eq!(
+            rename_key(RENAME_SAMPLE, &["panels", "b"], "b").unwrap(),
+            RENAME_SAMPLE
         );
     }
 }

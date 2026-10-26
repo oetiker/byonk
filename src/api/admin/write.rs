@@ -5,26 +5,60 @@ use axum::{
     http::HeaderMap,
     Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::api::config_persist::{persist, require_file_config};
 use crate::error::ApiError;
-use crate::models::config::{normalize_algorithm_name, DITHER_ALGORITHMS, RESERVED_DEFAULT_KEY};
+use crate::models::config::{
+    normalize_algorithm_name, CascadeValues, DitherTuningValues, GamutTuningValues,
+    DITHER_ALGORITHMS, RESERVED_DEFAULT_KEY,
+};
 use crate::models::param_schema::validate_params;
-use crate::server::{reload_config, AppState};
+use crate::server::AppState;
 use crate::services::config_writer;
 use crate::services::screen_repo_loader::BUILTIN_HANDLE;
 
 use super::read::{build_screen_repo_info, ScreenRepoInfo};
 use super::require_admin;
 
-#[derive(Deserialize)]
+// `Serialize` + `Default` exist for the MCP mirror test: serialising a default
+// value lists every field, so `ConfigureDeviceArgs` can be checked against the
+// struct itself rather than against a hand-kept list. They change nothing at
+// runtime (`ToSchema` would need a schema for every nested type, including
+// `serde_yaml::Value`).
+//
+// Strict like the device entry it writes (owner ruling E4): an unknown key,
+// at the top or inside `gamut`, is refused (axum's JSON extractor answers
+// 422), never a silently dropped setting.
+#[derive(Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeviceWrite {
-    pub key: Option<String>, // required for POST, ignored for PATCH (taken from URL)
+    /// Required for POST. The admin PATCH and MCP ignore it (the URL names
+    /// the device); the dev UI's PATCH reads a different key as a rename.
+    pub key: Option<String>,
     pub screen: Option<String>,
     pub panel: Option<String>,
     pub dither: Option<String>,
     pub colors: Option<String>,
+    /// Measured colours for this one display, comma-separated hex. The base
+    /// rung: it outranks the panel's calibration and is outranked by a screen
+    /// that measures its own.
+    pub colors_actual: Option<String>,
+    /// Gamut mapping for continuous-tone regions. Base rung.
+    ///
+    /// Reachable only since the cascade work: it was in `DeviceConfig` but in
+    /// neither `DeviceWrite` nor `MANAGED_DEVICE_KEYS`, so it could be
+    /// hand-edited into config.yaml and nothing could set it. That is the
+    /// silent-overwrite trap, and this field was the proof it bites.
+    #[serde(default, deserialize_with = "crate::models::config::strict_gamut_opt")]
+    pub gamut: Option<GamutTuningValues>,
+    /// The final rung -- the owner's veto. Merged **field by field**, like
+    /// every other rung: setting `final.dither` must not wipe
+    /// `final.strength`. A field is removed only through `clear`, which is
+    /// why both `final.<field>` and `final` are clearable.
+    #[serde(rename = "final")]
+    pub final_rung: Option<CascadeValues>,
     pub params: Option<HashMap<String, serde_yaml::Value>>,
     pub refresh: Option<u32>,
     pub name: Option<String>,
@@ -54,20 +88,11 @@ pub struct DeviceWrite {
     pub clear: Option<Vec<String>>,
 }
 
-/// Guard: writes require a file-backed config.
-fn require_file_config(state: &AppState) -> Result<std::path::PathBuf, ApiError> {
-    state
-        .asset_loader
-        .config_path()
-        .map(|p| p.to_path_buf())
-        .ok_or_else(|| ApiError::Conflict("config is embedded/read-only; set CONFIG_FILE".into()))
-}
-
 /// Guard: global-config registry/settings writes are read-only when byonk runs
 /// as an HA add-on. The add-on Options form (`/data/options.json`) is the sole
 /// editor for global config; per-device writes and screen repo content-refresh are
 /// unaffected.
-fn require_writable_global(state: &AppState) -> Result<(), ApiError> {
+pub(crate) fn require_writable_global(state: &AppState) -> Result<(), ApiError> {
     if state.addon_mode {
         return Err(ApiError::Conflict(
             "global config is read-only in add-on mode; edit it in the byonk add-on Configuration tab".into(),
@@ -107,6 +132,23 @@ fn validate_screen_and_params(
     Ok(())
 }
 
+/// Validate a dither algorithm name, reporting errors with a fully-qualified key name.
+///
+/// An unrecognised algorithm name does not fail anywhere downstream —
+/// `svg_to_png`'s match ends in `_ => DitherAlgorithm::Atkinson` — so without
+/// this check a typo silently rendered Atkinson, and the only symptom was on
+/// the glass.
+pub(crate) fn validate_dither_name(name: &str, key: &str) -> Result<(), ApiError> {
+    let canonical = normalize_algorithm_name(name);
+    if !DITHER_ALGORITHMS.contains(&canonical.as_str()) {
+        return Err(ApiError::BadRequest(format!(
+            "unknown dither algorithm `{name}` in `{key}`; known: {}",
+            DITHER_ALGORITHMS.join(", ")
+        )));
+    }
+    Ok(())
+}
+
 /// Validate the device settings a caller actually provided.
 ///
 /// Only the provided fields, never the merged result: a device whose
@@ -114,19 +156,13 @@ fn validate_screen_and_params(
 /// an unrelated patch, otherwise the API that exists to fix such a device is
 /// the one thing that cannot.
 ///
-/// This matters most for `dither`. An unrecognised algorithm name does not
+/// This matters most for `dither`: an unrecognised algorithm name does not
 /// fail anywhere downstream — `svg_to_png`'s match ends in `_ =>
 /// DitherAlgorithm::Atkinson` — so before this check a typo silently rendered
 /// Atkinson, and the only symptom was on the glass.
 fn validate_device_settings(state: &AppState, w: &DeviceWrite) -> Result<(), ApiError> {
     if let Some(dither) = &w.dither {
-        let canonical = normalize_algorithm_name(dither);
-        if !DITHER_ALGORITHMS.contains(&canonical.as_str()) {
-            return Err(ApiError::BadRequest(format!(
-                "unknown dither algorithm `{dither}`; known: {}",
-                DITHER_ALGORITHMS.join(", ")
-            )));
-        }
+        validate_dither_name(dither, "dither")?;
     }
 
     if let Some(panel) = &w.panel {
@@ -142,7 +178,7 @@ fn validate_device_settings(state: &AppState, w: &DeviceWrite) -> Result<(), Api
     }
 
     if let Some(colors) = &w.colors {
-        validate_colors(colors)?;
+        validate_colors(colors, "colors")?;
     }
 
     // `c` is rejected on purpose: firmware 1.8.14 still has its mapping
@@ -166,85 +202,139 @@ fn validate_device_settings(state: &AppState, w: &DeviceWrite) -> Result<(), Api
         ("chroma_clamp", w.chroma_clamp),
         ("strength", w.strength),
     ] {
-        if let Some(v) = value {
-            if !v.is_finite() || v < 0.0 {
-                return Err(ApiError::BadRequest(format!(
-                    "`{key}` must be a finite, non-negative number, got {v}"
-                )));
-            }
-        }
+        validate_number(key, value)?;
+    }
+
+    if let Some(colors) = &w.colors_actual {
+        validate_colors(colors, "colors_actual")?;
+    }
+    if let Some(g) = &w.gamut {
+        validate_gamut(g, "gamut")?;
+    }
+    if let Some(f) = &w.final_rung {
+        validate_cascade_values(f, "final.")?;
     }
 
     Ok(())
 }
 
-/// A `colors` override must be a comma-separated list of `#rrggbb` entries.
+/// Ranges stay open (see `validate_device_settings`); only values arithmetic
+/// cannot use are refused. `name` is the field as the request named it.
+fn validate_number(name: &str, value: Option<f32>) -> Result<(), ApiError> {
+    match value {
+        Some(n) if !n.is_finite() || n < 0.0 => Err(ApiError::BadRequest(format!(
+            "`{name}` must be a finite, non-negative number, got {n}"
+        ))),
+        _ => Ok(()),
+    }
+}
+
+/// The number checks for one panel tuning block (a panel's flat `dither`
+/// defaults or one per-algorithm sub-map). `prefix` is how the caller names
+/// the block, ending in `.` (`dither.`, `dither.atkinson.`).
+pub(crate) fn validate_tuning_values(v: &DitherTuningValues, prefix: &str) -> Result<(), ApiError> {
+    for (key, value) in [
+        ("max_error", v.max_error),
+        ("noise_scale", v.noise_scale),
+        ("chroma_clamp", v.chroma_clamp),
+        ("strength", v.strength),
+    ] {
+        validate_number(&format!("{prefix}{key}"), value)?;
+    }
+    validate_gamut(&v.gamut, &format!("{prefix}gamut"))
+}
+
+/// The same checks the base rung gets, applied to a rung written as a block.
+/// `prefix` is how the caller names the fields (`final.`), so an error points
+/// at the field the request actually contained.
+fn validate_cascade_values(v: &CascadeValues, prefix: &str) -> Result<(), ApiError> {
+    if let Some(dither) = &v.dither {
+        validate_dither_name(dither, &format!("{prefix}dither"))?;
+    }
+    for (key, colors) in [("colors", &v.colors), ("colors_actual", &v.colors_actual)] {
+        if let Some(c) = colors {
+            validate_colors(c, &format!("{prefix}{key}"))?;
+        }
+    }
+    for (key, value) in [
+        ("max_error", v.max_error),
+        ("noise_scale", v.noise_scale),
+        ("chroma_clamp", v.chroma_clamp),
+        ("strength", v.strength),
+    ] {
+        validate_number(&format!("{prefix}{key}"), value)?;
+    }
+    validate_gamut(&v.gamut, &format!("{prefix}gamut"))
+}
+
+fn validate_gamut(g: &GamutTuningValues, name: &str) -> Result<(), ApiError> {
+    for (key, value) in [
+        ("knee", g.knee),
+        ("amount", g.amount),
+        ("max_compression", g.max_compression),
+    ] {
+        validate_number(&format!("{name}.{key}"), value)?;
+    }
+    Ok(())
+}
+
+/// A `colors` override must be a comma-separated list of `#rrggbb` entries
+/// (the leading `#` is optional).
+/// `key` is the fully-qualified name the caller used, so errors point at it.
 ///
 /// Strict where the render path is forgiving: `parse_colors_header` builds the
 /// palette with `filter_map`, so it drops the entries it cannot read and
 /// carries on with a shorter palette. That is the right behaviour for a header
 /// arriving from a device and the wrong one for a value being written to disk.
-fn validate_colors(colors: &str) -> Result<(), ApiError> {
+pub(crate) fn validate_colors(colors: &str, key: &str) -> Result<(), ApiError> {
     let entries: Vec<&str> = colors.split(',').map(str::trim).collect();
     for entry in &entries {
+        // `#RRGGBB` or a bare `RRGGBB`: exactly what config load and the
+        // render path (`parse_hex_color`) accept, so an untouched entry from
+        // config.yaml is never refused when the UI sends it back.
         let hex = entry.strip_prefix('#').unwrap_or(entry);
         let valid = hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit());
         if !valid {
             return Err(ApiError::BadRequest(format!(
-                "`colors` entry `{entry}` is not a #rrggbb color"
+                "`{key}` entry `{entry}` is not a #rrggbb color"
             )));
         }
     }
     if entries.len() < 2 {
-        return Err(ApiError::BadRequest(
-            "`colors` needs at least two colors to dither between".into(),
-        ));
+        return Err(ApiError::BadRequest(format!(
+            "`{key}` needs at least two colors to dither between"
+        )));
     }
     Ok(())
 }
 
 /// Resolve the `clear` list into the set of keys to drop, rejecting names that
-/// are not settings and names the same call also sets.
+/// are not settings.
 ///
-/// Setting and clearing one field in a single call has no sensible reading, so
-/// it is refused rather than resolved by precedence — a caller that does it is
-/// confused about what it wants, and either outcome would surprise it.
+/// A name may also be set in the same request: `apply_device_patch` clears
+/// first and sets second, so the set wins (ruling C3).
 fn resolve_clear(w: &DeviceWrite) -> Result<Vec<String>, ApiError> {
     let Some(requested) = &w.clear else {
         return Ok(Vec::new());
     };
     let mut out = Vec::new();
     for name in requested {
-        if !CLEARABLE_DEVICE_KEYS.contains(&name.as_str()) {
+        let acceptable = CLEARABLE_DEVICE_KEYS.contains(&name.as_str())
+            || GAMUT_SUBFIELDS.contains(&name.as_str())
+            || name
+                .strip_prefix("final.")
+                .is_some_and(|f| is_cascade_field(f) || GAMUT_SUBFIELDS.contains(&f));
+        if !acceptable {
             let hint = if name == "screen" {
                 " (a device must always have a screen; assign a different one instead)"
             } else {
                 ""
             };
             return Err(ApiError::BadRequest(format!(
-                "cannot clear `{name}`{hint}; clearable: {}",
-                CLEARABLE_DEVICE_KEYS.join(", ")
-            )));
-        }
-        let also_set = match name.as_str() {
-            "panel" => w.panel.is_some(),
-            "dither" => w.dither.is_some(),
-            "colors" => w.colors.is_some(),
-            "refresh" => w.refresh.is_some(),
-            "name" => w.name.is_some(),
-            "params" => w.params.is_some(),
-            "max_error" => w.max_error.is_some(),
-            "noise_scale" => w.noise_scale.is_some(),
-            "chroma_clamp" => w.chroma_clamp.is_some(),
-            "strength" => w.strength.is_some(),
-            "temperature_profile" => w.temperature_profile.is_some(),
-            "maximum_compatibility" => w.maximum_compatibility.is_some(),
-            "min_png_bytes" => w.min_png_bytes.is_some(),
-            _ => false,
-        };
-        if also_set {
-            return Err(ApiError::BadRequest(format!(
-                "`{name}` is both set and cleared in the same request"
+                "cannot clear `{name}`{hint}; clearable: {}, gamut.knee, gamut.amount, \
+                 gamut.max_compression, or `final.<field>` for one of: {}",
+                CLEARABLE_DEVICE_KEYS.join(", "),
+                CASCADE_FIELDS.join(", ")
             )));
         }
         out.push(name.clone());
@@ -252,11 +342,65 @@ fn resolve_clear(w: &DeviceWrite) -> Result<Vec<String>, ApiError> {
     Ok(out)
 }
 
+/// The field names a `final.<name>` clear may address -- `CascadeValues`'
+/// own fields, and nothing else. `final: {screen: ...}` is a config error at
+/// startup; `clear: ["final.screen"]` must be an API error for the same
+/// reason, named rather than ignored.
+const CASCADE_FIELDS: [&str; 9] = [
+    "colors",
+    "colors_actual",
+    "dither",
+    "max_error",
+    "noise_scale",
+    "chroma_clamp",
+    "strength",
+    "refresh",
+    "gamut",
+];
+
+/// Single gamut knobs, clearable on their own (ruling C3) so one can be
+/// removed without restating the others.
+const GAMUT_SUBFIELDS: [&str; 3] = ["gamut.knee", "gamut.amount", "gamut.max_compression"];
+
+fn clear_gamut_sub(g: &mut GamutTuningValues, name: &str) {
+    match name {
+        "gamut.knee" => g.knee = None,
+        "gamut.amount" => g.amount = None,
+        "gamut.max_compression" => g.max_compression = None,
+        _ => {}
+    }
+}
+
+fn is_cascade_field(name: &str) -> bool {
+    CASCADE_FIELDS.contains(&name)
+}
+
+fn clear_cascade_field(v: &mut CascadeValues, field: &str) {
+    match field {
+        "colors" => v.colors = None,
+        "colors_actual" => v.colors_actual = None,
+        "dither" => v.dither = None,
+        "max_error" => v.max_error = None,
+        "noise_scale" => v.noise_scale = None,
+        "chroma_clamp" => v.chroma_clamp = None,
+        "strength" => v.strength = None,
+        "refresh" => v.refresh = None,
+        "gamut" => v.gamut = GamutTuningValues::default(),
+        sub if GAMUT_SUBFIELDS.contains(&sub) => clear_gamut_sub(&mut v.gamut, sub),
+        // Unreachable: `resolve_clear` rejects anything else.
+        _ => {}
+    }
+}
+
 /// Drop the named settings from an already-merged write.
 ///
-/// Applied after the merge, so a cleared field is not carried over from the
-/// existing entry; `device_block` then omits it, and `unmanaged_device_keys`
-/// cannot put it back because every clearable key is managed.
+/// A bare name addresses the base rung only; `final.<field>` one field of the
+/// final rung and `final` the whole rung.
+///
+/// Applied to the existing entry BEFORE the body's sets are merged over it
+/// (ruling C3), so a cleared field is not carried over, and a key that is also
+/// set in the same request ends up set. `device_block` omits a cleared field,
+/// and [`touched_keys`] names it, so the write removes it from the entry.
 fn apply_clear(merged: &mut DeviceWrite, clear: &[String]) {
     for name in clear {
         match name.as_str() {
@@ -273,19 +417,35 @@ fn apply_clear(merged: &mut DeviceWrite, clear: &[String]) {
             "temperature_profile" => merged.temperature_profile = None,
             "maximum_compatibility" => merged.maximum_compatibility = None,
             "min_png_bytes" => merged.min_png_bytes = None,
+            "colors_actual" => merged.colors_actual = None,
+            "gamut" => merged.gamut = None,
+            // The whole rung, as one key.
+            "final" => merged.final_rung = None,
+            sub if GAMUT_SUBFIELDS.contains(&sub) => {
+                if let Some(g) = merged.gamut.as_mut() {
+                    clear_gamut_sub(g, sub);
+                }
+            }
+            dotted if dotted.starts_with("final.") => {
+                if let Some(f) = merged.final_rung.as_mut() {
+                    clear_cascade_field(f, &dotted["final.".len()..]);
+                }
+                // A rung whose every field was cleared emits nothing anyway
+                // (`device_block`), so there is no empty-rung case to handle.
+            }
             // Unreachable: `resolve_clear` rejects anything else.
             _ => {}
         }
     }
 }
 
-/// Build the YAML mapping for a device block from the provided fields.
-/// The device keys `device_block` writes for itself. Anything else found in an
-/// existing entry is carried across verbatim by [`unmanaged_device_keys`].
+/// The device keys `device_block` writes for itself, and so the keys a patch
+/// can touch ([`touched_keys`]). Anything else in an existing entry is never
+/// read or written by a patch, so it stays exactly as written.
 ///
 /// Kept as a list rather than derived from `DeviceWrite`'s fields because the
 /// mapping is not one-to-one: `key` is the entry name, not a key inside it.
-const MANAGED_DEVICE_KEYS: [&str; 14] = [
+const MANAGED_DEVICE_KEYS: [&str; 17] = [
     "screen",
     "panel",
     "dither",
@@ -300,15 +460,19 @@ const MANAGED_DEVICE_KEYS: [&str; 14] = [
     "temperature_profile",
     "maximum_compatibility",
     "min_png_bytes",
+    "colors_actual",
+    "gamut",
+    "final",
 ];
 
 /// The settings `clear` accepts: every managed key except `screen`, which a
 /// device must always have. `error_clamp` is deliberately absent — it is not
-/// managed, so it is preserved verbatim and keeps reporting its deprecation.
+/// managed, so a patch never touches it and it keeps reporting its
+/// deprecation.
 ///
 /// A test asserts this stays exactly `MANAGED_DEVICE_KEYS` minus `screen`, so
 /// a field added to one list cannot go missing from the other.
-const CLEARABLE_DEVICE_KEYS: [&str; 13] = [
+const CLEARABLE_DEVICE_KEYS: [&str; 16] = [
     "panel",
     "dither",
     "colors",
@@ -322,33 +486,31 @@ const CLEARABLE_DEVICE_KEYS: [&str; 13] = [
     "temperature_profile",
     "maximum_compatibility",
     "min_png_bytes",
+    "colors_actual",
+    "gamut",
+    "final",
 ];
 
-/// Every key of an existing device entry that this writer does not model.
+/// The device keys this PATCH addresses: every [`MANAGED_DEVICE_KEYS`] entry
+/// the body sets (non-null when serialised; `final_rung` serialises as
+/// `final`), plus the first segment of every `clear` name (`gamut.knee` ->
+/// `gamut`, `final.dither` -> `final`).
 ///
-/// `upsert_device` replaces the whole block, so without this a patch deletes
-/// every setting `DeviceWrite` happens not to carry — `temperature_profile`,
-/// `maximum_compatibility`, `min_png_bytes` and the dither tuning knobs among
-/// them. That failure is silent and only shows up on the glass hours later,
-/// which is exactly how it was found. Preserving by exclusion rather than by
-/// enumeration means a field added to `DeviceConfig` tomorrow survives without
-/// anyone remembering to come back here.
-fn unmanaged_device_keys(yaml: &str, key: &str) -> serde_yaml::Mapping {
-    let mut out = serde_yaml::Mapping::new();
-    let Ok(root) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
-        return out;
-    };
-    let Some(block) = root
-        .get("devices")
-        .and_then(|d| d.get(key))
-        .and_then(|d| d.as_mapping())
-    else {
-        return out;
-    };
-    for (k, v) in block {
-        let managed = k.as_str().is_some_and(|s| MANAGED_DEVICE_KEYS.contains(&s));
-        if !managed {
-            out.insert(k.clone(), v.clone());
+/// Only these keys are written back, so a patch leaves every other line of
+/// the entry exactly as the user wrote it: `strength: 1` is not respelled
+/// `1.0`, and keys byonk does not model (`error_clamp`, `<<:`) stay put.
+fn touched_keys(body: &DeviceWrite) -> Vec<&'static str> {
+    let set = serde_yaml::to_value(body).unwrap_or_default();
+    let mut out: Vec<&'static str> = MANAGED_DEVICE_KEYS
+        .iter()
+        .copied()
+        .filter(|k| set.get(*k).is_some_and(|v| !v.is_null()))
+        .collect();
+    for name in body.clear.iter().flatten() {
+        let first = name.split('.').next().unwrap_or(name);
+        let key = MANAGED_DEVICE_KEYS.iter().copied().find(|k| *k == first);
+        if let Some(k) = key.filter(|k| !out.contains(k)) {
+            out.push(k);
         }
     }
     out
@@ -367,6 +529,77 @@ fn yaml_f32(v: f32) -> serde_yaml::Value {
         .parse::<f64>()
         .map(serde_yaml::Value::from)
         .unwrap_or_else(|_| serde_yaml::Value::from(v))
+}
+
+/// One rung's settings as a YAML mapping. Shared by the `final:` block (and
+/// by anything else that writes a rung) so `yaml_f32` applies at every rung --
+/// a float written one way at one rung and another way at the other churns
+/// the diff on every rewrite.
+fn cascade_mapping(v: &CascadeValues) -> serde_yaml::Mapping {
+    let mut m = serde_yaml::Mapping::new();
+    if let Some(c) = &v.colors {
+        m.insert("colors".into(), c.as_str().into());
+    }
+    if let Some(c) = &v.colors_actual {
+        m.insert("colors_actual".into(), c.as_str().into());
+    }
+    if let Some(d) = &v.dither {
+        m.insert("dither".into(), d.as_str().into());
+    }
+    for (key, value) in [
+        ("max_error", v.max_error),
+        ("noise_scale", v.noise_scale),
+        ("chroma_clamp", v.chroma_clamp),
+        ("strength", v.strength),
+    ] {
+        if let Some(n) = value {
+            m.insert(key.into(), yaml_f32(n));
+        }
+    }
+    if let Some(r) = v.refresh.filter(|&r| r > 0) {
+        m.insert("refresh".into(), serde_yaml::Value::from(r));
+    }
+    if let Some(g) = gamut_mapping(&v.gamut) {
+        m.insert("gamut".into(), g.into());
+    }
+    m
+}
+
+/// A `GamutTuningValues` as a mapping, or `None` when it sets nothing -- an
+/// empty `gamut: {}` in the file would be noise.
+fn gamut_mapping(g: &GamutTuningValues) -> Option<serde_yaml::Mapping> {
+    if g.is_empty() {
+        return None;
+    }
+    let mut m = serde_yaml::Mapping::new();
+    for (key, value) in [
+        ("knee", g.knee),
+        ("amount", g.amount),
+        ("max_compression", g.max_compression),
+    ] {
+        if let Some(n) = value {
+            m.insert(key.into(), yaml_f32(n));
+        }
+    }
+    Some(m)
+}
+
+/// Merge the patch's final rung onto the existing one, field by field.
+///
+/// `body.or(existing)` on the whole `Option` would be whole-block
+/// replacement: a patch setting `final.dither` would silently drop
+/// `final.strength`. Returns `None` when neither side has a rung, so
+/// `device_block` emits no `final:` key at all.
+fn merge_final(
+    body: Option<&CascadeValues>,
+    existing: Option<&CascadeValues>,
+) -> Option<CascadeValues> {
+    match (body, existing) {
+        (None, None) => None,
+        (Some(b), None) => Some(b.clone()),
+        (None, Some(e)) => Some(e.clone()),
+        (Some(b), Some(e)) => Some(b.or(e)),
+    }
 }
 
 fn device_block(w: &DeviceWrite, screen: &str) -> serde_yaml::Mapping {
@@ -401,6 +634,20 @@ fn device_block(w: &DeviceWrite, screen: &str) -> serde_yaml::Mapping {
             m.insert(key.into(), yaml_f32(v));
         }
     }
+    if let Some(c) = &w.colors_actual {
+        m.insert("colors_actual".into(), c.as_str().into());
+    }
+    if let Some(g) = w.gamut.as_ref().and_then(gamut_mapping) {
+        m.insert("gamut".into(), g.into());
+    }
+    // An empty final rung emits nothing: `final: {}` in the file would read
+    // as a veto that vetoes nothing.
+    if let Some(f) = &w.final_rung {
+        let mapping = cascade_mapping(f);
+        if !mapping.is_empty() {
+            m.insert("final".into(), mapping.into());
+        }
+    }
     if let Some(t) = &w.temperature_profile {
         m.insert("temperature_profile".into(), t.as_str().into());
     }
@@ -418,27 +665,6 @@ fn device_block(w: &DeviceWrite, screen: &str) -> serde_yaml::Mapping {
         m.insert("params".into(), serde_yaml::Value::Mapping(pm));
     }
     m
-}
-
-fn persist(state: &AppState, path: &std::path::Path, new_yaml: String) -> Result<(), ApiError> {
-    // Snapshot current contents so we can roll back if the new text fails to reparse.
-    let previous = std::fs::read_to_string(path).ok();
-
-    // Atomic write: temp file in same dir, then rename.
-    let tmp = path.with_extension("yaml.tmp");
-    std::fs::write(&tmp, &new_yaml).map_err(|e| ApiError::Internal(format!("write temp: {e}")))?;
-    std::fs::rename(&tmp, path).map_err(|e| ApiError::Internal(format!("rename: {e}")))?;
-
-    // Reload into the live config; on failure, roll the file back.
-    if let Err(e) = reload_config(state) {
-        if let Some(prev) = previous {
-            let _ = std::fs::write(path, prev);
-        }
-        return Err(ApiError::Internal(format!(
-            "reload failed, rolled back: {e}"
-        )));
-    }
-    Ok(())
 }
 
 /// Apply a device *add*: reject a duplicate key, validate the screen and
@@ -524,18 +750,84 @@ pub async fn apply_device_patch(
     key: &str,
     body: DeviceWrite,
 ) -> Result<serde_json::Value, ApiError> {
+    apply_device_patch_renaming(state, key, None, body).await
+}
+
+/// [`apply_device_patch`], optionally renaming the entry to `new_key` in the
+/// same write: the key changes in place (block, comments and position kept)
+/// and the patch lands under the new key, under one lock and one persist, so
+/// either both happen or neither does. `body.key` is never read here; the
+/// caller decides whether the body's key means a rename (the dev UI) or is
+/// ignored (the admin PATCH, the MCP tool).
+///
+/// A `new_key` equal to `key` is no rename. Empty or containing whitespace:
+/// 400. Taken by another device: 409. The reserved DEFAULT device is neither
+/// renamed nor renamed onto: 409.
+pub async fn apply_device_patch_renaming(
+    state: &AppState,
+    key: &str,
+    new_key: Option<&str>,
+    body: DeviceWrite,
+) -> Result<serde_json::Value, ApiError> {
     let path = require_file_config(state)?;
+    let new_key = new_key.filter(|k| *k != key);
+    if let Some(k) = new_key {
+        if k.is_empty() || k.chars().any(char::is_whitespace) {
+            return Err(ApiError::BadRequest(
+                "a device key must not be empty or contain whitespace".into(),
+            ));
+        }
+        if key == RESERVED_DEFAULT_KEY || k == RESERVED_DEFAULT_KEY {
+            return Err(ApiError::Conflict(
+                "the reserved DEFAULT device cannot be renamed".into(),
+            ));
+        }
+    }
     validate_device_settings(state, &body)?;
     let clear = resolve_clear(&body)?;
+    let keys = touched_keys(&body);
     let _guard = state.write_lock.lock().await;
 
-    // Must already exist.
+    // Must already exist; a rename target must not.
     let existing = {
         let config = state.config.load();
-        config.devices.get(key).cloned().ok_or(ApiError::NotFound)?
+        let existing = config.devices.get(key).cloned().ok_or(ApiError::NotFound)?;
+        if let Some(k) = new_key {
+            if config.devices.contains_key(k) {
+                return Err(ApiError::Conflict(format!("device `{k}` already exists")));
+            }
+        }
+        existing
     };
 
-    // Merge: start from existing, override provided fields.
+    // Ruling C3: clear the existing entry first, then merge the body's sets
+    // over what is left. A key both cleared and set therefore ends up set,
+    // and the whole change is one write under one lock.
+    let mut base = DeviceWrite {
+        key: Some(key.to_string()),
+        screen: Some(existing.screen.clone()),
+        panel: existing.panel.clone(),
+        dither: existing.dither.clone(),
+        colors: existing.colors.clone(),
+        colors_actual: existing.colors_actual.clone(),
+        gamut: Some(existing.gamut.clone()),
+        final_rung: existing.final_rung.clone(),
+        params: Some(existing.params.clone()),
+        refresh: existing.refresh,
+        name: existing.name.clone(),
+        max_error: existing.max_error,
+        noise_scale: existing.noise_scale,
+        chroma_clamp: existing.chroma_clamp,
+        strength: existing.strength,
+        temperature_profile: existing.temperature_profile.clone(),
+        maximum_compatibility: existing.maximum_compatibility,
+        min_png_bytes: existing.min_png_bytes,
+        clear: None,
+    };
+    apply_clear(&mut base, &clear);
+    let base_params = base.params.clone().unwrap_or_default();
+
+    // Merge: start from the cleared base, override provided fields.
     let screen = body.screen.clone().unwrap_or(existing.screen.clone());
 
     // Params: a screen change replaces params wholesale with whatever the
@@ -547,64 +839,79 @@ pub async fn apply_device_patch(
     let params = if body.screen.is_none() {
         match &body.params {
             Some(p) => {
-                let mut merged = existing.params.clone();
+                let mut merged = base_params.clone();
                 for (k, v) in p {
                     merged.insert(k.clone(), v.clone());
                 }
                 merged
             }
-            None => existing.params.clone(),
+            None => base_params.clone(),
         }
     } else {
-        body.params
-            .clone()
-            .unwrap_or_else(|| existing.params.clone())
+        body.params.clone().unwrap_or_else(|| base_params.clone())
     };
 
     // Every managed key needs a line here. A key listed in
     // `MANAGED_DEVICE_KEYS` but missing from this merge is *deleted* by any
-    // patch that omits it — `unmanaged_device_keys` no longer protects it —
-    // and the loss is silent until it shows up on the glass.
-    let mut merged = DeviceWrite {
+    // patch that sets or clears it, and the loss is silent until it shows up
+    // on the glass.
+    let merged = DeviceWrite {
         key: Some(key.to_string()),
         screen: Some(screen.clone()),
-        panel: body.panel.clone().or(existing.panel.clone()),
-        dither: body.dither.clone().or(existing.dither.clone()),
-        colors: body.colors.clone().or(existing.colors.clone()),
+        panel: body.panel.clone().or(base.panel.clone()),
+        dither: body.dither.clone().or(base.dither.clone()),
+        colors: body.colors.clone().or(base.colors.clone()),
+        colors_actual: body.colors_actual.clone().or(base.colors_actual.clone()),
+        gamut: Some(
+            body.gamut
+                .clone()
+                .unwrap_or_default()
+                .or(&base.gamut.clone().unwrap_or_default()),
+        ),
+        final_rung: merge_final(body.final_rung.as_ref(), base.final_rung.as_ref()),
         params: Some(params),
-        refresh: body.refresh.or(existing.refresh),
-        name: body.name.clone().or(existing.name.clone()),
-        max_error: body.max_error.or(existing.max_error),
-        noise_scale: body.noise_scale.or(existing.noise_scale),
-        chroma_clamp: body.chroma_clamp.or(existing.chroma_clamp),
-        strength: body.strength.or(existing.strength),
+        refresh: body.refresh.or(base.refresh),
+        name: body.name.clone().or(base.name.clone()),
+        max_error: body.max_error.or(base.max_error),
+        noise_scale: body.noise_scale.or(base.noise_scale),
+        chroma_clamp: body.chroma_clamp.or(base.chroma_clamp),
+        strength: body.strength.or(base.strength),
         temperature_profile: body
             .temperature_profile
             .clone()
-            .or(existing.temperature_profile.clone()),
-        maximum_compatibility: body
-            .maximum_compatibility
-            .or(existing.maximum_compatibility),
-        min_png_bytes: body.min_png_bytes.or(existing.min_png_bytes),
+            .or(base.temperature_profile.clone()),
+        maximum_compatibility: body.maximum_compatibility.or(base.maximum_compatibility),
+        min_png_bytes: body.min_png_bytes.or(base.min_png_bytes),
         clear: None,
     };
-    apply_clear(&mut merged, &clear);
-
     let empty = HashMap::new();
     validate_screen_and_params(state, &screen, merged.params.as_ref().unwrap_or(&empty))?;
 
-    let yaml = state
+    let mut yaml = state
         .asset_loader
         .read_config_string()
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let mut block = device_block(&merged, &screen);
-    // Carry across everything this writer does not model, so a screen
-    // assignment cannot quietly strip the device's other settings.
-    for (k, v) in unmanaged_device_keys(&yaml, key) {
-        block.insert(k, v);
-    }
-    let new_yaml = config_writer::upsert_device(&yaml, key, &block)
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    // The rename first, in place; the patch then edits the renamed entry.
+    let key = match new_key {
+        Some(k) => {
+            yaml = config_writer::rename_key(&yaml, &["devices", key], k)
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+            k
+        }
+        None => key,
+    };
+    // Only the keys this request names are written, in place: the entry
+    // keeps its position, its comments and every other line.
+    let block = device_block(&merged, &screen);
+    let new_yaml = match config_writer::update_device(&yaml, key, &block, &keys) {
+        Ok(y) => y,
+        // Known to the config but absent from the text: written as a new entry.
+        Err(config_writer::ConfigWriteError::NotFound(_)) => {
+            config_writer::upsert_device(&yaml, key, &block)
+                .map_err(|e| ApiError::Internal(e.to_string()))?
+        }
+        Err(e) => return Err(ApiError::Internal(e.to_string())),
+    };
     persist(state, &path, new_yaml)?;
 
     Ok(serde_json::json!({ "key": key, "screen": screen }))
@@ -626,26 +933,36 @@ pub async fn delete_device(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&state, &headers)?;
+    Ok(Json(apply_device_delete(&state, &key).await?))
+}
+
+/// Remove `devices.<key>` from config.yaml. Shared by
+/// `DELETE /api/admin/devices/{key}` and `DELETE /dev/api/devices/{key}`.
+/// The reserved DEFAULT device: 409. Absent from the file: 404.
+pub async fn apply_device_delete(
+    state: &AppState,
+    key: &str,
+) -> Result<serde_json::Value, ApiError> {
     if key == RESERVED_DEFAULT_KEY {
         return Err(ApiError::Conflict(
             "the reserved DEFAULT device cannot be deleted".into(),
         ));
     }
-    let path = require_file_config(&state)?;
+    let path = require_file_config(state)?;
     let _guard = state.write_lock.lock().await;
 
     let yaml = state
         .asset_loader
         .read_config_string()
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let new_yaml = match config_writer::remove_device(&yaml, &key) {
+    let new_yaml = match config_writer::remove_device(&yaml, key) {
         Ok(y) => y,
         Err(config_writer::ConfigWriteError::NotFound(_)) => return Err(ApiError::NotFound),
         Err(e) => return Err(ApiError::Internal(e.to_string())),
     };
-    persist(&state, &path, new_yaml)?;
+    persist(state, &path, new_yaml)?;
 
-    Ok(Json(serde_json::json!({ "deleted": key })))
+    Ok(serde_json::json!({ "deleted": key }))
 }
 
 #[derive(Deserialize)]
@@ -744,7 +1061,17 @@ pub async fn add_screen_repo(
 ) -> Result<Json<ScreenRepoInfo>, ApiError> {
     require_writable_global(&state)?;
     require_admin(&state, &headers)?;
-    let path = require_file_config(&state)?;
+    add_screen_repo_core(&state, body).await.map(Json)
+}
+
+/// Register a screen repo in `config.yaml` and start its first fetch. The
+/// caller has already authenticated and passed `require_writable_global`;
+/// shared by the admin route and the dev UI's.
+pub(crate) async fn add_screen_repo_core(
+    state: &AppState,
+    body: ScreenRepoWrite,
+) -> Result<ScreenRepoInfo, ApiError> {
+    let path = require_file_config(state)?;
     let _guard = state.write_lock.lock().await;
 
     let handle = body
@@ -763,10 +1090,11 @@ pub async fn add_screen_repo(
         )));
     }
 
+    // An empty pin or token is never a value: treat it as absent.
     let block = screen_repo_block(
         body.repo.as_deref(),
-        body.pin.as_deref(),
-        body.token.as_deref(),
+        body.pin.as_deref().filter(|v| !v.is_empty()),
+        body.token.as_deref().filter(|v| !v.is_empty()),
     );
     let yaml = state
         .asset_loader
@@ -774,7 +1102,7 @@ pub async fn add_screen_repo(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let new_yaml = config_writer::upsert_screen_repo(&yaml, &handle, &block)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    persist(&state, &path, new_yaml)?;
+    persist(state, &path, new_yaml)?;
 
     // Fetch asynchronously; the response reflects whatever status exists at
     // this instant (likely no entry yet). The client polls GET /screen-repos for
@@ -783,10 +1111,14 @@ pub async fn add_screen_repo(
     let h = handle.clone();
     tokio::task::spawn_blocking(move || mgr.refresh_one(&h));
 
-    let count = screen_repo_screen_count(&state, &handle);
+    Ok(screen_repo_info_now(state, handle))
+}
+
+/// The current `ScreenRepoInfo` for `handle`, from live config and status.
+pub(crate) fn screen_repo_info_now(state: &AppState, handle: String) -> ScreenRepoInfo {
+    let count = screen_repo_screen_count(state, &handle);
     let statuses = state.screen_repo_manager.status_snapshot();
-    let info = build_screen_repo_info(&state.config.load(), statuses.get(&handle), count, handle);
-    Ok(Json(info))
+    build_screen_repo_info(&state.config.load(), statuses.get(&handle), count, handle)
 }
 
 pub async fn patch_screen_repo(
@@ -797,7 +1129,17 @@ pub async fn patch_screen_repo(
 ) -> Result<Json<ScreenRepoInfo>, ApiError> {
     require_writable_global(&state)?;
     require_admin(&state, &headers)?;
-    let path = require_file_config(&state)?;
+    patch_screen_repo_core(&state, handle, body).await.map(Json)
+}
+
+/// Overlay the provided fields onto an existing screen repo entry. Same
+/// contract as [`add_screen_repo_core`].
+pub(crate) async fn patch_screen_repo_core(
+    state: &AppState,
+    handle: String,
+    body: ScreenRepoWrite,
+) -> Result<ScreenRepoInfo, ApiError> {
+    let path = require_file_config(state)?;
     let _guard = state.write_lock.lock().await;
 
     if handle == BUILTIN_HANDLE {
@@ -816,20 +1158,35 @@ pub async fn patch_screen_repo(
 
     // Overlay only the provided fields; an omitted field (incl. `token`)
     // keeps its existing value.
+    if body.repo.is_some() && existing.path.is_some() {
+        return Err(ApiError::BadRequest(format!(
+            "screen repo `{handle}` is a folder (`path:`), not a git repo: it has no `repo` to set"
+        )));
+    }
     let repo = body.repo.clone().or_else(|| existing.repo.clone());
-    let pin = body.pin.clone().or_else(|| existing.pin.clone());
-    let token = body.token.clone().or_else(|| existing.token.clone());
-    let repo_or_pin_changed = (body.repo.is_some() && body.repo != existing.repo)
-        || (body.pin.is_some() && body.pin != existing.pin);
+    // An empty string removes the pin or token (empty is never a valid value).
+    let overlay = |new: &Option<String>, old: &Option<String>| match new {
+        Some(v) if v.is_empty() => None,
+        Some(v) => Some(v.clone()),
+        None => old.clone(),
+    };
+    let pin = overlay(&body.pin, &existing.pin);
+    let token = overlay(&body.token, &existing.token);
+    let repo_or_pin_changed =
+        (body.repo.is_some() && body.repo != existing.repo) || pin != existing.pin;
 
-    let block = screen_repo_block(repo.as_deref(), pin.as_deref(), token.as_deref());
+    let mut block = screen_repo_block(repo.as_deref(), pin.as_deref(), token.as_deref());
+    // The entry is rebuilt whole, so a `path` must be carried over.
+    if let Some(p) = existing.path.as_deref() {
+        block.insert("path".into(), p.into());
+    }
     let yaml = state
         .asset_loader
         .read_config_string()
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let new_yaml = config_writer::upsert_screen_repo(&yaml, &handle, &block)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    persist(&state, &path, new_yaml)?;
+    persist(state, &path, new_yaml)?;
 
     if repo_or_pin_changed {
         let mgr = state.screen_repo_manager.clone();
@@ -837,10 +1194,7 @@ pub async fn patch_screen_repo(
         tokio::task::spawn_blocking(move || mgr.refresh_one(&h));
     }
 
-    let count = screen_repo_screen_count(&state, &handle);
-    let statuses = state.screen_repo_manager.status_snapshot();
-    let info = build_screen_repo_info(&state.config.load(), statuses.get(&handle), count, handle);
-    Ok(Json(info))
+    Ok(screen_repo_info_now(state, handle))
 }
 
 pub async fn delete_screen_repo(
@@ -850,7 +1204,19 @@ pub async fn delete_screen_repo(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_writable_global(&state)?;
     require_admin(&state, &headers)?;
-    let path = require_file_config(&state)?;
+    delete_screen_repo_core(&state, &handle).await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Remove a screen repo from `config.yaml`, unless a device still uses one
+/// of its screens (409 naming every such device). Same contract as
+/// [`add_screen_repo_core`].
+pub(crate) async fn delete_screen_repo_core(
+    state: &AppState,
+    handle: &str,
+) -> Result<(), ApiError> {
+    let handle = handle.to_string();
+    let path = require_file_config(state)?;
     let _guard = state.write_lock.lock().await;
 
     if handle == BUILTIN_HANDLE {
@@ -862,14 +1228,17 @@ pub async fn delete_screen_repo(
     // Reject if any device's screen dangles into this screen repo's namespace.
     let prefix = format!("{handle}/");
     let config = state.config.load();
-    if let Some((device_key, _)) = config
+    let mut users: Vec<&str> = config
         .devices
         .iter()
-        .find(|(_, d)| d.screen.starts_with(&prefix))
-        .map(|(k, d)| (k.clone(), d.screen.clone()))
-    {
+        .filter(|(_, d)| d.screen.starts_with(&prefix))
+        .map(|(k, _)| k.as_str())
+        .collect();
+    if !users.is_empty() {
+        users.sort_unstable();
         return Err(ApiError::Conflict(format!(
-            "screen repo `{handle}` is referenced by device `{device_key}`"
+            "screen repo `{handle}` is referenced by device(s): {}",
+            users.join(", ")
         )));
     }
     drop(config);
@@ -883,7 +1252,7 @@ pub async fn delete_screen_repo(
         Err(config_writer::ConfigWriteError::NotFound(_)) => return Err(ApiError::NotFound),
         Err(e) => return Err(ApiError::Internal(e.to_string())),
     };
-    persist(&state, &path, new_yaml)?;
+    persist(state, &path, new_yaml)?;
 
     // Forget the deleted handle's fetch status so a later re-registration of
     // the same handle doesn't briefly surface the stale resolved_sha/Ready
@@ -893,7 +1262,7 @@ pub async fn delete_screen_repo(
     // resolving immediately (in-memory only; not blocking).
     state.screen_repo_manager.rebuild_loader();
 
-    Ok(Json(serde_json::json!({ "ok": true })))
+    Ok(())
 }
 
 pub async fn update_screen_repo(
@@ -902,7 +1271,15 @@ pub async fn update_screen_repo(
     headers: HeaderMap,
 ) -> Result<Json<ScreenRepoInfo>, ApiError> {
     require_admin(&state, &headers)?;
+    update_screen_repo_core(&state, handle).map(Json)
+}
 
+/// Start a content refresh of one screen repo (not a config write, so it is
+/// allowed in add-on mode). 404 for an unknown handle.
+pub(crate) fn update_screen_repo_core(
+    state: &AppState,
+    handle: String,
+) -> Result<ScreenRepoInfo, ApiError> {
     if handle != BUILTIN_HANDLE && !state.config.load().screen_repos.contains_key(&handle) {
         return Err(ApiError::NotFound);
     }
@@ -911,10 +1288,7 @@ pub async fn update_screen_repo(
     let h = handle.clone();
     tokio::task::spawn_blocking(move || mgr.refresh_one(&h));
 
-    let count = screen_repo_screen_count(&state, &handle);
-    let statuses = state.screen_repo_manager.status_snapshot();
-    let info = build_screen_repo_info(&state.config.load(), statuses.get(&handle), count, handle);
-    Ok(Json(info))
+    Ok(screen_repo_info_now(state, handle))
 }
 
 pub async fn update_all_screen_repos(
@@ -945,51 +1319,6 @@ mod tests {
         state
     }
 
-    const DEVICE_YAML: &str = "\
-devices:
-  \"1C:DB:D4:66:5B:50\":
-    screen: local/gradient-lab
-    panel: trmnl_x
-    dither: floyd-steinberg
-    temperature_profile: a
-    maximum_compatibility: true
-    min_png_bytes: 102401
-    max_error: 0.8
-    error_clamp: 0.2
-    gamut:
-      knee: 0.7
-    params:
-      station: Olten
-";
-
-    /// The bug this guards against cost a live panel its anti-ghosting
-    /// settings: `upsert_device` replaces the whole block, so assigning a
-    /// screen silently deleted every key `DeviceWrite` does not carry. It
-    /// failed on the glass, not in a log.
-    ///
-    /// `temperature_profile`, `min_png_bytes` and the dither knobs used to be
-    /// guarded here. They are managed fields now, kept by the patch merge
-    /// instead — `test_patch_preserves_every_tuning_knob` in
-    /// `tests/admin_write_test.rs` is what proves they still survive, end to
-    /// end. What is left for this door are the keys the writer models nowhere:
-    /// `gamut`, and the deprecated `error_clamp` whose whole job is to stay on
-    /// disk and keep reporting itself.
-    #[test]
-    fn unmanaged_device_keys_are_preserved() {
-        let kept = unmanaged_device_keys(DEVICE_YAML, "1C:DB:D4:66:5B:50");
-        for key in ["error_clamp", "gamut"] {
-            assert!(
-                kept.contains_key(serde_yaml::Value::from(key)),
-                "{key} must survive a device patch, kept: {kept:?}"
-            );
-        }
-        assert_eq!(
-            kept.get(serde_yaml::Value::from("error_clamp")),
-            Some(&serde_yaml::Value::from(0.2)),
-            "value must carry across unchanged, not just the key"
-        );
-    }
-
     /// `clear` and the managed-key list are two halves of one contract: a key
     /// the writer sets must also be a key the caller can unset, or a setting
     /// becomes a one-way door. `screen` is the sole exception, because a
@@ -1010,27 +1339,356 @@ devices:
         );
     }
 
-    /// Keys the writer sets itself must NOT come back through the side door,
-    /// or a patch clearing `name` or `refresh` would be undone by its own
-    /// preservation step.
+    fn device_write_for_test() -> DeviceWrite {
+        DeviceWrite {
+            key: None,
+            screen: Some("local/a".into()),
+            panel: None,
+            dither: None,
+            colors: None,
+            colors_actual: None,
+            gamut: None,
+            final_rung: None,
+            params: None,
+            refresh: None,
+            name: None,
+            max_error: None,
+            noise_scale: None,
+            chroma_clamp: None,
+            strength: None,
+            temperature_profile: None,
+            maximum_compatibility: None,
+            min_png_bytes: None,
+            clear: None,
+        }
+    }
+
+    fn with_clear(mut w: DeviceWrite, names: &[&str]) -> DeviceWrite {
+        w.clear = Some(names.iter().map(|n| n.to_string()).collect());
+        w
+    }
+
+    /// Field by field, like every other rung: setting `final.dither` must not
+    /// wipe `final.strength`.
     #[test]
-    fn managed_device_keys_are_not_preserved() {
-        let kept = unmanaged_device_keys(DEVICE_YAML, "1C:DB:D4:66:5B:50");
-        for key in MANAGED_DEVICE_KEYS {
-            assert!(
-                !kept.contains_key(serde_yaml::Value::from(key)),
-                "{key} is written by device_block and must not be carried over"
-            );
+    fn setting_one_final_field_keeps_the_others() {
+        let existing = CascadeValues {
+            dither: Some("stucki".into()),
+            strength: Some(0.4),
+            ..Default::default()
+        };
+        let body = CascadeValues {
+            dither: Some("atkinson".into()),
+            ..Default::default()
+        };
+        let m = merge_final(Some(&body), Some(&existing)).expect("a final rung survives");
+        assert_eq!(
+            m.dither.as_deref(),
+            Some("atkinson"),
+            "the patch's field wins"
+        );
+        assert_eq!(m.strength, Some(0.4), "the untouched field must survive");
+    }
+
+    /// A bare name clears the BASE rung only. Clearing both would be
+    /// indistinguishable from success in the response.
+    #[test]
+    fn a_bare_clear_name_clears_the_base_rung_only() {
+        let mut merged = DeviceWrite {
+            dither: Some("sierra".into()),
+            final_rung: Some(CascadeValues {
+                dither: Some("atkinson".into()),
+                ..Default::default()
+            }),
+            ..device_write_for_test()
+        };
+        apply_clear(&mut merged, &["dither".to_string()]);
+        assert_eq!(merged.dither, None, "the base rung is cleared");
+        assert_eq!(
+            merged.final_rung.as_ref().and_then(|f| f.dither.as_deref()),
+            Some("atkinson"),
+            "`clear: [\"dither\"]` must never reach the final rung"
+        );
+    }
+
+    #[test]
+    fn a_dotted_clear_name_clears_that_final_field_only() {
+        let mut merged = DeviceWrite {
+            dither: Some("sierra".into()),
+            final_rung: Some(CascadeValues {
+                dither: Some("atkinson".into()),
+                strength: Some(0.4),
+                ..Default::default()
+            }),
+            ..device_write_for_test()
+        };
+        apply_clear(&mut merged, &["final.dither".to_string()]);
+        assert_eq!(
+            merged.dither.as_deref(),
+            Some("sierra"),
+            "the base rung stands"
+        );
+        let f = merged
+            .final_rung
+            .as_ref()
+            .expect("the rung itself survives");
+        assert_eq!(f.dither, None);
+        assert_eq!(f.strength, Some(0.4), "its other fields survive");
+    }
+
+    #[test]
+    fn clearing_final_removes_the_whole_rung() {
+        let mut merged = DeviceWrite {
+            final_rung: Some(CascadeValues {
+                dither: Some("atkinson".into()),
+                strength: Some(0.4),
+                ..Default::default()
+            }),
+            ..device_write_for_test()
+        };
+        apply_clear(&mut merged, &["final".to_string()]);
+        assert!(merged.final_rung.is_none());
+    }
+
+    #[test]
+    fn clearing_the_new_base_keys_removes_them() {
+        let mut merged = DeviceWrite {
+            colors_actual: Some("#000000,#FFFFFF".into()),
+            gamut: Some(GamutTuningValues {
+                knee: Some(0.8),
+                ..Default::default()
+            }),
+            ..device_write_for_test()
+        };
+        apply_clear(
+            &mut merged,
+            &["colors_actual".to_string(), "gamut".to_string()],
+        );
+        assert!(merged.colors_actual.is_none());
+        assert!(merged.gamut.is_none());
+    }
+
+    #[test]
+    fn an_unknown_dotted_clear_name_is_rejected_by_name() {
+        for bad in ["final.screen", "final.nonsense", "base.dither"] {
+            let err = resolve_clear(&with_clear(device_write_for_test(), &[bad]))
+                .expect_err("not a cascade field");
+            assert!(format!("{err:?}").contains(bad), "{bad}: {err:?}");
+        }
+    }
+
+    /// Ruling C3 (named by ruling PF7): setting and clearing one field in a
+    /// request is no longer a refusal. `apply_device_patch` clears the existing
+    /// entry first and merges the sets second, so the set wins. This walks
+    /// those steps in that order and asserts the field ends up SET.
+    #[test]
+    fn a_final_field_set_and_cleared_in_one_request_ends_up_set() {
+        let mut existing = DeviceWrite {
+            final_rung: Some(CascadeValues {
+                dither: Some("floyd-steinberg".into()),
+                strength: Some(0.4),
+                ..Default::default()
+            }),
+            ..device_write_for_test()
+        };
+        let body = with_clear(
+            DeviceWrite {
+                final_rung: Some(CascadeValues {
+                    dither: Some("atkinson".into()),
+                    ..Default::default()
+                }),
+                ..device_write_for_test()
+            },
+            &["final.dither"],
+        );
+        let clear = resolve_clear(&body).expect("set + clear is accepted");
+        assert_eq!(clear, vec!["final.dither".to_string()]);
+        apply_clear(&mut existing, &clear);
+        let merged = merge_final(body.final_rung.as_ref(), existing.final_rung.as_ref())
+            .expect("a final rung remains");
+        assert_eq!(merged.dither.as_deref(), Some("atkinson"), "the set wins");
+        assert_eq!(merged.strength, Some(0.4), "an uncleared sibling is kept");
+    }
+
+    #[test]
+    fn gamut_sub_fields_are_clearable_on_both_rungs_and_nothing_else_is() {
+        resolve_clear(&with_clear(
+            device_write_for_test(),
+            &["gamut.knee", "gamut.amount", "final.gamut.max_compression"],
+        ))
+        .expect("gamut sub-fields are clearable");
+        for bad in ["gamut.nope", "final.gamut.nope", "gamut."] {
+            resolve_clear(&with_clear(device_write_for_test(), &[bad])).expect_err(bad);
         }
     }
 
     #[test]
-    fn unmanaged_device_keys_tolerates_missing_device_and_bad_yaml() {
-        // Preservation is best-effort: it must never be the thing that fails
-        // a write.
-        assert!(unmanaged_device_keys(DEVICE_YAML, "NO:SUCH:MAC").is_empty());
-        assert!(unmanaged_device_keys("::: not yaml :::", "1C:DB:D4:66:5B:50").is_empty());
-        assert!(unmanaged_device_keys("", "1C:DB:D4:66:5B:50").is_empty());
+    fn clearing_a_gamut_sub_field_leaves_its_siblings() {
+        let mut w = DeviceWrite {
+            gamut: Some(GamutTuningValues {
+                knee: Some(0.5),
+                amount: Some(0.9),
+                ..Default::default()
+            }),
+            ..device_write_for_test()
+        };
+        apply_clear(&mut w, &["gamut.knee".to_string()]);
+        assert_eq!(w.gamut.as_ref().unwrap().knee, None);
+        assert_eq!(w.gamut.as_ref().unwrap().amount, Some(0.9));
+    }
+
+    /// Clearing one final field while setting a different one is fine -- that
+    /// is the whole point of field-by-field addressing.
+    #[test]
+    fn a_final_field_may_be_cleared_while_another_is_set() {
+        let body = DeviceWrite {
+            final_rung: Some(CascadeValues {
+                dither: Some("atkinson".into()),
+                ..Default::default()
+            }),
+            ..device_write_for_test()
+        };
+        resolve_clear(&with_clear(body, &["final.strength"])).expect("different fields");
+    }
+
+    #[test]
+    fn device_block_emits_the_final_mapping_and_the_two_new_base_keys() {
+        let w = DeviceWrite {
+            colors_actual: Some("#1C5240,#FFFFFF".into()),
+            gamut: Some(GamutTuningValues {
+                knee: Some(0.8),
+                ..Default::default()
+            }),
+            final_rung: Some(CascadeValues {
+                dither: Some("atkinson".into()),
+                ..Default::default()
+            }),
+            ..device_write_for_test()
+        };
+        let block = device_block(&w, "local/a");
+        assert_eq!(
+            block
+                .get(serde_yaml::Value::from("colors_actual"))
+                .and_then(|v| v.as_str()),
+            Some("#1C5240,#FFFFFF")
+        );
+        let gamut = block
+            .get(serde_yaml::Value::from("gamut"))
+            .expect("gamut is emitted");
+        assert!(gamut.as_mapping().is_some(), "gamut is a nested mapping");
+        let f = block
+            .get(serde_yaml::Value::from("final"))
+            .expect("final is emitted");
+        assert_eq!(
+            f.as_mapping()
+                .and_then(|m| m.get(serde_yaml::Value::from("dither")))
+                .and_then(|v| v.as_str()),
+            Some("atkinson")
+        );
+        // A final rung that sets nothing must not leave `final: {}` behind.
+        let empty = DeviceWrite {
+            final_rung: Some(CascadeValues::default()),
+            ..device_write_for_test()
+        };
+        assert!(device_block(&empty, "local/a")
+            .get(serde_yaml::Value::from("final"))
+            .is_none());
+    }
+
+    /// An f32 in the final rung (and in a gamut, at either rung) must come
+    /// back out of config.yaml as the decimal the caller sent.
+    #[test]
+    fn f32_values_are_written_as_the_decimal_the_caller_sent_at_every_rung() {
+        let w = DeviceWrite {
+            gamut: Some(GamutTuningValues {
+                knee: Some(0.7),
+                ..Default::default()
+            }),
+            final_rung: Some(CascadeValues {
+                strength: Some(0.9),
+                gamut: GamutTuningValues {
+                    amount: Some(0.3),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..device_write_for_test()
+        };
+        let yaml = serde_yaml::to_string(&device_block(&w, "local/a")).unwrap();
+        for expected in ["strength: 0.9", "amount: 0.3", "knee: 0.7"] {
+            assert!(yaml.contains(expected), "want `{expected}`, got:\n{yaml}");
+        }
+        assert!(!yaml.contains("0.8999"), "widened f32 leaked:\n{yaml}");
+    }
+
+    /// Every `CascadeValues` field must be addressable as `final.<field>`, or
+    /// a final-rung setting becomes a one-way door.
+    #[test]
+    fn every_cascade_field_is_clearable_in_the_final_rung() {
+        for field in CASCADE_FIELDS {
+            let name = format!("final.{field}");
+            resolve_clear(&with_clear(device_write_for_test(), &[name.as_str()]))
+                .unwrap_or_else(|e| panic!("`{name}` must be clearable: {e:?}"));
+        }
+    }
+
+    /// `CASCADE_FIELDS` is hand-maintained beside `CascadeValues`; a field
+    /// added there but not here would be a one-way door. Round-trip through
+    /// serde so the struct itself is the witness.
+    #[test]
+    fn cascade_fields_matches_the_struct() {
+        let v = serde_json::to_value(CascadeValues::default()).unwrap();
+        let mut from_struct: Vec<&str> =
+            v.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        let mut listed = CASCADE_FIELDS.to_vec();
+        from_struct.sort_unstable();
+        listed.sort_unstable();
+        assert_eq!(from_struct, listed);
+    }
+
+    #[test]
+    fn final_rung_values_are_validated_like_the_base_rung() {
+        let state = state_with_addon_mode(false);
+        for bad in [
+            CascadeValues {
+                dither: Some("nonsense".into()),
+                ..Default::default()
+            },
+            CascadeValues {
+                colors: Some("#00000,#FFFFFF".into()),
+                ..Default::default()
+            },
+            CascadeValues {
+                strength: Some(-1.0),
+                ..Default::default()
+            },
+        ] {
+            let w = DeviceWrite {
+                final_rung: Some(bad),
+                ..device_write_for_test()
+            };
+            assert!(validate_device_settings(&state, &w).is_err());
+        }
+    }
+
+    #[test]
+    fn touched_keys_are_the_set_fields_and_the_cleared_names() {
+        let w = DeviceWrite {
+            name: Some("K".into()),
+            final_rung: Some(CascadeValues {
+                strength: Some(0.5),
+                ..Default::default()
+            }),
+            clear: Some(vec![
+                "dither".into(),
+                "gamut.knee".into(),
+                "final.refresh".into(),
+            ]),
+            ..Default::default()
+        };
+        let mut got = touched_keys(&w);
+        got.sort_unstable();
+        assert_eq!(got, vec!["dither", "final", "gamut", "name"]);
     }
 
     #[test]

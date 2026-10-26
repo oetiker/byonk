@@ -1,6 +1,7 @@
 //! Dev mode API endpoints.
 //!
-//! These endpoints are only available when running `byonk dev`.
+//! These are mounted under `/dev` by `byonk serve`, behind the `require_dev`
+//! login gate (see `crate::api::dev_auth`).
 
 use axum::{
     body::Bytes,
@@ -10,74 +11,115 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         Html, IntoResponse, Json, Response,
     },
+    Router,
 };
 use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::sync::Arc;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
-use crate::assets::AssetLoader;
-use crate::models::{AppConfig, DisplaySpec};
-use crate::server::DevOverrides;
-use crate::services::screen_repo_manager::ScreenRepoManager;
-use crate::services::{ContentCache, ContentPipeline, DeviceContext, FileWatcher, RenderService};
+use crate::api::resolution::{
+    header_value, resolve_pre_script, resolve_render, PreScriptInputs, RenderInputs, Resolution,
+    Rung, RungSettings, RungStatus, RESOLUTION_HEADER,
+};
+use crate::error::ApiError;
+use crate::models::{CascadeValues, DisplaySpec, PanelDitherConfig};
+use crate::server::AppState;
+use crate::services::DeviceContext;
 
-/// Dev mode application state
-#[derive(Clone)]
-pub struct DevState {
-    pub config: Arc<AppConfig>,
-    pub content_pipeline: Arc<ContentPipeline>,
-    pub content_cache: Arc<ContentCache>,
-    pub renderer: Arc<RenderService>,
-    pub file_watcher: Arc<FileWatcher>,
-    pub asset_loader: Arc<AssetLoader>,
-    pub screen_repo_manager: Arc<ScreenRepoManager>,
-    pub dev_overrides: DevOverrides,
-}
-
-/// Query parameters for /dev/render
-#[derive(Debug, Deserialize)]
-pub struct RenderQuery {
-    /// Screen name from config (optional if mac is provided)
+/// Body of `POST /dev/api/render`. See `docs/src/guide/dev-mode.md`
+/// ("Rendering a preview") for the contract.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenderRequest {
+    /// Screen repo ref. With `device`, this screen is rendered with the
+    /// device's settings; without it, the device's own screen is rendered.
     pub screen: Option<String>,
-    /// MAC address to resolve screen from config
-    pub mac: Option<String>,
-    /// Device model: "og" or "x"
-    #[serde(default = "default_model")]
-    pub model: String,
+    /// MAC, config key, or registration code.
+    pub device: Option<String>,
+    /// Panel profile id; beats the device's own `panel`.
+    pub panel: Option<String>,
+    /// Device model: "og" or "x". Absent: the model the registry has for
+    /// `device` (its last `Model` header), else "og" -- what the admin
+    /// preview assumes too.
+    pub model: Option<String>,
     /// Display width (overrides model default)
     pub width: Option<u32>,
     /// Display height (overrides model default)
     pub height: Option<u32>,
+    #[serde(default)]
+    pub draft: RenderDraft,
+    /// Ad-hoc knobs from the dev UI: the `override` rung.
+    #[serde(default, rename = "override")]
+    pub over: CascadeValues,
+    #[serde(default)]
+    pub simulated: SimulatedInputs,
+    #[serde(default)]
+    pub view: ViewOptions,
+}
+
+/// An uncommitted edit. Each present rung REPLACES the configured one, so a
+/// preview can show the effect of removing a value (controller ruling R-B).
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenderDraft {
+    pub base: Option<CascadeValues>,
+    /// The device's `final:` rung, drafted.
+    #[serde(rename = "final")]
+    pub final_rung: Option<CascadeValues>,
+    pub panel: Option<PanelDraft>,
+    /// Replaces the device's configured params; `simulated.params` still
+    /// merge on top (plan ruling P1-7).
+    pub params: Option<HashMap<String, serde_json::Value>>,
+}
+
+/// The panel rung of a draft. Every field absent means the panel carries
+/// nothing — it does not fall back to the configured panel.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelDraft {
+    pub colors: Option<String>,
+    pub colors_actual: Option<String>,
+    pub dither: Option<PanelDitherConfig>,
+}
+
+/// What the device would report about itself.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SimulatedInputs {
     /// Battery voltage (default: 4.2)
     pub battery_voltage: Option<f32>,
     /// WiFi RSSI in dBm (default: -50)
     pub rssi: Option<i32>,
     /// Unix timestamp override for time_now() in Lua
     pub timestamp: Option<i64>,
-    /// Custom parameters as JSON string
-    pub params: Option<String>,
-    /// Display colors as comma-separated hex RGB (e.g. "#000000,#FFFFFF,#FF0000,#FFFF00")
-    pub colors: Option<String>,
-    /// Panel profile name (references panels section in config)
-    pub panel: Option<String>,
-    /// Show actual measured panel colors in preview (default: true when panel has measured colors)
+    /// Merged over the device's configured params.
+    #[serde(default)]
+    pub params: HashMap<String, serde_json::Value>,
+}
+
+/// How the answer is drawn, as opposed to how it is resolved.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViewOptions {
+    /// Show actual measured panel colors in preview (default: true when
+    /// measured colors resolve)
     pub use_actual: Option<bool>,
-    /// Dither algorithm override from dev UI (e.g. "atkinson", "floyd-steinberg")
-    pub dither: Option<String>,
-    /// Measured/actual colors override from dev UI color tuning
-    pub colors_actual: Option<String>,
-    /// Error clamp override
-    pub max_error: Option<f32>,
-    /// Chroma clamp override
-    pub chroma_clamp: Option<f32>,
-    /// Blue noise jitter scale override
-    pub noise_scale: Option<f32>,
-    /// Dither strength override (0.0 = no diffusion, 1.0 = standard)
-    pub strength: Option<f32>,
+}
+
+/// Override fields the cascade cannot carry on this path (controller ruling
+/// R-B): the script would be shown one palette and rendered with another,
+/// and nothing here consumes a refresh.
+fn refused_fields(req: &RenderRequest) -> Option<&'static str> {
+    if req.over.colors.is_some() {
+        return Some("override.colors is not supported: the script could not see it");
+    }
+    if req.over.refresh.is_some() {
+        return Some("override.refresh is not supported");
+    }
+    None
 }
 
 /// Convert serde_yaml params to serde_json values
@@ -88,10 +130,6 @@ fn yaml_params_to_json(
         .iter()
         .filter_map(|(k, v)| serde_json::to_value(v).ok().map(|jv| (k.clone(), jv)))
         .collect()
-}
-
-fn default_model() -> String {
-    "og".to_string()
 }
 
 /// Query parameters for /dev/resolve-mac
@@ -116,24 +154,60 @@ pub struct ScreenInfo {
     pub default_refresh: u32,
 }
 
-/// Device info for the screens list
+/// A configured device: everything the dev UI's device editor shows.
 #[derive(Debug, Serialize)]
 pub struct DeviceInfo {
     pub id: String,
     pub screen: String,
     pub panel: Option<String>,
-    pub dither: Option<String>,
+    pub name: Option<String>,
+    pub params: HashMap<String, serde_json::Value>,
+    /// The base rung (what is written directly under the device).
+    pub base: CascadeValues,
+    /// The `final:` rung, the owner's veto.
+    #[serde(rename = "final")]
+    pub final_rung: Option<CascadeValues>,
+    pub temperature_profile: Option<String>,
+    pub maximum_compatibility: Option<bool>,
+    pub min_png_bytes: Option<u32>,
+    /// The model a preview assumes for this device when no panel gives its
+    /// geometry: what the device last reported (registry), else "og".
+    pub model: String,
 }
 
-/// Panel info for the panels list
+/// A panel profile: everything the dev UI's panel editor shows.
 #[derive(Debug, Serialize)]
 pub struct PanelInfo {
     pub id: String,
     pub name: String,
+    /// The firmware `Board` (or `Model`) string this panel is picked for.
+    #[serde(rename = "match")]
+    pub match_pattern: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub colors: String,
     pub colors_actual: Option<String>,
+    /// The panel's dither block, in the flat form config.yaml uses.
+    pub dither: Option<PanelDitherConfig>,
+}
+
+/// The tuning values an algorithm renders with when nothing overrides them.
+///
+/// Taken straight from `DitherAlgorithm::defaults()`, so the dev UI's number
+/// fields start on the values the engine would have used anyway and a render
+/// only carries an override the user actually made.
+#[derive(Debug, Serialize)]
+pub struct DitherDefaults {
+    pub max_error: f32,
+    pub noise_scale: f32,
+}
+
+/// One entry of the dither algorithm list the dev UI builds its select from.
+#[derive(Debug, Serialize)]
+pub struct DitherAlgorithmInfo {
+    /// Canonical name, as accepted by `?dither=` and by config.yaml.
+    pub name: String,
+    pub defaults: DitherDefaults,
 }
 
 /// Response from /dev/screens
@@ -142,6 +216,10 @@ pub struct ScreensResponse {
     pub screens: Vec<ScreenInfo>,
     pub devices: Vec<DeviceInfo>,
     pub panels: Vec<PanelInfo>,
+    /// Every algorithm byonk understands, with its tuning defaults. The dev
+    /// UI used to hard-code both; a copy that drifted made the preview lie
+    /// about what the device would show.
+    pub dither_algorithms: Vec<DitherAlgorithmInfo>,
 }
 
 /// Response from /dev/render when there's an error
@@ -151,25 +229,40 @@ pub struct RenderErrorResponse {
     pub details: Option<String>,
 }
 
-/// Serve the dev mode HTML page
+/// Serve the dev UI's HTML shell, built by `make webui`.
 pub async fn handle_dev_page() -> Html<&'static str> {
-    Html(include_str!("../../static/dev/index.html"))
+    Html(include_str!("../../webui/dist/index.html"))
 }
 
-/// Serve the dev mode CSS
-pub async fn handle_dev_css() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/css")],
-        include_str!("../../static/dev/dev.css"),
-    )
-}
-
-/// Serve the dev mode JavaScript
-pub async fn handle_dev_js() -> impl IntoResponse {
+/// Serve the dev UI application bundle.
+pub async fn handle_app_js() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "application/javascript")],
-        include_str!("../../static/dev/dev.js"),
+        include_str!("../../webui/dist/app.js"),
     )
+}
+
+/// Serve the dev UI stylesheet.
+pub async fn handle_app_css() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/css")],
+        include_str!("../../webui/dist/app.css"),
+    )
+}
+
+/// Serve the 1:1 pixel lens, shared by the editor page and the pop-out
+/// preview window.
+pub async fn handle_lens_js() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/javascript")],
+        include_str!("../../static/dev/lens.js"),
+    )
+}
+
+/// Serve the pop-out preview window: a second window that mirrors the render
+/// the editor page is showing, over a BroadcastChannel.
+pub async fn handle_preview_page() -> Html<&'static str> {
+    Html(include_str!("../../static/dev/preview.html"))
 }
 
 /// List available screens by discovering them from the filesystem.
@@ -177,7 +270,9 @@ pub async fn handle_dev_js() -> impl IntoResponse {
 /// Screens are discovered by scanning for `.lua` files with matching `.svg` templates.
 /// Config-defined screens are included first, then any filesystem screens not in config
 /// are auto-discovered. This allows new screens to appear without restarting the server.
-pub async fn handle_screens(State(state): State<DevState>) -> Json<ScreensResponse> {
+pub async fn handle_screens(State(state): State<AppState>) -> Json<ScreensResponse> {
+    let config = state.config.load();
+
     // Every screen comes from the screen repo loader (the source of truth). The
     // `name` is the qualified `handle/path` ref the dev UI feeds back into
     // `?screen=<ref>`; script/template are informational only.
@@ -199,30 +294,56 @@ pub async fn handle_screens(State(state): State<DevState>) -> Json<ScreensRespon
     screens.sort_by(|a, b| a.name.cmp(&b.name));
 
     // Collect configured devices
-    let devices: Vec<DeviceInfo> = state
-        .config
-        .devices
-        .iter()
-        .map(|(id, dev)| DeviceInfo {
+    let mut devices: Vec<DeviceInfo> = Vec::with_capacity(config.devices.len());
+    for (id, dev) in config.devices.iter() {
+        let model = crate::api::display::registry_model(&state.registry, &config, id).await;
+        devices.push(DeviceInfo {
             id: id.clone(),
             screen: dev.screen.clone(),
             panel: dev.panel.clone(),
-            dither: dev.dither.clone(),
-        })
-        .collect();
+            name: dev.name.clone(),
+            params: yaml_params_to_json(&dev.params),
+            base: dev.base(),
+            final_rung: dev.final_rung.clone(),
+            temperature_profile: dev.temperature_profile.clone(),
+            maximum_compatibility: dev.maximum_compatibility,
+            min_png_bytes: dev.min_png_bytes,
+            model,
+        });
+    }
+    devices.sort_by(|a, b| a.id.cmp(&b.id));
 
     // Collect panel profiles
-    let panels: Vec<PanelInfo> = state
-        .config
+    let mut panels: Vec<PanelInfo> = config
         .panels
         .iter()
         .map(|(id, panel)| PanelInfo {
             id: id.clone(),
             name: panel.name.clone(),
+            match_pattern: panel.match_pattern.clone(),
             width: panel.width,
             height: panel.height,
             colors: panel.colors.clone(),
             colors_actual: panel.colors_actual.clone(),
+            dither: panel.dither.clone(),
+        })
+        .collect();
+    panels.sort_by(|a, b| a.id.cmp(&b.id));
+
+    // The engine owns both the list and the numbers; this endpoint only
+    // relays them.
+    let dither_algorithms: Vec<DitherAlgorithmInfo> = crate::models::config::DITHER_ALGORITHMS
+        .iter()
+        .map(|name| {
+            let (max_error, noise_scale) =
+                crate::models::config::dither_algorithm_for_name(name).defaults();
+            DitherAlgorithmInfo {
+                name: (*name).to_string(),
+                defaults: DitherDefaults {
+                    max_error,
+                    noise_scale,
+                },
+            }
         })
         .collect();
 
@@ -230,12 +351,13 @@ pub async fn handle_screens(State(state): State<DevState>) -> Json<ScreensRespon
         screens,
         devices,
         panels,
+        dither_algorithms,
     })
 }
 
 /// SSE endpoint for file change events
 pub async fn handle_events(
-    State(state): State<DevState>,
+    State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = state.file_watcher.subscribe();
 
@@ -264,14 +386,15 @@ pub async fn handle_events(
 
 /// Resolve MAC address to screen and params
 pub async fn handle_resolve_mac(
-    State(state): State<DevState>,
+    State(state): State<AppState>,
     Query(query): Query<ResolveMacQuery>,
 ) -> Response {
+    let config = state.config.load();
+
     // Try MAC lookup first, then registration code lookup
-    let device_config = state
-        .config
+    let device_config = config
         .get_device_config(&query.mac)
-        .or_else(|| state.config.get_device_config_for_code(&query.mac));
+        .or_else(|| config.get_device_config_for_code(&query.mac));
 
     match device_config {
         Some(device_config) => {
@@ -296,223 +419,774 @@ pub async fn handle_resolve_mac(
     }
 }
 
-/// Request body for POST /dev/panel-colors
+/// Body of `POST /dev/api/panels/{panel}/save`: the panel, whole -- its
+/// identity and its rung. An absent optional field is removed from the
+/// panel, because the draft replaced it (controller ruling R-B). `id`
+/// different from the path panel renames the panel in the same write.
 #[derive(Debug, Deserialize)]
-pub struct PanelColorsRequest {
-    pub device: String,
-    pub colors_actual: String,
+#[serde(deny_unknown_fields)]
+pub struct PanelSave {
+    pub id: Option<String>,
+    pub name: String,
+    #[serde(rename = "match")]
+    pub match_pattern: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub colors: String,
+    pub colors_actual: Option<String>,
+    pub dither: Option<PanelDitherConfig>,
 }
 
-/// Set color overrides for a device (dev mode color tuning).
-/// Keyed by device config key so each device's tuning is independent.
-pub async fn handle_set_panel_colors(
-    State(state): State<DevState>,
-    Json(body): Json<PanelColorsRequest>,
-) -> StatusCode {
-    state
-        .dev_overrides
-        .panel_colors
-        .write()
-        .await
-        .insert(body.device, body.colors_actual);
-    StatusCode::OK
+/// A panel's `dither` block as Save receives it: its `algorithm` gets the
+/// name check a device's `dither` gets, the flat defaults and every
+/// per-algorithm sub-map the number checks a device write gets, each error
+/// naming the field as the panel's YAML spells it.
+fn validate_panel_dither(d: &PanelDitherConfig) -> Result<(), ApiError> {
+    use crate::api::admin::write::{validate_dither_name, validate_tuning_values};
+    if let Some(algorithm) = &d.algorithm {
+        validate_dither_name(algorithm, "dither.algorithm")?;
+    }
+    validate_tuning_values(&d.defaults, "dither.")?;
+    for (algorithm, tuning) in &d.algorithms {
+        validate_tuning_values(tuning, &format!("dither.{algorithm}."))?;
+    }
+    Ok(())
 }
 
-/// Remove color overrides for a device, reverting to config.yaml values
-pub async fn handle_delete_panel_colors(
-    State(state): State<DevState>,
-    axum::extract::Path(device): axum::extract::Path<String>,
-) -> StatusCode {
-    state
-        .dev_overrides
-        .panel_colors
-        .write()
-        .await
-        .remove(&device);
-    StatusCode::OK
+/// A panel id as config.yaml keys it: letters, digits, `_` and `-`.
+fn validate_panel_id(id: &str) -> Result<(), ApiError> {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(ApiError::BadRequest(
+            "panel id must be letters, digits, `_` or `-`".into(),
+        ));
+    }
+    Ok(())
 }
 
-/// Render a screen and return PNG
-pub async fn handle_render(
-    State(state): State<DevState>,
-    Query(query): Query<RenderQuery>,
-) -> Response {
-    // Resolve screen ref: MAC takes precedence, then explicit screen
-    let (
-        screen_ref,
-        resolved_params,
-        device_config_colors,
-        device_config_panel,
-        device_config_dither,
-        dc_max_error,
-        dc_noise_scale,
-        dc_chroma_clamp,
-        dc_strength,
-        dc_gamut,
-    ) = if let Some(ref mac) = query.mac {
-        // Try MAC lookup first, then registration code lookup
-        match state
-            .config
-            .get_device_config(mac)
-            .or_else(|| state.config.get_device_config_for_code(mac))
-        {
-            Some(dc) => {
-                // The device's `screen` is a `handle/path` screen repo ref.
-                // Convert device params to JSON
-                let params: HashMap<String, serde_json::Value> = yaml_params_to_json(&dc.params);
-                (
-                    dc.screen.clone(),
-                    Some(params),
-                    dc.colors.clone(),
-                    dc.panel.clone(),
-                    dc.dither.clone(),
-                    dc.max_error,
-                    dc.noise_scale,
-                    dc.chroma_clamp,
-                    dc.strength,
-                    dc.gamut.clone(),
-                )
-            }
-            None => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(RenderErrorResponse {
-                        error: format!("Device '{}' not configured", mac),
-                        details: None,
-                    }),
-                )
-                    .into_response();
+/// Write a panel, whole, into `config.yaml`, durably (controller ruling
+/// R-D), in place, key by key: lines it does not change are not rewritten,
+/// so comments and the order of `panels:` survive (ruling C2). Then drop the
+/// panel's live override (P1-9): the config now carries the value, and an
+/// override that merely restates it is invisible weight.
+///
+/// With `id` set to another id, the panel is also renamed: its key changes
+/// in place and every `devices.*.panel` naming it follows, in the same write
+/// (U6 ruling R1). 409 when the new id is taken. Answers `{"id": <final id>}`.
+///
+/// Deliberately NOT guarded by `require_writable_global`: `panels` is absent
+/// from the Home Assistant add-on Options schema, so nothing else owns it.
+pub async fn handle_save_panel(
+    State(state): State<AppState>,
+    axum::extract::Path(panel): axum::extract::Path<String>,
+    Json(body): Json<PanelSave>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    use crate::services::config_writer::{remove_path, rename_key, set_path, sync_mapping};
+    require_known_panel(&state, &panel)?;
+    let new_id = body.id.as_deref().map(str::trim).filter(|id| *id != panel);
+    if let Some(id) = new_id {
+        validate_panel_id(id)?;
+    }
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("panel name must not be empty".into()));
+    }
+    let colors = body.colors.trim();
+    crate::api::admin::write::validate_colors(colors, "colors")?;
+    if let Some(actual) = body
+        .colors_actual
+        .as_deref()
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+    {
+        crate::api::admin::write::validate_colors(actual, "colors_actual")?;
+    }
+    if let Some(dither) = &body.dither {
+        validate_panel_dither(dither)?;
+    }
+    for (label, v) in [("width", body.width), ("height", body.height)] {
+        if let Some(v) = v {
+            DisplaySpec::check_dimension(label, v)
+                .map_err(|e| ApiError::BadRequest(format!("panel {e}")))?;
+        }
+    }
+    let path = crate::api::config_persist::require_file_config(&state)?;
+    let _guard = state.write_lock.lock().await;
+    // Every device that names the panel, from the config this write starts
+    // from; checked under the lock so no other write slips in between.
+    let users: Vec<String> = {
+        let config = state.config.load();
+        if let Some(id) = new_id {
+            if config.get_panel(id).is_some() {
+                return Err(ApiError::Conflict(format!("panel `{id}` already exists")));
             }
         }
-    } else if let Some(ref screen_name) = query.screen {
-        // `screen_name` is a `handle/path` screen repo ref; validity is checked when
-        // the pipeline resolves it below.
-        (
-            screen_name.clone(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            crate::models::GamutTuningValues::default(),
-        )
-    } else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(RenderErrorResponse {
-                error: "Either 'screen' or 'mac' parameter is required".to_string(),
-                details: None,
-            }),
-        )
-            .into_response();
+        config
+            .devices
+            .iter()
+            .filter(|(_, d)| d.panel.as_deref() == Some(panel.as_str()))
+            .map(|(k, _)| k.clone())
+            .collect()
     };
 
-    // Determine dimensions from model or explicit values
-    let (width, height) =
-        crate::api::display::resolve_preview_dimensions(&query.model, query.width, query.height);
+    let patch = |e: crate::services::config_writer::ConfigWriteError| {
+        ApiError::Internal(format!("patch config: {e}"))
+    };
+    let mut yaml = std::fs::read_to_string(&path)
+        .map_err(|e| ApiError::Internal(format!("read config: {e}")))?;
 
-    // Parse custom params (these override resolved params from MAC)
-    let mut custom_params: HashMap<String, serde_json::Value> = resolved_params.unwrap_or_default();
+    let field = |f: &'static str| ["panels", panel.as_str(), f];
+    let set_or_remove = |yaml: &str, f: &'static str, v: Option<serde_yaml::Value>| match v {
+        Some(v) => set_path(yaml, &field(f), &v),
+        None => remove_path(yaml, &field(f)),
+    };
+    let match_pattern = body
+        .match_pattern
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty());
+    yaml = set_path(&yaml, &field("name"), &name.into()).map_err(patch)?;
+    yaml = set_or_remove(&yaml, "match", match_pattern.map(Into::into)).map_err(patch)?;
+    yaml = set_or_remove(&yaml, "width", body.width.map(Into::into)).map_err(patch)?;
+    yaml = set_or_remove(&yaml, "height", body.height.map(Into::into)).map_err(patch)?;
+    yaml = set_path(&yaml, &field("colors"), &colors.into()).map_err(patch)?;
+    yaml = set_or_remove(
+        &yaml,
+        "colors_actual",
+        body.colors_actual.as_deref().map(Into::into),
+    )
+    .map_err(patch)?;
 
-    // Merge query params on top of resolved params
-    if let Some(ref params_str) = query.params {
-        if let Ok(query_params) =
-            serde_json::from_str::<HashMap<String, serde_json::Value>>(params_str)
-        {
-            custom_params.extend(query_params);
+    yaml = match body.dither.as_ref().filter(|d| !d.is_empty()) {
+        Some(d) => {
+            let serde_yaml::Value::Mapping(target) = serde_yaml::to_value(d)
+                .map_err(|e| ApiError::Internal(format!("serialize dither: {e}")))?
+            else {
+                return Err(ApiError::Internal(
+                    "dither did not serialize to a mapping".into(),
+                ));
+            };
+            sync_mapping(&yaml, &field("dither"), &target)
+        }
+        None => remove_path(&yaml, &field("dither")),
+    }
+    .map_err(patch)?;
+
+    if let Some(id) = new_id {
+        yaml = rename_key(&yaml, &["panels", panel.as_str()], id).map_err(patch)?;
+        for device in &users {
+            yaml = set_path(&yaml, &["devices", device.as_str(), "panel"], &id.into())
+                .map_err(patch)?;
         }
     }
 
-    // Build initial palette from colors param or model default (acts as "firmware header")
-    // Priority chain: script_colors > device_config_colors > panel_colors > query.colors > model default
-    let query_palette: Vec<(u8, u8, u8)> =
-        crate::api::display::resolve_query_palette(&query.model, query.colors.as_deref());
+    crate::api::config_persist::persist(&state, &path, yaml)?;
+    state.dev_overrides.panels.remove(&panel).await;
+    Ok(Json(serde_json::json!({ "id": new_id.unwrap_or(&panel) })))
+}
 
-    // Resolve panel: query.panel (UI override) > device_config_panel > None
-    let panel = query
-        .panel
-        .as_deref()
-        .or(device_config_panel.as_deref())
-        .and_then(|name| state.config.get_panel(name));
-    let panel_colors: Option<String> = panel.as_ref().map(|p| p.colors.clone());
+/// `DELETE /dev/api/panels/{panel}`: remove the panel's block from
+/// `config.yaml` and drop its live override. 404 for an unknown panel; 409
+/// while any device names it in `panel:` -- the message lists them (U6
+/// ruling R2: a delete never edits devices).
+pub async fn handle_delete_panel(
+    State(state): State<AppState>,
+    axum::extract::Path(panel): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let path = crate::api::config_persist::require_file_config(&state)?;
+    let _guard = state.write_lock.lock().await;
+    {
+        let config = state.config.load();
+        if config.get_panel(&panel).is_none() {
+            return Err(ApiError::NotFound);
+        }
+        let mut users: Vec<&str> = config
+            .devices
+            .iter()
+            .filter(|(_, d)| d.panel.as_deref() == Some(panel.as_str()))
+            .map(|(k, _)| k.as_str())
+            .collect();
+        if !users.is_empty() {
+            users.sort_unstable();
+            return Err(ApiError::Conflict(format!(
+                "panel `{panel}` is used by: {}",
+                users.join(", ")
+            )));
+        }
+    }
+    let yaml = std::fs::read_to_string(&path)
+        .map_err(|e| ApiError::Internal(format!("read config: {e}")))?;
+    let yaml = crate::services::config_writer::remove_path(&yaml, &["panels", panel.as_str()])
+        .map_err(|e| ApiError::Internal(format!("patch config: {e}")))?;
+    crate::api::config_persist::persist(&state, &path, yaml)?;
+    state.dev_overrides.panels.remove(&panel).await;
+    Ok(Json(serde_json::json!({ "deleted": panel })))
+}
 
-    // Apply priority chain: device_config_colors > panel_colors > query/model default
-    let default_palette: Vec<(u8, u8, u8)> = crate::api::display::resolve_ctx_palette(
-        device_config_colors.as_deref(),
-        panel_colors.as_deref(),
-        &query_palette,
-    );
+/// `POST /dev/api/panels` body: a new panel's id, the two fields a panel
+/// cannot do without, and optionally its size (the Library's "+" copies the
+/// current panel's). Everything else is edited afterwards through the panel
+/// Save.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelCreate {
+    pub id: String,
+    pub name: String,
+    pub colors: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
 
-    // Pre-script dither algorithm: query dither > device config > "atkinson"
-    let pre_script_algo = query
-        .dither
-        .as_deref()
-        .or(device_config_dither.as_deref())
-        .unwrap_or("atkinson");
+/// Create `panels.<id>` in `config.yaml` with `name` and `colors`, in place:
+/// the rest of the file, comments and order included, is not rewritten.
+/// Creates the `panels:` key when the file has none. 409 when the id is
+/// taken.
+///
+/// Not guarded by `require_writable_global`, for the reason
+/// `handle_save_panel` gives: nothing else owns `panels`.
+pub async fn handle_create_panel(
+    State(state): State<AppState>,
+    Json(body): Json<PanelCreate>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    use crate::services::config_writer::set_path;
+    let id = body.id.trim();
+    validate_panel_id(id)?;
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("panel name must not be empty".into()));
+    }
+    let colors = body.colors.trim();
+    crate::api::admin::write::validate_colors(colors, "colors")?;
+    for (label, v) in [("width", body.width), ("height", body.height)] {
+        if let Some(v) = v {
+            DisplaySpec::check_dimension(label, v)
+                .map_err(|e| ApiError::BadRequest(format!("panel {e}")))?;
+        }
+    }
 
-    // Pre-script panel tuning for device context
-    let panel_dither_config_pre = panel.as_ref().and_then(|p| p.dither.clone());
-    let pre_panel_tuning = panel_dither_config_pre
-        .as_ref()
-        .map(|pdc| pdc.resolve_for_algorithm(Some(pre_script_algo)))
-        .unwrap_or_default();
-    let pre_dc_tuning = crate::models::DitherTuningValues {
-        deprecated_error_clamp: None,
-        max_error: dc_max_error,
-        noise_scale: dc_noise_scale,
-        chroma_clamp: dc_chroma_clamp,
-        strength: dc_strength,
-        gamut: dc_gamut.clone(),
+    let path = crate::api::config_persist::require_file_config(&state)?;
+    let _guard = state.write_lock.lock().await;
+    if state.config.load().get_panel(id).is_some() {
+        return Err(ApiError::Conflict(format!("panel `{id}` already exists")));
+    }
+
+    let yaml = std::fs::read_to_string(&path)
+        .map_err(|e| ApiError::Internal(format!("read config: {e}")))?;
+    let mut block = serde_yaml::Mapping::new();
+    block.insert("name".into(), name.into());
+    block.insert("colors".into(), colors.into());
+    if let Some(w) = body.width {
+        block.insert("width".into(), w.into());
+    }
+    if let Some(h) = body.height {
+        block.insert("height".into(), h.into());
+    }
+    let block = serde_yaml::Value::Mapping(block);
+
+    // `set_path` needs the parent to exist. A `panels:` that is absent or
+    // null (`panels:` with nothing below) is written whole.
+    let has_panels_mapping = serde_yaml::from_str::<serde_yaml::Value>(&yaml)
+        .ok()
+        .and_then(|doc| doc.get("panels").map(serde_yaml::Value::is_mapping))
+        .unwrap_or(false);
+    let yaml = if has_panels_mapping {
+        set_path(&yaml, &["panels", id], &block)
+    } else {
+        let mut panels = serde_yaml::Mapping::new();
+        panels.insert(id.into(), block);
+        set_path(&yaml, &["panels"], &serde_yaml::Value::Mapping(panels))
+    }
+    .map_err(|e| ApiError::Internal(format!("patch config: {e}")))?;
+
+    crate::api::config_persist::persist(&state, &path, yaml)?;
+    Ok(Json(serde_json::json!({ "id": id })))
+}
+
+/// `POST /dev/api/devices`: add a device entry. The same write as the admin
+/// `POST /api/admin/devices` and the MCP tool -- `apply_device_add`, with its
+/// duplicate, screen, params and read-only-config guards.
+pub async fn handle_create_device(
+    State(state): State<AppState>,
+    Json(body): Json<crate::api::admin::write::DeviceWrite>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Same order as the admin route: a read-only config answers 409 before
+    // a missing key is reported.
+    crate::api::config_persist::require_file_config(&state)?;
+    let key = body
+        .key
+        .clone()
+        .ok_or_else(|| ApiError::BadRequest("`key` is required".into()))?;
+    Ok(Json(
+        crate::api::admin::write::apply_device_add(&state, &key, body).await?,
+    ))
+}
+
+/// `GET /dev/api/pending-devices`: devices seen but not configured, the same
+/// list as the admin `GET /api/admin/pending`.
+pub async fn handle_pending_devices(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<crate::api::admin::read::PendingDevice>>, ApiError> {
+    Ok(Json(
+        crate::api::admin::read::pending_devices(&state).await?,
+    ))
+}
+
+/// The first field no dev override may carry (ruling C1): `colors` would
+/// show the script one palette and render another, and nothing on the
+/// override rung consumes `refresh`. Everything else -- `dither` included --
+/// is a legitimate draft value for both the panel and the device rung.
+/// Returns the complete error message, so both PUT routes say the same thing
+/// (ruling PF8).
+fn refused_override_field(v: &CascadeValues) -> Option<String> {
+    let field = if v.colors.is_some() {
+        "colors"
+    } else if v.refresh.is_some() {
+        "refresh"
+    } else {
+        return None;
     };
-    let pre_script_tuning = pre_dc_tuning.or(&pre_panel_tuning);
+    Some(format!(
+        "`{field}` cannot be overridden: an override carries colors_actual, dither, \
+         max_error, noise_scale, chroma_clamp, strength and gamut"
+    ))
+}
 
-    // Resolve measured colors: query param (from dev UI color tuning) > panel.colors_actual
-    let query_actual_parsed: Option<Vec<(u8, u8, u8)>> = query
-        .colors_actual
+/// `PUT /dev/api/overrides/panels/{panel}`: push a panel draft to every
+/// device on that panel, as the cascade's override rung. In memory, expiring
+/// 30 minutes after the last PUT. Does NOT touch a tuning session: the client
+/// re-PUTs the watched device's session alongside each push.
+pub async fn handle_put_panel_override(
+    State(state): State<AppState>,
+    axum::extract::Path(panel): axum::extract::Path<String>,
+    Json(body): Json<CascadeValues>,
+) -> Result<StatusCode, ApiError> {
+    require_known_panel(&state, &panel)?;
+    if let Some(message) = refused_override_field(&body) {
+        return Err(ApiError::BadRequest(message));
+    }
+    state.dev_overrides.panels.insert(panel, body).await;
+    Ok(StatusCode::OK)
+}
+
+/// `DELETE /dev/api/overrides/panels/{panel}`. Idempotent.
+pub async fn handle_delete_panel_override(
+    State(state): State<AppState>,
+    axum::extract::Path(panel): axum::extract::Path<String>,
+) -> StatusCode {
+    state.dev_overrides.panels.remove(&panel).await;
+    StatusCode::OK
+}
+
+/// `PUT /dev/api/overrides/devices/{device}`: push a device draft as the
+/// override rung for that one device. Stored under the config key, so a MAC
+/// in another case or a registration code addresses the same entry.
+pub async fn handle_put_device_override(
+    State(state): State<AppState>,
+    axum::extract::Path(device): axum::extract::Path<String>,
+    Json(body): Json<CascadeValues>,
+) -> Result<StatusCode, ApiError> {
+    let key = state
+        .config
+        .load()
+        .resolve_device_key(&device, Some(&device))
+        .ok_or(ApiError::NotFound)?;
+    if let Some(message) = refused_override_field(&body) {
+        return Err(ApiError::BadRequest(message));
+    }
+    state.dev_overrides.devices.insert(key, body).await;
+    Ok(StatusCode::OK)
+}
+
+/// `DELETE /dev/api/overrides/devices/{device}`. Idempotent.
+pub async fn handle_delete_device_override(
+    State(state): State<AppState>,
+    axum::extract::Path(device): axum::extract::Path<String>,
+) -> StatusCode {
+    let key = state
+        .config
+        .load()
+        .resolve_device_key(&device, Some(&device))
+        .unwrap_or(device);
+    state.dev_overrides.devices.remove(&key).await;
+    StatusCode::OK
+}
+
+/// `PATCH /dev/api/devices/{key}`: Save a device draft. The same write as the
+/// admin PATCH and the MCP tool -- with its screen, params, clear and
+/// read-only-config guards -- then drop the device's live override, which the
+/// config now carries (P1-9). The override is keyed by the resolved config
+/// key, as the override routes are.
+///
+/// Unlike the admin PATCH, a `key` in the body that differs from the path
+/// renames the device in the same write (`apply_device_patch_renaming`); the
+/// old key's override and tuning session are dropped. Answers
+/// `{"key": <final key>, "screen": …}`.
+pub async fn handle_save_device(
+    State(state): State<AppState>,
+    axum::extract::Path(key): axum::extract::Path<String>,
+    Json(body): Json<crate::api::admin::write::DeviceWrite>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let key = state
+        .config
+        .load()
+        .resolve_device_key(&key, Some(&key))
+        .unwrap_or(key);
+    let new_key = body.key.clone();
+    let out = crate::api::admin::write::apply_device_patch_renaming(
+        &state,
+        &key,
+        new_key.as_deref(),
+        body,
+    )
+    .await?;
+    state.dev_overrides.devices.remove(&key).await;
+    if out["key"].as_str() != Some(key.as_str()) {
+        state
+            .dev_overrides
+            .tuning_sessions
+            .write()
+            .await
+            .remove(&key);
+    }
+    Ok(Json(out))
+}
+
+/// `DELETE /dev/api/devices/{key}`: the admin delete's core
+/// (`apply_device_delete`: 404 unknown, 409 for DEFAULT), then drop the
+/// device's live override and tuning session. Answers `{"deleted": <key>}`.
+pub async fn handle_delete_device(
+    State(state): State<AppState>,
+    axum::extract::Path(key): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let key = state
+        .config
+        .load()
+        .resolve_device_key(&key, Some(&key))
+        .unwrap_or(key);
+    let out = crate::api::admin::write::apply_device_delete(&state, &key).await?;
+    state.dev_overrides.devices.remove(&key).await;
+    state
+        .dev_overrides
+        .tuning_sessions
+        .write()
+        .await
+        .remove(&key);
+    Ok(Json(out))
+}
+
+/// One live override in the listing.
+#[derive(Debug, Serialize)]
+pub struct LiveOverride {
+    pub key: String,
+    pub values: CascadeValues,
+    pub expires_in_secs: u64,
+}
+
+/// One live tuning session in the listing.
+#[derive(Debug, Serialize)]
+pub struct LiveSession {
+    pub key: String,
+    pub expires_in_secs: u64,
+}
+
+/// `GET /dev/api/overrides`.
+#[derive(Debug, Serialize)]
+pub struct OverridesResponse {
+    pub panels: Vec<LiveOverride>,
+    pub devices: Vec<LiveOverride>,
+    pub tuning_sessions: Vec<LiveSession>,
+}
+
+/// List everything the dev UI has made live, so a reloaded page can show a
+/// Push that is still reaching hardware (spec section 6).
+pub async fn handle_list_overrides(State(state): State<AppState>) -> Json<OverridesResponse> {
+    let o = &state.dev_overrides;
+    let to_live = |v: Vec<(String, CascadeValues, std::time::Duration)>| {
+        v.into_iter()
+            .map(|(key, values, left)| LiveOverride {
+                key,
+                values,
+                expires_in_secs: left.as_secs(),
+            })
+            .collect::<Vec<_>>()
+    };
+    let panels = to_live(o.panels.live().await);
+    let devices = to_live(o.devices.live().await);
+    // One TTL rule for every map (ruling PF8): `live_tuning_sessions` shares
+    // `ttl_left` with `tuning_session_active` and `TimedMap`.
+    let tuning_sessions: Vec<LiveSession> = crate::server::live_tuning_sessions(o)
+        .await
+        .into_iter()
+        .map(|(key, left)| LiveSession {
+            key,
+            expires_in_secs: left.as_secs(),
+        })
+        .collect();
+    Json(OverridesResponse {
+        panels,
+        devices,
+        tuning_sessions,
+    })
+}
+
+/// Guard: an override for a panel that does not exist could never be read
+/// back, because the lookup is by resolved panel key. Refuse it rather than
+/// storing it where nothing will find it.
+fn require_known_panel(state: &AppState, panel: &str) -> Result<(), ApiError> {
+    if state.config.load().get_panel(panel).is_some() {
+        Ok(())
+    } else {
+        Err(ApiError::NotFound)
+    }
+}
+
+/// Start or refresh a tuning session for a device.
+///
+/// Idempotent: a repeat PUT is how the dev UI keeps the session alive while a
+/// calibration is in progress.
+pub async fn handle_start_tuning_session(
+    State(state): State<AppState>,
+    axum::extract::Path(device): axum::extract::Path<String>,
+) -> Result<StatusCode, ApiError> {
+    // `/api/display` looks the session up by config key, so store it there.
+    let key = state
+        .config
+        .load()
+        .resolve_device_key(&device, Some(&device))
+        .ok_or(ApiError::NotFound)?;
+    state
+        .dev_overrides
+        .tuning_sessions
+        .write()
+        .await
+        .insert(key, std::time::Instant::now());
+    Ok(StatusCode::OK)
+}
+
+/// End a tuning session, handing the device its normal refresh rate back.
+/// Idempotent: an unknown device is a no-op.
+pub async fn handle_end_tuning_session(
+    State(state): State<AppState>,
+    axum::extract::Path(device): axum::extract::Path<String>,
+) -> StatusCode {
+    let key = state
+        .config
+        .load()
+        .resolve_device_key(&device, Some(&device))
+        .unwrap_or(device);
+    state
+        .dev_overrides
+        .tuning_sessions
+        .write()
+        .await
+        .remove(&key);
+    StatusCode::OK
+}
+
+fn render_error(status: StatusCode, error: impl Into<String>, details: Option<String>) -> Response {
+    (
+        status,
+        Json(RenderErrorResponse {
+            error: error.into(),
+            details,
+        }),
+    )
+        .into_response()
+}
+
+/// What the dev render needs back from the blocking script run.
+struct ScriptOutputs {
+    svg: String,
+    script: RungSettings,
+    screen_default_refresh: u32,
+    font_hinting: Option<crate::rendering::font_config::FontHintingDirective>,
+}
+
+/// Render a screen and return PNG, with the resolution of every render
+/// setting in `X-Byonk-Resolution`.
+pub async fn handle_render(
+    State(state): State<AppState>,
+    Json(req): Json<RenderRequest>,
+) -> Response {
+    use crate::api::display;
+
+    if let Some(refusal) = refused_fields(&req) {
+        return render_error(StatusCode::BAD_REQUEST, refusal, None);
+    }
+
+    let config = state.config.load();
+
+    // The device supplies every render setting and its params; `screen`, when
+    // given, replaces only which screen is rendered (spec §4.6).
+    let device = match req.device.as_deref() {
+        Some(key) => match config
+            .get_device_config(key)
+            .or_else(|| config.get_device_config_for_code(key))
+        {
+            Some(dc) => Some(dc),
+            None => {
+                return render_error(
+                    StatusCode::NOT_FOUND,
+                    format!("Device '{key}' not configured"),
+                    None,
+                );
+            }
+        },
+        None => None,
+    };
+    // The config key the device is stored under: override maps are keyed by it.
+    let device_key: Option<String> = req
+        .device
         .as_deref()
-        .map(crate::api::display::parse_colors_header);
-    let panel_actual_parsed: Option<Vec<(u8, u8, u8)>> = panel
-        .as_ref()
-        .and_then(|p| p.colors_actual.as_deref())
-        .map(crate::api::display::parse_colors_header);
-    // Pre-script chain, in precedence order, for the final measured-colour
-    // resolution after the script runs (see `resolve_render_params`'s doc
-    // comment) — the dev UI's `colors_actual` query param stands in for a
-    // "dev override" layer.
-    let pre_script_measured_candidates: Vec<crate::api::display::MeasuredCandidate> = vec![
-        (crate::api::display::SRC_DEV_OVERRIDE, query_actual_parsed),
-        (crate::api::display::SRC_PANEL_ACTUAL, panel_actual_parsed),
-    ];
-    // Pre-script winner, used only to populate `DeviceContext.colors_actual`
-    // (what the script sees before it runs). Derived from the candidate
-    // array above rather than its own `.or_else` chain so the two can't
-    // silently drift on precedence (see Task 1's `main.rs` finding, of
-    // which a separately-maintained duplicate here would be a recurrence).
-    let measured_colors: Option<Vec<(u8, u8, u8)>> = pre_script_measured_candidates
-        .iter()
-        .find_map(|(_, c)| c.clone());
+        .and_then(|k| config.resolve_device_key(k, Some(k)));
+    // A screen ref is a `handle/path` screen repo ref; validity is checked
+    // when the pipeline resolves it below.
+    let Some(screen_ref) = req
+        .screen
+        .clone()
+        .or_else(|| device.map(|d| d.screen.clone()))
+    else {
+        return render_error(
+            StatusCode::BAD_REQUEST,
+            "Either 'screen' or 'device' is required",
+            None,
+        );
+    };
 
-    // Create device context
+    // The rungs, draft-aware: a draft rung REPLACES the configured one
+    // (plan ruling 2).
+    let device_rung: CascadeValues = req
+        .draft
+        .base
+        .clone()
+        .unwrap_or_else(|| device.map(|d| d.base()).unwrap_or_default());
+    // The device's `final:` block, unless the draft replaces it.
+    let device_final_rung: CascadeValues = req
+        .draft
+        .final_rung
+        .clone()
+        .unwrap_or_else(|| device.map(|d| d.device_final()).unwrap_or_default());
+    // Explicit request panel, else the panel `/api/display` would resolve for
+    // this device -- remembered Board/Model included (plan ruling P1-6).
+    let panel_key: Option<String> = match req.panel.clone() {
+        Some(p) => Some(p),
+        None => match device_key
+            .as_deref()
+            .and_then(|k| config.devices.get(k).map(|d| (k, d)))
+        {
+            Some((k, d)) => {
+                let sightings = state.dev_overrides.sightings.read().await;
+                display::device_panel_key(&config, d, sightings.get(k))
+            }
+            None => None,
+        },
+    }
+    .filter(|k| config.get_panel(k).is_some());
+    let panel_cfg = panel_key.as_deref().and_then(|name| config.get_panel(name));
+    // The override rung: the request's own ad-hoc values over whatever a
+    // Push made live (plan ruling P1-4). Reading only: this handler writes
+    // no server state.
+    let live = state
+        .dev_overrides
+        .live_override(device_key.as_deref(), panel_key.as_deref())
+        .await;
+    let over: CascadeValues = req.over.or(&live);
+    let (panel_colors, panel_colors_actual, panel_dither_config): (
+        Option<String>,
+        Option<String>,
+        Option<PanelDitherConfig>,
+    ) = match &req.draft.panel {
+        Some(d) => (d.colors.clone(), d.colors_actual.clone(), d.dither.clone()),
+        None => (
+            panel_cfg.map(|p| p.colors.clone()),
+            panel_cfg.and_then(|p| p.colors_actual.clone()),
+            panel_cfg.and_then(|p| p.dither.clone()),
+        ),
+    };
+
+    let model = match (&req.model, &device_key) {
+        (Some(m), _) => m.clone(),
+        (None, Some(k)) => display::registry_model(&state.registry, &config, k).await,
+        (None, None) => "og".to_string(),
+    };
+    // Determine dimensions from model or explicit values
+    let (width, height) = display::resolve_preview_dimensions(
+        &model,
+        req.width,
+        req.height,
+        (
+            panel_cfg.and_then(|p| p.width),
+            panel_cfg.and_then(|p| p.height),
+        ),
+    );
+    if let Err(message) = DisplaySpec::check_dimensions(width, height) {
+        return render_error(StatusCode::BAD_REQUEST, message, None);
+    }
+
+    // The device's params (or the draft's, which replace them), with the
+    // simulated ones on top.
+    let mut custom_params: HashMap<String, serde_json::Value> = match &req.draft.params {
+        Some(p) => p.clone(),
+        None => device
+            .map(|d| yaml_params_to_json(&d.params))
+            .unwrap_or_default(),
+    };
+    custom_params.extend(req.simulated.params.clone());
+
+    // The model's default palette stands in for the firmware `Colors` header.
+    let query_palette: Vec<(u8, u8, u8)> = display::resolve_query_palette(&model, None);
+
+    // ---- Pre-script device context: what the script sees as `device.*`,
+    // from the one shared resolution (`override -> device final -> device
+    // base -> panel -> model default`, the screen rung empty), fed from the
+    // draft-aware rungs.
+    let panel_actual: Option<Vec<(u8, u8, u8)>> = panel_colors_actual
+        .as_deref()
+        .map(display::parse_colors_header);
+    let pre = resolve_pre_script(&PreScriptInputs {
+        over: RungSettings {
+            dither: over.dither.clone(),
+            colors_actual: over
+                .colors_actual
+                .as_deref()
+                .map(display::parse_colors_header),
+            ..Default::default()
+        },
+        device_final: RungSettings::from_cascade(&device_final_rung),
+        device_base: RungSettings::from_cascade(&device_rung),
+        panel: RungSettings {
+            colors: panel_colors.as_deref().map(display::parse_colors_header),
+            colors_actual: panel_actual.clone(),
+            ..Default::default()
+        },
+        panel_dither: panel_dither_config.as_ref(),
+        fallback_palette: query_palette.clone(),
+        fallback_colors_actual: None,
+    });
+    let pre_script_tuning = &pre.tuning;
+    let default_palette = &pre.palette;
+
     let device_ctx = DeviceContext {
-        mac: query
-            .mac
+        mac: req
+            .device
             .clone()
             .unwrap_or_else(|| "dev-simulator".to_string()),
-        battery_voltage: Some(query.battery_voltage.unwrap_or(4.2)),
-        rssi: Some(query.rssi.unwrap_or(-50)),
-        model: Some(query.model.clone()),
+        battery_voltage: Some(req.simulated.battery_voltage.unwrap_or(4.2)),
+        rssi: Some(req.simulated.rssi.unwrap_or(-50)),
+        model: Some(model.clone()),
         firmware_version: Some("dev".to_string()),
         width: Some(width),
         height: Some(height),
         registration_code: None,
-        colors: Some(crate::api::display::colors_to_hex_strings(&default_palette)),
-        colors_actual: measured_colors
+        colors: Some(display::colors_to_hex_strings(default_palette)),
+        colors_actual: pre
+            .colors_actual
             .as_deref()
-            .map(crate::api::display::colors_to_hex_strings),
-        dither_algorithm: Some(pre_script_algo.to_string()),
+            .map(display::colors_to_hex_strings),
+        dither_algorithm: Some(pre.algorithm.clone()),
         dither_max_error: pre_script_tuning.max_error,
         dither_noise_scale: pre_script_tuning.noise_scale,
         dither_chroma_clamp: pre_script_tuning.chroma_clamp,
@@ -523,13 +1197,12 @@ pub async fn handle_render(
         ..Default::default()
     };
 
-    // Run script directly with the resolved screen ref
+    // ---- Run the script with the resolved screen ref
     let pipeline = state.content_pipeline.clone();
     let ctx = device_ctx.clone();
-    let timestamp_override = query.timestamp;
+    let timestamp_override = req.simulated.timestamp;
 
     let result = tokio::task::spawn_blocking(move || {
-        // Run the Lua script with optional timestamp override
         let script_result = pipeline.run_script_direct(
             &screen_ref,
             crate::services::content_pipeline::json_params_to_yaml(custom_params),
@@ -538,221 +1211,88 @@ pub async fn handle_render(
             None,
         )?;
 
-        // Render SVG
         let svg = pipeline
             .render_svg_from_script(&script_result, Some(&ctx))
             .map_err(|e| e.to_string())?;
 
-        Ok::<
-            (
-                String,
-                Option<Vec<String>>,
-                Option<Vec<String>>,
-                Option<String>,
-                Option<f32>,
-                Option<f32>,
-                Option<f32>,
-                Option<f32>,
-                Option<crate::models::GamutTuningValues>,
-                Option<crate::rendering::font_config::FontHintingDirective>,
-            ),
-            String,
-        >((
+        // The dev preview has the script's return value in hand, so it
+        // resolves `refresh` through the ladder as well.
+        let script = RungSettings::from_script(&script_result)
+            .with_refresh(script_result.script_refresh_rate);
+        Ok::<ScriptOutputs, String>(ScriptOutputs {
             svg,
-            script_result.script_colors,
-            script_result.script_colors_actual,
-            script_result.script_dither,
-            script_result.script_max_error,
-            script_result.script_noise_scale,
-            script_result.script_chroma_clamp,
-            script_result.script_strength,
-            script_result.script_gamut,
-            script_result.font_hinting,
-        ))
+            script,
+            screen_default_refresh: script_result.screen_default_refresh,
+            font_hinting: script_result.font_hinting,
+        })
     })
     .await;
 
-    let (
-        svg,
-        script_colors,
-        script_colors_actual,
-        script_dither,
-        script_max_error,
-        script_noise_scale,
-        script_chroma_clamp,
-        script_strength,
-        script_gamut,
-        script_font_hinting,
-    ) = match result {
+    let out = match result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(RenderErrorResponse {
-                    error: "Render error".to_string(),
-                    details: Some(e),
-                }),
-            )
-                .into_response();
+            return render_error(StatusCode::INTERNAL_SERVER_ERROR, "Render error", Some(e));
         }
         Err(e) => {
-            return (
+            return render_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(RenderErrorResponse {
-                    error: "Task error".to_string(),
-                    details: Some(e.to_string()),
-                }),
-            )
-                .into_response();
-        }
-    };
-
-    tracing::debug!(
-        screen = ?query.screen,
-        mac = ?query.mac,
-        script_colors = ?script_colors,
-        script_dither = ?script_dither,
-        dc_colors = ?device_config_colors,
-        dc_dither = ?device_config_dither,
-        panel_colors = ?panel_colors,
-        query_colors = ?query.colors,
-        measured_colors = ?measured_colors.as_deref().map(crate::api::display::colors_to_hex_strings),
-        "Resolving dev render params"
-    );
-
-    // In dev mode, UI dither overrides everything including script dither
-    let (effective_script_dither, effective_device_dither) = if query.dither.is_some() {
-        // UI explicitly selected a dither — override script and device config
-        (None, query.dither.as_deref())
-    } else {
-        // No UI override — normal priority: script > device config
-        (script_dither.as_deref(), device_config_dither.as_deref())
-    };
-
-    // Sync overrides to shared state so the production /api/display handler picks
-    // them up for the actual device render.  Both maps are keyed by the device
-    // config key (= query.mac when a device entry is selected in the dev UI).
-    if let Some(ref device_key) = query.mac {
-        // Dither
-        let mut dither_map = state.dev_overrides.dither.write().await;
-        if let Some(ref dither_val) = query.dither {
-            dither_map.insert(device_key.clone(), dither_val.clone());
-        } else {
-            dither_map.remove(device_key.as_str());
-        }
-        drop(dither_map);
-
-        // Color (actual/measured) — only sync when the dev UI sends tuned colors
-        if let Some(ref ca) = query.colors_actual {
-            state
-                .dev_overrides
-                .panel_colors
-                .write()
-                .await
-                .insert(device_key.clone(), ca.clone());
-        }
-
-        // Tuning — sync when the dev UI sends tuning params
-        let has_query_tuning = query.max_error.is_some()
-            || query.noise_scale.is_some()
-            || query.chroma_clamp.is_some()
-            || query.strength.is_some();
-        let mut tuning_map = state.dev_overrides.tuning.write().await;
-        if has_query_tuning {
-            tuning_map.insert(
-                device_key.clone(),
-                crate::models::DitherTuningValues {
-                    deprecated_error_clamp: None,
-                    max_error: query.max_error,
-                    noise_scale: query.noise_scale,
-                    chroma_clamp: query.chroma_clamp,
-                    strength: query.strength,
-                    gamut: Default::default(),
-                },
+                "Task error",
+                Some(e.to_string()),
             );
-        } else {
-            tuning_map.remove(device_key.as_str());
         }
-        drop(tuning_map);
-    }
-
-    // Resolve panel dither tuning for the effective algorithm
-    let panel_dither_config = panel.as_ref().and_then(|p| p.dither.clone());
-    let effective_algo = effective_device_dither
-        .or(effective_script_dither)
-        .or(device_config_dither.as_deref());
-    let effective_algo_normalized = effective_algo.map(crate::models::normalize_algorithm_name);
-    let panel_tuning = panel_dither_config
-        .as_ref()
-        .map(|pdc| pdc.resolve_for_algorithm(effective_algo_normalized.as_deref()))
-        .unwrap_or_default();
-
-    let dc_tuning = crate::models::DitherTuningValues {
-        deprecated_error_clamp: None,
-        max_error: dc_max_error,
-        noise_scale: dc_noise_scale,
-        chroma_clamp: dc_chroma_clamp,
-        strength: dc_strength,
-        gamut: dc_gamut.clone(),
     };
 
-    // Resolve tuning: query params (dev UI) > script > device config > panel > None
-    // `gamut` deliberately keeps its `Default::default()` placeholder here:
-    // there are no gamut query parameters, so a dev-UI tuning override never
-    // carries gamut knobs. Adding that would be new query-string surface,
-    // not threading (see Task 12's amendment F).
-    let query_tuning = crate::models::DitherTuningValues {
-        deprecated_error_clamp: None,
-        max_error: query.max_error,
-        noise_scale: query.noise_scale,
-        chroma_clamp: query.chroma_clamp,
-        strength: query.strength,
-        gamut: Default::default(),
-    };
-    let script_tuning = crate::models::DitherTuningValues {
-        deprecated_error_clamp: None,
-        max_error: script_max_error,
-        noise_scale: script_noise_scale,
-        chroma_clamp: script_chroma_clamp,
-        strength: script_strength,
-        gamut: script_gamut.clone().unwrap_or_default(),
-    };
-    let tuning = crate::api::display::resolve_effective_tuning(
-        &query_tuning,
-        &script_tuning,
-        &dc_tuning,
-        &panel_tuning,
-    );
+    // This handler writes NO server state. It renders a preview and answers
+    // with it; nothing it does can reach a physical device.
+    //
+    // It used to sync `query.dither`/`query.colors_actual`/the tuning numbers
+    // into `DevOverrides`, keyed by `query.mac`, so that `/api/display` would
+    // serve them to the real device. Two things were wrong with that, and
+    // `tests/dev_render_is_read_only_test.rs` pins both:
+    //
+    //  - Merely *looking* at a preview re-tuned the selected display, with no
+    //    button and no indication — and a preview that omitted `dither` or the
+    //    tuning numbers took the `else` branch and *removed* an override
+    //    someone had set on purpose.
+    //  - The colour sync inserted into `dev_overrides.panel_colors` under the
+    //    DEVICE key, while `api::display` reads that map by PANEL key (see
+    //    `resolve_panel`'s doc comment). Inert while the two key spaces don't
+    //    collide; a silent cross-device repaint when they do.
+    //
+    // Reaching real hardware is a separate, explicit act — `PUT
+    // /dev/api/overrides/panels/{panel}` — so that a push is something the
+    // operator does, not something a preview does to them. See
+    // `docs/superpowers/specs/2026-10-04-render-resolution-cascade-design.md`
+    // §5.1/§5.2, which is where the explicit routes for the dither and tuning
+    // overrides are specified.
 
-    let mut render_warnings: Vec<String> = Vec::new();
-    let render_params = crate::api::display::resolve_render_params(
-        script_colors.as_deref(),
-        script_colors_actual.as_deref(),
-        effective_script_dither,
-        device_config_colors.as_deref(),
-        effective_device_dither,
-        panel_colors.as_deref(),
-        &query_palette,
-        &pre_script_measured_candidates,
-        &tuning,
-        &mut render_warnings,
-    );
-    for w in &render_warnings {
-        tracing::warn!(screen = ?query.screen, mac = ?query.mac, "{w}");
-    }
+    // ---- Post-script: every render setting resolves on the ladder, and the
+    // renderer is fed from that same resolution — the report and the pixels
+    // cannot disagree.
+    let res = resolve_render(&RenderInputs {
+        over: RungSettings::from_cascade(&over),
+        device_final: RungSettings::from_cascade(&device_final_rung),
+        screen: out.script,
+        device_base: RungSettings::from_cascade(&device_rung),
+        panel: RungSettings {
+            colors: panel_colors.as_deref().map(display::parse_colors_header),
+            colors_actual: panel_actual,
+            ..Default::default()
+        },
+        panel_dither: panel_dither_config.as_ref(),
+        fallback_palette: query_palette,
+        fallback_colors_actual: None,
+        screen_default_refresh: out.screen_default_refresh,
+        override_source: display::SRC_DEV_OVERRIDE,
+    });
+    log_render_warnings(&res.report, &req);
 
-    let (tuning, has_tuning) = crate::api::display::resolve_dither_tuning(&render_params);
-
-    let final_palette = render_params.palette;
-    let final_dither = render_params.dither;
-    let measured_source = render_params.measured_source;
-    let measured_colors = render_params.measured_colors;
+    let (tuning, has_tuning) = display::resolve_dither_tuning_from(&res.tuning);
 
     tracing::debug!(
-        resolved_palette = ?crate::api::display::colors_to_hex_strings(&final_palette),
-        resolved_dither = ?final_dither,
-        has_measured = measured_colors.is_some(),
-        measured_source = measured_source,
+        resolved_palette = ?display::colors_to_hex_strings(&res.palette),
+        resolved_dither = ?res.dither,
+        has_measured = res.measured_colors.is_some(),
         "Resolved dev render params"
     );
 
@@ -760,41 +1300,170 @@ pub async fn handle_render(
     let display_spec = DisplaySpec::from_dimensions(width, height).unwrap_or(DisplaySpec::OG);
 
     // Dev mode uses measured colors for preview.
-    // Respect explicit query param; default to true when panel has measured
-    // colors. Shared rule — see `resolve_use_actual`'s doc comment.
+    // Respect an explicit request; default to true when measured colors
+    // resolve. Shared rule — see `resolve_use_actual`'s doc comment.
     let use_actual =
-        crate::api::display::resolve_use_actual(query.use_actual, measured_colors.is_some());
+        display::resolve_use_actual(req.view.use_actual, res.measured_colors.is_some());
 
     match state.content_pipeline.render_png_from_svg(
-        &svg,
+        &out.svg,
         display_spec,
-        &final_palette,
-        measured_colors.as_deref(),
+        &res.palette,
+        res.measured_colors.as_deref(),
         use_actual,
-        final_dither.as_deref(),
+        res.dither.as_deref(),
         if has_tuning { Some(&tuning) } else { None },
-        script_font_hinting.as_ref(),
-        // `/dev/render` answers with an image and nothing else — it does not
-        // carry the script log either (see `run_script_direct`), so there is
-        // nowhere to put this.
+        out.font_hinting.as_ref(),
+        // `/dev/render` does not carry the script log (see
+        // `run_script_direct`), so there is nowhere to put this.
         &mut None,
     ) {
         Ok(png_bytes) => (
             StatusCode::OK,
             [
-                (header::CONTENT_TYPE, "image/png"),
-                (header::CACHE_CONTROL, "no-cache"),
+                (header::CONTENT_TYPE, "image/png".to_string()),
+                (header::CACHE_CONTROL, "no-cache".to_string()),
+                (
+                    header::HeaderName::from_static(RESOLUTION_HEADER),
+                    header_value(&res.report),
+                ),
             ],
             Bytes::from(png_bytes),
         )
             .into_response(),
-        Err(e) => (
+        Err(e) => render_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(RenderErrorResponse {
-                error: "PNG render error".to_string(),
-                details: Some(e.to_string()),
-            }),
-        )
-            .into_response(),
+            "PNG render error",
+            Some(e.to_string()),
+        ),
     }
+}
+
+/// The two warnings the pre-cascade resolver pushed, read from the
+/// resolution so the server log keeps saying what it said: a rejected
+/// `colors_actual`, and a screen `dither` the device outranks.
+fn log_render_warnings(report: &Resolution, req: &RenderRequest) {
+    if let Some(actual) = report.get("colors_actual") {
+        for (rung, r) in &actual.rungs {
+            if let RungStatus::Rejected { reason } = &r.status {
+                tracing::warn!(
+                    screen = ?req.screen,
+                    device = ?req.device,
+                    "{rung:?}: colors_actual {reason}; skipping it."
+                );
+            }
+        }
+    }
+    if let Some(dither) = report.get("dither") {
+        let screen_value = dither
+            .rungs
+            .get(&Rung::Screen)
+            .and_then(|r| r.value.as_ref());
+        if let (Rung::DeviceBase, Some(screen_value)) = (dither.from, screen_value) {
+            if *screen_value != dither.effective {
+                tracing::warn!(
+                    screen = ?req.screen,
+                    device = ?req.device,
+                    "screen asked for dither {screen_value} but the device is configured \
+                     for {}; the device wins.",
+                    dither.effective
+                );
+            }
+        }
+    }
+}
+
+/// `GET /dev/api/panel-usage`.
+#[derive(Debug, Serialize)]
+pub struct PanelUsageResponse {
+    /// Every configured panel -> the device keys resolving to it.
+    pub panels: std::collections::BTreeMap<String, Vec<String>>,
+    /// Devices without `panel:` that have not polled since byonk started.
+    pub unseen: Vec<String>,
+}
+
+/// Which devices use which panel, as `/api/display` would resolve them.
+pub async fn handle_panel_usage(State(state): State<AppState>) -> Json<PanelUsageResponse> {
+    use crate::api::display::{resolve_device_panel, PanelResolution};
+    let config = state.config.load();
+    let sightings = state.dev_overrides.sightings.read().await;
+    let mut panels: std::collections::BTreeMap<String, Vec<String>> = config
+        .panels
+        .keys()
+        .map(|k| (k.clone(), Vec::new()))
+        .collect();
+    let mut unseen = Vec::new();
+    for (key, device) in &config.devices {
+        match resolve_device_panel(&config, device, sightings.get(key)) {
+            PanelResolution::Panel(p) => panels.entry(p).or_default().push(key.clone()),
+            PanelResolution::Unseen => unseen.push(key.clone()),
+            PanelResolution::NoPanel => {}
+        }
+    }
+    for list in panels.values_mut() {
+        list.sort();
+    }
+    unseen.sort();
+    Json(PanelUsageResponse { panels, unseen })
+}
+
+/// Everything under `/dev`. Protected routes get `require_dev` as a route
+/// layer; `/login` and `/logout` stay open. The hand-written UI's login page
+/// used to need an open `/dev.css` route alongside them (so it could style
+/// itself before authenticating) — Task 11 inlined the login page's CSS, so
+/// that route is gone outright, not repointed at the app's own stylesheet.
+///
+/// This registers the nest root (`/`, i.e. bare `/dev`) but — per axum's own
+/// `nest` semantics — nothing at `/dev/`; `server::build_router` registers
+/// that explicitly, outside this nest, wearing the same `require_dev` layer.
+pub fn dev_router(state: &AppState) -> Router<AppState> {
+    use axum::routing::{delete, get, patch, post, put};
+    let api = Router::new()
+        .route("/screens", get(handle_screens))
+        .route("/events", get(handle_events))
+        .route("/render", post(handle_render))
+        .route("/resolve-mac", get(handle_resolve_mac))
+        .route("/overrides", get(handle_list_overrides))
+        .route("/panel-usage", get(handle_panel_usage))
+        .route(
+            "/overrides/devices/{device}",
+            put(handle_put_device_override).delete(handle_delete_device_override),
+        )
+        .route(
+            "/overrides/panels/{panel}",
+            put(handle_put_panel_override).delete(handle_delete_panel_override),
+        )
+        .route("/panels", post(handle_create_panel))
+        .route("/panels/{panel}", delete(handle_delete_panel))
+        .route("/panels/{panel}/save", post(handle_save_panel))
+        .route("/devices", post(handle_create_device))
+        .route(
+            "/devices/{key}",
+            patch(handle_save_device).delete(handle_delete_device),
+        )
+        .route("/pending-devices", get(handle_pending_devices))
+        .route(
+            "/tuning-session/{device}",
+            put(handle_start_tuning_session).delete(handle_end_tuning_session),
+        )
+        .route("/whoami", get(crate::api::dev_auth::whoami))
+        .merge(crate::api::dev_files::files_router())
+        .merge(crate::api::dev_repos::repos_router());
+    let protected = Router::new()
+        .route("/", get(handle_dev_page))
+        .route("/app.js", get(handle_app_js))
+        .route("/app.css", get(handle_app_css))
+        .route("/lens.js", get(handle_lens_js))
+        // Flat, not nested: `require_dev` redirects an unauthenticated visitor
+        // to the relative string "login", which is only correct one level
+        // below `/dev/`.
+        .route("/preview.html", get(handle_preview_page))
+        .nest("/api", api)
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::api::dev_auth::require_dev,
+        ));
+    Router::new()
+        .merge(protected)
+        .merge(crate::api::dev_auth::dev_auth_router())
 }

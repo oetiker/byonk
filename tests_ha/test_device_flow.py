@@ -95,3 +95,22 @@ async def test_hub_single_instance(hass, byonk):
     assert result["reason"] == "single_instance_allowed"
 
 
+
+
+async def test_onboarding_dither_choice_lands_on_the_final_rung(hass, byonk):
+    """The onboarding Dither choice is the owner's veto, like the entity."""
+    byonk.screens = SCREENS_NO_PARAMS
+    await _setup_hub(hass)
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_INTEGRATION_DISCOVERY},
+        data={"key": "CC:DD", "code": "ABCD-1234", "model": "og"},
+    )
+    await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"screen": TRANSIT_REF, "dither": "atkinson", "panel": "trmnl_og"},
+    )
+    await hass.async_block_till_done()
+    payload = byonk.add_device.await_args.args[0]
+    assert payload["final"] == {"dither": "atkinson"}
+    assert "dither" not in payload
+    assert payload["panel"] == "trmnl_og"

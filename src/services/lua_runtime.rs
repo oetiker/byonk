@@ -26,8 +26,8 @@ pub struct ScriptResult {
     pub colors: Option<Vec<String>>,
     /// Optional measured-colour override from script (hex RGB strings),
     /// index-parallel to `colors`. Wins the measured chain when its length
-    /// matches the resolved official palette; see
-    /// `crate::api::display::resolve_measured_colors`.
+    /// matches the resolved official palette; see the `colors_actual` ladder
+    /// in `crate::api::resolution::resolve_render`.
     pub colors_actual: Option<Vec<String>>,
     /// Optional dither mode from script ("photo" or "graphics")
     pub dither: Option<String>,
@@ -137,6 +137,9 @@ fn send_http_request(spec: HttpRequestSpec) -> Result<HttpOutcome, String> {
         client_builder.redirect(reqwest::redirect::Policy::none())
     };
 
+    // Accepted risk (CodeQL `rust/disabled-certificate-check`, dismissed): only
+    // a screen script that explicitly asks for it gets this, for devices on a
+    // LAN with self-signed certificates, and every such request is logged.
     if spec.danger_accept_invalid_certs {
         tracing::warn!(url = %spec.url, "Accepting invalid TLS certificates - this is insecure!");
         client_builder = client_builder.danger_accept_invalid_certs(true);

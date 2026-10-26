@@ -1,12 +1,17 @@
 pub mod admin;
+pub mod config_persist;
 pub mod dev;
+pub mod dev_auth;
+pub mod dev_files;
+pub mod dev_repos;
 pub mod display;
 mod headers;
 pub mod log;
+pub mod resolution;
+pub mod screen_move;
 pub mod setup;
 pub mod time;
 
-pub use dev::DevState;
 pub use display::{__path_handle_display, __path_handle_image};
 pub use display::{handle_display, handle_image, DisplayJsonResponse};
 pub use headers::HeaderMapExt;

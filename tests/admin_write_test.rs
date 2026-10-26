@@ -739,13 +739,12 @@ async fn test_clear_rejects_screen_and_unknown_names() {
     }
 }
 
-/// Setting and clearing the same field has no sensible reading, so it is
-/// refused rather than resolved by precedence — either outcome would surprise
-/// the caller that asked for both.
+/// Ruling C3: a field both cleared and set in one request ends up set -- the
+/// clear applies to the existing entry first, the sets merge over the result.
 #[tokio::test]
-async fn test_clear_rejects_a_field_the_same_call_sets() {
+async fn test_clear_then_set_of_the_same_field_ends_up_set() {
     let dir = tempfile::tempdir().unwrap();
-    let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
+    let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
     seed_fully_configured(&app).await;
 
     let resp = app
@@ -755,8 +754,11 @@ async fn test_clear_rejects_a_field_the_same_call_sets() {
             r#"{"noise_scale":1.5,"clear":["noise_scale"]}"#,
         )
         .await;
-    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
-    assert!(resp.text().contains("noise_scale"), "{}", resp.text());
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    let block = on_disk.split(MAC).nth(1).expect("device block");
+    assert!(block.contains("noise_scale: 1.5"), "set wins:\n{block}");
 }
 
 #[tokio::test]
@@ -771,4 +773,179 @@ async fn test_clear_is_rejected_when_creating_a_device() {
         let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
         assert_eq!(resp.status, StatusCode::BAD_REQUEST, "accepted {clear}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// The `final:` rung, `colors_actual` and `gamut` through the real handler.
+// ---------------------------------------------------------------------------
+
+/// The `device_block` of `MAC`, parsed from what is actually on disk.
+fn device_on_disk(path: &std::path::Path) -> serde_yaml::Value {
+    let yaml = std::fs::read_to_string(path).unwrap();
+    let root: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+    root.get("devices")
+        .and_then(|d| d.get(MAC))
+        .cloned()
+        .expect("device block present on disk")
+}
+
+async fn seed_with_final(app: &TestApp) {
+    let body = format!(
+        r##"{{"key":"{MAC}","screen":"{COLOR}","dither":"sierra",
+            "final":{{"strength":0.4}}}}"##
+    );
+    let resp = app.post_json("/api/admin/devices", &[AUTH], &body).await;
+    assert_eq!(resp.status, StatusCode::OK, "seed device: {}", resp.text());
+}
+
+async fn patch(app: &TestApp, body: &str) -> common::app::TestResponse {
+    app.patch_json(&format!("/api/admin/devices/{MAC}"), &[AUTH], body)
+        .await
+}
+
+/// The composition trap. A `final` missing from `MANAGED_DEVICE_KEYS` is
+/// carried across by `unmanaged_device_keys` and re-inserted AFTER
+/// `device_block`, so the PATCH answers 200 and the file keeps the old block.
+/// Only asserting BOTH fields on disk catches it: the new one is lost to the
+/// old block, and a whole-block replacement would lose the old one.
+#[tokio::test]
+async fn test_patch_final_dither_keeps_final_strength_on_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
+    seed_with_final(&app).await;
+    assert_eq!(
+        device_on_disk(&path)["final"]["strength"].as_f64(),
+        Some(0.4),
+        "precondition: the file already holds final.strength"
+    );
+
+    let resp = patch(&app, r#"{"final":{"dither":"atkinson"}}"#).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+
+    let dev = device_on_disk(&path);
+    assert_eq!(
+        dev["final"]["dither"].as_str(),
+        Some("atkinson"),
+        "the patched field must reach the file\n{dev:?}"
+    );
+    assert_eq!(
+        dev["final"]["strength"].as_f64(),
+        Some(0.4),
+        "the untouched final field must survive\n{dev:?}"
+    );
+    assert_eq!(
+        dev["dither"].as_str(),
+        Some("sierra"),
+        "base rung untouched"
+    );
+}
+
+/// An unrelated patch must not lose the final block either.
+#[tokio::test]
+async fn test_unrelated_patch_keeps_the_final_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
+    seed_with_final(&app).await;
+    let resp = patch(&app, r#"{"name":"Renamed"}"#).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+    assert_eq!(
+        device_on_disk(&path)["final"]["strength"].as_f64(),
+        Some(0.4)
+    );
+}
+
+#[tokio::test]
+async fn test_clear_addressing_base_final_field_and_whole_rung() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
+    seed_with_final(&app).await;
+    let resp = patch(&app, r#"{"final":{"dither":"atkinson"}}"#).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+
+    // A bare name clears the base rung and never touches `final`.
+    let resp = patch(&app, r#"{"clear":["dither"]}"#).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+    let dev = device_on_disk(&path);
+    assert!(dev.get("dither").is_none(), "base dither cleared\n{dev:?}");
+    assert_eq!(dev["final"]["dither"].as_str(), Some("atkinson"), "{dev:?}");
+
+    // A dotted name clears that one field of the final rung.
+    let resp = patch(&app, r#"{"clear":["final.dither"]}"#).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+    let dev = device_on_disk(&path);
+    assert!(dev["final"].get("dither").is_none(), "{dev:?}");
+    assert_eq!(dev["final"]["strength"].as_f64(), Some(0.4), "{dev:?}");
+
+    // `final` clears the whole rung, and leaves no empty `final:` behind.
+    let resp = patch(&app, r#"{"clear":["final"]}"#).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+    assert!(device_on_disk(&path).get("final").is_none());
+}
+
+#[tokio::test]
+async fn test_clear_final_screen_is_rejected_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _path) = TestApp::new_admin_with_file("secret", dir.path());
+    seed_with_final(&app).await;
+    let resp = patch(&app, r#"{"clear":["final.screen"]}"#).await;
+    assert_eq!(resp.status, StatusCode::BAD_REQUEST);
+    assert!(resp.text().contains("final.screen"), "{}", resp.text());
+}
+
+/// `final: {screen: ...}` is as wrong in a request as in config.yaml.
+#[tokio::test]
+async fn test_final_with_a_non_cascade_field_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
+    seed_with_final(&app).await;
+    let resp = patch(&app, r#"{"final":{"screen":"x/y"}}"#).await;
+    assert!(
+        resp.status.is_client_error(),
+        "accepted: {} {}",
+        resp.status,
+        resp.text()
+    );
+    assert!(device_on_disk(&path)["final"].get("screen").is_none());
+}
+
+/// `gamut` and `colors_actual` were writable by nothing; they must now set,
+/// survive an unrelated patch, write floats as sent, and clear.
+#[tokio::test]
+async fn test_gamut_and_colors_actual_set_survive_and_clear() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, path) = TestApp::new_admin_with_file("secret", dir.path());
+    seed_with_final(&app).await;
+
+    let resp = patch(
+        &app,
+        r##"{"gamut":{"knee":0.7},"colors_actual":"#101010,#F0F0F0",
+            "final":{"gamut":{"amount":0.3}}}"##,
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+    let resp = patch(&app, r#"{"gamut":{"amount":0.5}}"#).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    for expected in ["knee: 0.7", "amount: 0.5", "amount: 0.3", "strength: 0.4"] {
+        assert!(text.contains(expected), "want `{expected}` in:\n{text}");
+    }
+    assert!(!text.contains("0.699"), "widened f32 leaked:\n{text}");
+    let dev = device_on_disk(&path);
+    assert_eq!(dev["colors_actual"].as_str(), Some("#101010,#F0F0F0"));
+    assert_eq!(
+        dev["gamut"]["knee"].as_f64(),
+        Some(0.7),
+        "merged, not replaced"
+    );
+
+    let resp = patch(&app, r#"{"clear":["gamut","colors_actual"]}"#).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.text());
+    let dev = device_on_disk(&path);
+    assert!(dev.get("gamut").is_none() && dev.get("colors_actual").is_none());
+    assert_eq!(
+        dev["final"]["gamut"]["amount"].as_f64(),
+        Some(0.3),
+        "{dev:?}"
+    );
 }

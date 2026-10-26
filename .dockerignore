@@ -38,3 +38,26 @@ Thumbs.db
 # Development files
 *.md
 !README.md
+
+# ...but docs/src is EMBEDDED INTO THE BINARY at compile time
+# (`#[derive(RustEmbed)] #[folder = "docs/src/"]`, src/assets.rs) and is 20
+# markdown files to 11 images. The blanket rule above would leave the folder
+# present but markdown-free, which compiles perfectly happily and ships a
+# binary whose built-in documentation is empty. Silent, so keep the negation.
+!docs/src/**/*.md
+
+# static/dev/editor/ was the hand-written UI's CodeMirror build tooling,
+# deleted from git in Task 12. Nothing in the build uses it any more, but its
+# node_modules/ and dist/ are untracked local build artifacts that git rm
+# cannot remove -- left for the maintainer to clean up, not for us to delete
+# -- so exclude the directory wholesale rather than one stale subpath.
+static/dev/editor/
+
+# The webui Node stage does its own `pnpm install` and `pnpm build` inside
+# the image (COPY webui ./webui); a developer's local node_modules
+# would otherwise bloat the build context, and a locally-built dist/ here
+# would be masked by -- and could be mistaken for -- the in-container build.
+# The Rust stage takes dist from the webui stage (COPY --from=webui), never
+# from the context.
+webui/node_modules/
+webui/dist/

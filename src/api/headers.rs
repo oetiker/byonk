@@ -126,14 +126,14 @@ mod tests {
     #[test]
     fn test_get_parsed_filtered_valid() {
         let headers = make_headers(&[("width", "800")]);
-        let result = headers.get_parsed_filtered::<u32, _>("width", |&w| w > 0 && w <= 2000);
+        let result = headers.get_parsed_filtered::<u32, _>("width", |&w| w > 0 && w <= 4096);
         assert_eq!(result, Some(800));
     }
 
     #[test]
     fn test_get_parsed_filtered_invalid() {
         let headers = make_headers(&[("width", "9999")]);
-        let result = headers.get_parsed_filtered::<u32, _>("width", |&w| w > 0 && w <= 2000);
+        let result = headers.get_parsed_filtered::<u32, _>("width", |&w| w > 0 && w <= 4096);
         assert_eq!(result, None);
     }
 }

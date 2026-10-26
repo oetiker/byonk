@@ -129,8 +129,8 @@ fn test_read_limited_is_stat_first_not_read_first() {
     }
 }
 
-#[test]
-fn test_validate_reports_size_cap_for_screens_dir_overlay_file() {
+#[tokio::test]
+async fn test_validate_reports_size_cap_for_screens_dir_overlay_file() {
     // `EmbeddedBuiltinSource::read` deliberately consults the `SCREENS_DIR`
     // filesystem overlay — a user-writable directory (Samba share, HA
     // `/config/screens`) — so `byonk-builtin` is not exempt from the same

@@ -31,7 +31,7 @@ pub fn require_admin(state: &AppState, headers: &HeaderMap) -> Result<(), ApiErr
 }
 
 /// Constant-time byte comparison (avoids token-length/timing leaks).
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }

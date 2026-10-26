@@ -34,6 +34,14 @@ pub struct ScreenRefOutput {
     pub screen_ref: String,
 }
 
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct RenamedScreenOutput {
+    pub screen_ref: String,
+    /// Device keys whose `screen:` named the old reference and now names the
+    /// new one.
+    pub rewritten_devices: Vec<String>,
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CreateScreenArgs {
     /// Writable repo handle on its own — `local`, not `local/clock`. Only a
@@ -84,6 +92,18 @@ pub struct DeleteFileArgs {
     /// Sibling asset to delete. meta.yaml / script.lua / screen.svg define
     /// the screen and cannot be deleted — use `delete_screen` instead.
     pub file: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RenameFileArgs {
+    /// Screen reference, `handle/path`. Must be in a writable repo.
+    pub screen_ref: String,
+    /// Existing sibling asset, relative to the screen directory.
+    pub from: String,
+    /// New name, relative to the screen directory (may include a
+    /// subdirectory). Must not exist yet. meta.yaml / script.lua / screen.svg
+    /// cannot be the source or the target.
+    pub to: String,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -157,18 +177,27 @@ impl ByonkMcp {
     }
 
     #[tool(
-        description = "Rename a screen within its repo. Devices still pointing at the old \
-                          reference will stop resolving — reassign them with configure_device."
+        description = "Rename a screen within its repo. Every device whose screen is the old \
+                          reference is pointed at the new one in config.yaml, in the same call \
+                          (the dev UI's move does the same); the result lists them. When devices use \
+                          the screen and config.yaml is embedded/read-only, the rename is refused \
+                          and nothing moves."
     )]
     pub async fn rename_screen(
         &self,
         Parameters(a): Parameters<RenameScreenArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let store = self.state.screen_store.clone();
-        let outcome = blocking(move || store.rename_screen(&a.screen_ref, &a.new_path)).await?;
-        match outcome {
-            Ok(screen_ref) => ok_json(ScreenRefOutput { screen_ref }),
-            Err(e) => Ok(store_failure(e)),
+        use crate::api::screen_move::{apply_screen_move, MoveError};
+        let handle = a.screen_ref.split_once('/').map_or("", |(h, _)| h);
+        match apply_screen_move(&self.state, &a.screen_ref, handle, &a.new_path).await {
+            Ok(m) => ok_json(RenamedScreenOutput {
+                screen_ref: m.screen_ref,
+                rewritten_devices: m.rewritten,
+            }),
+            Err(MoveError::Store(e)) => Ok(store_failure(e)),
+            Err(MoveError::Config(e)) => Ok(CallToolResult::error(vec![
+                rmcp::model::ContentBlock::text(e.to_string()),
+            ])),
         }
     }
 
@@ -197,6 +226,22 @@ impl ByonkMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let store = self.state.screen_store.clone();
         match blocking(move || store.delete_file(&a.screen_ref, &a.file)).await? {
+            Ok(()) => ok_json(OkOutput { ok: true }),
+            Err(e) => Ok(store_failure(e)),
+        }
+    }
+
+    #[tool(
+        description = "Rename one sibling asset inside a screen directory (the new name may \
+                          include a subdirectory). Refused when the target already exists. \
+                          meta.yaml, script.lua and screen.svg cannot be renamed or be the target."
+    )]
+    pub async fn rename_screen_file(
+        &self,
+        Parameters(a): Parameters<RenameFileArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let store = self.state.screen_store.clone();
+        match blocking(move || store.rename_file(&a.screen_ref, &a.from, &a.to)).await? {
             Ok(()) => ok_json(OkOutput { ok: true }),
             Err(e) => Ok(store_failure(e)),
         }

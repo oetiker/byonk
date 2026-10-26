@@ -186,6 +186,11 @@ pub fn install(src: &Path, ha_config: &Path) -> InstallOutcome {
 }
 
 /// Supervisor's in-container base URL. `BYONK_SUPERVISOR_URL` overrides it.
+///
+/// Plain HTTP is an accepted risk (CodeQL `rust/non-https-url`, dismissed):
+/// Supervisor serves its API only as `http://supervisor` on the add-on's
+/// internal Docker network, so there is no HTTPS endpoint to use, and the
+/// traffic never leaves the host.
 const DEFAULT_SUPERVISOR_URL: &str = "http://supervisor";
 
 /// Notification id, so a repeated notification replaces the previous one

@@ -159,3 +159,84 @@ async fn a_device_configured_by_registration_code_is_listed_once() {
         "the MAC is the key the admin API reports for a device that has checked in"
     );
 }
+
+/// Build an admin-enabled app whose config holds one device per `final:`
+/// shape the Home Assistant Dither control can meet: a veto, no block at all,
+/// and a block that sets nothing (what a hand-edited `final:` leaves behind).
+fn app_with_final_rungs() -> TestApp {
+    use byonk::assets::AssetLoader;
+    use byonk::models::{AppConfig, CascadeValues};
+
+    let loader = AssetLoader::new(None, None, None);
+    let mut config = AppConfig::load_from_assets(&loader).expect("load embedded config");
+    config.admin.token = Some("secret".to_string());
+    let template = config.devices.get("DEFAULT").expect("DEFAULT").clone();
+
+    let mut vetoed = template.clone();
+    vetoed.dither = Some("stucki".to_string()); // a default the screen may override
+    vetoed.final_rung = Some(CascadeValues {
+        dither: Some("atkinson".to_string()),
+        ..Default::default()
+    });
+    let mut bare = template.clone();
+    bare.final_rung = None;
+    let mut empty = template;
+    empty.final_rung = Some(CascadeValues::default());
+
+    config.devices.insert("AA:BB:CC:DD:EE:01".into(), vetoed);
+    config.devices.insert("AA:BB:CC:DD:EE:02".into(), bare);
+    config.devices.insert("AA:BB:CC:DD:EE:03".into(), empty);
+    TestApp::from_config(config)
+}
+
+async fn list_rows(app: &TestApp) -> Vec<serde_json::Value> {
+    app.get_with_headers("/api/admin/devices", &[("Authorization", "Bearer secret")])
+        .await
+        .json()
+}
+
+/// The Home Assistant Dither select writes `final.dither`, so the read API
+/// must serve it back or the entity goes blank exactly while a veto is in force.
+/// Covers the configured-but-never-seen listing pass.
+#[tokio::test]
+async fn unseen_device_reports_its_final_dither() {
+    let rows = list_rows(&app_with_final_rungs()).await;
+    let row = |k: &str| rows.iter().find(|d| d["key"] == k).expect("row").clone();
+
+    let vetoed = row("AA:BB:CC:DD:EE:01");
+    assert_eq!(vetoed["final"]["dither"], "atkinson");
+    assert_eq!(
+        vetoed["dither"], "stucki",
+        "the base default stays separate"
+    );
+    assert!(row("AA:BB:CC:DD:EE:02").get("final").is_none());
+    assert!(
+        row("AA:BB:CC:DD:EE:03").get("final").is_none(),
+        "an empty final: block is omitted, like an absent one"
+    );
+}
+
+/// Same contract for the seen-device listing pass, which is a separate
+/// construction site of `AdminDevice`.
+#[tokio::test]
+async fn seen_device_reports_its_final_dither() {
+    let app = app_with_final_rungs();
+    app.register_device("AA:BB:CC:DD:EE:01").await;
+    app.register_device("AA:BB:CC:DD:EE:02").await;
+
+    let rows = list_rows(&app).await;
+    let with_veto: Vec<_> = rows
+        .iter()
+        .filter(|d| d["key"] == "AA:BB:CC:DD:EE:01")
+        .collect();
+    assert_eq!(with_veto.len(), 1, "seen and configured must be one row");
+    assert_eq!(with_veto[0]["registered"], true);
+    assert!(!with_veto[0]["model"].is_null(), "this is the seen pass");
+    assert_eq!(with_veto[0]["final"]["dither"], "atkinson");
+
+    let bare = rows
+        .iter()
+        .find(|d| d["key"] == "AA:BB:CC:DD:EE:02")
+        .unwrap();
+    assert!(bare.get("final").is_none());
+}

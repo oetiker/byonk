@@ -521,3 +521,67 @@ async fn the_screens_own_refresh_rate_returns_once_the_run_is_over() {
         "after the final wipe the run is over and normal cadence resumes"
     );
 }
+
+/// A config whose device carries `final.refresh` and, optionally, a base `refresh`.
+fn app_with_final_refresh(mac: &str, base: Option<u32>, fin: Option<u32>) -> TestApp {
+    use byonk::assets::AssetLoader;
+    use byonk::models::AppConfig;
+    let loader = AssetLoader::new(None, None, None);
+    let mut config = AppConfig::load_from_assets(&loader).expect("load embedded config");
+    let mut device = config.devices.get("DEFAULT").expect("DEFAULT").clone();
+    device.screen = "byonk-builtin/calibration/grey".to_string();
+    device.refresh = base;
+    device.final_rung = fin.map(|r| byonk::models::CascadeValues {
+        refresh: Some(r),
+        ..Default::default()
+    });
+    config.devices.insert(mac.to_string(), device);
+    TestApp::from_config(config)
+}
+
+async fn polled_refresh_rate(app: &TestApp) -> u64 {
+    let api_key = app.register_device(macs::HELLO_DEVICE).await;
+    let headers = fixtures::display_headers(macs::HELLO_DEVICE, &api_key);
+    let body: serde_json::Value = app
+        .get_with_headers("/api/display", &fixtures::as_str_pairs(&headers))
+        .await
+        .json();
+    body["refresh_rate"].as_u64().expect("refresh_rate")
+}
+
+/// `final.refresh` is the owner's veto on wake-up cadence: it must reach the
+/// `refresh_rate` a real device is told to sleep for. It was inert on every
+/// path before `refresh` joined the shared order.
+///
+/// If this breaks, `DeviceContext::refresh_final` is no longer filled from
+/// the device config at `content_pipeline`'s device branch.
+#[tokio::test]
+async fn final_refresh_sets_the_rate_a_device_is_told_to_sleep() {
+    let plain = polled_refresh_rate(&app_with_final_refresh(macs::HELLO_DEVICE, None, None)).await;
+    assert_ne!(
+        plain, 7200,
+        "the veto value must differ from the screen's own rate"
+    );
+
+    let vetoed = polled_refresh_rate(&app_with_final_refresh(
+        macs::HELLO_DEVICE,
+        Some(600),
+        Some(7200),
+    ))
+    .await;
+    assert_eq!(vetoed, 7200);
+}
+
+/// Zero behaviour change: a device `refresh` without `final` stays at the
+/// base rung, where the screen's own rate still beats it.
+#[tokio::test]
+async fn a_base_device_refresh_does_not_gain_a_veto() {
+    let plain = polled_refresh_rate(&app_with_final_refresh(macs::HELLO_DEVICE, None, None)).await;
+    let with_base = polled_refresh_rate(&app_with_final_refresh(
+        macs::HELLO_DEVICE,
+        Some(7200),
+        None,
+    ))
+    .await;
+    assert_eq!(with_base, plain);
+}

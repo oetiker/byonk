@@ -189,9 +189,11 @@ class ByonkConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._key = self._discovery["key"]
             self._screen = user_input["screen"]
-            self._extra = {
-                k: user_input[k] for k in ("panel", "dither") if user_input.get(k)
-            }
+            self._extra = {k: user_input[k] for k in ("panel",) if user_input.get(k)}
+            if user_input.get("dither"):
+                # The onboarding Dither choice is the owner's veto, exactly as
+                # the Dither entity is; see ByonkDitherSelect.
+                self._extra["final"] = {"dither": user_input["dither"]}
             return await self.async_step_dev_params()
 
         schema = vol.Schema(

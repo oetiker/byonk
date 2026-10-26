@@ -10,15 +10,17 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::api::resolution::{resolve_pre_script, PreScriptInputs, RungSettings};
+use crate::models::config::PanelDitherConfig;
 use crate::models::screen_meta::ScreenMeta;
-use crate::models::{normalize_algorithm_name, DisplaySpec, DitherTuningValues};
+use crate::models::{CascadeValues, DisplaySpec, DitherTuningValues};
 use crate::services::content_pipeline::{ContentPipeline, DeviceContext};
 use crate::services::screen_repo_loader::{ReadOutcome, ScreenRepoSource};
 use crate::services::screen_repo_manager::ScreenRepoManager;
 
 /// Largest file `read_file`/`write_file` will handle. Guards against
 /// accidentally loading e.g. a stray multi-gigabyte asset into memory.
-const MAX_FILE_BYTES: usize = 5 * 1024 * 1024;
+pub const MAX_FILE_BYTES: usize = 5 * 1024 * 1024;
 
 /// A screen file's bytes plus enough metadata for the authoring UI/API to
 /// display it and detect edit conflicts.
@@ -65,6 +67,10 @@ pub enum StoreError {
     Traversal,
     /// `bytes` (write) or the on-disk file (read) exceeds `MAX_FILE_BYTES`.
     TooLarge,
+    /// The operation named one of the three files that define a screen
+    /// (`meta.yaml`, `script.lua`, `screen.svg`); raw upload and single-file
+    /// rename refuse them. Carries the offending name.
+    CoreFile(String),
     /// Any other I/O failure, stringified.
     Io(String),
 }
@@ -86,11 +92,15 @@ pub enum Severity {
 
 /// One `validate` finding: `location` is the screen-relative file the issue
 /// was found in (e.g. `"script.lua"`), `message` is human-readable detail
-/// (e.g. the mlua/tera/serde_yaml error text).
+/// (e.g. the mlua/tera/serde_yaml error text). `line` is a best-effort
+/// 1-based line number parsed out of `message` by `error_line`; `None` when
+/// the message has no line to report (a missing file, a schema error, or a
+/// message shape `error_line` doesn't recognize).
 #[derive(Debug, Clone)]
 pub struct Issue {
     pub severity: Severity,
     pub location: String,
+    pub line: Option<u32>,
     pub message: String,
 }
 
@@ -100,6 +110,15 @@ pub struct Issue {
 pub struct ValidationReport {
     pub ok: bool,
     pub issues: Vec<Issue>,
+}
+
+/// One entry in `ScreenStore::list_files`'s report: a file's name (relative
+/// to the screen directory), its size, and whether it's text.
+pub struct FileEntry {
+    pub name: String,
+    /// `None` when the file is over `MAX_FILE_BYTES` and was not read.
+    pub size: Option<u64>,
+    pub text: bool,
 }
 
 /// A real device, for a render made on its behalf: its registry identity
@@ -117,13 +136,14 @@ pub struct ValidationReport {
 ///   back to the authoring placeholders — showing 4.2 V for a device that
 ///   has never reported its battery is a fabricated reading, not a default.
 ///
-/// * **Config layer** — `colors`, `dither` and `tuning` occupy the
-///   *device-config* slots of `resolve_ctx_palette`,
-///   `resolve_render_params` and `resolve_effective_tuning`, which sit
-///   *below* the script's own choices and *above* the panel's. Passing a
-///   device's configured dither as `RenderOpts::dither` instead would put it
-///   in the override slot, where it beats the script — the preview would
-///   then disagree with the panel for any screen that sets its own dither.
+/// * **Config layer** — `colors`, `colors_actual`, `dither`, `tuning` and
+///   `refresh` are this render's *device base* rung of the cascade, and
+///   `final_rung` its *device final* rung (spec §2): both sit *below* a
+///   dev-UI override, the base rung also below the script's own choices, and
+///   both above the panel's. Passing a device's configured dither as
+///   `RenderOpts::dither` instead would put it in the override rung, where it
+///   beats the script — the preview would then disagree with the panel for
+///   any screen that sets its own dither.
 #[derive(Debug, Clone, Default)]
 pub struct DevicePreview {
     pub mac: String,
@@ -142,6 +162,11 @@ pub struct DevicePreview {
     /// screen's own. The preview cache uses it as the entry's TTL, which is
     /// what keeps a preview exactly as fresh as the panel it stands for.
     pub refresh: Option<u32>,
+    /// The device's base-rung measured colours, if it has its own.
+    pub colors_actual: Option<String>,
+    /// The device's final rung — the owner's veto. Empty when the device has
+    /// no `final:` block, which resolves identically to having an empty one.
+    pub final_rung: CascadeValues,
 }
 
 /// Options for `ScreenStore::render`. Mirrors the knobs `/dev/render`
@@ -171,6 +196,7 @@ pub struct RenderOpts {
     pub max_error: Option<f32>,
     pub chroma_clamp: Option<f32>,
     pub noise_scale: Option<f32>,
+    pub strength: Option<f32>,
     /// Optional gamut mapping overrides for dithering
     pub gamut: crate::models::GamutTuningValues,
     pub timestamp: Option<i64>,
@@ -187,9 +213,9 @@ pub struct RenderOpts {
     /// decisions (see `api::display::resolve_use_actual`).
     pub use_actual: Option<bool>,
     /// Measured-colour override for this render, comma-separated hex. Sits
-    /// in the dev-override slot of the measured chain: `script > this >
-    /// panel.colors_actual > none`. Lets an agent preview a calibration
-    /// without writing a panel into the config.
+    /// in the override rung of the cascade: `this > device final > screen
+    /// (script) > device > panel.colors_actual > firmware header`. Lets an
+    /// agent preview a calibration without writing a panel into the config.
     pub colors_actual: Option<String>,
     /// Lua `params` table for the run. Empty for an authoring render; a
     /// device preview supplies the device's configured params.
@@ -212,6 +238,7 @@ impl Default for RenderOpts {
             max_error: None,
             chroma_clamp: None,
             noise_scale: None,
+            strength: None,
             gamut: Default::default(),
             timestamp: None,
             include_raw: false,
@@ -263,25 +290,43 @@ pub struct RenderResult {
     /// inlined verbatim. `None` on a failure that happened before or during
     /// SVG generation, since there is then no expanded markup to show.
     pub svg: Option<String>,
+    /// Every render setting's cascade resolution — the same report
+    /// `/dev/api/render` answers with in `X-Byonk-Resolution` (spec §4.4).
+    ///
+    /// `None` when the render failed before resolution happened. Carried on
+    /// the result rather than recomputed by the caller because this *is* the
+    /// resolution the pixels were produced from: `/api/admin/devices/{key}/preview`
+    /// forwards it as its own `X-Byonk-Resolution`, and a convergence test can
+    /// read it without reaching into the resolver.
+    pub resolution: Option<crate::api::resolution::Resolution>,
 }
 
-/// Best-effort line-number extraction from an mlua error message shape like
-/// `runtime error: [string "..."]:12: attempt to index a nil value` or
-/// `syntax error: [string "..."]:1: unexpected symbol near <eof>` (both as
-/// wrapped by `ContentError`'s `Display`, e.g. `"Script error: Lua error:
-/// runtime error: [string \"...\"]:12: ..."`). Looks for the first `]:`
-/// marker and reads the digits immediately after it; returns `None` when
-/// the message doesn't have that shape (a non-Lua render failure, or a
-/// Lua message mlua didn't attach a location to).
-fn parse_lua_error_line(message: &str) -> Option<u32> {
-    let idx = message.find("]:")?;
-    let rest = &message[idx + 2..];
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() {
-        None
-    } else {
-        digits.parse().ok()
+/// Best-effort line number from a validator/render-error message. Recognizes
+/// two shapes:
+///
+/// * Lua (mlua), e.g. `runtime error: [string "..."]:12: attempt to index a
+///   nil value` or `syntax error: [string "..."]:1: unexpected symbol near
+///   <eof>` (both as wrapped by `ContentError`'s `Display`, e.g. `"Script
+///   error: Lua error: runtime error: [string \"...\"]:12: ..."`) — looks
+///   for the first `]:` marker and reads the digits immediately after it.
+/// * Tera (pest), e.g. `Failed to parse 'screen.svg'\n --> 3:5\n  |` — looks
+///   for the first ` --> ` marker and reads the digits immediately after it.
+///
+/// Returns `None` when the message has neither shape (a missing file, a
+/// schema error, a non-Lua/Tera render failure, or a Lua message mlua didn't
+/// attach a location to).
+pub fn error_line(message: &str) -> Option<u32> {
+    fn digits_at(message: &str, marker: &str) -> Option<u32> {
+        let idx = message.find(marker)?;
+        let rest = &message[idx + marker.len()..];
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if digits.is_empty() {
+            None
+        } else {
+            digits.parse().ok()
+        }
     }
+    digits_at(message, "]:").or_else(|| digits_at(message, "--> "))
 }
 
 /// Which starter template `create_screen` scaffolds. One variant today;
@@ -348,6 +393,58 @@ fn safe_rel(rel: &str) -> Result<PathBuf, StoreError> {
         return Err(StoreError::Traversal);
     }
     Ok(out)
+}
+
+/// Whether `dst` is the very file `src` is under a name differing in case
+/// only -- what a case-folding file system reports for a case-only rename.
+/// On unix the device and inode must match too (a hard link under another
+/// spelling is a real conflict); Windows always folds case.
+fn same_file(src: &std::fs::Metadata, dst: &std::fs::Metadata, from: &Path, to: &Path) -> bool {
+    let case_only = from
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&to.to_string_lossy());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        case_only && src.dev() == dst.dev() && src.ino() == dst.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (src, dst);
+        case_only
+    }
+}
+
+/// Remove the directories a moved-out screen left empty, from `dir`'s
+/// parent upwards, stopping at the first one that still holds something
+/// and never touching `base` (the repo root) itself.
+fn prune_empty_parents(base: &Path, dir: &Path) {
+    let mut cur = dir.parent();
+    while let Some(d) = cur {
+        if d == base || !d.starts_with(base) {
+            break;
+        }
+        // `remove_dir` only removes an empty directory; anything else ends
+        // the walk.
+        if std::fs::remove_dir(d).is_err() {
+            break;
+        }
+        cur = d.parent();
+    }
+}
+
+/// The three files that define a screen; they cannot be deleted, renamed or
+/// raw-uploaded. Compared case-insensitively on the whole relative name, so
+/// `sub/script.lua` is an ordinary asset.
+fn is_core_file(rel: &Path) -> bool {
+    is_core_file_name(&rel.to_string_lossy())
+}
+
+/// `is_core_file` on a name as the caller spelled it: the one list of the
+/// screen-defining files, shared with the dev API's delete route.
+pub(crate) fn is_core_file_name(name: &str) -> bool {
+    const CORE: [&str; 3] = ["meta.yaml", "script.lua", "screen.svg"];
+    CORE.iter().any(|d| name.eq_ignore_ascii_case(d))
 }
 
 /// Find the deepest ancestor of `path` (inclusive) that currently exists on
@@ -516,12 +613,50 @@ impl ScreenStore {
     /// Write one file within a screen, enforcing optimistic concurrency via
     /// `if_match` (the etag the caller last read; `None` skips the check —
     /// last-write-wins, or "create"). Returns the new etag on success.
+    ///
+    /// Ordering contract callers rely on: `resolve_writable_root` (the
+    /// read-only check, yielding `StoreError::ReadOnly`) MUST run before the
+    /// etag comparison below (`StoreError::Conflict`). The `/dev/api` PUT
+    /// handler's `If-Match: *` support depends on this order to tell a
+    /// read-only repo (409) apart from an existing file in a writable one
+    /// (412) — it probes existence itself but always routes the actual
+    /// write back through this method so its read-only check fires first.
+    /// Reordering these two checks would not fail any test in this module;
+    /// it would silently misreport a read-only repo as 412 instead of 409.
     pub fn write_file(
         &self,
         screen_ref: &str,
         file: &str,
         bytes: &[u8],
         if_match: Option<&str>,
+    ) -> Result<String, StoreError> {
+        self.write_file_inner(screen_ref, file, bytes, if_match, false)
+    }
+
+    /// Write `bytes` verbatim to one asset file (binary or text), creating or
+    /// replacing it. Same guards and `if_match` semantics as `write_file`,
+    /// except that an existing binary target may be replaced (the caller
+    /// sends bytes, not text) and the three screen-defining files are
+    /// refused with `CoreFile` (edit those through `write_file`).
+    pub fn write_raw(
+        &self,
+        screen_ref: &str,
+        file: &str,
+        bytes: &[u8],
+        if_match: Option<&str>,
+    ) -> Result<String, StoreError> {
+        self.write_file_inner(screen_ref, file, bytes, if_match, true)
+    }
+
+    /// Shared guard sequence of `write_file` and `write_raw`; `raw` selects
+    /// the binary-friendly, core-file-refusing variant.
+    fn write_file_inner(
+        &self,
+        screen_ref: &str,
+        file: &str,
+        bytes: &[u8],
+        if_match: Option<&str>,
+        raw: bool,
     ) -> Result<String, StoreError> {
         // Poisoning is not a correctness signal here — the guarded data is
         // the filesystem, not in-memory state a panicking thread could have
@@ -534,6 +669,9 @@ impl ScreenStore {
         let (handle, screen_path) = Self::split_ref(screen_ref)?;
         let rel = safe_rel(file)?;
         let base = self.resolve_writable_root(handle, screen_path)?;
+        if raw && is_core_file(&rel) {
+            return Err(StoreError::CoreFile(file.to_string()));
+        }
         let target = base.join(screen_path).join(&rel);
 
         // Guard + create the target's parent dir BEFORE any filesystem
@@ -549,7 +687,7 @@ impl ScreenStore {
         // `StoreError::BinaryOverwrite`).
         match std::fs::read(&target) {
             Ok(cur) => {
-                if std::str::from_utf8(&cur).is_err() {
+                if !raw && std::str::from_utf8(&cur).is_err() {
                     return Err(StoreError::BinaryOverwrite);
                 }
                 if let Some(expected) = if_match {
@@ -709,7 +847,19 @@ impl ScreenStore {
         // the filesystem, not in-memory state a panicking thread could have
         // torn. Recover and proceed.
         let _guard = self.mutation_lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.copy_locked(from_ref, to_handle, to_name)?;
+        self.manager.rebuild_loader();
+        Ok(format!("{to_handle}/{to_name}"))
+    }
 
+    /// `copy_screen`'s body, for a caller already holding `mutation_lock`.
+    /// Does not rebuild the loader. Returns the destination directory.
+    fn copy_locked(
+        &self,
+        from_ref: &str,
+        to_handle: &str,
+        to_name: &str,
+    ) -> Result<PathBuf, StoreError> {
         let (from_handle, from_path) = Self::split_ref(from_ref)?;
         let to_path = safe_rel(to_name)?;
 
@@ -736,9 +886,7 @@ impl ScreenStore {
             let _ = std::fs::remove_dir_all(&to_dir);
             return Err(e);
         }
-
-        self.manager.rebuild_loader();
-        Ok(format!("{to_handle}/{to_name}"))
+        Ok(to_dir)
     }
 
     /// Copy every file `from_source.screen_files(from_path)` lists into
@@ -790,7 +938,95 @@ impl ScreenStore {
         // the filesystem, not in-memory state a panicking thread could have
         // torn. Recover and proceed.
         let _guard = self.mutation_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let r = self.rename_locked(screen_ref, new_name)?;
+        self.manager.rebuild_loader();
+        Ok(r)
+    }
 
+    /// Move a screen to `to_handle/to_name`: a rename when the handle stays
+    /// the same, else a copy into the other repo and a delete of the source,
+    /// as ONE operation under the mutation lock. Both repos must be
+    /// writable. Should the source refuse to go after the copy landed, the
+    /// copy is removed again: the screen is never in both places, nor in
+    /// neither.
+    pub fn move_screen(
+        &self,
+        from_ref: &str,
+        to_handle: &str,
+        to_name: &str,
+    ) -> Result<String, StoreError> {
+        let _guard = self.mutation_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let (from_handle, from_path) = Self::split_ref(from_ref)?;
+        if from_handle == to_handle {
+            let r = self.rename_locked(from_ref, to_name)?;
+            self.manager.rebuild_loader();
+            return Ok(r);
+        }
+
+        // Every refusal is decided before anything is written.
+        let from_base = self.resolve_writable_root(from_handle, from_path)?;
+        let from_dir = from_base.join(from_path);
+        if !from_dir.join("meta.yaml").is_file() {
+            return Err(StoreError::NotFound);
+        }
+        let loader = self.manager.loader();
+        let to_source = loader.source_for(to_handle).ok_or(StoreError::NotFound)?;
+        if to_source.writable_root().is_none() {
+            return Err(StoreError::ReadOnly {
+                copy_hint: format!(
+                    "'{to_handle}' is read-only; a screen can only move into a writable repo"
+                ),
+            });
+        }
+        drop(loader);
+
+        let to_dir = self.copy_locked(from_ref, to_handle, to_name)?;
+        if let Err(e) = Self::discard_screen_dir(&from_base, &from_dir) {
+            // The source stays; so the copy must go.
+            let _ = std::fs::remove_dir_all(&to_dir);
+            return Err(e);
+        }
+        prune_empty_parents(&from_base, &from_dir);
+        self.manager.rebuild_loader();
+        Ok(format!("{to_handle}/{to_name}"))
+    }
+
+    /// Remove a screen directory without ever leaving a half-deleted screen
+    /// the loader would still list. First an atomic rename to a hidden
+    /// sibling (fails => nothing changed), then its `meta.yaml` goes (fails
+    /// => renamed back, nothing changed): from there on the loader no longer
+    /// sees a screen, and a failure to clear the rest is only logged.
+    fn discard_screen_dir(base: &Path, dir: &Path) -> Result<(), StoreError> {
+        let canon_base = base
+            .canonicalize()
+            .map_err(|e| StoreError::Io(e.to_string()))?;
+        let canon_dir = dir
+            .canonicalize()
+            .map_err(|e| StoreError::Io(e.to_string()))?;
+        if !canon_dir.starts_with(&canon_base) || canon_dir == canon_base {
+            return Err(StoreError::Traversal);
+        }
+        let parent = dir.parent().unwrap_or(base);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        let trash = parent.join(format!(".byonk-moved-{}-{stamp}", std::process::id()));
+        std::fs::rename(dir, &trash)
+            .map_err(|e| StoreError::Io(format!("remove {}: {e}", dir.display())))?;
+        if let Err(e) = std::fs::remove_file(trash.join("meta.yaml")) {
+            let _ = std::fs::rename(&trash, dir);
+            return Err(StoreError::Io(format!("remove {}: {e}", dir.display())));
+        }
+        if let Err(e) = std::fs::remove_dir_all(&trash) {
+            tracing::warn!(dir = %trash.display(), error = %e, "moved screen: leftover not removed");
+        }
+        Ok(())
+    }
+
+    /// `rename_screen`'s body, for a caller already holding `mutation_lock`.
+    /// Does not rebuild the loader.
+    fn rename_locked(&self, screen_ref: &str, new_name: &str) -> Result<String, StoreError> {
         let (handle, screen_path) = Self::split_ref(screen_ref)?;
         let new_path = safe_rel(new_name)?;
         let base = self.resolve_writable_root(handle, screen_path)?;
@@ -834,7 +1070,7 @@ impl ScreenStore {
         std::fs::create_dir_all(new_parent).map_err(|e| StoreError::Io(e.to_string()))?;
 
         std::fs::rename(&old_dir, &new_dir).map_err(|e| StoreError::Io(e.to_string()))?;
-        self.manager.rebuild_loader();
+        prune_empty_parents(&base, &old_dir);
         Ok(format!("{handle}/{new_name}"))
     }
 
@@ -900,8 +1136,7 @@ impl ScreenStore {
         // than "that file is undeletable".
         let base = self.resolve_writable_root(handle, screen_path)?;
 
-        const DEFINING: [&str; 3] = ["meta.yaml", "script.lua", "screen.svg"];
-        if DEFINING.contains(&rel.to_string_lossy().as_ref()) {
+        if is_core_file(&rel) {
             return Err(StoreError::Io(format!(
                 "'{file}' defines the screen and cannot be deleted; use delete_screen to remove '{screen_ref}'"
             )));
@@ -918,6 +1153,191 @@ impl ScreenStore {
         }
         self.manager.rebuild_loader();
         Ok(())
+    }
+
+    /// Rename one file inside a screen directory (`to` may name a
+    /// subdirectory of the screen). Refuses the screen-defining files on
+    /// either side (`CoreFile`), a missing source (`NotFound`) and an
+    /// existing target (`Conflict`); read-only repos report `ReadOnly` first.
+    pub fn rename_file(&self, screen_ref: &str, from: &str, to: &str) -> Result<(), StoreError> {
+        let _guard = self.mutation_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let (handle, screen_path) = Self::split_ref(screen_ref)?;
+        let from_rel = safe_rel(from)?;
+        let to_rel = safe_rel(to)?;
+        let base = self.resolve_writable_root(handle, screen_path)?;
+        for (rel, name) in [(&from_rel, from), (&to_rel, to)] {
+            if is_core_file(rel) {
+                return Err(StoreError::CoreFile(name.to_string()));
+            }
+        }
+        let src = base.join(screen_path).join(&from_rel);
+        let dst = base.join(screen_path).join(&to_rel);
+        // Guard both ends before touching either; only the destination's
+        // parent is created, and only once the checks below have passed.
+        Self::verify_writable_parent(&base, &src)?;
+        Self::verify_writable_parent(&base, &dst)?;
+        let src_meta = match std::fs::symlink_metadata(&src) {
+            Ok(m) if m.is_file() || m.file_type().is_symlink() => m,
+            Ok(_) => return Err(StoreError::NotFound),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(StoreError::NotFound),
+            Err(e) => return Err(StoreError::Io(e.to_string())),
+        };
+        // Renaming a file onto its own name changes nothing: a success.
+        if from_rel == to_rel {
+            return Ok(());
+        }
+        // A case-only rename (`logo.png` -> `Logo.png`) on a file system that
+        // folds case finds the source itself at the destination. That is
+        // not a conflict; the rename goes through a temporary name, because
+        // a direct one may be a no-op there.
+        let case_only = match std::fs::symlink_metadata(&dst) {
+            Ok(d) if same_file(&src_meta, &d, &from_rel, &to_rel) => true,
+            Ok(_) => return Err(StoreError::Conflict),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(StoreError::Io(e.to_string())),
+        };
+        Self::ensure_writable_parent(&base, &dst)?;
+        if case_only {
+            let tmp = src.with_file_name(format!(
+                ".byonk-rename-{}-{}",
+                std::process::id(),
+                src.file_name()
+                    .map(|n| n.to_string_lossy())
+                    .unwrap_or_default()
+            ));
+            std::fs::rename(&src, &tmp).map_err(|e| StoreError::Io(e.to_string()))?;
+            if let Err(e) = std::fs::rename(&tmp, &dst) {
+                let _ = std::fs::rename(&tmp, &src);
+                return Err(StoreError::Io(e.to_string()));
+            }
+        } else {
+            std::fs::rename(&src, &dst).map_err(|e| StoreError::Io(e.to_string()))?;
+        }
+        self.manager.rebuild_loader();
+        Ok(())
+    }
+
+    /// Run the validator that applies to `file` over `text`. `None` means
+    /// "no check for this kind of file" (an asset like a `.png`, or
+    /// anything else that isn't `meta.yaml`/`*.lua`/`*.svg`). Shared by
+    /// `validate` and `check_text` so the two cannot drift: this function
+    /// (not either caller) is the single source of what "valid" means for a
+    /// screen file.
+    fn check_one(
+        &self,
+        source: &Arc<dyn ScreenRepoSource>,
+        screen_path: &str,
+        file: &str,
+        text: &str,
+    ) -> Option<Result<(), String>> {
+        let name = file.rsplit('/').next().unwrap_or(file);
+        if name == "meta.yaml" {
+            return Some(ScreenMeta::from_yaml(text).map(|_| ()));
+        }
+        if name.ends_with(".lua") {
+            return Some(
+                mlua::Lua::new()
+                    .load(text)
+                    .set_name(name)
+                    .into_function()
+                    .map(|_| ())
+                    .map_err(|e| e.to_string()),
+            );
+        }
+        if name.ends_with(".svg") {
+            return Some(
+                self.pipeline
+                    .template_service()
+                    .validate_template(text, source, screen_path)
+                    .map_err(|e| e.to_string()),
+            );
+        }
+        None
+    }
+
+    /// Validate `text` as a draft for `file` without it being written to
+    /// disk first — what the editor's "check as you type" needs, since the
+    /// unsaved buffer a user is editing doesn't exist as a file yet. Runs
+    /// the exact same check as `validate` (via `check_one`), just against
+    /// caller-supplied text instead of the on-disk copy; a file kind
+    /// `check_one` has no check for (e.g. a `.png`) always reports `ok`.
+    pub fn check_text(&self, screen_ref: &str, file: &str, text: &str) -> ValidationReport {
+        let bad = |message: String| ValidationReport {
+            ok: false,
+            issues: vec![Issue {
+                severity: Severity::Error,
+                location: file.to_string(),
+                line: None,
+                message,
+            }],
+        };
+        let (handle, screen_path) = match Self::split_ref(screen_ref) {
+            Ok(v) => v,
+            Err(_) => return bad("invalid screen reference".into()),
+        };
+        if safe_rel(file).is_err() {
+            return bad("invalid file name".into());
+        }
+        let loader = self.manager.loader();
+        let Some(source) = loader.source_for(handle) else {
+            return bad(format!("unknown screen repo '{handle}'"));
+        };
+        match self.check_one(&source, screen_path, file, text) {
+            Some(Err(message)) => ValidationReport {
+                ok: false,
+                issues: vec![Issue {
+                    severity: Severity::Error,
+                    location: file.to_string(),
+                    line: error_line(&message),
+                    message,
+                }],
+            },
+            _ => ValidationReport {
+                ok: true,
+                issues: vec![],
+            },
+        }
+    }
+
+    /// List a screen's files (screen-relative names, e.g. `"script.lua"`),
+    /// each annotated with its size and whether it decodes as UTF-8 text.
+    /// The core triple (`meta.yaml`, `script.lua`, `screen.svg`) sorts
+    /// first, in that order; everything else follows alphabetically.
+    /// `NotFound` when the screen resolves to no files at all (unknown
+    /// handle, or an empty/nonexistent screen directory).
+    pub fn list_files(&self, screen_ref: &str) -> Result<Vec<FileEntry>, StoreError> {
+        let (handle, screen_path) = Self::split_ref(screen_ref)?;
+        let loader = self.manager.loader();
+        let source = loader.source_for(handle).ok_or(StoreError::NotFound)?;
+        let prefix = format!("{screen_path}/");
+        let names: Vec<String> = source
+            .screen_files(screen_path)
+            .into_iter()
+            .filter_map(|f| f.strip_prefix(&prefix).map(str::to_string))
+            .collect();
+        if names.is_empty() {
+            return Err(StoreError::NotFound);
+        }
+        let core = ["meta.yaml", "script.lua", "screen.svg"];
+        let mut out: Vec<FileEntry> = names
+            .into_iter()
+            .map(|name| {
+                let (size, text) =
+                    match source.read_limited(&format!("{prefix}{name}"), MAX_FILE_BYTES) {
+                        ReadOutcome::Found(b) => {
+                            (Some(b.len() as u64), std::str::from_utf8(&b).is_ok())
+                        }
+                        ReadOutcome::TooLarge => (None, false),
+                        ReadOutcome::Missing => (Some(0), false),
+                    };
+                FileEntry { name, size, text }
+            })
+            .collect();
+        out.sort_by_key(|f| {
+            let rank = core.iter().position(|c| *c == f.name).unwrap_or(core.len());
+            (rank, f.name.clone())
+        });
+        Ok(out)
     }
 
     /// Statically validate one screen: parse `meta.yaml` against its schema,
@@ -938,6 +1358,7 @@ impl ScreenStore {
                     issues: vec![Issue {
                         severity: Severity::Error,
                         location: screen_ref.to_string(),
+                        line: None,
                         message: "invalid screen reference".to_string(),
                     }],
                 }
@@ -950,6 +1371,7 @@ impl ScreenStore {
                 issues: vec![Issue {
                     severity: Severity::Error,
                     location: screen_ref.to_string(),
+                    line: None,
                     message: format!("unknown screen repo '{handle}'"),
                 }],
             };
@@ -957,14 +1379,16 @@ impl ScreenStore {
 
         let mut issues = Vec::new();
 
-        // Read one of the screen's files and run `validator` over it, pushing
-        // an Error `Issue` located at `name` either way: the validator's
-        // message if it rejects the contents, or "file not found" if the file
-        // isn't there at all. Every per-file check below is this same
-        // read -> check -> missing-file shape; keeping it in one place is
-        // what stops the three (soon more) copies from drifting apart on how
-        // a missing file is reported.
-        let mut check_file = |name: &str, validator: &dyn Fn(&str) -> Result<(), String>| {
+        // Read one of the screen's files and run `check_one` over it,
+        // pushing an Error `Issue` located at `name` either way:
+        // `check_one`'s message if it rejects the contents, or "file not
+        // found" if the file isn't there at all. Every per-file check below
+        // is this same read -> check -> missing-file shape; keeping it in
+        // one place is what stops the three (soon more) copies from
+        // drifting apart on how a missing file is reported. `check_one`
+        // itself is shared with `check_text`, so the two cannot drift on
+        // what "valid" means either.
+        let mut check_file = |name: &str| {
             let rel = format!("{screen_path}/{name}");
             let message = match source.read_limited(&rel, MAX_FILE_BYTES) {
                 ReadOutcome::Missing => "file not found".to_string(),
@@ -976,41 +1400,25 @@ impl ScreenStore {
                     // Previously this surfaced as "file not found", because
                     // `read_string` collapsed a UTF-8 failure into `None`.
                     Err(_) => "file is not valid UTF-8".to_string(),
-                    Ok(text) => match validator(&text) {
-                        Ok(()) => return,
-                        Err(message) => message,
+                    Ok(text) => match self.check_one(&source, screen_path, name, &text) {
+                        None | Some(Ok(())) => return,
+                        Some(Err(message)) => message,
                     },
                 },
             };
             issues.push(Issue {
                 severity: Severity::Error,
                 location: name.to_string(),
+                line: error_line(&message),
                 message,
             });
         };
 
-        // meta.yaml — schema check only.
-        check_file("meta.yaml", &|text| ScreenMeta::from_yaml(text).map(|_| ()));
-
-        // script.lua — compile without executing.
-        check_file("script.lua", &|text| {
-            mlua::Lua::new()
-                .load(text)
-                .into_function()
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        });
-
-        // screen.svg — Tera compile + extends-chain resolution, mirroring
-        // the registration phase real rendering runs (see
-        // `TemplateService::validate_template`'s doc comment for what this
-        // does and doesn't catch).
-        check_file("screen.svg", &|text| {
-            self.pipeline
-                .template_service()
-                .validate_template(text, &source, screen_path)
-                .map_err(|e| e.to_string())
-        });
+        // meta.yaml, script.lua, screen.svg — same three checks as before,
+        // now dispatched through `check_one` by filename.
+        check_file("meta.yaml");
+        check_file("script.lua");
+        check_file("screen.svg");
 
         let ok = !issues.iter().any(|i| matches!(i.severity, Severity::Error));
         ValidationReport { ok, issues }
@@ -1038,83 +1446,101 @@ impl ScreenStore {
             error: None,
             measured_source: crate::api::display::SRC_NONE,
             svg: None,
+            resolution: None,
         };
 
-        // Dimensions + base palette: explicit override, else the model's
-        // default — the same option-resolution chain `/dev/render` uses
+        // Dimensions + base palette: explicit override, else the named
+        // panel's size, else the model's default — the same option-resolution
+        // chain `/dev/render` uses
         // (`crate::api::display::resolve_preview_dimensions`/
-        // `resolve_query_palette`), shared so the two previews can't drift.
-        let (width, height) =
-            crate::api::display::resolve_preview_dimensions(&opts.model, opts.width, opts.height);
-        let query_palette: Vec<(u8, u8, u8)> =
-            crate::api::display::resolve_query_palette(&opts.model, None);
-
+        // `resolve_query_palette`), shared so the previews can't drift. The
+        // panel is looked up first because it supplies the size.
         let config = self.pipeline.config().load();
         let panel = opts
             .panel
             .as_deref()
             .and_then(|name| config.get_panel(name));
+        let (width, height) = crate::api::display::resolve_preview_dimensions(
+            &opts.model,
+            opts.width,
+            opts.height,
+            (panel.and_then(|p| p.width), panel.and_then(|p| p.height)),
+        );
+        // Refuse before anything is sized from it.
+        if let Err(message) = DisplaySpec::check_dimensions(width, height) {
+            return RenderResult {
+                error: Some(RenderError {
+                    line: None,
+                    message,
+                }),
+                ..empty()
+            };
+        }
+        let query_palette: Vec<(u8, u8, u8)> =
+            crate::api::display::resolve_query_palette(&opts.model, None);
+
         let panel_colors: Option<String> = panel.map(|p| p.colors.clone());
-        let opts_actual_parsed: Option<Vec<(u8, u8, u8)>> = opts
-            .colors_actual
-            .as_deref()
-            .map(crate::api::display::parse_colors_header);
         let panel_actual_parsed: Option<Vec<(u8, u8, u8)>> = panel
             .and_then(|p| p.colors_actual.as_deref())
             .map(crate::api::display::parse_colors_header);
-        // Pre-script chain for the final measured-colour resolution after
-        // the script runs — there is no header layer in an authoring render,
-        // but `RenderOpts::colors_actual` occupies the dev-override slot (see
-        // `resolve_render_params`'s doc comment). Kept as a candidate ARRAY
-        // rather than collapsed to a winner here: the length rule lives
-        // inside `resolve_measured_colors`'s loop, so a wrong-length render
-        // option falls through to a valid `panel.colors_actual` instead of
-        // killing the calibration outright.
-        let pre_script_measured_candidates: [crate::api::display::MeasuredCandidate; 2] = [
-            (crate::api::display::SRC_RENDER_OPTS, opts_actual_parsed),
-            (crate::api::display::SRC_PANEL_ACTUAL, panel_actual_parsed),
-        ];
-        // Pre-script winner, used only to populate `DeviceContext.colors_actual`
-        // (what the script sees before it runs). Derived from the candidate
-        // array rather than its own `.or_else` chain so the two can't
-        // silently drift on precedence — same construction as `api::dev`.
-        let measured_colors: Option<Vec<(u8, u8, u8)>> = pre_script_measured_candidates
-            .iter()
-            .find_map(|(_, c)| c.clone());
 
-        // The device-config layer of every chain below. Absent for an
-        // authoring render (there is no device), populated for a device
-        // preview — see `DevicePreview`.
-        let device_colors: Option<&str> = opts.device.as_ref().and_then(|d| d.colors.as_deref());
-        let device_dither: Option<&str> = opts.device.as_ref().and_then(|d| d.dither.as_deref());
-        let device_tuning: DitherTuningValues = opts
-            .device
-            .as_ref()
-            .map(|d| d.tuning.clone())
-            .unwrap_or_default();
-
-        // The palette the script sees via `device.colors` — device-config
-        // colors, then panel colors, then the model default, same as
-        // `/dev/render`'s `default_palette`.
-        let ctx_palette: Vec<(u8, u8, u8)> = crate::api::display::resolve_ctx_palette(
-            device_colors,
-            panel_colors.as_deref(),
-            &query_palette,
-        );
-
-        // Pre-script dither algorithm + tuning, for the device context the
-        // script sees via `device.dither.*` — same resolution `/dev/render`
-        // does before running the script.
-        let pre_script_algo = opts
-            .dither
-            .as_deref()
-            .or(device_dither)
-            .unwrap_or("atkinson");
         let panel_dither_config = panel.and_then(|p| p.dither.clone());
-        let pre_panel_tuning = panel_dither_config
-            .as_ref()
-            .map(|pdc| pdc.resolve_for_algorithm(Some(pre_script_algo)))
-            .unwrap_or_default();
+
+        // What the script sees as `device.*`: the one shared pre-script
+        // resolution (`override -> device final -> device base -> panel ->
+        // model default`, the screen rung empty), so a preview tells the
+        // script what `/dev/render` and `/api/display` would.
+        //
+        // The base rung carries everything the device's own config sets,
+        // tuning and measured colours included: the render below uses the
+        // same base, so a script must be told the numbers the glass gets.
+        let device_base = RungSettings {
+            colors: opts
+                .device
+                .as_ref()
+                .and_then(|d| d.colors.as_deref())
+                .map(crate::api::display::parse_colors_header),
+            colors_actual: opts
+                .device
+                .as_ref()
+                .and_then(|d| d.colors_actual.as_deref())
+                .map(crate::api::display::parse_colors_header),
+            dither: opts.device.as_ref().and_then(|d| d.dither.clone()),
+            tuning: opts
+                .device
+                .as_ref()
+                .map(|d| d.tuning.clone())
+                .unwrap_or_default(),
+            refresh: None,
+        };
+        let pre = resolve_pre_script(&PreScriptInputs {
+            over: RungSettings {
+                dither: opts.dither.clone(),
+                colors_actual: opts
+                    .colors_actual
+                    .as_deref()
+                    .map(crate::api::display::parse_colors_header),
+                ..Default::default()
+            },
+            device_final: opts
+                .device
+                .as_ref()
+                .map(|d| RungSettings::from_cascade(&d.final_rung))
+                .unwrap_or_default(),
+            device_base,
+            panel: RungSettings {
+                colors: panel_colors
+                    .as_deref()
+                    .map(crate::api::display::parse_colors_header),
+                colors_actual: panel_actual_parsed.clone(),
+                ..Default::default()
+            },
+            panel_dither: panel_dither_config.as_ref(),
+            fallback_palette: query_palette.clone(),
+            fallback_colors_actual: None,
+        });
+        let ctx_palette = &pre.palette;
+        let pre_tuning = &pre.tuning;
 
         // Device identity: the real one when this render is on a device's
         // behalf, else the authoring placeholders. Kept as a whole-identity
@@ -1144,19 +1570,21 @@ impl ScreenStore {
             firmware_version: ctx_fw,
             width: Some(width),
             height: Some(height),
-            colors: Some(crate::api::display::colors_to_hex_strings(&ctx_palette)),
-            colors_actual: measured_colors
+            colors: Some(crate::api::display::colors_to_hex_strings(ctx_palette)),
+            colors_actual: pre
+                .colors_actual
                 .as_deref()
                 .map(crate::api::display::colors_to_hex_strings),
-            dither_algorithm: Some(pre_script_algo.to_string()),
-            dither_max_error: pre_panel_tuning.max_error,
-            dither_noise_scale: pre_panel_tuning.noise_scale,
-            dither_chroma_clamp: pre_panel_tuning.chroma_clamp,
-            dither_strength: pre_panel_tuning.strength,
-            dither_gamut_knee: pre_panel_tuning.gamut.knee,
-            dither_gamut_amount: pre_panel_tuning.gamut.amount,
-            dither_gamut_max_compression: pre_panel_tuning.gamut.max_compression,
+            dither_algorithm: Some(pre.algorithm.clone()),
+            dither_max_error: pre_tuning.max_error,
+            dither_noise_scale: pre_tuning.noise_scale,
+            dither_chroma_clamp: pre_tuning.chroma_clamp,
+            dither_strength: pre_tuning.strength,
+            dither_gamut_knee: pre_tuning.gamut.knee,
+            dither_gamut_amount: pre_tuning.gamut.amount,
+            dither_gamut_max_compression: pre_tuning.gamut.max_compression,
             refresh_override: opts.device.as_ref().and_then(|d| d.refresh),
+            refresh_final: opts.device.as_ref().and_then(|d| d.final_rung.refresh),
             ..Default::default()
         };
 
@@ -1168,6 +1596,15 @@ impl ScreenStore {
         // comment for why this has to be caller-owned rather than read out
         // of `ScriptResult` after the fact.
         let log_sink: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        // A panel name that resolves to nothing is an authoring mistake the
+        // caller should hear about, not a silent fall-back to model defaults.
+        if let (Some(name), None) = (opts.panel.as_deref(), panel) {
+            if let Ok(mut sink) = log_sink.lock() {
+                sink.push(format!(
+                    "[warn] unknown panel '{name}' — using model defaults"
+                ));
+            }
+        }
 
         // Run the script, capturing logs/data/refresh_rate. `run_script_direct`
         // is the same entry point `/dev/render` uses for a screen-name preview.
@@ -1184,7 +1621,7 @@ impl ScreenStore {
                 return RenderResult {
                     log,
                     error: Some(RenderError {
-                        line: parse_lua_error_line(&message),
+                        line: error_line(&message),
                         message,
                     }),
                     ..empty()
@@ -1217,70 +1654,21 @@ impl ScreenStore {
             }
         };
 
-        // Explicit render-option dither wins outright over the script's own
-        // choice (like a `/dev/render` UI override); otherwise the script's
-        // `dither` return value is used. Mirrors `effective_script_dither`/
-        // `effective_device_dither` in `handle_render` (there is no device
-        // config layer in an authoring render, so that layer is always empty).
-        let (effective_script_dither, dither_override): (Option<&str>, Option<&str>) =
-            match opts.dither.as_deref() {
-                Some(d) => (None, Some(d)),
-                None => (script_result.script_dither.as_deref(), None),
-            };
-
-        let effective_algo = dither_override.or(effective_script_dither);
-        let panel_tuning = panel_dither_config
-            .as_ref()
-            .map(|pdc| {
-                pdc.resolve_for_algorithm(effective_algo.map(normalize_algorithm_name).as_deref())
-            })
-            .unwrap_or_default();
-
-        let opts_tuning = DitherTuningValues {
-            deprecated_error_clamp: None,
-            max_error: opts.max_error,
-            noise_scale: opts.noise_scale,
-            chroma_clamp: opts.chroma_clamp,
-            strength: None,
-            gamut: opts.gamut.clone(),
-        };
-        let script_tuning = DitherTuningValues {
-            deprecated_error_clamp: None,
-            max_error: script_result.script_max_error,
-            noise_scale: script_result.script_noise_scale,
-            chroma_clamp: script_result.script_chroma_clamp,
-            strength: script_result.script_strength,
-            gamut: script_result.script_gamut.clone().unwrap_or_default(),
-        };
-        let tuning = crate::api::display::resolve_effective_tuning(
-            &opts_tuning,
-            &script_tuning,
-            &device_tuning,
-            &panel_tuning,
-        );
-
-        let mut render_warnings: Vec<String> = Vec::new();
-        let render_params = crate::api::display::resolve_render_params(
-            script_result.script_colors.as_deref(),
-            script_result.script_colors_actual.as_deref(),
-            effective_script_dither,
-            device_colors,
-            // `resolve_render_params` resolves dither as
-            // `device_config_dither.or(script_dither)`, and an explicit
-            // override already blanked `effective_script_dither` above — so
-            // the override rides in this slot when present, and the device's
-            // configured dither takes it otherwise. Both layers that outrank
-            // the script share this one slot, in their own priority order.
-            dither_override.or(device_dither),
+        let resolved = crate::api::resolution::resolve_render(&render_inputs_for(
+            &opts,
+            &script_result,
             panel_colors.as_deref(),
-            &query_palette,
-            &pre_script_measured_candidates,
-            &tuning,
-            &mut render_warnings,
-        );
+            panel_actual_parsed.as_deref(),
+            panel_dither_config.as_ref(),
+            query_palette,
+        ));
+        // Kept before `into_params` consumes the resolution: the report and
+        // the params must be the same computation, never two.
+        let resolution = resolved.report.clone();
+        let render_params = resolved.into_params();
         // The authoring path's warning channel is the script log, which
         // render_screen returns to the agent — not the server's log stream.
-        for w in render_warnings {
+        for w in &render_params.warnings {
             log.push(format!("[warn] {w}"));
         }
 
@@ -1350,15 +1738,82 @@ impl ScreenStore {
             // may differ from the pre-script winner above.
             measured_source: render_params.measured_source,
             svg: opts.include_svg.then_some(svg),
+            resolution: Some(resolution),
         }
     }
 }
 
+/// Assign this path's bindings to the six rungs of the cascade (spec §2).
+///
+/// Pulled out of `ScreenStore::render` so the assignment can be tested: a pair
+/// of rungs swapped here would still resolve cleanly and quietly preview the
+/// wrong calibration or algorithm, and nothing downstream could tell.
+/// `RenderOpts` is this path's override rung: an agent or the authoring UI
+/// asking "what would this look like".
+fn render_inputs_for<'a>(
+    opts: &RenderOpts,
+    script: &crate::services::content_pipeline::ScriptResult,
+    panel_colors: Option<&str>,
+    panel_colors_actual: Option<&[(u8, u8, u8)]>,
+    panel_dither: Option<&'a PanelDitherConfig>,
+    fallback_palette: Vec<(u8, u8, u8)>,
+) -> crate::api::resolution::RenderInputs<'a> {
+    use crate::api::display::{parse_colors_header, SRC_RENDER_OPTS};
+    use crate::api::resolution::RenderInputs;
+    use crate::models::normalize_algorithm_name;
+
+    let device = opts.device.as_ref();
+    RenderInputs {
+        over: RungSettings {
+            colors_actual: opts.colors_actual.as_deref().map(parse_colors_header),
+            dither: opts.dither.as_deref().map(normalize_algorithm_name),
+            tuning: DitherTuningValues {
+                deprecated_error_clamp: None,
+                max_error: opts.max_error,
+                noise_scale: opts.noise_scale,
+                chroma_clamp: opts.chroma_clamp,
+                strength: opts.strength,
+                gamut: opts.gamut.clone(),
+            },
+            ..Default::default()
+        },
+        device_final: RungSettings::from_cascade(
+            &device.map(|d| d.final_rung.clone()).unwrap_or_default(),
+        ),
+        // `refresh` stays `None`: resolved in content_pipeline.
+        screen: RungSettings::from_script(script),
+        device_base: RungSettings {
+            colors: device
+                .and_then(|d| d.colors.as_deref())
+                .map(parse_colors_header),
+            colors_actual: device
+                .and_then(|d| d.colors_actual.as_deref())
+                .map(parse_colors_header),
+            dither: device
+                .and_then(|d| d.dither.as_deref())
+                .map(normalize_algorithm_name),
+            tuning: device.map(|d| d.tuning.clone()).unwrap_or_default(),
+            refresh: None,
+        },
+        panel: RungSettings {
+            colors: panel_colors.map(parse_colors_header),
+            colors_actual: panel_colors_actual.map(<[_]>::to_vec),
+            ..Default::default()
+        },
+        panel_dither,
+        fallback_palette,
+        // Only `/api/display` has a firmware `Measured-Colors` header.
+        fallback_colors_actual: None,
+        screen_default_refresh: 0,
+        override_source: SRC_RENDER_OPTS,
+    }
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::assets::AssetLoader;
-    use crate::models::config::PanelConfig;
+    use crate::models::config::{PanelConfig, PanelDitherConfig};
     use crate::models::AppConfig;
     use crate::server::SharedConfig;
     use crate::services::screen_repo_manager::tests::test_manager_with_screens_dir;
@@ -1413,6 +1868,71 @@ mod tests {
             .write_file("byonk-builtin/default", "script.lua", b"x", None)
             .unwrap_err();
         assert!(matches!(err, StoreError::ReadOnly { .. }));
+    }
+
+    /// A store over an auto-registered `local` plus an auto-registered
+    /// `examples` holding one screen (`examples/hello`).
+    fn test_store_with_local_and_examples() -> (ScreenStore, PathBuf, PathBuf) {
+        let outer = tempdir_path("screen_store_examples");
+        let local_root = outer.join("local_repo");
+        let examples_root = outer.join("examples_repo");
+        for (root, name) in [(&local_root, "local"), (&examples_root, "examples")] {
+            std::fs::create_dir_all(root).unwrap();
+            std::fs::write(
+                root.join("byonk-screens.yaml"),
+                format!("name: {name}\ndescription: d\nauthor: a\nlicense: MIT\n"),
+            )
+            .unwrap();
+        }
+        let hello = examples_root.join("hello");
+        std::fs::create_dir_all(&hello).unwrap();
+        std::fs::write(
+            hello.join("meta.yaml"),
+            "title: Hello\ndescription: d\nbyonk: \"0.15\"\n",
+        )
+        .unwrap();
+        std::fs::write(hello.join("script.lua"), "return { data = {} }\n").unwrap();
+        std::fs::write(hello.join("screen.svg"), "<svg/>\n").unwrap();
+        let manager =
+            crate::services::screen_repo_manager::tests::test_manager_with_screens_and_examples_dir(
+                &local_root,
+                &examples_root,
+            );
+        let asset_loader = Arc::new(AssetLoader::new(None, None, None));
+        let renderer = Arc::new(RenderService::new(&asset_loader).unwrap());
+        let shared_config: SharedConfig =
+            Arc::new(arc_swap::ArcSwap::from(Arc::new(AppConfig::default())));
+        let pipeline = Arc::new(
+            ContentPipeline::new(shared_config, asset_loader, renderer, manager.clone()).unwrap(),
+        );
+        (
+            ScreenStore::new(manager, pipeline),
+            local_root,
+            examples_root,
+        )
+    }
+
+    #[test]
+    fn auto_registered_examples_rejects_writes_but_copies_to_local() {
+        let (store, local_root, examples_root) = test_store_with_local_and_examples();
+        let err = store
+            .write_file("examples/hello", "script.lua", b"x", None)
+            .unwrap_err();
+        assert!(matches!(err, StoreError::ReadOnly { .. }));
+        assert_eq!(
+            std::fs::read_to_string(examples_root.join("hello/script.lua")).unwrap(),
+            "return { data = {} }\n",
+            "the example must be untouched"
+        );
+        // Copy FROM examples still works.
+        store
+            .copy_screen("examples/hello", "local", "mine")
+            .unwrap();
+        assert!(local_root.join("mine/script.lua").is_file());
+        // ...and the copy is editable.
+        store
+            .write_file("local/mine", "script.lua", b"return {}", None)
+            .unwrap();
     }
 
     #[test]
@@ -1579,6 +2099,156 @@ mod tests {
         assert!(after.binary);
     }
 
+    #[test]
+    fn write_raw_replaces_an_existing_binary_and_refuses_core_files() {
+        let (store, repo_root) = test_store_with_local();
+        store
+            .write_file("local/clock", "logo.png", &[0xFF, 0xD8, 0x00], None)
+            .unwrap();
+        let etag = store
+            .write_raw("local/clock", "logo.png", &[0x89, 0x50, 0xFF], None)
+            .unwrap();
+        assert_eq!(etag, super::etag(&[0x89, 0x50, 0xFF]));
+        assert_eq!(
+            std::fs::read(repo_root.join("clock/logo.png")).unwrap(),
+            [0x89, 0x50, 0xFF]
+        );
+        // etag mismatch still conflicts
+        assert!(matches!(
+            store.write_raw("local/clock", "logo.png", &[1], Some("nope")),
+            Err(StoreError::Conflict)
+        ));
+        for core in ["meta.yaml", "script.lua", "SCREEN.svg"] {
+            assert!(
+                matches!(
+                    store.write_raw("local/clock", core, b"x", None),
+                    Err(StoreError::CoreFile(_))
+                ),
+                "{core}"
+            );
+        }
+        // read-only is reported before anything else
+        assert!(matches!(
+            store.write_raw("byonk-builtin/default", "a.png", b"x", None),
+            Err(StoreError::ReadOnly { .. })
+        ));
+        assert!(matches!(
+            store.write_raw("local/clock", "../x.png", b"x", None),
+            Err(StoreError::Traversal)
+        ));
+    }
+
+    #[test]
+    fn rename_file_moves_an_asset_and_may_enter_a_subdirectory() {
+        let (store, repo_root) = test_store_with_local();
+        store
+            .write_file("local/clock", "a.png", &[0xFF, 0x00], None)
+            .unwrap();
+        store
+            .rename_file("local/clock", "a.png", "img/b.png")
+            .unwrap();
+        assert!(!repo_root.join("clock/a.png").exists());
+        assert_eq!(
+            std::fs::read(repo_root.join("clock/img/b.png")).unwrap(),
+            [0xFF, 0x00]
+        );
+    }
+
+    #[test]
+    fn rename_file_refuses_existing_target_missing_source_core_and_traversal() {
+        let (store, repo_root) = test_store_with_local();
+        store
+            .write_file("local/clock", "a.txt", b"a", None)
+            .unwrap();
+        store
+            .write_file("local/clock", "b.txt", b"b", None)
+            .unwrap();
+        store
+            .write_file("local/clock", "script.lua", b"s", None)
+            .unwrap();
+        assert!(matches!(
+            store.rename_file("local/clock", "a.txt", "b.txt"),
+            Err(StoreError::Conflict)
+        ));
+        assert_eq!(std::fs::read(repo_root.join("clock/b.txt")).unwrap(), b"b");
+        assert!(matches!(
+            store.rename_file("local/clock", "nope.txt", "c.txt"),
+            Err(StoreError::NotFound)
+        ));
+        assert!(matches!(
+            store.rename_file("local/clock", "script.lua", "c.lua"),
+            Err(StoreError::CoreFile(_))
+        ));
+        assert!(matches!(
+            store.rename_file("local/clock", "a.txt", "Meta.yaml"),
+            Err(StoreError::CoreFile(_))
+        ));
+        assert!(repo_root.join("clock/script.lua").exists());
+        assert!(matches!(
+            store.rename_file("local/clock", "a.txt", "../out.txt"),
+            Err(StoreError::Traversal)
+        ));
+        assert!(matches!(
+            store.rename_file("local/clock", "../a.txt", "z.txt"),
+            Err(StoreError::Traversal)
+        ));
+        assert!(repo_root.join("clock/a.txt").exists());
+    }
+
+    /// Renaming a file onto its own name changes nothing and succeeds; a
+    /// rename that only changes letter case works even where the file system
+    /// folds case (macOS, Windows), where the target "exists" as the source.
+    #[test]
+    fn rename_file_onto_itself_is_a_no_op_and_a_case_only_rename_works() {
+        let (store, repo_root) = test_store_with_local();
+        store
+            .write_file("local/clock", "logo.png", b"L", None)
+            .unwrap();
+        store
+            .rename_file("local/clock", "logo.png", "logo.png")
+            .expect("from == to is a no-op");
+        assert_eq!(
+            std::fs::read(repo_root.join("clock/logo.png")).unwrap(),
+            b"L"
+        );
+
+        store
+            .rename_file("local/clock", "logo.png", "Logo.png")
+            .expect("a case-only rename");
+        let names: Vec<String> = std::fs::read_dir(repo_root.join("clock"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"Logo.png".to_string()), "{names:?}");
+        assert!(!names.contains(&"logo.png".to_string()), "{names:?}");
+        assert_eq!(
+            std::fs::read(repo_root.join("clock/Logo.png")).unwrap(),
+            b"L"
+        );
+    }
+
+    /// The walk removes every directory a moved-out screen left empty and
+    /// stops at the repo root, even when the root is empty too.
+    #[test]
+    fn prune_empty_parents_stops_at_the_root() {
+        let base = tempdir_path("prune_empty_parents");
+        std::fs::create_dir_all(base.join("a/b")).unwrap();
+        // The screen dir itself (`a/b/clock`) is already gone.
+        prune_empty_parents(&base, &base.join("a/b/clock"));
+        assert!(!base.join("a").exists());
+        assert!(base.is_dir(), "the repo root was removed");
+        assert_eq!(std::fs::read_dir(&base).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn rename_file_on_a_read_only_repo_is_refused() {
+        let (store, _repo_root) = test_store_with_local();
+        assert!(matches!(
+            store.rename_file("byonk-builtin/default", "a.png", "b.png"),
+            Err(StoreError::ReadOnly { .. })
+        ));
+    }
+
     // --- Task 7: create / copy / rename / delete -------------------------
 
     #[test]
@@ -1673,6 +2343,30 @@ mod tests {
         store.read_file("local/b", "meta.yaml").unwrap();
         store.delete_screen("local/b").unwrap();
         assert!(store.read_file("local/b", "meta.yaml").is_err());
+    }
+
+    /// R2 (site B): the `DEFINING`-files guard in `delete_file` must reject
+    /// a mixed-case match too, not just an exact one — on a case-insensitive
+    /// filesystem (macOS APFS, Windows) a request naming `Script.lua`
+    /// resolves to the same real file as `script.lua`, so accepting it here
+    /// would delete a file that defines the screen.
+    #[test]
+    fn delete_file_rejects_defining_file_regardless_of_case() {
+        let (store, repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "defended", StarterKind::Minimal)
+            .unwrap();
+        let script_path = repo_root.join("defended/script.lua");
+        assert!(script_path.exists());
+
+        let err = store
+            .delete_file("local/defended", "Script.lua")
+            .unwrap_err();
+        assert!(matches!(err, StoreError::Io(_)));
+        assert!(
+            script_path.exists(),
+            "script.lua must survive a case-mismatched delete request"
+        );
     }
 
     #[test]
@@ -2028,6 +2722,38 @@ mod tests {
         assert!(rep.issues.iter().any(|i| i.location.contains("script.lua")));
     }
 
+    /// R1: a Lua syntax error's chunk name must be the file's basename
+    /// (`script.lua`), not mlua's default of the Rust source location of
+    /// the `Lua::load` call (`screen_store.rs:NNN:NN`) — the latter leaks
+    /// byonk's own source path into an error about the user's own typo.
+    #[test]
+    fn lua_syntax_error_chunk_name_is_basename_not_rust_source_location() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "badlua", StarterKind::Minimal)
+            .unwrap();
+        store
+            .write_file("local/badlua", "script.lua", b"end", None)
+            .unwrap(); // syntax error
+        let rep = store.validate("local/badlua");
+        assert!(!rep.ok);
+        let issue = rep
+            .issues
+            .iter()
+            .find(|i| i.location.contains("script.lua"))
+            .expect("lua syntax error should be reported");
+        assert!(
+            issue.message.contains("[string \"script.lua\"]"),
+            "message should carry the basename chunk name, got: {}",
+            issue.message
+        );
+        assert!(
+            !issue.message.contains("screen_store.rs"),
+            "message must not leak byonk's own source path, got: {}",
+            issue.message
+        );
+    }
+
     #[test]
     fn validate_passes_for_starter() {
         let (store, _repo_root) = test_store_with_local();
@@ -2158,14 +2884,14 @@ mod tests {
     /// Minor 6 coverage gap: every other `examples`-handle test uses either
     /// two unrelated tempdirs (`ScreenRepoManager` unit tests) or only
     /// checks `resolve()` (the `server.rs` e2e test) — none actually
-    /// *writes* through the auto-registered `examples` handle against the
+    /// *writes* through (and is refused by) the auto-registered `examples` handle against the
     /// real, production-shaped `<SCREENS_DIR>/../examples` (a genuinely
     /// `..`-bearing path, not a synthetic sibling tempdir). This locks in
     /// what the reviewer verified by reading: the write-path
     /// canonicalization guards handle that root correctly, and a write
     /// really does land where `read_file`/the seeded files agree it should.
     #[test]
-    fn write_through_examples_handle_with_real_derived_dot_dot_root() {
+    fn examples_handle_with_real_derived_dot_dot_root_is_read_only_but_copyable() {
         // `screens_dir` must be NESTED inside a private parent: the derived
         // examples dir is `<SCREENS_DIR>/../examples`, so a screens dir placed
         // directly in the system temp dir would resolve `..` to the temp dir
@@ -2207,24 +2933,26 @@ mod tests {
         );
         let store = ScreenStore::new(manager, pipeline);
 
-        // Write through the auto-registered `examples` handle.
-        store
-            .write_file(
-                "examples/hello",
-                "script.lua",
-                b"-- edited\nreturn {}",
-                None,
-            )
-            .unwrap();
+        // The auto-registered `examples` handle is read-only: a write is
+        // refused and the seeded file is untouched.
+        let before = std::fs::read(examples_dir.join("hello/script.lua")).unwrap();
+        let err = store
+            .write_file("examples/hello", "script.lua", b"-- edited", None)
+            .unwrap_err();
+        assert!(matches!(err, StoreError::ReadOnly { .. }));
+        assert_eq!(
+            std::fs::read(examples_dir.join("hello/script.lua")).unwrap(),
+            before
+        );
 
-        // Read back through the store...
+        // Reading through the `..`-bearing root and copying out of it still work.
         let f = store.read_file("examples/hello", "script.lua").unwrap();
-        assert_eq!(f.bytes, b"-- edited\nreturn {}");
-
-        // ...and confirm it actually landed on disk under the real
-        // `..`-bearing root, not some other location.
-        let on_disk = std::fs::read_to_string(examples_dir.join("hello/script.lua")).unwrap();
-        assert_eq!(on_disk, "-- edited\nreturn {}");
+        assert_eq!(f.bytes, before);
+        store
+            .copy_screen("examples/hello", "local", "hello-copy")
+            .unwrap();
+        let copied = store.read_file("local/hello-copy", "script.lua").unwrap();
+        assert_eq!(copied.bytes, before);
     }
 
     // --- Task 9: render -----------------------------------------------------
@@ -2248,6 +2976,33 @@ mod tests {
         assert!(!res.png.is_empty());
         assert_eq!(res.data["message"], "X");
         assert!(res.log.iter().any(|l| l.contains("hi")));
+    }
+
+    /// A width or height from a request is rejected with a clear error before
+    /// anything is allocated for it: no panic, no huge pixmap.
+    #[test]
+    fn render_rejects_oversized_dimensions() {
+        let (store, _repo_root) = test_store_with_local();
+        store
+            .create_screen("local", "big", StarterKind::Minimal)
+            .unwrap();
+        for (w, h) in [
+            (Some(100_000), None),
+            (None, Some(0)),
+            (Some(5000), Some(5000)),
+        ] {
+            let res = store.render(
+                "local/big",
+                RenderOpts {
+                    width: w,
+                    height: h,
+                    ..RenderOpts::default()
+                },
+            );
+            let err = res.error.expect("oversized dimensions must be an error");
+            assert!(err.message.contains("4096"), "{}", err.message);
+            assert!(res.png.is_empty());
+        }
     }
 
     /// A screen whose SVG is not the panel's size is silently rescaled to fit,
@@ -2470,6 +3225,85 @@ mod tests {
             res.data["colors"],
             serde_json::json!(["#FF0000", "#00FF00", "#0000FF"]),
             "device.colors should be the panel's colors, not the model default"
+        );
+    }
+
+    fn big_panel_store() -> ScreenStore {
+        let mut panels = HashMap::new();
+        panels.insert(
+            "big".to_string(),
+            PanelConfig {
+                name: "Big".to_string(),
+                match_pattern: None,
+                width: Some(1200),
+                height: Some(1600),
+                colors: "#000000,#FFFFFF".to_string(),
+                colors_actual: None,
+                dither: None,
+            },
+        );
+        let (store, _root) = test_store_with_local_and_config(AppConfig {
+            panels,
+            ..AppConfig::default()
+        });
+        store
+            .create_screen("local", "sized", StarterKind::Minimal)
+            .unwrap();
+        store
+    }
+
+    fn png_size(png: &[u8]) -> (u32, u32) {
+        let img = image::load_from_memory(png).expect("valid png");
+        (img.width(), img.height())
+    }
+
+    #[test]
+    fn render_sizes_from_the_named_panel() {
+        let store = big_panel_store();
+        let res = store.render(
+            "local/sized",
+            RenderOpts {
+                panel: Some("big".to_string()),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert_eq!(png_size(&res.png), (1200, 1600));
+    }
+
+    #[test]
+    fn render_explicit_width_overrides_only_the_panel_width() {
+        let store = big_panel_store();
+        let res = store.render(
+            "local/sized",
+            RenderOpts {
+                panel: Some("big".to_string()),
+                width: Some(600),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert_eq!(png_size(&res.png), (600, 1600));
+    }
+
+    #[test]
+    fn render_unknown_panel_uses_model_defaults_and_warns() {
+        let store = big_panel_store();
+        let res = store.render(
+            "local/sized",
+            RenderOpts {
+                panel: Some("nope".to_string()),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert_eq!(png_size(&res.png), (800, 480));
+        assert!(
+            res.log
+                .iter()
+                .any(|l| l.contains("unknown panel 'nope'") && l.contains("model defaults")),
+            "log: {:?}",
+            res.log
         );
     }
 
@@ -2859,20 +3693,20 @@ mod tests {
     }
 
     #[test]
-    fn parse_lua_error_line_extracts_runtime_error_line() {
+    fn error_line_extracts_runtime_error_line() {
         let msg = "Script error: Lua error: runtime error: [string \"...\"]:12: attempt to index a nil value (local 'y')\nstack traceback:\n\t[C]: in metamethod 'index'";
-        assert_eq!(parse_lua_error_line(msg), Some(12));
+        assert_eq!(error_line(msg), Some(12));
     }
 
     #[test]
-    fn parse_lua_error_line_extracts_syntax_error_line() {
+    fn error_line_extracts_syntax_error_line() {
         let msg = "Script error: Lua error: syntax error: [string \"...\"]:1: unexpected symbol near <eof>";
-        assert_eq!(parse_lua_error_line(msg), Some(1));
+        assert_eq!(error_line(msg), Some(1));
     }
 
     #[test]
-    fn parse_lua_error_line_none_when_unparseable() {
-        assert_eq!(parse_lua_error_line("Screen 'x/y' not found"), None);
+    fn error_line_none_when_unparseable() {
+        assert_eq!(error_line("Screen 'x/y' not found"), None);
     }
 
     /// Decode a PNG's `PLTE` chunk back into RGB triples. `render_png_from_svg`
@@ -3067,12 +3901,410 @@ mod tests {
             .find(|l| l.starts_with("[warn]"))
             .unwrap_or_else(|| panic!("expected a [warn] log entry, got: {:?}", res.log));
         assert!(
-            warning_line.contains(crate::api::display::SRC_SCRIPT),
-            "warning must name the script as the mismatched source: {warning_line}"
+            warning_line.contains(crate::api::resolution::Rung::Screen.label()),
+            "warning must name the screen as the mismatched source: {warning_line}"
         );
         assert!(
             warning_line.contains("has 2 usable"),
             "warning must name the mismatched entry count: {warning_line}"
+        );
+    }
+
+    /// A screen that fills the whole canvas with one mid-grey that lies
+    /// between two palette entries. Dithered with any diffusion it comes out
+    /// as a pattern of two inks; with `strength: 0` it comes out flat — so
+    /// the number of distinct colours in the PNG shows whether a `strength`
+    /// setting reached the ditherer.
+    fn write_grey_screen(store: &ScreenStore, name: &str, script_dither: Option<&str>) {
+        store
+            .create_screen("local", name, StarterKind::Minimal)
+            .unwrap();
+        let dither = script_dither
+            .map(|d| format!("dither = \"{d}\","))
+            .unwrap_or_default();
+        let script = format!("return {{ data = {{}}, {dither} refresh_rate = 60 }}");
+        let screen_ref = format!("local/{name}");
+        store
+            .write_file(&screen_ref, "script.lua", script.as_bytes(), None)
+            .unwrap();
+        store
+            .write_file(
+                &screen_ref,
+                "screen.svg",
+                br##"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480"><rect width="800" height="480" fill="#606060"/></svg>"##,
+                None,
+            )
+            .unwrap();
+    }
+
+    fn distinct_colors(png_bytes: &[u8]) -> usize {
+        let img = image::load_from_memory(png_bytes)
+            .expect("render must be a PNG")
+            .to_rgb8();
+        img.pixels()
+            .map(|p| p.0)
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+    }
+
+    fn grey_panel(dither: PanelDitherConfig) -> HashMap<String, PanelConfig> {
+        let mut panels = HashMap::new();
+        panels.insert(
+            "grey-panel".to_string(),
+            PanelConfig {
+                name: "Grey Panel".to_string(),
+                match_pattern: None,
+                width: None,
+                height: None,
+                colors: "#000000,#404040,#808080,#FFFFFF".to_string(),
+                colors_actual: None,
+                dither: Some(dither),
+            },
+        );
+        panels
+    }
+
+    #[test]
+    fn grey_screen_fixture_distinguishes_strength_zero_from_default() {
+        // Guards the fixture the tuning tests below rely on: if a flat fill
+        // and a diffused fill ever stopped differing in colour count, every
+        // one of those tests would pass vacuously.
+        let (store, _repo_root) = test_store_with_local();
+        write_grey_screen(&store, "fixture", None);
+        let diffused = store.render("local/fixture", RenderOpts::default());
+        assert!(diffused.error.is_none(), "{:?}", diffused.error);
+        assert!(
+            distinct_colors(&diffused.png) > 1,
+            "default strength must diffuse"
+        );
+
+        let config = AppConfig {
+            panels: grey_panel(PanelDitherConfig {
+                algorithm: None,
+                defaults: DitherTuningValues {
+                    strength: Some(0.0),
+                    ..Default::default()
+                },
+                algorithms: HashMap::new(),
+            }),
+            ..AppConfig::default()
+        };
+        let (store, _repo_root) = test_store_with_local_and_config(config);
+        write_grey_screen(&store, "fixture", None);
+        let flat = store.render(
+            "local/fixture",
+            RenderOpts {
+                panel: Some("grey-panel".to_string()),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(flat.error.is_none(), "{:?}", flat.error);
+        assert_eq!(distinct_colors(&flat.png), 1, "strength 0 must render flat");
+    }
+
+    #[test]
+    fn device_preview_looks_up_panel_tuning_for_the_algorithm_it_renders_with() {
+        // The device's `final:` dither outranks the screen's, so this renders with
+        // floyd-steinberg. The per-algorithm panel tuning must therefore be
+        // floyd-steinberg's (`strength: 0`, a flat fill), not that of the
+        // atkinson the screen asked for (no entry, so default diffusion).
+        let mut algorithms = HashMap::new();
+        algorithms.insert(
+            "floyd-steinberg".to_string(),
+            DitherTuningValues {
+                strength: Some(0.0),
+                ..Default::default()
+            },
+        );
+        let config = AppConfig {
+            panels: grey_panel(PanelDitherConfig {
+                algorithm: None,
+                defaults: DitherTuningValues::default(),
+                algorithms,
+            }),
+            ..AppConfig::default()
+        };
+        let (store, _repo_root) = test_store_with_local_and_config(config);
+        write_grey_screen(&store, "algo", Some("atkinson"));
+        let res = store.render(
+            "local/algo",
+            RenderOpts {
+                panel: Some("grey-panel".to_string()),
+                device: Some(DevicePreview {
+                    mac: "AA:BB:CC:DD:EE:FF".to_string(),
+                    firmware_version: None,
+                    battery_voltage: None,
+                    rssi: None,
+                    colors: None,
+                    dither: None,
+                    tuning: DitherTuningValues::default(),
+                    refresh: None,
+                    colors_actual: None,
+                    // `final:` outranks the screen's atkinson on the ladder;
+                    // a base-rung device dither no longer does.
+                    final_rung: CascadeValues {
+                        dither: Some("floyd-steinberg".to_string()),
+                        ..Default::default()
+                    },
+                }),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert_eq!(
+            distinct_colors(&res.png),
+            1,
+            "floyd-steinberg's panel tuning (strength 0) must apply"
+        );
+    }
+
+    /// Minimal screen-repo source: `ScriptResult` carries an `Arc` of one, and
+    /// the wiring test needs a result, not a repo.
+    struct NoRepo(crate::models::screen_repo_manifest::ScreenRepoManifest);
+    impl crate::services::screen_repo_loader::ScreenRepoSource for NoRepo {
+        fn read(&self, _rel: &str) -> Option<Vec<u8>> {
+            None
+        }
+        fn screen_paths(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn svg_files(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn manifest(&self) -> &crate::models::screen_repo_manifest::ScreenRepoManifest {
+            &self.0
+        }
+        fn screen_files(&self, _screen_path: &str) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    pub(crate) fn script_result_for_wiring() -> crate::services::content_pipeline::ScriptResult {
+        let manifest = crate::models::screen_repo_manifest::ScreenRepoManifest::from_yaml(
+            "name: t\ndescription: d\nauthor: a\nlicense: MIT\n",
+        )
+        .unwrap();
+        crate::services::content_pipeline::ScriptResult {
+            data: serde_json::Value::Null,
+            refresh_rate: 900,
+            script_refresh_rate: None,
+            screen_default_refresh: 900,
+            skip_update: false,
+            screen_name: "t".into(),
+            source: Arc::new(NoRepo(manifest)),
+            screen_dir: String::new(),
+            params: Default::default(),
+            script_colors: Some(vec!["#000001".into(), "#FFFFFE".into()]),
+            script_colors_actual: Some(vec!["#010101".into(), "#FEFEFE".into()]),
+            script_dither: Some("sierra-lite".into()),
+            script_max_error: Some(0.11),
+            script_noise_scale: Some(0.12),
+            script_chroma_clamp: Some(0.13),
+            script_strength: Some(0.14),
+            script_gamut: None,
+            font_hinting: None,
+            logs: Vec::new(),
+        }
+    }
+
+    /// Every rung carries the value from the binding it is meant to carry.
+    ///
+    /// If this breaks, it means: two bindings were swapped in
+    /// `render_inputs_for`. The resolver would accept that happily and the
+    /// preview would show another source's calibration or algorithm; nothing
+    /// else in the suite compares precedence against the ladder.
+    #[test]
+    fn render_inputs_for_assigns_each_binding_to_its_own_rung() {
+        use crate::api::display::{parse_colors_header, SRC_RENDER_OPTS};
+        let opts = RenderOpts {
+            dither: Some("stucki".into()),
+            max_error: Some(0.91),
+            noise_scale: Some(0.92),
+            chroma_clamp: Some(0.93),
+            strength: Some(0.94),
+            colors_actual: Some("#020202,#FDFDFD".into()),
+            device: Some(DevicePreview {
+                colors: Some("#000003,#FFFFFC".into()),
+                dither: Some("atkinson".into()),
+                tuning: DitherTuningValues {
+                    max_error: Some(0.71),
+                    noise_scale: Some(0.72),
+                    chroma_clamp: Some(0.73),
+                    strength: Some(0.74),
+                    ..Default::default()
+                },
+                colors_actual: Some("#060606,#F9F9F9".into()),
+                final_rung: CascadeValues {
+                    dither: Some("floyd_steinberg".into()),
+                    colors: Some("#000004,#FFFFFB".into()),
+                    colors_actual: Some("#050505,#FAFAFA".into()),
+                    max_error: Some(0.51),
+                    noise_scale: Some(0.52),
+                    chroma_clamp: Some(0.53),
+                    strength: Some(0.54),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..RenderOpts::default()
+        };
+        let panel_actual = parse_colors_header("#030303,#FCFCFC");
+        let fallback = parse_colors_header("#0A0A0A,#F0F0F0");
+        let i = render_inputs_for(
+            &opts,
+            &script_result_for_wiring(),
+            Some("#000002,#FFFFFD"),
+            Some(&panel_actual),
+            None,
+            fallback.clone(),
+        );
+
+        // Override: RenderOpts and nothing else.
+        assert_eq!(
+            i.over.colors_actual,
+            Some(parse_colors_header("#020202,#FDFDFD"))
+        );
+        assert_eq!(i.over.dither.as_deref(), Some("stucki"));
+        assert_eq!(i.over.colors, None);
+        assert_eq!(i.over.tuning.max_error, Some(0.91));
+        assert_eq!(i.over.tuning.noise_scale, Some(0.92));
+        assert_eq!(i.over.tuning.chroma_clamp, Some(0.93));
+        assert_eq!(i.over.tuning.strength, Some(0.94));
+        // Final: the device's `final_rung`.
+        assert_eq!(i.device_final.dither.as_deref(), Some("floyd_steinberg"));
+        assert_eq!(
+            i.device_final.colors,
+            Some(parse_colors_header("#000004,#FFFFFB"))
+        );
+        assert_eq!(
+            i.device_final.colors_actual,
+            Some(parse_colors_header("#050505,#FAFAFA"))
+        );
+        assert_eq!(i.device_final.tuning.max_error, Some(0.51));
+        assert_eq!(i.device_final.tuning.noise_scale, Some(0.52));
+        assert_eq!(i.device_final.tuning.chroma_clamp, Some(0.53));
+        assert_eq!(i.device_final.tuning.strength, Some(0.54));
+        // Screen: the script's return value, normalised.
+        assert_eq!(
+            i.screen.colors,
+            Some(parse_colors_header("#000001,#FFFFFE"))
+        );
+        assert_eq!(
+            i.screen.colors_actual,
+            Some(parse_colors_header("#010101,#FEFEFE"))
+        );
+        assert_eq!(i.screen.dither.as_deref(), Some("sierra-lite"));
+        assert_eq!(i.screen.tuning.max_error, Some(0.11));
+        assert_eq!(i.screen.tuning.noise_scale, Some(0.12));
+        assert_eq!(i.screen.tuning.chroma_clamp, Some(0.13));
+        assert_eq!(i.screen.tuning.strength, Some(0.14));
+        // Device base: the device's own configured values.
+        assert_eq!(
+            i.device_base.colors,
+            Some(parse_colors_header("#000003,#FFFFFC"))
+        );
+        assert_eq!(
+            i.device_base.colors_actual,
+            Some(parse_colors_header("#060606,#F9F9F9"))
+        );
+        assert_eq!(i.device_base.dither.as_deref(), Some("atkinson"));
+        assert_eq!(i.device_base.tuning.max_error, Some(0.71));
+        assert_eq!(i.device_base.tuning.noise_scale, Some(0.72));
+        assert_eq!(i.device_base.tuning.chroma_clamp, Some(0.73));
+        assert_eq!(i.device_base.tuning.strength, Some(0.74));
+        // Panel: its palette and measurement; tuning comes from panel_dither.
+        assert_eq!(i.panel.colors, Some(parse_colors_header("#000002,#FFFFFD")));
+        assert_eq!(i.panel.colors_actual, Some(panel_actual));
+        assert_eq!(i.panel.dither, None);
+        // Fallbacks, and no firmware header on this path.
+        assert_eq!(i.fallback_palette, fallback);
+        assert_eq!(i.fallback_colors_actual, None);
+        assert_eq!(i.override_source, SRC_RENDER_OPTS);
+    }
+
+    /// The device's `final:` rung must reach the rendered pixels through this
+    /// path, not just through `/api/display`. A preview that ignores it shows
+    /// the operator an image their panel will never produce.
+    #[test]
+    fn device_final_strength_reaches_the_rendered_image() {
+        let (store, _repo_root) = test_store_with_local();
+        write_grey_screen(&store, "final", None);
+        let res = store.render(
+            "local/final",
+            RenderOpts {
+                device: Some(DevicePreview {
+                    mac: "AA:BB:CC:DD:EE:FF".to_string(),
+                    // base rung: no diffusion
+                    tuning: DitherTuningValues {
+                        strength: Some(0.0),
+                        ..Default::default()
+                    },
+                    // final rung: force diffusion (only the final rung
+                    // winning can produce more than one colour)
+                    final_rung: CascadeValues {
+                        strength: Some(1.0),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert!(
+            distinct_colors(&res.png) > 1,
+            "final.strength = 1.0 must win over base strength = 0.0, giving a diffused block"
+        );
+    }
+
+    #[test]
+    fn render_opts_strength_override_reaches_the_ditherer() {
+        // Defect 5.4: `strength` is the one tuning number an authoring
+        // render could not override.
+        let (store, _repo_root) = test_store_with_local();
+        write_grey_screen(&store, "strength", None);
+        let res = store.render(
+            "local/strength",
+            RenderOpts {
+                strength: Some(0.0),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert_eq!(distinct_colors(&res.png), 1, "strength 0 must render flat");
+    }
+
+    #[test]
+    fn tuning_override_of_one_field_keeps_the_panels_other_fields() {
+        // Defect 5.3: an override that sets only `max_error` must leave the
+        // panel's `strength` in force, not drop it with the rest of the
+        // panel's block.
+        let config = AppConfig {
+            panels: grey_panel(PanelDitherConfig {
+                algorithm: None,
+                defaults: DitherTuningValues {
+                    strength: Some(0.0),
+                    ..Default::default()
+                },
+                algorithms: HashMap::new(),
+            }),
+            ..AppConfig::default()
+        };
+        let (store, _repo_root) = test_store_with_local_and_config(config);
+        write_grey_screen(&store, "partial", None);
+        let res = store.render(
+            "local/partial",
+            RenderOpts {
+                panel: Some("grey-panel".to_string()),
+                max_error: Some(1.0),
+                ..RenderOpts::default()
+            },
+        );
+        assert!(res.error.is_none(), "{:?}", res.error);
+        assert_eq!(
+            distinct_colors(&res.png),
+            1,
+            "the panel's strength 0 must survive a max_error-only override"
         );
     }
 

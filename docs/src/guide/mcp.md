@@ -75,9 +75,10 @@ Or as a JSON config block (the shape most MCP clients accept):
 | `write_screen_file` | Write one file inside a screen, atomically (supports optimistic-concurrency `if_match`). UTF-8 text only — refuses to overwrite an existing binary asset. |
 | `create_screen` | Scaffold a new screen from the minimal starter (`meta.yaml`, `script.lua`, `screen.svg`). |
 | `copy_screen` | Fork any screen — including read-only builtins and examples — into a writable repo. |
-| `rename_screen` | Move a screen to a different path within its repo. |
+| `rename_screen` | Move a screen to a different path within its repo. Every device whose `screen:` named the old reference is pointed at the new one in `config.yaml`, in the same call, and the result lists them (`rewritten_devices`). When devices use the screen and the config is embedded or read-only (no `CONFIG_FILE`), the rename is refused and nothing moves. |
 | `delete_screen` | Delete a screen and every file in its directory. |
 | `delete_screen_file` | Delete one sibling asset from a screen directory. |
+| `rename_screen_file` | Rename one sibling asset inside a screen directory (the new name may include a subfolder). Refused when the target exists; `meta.yaml`, `script.lua` and `screen.svg` cannot be renamed or be the target. |
 
 `create_screen`, `copy_screen` and `rename_screen` each take the screen's
 location inside a repo — `path`, `to_path` and `new_path` respectively. These
@@ -107,13 +108,15 @@ itself — a screen's dithering targets measured colours whenever they resolve, 
 
 | Argument | Type | What it does |
 |----------|------|----------------|
+| `panel` | string, optional | Panel profile from `panels:`. Sets the render size to the panel's `width`/`height` and supplies its colours and dither. An unknown name falls back to the model defaults and adds a warning to `log`. |
+| `width`, `height` | int, optional | Render size in pixels. Size chain, per axis: explicit `width`/`height`, then the `panel`'s size, then the `model` default (`og` 800x480, `x` 1872x1404). |
 | `image` | `dithered` \| `raw` \| `both` \| `none` | Which image(s) to return. Default `dithered`. `both` returns the dithered image then the pre-dither one, each preceded by a text block naming it. |
 | `image_max_width` | int, optional | Downscale returned image(s) to at most this width, preserving aspect ratio. Never upscales. |
 | `include_data` | bool, default `true` | Return the table the script produced. |
 | `include_svg` | bool, default `false` | Also return the fully expanded SVG that was rasterized. |
 | `data_uris` | `shorten` \| `full` \| `omit` | How to treat embedded base64 `data:` URIs in `data` and the SVG. Default `shorten`. |
 | `use_actual` | bool, optional | Draw the returned PNG in the panel's measured colours instead of the spec colours. Defaults to on whenever measured colours are available. `true` with nothing measured is a no-op, not an error. |
-| `colors_actual` | string, optional | Comma-separated hex, index-parallel to the palette (e.g. `#0A0A0A,#E8E6E0,#A83A30`). Lets you preview a calibration without adding a `panel` to `config.yaml`. A `colors_actual` returned by the screen's own script still wins over this; a length mismatch is ignored (with a warning in the diagnostics' `log`) rather than failing the render. |
+| `colors_actual` | string, optional | Comma-separated hex, index-parallel to the palette (e.g. `#0A0A0A,#E8E6E0,#A83A30`). Lets you preview a calibration without adding a `panel` to `config.yaml`. It takes the cascade's override rung, so **since 0.20.0 it wins over a `colors_actual` returned by the screen's own script** — it used to lose to it, which left no way to preview a calibration against a screen that measures its own. A length mismatch is ignored (with a warning in the diagnostics' `log`) rather than failing the render. |
 
 #### Keeping the response small
 
@@ -182,8 +185,9 @@ Five arguments let the caller decide what a render is worth:
   worth it when you genuinely need the bytes.
 
 The diagnostics also include `measured_source`, naming which layer actually supplied the
-measured colours for that render: `script`, `render_opts` (the `colors_actual` argument
-above), `panel.colors_actual`, or `none`.
+measured colours for that render: `render_opts` (the `colors_actual` argument above),
+`device` (the device's own `colors_actual` or its `final.colors_actual` — new in 0.20.0),
+`script`, `panel.colors_actual`, `Measured-Colors header`, or `none`.
 
 ### Configure a device
 
@@ -196,13 +200,35 @@ one call can change a single setting without disturbing the others. `screen_ref`
 is only required the first time a device is configured.
 
 Besides `screen_ref` the tool covers the device's `panel`, `dither` algorithm,
-`colors` palette, script `params`, `refresh` interval and `name`, the dither
-tuning knobs `max_error`, `noise_scale`, `chroma_clamp` and `strength`, and the
-panel-behaviour flags `temperature_profile`, `maximum_compatibility` and
+`colors` palette, its own `colors_actual` measurement, script `params`,
+`refresh` interval and `name`, the dither tuning knobs `max_error`,
+`noise_scale`, `chroma_clamp`, `strength` and `gamut`, the `final` block, and
+the panel-behaviour flags `temperature_profile`, `maximum_compatibility` and
 `min_png_bytes`. It reaches the same settings as
 `PATCH /api/admin/devices/{key}`, which spells two of them differently: there
 the device is named by the URL rather than by `mac`, and its screen field is
 `screen` rather than `screen_ref`.
+
+`colors_actual`, `gamut` and `final` are new in 0.20.0. `gamut` was
+configurable in `config.yaml` before, but no tool could reach it; `colors_actual`
+on a device is new.
+
+**`final` is where a setting that a screen must not override goes.** Everything
+written directly on the device is a *default*: a screen that returns its own
+`dither`, palette or tuning overrides it, because only the script can inspect
+what it just drew. `final` holds the owner's vetoes, and nothing overrides
+those:
+
+```json
+{ "mac": "44:1B:F6:83:93:38", "dither": "floyd-steinberg",
+  "final": { "dither": "atkinson", "refresh": 1800 } }
+```
+
+`final` accepts exactly `colors`, `colors_actual`, `dither`, `max_error`,
+`noise_scale`, `chroma_clamp`, `strength`, `refresh` and `gamut`, and merges
+field by field like the rest of the call. See the configuration guide's
+[Settings order](configuration.md#settings-order-defaults-and-vetoes) for the
+full ladder.
 
 To take a setting back rather than change it, name it in `clear`:
 
@@ -213,12 +239,18 @@ To take a setting back rather than change it, name it in `clear`:
 A device setting overrides the panel's, so removing it lets the panel's own
 value apply again. Setting and clearing the same field in one call is refused.
 
+**A name in `clear` takes at most one dot**, and a bare name never reaches
+`final`: `"dither"` clears the device's default, `"final.dither"` one field of
+the veto block, and `"final"` the whole block. So clearing `"dither"` on a
+device whose algorithm came from `final` changes nothing the renderer sees.
+
 Names are checked before anything is written: an unknown dither algorithm, an
-unconfigured panel, a malformed `colors` list or a `temperature_profile` other
-than `default`/`a`/`b` all fail with a message listing what is accepted. This
-matters most for `dither` — an unrecognised algorithm name is not an error
-further down the pipeline, it just renders Atkinson, so a typo used to be
-invisible until you looked at the panel.
+unconfigured panel, a malformed `colors` or `colors_actual` list, a negative
+tuning number or a `temperature_profile` other than `default`/`a`/`b` all fail
+with a message listing what is accepted — inside `final` too, where the message
+names the field as `final.dither`. This matters most for `dither` — an
+unrecognised algorithm name is not an error further down the pipeline, it just
+renders Atkinson, so a typo used to be invisible until you looked at the panel.
 
 ## Resources
 
@@ -228,6 +260,12 @@ works from this server's actual rules instead of guessing from stale training da
 - `byonk://reference/lua-api` — every global and function available to `script.lua`.
 - `byonk://reference/svg-templates` — the `screen.svg` templating contract.
 - `byonk://reference/authoring` — how screens, screen repos and writability fit together.
+
+  Each reference is served as an **index plus sections**: reading the URI above returns
+  the introduction and a list of the document's `##` sections, each with its own URI
+  (`byonk://reference/<doc>/<section>`, e.g. `byonk://reference/lua-api/time-functions`)
+  and the `###` headings inside it. Read the section you need rather than the whole
+  document.
 - `byonk://schema/meta.yaml` — the JSON Schema for `meta.yaml`, generated from the same
   type that parses it.
 - `byonk://examples/<screen path>` — one resource per shipped example screen, with the
@@ -242,8 +280,9 @@ general-purpose Lua.
 1. `list_screens` to see what's already there and which repos are writable.
 2. `copy_screen` a builtin or an example into a writable repo as a starting point.
    The built-in screens (`byonk-builtin`) are read-only, so editing one in place
-   fails; forking first is the way in. `examples` is writable directly, but
-   copying still keeps the original example intact as a reference.
+   fails; forking first is the way in. The `examples` repo is read-only too, so
+   copy an example into `local` to change it; the original stays intact as a
+   reference.
 3. Edit with `write_screen_file`.
 4. `render_screen` and read its `log` and `error.line` fields — Lua errors and
    template errors both surface there, pointing at what to fix.

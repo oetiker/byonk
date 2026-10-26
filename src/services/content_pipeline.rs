@@ -22,30 +22,43 @@ pub(crate) struct ResolvedRefresh {
     pub ignored_device_override: Option<u32>,
 }
 
-/// Resolve the effective refresh rate.
-/// Precedence: Lua-returned (>0) > per-device override (>0) > screen default.
+/// Resolve the effective refresh rate on the cascade ladder (spec section 2).
+///
+/// Walked by `api::resolution::resolve` with the shared `ORDER_REFRESH`, so
+/// `refresh` cannot drift out of step with the other settings -- which is the
+/// whole reason the cascade exists. It stays here rather than in
+/// `resolve_render` because the screen's rung is the script's `refresh_rate`
+/// return value, which only exists on this side of the script run (plan
+/// ruling 3).
+///
+/// `0` means "unset" at every layer.
 pub(crate) fn resolve_refresh_rate(
     lua_refresh: u32,
-    device_override: Option<u32>,
+    device_base: Option<u32>,
+    device_final: Option<u32>,
     screen_default: u32,
 ) -> ResolvedRefresh {
-    // `0` means "unset" at every layer of this chain.
-    let device_override = device_override.filter(|&r| r > 0);
-    if lua_refresh > 0 {
-        ResolvedRefresh {
-            rate: lua_refresh,
-            ignored_device_override: device_override,
-        }
-    } else if let Some(r) = device_override {
-        ResolvedRefresh {
-            rate: r,
-            ignored_device_override: None,
-        }
-    } else {
-        ResolvedRefresh {
-            rate: screen_default,
-            ignored_device_override: None,
-        }
+    use crate::api::resolution::{accept_any, resolve, Ladder, Rung, ORDER_REFRESH};
+    let nonzero = |v: Option<u32>| v.filter(|&r| r > 0);
+    let ladder = Ladder {
+        over: None,
+        device_final: nonzero(device_final),
+        screen: nonzero(Some(lua_refresh)),
+        device_base: nonzero(device_base),
+        panel: None,
+        fallback: Some(screen_default),
+    };
+    let resolved = resolve(&ladder, ORDER_REFRESH, accept_any);
+    ResolvedRefresh {
+        rate: resolved.effective.unwrap_or(screen_default),
+        // Only a BASE value displaced by the screen is worth telling the
+        // operator about: a displaced `final.refresh` is impossible, and a
+        // base value displaced by `final` was overridden on purpose by the
+        // same person. Stays until the dev UI's ladder widget shows the same
+        // fact (plan ruling 4).
+        ignored_device_override: (resolved.from == Rung::Screen)
+            .then(|| nonzero(device_base))
+            .flatten(),
     }
 }
 
@@ -55,6 +68,11 @@ pub struct ScriptResult {
     pub data: serde_json::Value,
     /// Refresh rate in seconds
     pub refresh_rate: u32,
+    /// The script's own `refresh_rate`, when it set one (`> 0`) — the screen
+    /// rung of the refresh ladder.
+    pub script_refresh_rate: Option<u32>,
+    /// The screen's `meta.yaml` `refresh`, or 900 — the refresh fallback.
+    pub screen_default_refresh: u32,
     /// If true, no new content - just tell device to check back later
     pub skip_update: bool,
     /// Screen name (a `handle/path` ref), for logging
@@ -135,6 +153,9 @@ pub struct DeviceContext {
     pub dither_gamut_max_compression: Option<f32>,
     /// Per-device refresh override (seconds) from DeviceConfig; 0/None = no override.
     pub refresh_override: Option<u32>,
+    /// The device's `final.refresh` -- the owner's veto on wake-up cadence.
+    /// Outranks the script, unlike [`DeviceContext::refresh_override`].
+    pub refresh_final: Option<u32>,
 }
 
 /// Error from the content pipeline
@@ -272,6 +293,7 @@ impl ContentPipeline {
                 })?;
             if let Some(ctx) = device_ctx.as_mut() {
                 ctx.refresh_override = device_config.refresh;
+                ctx.refresh_final = device_config.device_final().refresh;
             }
             return self.run_resolved(
                 &resolved,
@@ -353,9 +375,14 @@ impl ContentPipeline {
 
         // Use script's refresh rate, device override, or the screen meta default.
         let screen_default = resolved.meta.refresh.unwrap_or(900);
-        let device_override = device_ctx.and_then(|c| c.refresh_override);
-        let refresh =
-            resolve_refresh_rate(lua_result.refresh_rate, device_override, screen_default);
+        let device_base = device_ctx.and_then(|c| c.refresh_override);
+        let device_final = device_ctx.and_then(|c| c.refresh_final);
+        let refresh = resolve_refresh_rate(
+            lua_result.refresh_rate,
+            device_base,
+            device_final,
+            screen_default,
+        );
         let refresh_rate = refresh.rate;
         if let Some(ignored) = refresh.ignored_device_override {
             tracing::warn!(
@@ -382,6 +409,8 @@ impl ContentPipeline {
         Ok(ScriptResult {
             data: lua_result.data,
             refresh_rate,
+            script_refresh_rate: (lua_result.refresh_rate > 0).then_some(lua_result.refresh_rate),
+            screen_default_refresh: screen_default,
             skip_update: lua_result.skip_update,
             screen_name,
             source: resolved.source.clone(),
@@ -812,18 +841,18 @@ mod refresh_tests {
 
     #[test]
     fn lua_wins_over_override_and_default() {
-        assert_eq!(resolve_refresh_rate(120, Some(600), 900).rate, 120);
+        assert_eq!(resolve_refresh_rate(120, Some(600), None, 900).rate, 120);
     }
 
     #[test]
     fn override_wins_over_default_when_lua_zero() {
-        assert_eq!(resolve_refresh_rate(0, Some(600), 900).rate, 600);
+        assert_eq!(resolve_refresh_rate(0, Some(600), None, 900).rate, 600);
     }
 
     #[test]
     fn zero_override_is_ignored() {
-        assert_eq!(resolve_refresh_rate(0, Some(0), 900).rate, 900);
-        assert_eq!(resolve_refresh_rate(0, None, 900).rate, 900);
+        assert_eq!(resolve_refresh_rate(0, Some(0), None, 900).rate, 900);
+        assert_eq!(resolve_refresh_rate(0, None, None, 900).rate, 900);
     }
 
     /// A script keeps the last word on how often it wants to be run — only it
@@ -835,7 +864,7 @@ mod refresh_tests {
     /// why the device keeps checking back on the screen's schedule.
     #[test]
     fn a_displaced_device_override_is_reported() {
-        let r = resolve_refresh_rate(120, Some(600), 900);
+        let r = resolve_refresh_rate(120, Some(600), None, 900);
         assert_eq!(r.rate, 120, "the script still wins");
         assert_eq!(
             r.ignored_device_override,
@@ -847,7 +876,7 @@ mod refresh_tests {
     #[test]
     fn nothing_is_reported_when_the_device_override_is_used() {
         assert_eq!(
-            resolve_refresh_rate(0, Some(600), 900).ignored_device_override,
+            resolve_refresh_rate(0, Some(600), None, 900).ignored_device_override,
             None
         );
     }
@@ -856,7 +885,7 @@ mod refresh_tests {
     /// the script displaced and must not be reported as one.
     #[test]
     fn a_zero_device_override_is_not_a_displaced_value() {
-        let r = resolve_refresh_rate(120, Some(0), 900);
+        let r = resolve_refresh_rate(120, Some(0), None, 900);
         assert_eq!(r.rate, 120);
         assert_eq!(r.ignored_device_override, None);
     }
@@ -864,7 +893,55 @@ mod refresh_tests {
     #[test]
     fn no_device_override_reports_nothing() {
         assert_eq!(
-            resolve_refresh_rate(120, None, 900).ignored_device_override,
+            resolve_refresh_rate(120, None, None, 900).ignored_device_override,
+            None
+        );
+    }
+
+    /// Spec section 2: bringing `refresh` into the cascade at the base rung is
+    /// a ZERO behaviour change. The script still wins, and the displaced
+    /// device value is still reported so the operator can be told it is inert.
+    #[test]
+    fn refresh_script_still_beats_the_device_base_rung() {
+        let r = resolve_refresh_rate(120, Some(600), None, 900);
+        assert_eq!(r.rate, 120);
+        assert_eq!(r.ignored_device_override, Some(600));
+    }
+
+    /// The one new capability: an owner's veto on how often a battery-powered
+    /// display wakes up.
+    #[test]
+    fn final_refresh_beats_the_script() {
+        let r = resolve_refresh_rate(120, Some(600), Some(1800), 900);
+        assert_eq!(r.rate, 1800);
+        assert_eq!(
+            r.ignored_device_override, None,
+            "nothing outranks the final rung, so nothing it displaces is `ignored`"
+        );
+    }
+
+    /// `0` still means "unset" at every layer, including the new one.
+    #[test]
+    fn a_zero_final_refresh_is_unset_not_a_veto_of_zero() {
+        let r = resolve_refresh_rate(0, Some(600), Some(0), 900);
+        assert_eq!(r.rate, 600, "the base rung must still apply");
+    }
+
+    #[test]
+    fn an_empty_ladder_falls_back_to_the_screen_default() {
+        assert_eq!(resolve_refresh_rate(0, None, None, 900).rate, 900);
+    }
+
+    /// Plan ruling 4: the log line stays until the ladder widget ships, and
+    /// now reports a displaced BASE value only.
+    #[test]
+    fn only_a_displaced_base_value_is_reported_as_ignored() {
+        assert_eq!(
+            resolve_refresh_rate(120, None, None, 900).ignored_device_override,
+            None
+        );
+        assert_eq!(
+            resolve_refresh_rate(120, Some(0), None, 900).ignored_device_override,
             None
         );
     }

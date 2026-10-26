@@ -457,7 +457,50 @@ async fn test_delete_screen_file_end_to_end() {
 }
 
 #[tokio::test]
-async fn test_tools_list_reports_exactly_the_14_authoring_tools() {
+async fn test_rename_screen_file_end_to_end() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = TestApp::new_admin_with_screens("secret", tmp.path());
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+    client
+        .call_tool(
+            "create_screen",
+            serde_json::json!({ "handle": "local", "path": "ren" }),
+        )
+        .await;
+    client
+        .call_tool(
+            "write_screen_file",
+            serde_json::json!({ "screen_ref": "local/ren", "file": "a.txt", "content": "x" }),
+        )
+        .await;
+
+    let renamed = client
+        .call_tool(
+            "rename_screen_file",
+            serde_json::json!({ "screen_ref": "local/ren", "from": "a.txt", "to": "img/b.txt" }),
+        )
+        .await;
+    assert_eq!(structured(&renamed)["ok"], true, "{renamed}");
+    let read = client
+        .call_tool(
+            "read_screen_file",
+            serde_json::json!({ "screen_ref": "local/ren", "file": "img/b.txt" }),
+        )
+        .await;
+    assert_ne!(read["isError"], serde_json::json!(true), "{read}");
+
+    let core = client
+        .call_tool(
+            "rename_screen_file",
+            serde_json::json!({ "screen_ref": "local/ren", "from": "img/b.txt", "to": "script.lua" }),
+        )
+        .await;
+    assert_eq!(core["isError"], true, "{core}");
+}
+
+#[tokio::test]
+async fn test_tools_list_reports_exactly_the_15_authoring_tools() {
     // Cleanup 5: McpTestClient::list_tools existed but was never called —
     // an entire `tools/list` response class had no coverage. Pin the
     // documented tool count and names down.
@@ -486,6 +529,7 @@ async fn test_tools_list_reports_exactly_the_14_authoring_tools() {
         "rename_screen",
         "delete_screen",
         "delete_screen_file",
+        "rename_screen_file",
         // render
         "render_screen",
         "validate_screen",
@@ -498,9 +542,9 @@ async fn test_tools_list_reports_exactly_the_14_authoring_tools() {
 
     assert_eq!(
         names, expected,
-        "tools/list must report exactly these 14 tools"
+        "tools/list must report exactly these 15 tools"
     );
-    assert_eq!(tools.len(), 14, "no duplicate tool names");
+    assert_eq!(tools.len(), 15, "no duplicate tool names");
 }
 
 #[tokio::test]
@@ -1539,9 +1583,9 @@ panels:
 async fn test_render_screen_wrong_length_colors_actual_falls_through_to_the_panel() {
     // The reason the authoring path PREPENDS a `render_opts` candidate to
     // the chain instead of collapsing the chain to a single winner before
-    // resolving: the length rule lives inside `resolve_measured_colors`'s
-    // loop, so a wrong-length render option is DISCARDED and the walk
-    // continues to `panel.colors_actual` — it does not kill the calibration
+    // resolving: the length rule is the `colors_actual` ladder's `accept`
+    // in `api::resolution::resolve_render`, so a wrong-length render option is
+    // DISCARDED and the walk continues to `panel.colors_actual` — it does not kill the calibration
     // outright, and it does not fail the render.
     //
     // No other test in the tree has this discriminating power: a future
@@ -1742,4 +1786,50 @@ async fn test_configure_device_needs_a_screen_to_create() {
         result.to_string().contains("screen_ref"),
         "the error must name the field that would fix it: {result}"
     );
+}
+
+#[tokio::test]
+async fn test_render_screen_takes_its_size_from_the_panel() {
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = r##"
+admin:
+  token: secret
+panels:
+  tall:
+    name: "Tall"
+    width: 1200
+    height: 1600
+    colors: "#000000,#FFFFFF"
+"##;
+    let (app, _config_path) = TestApp::new_with_config_yaml(yaml, dir.path());
+    let client = McpTestClient::new(&app, Some("secret"));
+    client.initialize().await;
+
+    let size = |result: &serde_json::Value| {
+        use base64::Engine;
+        let block = image_blocks(result).remove(0);
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(block["data"].as_str().unwrap())
+            .unwrap();
+        let img = image::load_from_memory(&bytes).unwrap();
+        (img.width(), img.height())
+    };
+
+    let from_panel = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({ "screen_ref": "byonk-builtin/default", "panel": "tall" }),
+        )
+        .await;
+    assert_eq!(size(&from_panel), (1200, 1600), "{from_panel}");
+
+    let width_override = client
+        .call_tool(
+            "render_screen",
+            serde_json::json!({
+                "screen_ref": "byonk-builtin/default", "panel": "tall", "width": 600
+            }),
+        )
+        .await;
+    assert_eq!(size(&width_override), (600, 1600));
 }

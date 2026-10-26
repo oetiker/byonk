@@ -69,7 +69,7 @@ const REPO_SCHEMES: &[&str] = &["https://", "http://", "git://", "ssh://", "file
 /// URL forms and scp-like `user@host:path` (e.g. `git@github.com:o/r.git`).
 /// Rejects schemeless values (`github.com/o/r`) and bare paths (`/srv/x`,
 /// `./x`): a local repository must be given explicitly as `file:///path`.
-fn validate_repo(repo: &str) -> Result<(), FetchError> {
+pub fn validate_repo(repo: &str) -> Result<(), FetchError> {
     if REPO_SCHEMES.iter().any(|s| repo.starts_with(s)) {
         return Ok(());
     }

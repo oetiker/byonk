@@ -6,6 +6,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Trait for device metadata storage
+// async_trait-generated code trips clippy::double_must_use (new lint in Rust 1.99).
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait DeviceRegistry: Send + Sync {
     /// Store or update device metadata

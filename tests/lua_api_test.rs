@@ -742,7 +742,7 @@ mod lua_unit_tests {
     fn test_script_colors_actual_length_mismatch_appears_in_log_and_falls_back() {
         // The script returns a 4-entry palette but only 2 measured colours.
         // The runtime itself does not judge lengths — it just carries the
-        // value through unchanged; Task 4's `resolve_render_params` is what
+        // value through unchanged; the cascade's `colors_actual` ladder is what
         // turns the mismatch into a fallback + warning (see
         // `services::screen_store::tests::
         // render_script_colors_actual_length_mismatch_falls_back_to_panel_and_logs_warning`
@@ -4023,5 +4023,248 @@ mod font_hinting_tests {
                 "`false` must stay off on grey_count {grey_count}"
             );
         }
+    }
+}
+
+// ============================================================================
+// `device.*` before the script runs: the `final:` veto is visible
+// ============================================================================
+//
+// A `final:` block is the owner's veto, so a script told "sierra" while the
+// panel renders atkinson is being lied to. The pre-script `device` table
+// resolves the device's two rungs, `final:` over base; the screen rung stays
+// absent because the script is about to return it.
+
+mod pre_script_device_context {
+    use super::common;
+    use axum::http::StatusCode;
+    use byonk::assets::AssetLoader;
+    use byonk::models::AppConfig;
+    use byonk::server::{create_app_state_with_config, AppState};
+    use byonk::services::screen_store::{DevicePreview, RenderOpts};
+    use std::sync::Arc;
+
+    const AUTH: (&str, &str) = ("Authorization", "Bearer secret");
+    const WITH_FINAL: &str = "AA:BB:CC:DD:EE:FF";
+    const WITHOUT_FINAL: &str = "BB:CC:DD:EE:FF:AA";
+    const FAILING: &str = "CC:DD:EE:FF:AA:BB";
+    const SCREEN: &str = "local/probe";
+
+    /// The script reports what it was told as `algorithm|noise_scale|colors`
+    /// and also hands the algorithm back as its own `dither`, which puts the
+    /// value it saw into the screen rung of the dev resolution report.
+    const SCRIPT: &str = r#"
+if string.upper(device.mac) == "CC:DD:EE:FF:AA:BB" then error("probe failure") end
+local probe = device.dither.algorithm .. "|" .. tostring(device.dither.noise_scale)
+  .. "|" .. table.concat(device.colors, ",")
+  .. "|" .. (device.colors_actual and table.concat(device.colors_actual, ",") or "-")
+return { data = { probe = probe }, dither = device.dither.algorithm }
+"#;
+
+    fn state(dir: &std::path::Path) -> AppState {
+        let repo = dir.join("local");
+        let screen = repo.join("probe");
+        std::fs::create_dir_all(&screen).unwrap();
+        std::fs::write(
+            repo.join("byonk-screens.yaml"),
+            "name: local\ndescription: Probe.\nauthor: test\nlicense: MIT\n",
+        )
+        .unwrap();
+        std::fs::write(
+            screen.join("meta.yaml"),
+            format!(
+                "title: Probe\ndescription: Probe.\nbyonk: \"{}\"\nrefresh: 1800\n",
+                byonk::models::compat::engine_compat_req()
+            ),
+        )
+        .unwrap();
+        std::fs::write(screen.join("script.lua"), SCRIPT).unwrap();
+        std::fs::write(
+            screen.join("screen.svg"),
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" width="800" height="480">
+  <text x="10" y="40">PROBE[{{ data.probe }}]</text>
+</svg>
+"##,
+        )
+        .unwrap();
+        let yaml = format!(
+            "\
+admin:
+  token: secret
+screen_repos:
+  local:
+    path: {repo}
+panels:
+  trmnl_x:
+    name: TRMNL X
+    colors: '#000000,#555555,#AAAAAA,#FFFFFF'
+    dither:
+      atkinson:
+        noise_scale: 0.25
+      sierra:
+        noise_scale: 0.75
+devices:
+  '{WITH_FINAL}':
+    screen: {SCREEN}
+    panel: trmnl_x
+    dither: sierra
+    colors: '#111111,#EEEEEE'
+    final:
+      dither: atkinson
+      colors: '#000000,#FFFFFF'
+  '{WITHOUT_FINAL}':
+    screen: {SCREEN}
+    panel: trmnl_x
+    dither: sierra
+    colors: '#111111,#EEEEEE'
+    colors_actual: '#101010,#EFEFEF'
+    noise_scale: 0.5
+  '{FAILING}':
+    screen: {SCREEN}
+    panel: trmnl_x
+    colors: '#111111,#EEEEEE'
+    final:
+      colors: '#000000,#FFFFFF'
+",
+            repo = repo.display()
+        );
+        let config_path = dir.join("config.yaml");
+        std::fs::write(&config_path, yaml).unwrap();
+        let loader = Arc::new(AssetLoader::new(None, None, Some(config_path)));
+        let config = AppConfig::load_from_assets(&loader).expect("config");
+        create_app_state_with_config(loader, config).expect("state")
+    }
+
+    const VETOED: &str = "atkinson|0.25|#000000,#FFFFFF|-";
+    // Base tuning (noise_scale 0.5, beating the panel's sierra 0.75) and the
+    // base measurement both reach the script.
+    const UNVETOED: &str = "sierra|0.5|#111111,#EEEEEE|#101010,#EFEFEF";
+
+    async fn probe_via_api_display(app: &common::TestApp, mac: &str) -> String {
+        let key = app.register_device(mac).await;
+        let headers = common::fixtures::display_headers(mac, &key);
+        let r = app
+            .get_with_headers("/api/display", &common::fixtures::as_str_pairs(&headers))
+            .await;
+        assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+        let json: serde_json::Value = r.json();
+        let cached = app
+            .content_cache
+            .get(json["filename"].as_str().unwrap())
+            .expect("cached content");
+        let svg = cached.rendered_svg;
+        let start = svg.find("PROBE[").expect("probe text in the SVG") + "PROBE[".len();
+        svg[start..start + svg[start..].find(']').unwrap()].to_string()
+    }
+
+    async fn dither_the_script_returned_via_dev_render(app: &common::TestApp, mac: &str) -> String {
+        let body = format!(r#"{{"device":"{mac}"}}"#);
+        let r = app.post_json("/dev/api/render", &[AUTH], &body).await;
+        assert!(r.status.is_success(), "{} {}", r.status, r.text());
+        let raw = r
+            .headers
+            .get("x-byonk-resolution")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_str(raw).unwrap();
+        report["dither"]["rungs"]["screen"]["value"]
+            .as_str()
+            .expect("the script's dither shows up in the screen rung")
+            .to_string()
+    }
+
+    async fn probe_via_screen_store(state: &AppState, mac: &str) -> String {
+        let config = state.config.load_full();
+        let dc = config.get_device_config(mac).unwrap();
+        let opts = RenderOpts {
+            model: "og".to_string(),
+            panel: dc.panel.clone(),
+            device: Some(DevicePreview {
+                mac: mac.to_string(),
+                colors: dc.colors.clone(),
+                colors_actual: dc.colors_actual.clone(),
+                dither: dc.dither.clone(),
+                tuning: byonk::models::DitherTuningValues {
+                    deprecated_error_clamp: None,
+                    max_error: dc.max_error,
+                    noise_scale: dc.noise_scale,
+                    chroma_clamp: dc.chroma_clamp,
+                    strength: dc.strength,
+                    gamut: dc.gamut.clone(),
+                },
+                final_rung: dc.device_final(),
+                ..DevicePreview::default()
+            }),
+            ..RenderOpts::default()
+        };
+        let store = state.screen_store.clone();
+        let result = tokio::task::spawn_blocking(move || store.render(SCREEN, opts))
+            .await
+            .unwrap();
+        assert!(result.error.is_none(), "{:?}", result.error);
+        result.data["probe"].as_str().unwrap().to_string()
+    }
+
+    /// The headline: the script is told what the panel will render.
+    #[tokio::test]
+    async fn a_script_sees_the_final_veto_on_all_three_pre_script_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path());
+        let app = common::TestApp::from_state(state.clone());
+
+        assert_eq!(probe_via_api_display(&app, WITH_FINAL).await, VETOED);
+        assert_eq!(probe_via_screen_store(&state, WITH_FINAL).await, VETOED);
+        assert_eq!(
+            dither_the_script_returned_via_dev_render(&app, WITH_FINAL).await,
+            "atkinson"
+        );
+    }
+
+    /// No `final:` block: the script is told the device's base values on every
+    /// path — colours, measurement and tuning included. The preview is given
+    /// the same base tuning and measurement the admin handler hands it, so a
+    /// site that drops either reports the panel's 0.75 / no measurement.
+    #[tokio::test]
+    async fn a_device_without_final_is_told_its_base_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path());
+        let app = common::TestApp::from_state(state.clone());
+
+        assert_eq!(probe_via_api_display(&app, WITHOUT_FINAL).await, UNVETOED);
+        assert_eq!(
+            probe_via_screen_store(&state, WITHOUT_FINAL).await,
+            UNVETOED
+        );
+        assert_eq!(
+            dither_the_script_returned_via_dev_render(&app, WITHOUT_FINAL).await,
+            "sierra"
+        );
+    }
+
+    /// The error screen is dithered against the same palette the render would
+    /// have used: a device's `final:` colours beat its base colours there too.
+    #[tokio::test]
+    async fn the_error_screen_honours_the_final_colours() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path());
+        let app = common::TestApp::from_state(state.clone());
+
+        let key = app.register_device(FAILING).await;
+        let headers = common::fixtures::display_headers(FAILING, &key);
+        let r = app
+            .get_with_headers("/api/display", &common::fixtures::as_str_pairs(&headers))
+            .await;
+        assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+        let json: serde_json::Value = r.json();
+        let cached = app
+            .content_cache
+            .get(json["filename"].as_str().unwrap())
+            .expect("cached content");
+        assert_eq!(
+            cached.colors,
+            Some(vec![(0, 0, 0), (255, 255, 255)]),
+            "final colours, not the base (#111111,#EEEEEE)"
+        );
     }
 }

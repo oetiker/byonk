@@ -37,6 +37,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: corepack enable
+      - name: Build the dev UI
+        run: make webui
+
       - name: Check formatting
         run: cargo fmt --check
 
@@ -63,8 +70,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: corepack enable
+      - name: Build the dev UI
+        run: make webui
+
       - name: Run tests
         run: cargo test --workspace
+
+      # After the Rust suite, not beside it: the UI journeys time out under load.
+      # The bundle was built above, so run the tests without `make webui-test`'s rebuild.
+      - name: Run UI tests
+        run: cd webui && pnpm run test
 
   build:
     name: Build
@@ -85,6 +104,13 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: corepack enable
+      - name: Build the dev UI
+        run: make webui
 
       - name: Build
         run: cargo build

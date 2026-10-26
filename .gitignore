@@ -38,3 +38,11 @@ tools/ha-vm/ssh/
 # source tree — never commit them.
 screens/byonk-screens.yaml
 /examples/
+
+# Superpowers SDD working files (specs, plans, per-task briefs and ledger)
+.superpowers/
+
+# webui/dist is a build.rs-time dependency built by `make webui`, not
+# committed; webui/node_modules is the usual pnpm install output.
+webui/dist/
+webui/node_modules/

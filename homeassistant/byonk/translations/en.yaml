@@ -8,3 +8,11 @@ configuration:
   log_level:
     name: Log level
     description: Verbosity of the Byonk server log.
+  dev_username:
+    name: Dev UI username
+    description: >-
+      Only needed to open the screen editor from outside Home Assistant
+      (http://<host>:3000/dev/). Inside Home Assistant use the Byonk sidebar entry.
+  dev_password:
+    name: Dev UI password
+    description: Password for the username above. Leave both blank to disable the external login.

@@ -137,6 +137,9 @@ fn send_http_request(spec: HttpRequestSpec) -> Result<HttpOutcome, String> {
         client_builder.redirect(reqwest::redirect::Policy::none())
     };
 
+    // Accepted risk (CodeQL `rust/disabled-certificate-check`, dismissed): only
+    // a screen script that explicitly asks for it gets this, for devices on a
+    // LAN with self-signed certificates, and every such request is logged.
     if spec.danger_accept_invalid_certs {
         tracing::warn!(url = %spec.url, "Accepting invalid TLS certificates - this is insecure!");
         client_builder = client_builder.danger_accept_invalid_certs(true);

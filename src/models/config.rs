@@ -395,7 +395,7 @@ impl<'de> Deserialize<'de> for PanelDitherConfig {
                             defaults.max_error = Some(map.next_value()?);
                         }
                         "error_clamp" => {
-                            // Removed in 0.18.0; captured, warned about and
+                            // Removed in 0.20.0; captured, warned about and
                             // ignored. Without this arm it would fall through
                             // to the algorithm-name branch below and fail to
                             // parse as a sub-map.
@@ -802,7 +802,7 @@ impl AppConfig {
     /// they are not errors, because the config is still valid — the key is
     /// simply ignored.
     pub fn deprecation_warnings(&self) -> Vec<String> {
-        const RENAME_NOTE: &str = "`error_clamp` was removed in 0.18.0 and is IGNORED. \
+        const RENAME_NOTE: &str = "`error_clamp` was removed in 0.20.0 and is IGNORED. \
              It bounded the resulting pixel value; the replacement `max_error` bounds the \
              accumulated error, so the useful range moved from around 0.1 to around 1.0. \
              Delete the key to take the default, or set `max_error` if you have retuned it.";

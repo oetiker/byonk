@@ -8,7 +8,7 @@ description: >
   against its own local black and white — dark-frame and flat-field
   correction from a single hand-held shot. Photograph it square-on and
   measure; the exposure and the evenness of the light barely matter.
-byonk: "0.19"
+byonk: "0.20"
 refresh: 3600
 params:
   tiles:

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### New
+
+### Changed
+
+### Fixed
+
+## 0.20.0 - 2026-10-26
+
 ### Breaking
 
 - **A key byonk does not recognise in a device entry now stops byonk from starting.** Device entries in `config.yaml` used to ignore any key they did not know, so a typo such as `dithr: atkinson` or `strenght: 0.8` changed nothing and said nothing: the display simply kept its old look. Byonk now refuses to start and names the device and the key, for example ``Invalid config.yaml: devices.kitchen: unknown field `dithr` ``. The same applies inside a device's `gamut:` block and inside `final:`'s `gamut:` block. A YAML merge key (`<<:`) inside a device entry was never applied and is now reported the same way.

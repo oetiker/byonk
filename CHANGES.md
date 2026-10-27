@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An unregistered device shows its registration code again.** Since 0.10.0 the built-in default screen showed only the BYONK picture, without the code you need to register the device, because the code box had been left inside an SVG comment. The code now appears in a dark box in the lower half of the screen.
+
 ## 0.20.0 - 2026-10-26
 
 ### Breaking

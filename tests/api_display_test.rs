@@ -354,11 +354,43 @@ async fn test_unregistered_device_shows_default_device_screen_with_code() {
     // so the device can be onboarded (e.g. in Home Assistant).
     let expected_code = ApiKey::new(api_key).registration_code();
     let hyphenated = format!("{}-{}", &expected_code[..5], &expected_code[5..]);
+    // Look only at drawn <text> content: a code that ends up inside an XML
+    // comment is in the SVG source but never reaches the panel.
+    let drawn = drawn_text(&cached.rendered_svg);
     assert!(
-        cached.rendered_svg.contains(&hyphenated),
-        "Rendered content should contain the registration code '{hyphenated}', got:\n{}",
-        cached.rendered_svg
+        drawn.iter().any(|t| t.contains(&hyphenated)),
+        "The screen should draw the registration code '{hyphenated}'; drawn text: {drawn:?}"
     );
+}
+
+/// The content of every `<text>` element, i.e. what the renderer draws.
+/// Comments are separate XML events, so text inside them is not collected.
+fn drawn_text(svg: &str) -> Vec<String> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_str(svg);
+    let mut texts = Vec::new();
+    let mut depth = 0usize;
+    loop {
+        match reader
+            .read_event()
+            .expect("rendered SVG is well-formed XML")
+        {
+            Event::Start(e) if e.local_name().as_ref() == b"text" => {
+                depth += 1;
+                texts.push(String::new());
+            }
+            Event::End(e) if e.local_name().as_ref() == b"text" => depth -= 1,
+            Event::Text(t) if depth > 0 => {
+                let s = t.decode().expect("text is valid UTF-8");
+                texts.last_mut().unwrap().push_str(&s);
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    texts
 }
 
 /// A device that is not in `config.devices` is answered with the registration

@@ -5,7 +5,8 @@
     // Detect current version from URL path
     function getCurrentVersion() {
         const path = window.location.pathname;
-        const match = path.match(/\/byonk\/(v[\d.]+|dev)\//);
+        // latest/ is a copy of the newest release, published for stable links.
+        const match = path.match(/\/byonk\/(v[\d.]+|dev|latest)\//);
         return match ? match[1] : null;
     }
 
@@ -31,7 +32,7 @@
         select.addEventListener('change', function() {
             // Preserve the current sub-page path when switching versions.
             const currentPath = window.location.pathname;
-            const pageMatch = currentPath.match(/\/byonk\/(?:v[\d.]+|dev)\/(.*)$/);
+            const pageMatch = currentPath.match(/\/byonk\/(?:v[\d.]+|dev|latest)\/(.*)$/);
             const page = pageMatch ? pageMatch[1] : '';
             // Both the option value and `page` originate from the DOM/URL, so
             // navigate only when the whole target is a plain root-relative path:
@@ -81,7 +82,8 @@
                 if (menuBar) {
                     const rightButtons = menuBar.querySelector('.right-buttons');
                     if (rightButtons) {
-                        const selector = createVersionSelector(data.versions, currentVersion);
+                        const shown = currentVersion === 'latest' ? data.latest : currentVersion;
+                        const selector = createVersionSelector(data.versions, shown);
                         rightButtons.insertBefore(selector, rightButtons.firstChild);
                     }
                 }

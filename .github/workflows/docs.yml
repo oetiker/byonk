@@ -92,7 +92,7 @@ jobs:
     if: ${{ inputs.backfill }}
     strategy:
       matrix:
-        version: [v0.8.0, v0.7.1, v0.6.2, v0.5.3]
+        version: [v0.20.0, v0.19.0, v0.18.0, v0.17.1]
       fail-fast: false
     steps:
       - uses: actions/checkout@v7
@@ -112,6 +112,17 @@ jobs:
           key: ${{ runner.os }}-cargo-docs-${{ matrix.version }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-docs-
+
+      # From 0.20.0 on, build.rs embeds webui/dist and fails without it.
+      - uses: actions/setup-node@v4
+        if: hashFiles('webui/package.json') != ''
+        with:
+          node-version: "24"
+      - name: Build the dev UI
+        if: hashFiles('webui/package.json') != ''
+        run: |
+          corepack enable
+          make webui
 
       - name: Build Byonk
         run: cargo build --release
@@ -224,22 +235,10 @@ jobs:
 
       - name: Mirror existing GitHub Pages
         run: |
-          mkdir -p site
-          # Try to mirror existing site, but don't fail if it doesn't exist
-          wget --mirror --no-parent --no-host-directories \
-               --directory-prefix=site \
-               --reject="index.html?*" \
-               --execute robots=off \
-               --quiet \
-               "$PAGES_URL/" 2>/dev/null || echo "No existing site to mirror (first deployment?)"
-
-          # Clean up wget artifacts
-          find site -name "*.tmp" -delete 2>/dev/null || true
-          find site -name "index.html\?*" -delete 2>/dev/null || true
-
-          # Show what we got
+          chmod +x .github/scripts/manage-doc-versions.sh
+          .github/scripts/manage-doc-versions.sh site/byonk mirror "$PAGES_URL"
           echo "Existing site contents:"
-          ls -la site/ || echo "(empty)"
+          ls -la site/byonk/ || echo "(empty)"
 
       - name: Copy version selector assets to new docs
         run: |
@@ -263,6 +262,7 @@ jobs:
           chmod +x .github/scripts/manage-doc-versions.sh
           .github/scripts/manage-doc-versions.sh site/byonk cull
           .github/scripts/manage-doc-versions.sh site/byonk update-json
+          .github/scripts/manage-doc-versions.sh site/byonk alias-latest
           .github/scripts/manage-doc-versions.sh site/byonk generate-redirect
 
       - name: Show final site structure
@@ -332,6 +332,7 @@ jobs:
           chmod +x .github/scripts/manage-doc-versions.sh
           .github/scripts/manage-doc-versions.sh site/byonk cull
           .github/scripts/manage-doc-versions.sh site/byonk update-json
+          .github/scripts/manage-doc-versions.sh site/byonk alias-latest
           .github/scripts/manage-doc-versions.sh site/byonk generate-redirect
 
       - name: Show final site structure

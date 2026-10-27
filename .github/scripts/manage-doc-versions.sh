@@ -7,6 +7,8 @@
 #     cull                   - Remove old versions (keep last 4 minor releases)
 #     update-json            - Update versions.json
 #     generate-redirect      - Generate root index.html redirect
+#     mirror <pages-url>     - Download the live site's dev and version trees
+#     alias-latest           - Copy the newest release to latest/ (stable deep links)
 
 set -euo pipefail
 
@@ -185,6 +187,51 @@ EOF
     echo "Generated redirect to $latest"
 }
 
+# Download the currently published site into SITE_DIR.
+#
+# A plain `wget --mirror` of the root only follows links, and the root page
+# links to nothing but the latest release: every deploy that started from it
+# silently dropped /dev/ and every older version. So ask versions.json what
+# exists and mirror each tree on its own, plus /dev/, which a broken earlier
+# deploy may have left out of versions.json.
+mirror_site() {
+    local url="${VERSION:?Pages URL required for mirror}"
+    local prefix
+    prefix=$(dirname "$SITE_DIR")
+    mkdir -p "$SITE_DIR"
+
+    local paths
+    paths=$( (curl -fsSL "$url/versions.json" 2>/dev/null || true) |
+        grep -o '"path": *"[^"]*"' | cut -d'"' -f4 || true)
+
+    local p
+    for p in $(printf '%s\n' $paths "/byonk/dev/" | sort -u); do
+        echo "Mirroring ${p}"
+        wget --mirror --no-parent --no-host-directories \
+             --directory-prefix="$prefix" \
+             --reject="index.html?*" \
+             --execute robots=off \
+             --quiet \
+             "${url%/byonk}${p}" || echo "  (not found or partial: ${p})"
+    done
+
+    find "$prefix" -name "*.tmp" -delete 2>/dev/null || true
+    find "$prefix" -name "index.html\?*" -delete 2>/dev/null || true
+}
+
+# Publish the newest release a second time under latest/, so the README and
+# other long-lived links can point at /byonk/latest/<page> and never rot. It is
+# rebuilt from the version tree on every deploy, so it is never mirrored.
+alias_latest() {
+    local latest
+    latest=$(get_version_dirs | tail -1)
+    rm -rf "${SITE_DIR:?}/latest"
+    if [[ -n "$latest" ]]; then
+        cp -r "$SITE_DIR/$latest" "$SITE_DIR/latest"
+        echo "latest/ -> $latest"
+    fi
+}
+
 # Main action handler
 case "$ACTION" in
     add-version)
@@ -204,6 +251,12 @@ case "$ACTION" in
         ;;
     generate-redirect)
         generate_redirect
+        ;;
+    mirror)
+        mirror_site
+        ;;
+    alias-latest)
+        alias_latest
         ;;
     *)
         echo "Unknown action: $ACTION"

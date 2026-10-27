@@ -19,558 +19,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
-- **A key byonk does not recognise in a device entry now stops byonk from starting.** Device entries in `config.yaml` used to ignore any key they did not know, so a typo such as `dithr: atkinson` or `strenght: 0.8` changed nothing and said nothing: the display simply kept its old look. Byonk now refuses to start and names the device and the key, for example ``Invalid config.yaml: devices.kitchen: unknown field `dithr` ``. The same applies inside a device's `gamut:` block and inside `final:`'s `gamut:` block. A YAML merge key (`<<:`) inside a device entry was never applied and is now reported the same way.
-
-  If you edit `config.yaml` by hand while byonk is running, the next change made through the dev UI, the admin API or Home Assistant is refused with that message (HTTP 400), and your file is left exactly as you wrote it until the key is fixed. A write whose own body names a key byonk does not know — `{"dithr": "atkinson"}`, or an unknown name inside `gamut` — is refused too (HTTP 422) instead of being silently dropped.
-
-  **Before upgrading,** compare your device entries against the list under *Devices Section* in the configuration guide. `error_clamp` is still accepted, still ignored, and still reported as deprecated.
-
-- **`byonk dev` is gone. The dev UI is part of `byonk serve` now, and it needs
-  a login.** Dev mode used to be a second way to start the server: `byonk dev`
-  brought up the device simulator alongside everything else, and anyone who
-  could reach the port could use it. That made it awkward to leave running on
-  the machine that actually serves your devices, which is exactly the machine
-  whose screens you want to edit.
-
-  The dev UI is now a permanent part of the normal server, at `/dev/`, behind
-  a username and a password. Set both to enable it:
-
-  ```
-  BYONK_DEV_USERNAME=me
-  BYONK_DEV_PASSWORD=a-long-random-string
-  ```
-
-  or, in `config.yaml`, `admin.dev_username` and `admin.dev_password`; or, in
-  the Home Assistant app, the **Dev UI username** and **Dev UI password**
-  options. The environment wins over `config.yaml`, both halves are required,
-  and a blank value counts as unset. Your admin token is accepted as a bearer
-  credential too, which is what lets a script reach the API without a login.
-
-  Set neither and the editor page and its login form both answer `404 Not
-  Found`, so a server that was never meant to be edited over the web does not
-  offer a login to guess at. (Its JSON API under `/dev/api/` answers `401`
-  instead.)
-
-  **If you run `byonk dev`, run `byonk serve` instead.** In Docker, drop the
-  `dev` argument: `serve` is what the image runs by default, so
-  `docker run … ghcr.io/oetiker/byonk:latest dev` becomes
-  `docker run … ghcr.io/oetiker/byonk:latest`. A container still passing `dev`
-  will fail to start, because the subcommand no longer exists.
-
-  **If you called the dev endpoints directly**, they moved under `/dev/api/`:
-  `/dev/render` is now `/dev/api/render`, and so on for `screens`, `events`,
-  `resolve-mac` and `panel-colors`.
-
-- **Home Assistant: re-pick Dither once per device.** The integration's
-  **Dither** control has always meant "on this display, use *this*". It wrote
-  the device's `dither:` key, which any screen that names its own algorithm
-  overrides — so what the control displayed was not always what the panel
-  rendered. It now writes the device's new `final:` block, which nothing
-  overrides, and what it shows is what you get.
-
-  The one-time cost: a device configured through the older control still holds
-  a bare `dither:`, and the control no longer reads that, so its Dither entity
-  shows **empty** until you pick a value again. Nothing about the panel changes
-  while it is empty — the device goes on using that algorithm for every screen
-  that names none of its own, exactly as before, and a screen that names one
-  goes on winning, exactly as before. Picking the same value again turns it
-  into a veto that no screen can override.
-
-  byonk deliberately does not migrate the value for you: `config.yaml` is the
-  operator's document, and a release that rewrites it unprompted is worse than
-  one that asks. To do it by hand, move the key under `final:`:
-
-  ```yaml
-  devices:
-    "AA:BB:CC:DD:EE:FF":
-      final:
-        dither: atkinson
-  ```
-
-  **Update the integration together with byonk.** An older integration writes
-  the device's default instead of its veto, and its Dither entity would then
-  report a value a screen can override.
-
-  `refresh` needs nothing: a screen's `refresh_rate` outranked a device's
-  `refresh` before and still does. The new `final.refresh` is the way to
-  override a screen — see below.
-
-- **`error_clamp` is now called `max_error`, and the old name is ignored.** In
-  0.18.0 the knob stopped capping the resulting pixel value and started capping
-  the accumulated dithering error, which moved its useful range from around
-  `0.1` to around `1.0`. The old name kept working, so a value tuned before
-  0.18.0 went on being applied under a meaning it was never chosen for — and
-  rendered flat, with saturated areas collapsing to a single ink.
-
-  A setting that changes what it means should change its name with it, so it
-  has. `max_error` is the setting; `error_clamp` is read at startup, reported
-  with the exact path to edit, and then discarded. It applies wherever the old
-  name was accepted: `config.yaml` panel and device blocks, a screen's Lua
-  return table, the render API and the dev UI.
-
-  If you never set it, nothing changes. If you did, Byonk tells you where:
-
-  ```text
-  WARN panels.reterminal_e1004.dither.sierra-lite.error_clamp: 0.11 —
-       `error_clamp` was removed in 0.20.0 and is IGNORED. ...
-  ```
-
-  Delete the line to take the default, or set `max_error` if you have retuned
-  it under the new meaning. Lua scripts read the resolved value as
-  `device.dither.max_error`.
-
-- **The MCP tool `assign_screen` is now `configure_device`, and it can set
-  everything about a device, not just its screen.** Assigning a screen was the
-  only thing an assistant could do; every other per-device setting — which
-  panel profile to use, which dither algorithm, the dither tuning, the
-  anti-ghosting flags — could only be changed by editing `config.yaml` by hand
-  and restarting.
-
-  `configure_device` reaches the same settings as
-  `PATCH /api/admin/devices/{key}`: the screen, plus `panel`, `dither`,
-  `colors`, `params`, `refresh`, `name`, `max_error`, `noise_scale`,
-  `chroma_clamp`, `strength`, `temperature_profile`, `maximum_compatibility`
-  and `min_png_bytes`.
-
-  The two interfaces name the device and its screen differently. Over MCP you
-  pass `mac` and `screen_ref`; over REST the device is in the URL and the field
-  is `screen`. Everything else is spelled the same on both.
-
-  Every setting is optional and an omitted one is left alone, so one call
-  changes one setting. The screen is needed only the first time a device is
-  configured.
-
-  If you drive Byonk through MCP, rename any `assign_screen` call to
-  `configure_device`; the `mac` and `screen_ref` arguments are unchanged.
+- **`byonk dev` is gone; the dev UI is part of `byonk serve` and needs a login.**
+  It lives at `/dev/`. Enable it with `BYONK_DEV_USERNAME` and
+  `BYONK_DEV_PASSWORD` (or `admin.dev_username`/`admin.dev_password` in
+  `config.yaml`, or the **Dev UI username/password** options of the Home
+  Assistant app). With neither set, `/dev/` answers 404. If you ran
+  `byonk dev`, run `byonk serve` instead; in Docker, drop the `dev` argument.
+  The dev endpoints moved under `/dev/api/` (e.g. `/dev/render` →
+  `/dev/api/render`).
+- **An unknown key in a device entry now stops byonk from starting**, naming the
+  device and the key. A typo such as `dithr:` used to be ignored silently.
+  Check your device entries against the configuration guide before upgrading.
+- **`error_clamp` is now `max_error`.** Its meaning changed in 0.18.0; the old
+  name is now ignored with a warning that names where it is set. Delete it, or
+  set `max_error` if you retuned it after 0.18.0.
+- **The MCP tool `assign_screen` is now `configure_device`** and can set every
+  device setting, not only the screen. The `mac` and `screen_ref` arguments are
+  unchanged.
+- **Home Assistant: pick Dither once more on each device.** The control now
+  writes the new `final:` block (see below), so a screen can no longer override
+  it. Until you pick again it shows empty; the panel keeps rendering as before.
+  Update the integration together with byonk.
 
 ### New
 
-- **A screen editor in the browser.** The dev UI is no longer just a preview:
-  it is a full editor with three panels behind an icon rail — Library, Edit
-  and Preview — so you can hide anything you are not using and give the space
-  to what you are. Every combination is allowed, a hidden panel comes back at
-  the size it had, and all three panels — Library included — can be resized
-  by dragging (or, with the keyboard, arrowing) the dividers between them.
-  Their sizes are proportions of the window, so a narrower window shrinks
-  every panel instead of squeezing Edit away, and they are remembered between
-  visits.
-
-  Everything revolves around one subject, which you choose in Library: a
-  screen, a panel profile or a device. Edit changes it and Preview shows it.
-  The **+** on the Panels and Devices headings adds a "New panel" or "New
-  device" to `config.yaml` at once, comments kept, whose identity (id, name,
-  match, size and colours; a device's key, name, screen and panel) you then
-  edit — and rename — in Edit's Details block (always shown), and **Delete** removes the
-  selected panel or device too. A fourth section, Screen repos, lists every
-  screen repo with its fetch status and lets you add a git repo (URL, ref,
-  write-only token), change it, fetch it again with **Update now** or delete
-  it.
-  For a screen, Edit opens its files as tabs (images and other asset files
-  can be viewed, uploaded and renamed too) and saves your work; Preview
-  renders it through the same pipeline the device uses and updates as you
-  work, so a mistake in `script.lua`, `screen.svg` or `meta.yaml` shows up as
-  a render error right next to the code, not after you ship it. Edit also
-  checks the file you're typing in on its own, marking the line of any problem
-  in the gutter shortly after you stop — you don't have to save or wait for a
-  render to see it.
-
-  Preview renders once per change and only when something that affects the
-  picture changed: at once for a new subject, target or the measured-inks
-  view, after a short pause while you type a simulated input or a config
-  value, and once when you save or the file watcher reports an edit.
-
-  You can create a screen from a starter, copy any screen — including the
-  built-in ones and anything fetched from git — into a repo you can write to,
-  and delete it. To rename a screen or move it to another writable repo,
-  change its Repo and Path in Edit's Details block and save; devices showing
-  it follow it in `config.yaml`, and so do they when an AI agent renames a
-  screen over MCP. Every file in a screen is editable, not just the
-  core three, and you can add new ones.
-
-  Saving checks that the file has not changed underneath you. If it has —
-  another browser tab, an editor on the server, a git fetch — the save is
-  refused and you are offered a choice between reloading and overwriting,
-  rather than one of the two edits vanishing.
-
-  Editing in place needs a writable screen repo: `local`, or one registered
-  with `path:`. The built-in screens, the shipped `examples` and any repo
-  fetched from git stay read-only, so the way to customize one is **Copy** — the same
-  fork-to-edit that previously meant copying directories in a shell.
-
-  **Panels and devices are edited the same way.** Pick a panel profile or a
-  device in Library and Edit shows one section per render setting, each with
-  a ladder that lists every place the setting can come from, which one wins
-  and why — including a value that was outranked or rejected, with the
-  reason. Drag hue, saturation and lightness or type a hex value against a
-  panel's swatches, then **Push** to see the result on the physical device,
-  under the light it actually hangs in — e-ink is reflective, so a calibration
-  judged from a screenshot is a guess. Push is a button, not automatic: it
-  wakes a battery-powered device into a refresh cycle, so nothing repaints
-  until you ask it to, and it reverts on its own within 30 minutes. Once it
-  looks right, **Save** writes it into `config.yaml`; **Discard** reverts the
-  draft and clears the temporary override. A panel Save that carries a
-  malformed `colors_actual` or a negative or non-finite tuning number is
-  refused with the field named, and `config.yaml` is left as it was.
-
-- **A pop-out preview window.** The preview opens in a window of its own, with
-  **Fit** and **100%** zoom, and follows the editor as you work — useful on a
-  second monitor, and the only comfortable way to look at a 1872×1404 TRMNL X
-  render at its real size.
-
-- **Light and dark colour schemes for the dev UI.** A **System / Light / Dark**
-  control in the icon rail, defaulting to System so it follows your operating
-  system. Your choice is remembered and applies to the pop-out window too.
-
-- **A Logout button in the icon rail** ends a dev-login session, next to the
-  colour scheme control. It only appears when there is a session to end —
-  signing in through the Home Assistant sidebar or an admin token has nothing
-  to log out of, and shows no button either.
-
-- **A Byonk entry in the Home Assistant sidebar**, opening the screen editor
-  with no second login — Home Assistant has already authenticated you. It is
-  shown to administrators only. The two Dev UI options are needed only if you
-  also want to reach the editor from outside Home Assistant.
-
-  Turn it on once, under **Show in sidebar** on Byonk's own page in
-  **Settings**: Home Assistant keeps that switch off for a newly installed
-  app, no matter what the app asks for.
-
-- **Panel recovery for burnt-in screens.** If a TRMNL X keeps showing a faint
-  image of something it displayed a long time ago, you can now ask it to clear
-  the panel. Start a run with
-  `POST /api/admin/devices/{device}/recover` (optional body `{"wipes": 20}`),
-  check on it with `GET`, and stop it early with `DELETE`. Each wipe is a few
-  minutes of the device flashing its panel black and white; content reappears
-  between wipes and normal operation resumes by itself when the run finishes.
-  While a run is in progress the device checks back every few seconds, so the
-  wipes follow one another closely even when the screen it is showing has a
-  long `refresh` interval.
-  Runs are not saved: restarting Byonk, rebooting the device, or simply
-  unplugging it all end the run safely. Needs device firmware 1.8.14 or newer —
-  on older firmware the device ignores the request and keeps showing content.
-
-- **Ghosting fix for devices that need a stronger refresh.** If a faint image of
-  the previous screen stays visible under the current one, set
-  `temperature_profile: a` on the device in `config.yaml` — Byonk then tells the
-  device to drive its panel harder and flash more, which clears the residue. Try
-  `a` first, then `b`. The tell-tale sign is ghosting that shows in mid-greys but
-  is invisible in solid black and solid white areas. Unset behaves exactly as
-  before, so nothing changes for devices that are fine. On a TRMNL X this needs
-  device firmware 1.8.4 or newer. See the configuration guide's *Ghosting*
-  section.
-- **`maximum_compatibility` device setting**, asking the device to use a full
-  refresh on every update. Note it has no effect on a TRMNL X — that model
-  always does a full update and its firmware ignores the setting.
-- **`min_png_bytes` device setting.** A TRMNL X picks how carefully it renders
-  greys from the size in bytes of the image it downloads, and Byonk's images are
-  normally too small to reach its better setting. Setting `min_png_bytes: 102401`
-  pads the image with data that decoders ignore, so the picture is unchanged and
-  only the size grows. Updates take longer in exchange. Useful on a TRMNL X only.
-- **`final:` on a device — the settings no screen can override.** Everything
-  written directly under a device is a default a screen may replace, which is
-  usually what you want: the script is the only participant that can look at
-  the content it is about to render. `final:` is for when it is not — when the
-  panel hangs in a dark hallway, or runs on a battery, and the owner can see
-  the result and the screen's author cannot.
-
-  ```yaml
-  devices:
-    "AA:BB:CC:DD:EE:FF":
-      dither: floyd-steinberg    # a default — a screen may pick its own
-      final:
-        dither: atkinson         # a veto — no screen overrides this
-        refresh: 1800            # this panel runs on a battery
-  ```
-
-  It accepts exactly `colors`, `colors_actual`, `dither`, `max_error`,
-  `noise_scale`, `chroma_clamp`, `strength`, `refresh` and `gamut`, and nothing
-  else: an unrecognised key under `final:` stops the server at startup with the
-  field named, so a typo there cannot silently do nothing — as does an
-  unrecognised key anywhere else in a device entry (see *Breaking* above).
-
-  `final.colors` reaches the error screen too, so the one picture whose job is
-  to be legible is drawn in the inks the owner chose.
-- **`final.refresh` — a refresh interval a screen cannot argue with.** Until
-  now nothing outranked a screen's own `refresh_rate`, so there was no way to
-  hold a battery-powered display to an interval its owner can live with.
-  `final.refresh` replaces whatever the screen asked for, in either direction.
-- **`colors_actual` on a device** — this one display's measured colours,
-  overriding the calibration in its panel profile. For the single panel that
-  drifted, rather than a profile of its own.
-- **`gamut` and `colors_actual` are now writable** through
-  `POST`/`PATCH /api/admin/devices` and the MCP `configure_device` tool, as is
-  the whole `final:` block. `gamut` was already configurable in
-  `config.yaml`, but no API or MCP client could reach it. `colors_actual` on a
-  device is new in this release.
-
-  A setting is removed with `clear`, which now takes **one dot**:
-  `clear: ["dither"]` removes the device's default, `clear: ["final.dither"]`
-  one field of its veto block, and `clear: ["final"]` the whole block. A bare
-  name never touches `final:`.
-- **`GET /api/admin/devices` reports `final.dither`**, so a client that writes
-  the veto can read back what it wrote. It is omitted for a device that vetoes
-  no algorithm.
-- **The device preview can report how a render was resolved.**
-  `GET /api/admin/devices/{key}/preview?resolution` adds the
-  `X-Byonk-Resolution` header, one line of JSON naming, for every render
-  setting, which rung won and what each other rung held — the same diagnostic
-  the dev render answers with, so a picture on a Home Assistant device page can
-  be checked without guessing. It is opt-in because that header can be larger
-  than a reverse proxy's default header buffer, and it is absent on a cache hit
-  or an error image, neither of which resolved anything.
-- **New MCP tool `rename_screen_file`** renames one asset file inside a screen directory (the new name may include a subfolder). It refuses an existing target and the three files that define a screen.
+- **A screen editor in the browser.** Library, Edit and Preview panels: create,
+  copy, rename and delete screens, edit every file with error marks as you type,
+  and see the render update as you work. Panel profiles and devices are edited
+  the same way, with a view of where each render setting comes from, and
+  **Push** to try colours on the real panel before you save them. Also: a
+  pop-out preview window, light and dark themes, and screen-repo management.
+- **Byonk in the Home Assistant sidebar** opens the editor without a second
+  login (administrators only; turn on **Show in sidebar** once).
+- **`final:` on a device** holds settings no screen can override, including
+  `final.refresh` for battery-powered displays.
+- **Ghosting and burn-in help for TRMNL panels:** the `temperature_profile`,
+  `maximum_compatibility` and `min_png_bytes` device settings, and panel
+  recovery runs (`POST /api/admin/devices/{device}/recover`) for burnt-in
+  TRMNL X screens. See *Ghosting* in the configuration guide.
+- **`colors_actual` on a device**, for one display whose colours drifted from
+  its panel profile.
+- **The admin API and MCP can set and clear every device setting**, including
+  `gamut`, `colors_actual` and `final:`; `clear: ["noise_scale"]` removes a
+  setting so the panel's value applies again.
+- **New MCP tool `rename_screen_file`.**
 
 ### Changed
 
-- **The MCP reference documents are served as an index plus sections.** `byonk://reference/lua-api`, `svg-templates` and `authoring` now return the introduction and a list of their sections (with the `###` headings inside each) instead of the whole document; `byonk://reference/<doc>/<section>` reads one section, and each section is listed in `resources/list`. A client no longer pays for the whole 57 KB Lua reference to learn one function.
-
-- **A panel in `config.yaml` wider or taller than 4096 pixels now stops byonk from starting**, naming the panel and the key. No TRMNL panel is anywhere near the limit.
-
-- **The MCP tool `rename_screen` now keeps devices on the screen.** Renaming (or moving) a screen used to leave every device that showed it pointing at the old name. The devices in `config.yaml` that show the screen now follow the rename. If byonk cannot write `config.yaml` (it is embedded, or the Home Assistant add-on owns it) and a device uses the screen, the rename is refused and nothing is moved.
-
-- **The shipped `examples` screens are read-only.** They used to be editable in place, which made it easy to change a sample you meant to keep as a reference. Copy an example into `local` (the dev UI's Copy, or the MCP tool `copy_screen`) to change it. An explicit `screen_repos: examples:` entry in `config.yaml` is unaffected.
-
-- **A setting can now be removed, not just changed.** Because leaving a field
-  out means "keep it as it is", there was no way to undo a per-device setting
-  once it existed — and a device setting overrides its panel's, so a value tried
-  once kept overriding it forever. Both `configure_device` and
-  `PATCH /api/admin/devices/{key}` now take a `clear` list naming the settings
-  to remove, after which the panel's value (or the firmware default) applies
-  again:
-
-  ```json
-  { "mac": "44:1B:F6:83:93:38", "clear": ["noise_scale"] }
-  ```
-
-  That is the MCP call. Over REST the device is named by the URL, so the body
-  is just `{ "clear": ["noise_scale"] }`.
-
-  Anything except `screen` can be cleared — a device must always have a screen.
-
-- **Bad device settings are refused instead of silently doing something else.**
-  Writing a device's `panel`, `dither`, `colors` or `temperature_profile`
-  through the admin API or MCP now checks the value first and fails with a
-  message listing what is accepted.
-
-  This was worst for `dither`: an unrecognised algorithm name was not an error
-  anywhere, it just rendered `atkinson`. A misspelling such as
-  `floyd_steinburg` was accepted, saved, and then quietly gave you a different
-  algorithm than the one you asked for — visible only on the panel itself.
-
-- **The dev UI's tuning defaults now match the renderer.** Switching dither
-  algorithm filled the tuning boxes from a table that had not been updated
-  since before 0.18.0: every algorithm got a pre-0.18.0 error cap, and the
-  noise scales disagreed with the renderer's own — Atkinson offered `0` where
-  the renderer uses `8.0`, and four algorithms could not even reach their
-  default because the noise box stopped at `8.0`. The preview therefore showed
-  something the device would not produce. The boxes now start at the values
-  the renderer actually uses.
-
-  The dev UI no longer keeps its own copy of those numbers at all: the list of
-  dither algorithms and each one's defaults are served by the renderer itself,
-  so the two cannot drift apart again.
-
-- **Every render setting now resolves in one documented order, and all five
-  render paths use it.** `colors`, `colors_actual`, `dither`, `max_error`,
-  `noise_scale`, `chroma_clamp`, `strength`, `gamut` and `refresh` each carried
-  a precedence chain of its own, and the five places that render a screen — the
-  device itself, the dev preview, the authoring render, `byonk render` and the
-  admin device preview — did not agree about them. A screen could therefore
-  look one way in a preview and another on the panel. One ladder now replaces
-  all of it, highest first:
-
-  **override → the device's `final:` → the screen → the device → the panel →
-  byonk's own defaults.**
-
-  What is written directly under a device is a **default**, which a screen may
-  override, because only the script can inspect the content it just drew. What
-  is written under the new `final:` block is a **veto**, which nothing
-  overrides. So a device's `dither:` does not override a screen that names its
-  own algorithm — it never did — and `final: {dither: …}` is how you make that
-  choice stick. The configuration guide's *Settings order* section has the
-  whole table, and the Lua API reference states it for every value a script can
-  return.
-
-  A panel can now name its own default algorithm, as `algorithm:` inside its
-  `dither:` block (`panels.<id>.dither.algorithm`); it is the panel rung of
-  `dither`, between the device and byonk's `atkinson`, and it brings the
-  panel's own per-algorithm tuning block with it. The dev UI's panel editor
-  sets it with the same algorithm picker a device has.
-
-  Two consequences are worth knowing even if you configure nothing:
-
-  - **A device preview's script is now told the device's own tuning.** The
-    preview rendered with the device's numbers but handed the script the
-    panel's, so a screen branching on `device.dither.max_error` could draw
-    something in a preview that it would never draw on the glass. All three
-    pre-script paths agree now. This affects devices with no `final:` block.
-  - **A caller's explicit measurement now outranks a script's own.** The dev
-    UI's panel editor (Push), `POST /dev/api/render`'s `override.colors_actual` and the
-    MCP `render_screen` tool's `colors_actual` argument used to lose to a
-    `colors_actual` returned by the screen, which left no way to preview a
-    calibration against a screen that measures its own.
-
-- **A device's `final:` block is visible to screen scripts.** `device.colors`,
-  `device.colors_actual` and `device.dither` resolve the device's two rungs with
-  the veto first, so a script is told the decision the renderer will actually
-  make rather than a value it is about to overrule. One rung is necessarily
-  missing: the screen's, which is what the script is about to return.
-
-  One wart to know about: `device.dither.algorithm` is the string as
-  configured, not a canonical one. Byonk accepts aliases and spelling variants
-  everywhere else and normalises them internally, but a script that configures
-  `Floyd_Steinberg` is shown `Floyd_Steinberg`. Lowercase it, swap `_` for
-  `-`, and map the remaining aliases (`floydsteinberg`, `atkinsonhybrid`,
-  `jjn`, `sierratworow`, `sierralite`, and `sierra-light`/`sierralight` for
-  `sierra-lite`) before matching, or branch on the tuning numbers instead.
-
-- **A screen's `refresh_rate` still wins over a device's `refresh`, but no
-  longer in silence.** This one keeps its precedence: only the script knows
-  when its own content next changes, so a screen that asks to be run again in
-  three minutes gets three minutes. What was missing was any sign that the
-  device's setting had been passed over — Byonk now logs it, naming both
-  intervals.
-
-- The configuration guide's *Ghosting* section now explains what
-  `temperature_profile` actually does on each model — on a TRMNL X it controls
-  how hard the panel is cleared rather than which waveform is used, so `a` and
-  `b` behave identically there — and adds a *Burn-in* section for the case no
-  setting can fix: a panel that has shown the same picture for weeks keeps a
-  trace of it, and needs hours of cycling rather than a stronger refresh.
+- **All render paths now agree.** The device, the dev preview, `byonk render`,
+  MCP and the Home Assistant preview resolve every render setting in one
+  documented order (*Settings order* in the configuration guide), so a preview
+  shows what the panel shows. A panel profile can now set its own default
+  dither algorithm.
+- **Bad device settings are refused** with a list of what is accepted. A
+  misspelled dither algorithm used to render Atkinson silently.
+- **The shipped `examples` screens are read-only.** Copy one into `local` to
+  change it.
+- **Renaming a screen moves its devices along** in `config.yaml`.
+- **MCP reference documents are served in sections**, so a client can read one
+  part instead of the whole reference.
 
 ### Fixed
 
-- **Saving no longer makes a private `config.yaml` readable by everyone.**
-  A change saved through the dev UI, the admin API or Home Assistant replaced
-  `config.yaml` with a new file created with default permissions, so a file
-  you had restricted with `chmod 600` — it holds your tokens — came back
-  `0644`. The new file now takes the permissions of the one it replaces.
-
-- **MCP `render_screen` with a `panel` now renders at the panel's size.** It used to ignore the panel's `width`/`height` and render at the model default (800x480 even for a 1200x1600 panel). The size is now an explicit `width`/`height`, else the panel's, else the model's, per axis. An unknown panel name is reported in the render `log` instead of being ignored silently. `POST /dev/api/render` uses the same rule when a panel is named without a size.
-
-- **Home Assistant's device preview and `byonk render` now use the panel a
-  device reports.** A device without `panel:` whose Board or Model matches a
-  panel profile was rendered with that panel on the glass and in the dev UI,
-  but the admin preview Home Assistant shows and `byonk render --mac` ignored
-  the match and drew it with the model's default palette. The preview now
-  picks the same panel. `byonk render` has no live device report, so the new
-  `--board` option and `--device` stand in for the Board and Model a device
-  would report (for example `--board trmnl_x`), and are matched the same way.
-
-- **Saving a device no longer rewrites its whole entry in `config.yaml`.**
-  A device saved from the dev UI, the admin API or Home Assistant used to be
-  moved to the top of `devices:` and rewritten from scratch: comments inside
-  it were dropped, the comment above it was left behind on the wrong device,
-  and a one-line `{…}` entry became a block. Byonk now edits the entry where
-  it is and changes only the settings you changed, like panel Save already
-  did. A new device is added at the end of `devices:`.
-
-- **Looking at a preview no longer re-tunes the display you are previewing.**
-  When the dev editor's preview had a device selected, the render request wrote
-  its dither algorithm and its tuning numbers into the server's override table
-  for that device — so the physical panel started rendering with whatever was
-  in the drawer, from the moment you glanced at it. There was no button to
-  press and nothing on screen to say it had happened. Worse, a preview that
-  left those fields empty took the other branch and *removed* the override, so
-  opening a plain preview silently undid tuning someone had set on purpose.
-  The preview is now read-only: it renders and answers, and it cannot reach a
-  device.
-
-  A related cross-wiring went with it. The colour half of that sync stored its
-  value under the *device's* name while the renderer looks the value up under
-  the *panel profile's* name. The two names normally differ, so the write was
-  simply lost; where they happened to match, previewing one device repainted
-  every other device sharing that panel.
-
-  **What you lose for now:** changing a device's dither algorithm or its
-  tuning numbers from the dev editor no longer reaches the real device. Colour
-  tuning is unaffected — **Push to panel** was always an explicit button and
-  still is. Explicit controls for the other settings are coming; until then,
-  set them in `config.yaml` (or through the Home Assistant device controls) as
-  you would any other device setting.
-- **`byonk render` and device previews now use the panel tuning of the
-  algorithm they actually render with.** A panel profile can tune each dither
-  algorithm differently. When a device and its screen named different
-  algorithms, `byonk render --mac` and the device preview (the admin API's
-  preview image, which Home Assistant shows) each looked that tuning up for an
-  algorithm other than the one they went on to render with. Both now match
-  what the device itself receives from `/api/display`.
-- **A dither tuning override that sets only some numbers keeps the rest.**
-  Setting, say, only `max_error` in the dev editor's preview dropped every
-  other tuning number the panel profile or the device supplied, so the preview
-  quietly fell back to algorithm defaults for those. Each number is now
-  overridden on its own.
-- **Your own screen repo now appears in the editor before it holds any
-  screens.** The dev editor listed a repo only if it already contained a
-  screen, so on a fresh install `local` — the repo your own screens belong in —
-  was missing from the **New** and **Copy** dialogs entirely. The only place
-  you could put a first screen was `examples`. Repos are now listed because
-  they exist, not because something is already in them.
-- **The error screen now wraps long messages.** The whole message was drawn as
-  a single centred line of text, which ran off both edges of the panel and
-  showed only its middle. Lua errors were worst affected: they arrive as a
-  message plus a multi-line stack traceback, and every line break was collapsed
-  into one unreadable run. Messages are now wrapped and left-aligned, and a
-  message too long for the box ends with an ellipsis so a clipped error cannot
-  be mistaken for a complete one.
-- **Assigning a screen to a device no longer deletes the device's other
-  settings.** Changing a device's screen — from the admin API, the web UI or an
-  MCP client — rewrote the device's whole entry in `config.yaml` and silently
-  dropped every setting it did not know how to write: `temperature_profile`,
-  `maximum_compatibility`, `min_png_bytes` and the dither tuning values
-  `error_clamp`, `noise_scale`, `chroma_clamp`, `strength` and `gamut`. Nothing
-  reported an error; the settings were simply gone, and the only symptom was
-  the panel looking wrong again some time later. If a device of yours has lost
-  such a setting, add it back to `config.yaml` — it will stay now.
-- **A device configured by registration code is no longer listed twice.** If
-  your `config.yaml` lists a device under its registration code rather than its
-  MAC address, the admin device list — and so the web UI and Home Assistant —
-  showed it as two devices: the real one, and a phantom that had never been
-  seen, with the registration code sitting in its MAC field. Editing the
-  phantom row changed settings the device does not read.
-- **Panel recovery can be checked and cancelled under either of a device's
-  names.** A run started with the device's `config.yaml` key reported "not
-  running" when asked about under its MAC address, and cancelling it that way
-  silently did nothing while the panel went on wiping — the web UI and Home
-  Assistant use the MAC. Both names now reach the same run, and a registration
-  code works written either way, `ABCDE-FGHJK` or `ABCDEFGHJK`.
-- **Panel recovery now works for a device configured by registration code.**
-  If your `config.yaml` lists a device under its registration code rather than
-  its MAC address, starting a recovery run for it did nothing at all: the run
-  was filed under the code, and the device asks for work under its MAC. No
-  error appeared anywhere — the panel simply went on showing content. Runs are
-  now found under either identifier.
-- **`min_png_bytes` is capped at the size a device will accept** (750 000
-  bytes). A value above that produced an image the device refuses, so a screen
-  went blank instead of looking better; a mistyped value could also ask the
-  server for a very large amount of memory on every single render. Byonk now
-  caps the value and says so in the log, and an image already so large that
-  padding it would cross the limit is served as it is. Nothing changes for a
-  sensible setting such as `102401`.
-- **Lua stack tracebacks keep their indentation on the error screen.** The
-  indent is the only thing separating a traceback's frames from the message
-  above them, and it was being stripped, so the frames ran together with the
-  error text. Wrapped frames now stay indented too.
-- **The "screen wins over the device's `refresh`" warning now names the
-  device.** With several devices sharing one screen, the message said which
-  screen but not which device had the setting that does nothing.
-- **Two devices that show the same screen no longer get each other's image.**
-  Byonk caches a rendered image under a short id and serves it as
-  `/api/image/<id>.png`. That id was computed from the drawing alone, so two
-  devices whose screen produced identical drawing — same model, same screen,
-  same data — shared one cache entry even when their render settings differed.
-  Whichever device rendered last decided what both of them received, so a
-  device could silently get another device's `colors`, `colors_actual`,
-  `dither`, `max_error`, `noise_scale`, `chroma_clamp`, `strength`, `gamut`,
-  `font_hinting` or `min_png_bytes` — or an image at the wrong size. The id now
-  covers every one of those. Nothing reported an error while this happened.
-  After upgrading, every device fetches its image once more, because all the
-  ids change; there is no other effect.
-- `temperature_profile: c` is now refused with a warning instead of being sent
-  to the device. TRMNL's documentation lists `c`, but device firmware up to
-  1.8.14 never implemented it and silently reads it as `default` — which turns
-  off the very anti-ghosting behaviour the setting was meant to enable. Use `a`
-  or `b`.
+- **Two devices showing the same screen no longer get each other's image**
+  when their render settings differ.
+- **Saving a device no longer drops its other settings or comments.** Assigning
+  a screen used to delete settings such as `noise_scale` or `gamut`; the entry
+  is now edited in place. If a device lost a setting, add it back once.
+- **Saving keeps `config.yaml`'s file permissions** (it used to reset a
+  `chmod 600` file to `0644`).
+- **Looking at a dev preview no longer changes the real device's dithering.**
+- **The Home Assistant preview, `byonk render` and MCP `render_screen` use the
+  right panel**: its size, its match on Board or Model (new `--board` option),
+  and its tuning for the algorithm actually used.
+- **The error screen wraps long messages**, so Lua errors and tracebacks are
+  readable.
+- **A device listed under its registration code is no longer shown twice.**
 
 ## 0.19.0 - 2026-08-20
 

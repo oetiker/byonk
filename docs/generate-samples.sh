@@ -87,6 +87,13 @@ render_screen "HI:NT:DE:MO:00:00" "hintdemo"
 render_screen "X11Helv" "fontdemo-bitmap-helv"
 render_screen "X11Misc" "fontdemo-bitmap-misc"
 
+# Font rendering comparisons for the Font Hinting page and the Bitmap Fonts
+# section. Hinting is shown on a black-and-white panel (where byonk draws text
+# 1-bit) and on the default 4-grey panel (where it anti-aliases).
+render_screen "FO:NT:HI:NT:00:00" "font-hinting-bw" --colors="#000000,#FFFFFF"
+render_screen "FO:NT:HI:NT:00:00" "font-hinting-grey"
+render_screen "FO:NT:ST:RK:00:00" "font-strikes" --colors="#000000,#FFFFFF"
+
 # 6-color palette samples (simulating a color e-ink display)
 PALETTE_6CLR="#000000,#FFFFFF,#00FF00,#0000FF,#FF0000,#FFFF00"
 render_screen "TE:ST:GR:AY:00:00" "graytest-6color" --colors="$PALETTE_6CLR"

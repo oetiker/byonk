@@ -38,3 +38,13 @@ devices:
     screen: examples/demo/font/bitmap
     params:
       font_prefix: "X11Misc"
+
+  "FO:NT:HI:NT:00:00":
+    screen: examples/demo/font/compare
+    params:
+      topic: hinting
+
+  "FO:NT:ST:RK:00:00":
+    screen: examples/demo/font/compare
+    params:
+      topic: strikes

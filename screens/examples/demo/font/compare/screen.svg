@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ data.width }} {{ data.height }}" width="{{ data.width }}" height="{{ data.height }}">
+  <defs>
+    <style>
+    /* No `font-family` on a bare `text` rule: a CSS rule outranks the
+       presentation attribute, so it would override every cell's own family
+       and the variants would never be selected. Labels name theirs on a
+       class; the cells name theirs on the element. */
+    .header { font-family: Outfit; font-size: 14px; font-weight: 700; fill: #ffffff; }
+    .col-header { font-family: Outfit; font-size: 13px; font-weight: 700; fill: #000000; }
+    .label { font-family: Outfit; font-size: 11px; font-weight: 600; fill: #000000; }
+    .note { font-family: Outfit; font-size: 9px; font-weight: 400; fill: #555555; }
+    </style>
+  </defs>
+
+  <rect width="{{ data.width }}" height="{{ data.height }}" fill="#ffffff"/>
+
+  <rect width="{{ data.width }}" height="{{ data.header_h }}" fill="#000000"/>
+  <text class="header" x="{{ data.margin }}" y="16">{{ data.title }}</text>
+
+  {% for ch in data.col_headers %}
+  <text class="col-header" x="{{ ch.x }}" y="{{ data.col_header_y }}">{{ ch.label }}</text>
+  {% endfor %}
+  {% for cl in data.col_lines %}
+  <line x1="{{ cl.x }}" y1="{{ data.grid_top }}" x2="{{ cl.x }}" y2="{{ data.height - data.margin }}" stroke="#000000" stroke-width="1" shape-rendering="crispEdges"/>
+  {% endfor %}
+  <line x1="{{ data.margin }}" y1="{{ data.grid_top }}" x2="{{ data.width - data.margin }}" y2="{{ data.grid_top }}" stroke="#000000" stroke-width="1" shape-rendering="crispEdges"/>
+
+  {% for line in data.lines %}
+  <text class="label" x="{{ data.margin }}" y="{{ line.y }}">{{ line.label }}</text>
+  {% if line.note %}<text class="note" x="{{ data.margin + 34 }}" y="{{ line.y }}">{{ line.note }}</text>{% endif %}
+  {% for cell in line.cells %}
+  <text x="{{ cell.x }}" y="{{ line.y }}" fill="#000000" font-family="{{ cell.family }}" font-size="{{ line.size }}"{% if cell.text_rendering %} text-rendering="{{ cell.text_rendering }}"{% endif %}>{{ data.sample }}</text>
+  {% endfor %}
+  {% endfor %}
+</svg>

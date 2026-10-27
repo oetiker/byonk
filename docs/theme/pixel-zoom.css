@@ -1,0 +1,45 @@
+/* Enlarged crops of a rendered screen, drawn with hard pixel edges, so the
+   effect of hinting or a bitmap strike is visible at reading size.
+
+   Usage (all values in source-image pixels):
+     <div class="pixel-zoom-row">
+       <figure class="pixel-zoom" style="--src-w:800; --x:74; --y:52; --w:140; --h:106">
+         <div class="crop"><img src="../images/x.png" alt="…"></div>
+         <figcaption>…</figcaption>
+       </figure>
+     </div>
+*/
+.pixel-zoom-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin: 1em 0;
+}
+
+.pixel-zoom {
+    flex: 1 1 180px;
+    margin: 0;
+}
+
+.pixel-zoom .crop {
+    position: relative;
+    overflow: hidden;
+    aspect-ratio: var(--w) / var(--h);
+    border: 1px solid var(--table-border-color);
+    background: #ffffff;
+}
+
+.pixel-zoom .crop img {
+    position: absolute;
+    max-width: none;
+    width: calc(var(--src-w) / var(--w) * 100%);
+    left: calc(var(--x) / var(--w) * -100%);
+    top: calc(var(--y) / var(--h) * -100%);
+    image-rendering: pixelated;
+}
+
+.pixel-zoom figcaption {
+    font-size: 0.85em;
+    text-align: center;
+    margin-top: 0.3em;
+}

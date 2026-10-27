@@ -542,7 +542,27 @@ Set `font-family` to the family name and `font-size` to a pixel size that matche
 <text font-family="X11Misc7x" font-size="13" font-style="oblique">Fixed oblique</text>
 ```
 
-For sizes without an exact bitmap strike, autotraced scalable outlines are used as fallback — but these won't look as clean as the native bitmap sizes.
+The bitmap fonts carry no outlines. At a size without a strike, the renderer
+scales the nearest strike instead — the same typeface at the right width, but
+blocky. Stick to the listed sizes:
+
+![X11Helv on and between its strike sizes, next to Outfit](../images/font-strikes.png)
+
+Enlarged, 12 to 17 px — `strike` rows are pixel-perfect, `scaled` rows are not:
+
+<div class="pixel-zoom-row">
+<figure class="pixel-zoom" style="--src-w:800; --x:40; --y:68; --w:160; --h:122">
+<div class="crop"><img src="../images/font-strikes.png" alt="X11Helv: strike and scaled sizes, enlarged"></div>
+<figcaption>X11Helv: strike and scaled sizes</figcaption>
+</figure>
+<figure class="pixel-zoom" style="--src-w:800; --x:432; --y:68; --w:160; --h:122">
+<div class="crop"><img src="../images/font-strikes.png" alt="Outfit (outline, hinted) for comparison, enlarged"></div>
+<figcaption>Outfit (outline, hinted) for comparison</figcaption>
+</figure>
+</div>
+
+The image comes from the `examples/demo/font/compare` screen with
+`topic: strikes`.
 
 ### Bitmap Font Demo Screen
 

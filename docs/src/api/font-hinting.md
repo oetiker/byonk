@@ -17,6 +17,48 @@ picks the treatment from the panel's palette:
 This is decided per render from the palette the device reports, so the same
 screen does the right thing on different hardware.
 
+### What it looks like
+
+The same Outfit text three ways, rendered by byonk for a **black-and-white
+panel**: hinting off and anti-aliased, hinting off and drawn 1-bit, and what
+byonk does on its own (mono hinting, 1-bit glyphs). The screen is
+`examples/demo/font/compare`; put it on your own panel to judge for yourself.
+
+![Hinting compared on a black-and-white panel](../images/font-hinting-bw.png)
+
+Enlarged, 9 to 14 px:
+
+<div class="pixel-zoom-row">
+<figure class="pixel-zoom" style="--src-w:800; --x:74; --y:52; --w:96; --h:106">
+<div class="crop"><img src="../images/font-hinting-bw.png" alt="hinting off: grey edges dithered into speckle, enlarged"></div>
+<figcaption>hinting off: grey edges dithered into speckle</figcaption>
+</figure>
+<figure class="pixel-zoom" style="--src-w:800; --x:314; --y:52; --w:96; --h:106">
+<div class="crop"><img src="../images/font-hinting-bw.png" alt="hinting off, 1-bit: stems drop out, enlarged"></div>
+<figcaption>hinting off, 1-bit: stems drop out</figcaption>
+</figure>
+<figure class="pixel-zoom" style="--src-w:800; --x:554; --y:52; --w:96; --h:106">
+<div class="crop"><img src="../images/font-hinting-bw.png" alt="byonk default: mono-hinted, 1-bit, enlarged"></div>
+<figcaption>byonk default: mono-hinted, 1-bit</figcaption>
+</figure>
+</div>
+
+On a **4-grey panel** byonk anti-aliases instead, and smooth hinting keeps the
+stems on whole pixels so the edges stay one grey wide:
+
+![Hinting compared on a 4-grey panel](../images/font-hinting-grey.png)
+
+<div class="pixel-zoom-row">
+<figure class="pixel-zoom" style="--src-w:800; --x:74; --y:52; --w:96; --h:106">
+<div class="crop"><img src="../images/font-hinting-grey.png" alt="hinting off, enlarged"></div>
+<figcaption>hinting off</figcaption>
+</figure>
+<figure class="pixel-zoom" style="--src-w:800; --x:554; --y:52; --w:96; --h:106">
+<div class="crop"><img src="../images/font-hinting-grey.png" alt="byonk default: smooth hinting, enlarged"></div>
+<figcaption>byonk default: smooth hinting</figcaption>
+</figure>
+</div>
+
 > **Upgrading:** this used to require `{% include "byonk-base-v1/hinting.svg" %}`
 > in your template. It no longer does — the include is now inert and can be
 > deleted without changing the output.

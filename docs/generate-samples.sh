@@ -42,11 +42,24 @@ fi
 mkdir -p "$OUTPUT_DIR"
 cd "$PROJECT_DIR"
 
+# The render CLI reads assets and the device map from env vars. Without these
+# it falls back to the EMBEDDED default-config.yaml, which knows only the
+# reserved DEFAULT device -- so every sample device silently rendered the
+# default screen instead of its own. The device map is docs/samples-config.yaml,
+# not the repository's config.yaml: that one is a working dev config, and the
+# docs must not change whenever it does.
+export CONFIG_FILE="$SCRIPT_DIR/samples-config.yaml"
+export SCREENS_DIR="$PROJECT_DIR/screens"
+# The examples repo otherwise resolves to <SCREENS_DIR>/../examples, a seeded
+# (git-ignored) copy that is stale on a dev machine and absent in CI.
+export EXAMPLES_DIR="$PROJECT_DIR/screens/examples"
+export FONTS_DIR="$PROJECT_DIR/fonts"
+
 echo "Generating sample images using $BYONK..."
 echo "Working directory: $(pwd)"
 echo "Fonts directory exists: $(test -d fonts && echo 'yes' || echo 'no')"
 echo "Screens directory exists: $(test -d screens && echo 'yes' || echo 'no')"
-echo "Config file exists: $(test -f config.yaml && echo 'yes' || echo 'no')"
+echo "Config file exists: $(test -f "$CONFIG_FILE" && echo 'yes' || echo 'no')"
 
 FAILED=0
 

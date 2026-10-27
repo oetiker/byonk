@@ -418,7 +418,7 @@ the document.
 
 ### Testing Display Colors
 
-The included `graytest` screen adapts to the device palette and shows all available colors as swatches with gradient and dithering tests.
+The built-in `byonk-builtin/calibration/grey` screen adapts to the device palette and shows all available colors as swatches with gradient and dithering tests.
 
 **4-grey palette (TRMNL OG default):**
 

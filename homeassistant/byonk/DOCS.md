@@ -97,7 +97,7 @@ the MCP `copy_screen` tool — and edit the copy.
 
 Byonk itself has another writable repo type, `path:` instead of `repo:`
 (see the [screen repo authoring
-guide](https://oetiker.github.io/byonk/guide/authoring.html#the-path-config-variant)) —
+guide](https://oetiker.github.io/byonk/latest/guide/authoring.html#the-path-config-variant)) —
 but this app doesn't expose it. The Screen repos option above only accepts
 `repo:` rows, and it replaces the whole registry on every restart, so a
 `path:` entry hand-added to `config.yaml` would not survive one. `local` is

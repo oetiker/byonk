@@ -1,0 +1,50 @@
+# Device map for docs/generate-samples.sh.
+#
+# Each pseudo-MAC below renders one documentation image. This file is kept
+# apart from the repository's config.yaml on purpose: that one is a working
+# development config, and the screenshots in the docs must not change (or
+# silently fall back to the default screen) whenever it does.
+#
+# Screen references are `<repo>/<path>` into the repos under screens/.
+
+registration:
+  enabled: true
+
+devices:
+  DEFAULT:
+    screen: byonk-builtin/default
+
+  "TR:AN:SI:T0:00:00":
+    screen: examples/swiss-departure-board
+    params:
+      station: "Olten"
+      limit: 8
+
+  "TE:ST:GR:AY:00:00":
+    screen: byonk-builtin/calibration/grey
+
+  "TE:ST:HE:LL:00:00":
+    screen: examples/hello
+
+  "HI:NT:DE:MO:00:00":
+    screen: examples/demo/font/hinting
+
+  "X11Helv":
+    screen: examples/demo/font/bitmap
+    params:
+      font_prefix: "X11Helv"
+
+  "X11Misc":
+    screen: examples/demo/font/bitmap
+    params:
+      font_prefix: "X11Misc"
+
+  "FO:NT:HI:NT:00:00":
+    screen: examples/demo/font/compare
+    params:
+      topic: hinting
+
+  "FO:NT:ST:RK:00:00":
+    screen: examples/demo/font/compare
+    params:
+      topic: strikes

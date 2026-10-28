@@ -438,6 +438,11 @@ jobs:
     needs: [guard, tag, build-docs, create-release]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Shares the Documentation workflow's group: both mirror the live site and
+    # redeploy all of it, so two running at once would each drop the other's tree.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     permissions:
       contents: read
       pages: write
@@ -458,18 +463,8 @@ jobs:
 
       - name: Mirror existing GitHub Pages
         run: |
-          mkdir -p site
-          wget --mirror --no-parent --no-host-directories \
-               --directory-prefix=site \
-               --reject="index.html?*" \
-               --execute robots=off \
-               --quiet \
-               "$PAGES_URL/" 2>/dev/null || echo "No existing site to mirror"
-
-          # Clean up wget artifacts
-          find site -name "*.tmp" -delete 2>/dev/null || true
-          find site -name "index.html\?*" -delete 2>/dev/null || true
-
+          chmod +x .github/scripts/manage-doc-versions.sh
+          .github/scripts/manage-doc-versions.sh site/byonk mirror "$PAGES_URL"
           echo "Existing site contents:"
           ls -la site/byonk/ 2>/dev/null || echo "(empty or no byonk dir)"
 
@@ -486,6 +481,7 @@ jobs:
           chmod +x .github/scripts/manage-doc-versions.sh
           .github/scripts/manage-doc-versions.sh site/byonk cull
           .github/scripts/manage-doc-versions.sh site/byonk update-json
+          .github/scripts/manage-doc-versions.sh site/byonk alias-latest
           .github/scripts/manage-doc-versions.sh site/byonk generate-redirect
 
       - name: Show final site structure

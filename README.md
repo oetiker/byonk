@@ -30,7 +30,7 @@ with it — device onboarding, entities, and automatic token provisioning:
 5. After the restart, a **Byonk** card is waiting in
    **Settings → Devices & Services**. Select **Add**.
 
-See the [Home Assistant guide](https://oetiker.github.io/byonk/dev/guide/home-assistant.html)
+See the [Home Assistant guide](https://oetiker.github.io/byonk/latest/guide/home-assistant.html)
 for details.
 
 ## Dev Mode
@@ -53,14 +53,14 @@ Then open `http://localhost:3000/dev/` in your browser:
 
 Full documentation is available at **[oetiker.github.io/byonk](https://oetiker.github.io/byonk)**:
 
-- [Installation Guide](https://oetiker.github.io/byonk/dev/guide/installation.html)
-- [Home Assistant](https://oetiker.github.io/byonk/dev/guide/home-assistant.html)
-- [Configuration](https://oetiker.github.io/byonk/dev/guide/configuration.html)
-- [Creating Your First Screen](https://oetiker.github.io/byonk/dev/tutorial/first-screen.html)
-- [Lua API Reference](https://oetiker.github.io/byonk/dev/api/lua-api.html)
-- [HTTP API](https://oetiker.github.io/byonk/dev/api/http-api.html)
-- [Admin API](https://oetiker.github.io/byonk/dev/api/admin-api.html)
-- [Dev Mode](https://oetiker.github.io/byonk/dev/guide/dev-mode.html)
+- [Installation Guide](https://oetiker.github.io/byonk/latest/guide/installation.html)
+- [Home Assistant](https://oetiker.github.io/byonk/latest/guide/home-assistant.html)
+- [Configuration](https://oetiker.github.io/byonk/latest/guide/configuration.html)
+- [Creating Your First Screen](https://oetiker.github.io/byonk/latest/tutorial/first-screen.html)
+- [Lua API Reference](https://oetiker.github.io/byonk/latest/api/lua-api.html)
+- [HTTP API](https://oetiker.github.io/byonk/latest/api/http-api.html)
+- [Admin API](https://oetiker.github.io/byonk/latest/api/admin-api.html)
+- [Dev Mode](https://oetiker.github.io/byonk/latest/guide/dev-mode.html)
 
 ## License
 

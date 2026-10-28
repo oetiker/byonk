@@ -42,11 +42,24 @@ fi
 mkdir -p "$OUTPUT_DIR"
 cd "$PROJECT_DIR"
 
+# The render CLI reads assets and the device map from env vars. Without these
+# it falls back to the EMBEDDED default-config.yaml, which knows only the
+# reserved DEFAULT device -- so every sample device silently rendered the
+# default screen instead of its own. The device map is docs/samples-config.yaml,
+# not the repository's config.yaml: that one is a working dev config, and the
+# docs must not change whenever it does.
+export CONFIG_FILE="$SCRIPT_DIR/samples-config.yaml"
+export SCREENS_DIR="$PROJECT_DIR/screens"
+# The examples repo otherwise resolves to <SCREENS_DIR>/../examples, a seeded
+# (git-ignored) copy that is stale on a dev machine and absent in CI.
+export EXAMPLES_DIR="$PROJECT_DIR/screens/examples"
+export FONTS_DIR="$PROJECT_DIR/fonts"
+
 echo "Generating sample images using $BYONK..."
 echo "Working directory: $(pwd)"
 echo "Fonts directory exists: $(test -d fonts && echo 'yes' || echo 'no')"
 echo "Screens directory exists: $(test -d screens && echo 'yes' || echo 'no')"
-echo "Config file exists: $(test -f config.yaml && echo 'yes' || echo 'no')"
+echo "Config file exists: $(test -f "$CONFIG_FILE" && echo 'yes' || echo 'no')"
 
 FAILED=0
 
@@ -73,6 +86,13 @@ render_screen "TE:ST:HE:LL:00:00" "hello"
 render_screen "HI:NT:DE:MO:00:00" "hintdemo"
 render_screen "X11Helv" "fontdemo-bitmap-helv"
 render_screen "X11Misc" "fontdemo-bitmap-misc"
+
+# Font rendering comparisons for the Font Hinting page and the Bitmap Fonts
+# section. Hinting is shown on a black-and-white panel (where byonk draws text
+# 1-bit) and on the default 4-grey panel (where it anti-aliases).
+render_screen "FO:NT:HI:NT:00:00" "font-hinting-bw" --colors="#000000,#FFFFFF"
+render_screen "FO:NT:HI:NT:00:00" "font-hinting-grey"
+render_screen "FO:NT:ST:RK:00:00" "font-strikes" --colors="#000000,#FFFFFF"
 
 # 6-color palette samples (simulating a color e-ink display)
 PALETTE_6CLR="#000000,#FFFFFF,#00FF00,#0000FF,#FF0000,#FFFF00"

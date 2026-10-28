@@ -1,0 +1,12 @@
+title: Font Rendering Comparison
+description: Side-by-side text at small sizes — hinting off against byonk's default, or a bitmap font on and between its strike sizes.
+byonk: "0.20"
+refresh: 3600
+params:
+  topic:
+    type: enum
+    label: "Compare"
+    default: "hinting"
+    options:
+      - {value: hinting, label: "Hinting off vs byonk's default"}
+      - {value: strikes, label: "Bitmap strikes vs in-between sizes"}

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New
 
+- **Example screen `examples/demo/font/compare`** shows small text side by side, so you can see what font hinting and bitmap strikes do on your panel. Set the `topic` parameter to `hinting` (hinting off against byonk's default) or `strikes` (a bitmap font at its strike sizes and between them).
+
 ### Changed
 
 ### Fixed
